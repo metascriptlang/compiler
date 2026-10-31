@@ -417,9 +417,7 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 			const mask: int32 = newCap - 1;
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (m.data[j].hcode != 0) { j = (j + 1) & mask; }
-			m.data[j].hcode = oldData[i].hcode;
-			m.data[j].key = move oldData[i].key;
-			m.data[j].value = move oldData[i].value;
+			swap(m.data[j], oldData[i]);
 		}
 		i = i + 1;
 	}
@@ -629,8 +627,7 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 			const mask: int32 = newCap - 1;
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (s.data[j].hcode != 0) { j = (j + 1) & mask; }
-			s.data[j].hcode = oldData[i].hcode;
-			s.data[j].key = move oldData[i].key;
+			swap(s.data[j], oldData[i]);
 		}
 		i = i + 1;
 	}
@@ -798,21 +795,16 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 }
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
-	let oldEntries = move m.entries;
-	let newEntries: Vec<OrderedMapEntry<K, V>> = [];
+	let live: int32 = 0;
 	let i: int32 = 0;
-	while (i < oldEntries.length) {
-		if (oldEntries[i].hcode != 0) {
-			const e: OrderedMapEntry<K, V> = {
-				hcode: oldEntries[i].hcode,
-				key: move oldEntries[i].key,
-				value: move oldEntries[i].value,
-			};
-			newEntries.push(e);
+	while (i < m.entries.length) {
+		if (m.entries[i].hcode != 0) {
+			if (i != live) swap(m.entries[live], m.entries[i]);
+			live = live + 1;
 		}
 		i = i + 1;
 	}
-	m.entries = newEntries;
+	m.entries.shrink(live);
 	m.tombstones = 0;
 	let cap = INITIAL_CAPACITY;
 	const needed = m.size + (m.size >> 1) + MIN_EMPTY_SLOTS;
@@ -1112,20 +1104,16 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 }
 
 function orderedSetCompact<T>(s: Set<T>): void {
-	let oldEntries = move s.entries;
-	let newEntries: Vec<OrderedSetEntry<T>> = [];
+	let live: int32 = 0;
 	let i: int32 = 0;
-	while (i < oldEntries.length) {
-		if (oldEntries[i].hcode != 0) {
-			const e: OrderedSetEntry<T> = {
-				hcode: oldEntries[i].hcode,
-				key: move oldEntries[i].key,
-			};
-			newEntries.push(e);
+	while (i < s.entries.length) {
+		if (s.entries[i].hcode != 0) {
+			if (i != live) swap(s.entries[live], s.entries[i]);
+			live = live + 1;
 		}
 		i = i + 1;
 	}
-	s.entries = newEntries;
+	s.entries.shrink(live);
 	s.tombstones = 0;
 	let cap = INITIAL_CAPACITY;
 	const needed = s.size + (s.size >> 1) + MIN_EMPTY_SLOTS;
