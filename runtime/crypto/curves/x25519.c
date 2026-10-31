@@ -37,6 +37,14 @@ msString msX25519SharedSecret(msString secretKey, msString publicKey) {
 		(const uint8_t *)secretKey.p->data,
 		(const uint8_t *)publicKey.p->data);
 
+	/* RFC 7748 6.1: a low-order public key forces the all-zero output; refuse it.
+	 * crypto_verify32 compares in constant time. */
+	static const uint8_t zero[32] = {0};
+	if (crypto_verify32(shared, zero) == 0) {
+		crypto_wipe(shared, 32);
+		return MS_EMPTY_STRING;
+	}
+
 	msString result = msStringNew((const char *)shared, 32);
 	crypto_wipe(shared, 32);
 	return result;
