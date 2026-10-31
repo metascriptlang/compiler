@@ -237,6 +237,12 @@ test "randomBytes generates correct length" {
 	assert result.value.length == 32;
 }
 
+test "randomBytes zero is an empty result" {
+	const result = randomBytes(0);
+	assert result.ok;
+	assert result.value.length == 0;
+}
+
 test "randomBytes different each call" {
 	const a = randomBytes(16);
 	const b = randomBytes(16);
