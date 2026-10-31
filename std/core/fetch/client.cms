@@ -191,8 +191,10 @@ export function doRequestOver(
 		if (!decoded.ok) return Result.err(decoded.error);
 		body = decoded.value;
 	} else if (contentLength > 0) {
-		body = readFullBodyOver(recvFn, data, bodyStart, contentLength);
+		const full = readFullBodyOver(recvFn, data, bodyStart, contentLength);
 		closeFn();
+		if (!full.ok) return Result.err(full.error);
+		body = full.value;
 	} else if (contentLength < 0) {
 		body = readUntilCloseOver(recvFn, data, bodyStart);
 		closeFn();
@@ -218,20 +220,22 @@ function indexOfText(data: Buffer, needle: string): int32 {
 	return data.indexOfBuffer(Buffer.fromString(needle, "utf8"), 0) as int32;
 }
 
-function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32, contentLength: int32): Buffer {
+function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32, contentLength: int32): Result<Buffer, HttpError> {
 	const available = (initialData.length as int32) - bodyStart;
 	if (available >= contentLength) {
-		return [...initialData[bodyStart..(bodyStart + contentLength)]];
+		return Result.ok([...initialData[bodyStart..(bodyStart + contentLength)]]);
 	}
 	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]]];
 	let remaining = contentLength - available;
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
-		if (chunk.length == 0) break;
+		if (chunk.length == 0) {
+			return Result.err(invalidResponse(`body shorter than Content-Length: ${contentLength - remaining} of ${contentLength} bytes`));
+		}
 		pieces.push(chunk);
 		remaining = remaining - (chunk.length as int32);
 	}
-	return Buffer.concatList(pieces);
+	return Result.ok(Buffer.concatList(pieces));
 }
 
 function readUntilCloseOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32): Buffer {
