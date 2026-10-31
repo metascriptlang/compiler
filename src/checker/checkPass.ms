@@ -24,7 +24,6 @@ import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContex
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
@@ -211,18 +210,17 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 		}
 		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
 	}
-	if (bindsSignatureTypes(node)) {
-		fnExpr.typeExpr = node.typeExpr;
-		fnExpr.typeExprs = node.typeExprs;
-		node.typeExpr = null;
-		node.typeExprs = null;
-		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx) : null;
-		if (annotation != null) {
-			const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
-			operand.nodeType = annotation;
-			operand.flags = operand.flags.incl(NodeFlag.BoundSym);
-			node.typeExpr = operand;
-		}
+	fnExpr.typeExpr = node.typeExpr;
+	fnExpr.typeExprs = node.typeExprs;
+	fnExpr.paramLocations = node.paramLocations;
+	node.typeExpr = null;
+	node.typeExprs = null;
+	const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx) : null;
+	if (annotation != null) {
+		const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
+		operand.nodeType = annotation;
+		operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+		node.typeExpr = operand;
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -2779,9 +2777,9 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
 		if (fd.funcExprParamTypes[i] == "") return;
-		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, d.nameLocation.line, d.nameLocation.column));
+		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, 0, 0));
 	}
-	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, 0, 0) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
