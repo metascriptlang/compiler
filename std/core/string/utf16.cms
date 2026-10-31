@@ -244,6 +244,7 @@ function encodeCodePoint(out: Span<uint8>, cp: int64): int32 {
 
 @exportName("msStringFromCodePoint")
 export function stringFromCodePoint(cp: int64): string {
+	if (cp >= 0 && cp < 0x80) return msStringAsciiChar(cp as uint8);
 	let scratch: uint8[4] = [];
 	const out: Span<uint8> = scratch;
 	const len = encodeCodePoint(out, cp);
