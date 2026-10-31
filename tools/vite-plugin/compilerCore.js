@@ -161,6 +161,9 @@ export function buildCompilerGraph(options) {
 		artifacts.push(declaration);
 		return declaration;
 	});
+	if (options.declaration === true && !declarations.some(output => output.source === entry)) {
+		invalid("entry declaration is required when --declaration is requested");
+	}
 	const dependencies = [...new Set([
 		...modules.map(m => m.source),
 		...instances.map(m => m.source),

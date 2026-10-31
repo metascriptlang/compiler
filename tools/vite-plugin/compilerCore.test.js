@@ -50,12 +50,23 @@ fs.writeFileSync(path.join(out, "_manifest.json"), fixture.rawManifest ?? JSON.s
 describe("fake compiler adapter contract (not compiler acceptance)", () => {
 	test("one subprocess requests the complete split graph and preserves compiler arguments", t => {
 		const f = fixture(t);
-		const result = f.run({}, { compilerArgs: ["--define=some value"], declaration: true });
+		f.manifest.declarations = [{ source: f.entry, out: "main.d.ts" }];
+		const result = f.run({ files: { ...f.files, "main.d.ts": "export {};" } }, { compilerArgs: ["--define=some value"], declaration: true });
 		assert.deepEqual(JSON.parse(readFileSync(join(f.root, "args.json"), "utf8")), [
 			"build", f.entry, "--define=some value", "--target=js", "--split", `--output=${join(f.root, "output tree")}`, "--sourcemap", "--declaration",
 		]);
 		assert.equal(result.entry, f.entry);
 		assert.equal(result.outDir, canonicalPath(join(f.root, "output tree")));
+	});
+
+	test("requires an entry declaration when declarations are requested", t => {
+		const f = fixture(t);
+		const message = /entry declaration is required when --declaration is requested/;
+		assert.throws(() => f.run({}, { declaration: true }), message);
+		f.manifest.declarations = [];
+		assert.throws(() => f.run({}, { declaration: true }), message);
+		f.manifest.declarations = [{ source: f.dependency, out: "types.d.ts" }];
+		assert.throws(() => f.run({ files: { ...f.files, "types.d.ts": "export {};" } }, { declaration: true }), message);
 	});
 
 	test("declarations are opt-in and sourcemaps can be disabled", t => {
