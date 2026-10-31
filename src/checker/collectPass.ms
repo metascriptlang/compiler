@@ -372,6 +372,8 @@ function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): vo
 	if (problem != "") {
 		const dec = borrowDecorator(ctx, dd.decorators);
 		addError(ctx, problem, dec.location.line, dec.location.column);
+		const decl = declOfStatement(dd.decoratedNode);
+		decl.flags = decl.flags.incl(NodeFlag.DecoratorRefused);
 		return;
 	}
 	setFlag(sym, SymbolFlag.Borrow);

@@ -442,6 +442,7 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 		if (isIntrinsicDecorator(ctx, md.macroName, dec)) continue;
 		if (plan == null || current == null || !decoratorPositionValid(current)) {
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
+			if (current != null) current.flags = current.flags.incl(NodeFlag.DecoratorRefused);
 			continue;
 		}
 		current = runDecorator(ctx, dec, md, current, plan);

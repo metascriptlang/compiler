@@ -355,6 +355,7 @@ export enum NodeFlag {
 	ParamProperty, // checker: this class field was declared by a constructor parameter written with `public`, `private`, `protected` or `readonly`
 	SendableClosure, // checker: this closure is converted to Sendable<F>, so lambda lifting gives it an env of its own that holds copies of its captures
 	ConstData,     // transform: every element of this array literal is deep-constant data, so codegen copies one static initializer
+	DecoratorRefused, // checker: a decorator on this declaration was refused, so a check that would only follow from it skips the declaration
 }
 
 // ===== Node Kind Enum =====

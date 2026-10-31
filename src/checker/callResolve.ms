@@ -4255,7 +4255,7 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 	for (const stmt of stmts) {
 		const decl = unwrapDecl(stmt)!;
 		const key = overloadGroupKey(decl);
-		if (key == "" || decl.resolvedSym == null || hasFlag(decl.resolvedSym, SymbolFlag.ImportC)) continue;
+		if (key == "" || decl.resolvedSym == null || hasFlag(decl.resolvedSym, SymbolFlag.ImportC) || refusedSignature(decl)) continue;
 		if (!groups.has(key)) {
 			keys.push(key);
 			groups.set(key, []);
@@ -4301,6 +4301,10 @@ function methodVisibility(sym: Symbol): string {
 	if (sym.declNode.kind != NodeKind.MethodDecl) return "";
 	const written = (sym.declNode.data as MethodDeclData).methodVisibility;
 	return written == "public" ? "" : written;
+}
+
+function refusedSignature(decl: Node): boolean {
+	return decl.flags.has(NodeFlag.DecoratorRefused) && hasFlag(decl.resolvedSym!, SymbolFlag.OverloadSig);
 }
 
 function declaresSignature(decl: Node | null): boolean {
