@@ -27,6 +27,7 @@
 // GUARD-CHECK-FAIL a closure captures it
 // GUARD-CHECK-FAIL it is passed to 'register'
 // GUARD-CHECK-FAIL it is a parameter
+// GUARD-CHECK-FAIL a sink parameter holding a reference
 // GUARD-CHECK-FAIL the value assigned into 'c'
 // GUARD-CHECK-FAIL a defer that runs after the move uses it
 // GUARD-CHECK-FAIL for..of binds it
@@ -109,9 +110,30 @@ function moveParam(c: Counter): int32 {
 	return await f;
 }
 
-function moveSinkParam(sink c: Counter): int32 {
-	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] });
+struct Dims { w: int32; h: int32 }
+
+function moveSinkValueParam(sink d: Dims): int32 {
+	const f = spawn(() => { return d.w; }, { move: [d] });
 	return await f;
+}
+
+function moveSinkArrayParam(sink ids: int32[]): int32 {
+	const f = spawn(() => { return ids.length; }, { move: [ids] }); // GUARD-REFUSED
+	return await f;
+}
+
+function moveSinkRefParam(sink c: Counter): int32 {
+	const f = spawn(() => { c.n = 1; return c.n; }, { move: [c] }); // GUARD-REFUSED
+	return await f;
+}
+
+actor Sink {
+	seen: int32 = 0;
+	take(c: Counter): int32 { this.seen = c.n; return this.seen; }
+}
+
+function moveSinkRefIntoActor(a: Sink, sink c: Counter): Promise<int32> {
+	return a.take(move c); // GUARD-REFUSED
 }
 
 // 10 — rebound from a shared value inside a loop that moves again.
