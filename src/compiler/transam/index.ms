@@ -46,7 +46,7 @@ import {
 } from "./cancel";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { registerBoundModuleFn } from "../../checker/checkerCallbacks";
@@ -955,8 +955,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const bound = reusableBound(db, filePath);
 	if (bound != null) return bound.ctx;
 	if (db.checkInProgress.has(filePath)) return null;
-	const checkEntry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, fileId));
-	const checked = checkEntry != null && checkEntry.state == TaQueryState.Green ? dbContext(db, checkCtxKey(fileId)) : null;
+	const checked = dbCheckIsCurrent(db, filePath) ? dbContext(db, checkCtxKey(fileId)) : null;
 	if (checked != null) return checked;
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
