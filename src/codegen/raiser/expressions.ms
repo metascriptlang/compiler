@@ -1863,7 +1863,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null);
 			emitCallArgs(s, dest, runtimeArgs);
-			const pastBase = runtimeArgs.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym), runtimeArgs.length) : [];
+			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym), runtimeArgs.length) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, runtimeArgs.length));
 			patchJumpsTo(s, pastBase, codeLen(s));
 			return dest;
