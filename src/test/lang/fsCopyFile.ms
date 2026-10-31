@@ -1,4 +1,5 @@
-import { copyFile, ensureDir, exists, readFile, readFileBytes, removeAll, writeFile, writeFileBytes } from "std/fs";
+import { copyFile, ensureDir, exists, modifiedTime, readFile, readFileBytes, removeAll, writeFile, writeFileBytes } from "std/fs";
+import { execFileCapture } from "std/process";
 import { Buffer } from "std/core/buffer";
 
 function scratch(name: string): string {
@@ -49,5 +50,18 @@ test "copyFile of a missing source fails and creates no destination" {
 	const base = scratch("missing");
 	assert !copyFile(base + "/absent.txt", base + "/dst.txt").ok;
 	assert !exists(base + "/dst.txt");
+	assert removeAll(base).ok;
+}
+
+test "a copy is modified when it is made, not when its source was, whether or not the destination existed" {
+	const base = scratch("mtime");
+	assert writeFile(base + "/src.txt", "aged").ok;
+	assert execFileCapture("touch", ["-t", "200001010000", base + "/src.txt"]).ok;
+	assert writeFile(base + "/old.txt", "previous").ok;
+	for (const dst of [base + "/new.txt", base + "/old.txt"]) {
+		assert copyFile(base + "/src.txt", dst).ok;
+		assert (try readFile(dst) catch "") == "aged";
+		assert modifiedTime(dst) > modifiedTime(base + "/src.txt") + 86400, dst;
+	}
 	assert removeAll(base).ok;
 }

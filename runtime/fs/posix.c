@@ -15,6 +15,7 @@
 #include <errno.h>
 #if defined(__APPLE__)
 #include <sys/clonefile.h>
+#include <sys/time.h>
 #elif defined(__linux__)
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -27,10 +28,11 @@ static _Thread_local int _msFsLastErrno = 0;
 
 int32_t msFsCloneFile(const char* src, const char* dst) {
 #if defined(__APPLE__)
-	if (clonefile(src, dst, 0) == 0) return 0;
-	if (errno != EEXIST) return errno;
-	if (unlink(dst) != 0) return errno;
-	return clonefile(src, dst, 0) == 0 ? 0 : errno;
+	if (clonefile(src, dst, 0) != 0) return errno;
+	if (utimes(dst, NULL) == 0) return 0;
+	int err = errno;
+	unlink(dst);
+	return err;
 #elif defined(__linux__) && defined(FICLONE)
 	int in = open(src, O_RDONLY | O_CLOEXEC);
 	if (in < 0) return errno;
