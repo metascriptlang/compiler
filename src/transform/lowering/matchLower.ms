@@ -21,9 +21,9 @@ import { frameReach } from "./operandOrder";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef, makeDefaultValue,
 } from "../util";
-import { booleanType, int32Type } from "../../checker/types";
+import { booleanType, int32Type, literalBase } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { hashStringSigned } from "std/hash";
 import { endsInNoReturn } from "../analysis/dce";
@@ -36,6 +36,12 @@ enum ArmMode {
 
 // ===== Nested MatchExpr Hoisting =====
 
+function resultPlaceholder(t: Type | null, loc: SourceLocation): Node {
+	if (t == null) return makeNull(loc);
+	const base = literalBase(t);
+	return base == t ?makeNull(loc) : makeDefaultValue(base, loc);
+}
+
 function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	return hoistGuarded(expr, NodeKind.MatchExpr, hoistMatchExpr, hoisted, ctx);
 }
@@ -46,7 +52,7 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	const loc = node.location;
 	const resultSym = freshTempSym(ctx, "matchres", node.nodeType);
 
-	const placeholder = makeNull(loc);
+	const placeholder = resultPlaceholder(node.nodeType, loc);
 	const letDecl = makeVarDecl(resultSym.name, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = resultSym;
 	if (node.nodeType != null) { letDecl.nodeType = node.nodeType; }
@@ -153,7 +159,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 		throw new Error(`internal: match initializer of '${varData.declName}' reached lowering without its symbol`);
 	}
 	const result: Node[] = [];
-	const placeholder = makeNull(loc);
+	const placeholder = resultPlaceholder(stmt.nodeType, loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
 	if (stmt.nodeType != null) {

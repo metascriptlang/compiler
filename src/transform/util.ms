@@ -533,6 +533,11 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 		n.nodeType = t;
 		return n;
 	}
+	if (k == TypeKind.Enum) {
+		const zero = makeNumber(0, loc);
+		zero.nodeType = t;
+		return zero;
+	}
 	if (k == TypeKind.Module) {
 		const unit = makeNumber(0, loc);
 		unit.nodeType = getSysType(TypeKind.Uint8);
