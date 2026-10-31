@@ -1989,9 +1989,13 @@ function isActorRef(t: Type | null): boolean {
 
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
 	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
-	const ownedParam = sym.symbolKind == SymbolKind.Parameter && hasFlag(sym, SymbolFlag.Sink);
+	const sinkParam = sym.symbolKind == SymbolKind.Parameter && hasFlag(sym, SymbolFlag.Sink);
+	const ownedParam = sinkParam && isValueOnlyType(sym.symbolType);
 	if (sym.symbolKind == SymbolKind.Parameter && !ownedParam) {
-		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
+		const why = sinkParam
+			? "it is a sink parameter holding a reference, and a caller that keeps using its value passes a copy that shares the graph — pass a fresh value or bind a fresh copy locally and move that"
+			: "it is a parameter, so the caller still owns it — bind a fresh value locally and move that";
+		addError(ctx, "cannot move '" + sym.name + "': " + why + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
 	if (hasFlag(sym, SymbolFlag.Global)) {
