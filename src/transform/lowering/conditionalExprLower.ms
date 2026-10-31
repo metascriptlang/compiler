@@ -38,7 +38,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef, resultPlaceholder } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive, isStringLike } from "../../checker/types";
@@ -93,8 +93,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, hoisted, ctx);
 		const loc = expr.location;
 		const t = freshTempSym(ctx, "tern", expr.nodeType);
-		const initial = makeNull(loc);
-		initial.nodeType = expr.nodeType;
+		const initial = resultPlaceholder(expr.nodeType, loc);
 		const letDecl = makeVarDecl(t.name, initial, DeclKind.Let, loc);
 		letDecl.resolvedSym = t;
 		if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
@@ -472,8 +471,7 @@ export function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: Transfor
 	hoisted.push(lhsDecl);
 
 	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
-	const initial = makeNull(loc);
-	initial.nodeType = expr.nodeType;
+	const initial = resultPlaceholder(expr.nodeType, loc);
 	const resDecl = makeVarDecl(resSym.name, initial, DeclKind.Let, loc);
 	resDecl.resolvedSym = resSym;
 	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
@@ -668,8 +666,7 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	let tempType = stmt.nodeType;
 	if (tempType == null) tempType = vd.initializer.nodeType;
 	if (tempType == null && stmt.resolvedSym != null) tempType = stmt.resolvedSym.symbolType;
-	const initial = makeNull(loc);
-	initial.nodeType = tempType;
+	const initial = resultPlaceholder(tempType, loc);
 	const letDecl = makeVarDecl(vd.declName, initial, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
 	letDecl.nodeType = tempType;

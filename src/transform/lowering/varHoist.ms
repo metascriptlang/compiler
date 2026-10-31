@@ -21,7 +21,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { forEachChild, isFuncBoundary } from "../../ast/visitor";
-import { makeVarDecl, makeTypedIdentResolved, makeNull, makeAssign, makeExprStmt, makeBlock } from "../util";
+import { makeVarDecl, makeTypedIdentResolved, resultPlaceholder, makeAssign, makeExprStmt, makeBlock } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, checkedFnBodyCount } from "../testUtil";
 
 // ===== Conversion =====
@@ -116,7 +116,7 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 		const sym = varSymOf(decl);
 		if (hoisted.includes(sym)) continue;
 		hoisted.push(sym);
-		const letDecl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Let, loc);
+		const letDecl = makeVarDecl(sym.name, resultPlaceholder(decl.nodeType, loc), DeclKind.Let, loc);
 		letDecl.resolvedSym = sym;
 		letDecl.nodeType = decl.nodeType;
 		newStmts.push(letDecl);

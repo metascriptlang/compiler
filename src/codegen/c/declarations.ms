@@ -625,13 +625,6 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType})${zeroInit(node.nodeType)};`);
 		return;
 	}
-	if (d.initializer != null
-			&& d.initializer.kind == NodeKind.NullLiteral
-			&& node.nodeType != null
-			&& (isNumeric(node.nodeType) || node.nodeType.kind == TypeKind.Boolean || node.nodeType.kind == TypeKind.Enum)) {
-		addLine(sec(g, CSection.ModuleInit), `  ${varName} = 0;`);
-		return;
-	}
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer != null) {
 		const p = g.initProc;

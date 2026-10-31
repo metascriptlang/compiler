@@ -19,11 +19,11 @@ import { walkExpandBlocksHooked, containsExprKind } from "../walker";
 import { hoistGuarded, expandConditionStmt } from "./guardedLower";
 import { frameReach } from "./operandOrder";
 import {
-	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
+	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef, makeDefaultValue,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef, resultPlaceholder,
 } from "../util";
-import { booleanType, int32Type, literalBase } from "../../checker/types";
+import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { hashStringSigned } from "std/hash";
 import { endsInNoReturn } from "../analysis/dce";
@@ -35,12 +35,6 @@ enum ArmMode {
 }
 
 // ===== Nested MatchExpr Hoisting =====
-
-function resultPlaceholder(t: Type | null, loc: SourceLocation): Node {
-	if (t == null) return makeNull(loc);
-	const base = literalBase(t);
-	return base == t ?makeNull(loc) : makeDefaultValue(base, loc);
-}
 
 function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	return hoistGuarded(expr, NodeKind.MatchExpr, hoistMatchExpr, hoisted, ctx);

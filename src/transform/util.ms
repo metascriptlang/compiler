@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
-import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody } from "../checker/types";
+import { literalBase, isNumeric, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -528,7 +528,7 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	// Numeric types → 0
 	if (k == TypeKind.Number || k == TypeKind.Float64 || k == TypeKind.Float32
 		|| k == TypeKind.Int8 || k == TypeKind.Int16 || k == TypeKind.Int32 || k == TypeKind.Int64
-		|| k == TypeKind.Uint8 || k == TypeKind.Uint16 || k == TypeKind.Uint32 || k == TypeKind.Uint64) {
+		|| k == TypeKind.Char || k == TypeKind.Uint8 || k == TypeKind.Uint16 || k == TypeKind.Uint32 || k == TypeKind.Uint64) {
 		const n = makeNumber(0, loc);
 		n.nodeType = t;
 		return n;
@@ -553,6 +553,13 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	}
 	// Everything else (refs, closures, interfaces) → null
 	return makeNull(loc);
+}
+
+export function resultPlaceholder(t: Type | null, loc: SourceLocation): Node {
+	if (t == null) return makeNull(loc);
+	const base = literalBase(t);
+	const scalar = isNumeric(base) || base.kind == TypeKind.Boolean || base.kind == TypeKind.Enum;
+	return base == t && !scalar ? makeNull(loc) : makeDefaultValue(base, loc);
 }
 
 
