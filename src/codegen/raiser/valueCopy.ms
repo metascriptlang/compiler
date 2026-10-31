@@ -5,7 +5,7 @@ import { getOpByKey } from "../c/types";
 import { isSlotUnion } from "../../checker/fit";
 import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findSharedStringDiscriminant, isMaybeType, isStructType, needsValueCopy, peelToStruct, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase, isDiscriminatedUnion } from "../../checker/types";
+import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
 import { MemKind, memKindOf } from "../../raiser/layout";
 import { RaiserValue, RaiserValueKind, createClassType, CLOSURE_LAYOUT, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
@@ -68,16 +68,6 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 		}
 	}
 	return index;
-}
-
-function sharedLiteralField(union: Readonly<Type>): string {
-	const name = findSharedStringDiscriminant(union);
-	return name != "" ? name : findSharedBooleanDiscriminant(union);
-}
-
-function isMixedUnion(t: Readonly<Type>): boolean {
-	if (t.kind != TypeKind.Union || t.typeFlags.has(TypeFlag.ValueUnion) || sharedLiteralField(t) == "") return false;
-	return t.typeChildren.some((c) => needsValueCopy(c));
 }
 
 function armDiscriminant(union: Readonly<Type>, key: string): int64 {
