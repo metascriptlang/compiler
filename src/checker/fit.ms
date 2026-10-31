@@ -3137,11 +3137,15 @@ function hasSharedDiscriminant(t: Type): boolean {
 export function storesUnionTag(t: Type): boolean {
 	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
+	const seenValue: string[] = [];
 	for (const m of t.typeChildren) {
-		const kind = jsValueKind(m);
+		const kind = jsMemberKind(m);
 		if (kind == "class" || kind == "string") continue;
 		if (seen.indexOf(kind) >= 0) return true;
 		seen.push(kind);
+		const valueKind = jsValueKind(m);
+		if (seenValue.indexOf(valueKind) >= 0) return true;
+		seenValue.push(valueKind);
 	}
 	return false;
 }
