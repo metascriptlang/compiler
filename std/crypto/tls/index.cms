@@ -116,7 +116,8 @@ import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 
 // C bindings
-extern function msTlsConnect(hostname: string, port: int32, caPath: string): int64;
+extern function msTlsConnect(hostname: string, port: int32, caPath: string, timeoutMs: int32): int64;
+extern function msTlsTimedOut(): int32;
 extern function msTlsRead(ctx: int64, maxBytes: int32): string;
 extern function msTlsWrite(ctx: int64, data: string): int32;
 extern function msTlsClose(ctx: int64): void;
@@ -125,8 +126,8 @@ extern function msTlsLastError(): string;
 
 // ===== Public API =====
 
-export function tlsConnect(hostname: string, port: int32, caPath: string = ""): Result<int64, CryptoError> {
-	const ctx = msTlsConnect(hostname, port, caPath);
+export function tlsConnect(hostname: string, port: int32, caPath: string = "", timeoutMs: int32 = 0): Result<int64, CryptoError> {
+	const ctx = msTlsConnect(hostname, port, caPath, timeoutMs);
 	if (ctx == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.ConnectionFailed, "tlsConnect", msTlsLastError()));
 	}
@@ -135,6 +136,16 @@ export function tlsConnect(hostname: string, port: int32, caPath: string = ""): 
 
 export function tlsRead(ctx: int64, maxBytes: int32 = 4096): Buffer {
 	return rawBuffer(msTlsRead(ctx, maxBytes));
+}
+
+// After an empty tlsRead: "" is a clean close_notify, anything else is why the stream ended.
+export function tlsLastError(): string {
+	return msTlsLastError();
+}
+
+// True when the last tlsConnect, tlsRead or tlsWrite failed because its wait ran out.
+export function tlsTimedOut(): boolean {
+	return msTlsTimedOut() != 0;
 }
 
 export function tlsWrite(ctx: int64, data: Bytes): int32 {

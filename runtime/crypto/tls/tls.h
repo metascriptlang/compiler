@@ -19,17 +19,22 @@
 /* Connect to hostname:port over TLS.
  * Performs DNS resolution, TCP connect, TLS handshake, cert verification.
  * caPath: path to CA bundle file. Empty string = use system default.
+ * timeoutMs > 0 bounds the connect and every later handshake, read and write wait; 0 waits forever.
  * Returns handle on success, 0 on failure. */
-int64_t msTlsConnect(msString hostname, int32_t port, msString caPath);
+int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t timeoutMs);
+
+/* 1 when the last connect, read or write failed because its wait ran out. */
+int32_t msTlsTimedOut(void);
 
 msString msTlsLastError(void);
 
 /* Read decrypted data from TLS connection.
- * Returns msString with data, empty on error/close. */
+ * Returns msString with data. Empty is end of stream, and an error when msTlsLastError() is then
+ * non-empty (timeout, failure, or a close without close_notify). */
 msString msTlsRead(int64_t ctx, int32_t maxBytes);
 
 /* Write data through TLS connection (encrypted by mbedTLS).
- * Returns bytes written, -1 on error. */
+ * Returns bytes written (0 for empty data), -1 on error. */
 int32_t msTlsWrite(int64_t ctx, msString data);
 
 /* Close TLS connection and free all resources. */

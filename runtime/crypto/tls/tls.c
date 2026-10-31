@@ -19,6 +19,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <errno.h>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -30,14 +31,26 @@ static inline int _ms_access(const char* path) {
 	DWORD attr = GetFileAttributesA(path);
 	return attr != INVALID_FILE_ATTRIBUTES ? 0 : -1;
 }
-#define access(p, m) _ms_access(p)
+#define ms_sock_err() WSAGetLastError()
+#define MS_ERR_INTR(e) ((e) == WSAEINTR)
+#define MS_ERR_TIMEOUT(e) ((e) == WSAEWOULDBLOCK || (e) == WSAETIMEDOUT)
+#define MS_ERR_INPROGRESS(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINTR || (e) == WSAEINPROGRESS)
+#define ms_poll(fds, n, ms) WSAPoll((fds), (n), (ms))
 #else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/time.h>
 #define ms_close_socket(fd) close(fd)
+#define ms_sock_err() errno
+#define MS_ERR_INTR(e) ((e) == EINTR)
+#define MS_ERR_TIMEOUT(e) ((e) == EAGAIN || (e) == EWOULDBLOCK)
+#define MS_ERR_INPROGRESS(e) ((e) == EINPROGRESS || (e) == EINTR)
+#define ms_poll(fds, n, ms) poll((fds), (n), (ms))
 #define MS_SOCKOPT_CAST
 #ifdef MSG_NOSIGNAL
 #define MS_TLS_SEND_FLAGS MSG_NOSIGNAL
@@ -57,19 +70,31 @@ typedef struct msTlsCtx {
 
 /* ===== I/O Callbacks for mbedTLS ===== */
 
+static _Thread_local int tlsTimedOut;
+
 static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
-	int ret = (int)send(fd, (const char*)buf, (int)len, MS_TLS_SEND_FLAGS);
-	if (ret < 0) return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
-	return (int)ret;
+	for (;;) {
+		int ret = (int)send(fd, (const char*)buf, (int)len, MS_TLS_SEND_FLAGS);
+		if (ret >= 0) return ret;
+		int err = ms_sock_err();
+		if (MS_ERR_INTR(err)) continue;
+		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; return MBEDTLS_ERR_SSL_TIMEOUT; }
+		return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+	}
 }
 
 static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
-	int ret = (int)recv(fd, (char*)buf, (int)len, 0);
-	if (ret < 0) return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
-	if (ret == 0) return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
-	return (int)ret;
+	for (;;) {
+		int ret = (int)recv(fd, (char*)buf, (int)len, 0);
+		if (ret > 0) return ret;
+		if (ret == 0) return MBEDTLS_ERR_SSL_CONN_EOF;
+		int err = ms_sock_err();
+		if (MS_ERR_INTR(err)) continue;
+		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; return MBEDTLS_ERR_SSL_TIMEOUT; }
+		return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+	}
 }
 
 /* ===== CA Discovery ===== */
@@ -99,7 +124,7 @@ static int loadCaFromWindows(mbedtls_x509_crt *chain) {
 		char *slash = strrchr(path, '\\');
 		if (slash) {
 			strcpy(slash + 1, "cacert.pem");
-			if (access(path, 0) == 0 && loadCaSource(chain, path)) return 1;
+			if (_ms_access(path) == 0 && loadCaSource(chain, path)) return 1;
 		}
 	}
 	const char *p = getenv("PATH");
@@ -111,7 +136,7 @@ static int loadCaFromWindows(mbedtls_x509_crt *chain) {
 		if (len > 0 && len < MAX_PATH) {
 			memcpy(path, dir, len);
 			strcpy(path + len, "\\cacert.pem");
-			if (access(path, 0) == 0 && loadCaSource(chain, path)) return 1;
+			if (_ms_access(path) == 0 && loadCaSource(chain, path)) return 1;
 		}
 		p = end ? end + 1 : NULL;
 	}
@@ -181,7 +206,76 @@ msString msTlsLastError(void) {
 
 /* ===== TCP Connect ===== */
 
-static int tcpConnect(const char *hostname, int port) {
+static int64_t nowMs(void) {
+#ifdef _WIN32
+	return (int64_t)GetTickCount64();
+#else
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+#endif
+}
+
+static int setBlocking(int fd, int blocking) {
+#ifdef _WIN32
+	u_long mode = blocking ? 0 : 1;
+	return ioctlsocket((SOCKET)(intptr_t)fd, FIONBIO, &mode);
+#else
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0) return -1;
+	return fcntl(fd, F_SETFL, blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK));
+#endif
+}
+
+static void setIoTimeout(int fd, int timeoutMs) {
+#ifdef _WIN32
+	DWORD t = (DWORD)timeoutMs;
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, MS_SOCKOPT_CAST &t, sizeof(t));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, MS_SOCKOPT_CAST &t, sizeof(t));
+#else
+	struct timeval tv;
+	tv.tv_sec = timeoutMs / 1000;
+	tv.tv_usec = (timeoutMs % 1000) * 1000;
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+}
+
+/* One connect attempt: 1 connected, 0 refused or failed, -1 the deadline passed. */
+static int connectOne(int fd, const struct sockaddr *addr, socklen_t addrLen, int64_t deadline) {
+	if (setBlocking(fd, 0) != 0) return 0;
+	int ok = connect(fd, addr, addrLen) == 0;
+	if (!ok && MS_ERR_INPROGRESS(ms_sock_err())) {
+		for (;;) {
+			int wait = -1;
+			if (deadline >= 0) {
+				int64_t left = deadline - nowMs();
+				if (left <= 0) return -1;
+				wait = left > 0x7fffffff ? 0x7fffffff : (int)left;
+			}
+			struct pollfd p;
+			p.fd = fd;
+			p.events = POLLOUT;
+			p.revents = 0;
+			int n = ms_poll(&p, 1, wait);
+			if (n < 0) {
+				if (MS_ERR_INTR(ms_sock_err())) continue;
+				return 0;
+			}
+			if (n == 0) return -1;
+			int soErr = 0;
+			socklen_t soLen = sizeof(soErr);
+			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&soErr, &soLen) != 0 || soErr != 0) return 0;
+			ok = 1;
+			break;
+		}
+	}
+	if (!ok) return 0;
+	return setBlocking(fd, 1) == 0 ? 1 : 0;
+}
+
+/* Tries every address getaddrinfo returns, in order; timeoutMs bounds the whole connect (0 = no bound). */
+static int tcpConnect(const char *hostname, int port, int timeoutMs) {
 	char portStr[16];
 	snprintf(portStr, sizeof(portStr), "%d", port);
 
@@ -192,39 +286,50 @@ static int tcpConnect(const char *hostname, int port) {
 	struct addrinfo *res = NULL;
 	if (getaddrinfo(hostname, portStr, &hints, &res) != 0 || !res) return -1;
 
-	int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (fd < 0) { freeaddrinfo(res); return -1; }
-
-	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-		ms_close_socket(fd);
-		freeaddrinfo(res);
-		return -1;
+	int64_t deadline = timeoutMs > 0 ? nowMs() + timeoutMs : -1;
+	int fd = -1;
+	for (struct addrinfo *it = res; it; it = it->ai_next) {
+		int s = (int)socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+		if (s < 0) continue;
+		int r = connectOne(s, it->ai_addr, (socklen_t)it->ai_addrlen, deadline);
+		if (r > 0) { fd = s; break; }
+		ms_close_socket(s);
+		if (r < 0) { tlsTimedOut = 1; break; }
 	}
-
 	freeaddrinfo(res);
+	if (fd < 0) return -1;
 
 	int flag = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
 #ifdef SO_NOSIGPIPE
 	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, MS_SOCKOPT_CAST &flag, sizeof(flag));
 #endif
-
+	if (timeoutMs > 0) setIoTimeout(fd, timeoutMs);
 	return fd;
 }
 
 /* ===== Public API ===== */
 
-int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
+int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t timeoutMs) {
+	tlsLastError[0] = '\0';
+	tlsTimedOut = 0;
+
 	char hostBuf[256];
-	int64_t hlen = hostname.len < 255 ? hostname.len : 255;
+	if (hostname.len > 255) {
+		tlsSetError("hostname is longer than 255 bytes%s", "");
+		return 0;
+	}
+	int64_t hlen = hostname.len;
 	if (hostname.p) memcpy(hostBuf, hostname.p->data, hlen);
 	hostBuf[hlen] = '\0';
+	if (caPath.len > 511) {
+		tlsSetError("CA path is longer than 511 bytes%s", "");
+		return 0;
+	}
 
 	/* Initialize PSA crypto once (required by mbedTLS 4.x for RNG) */
 	static int psa_inited = 0;
 	if (!psa_inited) { psa_crypto_init(); psa_inited = 1; }
-
-	tlsLastError[0] = '\0';
 
 	msTlsCtx *ctx = (msTlsCtx*)msMemAlloc0(sizeof(msTlsCtx));
 	ctx->fd = -1;
@@ -236,16 +341,15 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	char caBuf[512];
 	const char *explicitCa = NULL;
 	if (caPath.len > 0 && caPath.p) {
-		int64_t clen = caPath.len < 511 ? caPath.len : 511;
-		memcpy(caBuf, caPath.p->data, clen);
-		caBuf[clen] = '\0';
+		memcpy(caBuf, caPath.p->data, caPath.len);
+		caBuf[caPath.len] = '\0';
 		explicitCa = caBuf;
 	}
 	if (!loadCaChain(&ctx->cacert, explicitCa)) goto fail;
 
-	int fd = tcpConnect(hostBuf, port);
+	int fd = tcpConnect(hostBuf, port, timeoutMs);
 	if (fd < 0) {
-		tlsSetError("TCP connect to %s failed", hostBuf);
+		tlsSetError(tlsTimedOut ? "TCP connect to %s timed out" : "TCP connect to %s failed", hostBuf);
 		goto fail;
 	}
 	ctx->fd = fd;
@@ -284,7 +388,9 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	int ret;
 	while ((ret = mbedtls_ssl_handshake(&ctx->ssl)) != 0) {
 		if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-			snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: -0x%04X", (unsigned)-ret);
+			if (tlsTimedOut) snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake timed out");
+			else if (ret == MBEDTLS_ERR_SSL_CONN_EOF) snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: connection closed by the peer");
+			else snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: -0x%04X", (unsigned)-ret);
 			uint32_t failedFlags = mbedtls_ssl_get_verify_result(&ctx->ssl);
 			if (failedFlags != 0 && failedFlags != 0xFFFFFFFFu) {
 				char info[256];
@@ -314,15 +420,26 @@ fail:
 	return 0;
 }
 
+/* An empty result is a clean close_notify when msTlsLastError() is empty; otherwise it names a timeout (msTlsTimedOut), a failure, or a close without close_notify. */
 msString msTlsRead(int64_t handle, int32_t maxBytes) {
+	tlsLastError[0] = '\0';
+	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx || maxBytes <= 0) return MS_EMPTY_STRING;
 
 	unsigned char *buf = (unsigned char*)msMemAlloc(maxBytes);
 
-	int ret = mbedtls_ssl_read(&ctx->ssl, buf, maxBytes);
+	int ret;
+	do {
+		ret = mbedtls_ssl_read(&ctx->ssl, buf, maxBytes);
+	} while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE ||
+	         ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET);
 	if (ret <= 0) {
 		free(buf);
+		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return MS_EMPTY_STRING;
+		if (tlsTimedOut) tlsSetError("TLS read timed out%s", "");
+		else if (ret == 0) tlsSetError("TLS connection closed without close_notify%s", "");
+		else snprintf(tlsLastError, sizeof(tlsLastError), "TLS read failed: -0x%04X", (unsigned)-ret);
 		return MS_EMPTY_STRING;
 	}
 
@@ -331,16 +448,22 @@ msString msTlsRead(int64_t handle, int32_t maxBytes) {
 	return result;
 }
 
+int32_t msTlsTimedOut(void) {
+	return tlsTimedOut;
+}
+
 int32_t msTlsWrite(int64_t handle, msString data) {
+	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
-	if (!ctx || data.len == 0 || !data.p) return -1;
+	if (!ctx) return -1;
+	if (data.len == 0 || !data.p) return 0;
 
 	const unsigned char *buf = (const unsigned char*)data.p->data;
 	int32_t total = 0;
 	int32_t len = (int32_t)data.len;
 	while (total < len) {
 		int ret = mbedtls_ssl_write(&ctx->ssl, buf + total, (size_t)(len - total));
-		if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+		if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
 		if (ret < 0) return -1;
 		total += (int32_t)ret;
 	}
