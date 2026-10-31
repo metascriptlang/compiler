@@ -8,7 +8,8 @@ import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGe
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
-import { FmtPos, StatementRun, formatRunEdits, rangeStatements, applyEdit, lineOffset } from "../../fmt/edit";
+import { FormatOptions } from "../../fmt/options";
+import { FmtPos, StatementRun, formatRunEdits, rangeStatements, lineOffset } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
 import { lspByteColumnIn, lspSourcePosition, lspPositionAt as positionAtByte, LspPosition } from "../position";
 import { checkLossless } from "../../fmt/lossless";
@@ -26,9 +27,69 @@ let _fmtParsersRegistered = false;
 
 // ===== Code Actions =====
 // Quick fixes for format violations — "Fix: Use tabs" etc.
-// Cache formatted output to avoid re-formatting on every code action request.
 let _codeActionFmtSource = "";
-let _codeActionFmtResult = "";
+let _codeActionFmtOptions = "";
+let _codeActionFmtEdits: ByteEdit[] = [];
+let _codeActionFmtText = "";
+
+function formatEditsOf(source: string, options: FormatOptions): ByteEdit[] {
+	const key = `${options.printWidth}/${options.tabWidth}/${options.useTabs}/${options.singleQuote}`;
+	if (_codeActionFmtSource == source && _codeActionFmtOptions == key) return _codeActionFmtEdits;
+	_codeActionFmtSource = source;
+	_codeActionFmtOptions = key;
+	_codeActionFmtEdits = [];
+	_codeActionFmtText = "";
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+	const parsed = parseSource(source);
+	if (!parsed.ok) {
+		writeStderr(`[LSP-FMT] code action: source does not parse: ${parsed.error}\n`);
+		return _codeActionFmtEdits;
+	}
+	options.source = source;
+	const printed = formatNode(parsed.value, options);
+	if (!printed.ok) {
+		writeStderr(`[LSP-FMT] code action: ${printed.error}\n`);
+		return _codeActionFmtEdits;
+	}
+	const kept = checkLossless(source, printed.value);
+	if (!kept.ok) {
+		writeStderr(`[LSP-FMT] code action: fmt refused: ${kept.error}\n`);
+		return _codeActionFmtEdits;
+	}
+	_codeActionFmtEdits = diffTextEdits(source, printed.value);
+	_codeActionFmtText = printed.value;
+	return _codeActionFmtEdits;
+}
+
+function lastNewline(text: string): int32 {
+	for (let k = text.byteLength - 1; k >= 0; k -= 1) {
+		if (text.byteAt(k) == "\n".code) return k;
+	}
+	return -1;
+}
+
+function formattedLineStart(from: int32, edits: ByteEdit[]): int32 {
+	let shift = 0;
+	for (const e of edits) {
+		if (e.end <= from) {
+			shift += e.newText.byteLength - (e.end - e.start);
+		} else if (e.start < from) {
+			const nl = lastNewline(e.newText);
+			return nl < 0 ? -1 : e.start + shift + nl + 1;
+		} else break;
+	}
+	return from + shift;
+}
+
+function formattedLine(text: string, start: int32): string {
+	let end = start;
+	while (end < text.byteLength && text.byteAt(end) != "\n".code) end += 1;
+	if (end > start && text.byteAt(end - 1) == "\r".code) end -= 1;
+	return text.byteSlice(start, end);
+}
 
 export function handleCodeAction(id: string, params: string, db: TransAmDb): string {
 	const uri = lspDocumentUri(params);
@@ -54,41 +115,17 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 	const hasTrailingWs = info.trailStart < line.length && info.trailStart > 0;
 
 	if (hasIndentIssue || hasTrailingWs) {
-		// Use the formatter as source of truth — get the correctly formatted version of this line.
-		// This ensures the fix is identical to what "Format Document" would produce.
-		// Cache: reuse formatted output if source unchanged
-		if (_codeActionFmtSource != source) {
-			if (!_fmtParsersRegistered) {
-				registerCoreParsers();
-				_fmtParsersRegistered = true;
-			}
-			const parseResult = parseSource(source);
-			options.source = source;
-			if (parseResult.ok) {
-				const printed = formatNode(parseResult.value, options);
-				_codeActionFmtResult = printed.ok && checkLossless(source, printed.value).ok ? printed.value : "";
-			} else {
-				_codeActionFmtResult = "";
-			}
-			_codeActionFmtSource = source;
-		}
-		if (_codeActionFmtResult.length > 0) {
-			const fmtLines = splitLines(_codeActionFmtResult);
-
-			if (startLine < fmtLines.length && fmtLines[startLine] != line) {
-				const from = lspSourcePosition(source, (startLine + 1) as int32, 0);
-				const to = lspSourcePosition(source, (startLine + 1) as int32, line.length);
-				const proposed = applyEdit(source, {
-					start: { line: from.line, column: from.column },
-					end: { line: to.line, column: to.column },
-					newText: fmtLines[startLine],
-				});
-				if (!checkLossless(source, proposed).ok) return lspResponse(id, "[]");
-				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
-				const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
-				const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
-				actions.push(lspFmtQuickFix(title, changesJson));
-			}
+		const from = lineOffset(source, (startLine + 1) as int32);
+		const to = from + line.byteLength;
+		const at = formattedLineStart(from, formatEditsOf(source, options));
+		const fixed = at < 0 ? line : formattedLine(_codeActionFmtText, at);
+		if (fixed != line) {
+			const proposed = source.byteSlice(0, from) + fixed + source.byteSlice(to, source.byteLength);
+			if (!checkLossless(source, proposed).ok) return lspResponse(id, "[]");
+			const edit = lspFmtTextEdit(startLine, 0, line.length, fixed);
+			const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
+			const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
+			actions.push(lspFmtQuickFix(title, changesJson));
 		}
 	}
 
@@ -254,9 +291,13 @@ function formattingItems(response: string): string[] {
 	return lspGetArrayItems(items);
 }
 
-function quickfixItems(source: string): string[] {
-	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}}}";
+function quickfixItemsAt(source: string, line: int32): string[] {
+	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":" + line.toString() + ",\"character\":0},\"end\":{\"line\":" + line.toString() + ",\"character\":1}}}";
 	return formattingItems(handleCodeAction("1", params, formattingDb(source)));
+}
+
+function quickfixItems(source: string): string[] {
+	return quickfixItemsAt(source, 1);
 }
 
 function quickfixEdit(action: string): string {
@@ -497,6 +538,24 @@ test "indent quickfix spells each literal as the document format does" {
 		assert quickfixText(source) == "\tconst x = " + printed + ";";
 		assertFormattedBuffer(source, result);
 	}
+}
+
+test "indent quickfix takes its line from the edits when an earlier line splits in two" {
+	const source = "const a = 1; const b = 2;\nfunction f(): int32 {\n \tconst x = 1;\n\treturn x;\n}\n";
+	const actions = quickfixItemsAt(source, 2);
+	assert actions.length == 1;
+	assert lspGetField(quickfixEdit(actions[0]), "newText") == "\tconst x = 1;";
+}
+
+test "quickfix cache follows the format options of the same source" {
+	const source = "function f(): int32 {\n\tconst x = 1;   \n\treturn x;\n}\n";
+	const options = getFormatOptions(formattingDb(source), lspUriToPath("file:///fmt/probe.ms"));
+	const was = options.useTabs;
+	assert quickfixText(source) == "\tconst x = 1;";
+	options.useTabs = false;
+	const spaced = quickfixText(source);
+	options.useTabs = was;
+	assert spaced == "  const x = 1;";
 }
 
 test "indent quickfix reads its own buffer after another document was formatted" {
