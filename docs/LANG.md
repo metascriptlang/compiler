@@ -770,6 +770,26 @@ Before, C and the Raiser filled the fields positionally and skipped the parent's
 backends (corpus `overrideDispatchThroughBase`); `instanceof` and a checked `as` answer the same on the
 Raiser since 2026-10-06 (corpus `classIdentityEveryLane`, `732-dynamicDispatch`).
 
+**Abstract classes.** An `abstract` method declares its signature without a body and is answered by
+each concrete subclass, so a call through the base always reaches a body:
+
+```typescript
+abstract class Shape { abstract area(): number; describe(): string { return "shape"; } }
+class Square extends Shape { area(): number { return 4; } }
+const s: Shape = new Square();                      // s.area() == 4
+```
+
+`new Shape()` is refused (`Cannot create an instance of the abstract class 'Shape'`), and so is a
+concrete class that leaves an inherited abstract method unanswered (`Non-abstract class 'Sq' does
+not implement inherited abstract member 'name' from class 'Shape'`), an abstract method in a class
+that is not abstract, a `static` or bodied abstract method, and `super.area()` on an abstract
+method. Measured 2026-10-31 on a candidate of this tree: corpus `1265-abstractMethodReturnsValue`
+(directly and through an abstract class extending another) prints the same on C, JS and the
+Raiser; the refusals are pinned by checker3pass `abstractMembers`. Before, `abstract area(): number;`
+was refused as a body that falls off its end, and an unanswered `abstract name(): void` ran an empty
+body. Not covered: an `abstract` property, since a subclass cannot redeclare an inherited field
+(`field 'x' redefines inherited field`).
+
 ### Interfaces
 
 Interfaces are **reference types** — heap-allocated, reference-counted via DRC. They work identically across JS and C backends. Interfaces can have both fields and method signatures.
