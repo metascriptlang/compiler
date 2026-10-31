@@ -13,7 +13,12 @@
     "./rollup": {
       "types": "./rollup.d.ts",
       "default": "./rollup.js"
-    }
+    },
+    "./webpack": {
+      "types": "./webpack.d.ts",
+      "default": "./webpack.js"
+    },
+    "./webpack/loader": "./webpackLoader.js"
   },
   "files": [
     "index.js",
@@ -21,17 +26,22 @@
     "compilerCore.js",
     "compilerCore.d.ts",
     "rollup.js",
-    "rollup.d.ts"
+    "rollup.d.ts",
+    "webpack.js",
+    "webpack.d.ts",
+    "webpackLoader.js"
   ],
   "dependencies": {
     "magic-string": "^0.30.17"
   },
   "peerDependencies": {
     "vite": ">=5",
-    "rollup": ">=4"
+    "rollup": ">=4",
+    "webpack": "^5.0.0"
   },
   "peerDependenciesMeta": {
     "vite": { "optional": true },
-    "rollup": { "optional": true }
+    "rollup": { "optional": true },
+    "webpack": { "optional": true }
   }
 }
