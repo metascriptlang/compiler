@@ -411,7 +411,7 @@ function glueBody(prelude: string, name: string): string {
 
 test "js side: copying a Span back into its array or out to wasm memory throws when the array no longer holds it" {
 	const p = bindingsFor(["fill"]).prelude;
-	assert p.includes("function __msbInRange(a, off, n) {\n\tif (!(off >= 0 && n >= 0 && off + n <= a.length)) throw new RangeError(");
+	assert p.includes("function __msbInRange(a, off, n) {\n\tif (!(off >= 0 && (n === 0 || n >= 0 && off + n <= a.length))) throw new RangeError(");
 	assert glueBody(p, "__msbCopyBack").startsWith("function __msbCopyBack(p, a, off, n, T, bool) {\n\t__msbInRange(a, off, n);\n");
 	assert glueBody(p, "__msbCopyTo").startsWith("function __msbCopyTo(p, a, off, n, T) {\n\t__msbInRange(a, off, n);\n");
 	assert !glueBody(p, "__msbVecOut").includes("__msbInRange");
@@ -505,7 +505,7 @@ test "js side: a checked Span is tested for its shape only, so an empty one past
 	const span = checkGlueBody(p, "__msbSpan");
 	assert span.includes("!Number.isInteger(v.off) || !Number.isInteger(v.len)");
 	assert !span.includes("base.length");
-	assert checkGlueBody(p, "__msbElems").startsWith("function __msbElems(v, off, n, k, lo, hi, t, f, p) {\n\tconst end = Math.min(off + n, v.length);\n\tfor (let i = Math.max(off, 0); i < end; i++) {\n");
+	assert checkGlueBody(p, "__msbElems").startsWith("function __msbElems(v, off, n, k, lo, hi, t, f, p) {\n\tif (k === \"boolean\" && ArrayBuffer.isView(v)) return v;\n\tconst end = Math.min(off + n, v.length);\n\tfor (let i = Math.max(off, 0); i < end; i++) {\n");
 }
 
 test "js side: a checked callback is tested before it is pushed and its result is tested on its way into wasm" {
