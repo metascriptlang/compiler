@@ -90,7 +90,7 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 let hookRegistry: ExtensionRegistry | null = null;
 const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
-const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "Float64FromBits", "HiXorLo", "MapFatal", "LoadLE64", "LoadLE32", "AsBytes"];
+const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "Float64FromBits", "HiXorLo", "MapFatal", "LoadLE64", "LoadLE32", "AsBytes", "ResultOk", "ResultErr"];
 
 function tableFor(e: Effect): EffectTable {
 	return match (e) {

@@ -179,6 +179,8 @@ function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, meth
 			checkReplyBindingSoleOwner(ctx, p.resolvedSym!, result, p.location, method);
 			return null;
 		},
+		NodeKind.CallExpr when (p.resolvedSym != null && (p.resolvedSym!.builtinKind == "ResultOk" || p.resolvedSym!.builtinKind == "ResultErr")) =>
+			firstSharedReplyPart(ctx, (p.data as CallExprData).arguments, result, method),
 		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
 	};
 }
