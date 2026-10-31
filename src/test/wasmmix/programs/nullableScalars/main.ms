@@ -56,7 +56,8 @@ console.log(`[${showText(greet("ab"))}],[${showText(greet(""))}],[${showText(gre
 console.log(`[${showText(emptyOrNull(0))}],[${showText(emptyOrNull(-1))}],[${showText(emptyOrNull(1))}]`);
 console.log([label(7, "x"), label(null, ""), label(200, null), label(null, null)].join("|"));
 console.log(`${showUnsigned(echoU32(0))},${showUnsigned(echoU32(16777215))},${showUnsigned(echoU32(4294967295))},${showUnsigned(echoU32(null))}`);
-console.log(`${showSmall(echoSmall(-128))},${showSmall(echoSmall(127))},${showSmall(echoSmall(null))}`);
+const lo: int8 = -128;
+console.log(`${showSmall(echoSmall(lo))},${showSmall(echoSmall(127))},${showSmall(echoSmall(null))}`);
 console.log(`${showBig(bigAt(9007199254740993, 2))},${showBig(bigAt(9007199254740993, -1))}`);
 const seen: string[] = [];
 replay((n: int32 | null, s: string | null): void => { seen.push(`${showInt(n)}:${showText(s)}`); });
