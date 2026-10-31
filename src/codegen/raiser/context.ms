@@ -140,6 +140,7 @@ export interface RaiserCompState {
 export interface RaiserTryInfo {
 	finallyBody: Node | null;
 	routeReg: int32;
+	inFinallyBody: boolean;
 }
 
 export function createCompState(): RaiserCompState {

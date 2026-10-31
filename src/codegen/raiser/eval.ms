@@ -3035,6 +3035,15 @@ test "arena: a throw in a finally replaces the raise, and a catch inside it keep
 	assert vm.output == finallyInFlightOut, vm.output;
 }
 
+test "placed: a break or continue out of a finally entered by a raise drops that raise, with an enclosing catch or without" {
+	const vm = evalVM("class Boom { n: number; constructor(n: number) { this.n = n; } } function boom(m: number): void { throw new Boom(m); }"
+		+ " function acrossCatch(): number { let n = 0; while (n < 3) { n += 1; try { try { boom(n); } finally { break; } } catch (e) { return -1; } } return n; }"
+		+ " function cont(): number { let n = 0; let k = 0; while (n < 3) { n += 1; try { boom(n); } finally { continue; } k += 1; } return n * 10 + k; }"
+		+ " console.log(`${acrossCatch()} ${cont()}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 30\n", vm.output;
+}
+
 test "orc: a return inside try carries the value read at the return through the finally bodies" {
 	const vm = evalVM("class Boom { n: number; constructor(n: number) { this.n = n; } }"
 		+ " function str(): string { let s = ''; try { return s; } finally { s += 'x'; } }"

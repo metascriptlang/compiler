@@ -128,7 +128,7 @@ export enum RaiserOpcode {
 	Try,              // ABx: push a safepoint at ip + Bx (a Catch or a Finally)
 	Catch,            // ABx: metadata — handler body follows, Bx = offset past the block
 	Finally,          // ABC: pop the safepoint — reached only when nothing was raised; R[A], R[A+1] = how the finally body was entered
-	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return
+	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return; C = FINALLY_LEAVE drops it instead, for a jump out of the finally body
 	Throw,            // ABC: raise R[A]
 
 	// Compile-time-known-bad site: the bytecode compiler already reported it
@@ -238,6 +238,8 @@ export enum RaiserOpcode {
 }
 
 export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.FutureRead;
+
+export const FINALLY_LEAVE: int32 = 1;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any, allSettled).
 export enum RaiserCombine {
