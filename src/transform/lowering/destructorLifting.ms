@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
@@ -719,11 +719,10 @@ function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 
 // A nullable distinct is a union whose arm is live when the slot is not null: its hooks run on
 // the live arm only, in the order of a case object's (generateUnionArms).
-function nullableDistinctOp(hook: string, d: Type, xf: Node, yf: Node, empties: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	ensureHooks(d.typeName, d, null as unknown as Type, d, false, lctx, loc);
+function nullableDistinctOp(hook: string, held: Type, xf: Node, yf: Node, empties: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const onLiveArm = (op: string, x: Node, y: Node, live: Node): void => {
 		const arm = newBuf();
-		namedObjOp(op, d, clonePath(x, loc), clonePath(y, loc), lctx, arm, loc);
+		fillBody(op, clonePath(x, loc), clonePath(y, loc), "", held, lctx, arm, createNameSet(), loc);
 		buf.items.push(makeIf(makeBinary(clonePath(live, loc), "!==", makeNull(loc), loc), makeBlock(arm.items, loc), null as unknown as Node, loc));
 	};
 	match (hook) {
@@ -753,6 +752,21 @@ function nullableDistinctOp(hook: string, d: Type, xf: Node, yf: Node, empties: 
 		"trace" | "custody" => { onLiveArm(hook, xf, yf, xf); },
 		_ => { throw new Error(`internal: a nullable distinct field has no '${hook}' operation`); },
 	};
+}
+
+function distinctHookName(d: Type): string {
+	return d.kind == TypeKind.GenericInstance ? monoInstanceName(d) : d.typeName;
+}
+
+// Reference tyDistinct arm: a distinct, plain or a generic instance, runs its own hook when it
+// has one and is otherwise its body.
+function distinctOp(hook: string, d: Type, x: Node, y: Node, fieldName: string, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, visited: NameSet, loc: SourceLocation): void {
+	if (!distinctTakesOp(d, hook, lctx)) {
+		fillBody(hook, x, y, fieldName, distinctBody(d) as Type, lctx, buf, visited, loc);
+	} else if (walksValue(hook, d, lctx)) {
+		ensureHooks(distinctHookName(d), d, null as unknown as Type, d, false, lctx, loc);
+		namedObjOp(hook, d, xf, yf, lctx, buf, loc);
+	}
 }
 
 // --- Parameterized runtime op (shared by closure, map) ---
@@ -879,9 +893,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
 				return;
 			}
-			const distinctInner = distinctBody(fieldType);
-			if (distinctInner != null) {
-				fillBody(hook, x, y, fieldName, distinctInner, lctx, buf, visited, loc);
+			if (distinctBody(fieldType) != null) {
+				distinctOp(hook, fieldType, x, y, fieldName, xf, yf, lctx, buf, visited, loc);
 				return;
 			}
 			const transparentInner = peelTransparentInstance(fieldType);
@@ -904,14 +917,12 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Union => {
-			let refInner = unwrapRefNullUnion(fieldType);
-			while (refInner != null && refInner.kind == TypeKind.Distinct) {
-				if (distinctTakesOp(refInner, hook, lctx)) {
-					if (walksValue(hook, refInner, lctx)) nullableDistinctOp(hook, refInner, xf, yf, empties, lctx, buf, loc);
-					return;
-				}
-				refInner = refInner.typeReturn;
+			const held = unwrapRefNullUnion(fieldType);
+			if (held != null && hookedDistinctLayer(held, hook, lctx) != null) {
+				if (walksValue(hook, held, lctx)) nullableDistinctOp(hook, held, xf, yf, empties, lctx, buf, loc);
+				return;
 			}
+			const refInner = held != null ? distinctRepr(held) : null;
 			if (refInner != null) {
 				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
@@ -944,11 +955,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
-			if (fieldType.kind == TypeKind.Distinct && distinctTakesOp(fieldType, hook, lctx)) {
-				if (walksValue(hook, fieldType, lctx)) {
-					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
-				}
+			if (fieldType.kind == TypeKind.Distinct) {
+				distinctOp(hook, fieldType, x, y, fieldName, xf, yf, lctx, buf, visited, loc);
 			} else if (fieldType.typeReturn != null) {
 				fillBody(hook, x, y, fieldName, fieldType.typeReturn, lctx, buf, visited, loc);
 			}
@@ -1143,13 +1151,27 @@ function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(t, "trace", lctx);
 }
 
-function hookedNullableDistinct(held: Type, lctx: LiftCtx): boolean {
-	let t: Type | null = held;
-	while (t != null && t.kind == TypeKind.Distinct) {
-		if (hasAnyUserHook(t, lctx)) return true;
-		t = t.typeReturn;
+// The outermost layer of `t` (through aliases, distincts and generic distinct instances) that
+// runs its own `hook`, or null when every layer is its body for that hook.
+function hookedDistinctLayer(t: Type, hook: string, lctx: LiftCtx): Type | null {
+	for (let layer: Type | null = t; layer != null; layer = distinctLayerBody(layer)) {
+		if (distinctBody(layer) != null && distinctTakesOp(layer, hook, lctx)) return layer;
 	}
-	return false;
+	return null;
+}
+
+// A pointer-held distinct is null only in a slot that holds no value (zeroed, moved from), so its
+// hooks skip null where the reference passes nil to them.
+function heldAsPointer(t: Type): boolean {
+	if (distinctBody(t) == null) return false;
+	const repr = distinctRepr(t);
+	return repr.kind == TypeKind.Ref || repr.kind == TypeKind.Ptr;
+}
+
+function distinctRepr(t: Type): Type {
+	let layer = t;
+	while (distinctLayerBody(layer) != null) layer = distinctLayerBody(layer) as Type;
+	return layer;
 }
 
 function distinctTakesOp(t: Type, hook: string, lctx: LiftCtx): boolean {
@@ -1464,8 +1486,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			} else {
 				generateUnionArms(hook, cName, objType, s1, s2, lctx, buf, loc);
 			}
-		} else if (objType.kind == TypeKind.Distinct) {
-			fillBody(hook, x1, x2, "", objType.typeReturn!, lctx, buf, createNameSet(), loc);
+		} else if (distinctBody(objType) != null) {
+			fillBody(hook, x1, x2, "", distinctBody(objType) as Type, lctx, buf, createNameSet(), loc);
 		} else if (hook == "destroy") {
 			const releaseBase = (): void => {
 				if (owner != null) {
@@ -1494,6 +1516,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
 		}
+	}
+	if ((hook == "destroy" || isTrace) && heldAsPointer(objType)) {
+		buf.items = [makeIf(makeBinary(hookParamDeref(s1, loc), "!==", makeNull(loc), loc), makeBlock(buf.items, loc), null as unknown as Node, loc)];
 	}
 	if (lctx.dropOwner != null && classType != null) {
 		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, held, lctx, loc);
@@ -1639,7 +1664,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		aliasLiftedOps(orig, objType);
 		return;
 	}
-	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(distinctBody(objType) != null && hasAnyUserHook(orig, lctx))) return;
 	if (nameSetContains(lctx.generating, typeId)) return;
 	nameSetAdd(lctx.generating, typeId);
 	liftInstanceBaseOps(orig, lctx, loc);
@@ -2269,7 +2294,7 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, walk: DistinctWalk
 	walk.seen.add(t);
 	walk.order.push(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
-	if (elem != null && elem.kind == TypeKind.Distinct) {
+	if (elem != null && distinctBody(elem) != null) {
 		walk.reachesDistinctArray = true;
 		if (hasAnyUserHook(elem, lctx)) return elem;
 	}
@@ -2305,7 +2330,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) {
 		liftTypeOps(nullableRef, lctx, loc);
-		if (hookedNullableDistinct(nullableRef, lctx)) ensureHooks(anonUnionCName(t), t, null as unknown as Type, t, false, lctx, loc);
+		if (hookedDistinctLayer(nullableRef, "destroy", lctx) != null) ensureHooks(anonUnionCName(t), t, null as unknown as Type, t, false, lctx, loc);
 		return;
 	}
 	refuseArrayOfHookedDistinct(t, lctx, loc);
@@ -2331,8 +2356,8 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 			&& !isAllStringLiteralUnion(t)
 			&& unwrapRefNullUnion(t) == null) {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
-		} else if (t.kind == TypeKind.Distinct && t.typeName != "") {
-			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
+		} else if (distinctBody(t) != null && distinctHookName(t) != "") {
+			ensureHooks(distinctHookName(t), t, null as unknown as Type, t, false, lctx, loc);
 		} else if (t.kind == TypeKind.Ref && t.typeReturn != null
 			&& t.typeReturn.kind == TypeKind.Struct && t.typeReturn.typeName != "") {
 			// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.

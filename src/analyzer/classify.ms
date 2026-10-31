@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -274,8 +274,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// serializing with the drain decref to eliminate the concurrent-decref
 			// race without atomic rc).
 			if (isAwaitable(t)) return makeRcInfo(RcKind.Ref, "", "msDecrefFuture", "msIncref", "msPtrWasMoved", "", false);
-			const distinctInner = distinctBody(t);
-			if (distinctInner != null) return classifyType(distinctInner, ctx, requireOps);
+			if (distinctBody(t) != null) return classifyDistinct(t, ctx, requireOps);
 			const transparentInner = peelTransparentInstance(t);
 			if (transparentInner != t) return classifyType(transparentInner, ctx, requireOps);
 			// Result is a boolean-discriminated match-type Union post-migration —
@@ -306,10 +305,8 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 		TypeKind.Function => t.callConv != CallingConvention.CcClosure ? noRcInfo() : makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx, requireOps),
 		TypeKind.TypeReference => noRcInfo(),
-		TypeKind.Distinct => {
-			if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
-			return t.typeReturn != null ? classifyType(t.typeReturn, ctx, requireOps) : noRcInfo();
-		},
+		TypeKind.Distinct => classifyDistinct(t, ctx, requireOps),
+		TypeKind.Alias => classifyType(t.typeReturn, ctx, requireOps),
 		TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx, requireOps); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
@@ -319,9 +316,9 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// `T | null` (e.g. `Type.typeReturn`) are not refcounted and dangle
 			// when the original allocation is destroyed.
 			let refInner = unwrapRefNullUnion(t);
-			while (refInner != null && refInner.kind == TypeKind.Distinct) {
-				if (getOpByKey(refInner, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, anonUnionCName(t), t, false, requireOps);
-				refInner = refInner.typeReturn;
+			while (distinctLayerBody(refInner) != null) {
+				if (distinctBody(refInner) != null && getOpByKey(refInner as Type, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, anonUnionCName(t), t, false, requireOps);
+				refInner = distinctLayerBody(refInner);
 			}
 			if (refInner != null) {
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
@@ -369,6 +366,11 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
 	};
+}
+
+function classifyDistinct(t: Type, ctx: TransformContext, requireOps: boolean): RcInfo {
+	if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : t.typeName, t, false, requireOps);
+	return classifyType(distinctBody(t), ctx, requireOps);
 }
 
 export function sizedArrayHookName(t: Type): string {

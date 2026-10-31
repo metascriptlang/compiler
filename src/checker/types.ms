@@ -2366,6 +2366,11 @@ export function distinctBody(t: Readonly<Type | null>): Readonly<Type | null> {
 	return distinctInstanceRepr(t);
 }
 
+export function distinctLayerBody(t: Type | null): Type | null {
+	if (t != null && t.kind == TypeKind.Alias) return t.typeReturn;
+	return distinctBody(t);
+}
+
 export function borrowedDotBase(t: Type | null): Type | null {
 	if (t == null) return null;
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
