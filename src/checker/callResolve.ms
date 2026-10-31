@@ -5650,6 +5650,14 @@ export function carriesLength(t: Type): boolean {
 	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || isStringLike(t) || t.kind == TypeKind.CString;
 }
 
+function expectsEnumMember(expected: Type, enumType: Type, member: string): boolean {
+	if (expected.kind == TypeKind.Union) return expected.typeChildren.some((m: Type): boolean => expectsEnumMember(m, enumType, member));
+	return expected.kind == TypeKind.EnumLiteral
+		&& expected.typeReturn != null && sameNominal(expected.typeReturn, enumType)
+		&& expected.typeNames.length > 0
+		&& expected.typeNames[0] == member;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
@@ -5701,11 +5709,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// to Tier 2 (discriminated union narrowing at call sites). The literal type is also
 		// stored on resolvedSym.symbolType so call-argument narrowing can pick it up even
 		// when no expectedType flows down.
-		const wantsLiteral = expectedType != null
-			&& expectedType.kind == TypeKind.EnumLiteral
-			&& expectedType.typeReturn != null && sameNominal(expectedType.typeReturn, objType)
-			&& expectedType.typeNames.length > 0
-			&& expectedType.typeNames[0] == propName;
+		const wantsLiteral = expectedType != null && expectsEnumMember(expectedType, objType, propName);
 		const litType = createEnumLiteral(objType, propName);
 		const reportedType = wantsLiteral ? litType : objType;
 		// Create synthetic symbol for the enum member (no scope lookup needed).

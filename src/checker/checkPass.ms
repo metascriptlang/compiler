@@ -6,7 +6,7 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
+import { enumMemberLiteralOf, errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
 import { findAllExtensionsByName, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, noteDefaultSource, stdSymbol, createExportRegistry } from "./context";
@@ -841,6 +841,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		const storedRead = convertStoredUnionRead(d.initializer, initType, initType);
 		if (storedRead != null) d.initializer = storedRead;
 	}
+	if (declType == null && d.initializer != null) varType = declaredTypeOfEnumInit(d, varType);
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
 	// for self-recursive closure binding, update type and re-record.
@@ -884,6 +885,13 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	refuseStoredView(ctx, node, d, varType);
 	if (binding != null) binding.state = SymbolState.Checked;
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+function declaredTypeOfEnumInit(d: VariableDeclData, varType: Type | null): Type | null {
+	const lit = enumMemberLiteralOf(d.initializer);
+	if (lit != null) return d.declKind == DeclKind.Const ? lit : lit.typeReturn;
+	if (varType != null && varType.kind == TypeKind.EnumLiteral && d.declKind != DeclKind.Const && varType.typeReturn != null) return varType.typeReturn;
+	return varType;
 }
 
 function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
