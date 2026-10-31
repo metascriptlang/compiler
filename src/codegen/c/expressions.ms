@@ -3290,13 +3290,60 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 
 const constBlobMinElements = 64;
 
-function isNumericLiteralList(node: Readonly<Node>, d: Readonly<ArrayLiteralData>): boolean {
-	const t = node.nodeType;
-	if (t == null || !isNumeric(t.typeReturn)) return false;
-	for (const e of d.elements) {
-		if (e.kind != NodeKind.NumberLiteral) return false;
+function isConstScalar(node: Readonly<Node>): boolean {
+	if (node.kind == NodeKind.UnaryExpr) {
+		const u = node.data as UnaryExprData;
+		return u.unaryOp == "-" && u.operand.kind == NodeKind.NumberLiteral;
 	}
-	return true;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember;
+	return node.kind == NodeKind.NumberLiteral || node.kind == NodeKind.BooleanLiteral;
+}
+
+function isConstFieldType(ft: Readonly<Type | null>): boolean {
+	if (ft == null) return false;
+	if (isNumeric(ft)) return true;
+	const k = ft.kind;
+	return k == TypeKind.Boolean || k == TypeKind.Enum || k == TypeKind.Struct || k == TypeKind.Tuple;
+}
+
+function constAggregateInit(g: CGen, p: CProc, node: Readonly<Node>): string {
+	if (node.nodeType == null) return "";
+	if (isConstScalar(node)) return genExpr(g, p, node);
+	if (node.kind == NodeKind.ArrayLiteral && node.nodeType.kind == TypeKind.Tuple) {
+		const items: string[] = [];
+		const td = node.data as ArrayLiteralData;
+		for (let i = 0; i < td.elements.length; i += 1) {
+			const v = constAggregateInit(g, p, td.elements[i]);
+			if (v == "") return "";
+			items.push(`._${i} = ${v}`);
+		}
+		return `{ ${items.join(", ")} }`;
+	}
+	if (node.kind != NodeKind.ObjectLiteral || node.flags.has(NodeFlag.Closure) || node.nodeType.kind != TypeKind.Struct) return "";
+	if (node.nodeType.sym != null && hasFlag(node.nodeType.sym, SymbolFlag.ImportC)) return "";
+	const shape = objLitShape(g, node, false);
+	if (shape.cType == "" || shape.isClassObj || shape.unionWrapIdx >= 0) return "";
+	const d = node.data as ObjectLiteralData;
+	const owner = node.nodeType;
+	const items: string[] = [];
+	for (let i = 0; i < d.keys.length; i += 1) {
+		const ft = fieldTypeView(owner, d.keys[i]);
+		if (!isConstFieldType(ft) || storesNothing(owner, ft)) return "";
+		const v = constAggregateInit(g, p, d.properties[i]);
+		if (v == "") return "";
+		items.push(`.${mangleFieldName(d.keys[i])} = ${v}`);
+	}
+	return `{ ${items.join(", ")} }`;
+}
+
+function constAggregateList(g: CGen, p: CProc, d: Readonly<ArrayLiteralData>): string[] {
+	const items: string[] = [];
+	for (const e of d.elements) {
+		const v = constAggregateInit(g, p, e);
+		if (v == "") return [];
+		items.push(v);
+	}
+	return items;
 }
 
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
@@ -3343,10 +3390,9 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
 	}
 	const slots = isSizedArray ? `${tmpName}.data` : `${tmpName}.p->data`;
-	if (d.elements.length >= constBlobMinElements && isNumericLiteralList(node, d)) {
-		const items: string[] = [];
-		for (const e of d.elements) items.push(genExpr(g, p, e));
-		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${items.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
+	const blobItems = d.elements.length >= constBlobMinElements && node.nodeType != null && isConstFieldType(node.nodeType.typeReturn) ? constAggregateList(g, p, d) : [];
+	if (blobItems.length > 0) {
+		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${blobItems.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
 		return tmpName;
 	}
 	let i = 0;
