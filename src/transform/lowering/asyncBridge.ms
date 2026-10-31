@@ -32,7 +32,7 @@ import {
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType, spillAssignedYields, holdClosureEnv } from "./generatorLower";
 import { routineSyms } from "./lambdaLiftingDetect";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { statementCanRaise } from "../../checker/raises";
@@ -535,6 +535,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	const stepperRetType = createClosureType([], [], createPtr(voidType()));  // returns void* (msFutureBase* or NULL)
 	const closureType = stepperRetType;
 
+	spillAssignedYields(body, ctx);
+	holdClosureEnv(body, ctx);
 	// 1. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
 

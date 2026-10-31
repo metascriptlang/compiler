@@ -196,7 +196,7 @@ export function createLiftState(ctx: TransformContext): LiftState {
 	const state: LiftState = {
 		liftedFunctions: [],
 		envStructs: [],
-		closureCounter: 0,
+		closureCounter: ctx.liftCounter,
 		currentFnName: "anon",
 		ss: createScopeStack(),
 		lastUseCaptures: createSymSet(),
@@ -695,7 +695,7 @@ function envStructNamed(state: LiftState, name: string): boolean {
 	for (const decl of state.envStructs) {
 		if (decl.nodeType!.sym!.name == name) return true;
 	}
-	return false;
+	return state.ctx.liftedEnvNames.includes(name);
 }
 
 // Creates the shared env struct type and hoisted declaration for a function.

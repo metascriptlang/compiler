@@ -1271,6 +1271,14 @@ function liftCapturingClosureBody(
 	return liftNonCapturing(body, node.paramSyms!, paramTypes, flags, returnType, state, loc, node.nodeType!, routine);
 }
 
+function carryAsync(source: Node, state: LiftState, pair: Node): Node {
+	if (source.flags.has(NodeFlag.WasAsync)) {
+		const fn = state.liftedFunctions[state.liftedFunctions.length - 1];
+		fn.flags = fn.flags.incl(NodeFlag.WasAsync);
+	}
+	return pair;
+}
+
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
 function tryLiftClosure(node: Node, state: LiftState): Node {
 	// Save+clear scope state: closure body is a new scope.
@@ -1281,10 +1289,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		return liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow);
+		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow));
 	} else if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		return liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr);
+		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr));
 	} else {
 		popFuncBoundary(state.ss);
 		state.activeEnvRewrites = savedActiveRewrites;
@@ -1322,6 +1330,8 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	collectRoutines(program, state);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);
+	ctx.liftCounter = state.closureCounter;
+	for (const s of state.envStructs) ctx.liftedEnvNames.push(s.nodeType!.sym!.name);
 
 	// Prepend env structs + lifted functions to program
 	if (state.envStructs.length == 0 && state.liftedFunctions.length == 0) {

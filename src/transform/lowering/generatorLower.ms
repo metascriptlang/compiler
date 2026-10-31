@@ -42,7 +42,7 @@ import {
 	makeTryCatch, makeTryFinally, makeCatchSym, makeMoveExpr, makeString,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, booleanType, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { createRef, int32Type, booleanType, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn, stdSymbol } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -459,6 +459,95 @@ export function containsYield(node: Node | null): boolean {
 
 function isDirectYield(expr: Node): boolean {
 	return expr.kind == NodeKind.YieldExpr && !containsYield((expr.data as YieldExprData).yieldArg);
+}
+
+function assignedYield(stmt: Node): Node | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr || (e.data as BinaryExprData).operator != "=") return null;
+	return isDirectYield((e.data as BinaryExprData).right) ? e : null;
+}
+
+function spillAssignedYieldsIn(stmts: Node[], ctx: TransformContext): Node[] {
+	const out: Node[] = [];
+	for (const stmt of stmts) {
+		const assign = assignedYield(stmt);
+		if (assign == null) {
+			spillAssignedYields(stmt, ctx);
+			out.push(stmt);
+			continue;
+		}
+		const ad = assign.data as BinaryExprData;
+		const t = ad.left.nodeType != null ? ad.left.nodeType : ad.right.nodeType;
+		const tmp = newLoweredSym(ctx, SymbolKind.Variable, `$yv${ctx.tempCounter}`, t, false);
+		ctx.tempCounter += 1;
+		const decl = makeVarDecl(tmp.name, ad.right, DeclKind.Const, stmt.location);
+		decl.resolvedSym = tmp;
+		decl.nodeType = t;
+		out.push(decl);
+		ad.right = makeTypedIdentResolved(tmp, t, stmt.location);
+		out.push(stmt);
+	}
+	return out;
+}
+
+export function spillAssignedYields(node: Node | null, ctx: TransformContext): void {
+	if (node == null || isScopeBoundary(node)) return;
+	if (node.kind == NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		bd.statements = spillAssignedYieldsIn(bd.statements, ctx);
+	} else if (node.kind == NodeKind.SwitchCase) {
+		const cd = node.data as SwitchCaseData;
+		cd.caseStmts = spillAssignedYieldsIn(cd.caseStmts, ctx);
+	} else {
+		forEachChild(node, (child: Node): void => { spillAssignedYields(child, ctx); });
+	}
+}
+
+function closureEnvParam(node: Node): Symbol | null {
+	if (node.kind != NodeKind.TypeAssertion) return null;
+	const inner = (node.data as TypeAssertionData).asExpr;
+	const sym = inner.kind == NodeKind.Identifier ? inner.resolvedSym : null;
+	if (sym == null || sym.symbolKind != SymbolKind.Parameter) return null;
+	const env = node.nodeType != null && node.nodeType.kind == TypeKind.Ptr ? node.nodeType.typeReturn : null;
+	return env != null && env.sym != null && hasFlag(env.sym, SymbolFlag.ClosureEnv) ? sym : null;
+}
+
+function findClosureEnv(node: Node | null, found: Node[]): void {
+	if (node == null || isScopeBoundary(node)) return;
+	if (closureEnvParam(node) != null) {
+		if (found.length == 0) found.push(node);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { findClosureEnv(child, found); });
+}
+
+function retargetIdent(node: Node | null, from: Symbol, to: Symbol, t: Type): void {
+	if (node == null || isScopeBoundary(node)) return;
+	if (node.kind == NodeKind.Identifier && node.resolvedSym == from) {
+		node.resolvedSym = to;
+		(node.data as IdentifierData).name = to.name;
+		node.nodeType = t;
+		return;
+	}
+	forEachChild(node, (child: Node): void => { retargetIdent(child, from, to, t); });
+}
+
+export function holdClosureEnv(body: Node, ctx: TransformContext): void {
+	const found: Node[] = [];
+	findClosureEnv(body, found);
+	if (found.length == 0 || body.kind != NodeKind.BlockStmt) return;
+	const param = closureEnvParam(found[0])!;
+	const held = createRef(found[0].nodeType!.typeReturn!);
+	const local = newLoweredSym(ctx, SymbolKind.Variable, `$heldEnv${ctx.tempCounter}`, held, false);
+	ctx.tempCounter += 1;
+	retargetIdent(body, param, local, held);
+	const init = makeTypedIdentResolved(param, param.symbolType, body.location);
+	const decl = makeVarDecl(local.name, init, DeclKind.Const, body.location);
+	decl.resolvedSym = local;
+	decl.nodeType = held;
+	const bd = body.data as BlockStmtData;
+	bd.statements = [decl, ...bd.statements];
 }
 
 // Emit yield: transition to next state + return IteratorResult.
@@ -1287,6 +1376,8 @@ function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Nod
 }
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation, source: Symbol | null = null): Node {
+	spillAssignedYields(body, ctx);
+	holdClosureEnv(body, ctx);
 	// 1. Collect all locals and their types
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);

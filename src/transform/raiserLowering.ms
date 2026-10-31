@@ -88,10 +88,11 @@ function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolea
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
-	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
+	result = lowerLambda(result, ctx);
+	result = lowerGenerator(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = guardModuleTdzRaiser(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
