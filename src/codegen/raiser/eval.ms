@@ -3036,7 +3036,7 @@ test "arena: a throw in a finally replaces the raise, and a catch inside it keep
 }
 
 test "orc: a return inside try carries the value read at the return through the finally bodies" {
-	const vm = evalOrcVM("class Boom { n: number; constructor(n: number) { this.n = n; } }"
+	const vm = evalVM("class Boom { n: number; constructor(n: number) { this.n = n; } }"
 		+ " function str(): string { let s = ''; try { return s; } finally { s += 'x'; } }"
 		+ " function num(): int32 { let n: int32 = 1; try { return n; } finally { n = 5; } }"
 		+ " function nest(): string { let s = ''; try { try { return s; } finally { s += 'a'; } } finally { s += 'b'; } }"
