@@ -4,8 +4,9 @@
 // on the held member, one routine per union and table.
 
 import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable, findFieldInVariant } from "../../checker/types";
+import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
 import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
+import { declaresProperty } from "../../checker/compat";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
@@ -152,7 +153,7 @@ function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null 
 }
 
 // `"name" in u` over a union asks which member `u` holds: a member that
-// declares `name`, optional or not, answers true.
+// declares `name` as a field, optional or not, a method or an accessor answers true.
 function lowerInKeyword(node: Node, ctx: TransformContext): Node | null {
 	const d = node.data as BinaryExprData;
 	if (d.operator != "in" || d.right.nodeType == null) return null;
@@ -166,7 +167,7 @@ function lowerInKeyword(node: Node, ctx: TransformContext): Node | null {
 	const name = (d.left.data as StringLiteralData).value;
 	const operand = lowerNode(d.right, ctx);
 	const held: Type = u;
-	return routineCall("msIn_" + hashToBase36(name) + "_", operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(findFieldInVariant(peelTransparentInstance(member), name) != null, loc), ctx, loc), booleanType());
+	return routineCall("msIn_" + hashToBase36(name) + "_", operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(declaresProperty(peelTransparentInstance(member), name), loc), ctx, loc), booleanType());
 }
 
 function holdsAwaitable(u: Type): boolean {

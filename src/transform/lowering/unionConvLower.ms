@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
-import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase } from "../../checker/types";
+import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase, isDiscriminatedUnion, getDiscriminantName } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
@@ -9,7 +9,7 @@ import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind } from "../util";
 import { createNode } from "../../ast/node";
-import { memberLabels } from "../native/unionProjectLower";
+import { memberLabels, discriminantValue } from "../native/unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
 import { monoInstanceName } from "../../monomorphize/registry";
 
@@ -408,7 +408,7 @@ function testedByTypeof(kind: string): boolean {
 
 export function armOrder(source: Type, ctx: TransformContext, loc: SourceLocation): int32[] {
 	const order: int32[] = [];
-	if (testsByTag(source, ctx)) {
+	if (testsByTag(source, ctx) || isDiscriminatedUnion(source)) {
 		for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) order.push(vi);
 		return order;
 	}
@@ -444,6 +444,12 @@ export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: Tran
 		const tag = makeMember(read(valueSym, source, loc), ctx.jsBackend || ctx.raiserBackend ? "$tag" : "_tag", loc);
 		tag.nodeType = int32Type();
 		test = makeBinary(tag, "==", makeIntNumber(vi as int64, loc), loc);
+	} else if (isDiscriminatedUnion(source)) {
+		const want = discriminantValue(source, vi, loc);
+		if (want == null) throw new Error(`internal: member ${vi} of '${typeDisplayName(source)}' has no discriminant value`);
+		const disc = makeMember(read(valueSym, source, loc), getDiscriminantName(source), loc);
+		disc.nodeType = source.typeExtra;
+		test = makeBinary(disc, "==", want, loc);
 	} else if (jsValueKind(member) == "class") {
 		const cls = runtimeClassSym(member.typeReturn);
 		if (cls == null) throw new Error(`internal: the class member '${typeDisplayName(member)}' of '${typeDisplayName(source)}' has no runtime class`);

@@ -203,7 +203,7 @@ function guardObjectSlot(p: Node): void {
 	if (carried) p.flags = p.flags.incl(NodeFlag.NoFieldCheck);
 }
 
-function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
+export function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
 	const en = ut.typeExtra;
 	if (en == null || en.kind != TypeKind.Enum || slot + 1 >= ut.typeNames.length) return null;
 	const stored = ut.typeNames[slot + 1];
