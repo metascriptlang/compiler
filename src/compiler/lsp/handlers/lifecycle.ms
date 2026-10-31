@@ -191,9 +191,9 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 
 export function handleDidChange(params: string, db: TransAmDb): string {
 	const uri = lspDocumentUri(params);
-	// Two-step extraction: scope search to contentChanges array (avoids matching "text" elsewhere)
-	const contentChanges = lspGetObjectField(params, "contentChanges");
-	const changes = lspGetField(contentChanges, "text");
+	const entries = lspGetArrayItems(lspGetObjectField(params, "contentChanges"));
+	if (entries.length == 0) return "";
+	const changes = lspGetField(entries[entries.length - 1], "text");
 	const path = lspUriToPath(uri);
 	// Lightweight: update text + parse only. No type check on keystrokes.
 	// Diagnostics publish post-drain via publishPendingDiagnostics().

@@ -2054,6 +2054,38 @@ function closedDocumentIsNotRepublished(): LspScenario {
 	};
 }
 
+function twoChanges(uri: string, first: string, last: string): string {
+	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(first)}},{"text":${lspJsonString(last)}}]}`;
+}
+
+function lastContentChangeWins(): LspScenario {
+	const goodLast = "file:///lspwire/goodlast.ms";
+	const badLast = "file:///lspwire/badlast.ms";
+	return {
+		name: "a didChange with several content changes takes the last text",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(goodLast, GOOD_VALUE)),
+				notification("textDocument/didOpen", openParams(badLast, GOOD_VALUE)),
+			]),
+			frames([
+				notification("textDocument/didChange", twoChanges(goodLast, BAD_VALUE, GOOD_VALUE)),
+				notification("textDocument/didChange", twoChanges(badLast, GOOD_VALUE, BAD_VALUE)),
+			]),
+			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("diagnostic count after good-last", "0", finalDiagnosticCount(r, goodLast)),
+			sameText("diagnostic count after bad-last", "1", finalDiagnosticCount(r, badLast)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -2114,6 +2146,7 @@ export function lspScenarios(): LspScenario[] {
 		unknownMethodAnswersMethodNotFound(),
 		requestsBeforeInitializeAreRefused(),
 		closedDocumentIsNotRepublished(),
+		lastContentChangeWins(),
 	];
 }
 

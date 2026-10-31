@@ -851,6 +851,10 @@ test "replay: an edit followed by a close in one drain publishes nothing more fo
 	assert runMemoryScenario("an edit followed by a close in one drain publishes nothing more for the closed document") == "";
 }
 
+test "replay: a didChange with several content changes takes the last text" {
+	assert runMemoryScenario("a didChange with several content changes takes the last text") == "";
+}
+
 }
 
 // ===== Exports a top-level macro statement splices =====
