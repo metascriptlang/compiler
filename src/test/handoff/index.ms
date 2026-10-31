@@ -104,6 +104,7 @@ import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
 import "./bitSetCaseLabel";
 import "./destructuringRestLast";
+import "./stringMutatorsRemoved";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

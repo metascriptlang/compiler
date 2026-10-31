@@ -6768,7 +6768,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					}
 				}
 			}
-			if (isMaybeType(resolvedObjType)) {
+			const mutableForm = isStringLike(resolvedObjType) ? removedStringMutatorForm(d.property) : "";
+			if (mutableForm != "") {
+				addError(ctx, `strings are immutable, so string has no '${d.property}': write ${mutableForm}`, node.location.line, node.location.column);
+			} else if (isMaybeType(resolvedObjType)) {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}': it is possibly 'null', narrow it with a null check, or unwrap it with '!' or '??'`, node.location.line, node.location.column);
 			} else if (suggestion != "") {
 				addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
@@ -6778,6 +6781,15 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	return propType;
+}
+
+function removedStringMutatorForm(name: string): string {
+	if (name == "setLength") return "`s = s.slice(0, n)`";
+	if (name == "append") return "`s = s + x`";
+	if (name == "setSlice") return "`s = s.slice(a, b)`";
+	if (name == "stripInPlace") return "`s = s.trim()`";
+	if (name == "capacity") return "`s.length`";
+	return "";
 }
 
 function isUint8Array(t: Type): boolean {
