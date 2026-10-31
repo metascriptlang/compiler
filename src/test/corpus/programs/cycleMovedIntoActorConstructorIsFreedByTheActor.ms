@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors and no per-thread cycle root sets, which this program pins
 // @stdout: m
 // @stdout: kept mo
 // @stdout: kept mo
