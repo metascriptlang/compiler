@@ -166,3 +166,25 @@ test "js side: each writable Span has its own copy-back, so one that throws cann
 	const code = bindingsFor(["swap"]).modules[0].code;
 	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e1) __msbMod._free(e1[0]);");
 }
+
+function glueBody(prelude: string, name: string): string {
+	const from = prelude.indexOf("function " + name + "(");
+	if (from < 0) throw new Error("internal: prelude lacks " + name);
+	const to = prelude.indexOf("\n}\n", from);
+	if (to < 0) throw new Error("internal: " + name + " has no closing brace at column zero");
+	return prelude.slice(from, to);
+}
+
+test "js side: copying a Span back into its array or out to wasm memory throws when the array no longer holds it" {
+	const p = bindingsFor(["fill"]).prelude;
+	assert p.includes("function __msbInRange(a, off, n) {\n\tif (!(off >= 0 && n >= 0 && off + n <= a.length)) throw new RangeError(");
+	assert glueBody(p, "__msbCopyBack").startsWith("function __msbCopyBack(p, a, off, n, T, bool) {\n\t__msbInRange(a, off, n);\n");
+	assert glueBody(p, "__msbCopyTo").startsWith("function __msbCopyTo(p, a, off, n, T) {\n\t__msbInRange(a, off, n);\n");
+	assert !glueBody(p, "__msbVecOut").includes("__msbInRange");
+}
+
+test "js side: a Span is range-checked before its copy is allocated, so a throw leaves no wasm memory to free" {
+	const body = glueBody(bindingsFor(["fill"]).prelude, "__msbCopyIn");
+	assert body.startsWith("function __msbCopyIn(a, off, n, T) {\n\t__msbInRange(a, off, n);\n");
+	assert body.indexOf("__msbInRange(") < body.indexOf("__msbAlloc(");
+}
