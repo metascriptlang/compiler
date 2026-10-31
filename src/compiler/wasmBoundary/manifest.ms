@@ -1,4 +1,4 @@
-import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, NodeKind, FunctionDeclData } from "../../ast/node";
+import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, Node, NodeKind, FunctionDeclData, SourceLocation, makeLoc } from "../../ast/node";
 import { ExportedSymInfo, LIFECYCLE_HOOK_NAMES, isExtensionRoutine, isGenericFn, lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
@@ -48,15 +48,26 @@ export interface BoundaryFunction {
 	resultElement: BoundaryKind;
 }
 
+export interface BoundaryRefusal {
+	file: string;
+	code: string;
+	message: string;
+	line: int32;
+	column: int32;
+	endLine: int32;
+	endColumn: int32;
+}
+
 export interface Manifest {
 	functions: BoundaryFunction[];
-	errors: string[];
+	errors: BoundaryRefusal[];
 }
 
 interface Collector {
-	errors: string[];
+	errors: BoundaryRefusal[];
 	fnName: string;
 	modulePath: string;
+	at: SourceLocation;
 }
 
 export function unwiredKind(kind: BoundaryKind, what: string): never {
@@ -171,8 +182,12 @@ function isVoidType(t: Type | null): boolean {
 	return p.kind == TypeKind.Void || p.kind == TypeKind.None;
 }
 
-function refuse(c: Collector, what: string, t: Type, why: string): void {
-	c.errors.push(`'${c.fnName}' in '${c.modulePath}' cannot cross the JS/wasm boundary: ${what} has type '${describe(t)}', ${why}`);
+function refuseAt(c: Collector, code: string, message: string): void {
+	c.errors.push({ file: c.modulePath, code, message, line: c.at.line, column: c.at.column, endLine: c.at.endLine, endColumn: c.at.endColumn });
+}
+
+function refuse(c: Collector, code: string, what: string, t: Type, why: string): void {
+	refuseAt(c, code, `'${c.fnName}' in '${c.modulePath}' cannot cross the JS/wasm boundary: ${what} has type '${describe(t)}', ${why}`);
 }
 
 function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | null {
@@ -193,7 +208,7 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 			}
 		}
 		if (k == null) {
-			refuse(c, `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float, string and Span-of-number parameters");
+			refuse(c, "callback-param", `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float, string and Span-of-number parameters");
 			ok = false;
 		} else {
 			params.push(k);
@@ -206,7 +221,7 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 		const rt = peeled(t.typeReturn!);
 		const k = isMaybeType(rt) ? null : scalarKind(rt);
 		if (k == null) {
-			refuse(c, `the result of ${what}`, rt, "and a callback crossing the boundary returns only void, bool, integer and float");
+			refuse(c, "callback-result", `the result of ${what}`, rt, "and a callback crossing the boundary returns only void, bool, integer and float");
 			ok = false;
 		} else {
 			result = k;
@@ -248,7 +263,7 @@ function declaresHook(t: Type): boolean {
 
 function structLeaves(c: Collector, what: string, t: Type, path: string[], out: BoundaryLeaf[]): boolean {
 	if (declaresHook(t)) {
-		refuse(c, what, t, "which declares a lifecycle hook, and a copy made field by field would skip it");
+		refuse(c, "struct-hook", what, t, "which declares a lifecycle hook, and a copy made field by field would skip it");
 		return false;
 	}
 	let ok = true;
@@ -261,7 +276,7 @@ function structLeaves(c: Collector, what: string, t: Type, path: string[], out: 
 		else if (ft.kind == TypeKind.String) out.push({ path: fieldPath, kind: BoundaryKind.String });
 		else if (isStructType(ft) && !isMaybeType(ft)) ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
 		else {
-			refuse(c, fieldWhat, ft, noFormWhy(ft, NoFormAt.Field) ?? "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
+			refuse(c, "struct-field", fieldWhat, ft, noFormWhy(ft, NoFormAt.Field) ?? "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
 			ok = false;
 		}
 	}
@@ -326,7 +341,7 @@ function valueShape(c: Collector, what: string, t: Type): ValueShape | null {
 		const et = peeled(t.typeReturn!);
 		const element = isMaybeType(et) ? null : scalarKind(et);
 		if (element == null) {
-			refuse(c, what, t, "and a Vec crosses the boundary as a copy of bool, integer or float elements");
+			refuse(c, "vec-element", what, t, "and a Vec crosses the boundary as a copy of bool, integer or float elements");
 			return null;
 		}
 		return { kind: BoundaryKind.Vec, leaves: [], element };
@@ -338,7 +353,7 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 	const t = peeled(type);
 	const what = `parameter '${name}'`;
 	if (isMaybeType(t)) {
-		refuse(c, what, t, "which is not supported: pass a plain value");
+		refuse(c, "optional", what, t, "which is not supported: pass a plain value");
 		return null;
 	}
 	const scalar = scalarKind(t);
@@ -352,7 +367,7 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 		const et = peeled(t.typeReturn!);
 		const element = isMaybeType(et) ? null : scalarKind(et);
 		if (element == null) {
-			refuse(c, what, t, "and a Span crosses the boundary for the call over bool, integer or float elements");
+			refuse(c, "span-element", what, t, "and a Span crosses the boundary for the call over bool, integer or float elements");
 			return null;
 		}
 		return { name, kind: BoundaryKind.Span, mode: isReadonlyView(t) ? BoundaryMode.Borrowed : BoundaryMode.Shared, callback: null, leaves: [], element };
@@ -360,7 +375,7 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, what, t);
 	if (shape != null) return { name, kind: shape.kind, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
-	if (c.errors.length == errorsBefore) refuse(c, what, t, noFormWhy(t, NoFormAt.Param) ?? "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
+	if (c.errors.length == errorsBefore) refuse(c, "no-form", what, t, noFormWhy(t, NoFormAt.Param) ?? "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
 	return null;
 }
 
@@ -368,20 +383,20 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 	if (isVoidType(type)) return { kind: BoundaryKind.Void, leaves: [], element: BoundaryKind.Void };
 	const t = peeled(type!);
 	if (isMaybeType(t)) {
-		refuse(c, "the result", t, "which is not supported: return a plain value");
+		refuse(c, "optional", "the result", t, "which is not supported: return a plain value");
 		return null;
 	}
 	const scalar = scalarKind(t);
 	if (scalar != null) return { kind: scalar, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.String) return { kind: BoundaryKind.String, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.Span) {
-		refuse(c, "the result", t, "and a Span borrows its memory only for the call, so it cannot outlive it: return a Vec");
+		refuse(c, "span-result", "the result", t, "and a Span borrows its memory only for the call, so it cannot outlive it: return a Vec");
 		return null;
 	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, "the result", t);
 	if (shape != null) return shape;
-	if (c.errors.length == errorsBefore) refuse(c, "the result", t, noFormWhy(t, NoFormAt.Result) ?? "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
+	if (c.errors.length == errorsBefore) refuse(c, "no-form", "the result", t, noFormWhy(t, NoFormAt.Result) ?? "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
 	return null;
 }
 
@@ -389,29 +404,42 @@ function fnFlagsOf(sym: Symbol): string {
 	return sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl ? (sym.declNode.data as FunctionDeclData).fnFlags : "";
 }
 
+function fnDeclOf(sym: Symbol): Node | null {
+	return sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl ? sym.declNode : null;
+}
+
 function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol): BoundaryFunction | null {
 	c.fnName = name;
+	const decl = fnDeclOf(sym);
+	const nameAt = decl != null ? (decl.data as FunctionDeclData).nameLocation : sym.location;
+	c.at = nameAt;
 	const flags = fnFlagsOf(sym);
 	if (sym.overloads.length > 0) {
-		c.errors.push(`'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is an overload set, and one export symbol names one function; give each overload its own name`);
+		refuseAt(c, "overload-set", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is an overload set, and one export symbol names one function; give each overload its own name`);
 		return null;
 	}
 	if (isGenericFn(flags) || hasGenericParams(sym.symbolType)) {
-		c.errors.push(`'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is generic, and a boundary function has one concrete signature; export a non-generic wrapper`);
+		refuseAt(c, "generic", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is generic, and a boundary function has one concrete signature; export a non-generic wrapper`);
 		return null;
 	}
 	if (isExtensionRoutine(flags)) {
-		c.errors.push(`'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is an extension routine; export a plain function that takes the receiver as a parameter`);
+		refuseAt(c, "extension-routine", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is an extension routine; export a plain function that takes the receiver as a parameter`);
 		return null;
 	}
 	const ft = peeled(sym.symbolType);
+	const typeExprs = decl != null ? decl.typeExprs : null;
+	if (typeExprs != null && typeExprs.length != ft.typeChildren.length) throw new Error(`internal: '${name}' in '${c.modulePath}' has ${ft.typeChildren.length} parameter types but ${typeExprs.length} parameter annotations`);
 	const params: BoundaryParam[] = [];
 	let ok = true;
 	for (let i = 0; i < ft.typeChildren.length; i += 1) {
+		const typeExpr = typeExprs != null ? typeExprs[i] : null;
+		c.at = typeExpr != null ? typeExpr.location : nameAt;
 		const p = paramOf(c, ft.typeNames[i], ft.typeChildren[i]);
 		if (p == null) ok = false;
 		else params.push(p);
 	}
+	const resultExpr = decl != null ? decl.typeExpr : null;
+	c.at = resultExpr != null ? resultExpr.location : nameAt;
 	const result = resultOf(c, ft.typeReturn);
 	if (!ok || result == null) return null;
 	return { modulePath: c.modulePath, moduleKey: key, name, exportSymbol: `msb_${key}_${name}`, params, result: result.kind, resultLeaves: result.leaves, resultElement: result.element };
@@ -419,7 +447,7 @@ function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol):
 
 export function manifestFor(modulePath: string, entryPath: string, exports: ExportedSymInfo[], placed: string[]): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
-	const c: Collector = { errors: [], fnName: "", modulePath };
+	const c: Collector = { errors: [], fnName: "", modulePath, at: makeLoc(0, 0) };
 	const functions: BoundaryFunction[] = [];
 	for (const name of placed) {
 		let found = false;

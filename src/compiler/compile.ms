@@ -81,7 +81,7 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
-import { manifestFor, BoundaryFunction } from "./wasmBoundary/manifest";
+import { manifestFor, BoundaryFunction, BoundaryRefusal } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
 import { placedModuleErrors, placedImportErrors } from "./wasmBoundary/refusals";
@@ -1609,6 +1609,12 @@ function isJsIdentifierName(name: string): boolean {
 	return true;
 }
 
+function printBoundaryRefusal(graph: ModuleGraph, r: BoundaryRefusal): void {
+	const mod = findModule(graph, r.file);
+	if (mod == null) throw new Error(`internal: wasm boundary refusal '${r.code}' names '${r.file}', which is not in the module graph`);
+	renderModuleError(r.file, mod.rawSource, { message: r.message, line: r.line, column: r.column, severity: ErrorSeverity.Error });
+}
+
 function placeWasmModules(placed: string[], placedNames: string[][], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, opts: CliOptions): JsBindings {
 	const errors = placedModuleErrors(placed, entryPath, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
@@ -1627,7 +1633,7 @@ function placeWasmModules(placed: string[], placedNames: string[][], graph: Modu
 		for (const f of manifest.functions) functions.push(f);
 	}
 	if (errors.length > 0) {
-		for (const e of errors) printDiag(`${error("error")}: ${e}`);
+		for (const e of errors) printBoundaryRefusal(graph, e);
 		stopBuild();
 	}
 	const entry = wasmEntrySource(functions, (path: string): string => path.replaceAll("\\", "/"));
