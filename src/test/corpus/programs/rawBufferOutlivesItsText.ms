@@ -1,6 +1,6 @@
 // @stdout: built length=4 71,30,c3,a9
 // @stdout: file length=6 first=61
-// @skip-js
+// @skip-js: std/core/buffer/bytes has no JS build
 // note: a Buffer made from text owns its bytes, so it stays whole after the text it came from is released and its memory reused, whether the text was built in a routine or read from a file.
 
 import { Buffer } from "std/core/buffer";
