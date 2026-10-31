@@ -46,12 +46,12 @@ test "manifest: scalar, callback and string exports map to boundary kinds" {
 	assert m.functions[5].params[0].kind == BoundaryKind.String && m.functions[5].result == BoundaryKind.String;
 }
 
-test "manifest: an array, a class and a nullable parameter fail naming function, parameter and type" {
+test "manifest: an array, a class and a nullable callback parameter fail naming function, parameter and type" {
 	const src = `
 class Box { v: int32 = 0; }
 export function takesArray(xs: int32[]): int32 { return 0; }
 export function takesBox(b: Box): int32 { return 0; }
-export function maybe(x: int32 | null): int32 { return 0; }
+export function maybe(cb: ((x: int32) => int32) | null): int32 { return 0; }
 export function wide(): Box { return new Box(); }
 export function cbString(cb: (n: int32) => string): int32 { return 0; }
 `;
@@ -60,7 +60,7 @@ export function cbString(cb: (n: int32) => string): int32 { return 0; }
 	assert m.errors.length == 5, m.errors.map((e) => e.message).join("; ");
 	assert m.errors[0].message.includes("'takesArray'") && m.errors[0].message.includes("parameter 'xs'");
 	assert m.errors[1].message.includes("'takesBox'") && m.errors[1].message.includes("parameter 'b'") && m.errors[1].message.includes("'Box'");
-	assert m.errors[2].message.includes("'maybe'") && m.errors[2].message.includes("nullable");
+	assert m.errors[2].message.includes("'maybe'") && m.errors[2].message.includes("parameter 'cb'") && m.errors[2].message.includes("cannot be null");
 	assert m.errors[3].message.includes("'wide'") && m.errors[3].message.includes("the result");
 	assert m.errors[4].message.includes("'cbString'") && m.errors[4].message.includes("callback");
 }
@@ -192,11 +192,12 @@ export function sum(xs: Vec<float32>): Vec<int32> { const out: Vec<int32> = []; 
 	assert sum.result == BoundaryKind.Vec && sum.resultElement == BoundaryKind.I32;
 }
 
-test "manifest: a struct with a hook, a nullable field or a Vec of strings fails naming the field" {
+test "manifest: a struct with a hook, a nullable struct field or a Vec of strings fails naming the field" {
 	const src = `
 struct Owned { n: int32; }
 function onDestroy(this o: Owned): void {}
-struct Loose { n: int32 | null; }
+struct Inner { n: int32; }
+struct Loose { n: Inner | null; }
 export function own(o: Owned): int32 { return 0; }
 export function loose(l: Loose): int32 { return 0; }
 export function words(ws: Vec<string>): int32 { return 0; }
@@ -205,7 +206,7 @@ export function words(ws: Vec<string>): int32 { return 0; }
 	assert m.functions.length == 0;
 	assert m.errors.length == 3, m.errors.map((e) => e.message).join("; ");
 	assert m.errors[0].message.includes("'own'") && m.errors[0].message.includes("lifecycle hook");
-	assert m.errors[1].message.includes("'loose'") && m.errors[1].message.includes("field 'n'");
+	assert m.errors[1].message.includes("'loose'") && m.errors[1].message.includes("field 'n'") && m.errors[1].message.includes("Inner | null");
 	assert m.errors[2].message.includes("'words'") && m.errors[2].message.includes("Vec");
 }
 
@@ -302,4 +303,94 @@ export function mark(x: float64): float64 { return x; }
 	const bad = manifestFor(MODULE, ENTRY, exportsOf(some, ["mark"]), ["mark"]);
 	assert bad.errors.length == 1, bad.errors.map((e) => e.message).join("; ");
 	assert bad.errors[0].message.includes("@wasm is on 1 of its 2 overloads");
+}
+
+test "manifest: a nullable scalar, string, Vec and struct cross with the nullable flag" {
+	const src = `
+struct Pos { x: int32; y: int32 | null; }
+struct Item { id: int32; note: string | null; score: float64 | null; ok: boolean | null; at: Pos; }
+export function orMinus(a: int32 | null, b?: int64): int32 | null { return a; }
+export function echoU32(n: uint32 | null): uint32 | null { return n; }
+export function greet(s: string | null): string | null { return s; }
+export function head(xs: Vec<int32> | null): Vec<float32> | null { return null; }
+export function bump(i: Item | null): Item | null { return i; }
+export function replay(cb: (n: int32 | null, s: string | null, k: float64) => void): void {}
+`;
+	const names = ["orMinus", "echoU32", "greet", "head", "bump", "replay"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	const o = m.functions[0];
+	assert o.params[0].kind == BoundaryKind.I32 && o.params[0].nullable;
+	assert o.params[1].kind == BoundaryKind.I64 && o.params[1].nullable;
+	assert o.result == BoundaryKind.I32 && o.resultNullable;
+	const u = m.functions[1];
+	assert u.params[0].kind == BoundaryKind.U32 && u.params[0].nullable && u.result == BoundaryKind.U32 && u.resultNullable;
+	assert m.functions[2].params[0].kind == BoundaryKind.String && m.functions[2].params[0].nullable && m.functions[2].resultNullable;
+	const h = m.functions[3];
+	assert h.params[0].kind == BoundaryKind.Vec && h.params[0].nullable && h.params[0].element == BoundaryKind.I32;
+	assert h.result == BoundaryKind.Vec && h.resultNullable && h.resultElement == BoundaryKind.F32;
+	const b = m.functions[4];
+	assert b.params[0].kind == BoundaryKind.Struct && b.params[0].nullable && b.resultNullable;
+	const paths: string[] = [];
+	const flags: string[] = [];
+	for (const leaf of b.params[0].leaves) {
+		paths.push(leaf.path.join("."));
+		flags.push(leaf.nullable ? "n" : "-");
+	}
+	assert paths.join(",") == "id,note,score,ok,at.x,at.y";
+	assert flags.join(",") == "-,n,n,n,-,n";
+	assert b.params[0].leaves[3].kind == BoundaryKind.Bool && b.params[0].leaves[5].kind == BoundaryKind.I32;
+	const r = m.functions[5].params[0].callback!;
+	assert r.nullables.length == 3 && r.nullables[0] && r.nullables[1] && !r.nullables[2];
+	assert r.signature == "v_iiisd";
+	assert !m.functions[5].params[0].nullable;
+}
+
+test "manifest: a plain value is not nullable" {
+	const m = manifestFor(MODULE, ENTRY, exportsOf(CALC, ["add64", "name"]), ["add64", "name"]);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	assert !m.functions[0].params[0].nullable && !m.functions[0].resultNullable;
+	assert !m.functions[1].params[0].nullable && !m.functions[1].resultNullable;
+}
+
+test "manifest: a nullable callback result, a nullable struct field and a Vec of nullable elements are refused naming the type" {
+	const src = `
+struct Inner { n: int32; }
+struct Holds { inner: Inner | null; }
+export function pick(cb: (x: int32) => int32 | null): int32 { return 0; }
+export function holds(h: Holds): int32 { return 0; }
+export function items(xs: Vec<int32 | null>): int32 { return 0; }
+`;
+	const names = ["pick", "holds", "items"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.functions.length == 0;
+	assert m.errors.length == 3, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'pick'") && m.errors[0].message.includes("the result of parameter 'cb'") && m.errors[0].message.includes("int32 | null") && m.errors[0].message.includes("never a nullable value");
+	assert m.errors[1].message.includes("'holds'") && m.errors[1].message.includes("field 'inner'") && m.errors[1].message.includes("Inner | null") && m.errors[1].message.includes("nullable struct field");
+	assert m.errors[2].message.includes("'items'") && m.errors[2].message.includes("Vec");
+}
+
+test "manifest: a nullable class stays refused, because only value types carry a presence flag" {
+	const src = `
+class Box { v: int32 = 0; }
+export function maybeBox(b: Box | null): int32 { return 0; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["maybeBox"]), ["maybeBox"]);
+	assert m.functions.length == 0;
+	assert m.errors.length == 1, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'maybeBox'") && m.errors[0].message.includes("parameter 'b'") && m.errors[0].message.includes("Box");
+}
+
+test "manifest: two parameters whose wasm names collide are refused, a Some, Ptr or Len suffix included" {
+	const src = `
+export function clash(x: int32 | null, xSome: int32): int32 { return 0; }
+export function clashStr(s: string, sPtr: int32): int32 { return 0; }
+export function fine(x: int32 | null, y: int32 | null): int32 { return 0; }
+`;
+	const names = ["clash", "clashStr", "fine"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.functions.length == 1 && m.functions[0].name == "fine";
+	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'clash'") && m.errors[0].message.includes("'xSome'");
+	assert m.errors[1].message.includes("'clashStr'") && m.errors[1].message.includes("'sPtr'");
 }
