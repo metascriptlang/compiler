@@ -21,6 +21,6 @@ const big: Vec<uint64> = [1, 18446744073709551615];
 console.log(echoVecU64(big).join(","));
 const shorts: Vec<int16> = [-300, 0, 32767];
 console.log(echoVecI16(shorts).join(","));
-const bytes: Vec<int8> = [-5, 6, -127];
+let bytes: Vec<int8> = [-5, 6, -127];
 swapEndsI8(bytes);
 console.log(bytes.join(","));
