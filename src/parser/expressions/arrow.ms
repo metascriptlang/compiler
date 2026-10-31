@@ -78,7 +78,8 @@ export function arrowShape(state: ParserState): ArrowShape {
 		return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No;
 	}
 
-	if (p1.kind == TokenKind.Ident && p1.value == "sink" && isIdentLike(peek(state, 2)) && peek(state, 3).kind == TokenKind.Colon) { return ArrowShape.Yes; }
+	const isModifier = p1.kind == TokenKind.Out || p1.kind == TokenKind.Ref || p1.kind == TokenKind.Readonly || (p1.kind == TokenKind.Ident && p1.value == "sink");
+	if (isModifier && isIdentLike(peek(state, 2)) && peek(state, 3).kind == TokenKind.Colon) { return ArrowShape.Yes; }
 
 	// Must have identifier as first param
 	if (!isIdentLike(p1)) { return ArrowShape.No; }
