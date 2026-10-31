@@ -112,7 +112,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerTypeof(result, ctx);
-	result = lowerArrayLengthAssign(result);
+	result = lowerArrayLengthAssign(result, ctx);
 	if (namesEnums) result = lowerEnumToString(lowerEnumNames(result, ctx), ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
