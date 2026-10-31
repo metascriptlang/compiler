@@ -29,3 +29,4 @@ import "./refParamOwner";
 import "./globalReferences";
 import "./bareReturnLineBreak";
 import "./throwLineBreak";
+import "./stringNative";

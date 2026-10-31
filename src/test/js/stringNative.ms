@@ -1,13 +1,13 @@
 // The JS string prelude reaches the native operation for these calls instead of bounds helpers
 // or a BigInt parse. Their results on non-ASCII input equal C's in
-// corpus/programs/1241-stringNativeOpsMatrix.ms.
+// corpus/programs/1241-stringNativeOpsMatrix.ms and 1242-stringCaseTrimUnicode.ms.
 //
 // The compiler under test is $MSC, else ./msc; the pins read the JS it emits, std included.
 
 import { cwd, env, execFileCapture } from "std/process";
 import { writeFile, readFile, ensureDir } from "std/fs";
 
-const source = "const s = \"Ab\";\nconsole.log(s.substring(1, 2) + s.charAt(1) + s.charCodeAt(1).toString() + s.parseInt().toString());\n";
+const source = "const s = \"Ab\";\nconsole.log(s.substring(1, 2) + s.charAt(1) + s.charCodeAt(1).toString() + s.parseInt().toString() + s.trim() + s.toUpperCase() + s.toLowerCase());\n";
 
 function compilerPath(): string {
 	const named = env.get("MSC");
@@ -41,4 +41,12 @@ test "parseInt reads a safe integer with the native parseInt" {
 	const js = emittedJs();
 	assert !js.startsWith("error:"), js;
 	assert js.contains("Number.parseInt(");
+}
+
+test "trim and the case functions call the native methods" {
+	const js = emittedJs();
+	assert !js.startsWith("error:"), js;
+	assert js.contains(".trim()");
+	assert js.contains(".toUpperCase()");
+	assert js.contains(".toLowerCase()");
 }
