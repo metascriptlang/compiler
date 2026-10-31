@@ -1368,6 +1368,26 @@ function vmArmTask(vm: RaiserVM, closure: RaiserValue, delay: RaiserValue): void
 	if (task >= 0) insertTimer(vm, { dueMs: timerDueMs(delay), future: -1, task });
 }
 
+function vmCancelTask(vm: RaiserVM, closure: RaiserValue): void {
+	if (closure.kind != RaiserValueKind.Object) return;
+	const fn = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "fn").intVal;
+	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
+	const env: int64 = envField.kind == RaiserValueKind.Object ? envField.intVal : 0;
+	const items = vm.sched.timers.items;
+	for (let i = 0; i < items.length; i += 1) {
+		const task = items[i].task;
+		if (task < 0) continue;
+		const s = vm.sched.strands.items[task];
+		if ((s.funcIdx as int64) != fn || s.spawnEnv != env) continue;
+		for (let j = i + 1; j < items.length; j += 1) items[j - 1] = items[j];
+		items.shrink(items.length - 1);
+		releaseSpawnEnv(vm, s);
+		s.status = RaiserStrandStatus.Done;
+		retireStrand(vm, task);
+		return;
+	}
+}
+
 function insertTimer(vm: RaiserVM, timer: RaiserTimer): void {
 	const items = vm.sched.timers.items;
 	items.push(timer);
@@ -1409,6 +1429,10 @@ function vmHandleSleep(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	if (ic == 1) {
 		vmArmTask(vm, getDyn(vm, ia), getDyn(vm, ib));
+		return;
+	}
+	if (ic == 2) {
+		vmCancelTask(vm, getDyn(vm, ia));
 		return;
 	}
 	const fut = vmArmTimer(vm, getDyn(vm, ib));

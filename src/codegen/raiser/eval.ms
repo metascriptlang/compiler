@@ -1224,7 +1224,17 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
-const RAISER_TIER_TASK = "@builtin(\"SleepTask\") extern function task(ms: number, f: () => void): void from \"msSleepTask\";";
+const RAISER_TIER_TASK = "@builtin(\"SleepTask\") extern function task(ms: number, f: () => void): void from \"msSleepTask\";"
+	+ " @builtin(\"SleepCancel\") extern function cancel(f: () => void): void from \"msSleepCancel\";";
+
+test "engine: a cancelled timer task never runs and leaves no timer to wait for" {
+	const started = performance.now();
+	const vm = evalVM(RAISER_TIER_TASK + " const f = (): void => { console.log(\"never\"); }; task(5000, f); cancel(f); console.log(\"cancelled\");");
+	assert vm.error == "", vm.error;
+	assert vm.output == "cancelled\n", vm.output;
+	assert vm.sched.timers.items.length == 0;
+	assert performance.now() - started < 2500;
+}
 
 test "engine: a throw out of a timer task is unhandled and stops the program before a later timer" {
 	const vm = evalVM(RAISER_TIER_TASK + " class Boom { n: int64 = 1; } task(0, (): void => { throw new Boom(); }); task(20, (): void => { console.log(\"later\"); });");
