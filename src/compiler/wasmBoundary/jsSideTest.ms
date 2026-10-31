@@ -40,8 +40,24 @@ export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
 `;
 
-function manifestOf(names: string[]): Manifest {
-	const ctx = checkSource(SOURCE);
+const NULLABLE = `
+struct Pos { x: int32; y: int32 | null; }
+struct Item { id: int32; note: string | null; score: float64 | null; ok: boolean | null; at: Pos; }
+export function orMinus(a: int32 | null): int32 { return a ?? -1; }
+export function sumBig(a: int64 | null, b?: int64): int64 { return 0; }
+export function echoU32(n: uint32 | null): uint32 | null { return n; }
+export function halve(x: float64): float64 | null { return x; }
+export function parity(n: uint8): boolean | null { return null; }
+export function greet(s: string | null): string | null { return s; }
+export function headOr(xs: Vec<int32> | null): int32 { return 0; }
+export function upTo(n: int32): Vec<float32> | null { return null; }
+export function bump(i: Item | null): Item | null { return i; }
+export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
+export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
+`;
+
+function manifestFrom(source: string, names: string[]): Manifest {
+	const ctx = checkSource(source);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
 	for (const n of names) {
@@ -54,12 +70,20 @@ function manifestOf(names: string[]): Manifest {
 	return m;
 }
 
+function manifestOf(names: string[]): Manifest {
+	return manifestFrom(SOURCE, names);
+}
+
 function bindingsWith(names: string[], bundleNameOf: (f: BoundaryFunction) => string, checked: boolean = false) {
 	return jsBindings(manifestOf(names), "./app.wasm.mjs", bundleNameOf, { checked: checked });
 }
 
 function bindingsFor(names: string[], checked: boolean = false) {
 	return bindingsWith(names, (f) => "bundled_" + f.name, checked);
+}
+
+function nullableBindings(names: string[]) {
+	return jsBindings(manifestFrom(NULLABLE, names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
 }
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
@@ -200,12 +224,12 @@ test "js side: the owned string encoder lays out a payload, cap then bytes then 
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
-	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], result: BoundaryKind.I32, signature: "i_si" };
+	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], nullables: [false, false], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], result: BoundaryKind.I32, signature: "i_si" };
 	const m: Manifest = {
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", overloadIndex: 0, exportSymbol: "msb_calc_note",
-			params: [{ name: "cb", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void }],
-			result: BoundaryKind.Void, resultLeaves: [], resultElement: BoundaryKind.Void,
+			params: [{ name: "cb", kind: BoundaryKind.Callback, nullable: false, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void }],
+			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void,
 		}],
 		errors: [],
 	};
@@ -506,4 +530,52 @@ test "js side: each overload gets its own wrapper named for its symbol and calls
 	const code = bindingsWith(["bump"], (f) => "bundled_bump_" + f.overloadIndex).modules[0].code;
 	assert code.includes("bundled_bump_0") && code.includes("bundled_bump_1");
 	assert code.includes("_msb_calc_bump_u0") && code.includes("_msb_calc_bump_u1");
+}
+
+test "js side: a nullable scalar parameter is a presence flag and a value, 0 or 0n when absent, and an omitted one counts as null" {
+	const code = nullableBindings(["orMinus", "sumBig"]).modules[0].code;
+	assert code.includes("function bundled_orMinus(a0) {\n\t__msb.enter();\n\treturn __msbMod._msb_calc_orMinus(a0 == null ? 0 : 1, a0 == null ? 0 : a0);\n}");
+	assert code.includes("return __msbMod._msb_calc_sumBig(a0 == null ? 0 : 1, a0 == null ? 0n : a0, a1 == null ? 0 : 1, a1 == null ? 0n : a1);");
+}
+
+test "js side: a nullable scalar result is read after the call, gated by the presence flag, and absent is null" {
+	const code = nullableBindings(["halve", "parity", "echoU32"]).modules[0].code;
+	assert code.includes("function bundled_halve(a0) {\n\t__msb.enter();\n\tconst v = __msbMod._msb_calc_halve(a0);\n\treturn __msbMod._msb_ret_some() !== 0 ? v : null;\n}");
+	assert code.includes("return __msbMod._msb_ret_some() !== 0 ? v !== 0 : null;");
+	assert code.includes("function bundled_echoU32(a0) {\n\t__msb.enter();\n\tconst v = __msbMod._msb_calc_echoU32(a0 == null ? 0 : 1, a0 == null ? 0 : a0);\n\treturn __msbMod._msb_ret_some() !== 0 ? v >>> 0 : null;\n}");
+}
+
+test "js side: a nullable string is encoded only when present, and an absent string result stays null because the result take never runs" {
+	const code = nullableBindings(["greet"]).modules[0].code;
+	assert code.includes("e0 = a0 == null ? null : __msbEncOwned(a0);");
+	assert code.includes("\tlet r = null;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;");
+	assert code.includes("__msbMod._msb_calc_greet(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0);\n\t\treturn r;");
+	assert code.includes("\t\tif (e0 && !sent) __msbMod._free(e0[0]);\n\t\t__msb.takes.length = d;");
+	assert !code.includes("_msb_ret_some");
+	assert !code.includes("_msb_ret_len");
+}
+
+test "js side: a nullable Vec is copied in only when present, and a nullable Vec result starts as null" {
+	const code = nullableBindings(["headOr", "upTo"]).modules[0].code;
+	assert code.includes("e0 = a0 == null ? null : __msbCopyIn(a0, 0, a0.length, Int32Array);");
+	assert code.includes("__msbMod._msb_calc_headOr(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0);");
+	assert code.includes("function bundled_upTo(a0) {\n\t__msb.enter();\n\tlet r = null;\n\tconst d = __msb.takes.push((p, n) => { r = __msbVecOut(p >>> 0, n, Float32Array, false); }) - 1;");
+	assert code.includes("\t\t__msbMod._msb_calc_upTo(a0);\n\t\treturn r;");
+	assert !code.includes("_msb_ret_some");
+}
+
+test "js side: a nullable struct and its nullable fields each carry a flag in leaf order, and its taker builds null fields" {
+	const code = nullableBindings(["bump"]).modules[0].code;
+	assert code.includes("e0_1 = a0 == null || a0.note == null ? null : __msbEncOwned(a0.note);");
+	assert code.includes("__msbMod._msb_calc_bump(a0 == null ? 0 : 1, a0 == null ? 0 : a0.id, a0 == null || a0.note == null ? 0 : 1, e0_1 ? e0_1[0] : 0, e0_1 ? e0_1[1] : 0, a0 == null || a0.score == null ? 0 : 1, a0 == null || a0.score == null ? 0 : a0.score, a0 == null || a0.ok == null ? 0 : 1, a0 == null || a0.ok == null ? 0 : (a0.ok ? 1 : 0), a0 == null ? 0 : a0.at.x, a0 == null || a0.at.y == null ? 0 : 1, a0 == null || a0.at.y == null ? 0 : a0.at.y);");
+	assert code.includes("(x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) => { r = { id: x0, note: x1 !== 0 ? __msbDec(x2, x3) : null, score: x4 !== 0 ? x5 : null, ok: x6 !== 0 ? x7 !== 0 : null, at: { x: x8, y: x9 !== 0 ? x10 : null } }; }");
+	assert code.includes("\tlet r = null;");
+	assert !code.includes("_msb_ret_some");
+}
+
+test "js side: a nullable callback parameter arrives as a flag and a value, is passed as null when the flag is 0, and keeps its adapter" {
+	const code = nullableBindings(["replay", "replayBig"]).modules[0].code;
+	assert code.includes("const id0 = __msb.push((x0, x1, x2, x3, x4) => { a0(x0 !== 0 ? x1 : null, x2 !== 0 ? __msbDec(x3, x4) : null); });");
+	assert code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { a0(x0 !== 0 ? x1 !== 0 : null, x2 !== 0 ? x3 : null); });");
+	assert !code.includes("__msb.push(a0)");
 }

@@ -30,8 +30,24 @@ export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
 `;
 
-function manifestOf(names: string[]): Manifest {
-	const ctx = checkSource(SOURCE);
+const NULLABLE = `
+struct Pos { x: int32; y: int32 | null; }
+struct Item { id: int32; note: string | null; score: float64 | null; ok: boolean | null; at: Pos; }
+export function orMinus(a: int32 | null): int32 { return a ?? -1; }
+export function widthOf(a: int8 | null): int8 | null { return a; }
+export function echoU32(n: uint32 | null): uint32 | null { return n; }
+export function halve(x: float64): float64 | null { return x; }
+export function parity(n: uint8): boolean | null { return null; }
+export function greet(s: string | null): string | null { return s; }
+export function headOr(xs: Vec<int32> | null): int32 { return 0; }
+export function upTo(n: int32): Vec<float32> | null { return null; }
+export function bump(i: Item | null): Item | null { return i; }
+export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
+export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
+`;
+
+function manifestFrom(source: string, names: string[]): Manifest {
+	const ctx = checkSource(source);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
 	for (const n of names) {
@@ -44,8 +60,16 @@ function manifestOf(names: string[]): Manifest {
 	return m;
 }
 
+function manifestOf(names: string[]): Manifest {
+	return manifestFrom(SOURCE, names);
+}
+
 function entryFor(names: string[]) {
 	return wasmEntrySource(manifestOf(names).functions, (p: string) => "./calc");
+}
+
+function nullableEntryFor(names: string[]) {
+	return wasmEntrySource(manifestFrom(NULLABLE, names).functions, (p: string) => "./calc");
 }
 
 test "wasm entry: one exportName wrapper per function and one import per callback signature" {
@@ -221,4 +245,61 @@ test "wasm entry: an overload set is imported once and each overload is its own 
 	assert s.includes("export function msb_calc_bump_u0(x: int32): int32") && s.includes("@exportName(\"msb_calc_bump_u0\")");
 	assert s.includes("export function msb_calc_bump_u1(x: float64): float64") && s.includes("@exportName(\"msb_calc_bump_u1\")");
 	assert e.exportedFunctions.join(",") == "_msb_calc_bump_u0,_msb_calc_bump_u1,_MsMain";
+}
+
+test "wasm entry: a nullable scalar parameter arrives as a flag and a value and is rebuilt as null when the flag is 0" {
+	const e = nullableEntryFor(["orMinus"]);
+	assert e.source.includes("export function msb_calc_orMinus(aSome: int32, a: int32): int32 {\n\treturn msbm0_orMinus((aSome != 0 ? a : null));\n}");
+	assert e.source.includes("msbRetSome") == false;
+	assert e.exportedFunctions.includes("_msb_ret_some") == false;
+}
+
+test "wasm entry: a nullable scalar result sets the presence flag the glue reads right after the call" {
+	const e = nullableEntryFor(["halve", "parity", "widthOf", "echoU32"]);
+	const s = e.source;
+	assert s.includes("let msbRetSome: int32 = 0;\n@exportName(\"msb_ret_some\")\nexport function msb_ret_some(): int32 { return msbRetSome; }");
+	assert s.includes("export function msb_calc_halve(x: float64): float64 {\n\tconst r = msbm0_halve(x);\n\tmsbRetSome = r != null ? 1 : 0;\n\treturn r ?? 0;\n}");
+	assert s.includes("export function msb_calc_parity(n: uint8): boolean {\n\tconst r = msbm0_parity(n);\n\tmsbRetSome = r != null ? 1 : 0;\n\treturn r ?? false;\n}");
+	assert s.includes("export function msb_calc_widthOf(aSome: int32, a: int8): int8 {\n\tconst r = msbm0_widthOf((aSome != 0 ? a : null));\n\tmsbRetSome = r != null ? 1 : 0;\n\treturn r ?? 0;\n}");
+	assert s.includes("export function msb_calc_echoU32(nSome: int32, n: uint32): uint32 {\n\tconst r = msbm0_echoU32((nSome != 0 ? n : null));\n\tmsbRetSome = r != null ? 1 : 0;\n\treturn r ?? 0;\n}");
+	assert s.split("let msbRetSome").length == 2;
+	assert e.exportedFunctions.includes("_msb_ret_some");
+}
+
+test "wasm entry: a nullable string crosses with a flag, and a nullable string result goes through the result import only when present" {
+	const e = nullableEntryFor(["greet"]);
+	const s = e.source;
+	assert s.includes("export function msb_calc_greet(sSome: int32, sPtr: uint32, sLen: int32): void {\n\tconst r = msbm0_greet((sSome != 0 ? msbStrAdopt(sPtr, sLen) : null));\n\tif (r != null) {\n\t\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n\t}\n}");
+	assert s.includes("extern function msb_rs_s(a0p: uint32, a0l: int32): void from \"msb_rs_s\";");
+	assert s.includes("msbRet") == false;
+	assert s.includes("msbRetSome") == false;
+	assert e.exportedFunctions.includes("_msb_ret_len") == false;
+	assert e.exportedFunctions.includes("_msb_ret_some") == false;
+	assert e.exportedFunctions.includes("_malloc");
+	assert e.jsLibrary.includes("msb_rs_s");
+}
+
+test "wasm entry: a nullable Vec parameter is rebuilt only when present and a nullable Vec result skips msb_rv when absent" {
+	const s = nullableEntryFor(["headOr", "upTo"]).source;
+	assert s.includes("export function msb_calc_headOr(xsSome: int32, xsPtr: uint32, xsLen: int32): int32 {\n\treturn msbm0_headOr((xsSome != 0 ? msbVecFrom_int32(xsPtr, xsLen) : null));\n}");
+	assert s.includes("export function msb_calc_upTo(n: int32): void {\n\tconst r = msbm0_upTo(n);\n\tif (r != null) {\n\t\tmsb_rv((r as Span<float32>) as Ptr<void> as uint64 as int32, r.length as int32);\n\t}\n}");
+	assert s.includes("msbRetSome") == false;
+}
+
+test "wasm entry: a nullable struct and its nullable fields carry flags in leaf order, and the result import names them" {
+	const s = nullableEntryFor(["bump"]).source;
+	assert s.includes("export function msb_calc_bump(iSome: int32, i_0: int32, i_1Some: int32, i_1Ptr: uint32, i_1Len: int32, i_2Some: int32, i_2: float64, i_3Some: int32, i_3: boolean, i_4: int32, i_5Some: int32, i_5: int32): void {");
+	assert s.includes("\tconst r = msbm0_bump((iSome != 0 ? { id: i_0, note: (i_1Some != 0 ? msbStrAdopt(i_1Ptr, i_1Len) : null), score: (i_2Some != 0 ? i_2 : null), ok: (i_3Some != 0 ? i_3 : null), at: { x: i_4, y: (i_5Some != 0 ? i_5 : null) } } : null));");
+	assert s.includes("\tif (r != null) {\n\t\tmsb_rs_iisidiiiii(r.id, (r.note != null ? 1 : 0), (r.note != null ? msbStrPtr(r.note) : 0), (r.note != null ? r.note.asBytes().length : 0), (r.score != null ? 1 : 0), (r.score ?? 0), (r.ok != null ? 1 : 0), ((r.ok ?? false) ? 1 : 0), r.at.x, (r.at.y != null ? 1 : 0), (r.at.y ?? 0));\n\t}");
+	assert s.split("extern function msb_rs_iisidiiiii(").length == 2;
+	assert s.includes("msbRetSome") == false;
+}
+
+test "wasm entry: a nullable callback parameter is split into a flag and a value, the import signature follows" {
+	const s = nullableEntryFor(["replay", "replayBig"]).source;
+	assert s.includes("msbm0_replay((a0: int32 | null, a1: string | null): void => { msb_cb_v_iiis(cb, (a0 != null ? 1 : 0), (a0 ?? 0), (a1 != null ? 1 : 0), (a1 != null ? msbStrPtr(a1) : 0), (a1 != null ? a1.asBytes().length : 0)); })");
+	assert s.includes("extern function msb_cb_v_iiis(id: int32, a0: int32, a1: int32, a2: int32, a3p: uint32, a3l: int32): void from \"msb_cb_v_iiis\";");
+	assert s.includes("void msb_cb_v_iiis(int32_t id, int32_t a0, int32_t a1, int32_t a2, uint32_t a3p, int32_t a3l);");
+	assert s.includes("msbm0_replayBig((a0: boolean | null, a1: int64 | null): void => { msb_cb_v_iiij(cb, (a0 != null ? 1 : 0), ((a0 ?? false) ? 1 : 0), (a1 != null ? 1 : 0), (a1 ?? 0)); })");
+	assert s.includes("extern function msb_cb_v_iiij(id: int32, a0: int32, a1: int32, a2: int32, a3: int64): void from \"msb_cb_v_iiij\";");
 }

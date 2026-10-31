@@ -2,7 +2,7 @@ import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, Node, NodeKind, Functio
 import { ExportedSymInfo, LIFECYCLE_HOOK_NAMES, isExtensionRoutine, isGenericFn, lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
-import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isAtomicRef, isLockedRef, isMaybeType, isReadonlyView, isStdCollection, isStructType, literalBase, peelThrough, runtimeClassSym, typeDisplayNameUnprofiled, unwrapRefNullUnion } from "../../checker/types";
+import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isAtomicRef, isLockedRef, isMaybeType, isReadonlyView, isStdCollection, isStructType, literalBase, peelThrough, runtimeClassSym, typeDisplayNameUnprofiled, unwrapMaybeType, unwrapRefNullUnion } from "../../checker/types";
 import { dirname, relative } from "std/fs/path";
 
 export enum BoundaryKind {
@@ -12,6 +12,7 @@ export enum BoundaryKind {
 export interface BoundaryLeaf {
 	path: string[];
 	kind: BoundaryKind;
+	nullable: boolean;
 }
 
 export enum BoundaryMode {
@@ -22,6 +23,7 @@ export enum BoundaryMode {
 
 export interface BoundaryCallback {
 	params: BoundaryKind[];
+	nullables: boolean[];
 	elements: BoundaryKind[];
 	modes: BoundaryMode[];
 	result: BoundaryKind;
@@ -31,6 +33,7 @@ export interface BoundaryCallback {
 export interface BoundaryParam {
 	name: string;
 	kind: BoundaryKind;
+	nullable: boolean;
 	mode: BoundaryMode;
 	callback: BoundaryCallback | null;
 	leaves: BoundaryLeaf[];
@@ -45,6 +48,7 @@ export interface BoundaryFunction {
 	exportSymbol: string;
 	params: BoundaryParam[];
 	result: BoundaryKind;
+	resultNullable: boolean;
 	resultLeaves: BoundaryLeaf[];
 	resultElement: BoundaryKind;
 }
@@ -168,13 +172,17 @@ function scalarKind(t: Type): BoundaryKind | null {
 	}
 }
 
-function describe(t: Type): string {
-	if (isMaybeType(t)) return "a nullable type";
-	return typeDisplayNameUnprofiled(t);
-}
-
 function peeled(t: Type): Type {
 	return peelThrough(t, PEEL_ALIAS) ?? t;
+}
+
+function payloadOf(t: Type): Type {
+	return isMaybeType(t) ? peeled(unwrapMaybeType(t)) : t;
+}
+
+function describe(t: Type): string {
+	if (isMaybeType(t)) return typeDisplayNameUnprofiled(payloadOf(t)) + " | null";
+	return typeDisplayNameUnprofiled(t);
 }
 
 function isVoidType(t: Type | null): boolean {
@@ -194,13 +202,16 @@ function refuse(c: Collector, code: string, what: string, t: Type, why: string):
 function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | null {
 	let ok = true;
 	const params: BoundaryKind[] = [];
+	const nullables: boolean[] = [];
 	const elements: BoundaryKind[] = [];
 	const modes: BoundaryMode[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		const pt = peeled(t.typeChildren[i]);
+		const declared = peeled(t.typeChildren[i]);
+		const nullable = isMaybeType(declared);
+		const pt = payloadOf(declared);
 		let k = isMaybeType(pt) ? null : pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
 		let element = BoundaryKind.Void;
-		if (pt.kind == TypeKind.Span && pt.typeReturn != null) {
+		if (!nullable && pt.kind == TypeKind.Span && pt.typeReturn != null) {
 			const et = peeled(pt.typeReturn!);
 			const ek = isMaybeType(et) ? null : scalarKind(et);
 			if (ek != null) {
@@ -209,10 +220,11 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 			}
 		}
 		if (k == null) {
-			refuse(c, "callback-param", `parameter ${i + 1} of ${what}`, pt, "and a callback crossing the boundary takes only bool, integer, float, string and Span-of-number parameters");
+			refuse(c, "callback-param", `parameter ${i + 1} of ${what}`, declared, "and a callback crossing the boundary takes only bool, integer, float and string parameters, each also nullable, and Span-of-number parameters");
 			ok = false;
 		} else {
 			params.push(k);
+			nullables.push(nullable);
 			elements.push(element);
 			modes.push(k != BoundaryKind.Span ? BoundaryMode.Copied : isReadonlyView(pt) ? BoundaryMode.Borrowed : BoundaryMode.Shared);
 		}
@@ -222,7 +234,7 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 		const rt = peeled(t.typeReturn!);
 		const k = isMaybeType(rt) ? null : scalarKind(rt);
 		if (k == null) {
-			refuse(c, "callback-result", `the result of ${what}`, rt, "and a callback crossing the boundary returns only void, bool, integer and float");
+			refuse(c, "callback-result", `the result of ${what}`, rt, "and a callback crossing the boundary returns only void, bool, integer and float, never a nullable value");
 			ok = false;
 		} else {
 			result = k;
@@ -230,8 +242,8 @@ function callbackOf(c: Collector, what: string, t: Type): BoundaryCallback | nul
 	}
 	if (!ok) return null;
 	let letters = "";
-	for (const p of params) letters += signatureLetter(p);
-	return { params, elements, modes, result, signature: signatureLetter(result) + "_" + letters };
+	for (let i = 0; i < params.length; i += 1) letters += (nullables[i] ? "i" : "") + signatureLetter(params[i]);
+	return { params, nullables, elements, modes, result, signature: signatureLetter(result) + "_" + letters };
 }
 
 export function leafLiteral(leaves: BoundaryLeaf[], values: string[], depth: int32): string {
@@ -250,6 +262,7 @@ export function leafLiteral(leaves: BoundaryLeaf[], values: string[], depth: int
 
 interface ValueShape {
 	kind: BoundaryKind;
+	nullable: boolean;
 	leaves: BoundaryLeaf[];
 	element: BoundaryKind;
 }
@@ -270,14 +283,16 @@ function structLeaves(c: Collector, what: string, t: Type, path: string[], out: 
 	let ok = true;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const fieldPath = path.concat([t.typeNames[i]]);
-		const ft = peeled(t.typeChildren[i]);
+		const declared = peeled(t.typeChildren[i]);
+		const nullable = isMaybeType(declared);
+		const ft = payloadOf(declared);
 		const fieldWhat = `field '${fieldPath.join(".")}' of ${what}`;
 		const scalar = isMaybeType(ft) ? null : scalarKind(ft);
-		if (scalar != null) out.push({ path: fieldPath, kind: scalar });
-		else if (ft.kind == TypeKind.String) out.push({ path: fieldPath, kind: BoundaryKind.String });
-		else if (isStructType(ft) && !isMaybeType(ft)) ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
+		if (scalar != null) out.push({ path: fieldPath, kind: scalar, nullable });
+		else if (ft.kind == TypeKind.String) out.push({ path: fieldPath, kind: BoundaryKind.String, nullable });
+		else if (!nullable && isStructType(ft) && !isMaybeType(ft)) ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
 		else {
-			refuse(c, "struct-field", fieldWhat, ft, noFormWhy(ft, NoFormAt.Field) ?? "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
+			refuse(c, "struct-field", fieldWhat, declared, nullable && isStructType(ft) ? "and a nullable struct field is not supported: give the nested struct's own fields a null each" : noFormWhy(ft, NoFormAt.Field) ?? "and a struct crosses the boundary as a copy of its bool, integer, float and string fields, each also nullable, and of its struct fields");
 			ok = false;
 		}
 	}
@@ -333,10 +348,14 @@ function noFormWhy(t: Type, at: NoFormAt): string | null {
 	return isClassRef(t) ? classWhy(at, false) : null;
 }
 
-function valueShape(c: Collector, what: string, t: Type): ValueShape | null {
+function valueShape(c: Collector, what: string, t: Type, nullable: boolean): ValueShape | null {
+	if (isMaybeType(t)) {
+		refuse(c, "nullable-nested", what, t, "and a nullable of a nullable has no boundary form: write one | null");
+		return null;
+	}
 	if (isStructType(t)) {
 		const leaves: BoundaryLeaf[] = [];
-		return structLeaves(c, what, t, [], leaves) ? { kind: BoundaryKind.Struct, leaves, element: BoundaryKind.Void } : null;
+		return structLeaves(c, what, t, [], leaves) ? { kind: BoundaryKind.Struct, nullable, leaves, element: BoundaryKind.Void } : null;
 	}
 	if (t.kind == TypeKind.Array && t.typeReturn != null) {
 		const et = peeled(t.typeReturn!);
@@ -345,60 +364,87 @@ function valueShape(c: Collector, what: string, t: Type): ValueShape | null {
 			refuse(c, "vec-element", what, t, "and a Vec crosses the boundary as a copy of bool, integer or float elements");
 			return null;
 		}
-		return { kind: BoundaryKind.Vec, leaves: [], element };
+		return { kind: BoundaryKind.Vec, nullable, leaves: [], element };
 	}
 	return null;
 }
 
 function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
-	const t = peeled(type);
+	const declared = peeled(type);
+	const nullable = isMaybeType(declared);
+	const t = payloadOf(declared);
 	const what = `parameter '${name}'`;
-	if (isMaybeType(t)) {
-		refuse(c, "optional", what, t, "which is not supported: pass a plain value");
-		return null;
-	}
 	const scalar = scalarKind(t);
-	if (scalar != null) return { name, kind: scalar, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
-	if (t.kind == TypeKind.String) return { name, kind: BoundaryKind.String, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
+	if (scalar != null) return { name, kind: scalar, nullable, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
+	if (t.kind == TypeKind.String) return { name, kind: BoundaryKind.String, nullable, mode: BoundaryMode.Copied, callback: null, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.Function) {
+		if (nullable) {
+			refuse(c, "callback-null", what, declared, "and a callback crossing the boundary cannot be null: pass a function");
+			return null;
+		}
 		const cb = callbackOf(c, what, t);
-		return cb == null ? null : { name, kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void };
+		return cb == null ? null : { name, kind: BoundaryKind.Callback, nullable: false, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void };
 	}
 	if (t.kind == TypeKind.Span && t.typeReturn != null) {
+		if (nullable) {
+			refuse(c, "span-null", what, declared, "and a Span crosses the boundary only as a plain parameter, so pass a Span or a Vec");
+			return null;
+		}
 		const et = peeled(t.typeReturn!);
 		const element = isMaybeType(et) ? null : scalarKind(et);
 		if (element == null) {
 			refuse(c, "span-element", what, t, "and a Span crosses the boundary for the call over bool, integer or float elements");
 			return null;
 		}
-		return { name, kind: BoundaryKind.Span, mode: isReadonlyView(t) ? BoundaryMode.Borrowed : BoundaryMode.Shared, callback: null, leaves: [], element };
+		return { name, kind: BoundaryKind.Span, nullable: false, mode: isReadonlyView(t) ? BoundaryMode.Borrowed : BoundaryMode.Shared, callback: null, leaves: [], element };
 	}
 	const errorsBefore = c.errors.length;
-	const shape = valueShape(c, what, t);
-	if (shape != null) return { name, kind: shape.kind, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
-	if (c.errors.length == errorsBefore) refuse(c, "no-form", what, t, noFormWhy(t, NoFormAt.Param) ?? "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
+	const shape = valueShape(c, what, t, nullable);
+	if (shape != null) return { name, kind: shape.kind, nullable, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
+	if (c.errors.length == errorsBefore) refuse(c, "no-form", what, declared, noFormWhy(t, NoFormAt.Param) ?? "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec of numbers (each also nullable), a Span of numbers or a callback");
 	return null;
 }
 
 function resultOf(c: Collector, type: Type | null): ValueShape | null {
-	if (isVoidType(type)) return { kind: BoundaryKind.Void, leaves: [], element: BoundaryKind.Void };
-	const t = peeled(type!);
-	if (isMaybeType(t)) {
-		refuse(c, "optional", "the result", t, "which is not supported: return a plain value");
-		return null;
-	}
+	if (isVoidType(type)) return { kind: BoundaryKind.Void, nullable: false, leaves: [], element: BoundaryKind.Void };
+	const declared = peeled(type!);
+	const nullable = isMaybeType(declared);
+	const t = payloadOf(declared);
 	const scalar = scalarKind(t);
-	if (scalar != null) return { kind: scalar, leaves: [], element: BoundaryKind.Void };
-	if (t.kind == TypeKind.String) return { kind: BoundaryKind.String, leaves: [], element: BoundaryKind.Void };
+	if (scalar != null) return { kind: scalar, nullable, leaves: [], element: BoundaryKind.Void };
+	if (t.kind == TypeKind.String) return { kind: BoundaryKind.String, nullable, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.Span) {
-		refuse(c, "span-result", "the result", t, "and a Span borrows its memory only for the call, so it cannot outlive it: return a Vec");
+		refuse(c, "span-result", "the result", declared, "and a Span borrows its memory only for the call, so it cannot outlive it: return a Vec");
 		return null;
 	}
 	const errorsBefore = c.errors.length;
-	const shape = valueShape(c, "the result", t);
+	const shape = valueShape(c, "the result", t, nullable);
 	if (shape != null) return shape;
-	if (c.errors.length == errorsBefore) refuse(c, "no-form", "the result", t, noFormWhy(t, NoFormAt.Result) ?? "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
+	if (c.errors.length == errorsBefore) refuse(c, "no-form", "the result", declared, noFormWhy(t, NoFormAt.Result) ?? "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers, each also nullable");
 	return null;
+}
+
+function wireNamesOf(p: BoundaryParam): string[] {
+	const names: string[] = [];
+	if (p.nullable) names.push(p.name + "Some");
+	if (p.kind == BoundaryKind.String || p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) {
+		names.push(p.name + "Ptr");
+		names.push(p.name + "Len");
+	} else if (p.kind == BoundaryKind.Struct) {
+		for (let j = 0; j < p.leaves.length; j += 1) {
+			const leaf = `${p.name}_${j}`;
+			if (p.leaves[j].nullable) names.push(leaf + "Some");
+			if (p.leaves[j].kind == BoundaryKind.String) {
+				names.push(leaf + "Ptr");
+				names.push(leaf + "Len");
+			} else {
+				names.push(leaf);
+			}
+		}
+	} else {
+		names.push(p.name);
+	}
+	return names;
 }
 
 function fnFlagsOf(sym: Symbol): string {
@@ -439,8 +485,19 @@ function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol, 
 	c.at = resultExpr != null ? resultExpr.location : nameAt;
 	const result = resultOf(c, ft.typeReturn);
 	if (!ok || result == null) return null;
+	const wires: string[] = [];
+	for (const p of params) {
+		for (const w of wireNamesOf(p)) {
+			if (wires.includes(w)) {
+				c.at = nameAt;
+				refuseAt(c, "wire-name-clash", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: two parameters would become the wasm parameter '${w}' (a string, Vec or Span adds Ptr and Len, a nullable adds Some); rename one of them`);
+				return null;
+			}
+			wires.push(w);
+		}
+	}
 	const exportSymbol = inSet ? `msb_${key}_${name}_u${overloadIndex}` : `msb_${key}_${name}`;
-	return { modulePath: c.modulePath, moduleKey: key, name, overloadIndex, exportSymbol, params, result: result.kind, resultLeaves: result.leaves, resultElement: result.element };
+	return { modulePath: c.modulePath, moduleKey: key, name, overloadIndex, exportSymbol, params, result: result.kind, resultNullable: result.nullable, resultLeaves: result.leaves, resultElement: result.element };
 }
 
 function kindList(kinds: BoundaryKind[]): string {
@@ -450,8 +507,8 @@ function kindList(kinds: BoundaryKind[]): string {
 }
 
 function paramShape(p: BoundaryParam): string {
-	let s = `${p.kind.toString()}/${p.element.toString()}`;
-	for (const leaf of p.leaves) s += `/${leaf.path.join(".")}:${leaf.kind.toString()}`;
+	let s = `${p.kind.toString()}${p.nullable ? "?" : ""}/${p.element.toString()}`;
+	for (const leaf of p.leaves) s += `/${leaf.path.join(".")}:${leaf.kind.toString()}${leaf.nullable ? "?" : ""}`;
 	if (p.callback != null) s += `/(${kindList(p.callback!.params)})(${kindList(p.callback!.elements)})${p.callback!.result.toString()}`;
 	return s;
 }

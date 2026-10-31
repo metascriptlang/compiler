@@ -92,8 +92,16 @@ function callbackImportJs(signature: string): string {
 
 function leafLetters(leaves: BoundaryLeaf[]): string {
 	let letters = "";
-	for (const leaf of leaves) letters += signatureLetter(leaf.kind);
+	for (const leaf of leaves) letters += (leaf.nullable ? "i" : "") + signatureLetter(leaf.kind);
 	return letters;
+}
+
+function zeroOf(kind: BoundaryKind): string {
+	return kind == BoundaryKind.Bool ? "false" : "0";
+}
+
+function orMaybe(flag: string, value: string): string {
+	return `(${flag} != 0 ? ${value} : null)`;
 }
 
 function vecFromLines(kind: BoundaryKind): string[] {
@@ -113,7 +121,13 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 	let args = idName;
 	for (let i = 0; i < params.length; i += 1) {
 		if (i > 0) sig += ", ";
+		const nullable = cb.nullables[i];
 		if (params[i] == BoundaryKind.String) {
+			if (nullable) {
+				sig += `a${i}: string | null`;
+				args += `, (a${i} != null ? 1 : 0), (a${i} != null ? msbStrPtr(a${i}) : 0), (a${i} != null ? a${i}.asBytes().length : 0)`;
+				continue;
+			}
 			sig += `a${i}: string`;
 			args += `, msbStrPtr(a${i}), a${i}.asBytes().length`;
 			continue;
@@ -123,6 +137,11 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 			const ptr = cb.modes[i] == BoundaryMode.Shared ? `Ptr<${t}>` : `Readonly<Ptr<${t}>>`;
 			sig += `a${i}: ${cb.modes[i] == BoundaryMode.Shared ? `Span<${t}>` : `Readonly<Span<${t}>>`}`;
 			args += `, (a${i}.length == 0 ? 0 : a${i} as ${ptr} as uint64 as uint32), a${i}.length as int32`;
+			continue;
+		}
+		if (nullable) {
+			sig += `a${i}: ${valueTypeOf(params[i])} | null`;
+			args += `, (a${i} != null ? 1 : 0), ` + toWire(params[i], `(a${i} ?? ${zeroOf(params[i])})`);
 			continue;
 		}
 		sig += `a${i}: ${valueTypeOf(params[i])}`;
@@ -149,14 +168,34 @@ function stringHelperLines(): string[] {
 	];
 }
 
+function takenResult(f: BoundaryFunction, call: string, sig: string, take: string): string[] {
+	const lines = [
+		`@exportName("${f.exportSymbol}")`,
+		`export function ${f.exportSymbol}(${sig}): void {`,
+		`\tconst r = ${call};`,
+	];
+	if (f.resultNullable) {
+		lines.push("\tif (r != null) {");
+		lines.push("\t\t" + take);
+		lines.push("\t}");
+	} else {
+		lines.push("\t" + take);
+	}
+	lines.push("}");
+	return lines;
+}
+
 function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 	const sigs: string[] = [];
 	const argList: string[] = [];
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
+		const some = `${p.name}Some`;
+		if (p.nullable) sigs.push(`${some}: int32`);
+		const present = (value: string): string => p.nullable ? orMaybe(some, value) : value;
 		if (p.kind == BoundaryKind.String) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
-			argList.push(`msbStrAdopt(${p.name}Ptr, ${p.name}Len)`);
+			argList.push(present(`msbStrAdopt(${p.name}Ptr, ${p.name}Len)`));
 		} else if (p.kind == BoundaryKind.Callback) {
 			sigs.push(`${p.name}: int32`);
 			argList.push(closureOf(p.callback!, p.name));
@@ -164,24 +203,28 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 			const values: string[] = [];
 			for (let j = 0; j < p.leaves.length; j += 1) {
 				const leaf = `${p.name}_${j}`;
-				if (p.leaves[j].kind == BoundaryKind.String) {
+				const leafSome = `${leaf}Some`;
+				const kind = p.leaves[j].kind;
+				if (p.leaves[j].nullable) sigs.push(`${leafSome}: int32`);
+				let value = leaf;
+				if (kind == BoundaryKind.String) {
 					sigs.push(`${leaf}Ptr: uint32, ${leaf}Len: int32`);
-					values.push(`msbStrAdopt(${leaf}Ptr, ${leaf}Len)`);
+					value = `msbStrAdopt(${leaf}Ptr, ${leaf}Len)`;
 				} else {
-					sigs.push(`${leaf}: ${valueTypeOf(p.leaves[j].kind)}`);
-					values.push(leaf);
+					sigs.push(`${leaf}: ${valueTypeOf(kind)}`);
 				}
+				values.push(p.leaves[j].nullable ? orMaybe(leafSome, value) : value);
 			}
-			argList.push(leafLiteral(p.leaves, values, 0));
+			argList.push(present(leafLiteral(p.leaves, values, 0)));
 		} else if (p.kind == BoundaryKind.Vec) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
-			argList.push(`msbVecFrom_${valueTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`);
+			argList.push(present(`msbVecFrom_${valueTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`));
 		} else if (p.kind == BoundaryKind.Span) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
 			argList.push(`(${p.name}Ptr as uint64 as Ptr<${valueTypeOf(p.element)}>)[0..${p.name}Len]`);
 		} else {
 			sigs.push(`${p.name}: ${valueTypeOf(p.kind)}`);
-			argList.push(p.name);
+			argList.push(present(p.name));
 		}
 	}
 	const sig = sigs.join(", ");
@@ -190,33 +233,38 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 		const wires: string[] = [];
 		for (const leaf of f.resultLeaves) {
 			const value = `r.${leaf.path.join(".")}`;
-			if (leaf.kind == BoundaryKind.String) wires.push(`msbStrPtr(${value}), ${value}.asBytes().length`);
-			else wires.push(toWire(leaf.kind, value));
+			if (leaf.nullable) wires.push(`(${value} != null ? 1 : 0)`);
+			if (leaf.kind == BoundaryKind.String && leaf.nullable) {
+				wires.push(`(${value} != null ? msbStrPtr(${value}) : 0), (${value} != null ? ${value}.asBytes().length : 0)`);
+			} else if (leaf.kind == BoundaryKind.String) {
+				wires.push(`msbStrPtr(${value}), ${value}.asBytes().length`);
+			} else {
+				wires.push(toWire(leaf.kind, leaf.nullable ? `(${value} ?? ${zeroOf(leaf.kind)})` : value));
+			}
 		}
-		return [
-			`@exportName("${f.exportSymbol}")`,
-			`export function ${f.exportSymbol}(${sig}): void {`,
-			`\tconst r = ${call};`,
-			`\tmsb_rs_${leafLetters(f.resultLeaves)}(${wires.join(", ")});`,
-			"}",
-		];
+		return takenResult(f, call, sig, `msb_rs_${leafLetters(f.resultLeaves)}(${wires.join(", ")});`);
 	}
 	if (f.result == BoundaryKind.Vec) {
 		const t = valueTypeOf(f.resultElement);
-		return [
-			`@exportName("${f.exportSymbol}")`,
-			`export function ${f.exportSymbol}(${sig}): void {`,
-			`\tconst r = ${call};`,
-			`\tmsb_rv((r as Span<${t}>) as Ptr<void> as uint64 as int32, r.length as int32);`,
-			"}",
-		];
+		return takenResult(f, call, sig, `msb_rv((r as Span<${t}>) as Ptr<void> as uint64 as int32, r.length as int32);`);
 	}
 	if (f.result == BoundaryKind.String) {
+		if (f.resultNullable) return takenResult(f, call, sig, "msb_rs_s(msbStrPtr(r), r.asBytes().length);");
 		return [
 			`@exportName("${f.exportSymbol}")`,
 			`export function ${f.exportSymbol}(${sig}): void {`,
 			`\tconst r = ${call};`,
 			"\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);",
+			"}",
+		];
+	}
+	if (f.resultNullable) {
+		return [
+			`@exportName("${f.exportSymbol}")`,
+			`export function ${f.exportSymbol}(${sig}): ${msTypeOf(f.result)} {`,
+			`\tconst r = ${call};`,
+			"\tmsbRetSome = r != null ? 1 : 0;",
+			`\treturn r ?? ${zeroOf(f.result)};`,
 			"}",
 		];
 	}
@@ -257,6 +305,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let readsHeap = false;
 	let copiesIn = false;
 	let hasVecResult = false;
+	let hasScalarSome = false;
 	const vecElements: BoundaryKind[] = [];
 	const resultImports: string[] = [];
 	const addResultImport = (name: string): void => {
@@ -266,6 +315,8 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		if (f.result == BoundaryKind.String) {
 			hasStringResult = true;
 			addResultImport("msb_rs_s");
+		} else if (f.resultNullable && f.result != BoundaryKind.Struct && f.result != BoundaryKind.Vec) {
+			hasScalarSome = true;
 		}
 		if (f.result == BoundaryKind.Vec) {
 			readsHeap = true;
@@ -296,6 +347,11 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	if (hasVecResult) resultImports.push("msb_rv");
 	const hasString = hasStringParam || hasStringResult || hasStructString;
 	if (hasString) for (const l of stringHelperLines()) lines.push(l);
+	if (hasScalarSome) {
+		lines.push("let msbRetSome: int32 = 0;");
+		lines.push('@exportName("msb_ret_some")');
+		lines.push("export function msb_ret_some(): int32 { return msbRetSome; }");
+	}
 	for (const k of vecElements) for (const l of vecFromLines(k)) lines.push(l);
 
 	const signatures: string[] = [];
@@ -316,6 +372,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
+	if (hasScalarSome) exported.push("_msb_ret_some");
 	if (copiesIn) {
 		exported.push("_malloc");
 		exported.push("_free");
