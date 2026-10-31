@@ -21,6 +21,11 @@
  * Returns 1, 0 on a bad key or a cipher failure, -1 when the OS random source failed. */
 int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out);
 
+/* Seal with a caller-chosen 12-byte nonce, for tests that need a reproducible blob; std/crypto/aes
+ * never exposes it, because a repeated nonce under one key breaks GCM. Same layout and returns
+ * as msCryptoAesSealInto, 0 also for a nonce that is not 12 bytes. */
+int64_t msCryptoAesSealWithNonceInto(msString key, msString nonce, msString plainText, msString aad, uint8_t* out);
+
 /* Open: AES-GCM decrypt from sealed blob nonce(12) || cipherText || authTag(16).
  * out holds sealed.len - 28 bytes. Returns 1 when the tag verifies and out holds the plaintext
  * (an empty plaintext is a valid success), 0 on error, with out zeroed after an auth failure. */

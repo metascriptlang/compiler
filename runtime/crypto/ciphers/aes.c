@@ -35,6 +35,12 @@ static int64_t removePkcs7Padding(const uint8_t* data, size_t dataLen) {
 
 /* ===== AES-GCM ===== */
 
+/* The SP 800-38D limits mbedtls gcm.c enforces (update: total 2^36 - 32 bytes; update_ad: AAD under
+ * 2^61 bytes), checked before dispatch so the hardware and the generic path answer alike. */
+static int gcmLengthsOk(uint64_t aadLen, uint64_t dataLen) {
+	return dataLen <= 0xFFFFFFFE0ull && (aadLen >> 61) == 0;
+}
+
 /* Hardware path: 1 done, 0 refused (open: tag mismatch, out zeroed), -1 unavailable, use the generic gcm. */
 static int sealHw(msString key, const uint8_t* iv, msString aad, msString plainText, uint8_t* out) {
 	mbedtls_aes_context aes;
@@ -62,12 +68,10 @@ static int openHw(msString key, msString aad, const uint8_t* data, size_t ctLen,
 	return 0;
 }
 
-int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out) {
-	if (!validKeyBits(key)) return 0;
+/* out already holds the nonce in its first 12 bytes. */
+static int64_t sealWithNonceInOut(msString key, msString plainText, msString aad, uint8_t* out) {
+	if (!validKeyBits(key) || !gcmLengthsOk((uint64_t)aad.len, (uint64_t)plainText.len)) return 0;
 	size_t ptLen = (size_t)plainText.len;
-
-	/* Layout: nonce(12) || cipherText || tag(16) */
-	if (ms_random_fill(out, GCM_NONCE_SIZE) != 0) return -1;
 	if (sealHw(key, out, aad, plainText, out) == 1) return 1;
 
 	mbedtls_gcm_context gcm;
@@ -81,12 +85,26 @@ int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint
 	return ok ? 1 : 0;
 }
 
+/* Layout: nonce(12) || cipherText || tag(16) */
+int64_t msCryptoAesSealInto(msString key, msString plainText, msString aad, uint8_t* out) {
+	if (!validKeyBits(key) || !gcmLengthsOk((uint64_t)aad.len, (uint64_t)plainText.len)) return 0;
+	if (ms_random_fill(out, GCM_NONCE_SIZE) != 0) return -1;
+	return sealWithNonceInOut(key, plainText, aad, out);
+}
+
+int64_t msCryptoAesSealWithNonceInto(msString key, msString nonce, msString plainText, msString aad, uint8_t* out) {
+	if (nonce.len != GCM_NONCE_SIZE) return 0;
+	memcpy(out, msStringToCString(nonce), GCM_NONCE_SIZE);
+	return sealWithNonceInOut(key, plainText, aad, out);
+}
+
 int64_t msCryptoAesOpenInto(msString key, msString sealed, msString aad, uint8_t* out) {
 	if (!validKeyBits(key)) return 0;
 	if (sealed.len < GCM_NONCE_SIZE + GCM_TAG_SIZE) return 0;
 
 	const uint8_t* data = (const uint8_t*)msStringToCString(sealed);
 	size_t ctLen = (size_t)sealed.len - GCM_NONCE_SIZE - GCM_TAG_SIZE;
+	if (!gcmLengthsOk((uint64_t)aad.len, (uint64_t)ctLen)) return 0;
 	uint8_t none = 0;
 	if (out == NULL) out = &none;
 	int hw = openHw(key, aad, data, ctLen, out);
