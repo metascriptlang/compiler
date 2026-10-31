@@ -5,7 +5,7 @@ import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } fro
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
@@ -4038,7 +4038,8 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			const kind = vm.regs.slots[absOf(vm, ia)];
 			const heldReg = operandTagged(ib, RaiserRegClass.Dyn);
 			const held = getDyn(vm, heldReg);
-			if (kind == FINALLY_RAISE) setException(vm, held);
+			const leaving = ic == FINALLY_LEAVE;
+			if (kind == FINALLY_RAISE && !leaving) setException(vm, held);
 			if (kind != FINALLY_NORMAL) {
 				const marker = pendingMarker(absOf(vm, heldReg));
 				if (vm.safePoints.length == safePointBase(vm) || vm.safePoints[vm.safePoints.length - 1] != marker) {
@@ -4047,7 +4048,12 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 				}
 				vm.safePoints.length = vm.safePoints.length - 1;
 			}
+			if (leaving && kind == FINALLY_RAISE) {
+				discardPendingBox(vm, absOf(vm, heldReg) as int64);
+				return;
+			}
 			freePendingBox(vm, absOf(vm, heldReg) as int64);
+			if (leaving) return;
 			if (kind == FINALLY_RAISE) {
 				unwindStep(vm);
 			} else if (kind == FINALLY_RETURN) {

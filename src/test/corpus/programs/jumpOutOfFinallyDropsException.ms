@@ -1,4 +1,4 @@
-// @stdout: ret 5 break 1 ret-string 6 ret-nested 7
+// @stdout: ret 5 break 1 ret-string 6 ret-nested 7 break-across-catch 1 continue 30
 // note: a return or break inside a finally entered by a raise drops that exception and still delivers its own value, though the exception's destroy routine runs in the middle of the jump.
 
 function boom(m: string): void { throw new Error(m); }
@@ -30,5 +30,28 @@ function retNested(): int32 {
 	return 0;
 }
 
+function breakAcrossCatch(): int32 {
+	let n: int32 = 0;
+	while (n < 3) {
+		n += 1;
+		try {
+			try { boom("inner"); } finally { break; }
+		} catch (e) {
+			return -1;
+		}
+	}
+	return n;
+}
+function continueInFinally(): int32 {
+	let n: int32 = 0;
+	let k: int32 = 0;
+	while (n < 3) {
+		n += 1;
+		try { boom("again"); } finally { continue; }
+		k += 1;
+	}
+	return n * 10 + k;
+}
+
 const nested = retNested();
-console.log(`ret ${retInFinally()} break ${breakInFinally()} ret-string ${retStringInFinally()} ret-nested ${nested}`);
+console.log(`ret ${retInFinally()} break ${breakInFinally()} ret-string ${retStringInFinally()} ret-nested ${nested} break-across-catch ${breakAcrossCatch()} continue ${continueInFinally()}`);
