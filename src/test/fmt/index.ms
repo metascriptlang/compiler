@@ -55,6 +55,7 @@ import "./cases/listEndComments";
 import "./cases/bigIntRegex";
 import "./cases/missingPrinters";
 import "./cases/asyncFlags";
+import "./cases/anonymousParamModifiers";
 import "./cases/statementEndLines";
 import "./cases/awaitYieldAtom";
 import "./cases/assertEscape";
