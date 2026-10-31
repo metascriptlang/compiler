@@ -11,13 +11,13 @@
 #include "runtime/core/string.h"
 #include <stdint.h>
 
-/* Hash data with BLAKE2b. hashSize: output bytes (1-64, default 32). */
+/* Hash data with BLAKE2b. hashSize: output bytes (1-64); another size returns the empty string. */
 msString msBlake2b(msString data, int32_t hashSize);
 
-/* Keyed BLAKE2b (MAC). key: 1-64 bytes. */
+/* Keyed BLAKE2b (MAC). key: 1-64 bytes. A bad hashSize or key returns the empty string. */
 msString msBlake2bKeyed(msString key, msString data, int32_t hashSize);
 
-/* Streaming BLAKE2b — opaque handle pattern. */
+/* Streaming BLAKE2b — opaque handle pattern. Init returns 0 for a hashSize outside 1-64. */
 int64_t  msBlake2bInit(int32_t hashSize);
 void     msBlake2bUpdate(int64_t ctx, msString data);
 msString msBlake2bFinal(int64_t ctx);

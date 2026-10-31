@@ -23,7 +23,12 @@ extern function msBlake2bFinal(ctx: int64): string;
 
 // ===== One-shot Hashing =====
 
+function requireHashSize(hashSize: int32, op: string): void {
+	if (hashSize < 1 || hashSize > 64) throw new Error(`${op}: hashSize must be 1-64, got ${hashSize}`);
+}
+
 export function blake2b(data: Bytes, hashSize: int32 = 32): Buffer {
+	requireHashSize(hashSize, "blake2b");
 	return rawBuffer(msBlake2b(rawString(data), hashSize));
 }
 
@@ -31,6 +36,9 @@ export function blake2bKeyed(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32)
 	const key = rawString(keyBytes);
 	if (key.byteLength < 1 || key.byteLength > 64) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
+	}
+	if (hashSize < 1 || hashSize > 64) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "blake2bKeyed", "hashSize must be 1-64"));
 	}
 	const result = msBlake2bKeyed(key, rawString(data), hashSize);
 	if (result == "") return Result.err(cryptoError(CryptoErrorKind.HashFailed, "blake2bKeyed", "keyed hash failed"));
@@ -43,16 +51,18 @@ export class Blake2b {
 	_ctx: int64;
 
 	static create(hashSize: int32 = 32): Blake2b {
+		requireHashSize(hashSize, "Blake2b.create");
 		return { _ctx: msBlake2bInit(hashSize) };
 	}
 
 	update(data: Bytes): Blake2b {
-		if (this._ctx != 0) msBlake2bUpdate(this._ctx, rawString(data));
+		if (this._ctx == 0) throw new Error("Blake2b.update: the hasher already produced its digest");
+		msBlake2bUpdate(this._ctx, rawString(data));
 		return this;
 	}
 
 	digest(): Buffer {
-		if (this._ctx == 0) return rawBuffer("");
+		if (this._ctx == 0) throw new Error("Blake2b.digest: the hasher already produced its digest");
 		const result = msBlake2bFinal(this._ctx);
 		this._ctx = 0;
 		return rawBuffer(result);
