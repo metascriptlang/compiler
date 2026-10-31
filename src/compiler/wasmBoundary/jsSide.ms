@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral, msTypeOf, unwiredKind } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, copiesArgsIn, leafLiteral, msTypeOf, unwiredKind } from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -252,7 +252,7 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	const encode = (name: string, expr: string, fn: string): void => {
 		encoded.push(name);
 		encodes.push(`		${name} = ${fn}(${expr});`);
-		cleanup.push(`if (${name}) __msbMod._free(${name}[0]);`);
+		cleanup.push(`if (${name}) __msbFree(${name}[0]);`);
 		argList.push(`${name}[0], ${name}[1]`);
 	};
 	for (let i = 0; i < f.params.length; i += 1) {
@@ -304,11 +304,15 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 		for (const l of body) out.push(`	${l}`);
 	} else {
 		for (const l of lines) out.push(l);
-		if (encoded.length > 0) out.push(`	let ${encoded.join(", ")};`);
+		if (encoded.length > 0) {
+			out.push(`	let ${encoded.join(", ")};`);
+			out.push("	const mark = __msbTop;");
+		}
 		out.push("	try {");
 		for (const l of encodes) out.push(l);
 		for (const l of afterCall(body, copyBacks)) out.push(`		${l}`);
 		out.push("	} finally {");
+		if (encoded.length > 0) out.push("		__msbTop = mark;");
 		for (const c of cleanup) out.push(`		${c}`);
 		out.push("	}");
 	}
@@ -324,9 +328,21 @@ const GLUE = [
 	"const __msbTe = new TextEncoder();",
 	"const __msbTd = new TextDecoder('utf-8', { ignoreBOM: true });",
 	"function __msbAlloc(n) {",
+	"\tconst room = __msbEnd - __msbTop;",
+	"\tif (n <= room) {",
+	"\t\tconst a = n + 15 & -16;",
+	"\t\tif (a <= room) {",
+	"\t\t\tconst q = __msbTop;",
+	"\t\t\t__msbTop = q + a;",
+	"\t\t\treturn q;",
+	"\t\t}",
+	"\t}",
 	"\tconst p = n > 4294967295 ? 0 : __msbMod._malloc(n);",
 	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
 	"\treturn p;",
+	"}",
+	"function __msbFree(p) {",
+	"\tif (p < __msbBase || p >= __msbEnd) __msbMod._free(p);",
 	"}",
 	"function __msbInRange(a, off, n) {",
 	"\tif (!(off >= 0 && n >= 0 && off + n <= a.length)) throw new RangeError(\"Span out of range of its array: offset \" + off + \", length \" + n + \", array length \" + a.length + \" (was the array resized while lent?)\");",
@@ -452,7 +468,18 @@ const CHECK_GLUE = [
 	"}",
 ];
 
-function preludeFor(wasmModuleUrl: string, options: JsBindingOptions): string {
+const SCRATCH_BYTES = 16384;
+
+function scratchLines(used: boolean): string[] {
+	if (!used) return ["const __msbBase = 0;", "const __msbEnd = 0;", "let __msbTop = 0;"];
+	return [
+		`const __msbBase = __msbMod._malloc(${SCRATCH_BYTES});`,
+		`const __msbEnd = __msbBase === 0 ? 0 : __msbBase + ${SCRATCH_BYTES};`,
+		"let __msbTop = __msbBase;",
+	];
+}
+
+function preludeFor(wasmModuleUrl: string, options: JsBindingOptions, scratch: boolean): string {
 	return [
 		"const __msb = (() => {",
 		"\tconst live = new Map();",
@@ -475,6 +502,7 @@ function preludeFor(wasmModuleUrl: string, options: JsBindingOptions): string {
 		(options.checked ? GLUE.concat(CHECK_GLUE) : GLUE).join("\n"),
 		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default({ msb: __msb });`,
 		"__msbMod._MsMain();",
+		...scratchLines(scratch),
 		"",
 	].join("\n");
 }
@@ -482,7 +510,9 @@ function preludeFor(wasmModuleUrl: string, options: JsBindingOptions): string {
 export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f: BoundaryFunction) => string, options: JsBindingOptions): JsBindings {
 	const modules: JsModuleBindings[] = [];
 	const lines: string[][] = [];
+	let scratch = false;
 	for (const f of m.functions) {
+		if (copiesArgsIn(f)) scratch = true;
 		let at = -1;
 		for (let i = 0; i < modules.length; i += 1) {
 			if (modules[i].modulePath == f.modulePath) at = i;
@@ -495,5 +525,5 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 		for (const l of wrapperLines(f, bundleNameOf(f), options)) lines[at].push(l);
 	}
 	for (let i = 0; i < modules.length; i += 1) modules[i].code = lines[i].join("\n") + "\n";
-	return { prelude: preludeFor(wasmModuleUrl, options), modules };
+	return { prelude: preludeFor(wasmModuleUrl, options, scratch), modules };
 }
