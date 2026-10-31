@@ -2062,20 +2062,30 @@ Measured on C (msc b899f456). The JS backend does not check element moves yet: i
 lines above and keeps the element.
 
 A field or element whose type has no default value (a class, an array `T[]`, a struct holding one) cannot
-be moved out at all, on every backend, because the move would leave it without a value. Read it without
-`move` (a class reference is shared, not copied), declare the slot nullable, or exchange it with `swap`:
+be moved out, on every backend, because the move would leave it without a value, unless nothing can read
+the emptied slot: the path starts at a local of the enclosing function (not a parameter, `this`, a global
+or a captured variable), every step is held by value (a struct, a `Vec`, a fixed array, a tuple, a `Result`),
+and the local is not named again after the move nor moved inside a loop that does not declare it. A class
+on the path (`s.room.wrap.leaf` with `room` a class) keeps the refusal, because another reference can reach
+the slot. Otherwise read it without `move` (a class reference is shared, not copied), declare the slot
+nullable, or exchange it with `swap`:
 
 ```typescript
 const t = move h.leaf;           // error when leaf: Leaf — cannot move 'h.leaf': type 'Leaf' has no default value
 const u = move h.maybe;          // ok when maybe: Leaf | null — h.maybe is left null
 swap(h.leaf, spare);             // ok: the two places trade values, each evaluated once
+let w: Wrap = made();            // struct Wrap { leaf: Leaf }
+const k = move w.leaf;           // ok: w is a local never named again
+w.leaf.v;                        // with this line the move is refused: 'w' is used again at line …
 ```
 
 Where the move hands its value on (a binding, an assignment, a return, a throw, a sink or constructor
 argument, a literal), C and JS both leave the field empty; a number or plain-struct field keeps its value,
 and a plain argument only lends it. Measured with corpus `explicitMoveEmptiesFieldOnEveryBackend` on C
 and JS (tree of this change): `decl /0/null/4 | … | struct :0/7 | borrow s1/2/leaf/4`. The Raiser VM
-still leaves a moved field holding its value.
+still leaves a moved field holding its value. The dead-local cases (a field, a `Vec` element, a nested struct
+field, a `Result` payload, a local declared in the loop) compile and the refused ones are rejected through
+the C pipeline (handoff `bindingOwnership`); not run as programs on JS or the Raiser.
 
 A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
 field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside
