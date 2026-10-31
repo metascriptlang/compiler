@@ -216,6 +216,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 }
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
 #define msPlainWasMoved(x)    memset(&(x), 0, sizeof(x))
+#define msSwap(a, b)          ({ __typeof__(a) msSwapA_ = (a); __typeof__(a) msSwapB_ = (b); \
+	__typeof__(*msSwapA_) msSwapHeld_ = *msSwapA_; *msSwapA_ = *msSwapB_; *msSwapB_ = msSwapHeld_; (void)0; })
 #define msStringSink(d, ...)  do { msStringDestroy(d); (d) = (__VA_ARGS__); } while(0)
 
 /* --- Array lifecycle (unified) — uniquely owned payloads --- */

@@ -97,6 +97,8 @@ function msModuleBindingUninitialized(name: string): never {
 @builtin("delegate")
 export extern function delegate(): void;
 
+export { swap } from "./swap";
+
 @compilerFunc @throws
 extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
 

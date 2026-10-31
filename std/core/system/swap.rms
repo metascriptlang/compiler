@@ -1,0 +1,6 @@
+/** Exchanges the values held at `a` and `b`, each place evaluated once. */
+export function swap<T>(ref a: T, ref b: T): void {
+	const held = a;
+	a = b;
+	b = held;
+}

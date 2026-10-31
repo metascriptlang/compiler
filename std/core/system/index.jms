@@ -70,6 +70,12 @@ export extern function throws(): void;
 @builtin("delegate")
 export extern function delegate(): void;
 
+export function swap<T>(ref a: T, ref b: T): void {
+	const held = a;
+	a = b;
+	b = held;
+}
+
 @compilerFunc
 function msDefect(message: string): never {
 	@emit(`if (typeof process === "object" && process !== null && typeof process.exit === "function") {
