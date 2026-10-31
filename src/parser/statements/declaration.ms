@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ConstructorDeclData, BlockStmtData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
@@ -1352,7 +1352,11 @@ function parseClassMember(state: ParserState, isExtern: boolean = false): NodeRe
 				`A constructor cannot have an 'override' modifier at line ${modifier.line}`,
 			);
 		}
-		return parseClassConstructor(state, memberVisibility);
+		const ctor = try parseClassConstructor(
+			state, memberVisibility, isExtern || memberIsExtern,
+		);
+		if (memberIsAbstract) ctor.flags = ctor.flags.incl(NodeFlag.Abstract);
+		return Result.ok(ctor);
 	}
 
 	// Get/Set accessors — early return
@@ -1430,7 +1434,9 @@ function parseClassMember(state: ParserState, isExtern: boolean = false): NodeRe
 // parseParamList and skipDefaultValue imported from ../util
 
 
-function parseClassConstructor(state: ParserState, visibility: string): NodeResult {
+function parseClassConstructor(
+	state: ParserState, visibility: string, isExtern: boolean,
+): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
 	const raw = parseParamList(state, "constructor", true);
@@ -1450,7 +1456,25 @@ function parseClassConstructor(state: ParserState, visibility: string): NodeResu
 		pd.propType = ctorParamTypes[i];
 		prop.location = ctorParamLocs[i];
 	}
-	const body = prependParamPatterns(try callBlockParser(state), ctorPatterns, ctorParamLocs);
+	const signature = current(state).kind == TokenKind.Semicolon;
+	if (signature && isExtern) {
+		return Result.err(
+			"Constructor signatures in an extern class are not supported " +
+			`at line ${ctorToken.line}`,
+		);
+	}
+	if (signature && ctorParamProps.some((prop: Node): boolean => prop != null)) {
+		return Result.err(
+			"A parameter property is only allowed in a constructor implementation " +
+			`at line ${ctorToken.line}`,
+		);
+	}
+	if (signature) consumeSemicolon(state);
+	const body = signature
+		? createNode(NodeKind.BlockStmt, { statements: [] }, ctorToken)
+		: prependParamPatterns(
+			try callBlockParser(state), ctorPatterns, ctorParamLocs,
+		);
 	const ctorNode = createNode(NodeKind.ConstructorDecl, {
 		ctorParams,
 		ctorParamTypes,
@@ -1458,7 +1482,7 @@ function parseClassConstructor(state: ParserState, visibility: string): NodeResu
 		ctorDefaults,
 		ctorVisibility: visibility,
 		ctorParamProps,
-		ctorFlags: "",
+		ctorFlags: signature ? "overload" : "",
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;
@@ -2784,6 +2808,88 @@ test "override is refused where its assertion cannot be represented" {
 }
 
 test "constructor" { assert programOk("class Foo { constructor(x: number) { this.x = x; } }"); }
+
+test "constructor signatures carry overload intent without a body" {
+	const source = `class C {
+		constructor(value: string);
+		constructor(value: int32);
+		constructor(value: string | int32) { value; }
+	}`;
+	assert programOk(source);
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	assert cls.classBody.length == 3;
+	for (let i: int32 = 0; i < 2; i++) {
+		const member = cls.classBody[i];
+		assert member.kind == NodeKind.ConstructorDecl;
+		const signature = member.data as ConstructorDeclData;
+		assert signature.ctorFlags == "overload";
+		assert signature.ctorBody.kind == NodeKind.BlockStmt;
+		assert (signature.ctorBody.data as BlockStmtData).statements.length == 0;
+	}
+	const impl = cls.classBody[2].data as ConstructorDeclData;
+	assert impl.ctorFlags == "";
+	assert (impl.ctorBody.data as BlockStmtData).statements.length == 1;
+}
+
+test "a constructor signature refuses a parameter property" {
+	assert parseError("class C {\n\tconstructor(private x: int32);\n\tconstructor(x: int32) {}\n}").indexOf("A parameter property is only allowed in a constructor implementation") >= 0;
+	assert programOk("class C {\n\tconstructor(x: int32);\n\tconstructor(private x: int32) {}\n}");
+}
+
+test "constructor signatures retain positioned parameter metadata" {
+	const source = `class C {
+protected constructor(values: int32[]);
+protected constructor(values: int32[] = [1]) { values; }
+}`;
+	assert programOk(source);
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	const member = cls.classBody[0];
+	const signature = member.data as ConstructorDeclData;
+	assert signature.ctorVisibility == "protected";
+	assert signature.ctorParams[0] == "values";
+	assert signature.ctorParamTypes[0] == "int32[]";
+	assert member.typeExprs != null;
+	assert member.typeExprs![0].kind == NodeKind.TypeArray;
+	assert member.paramLocations != null;
+	assert member.paramLocations![0].line == 2;
+	assert member.location.line == 2 && member.location.endLine == 2;
+	assert member.location.endColumn > member.location.column;
+	const impl = cls.classBody[1].data as ConstructorDeclData;
+	assert impl.ctorVisibility == "protected" && impl.ctorFlags == "";
+	assert impl.ctorDefaults[0] != null;
+}
+
+test "constructor abstract modifiers remain distinct from class context" {
+	const source = `abstract class C {
+		constructor(value: string);
+		constructor(value: string) {}
+	}`;
+	assert programOk(source);
+	const ordinary = (stmtAt(source, 0).data as ClassDeclData).classBody[0];
+	assert !ordinary.flags.has(NodeFlag.Abstract);
+	assert (ordinary.data as ConstructorDeclData).ctorFlags == "overload";
+	const explicit = stmtAt(
+		"class C { abstract constructor(value: string) {} }", 0,
+	).data as ClassDeclData;
+	assert explicit.classBody[0].flags.has(NodeFlag.Abstract);
+	const decorated = stmtAt(
+		"class C { @marker constructor(value: string); }", 0,
+	).data as ClassDeclData;
+	const inner = (
+		decorated.classBody[0].data as DecoratedDeclData
+	).decoratedNode;
+	assert (inner.data as ConstructorDeclData).ctorFlags == "overload";
+}
+
+test "extern constructors do not acquire overload signatures" {
+	assert !programOk("extern class C { constructor(value: string); }");
+	assert !programOk("class C { extern constructor(value: string); }");
+	assert !programOk("class C { constructor(value: string) }");
+	const source = "extern class C { constructor(value: string) {} }";
+	assert programOk(source);
+	const member = (stmtAt(source, 0).data as ClassDeclData).classBody[0];
+	assert (member.data as ConstructorDeclData).ctorFlags == "";
+}
 // Modifiers — each tests a distinct parser path
 test "extends" { assert programOk("class Dog extends Animal { bark() { return 1; } }"); }
 
