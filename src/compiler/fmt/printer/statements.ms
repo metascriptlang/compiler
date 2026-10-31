@@ -9,7 +9,7 @@ import {
 } from "../../../ast/node";
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docLine, docCommaSepList, docIfBreak, docNil, docWillBreak } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { isAssignOp } from "../../../ast/operators";
@@ -186,9 +186,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 export function printExprStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExprStmtData;
 	const parts: Doc[] = [callPrintNode(d.expr, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -213,9 +211,7 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" "));
 		parts.push(returnedArgument(d.argument, options));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -358,9 +354,7 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 		docText(" while "),
 		...parenthesizedHeader(callPrintNode(d.doCondition, options)),
 	];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -435,9 +429,7 @@ export function printMatchStmt(node: Node, options: FormatOptions): Doc {
 export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ThrowStmtData;
 	const parts: Doc[] = [docText("throw "), returnedArgument(d.throwArg, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -463,7 +455,7 @@ export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 export function printDeferStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DeferStmtData;
 	const parts: Doc[] = [docText("defer "), callPrintNode(d.deferExpr, options)];
-	if (options.semi && d.deferExpr.kind != NodeKind.BlockStmt) {
+	if (d.deferExpr.kind != NodeKind.BlockStmt) {
 		parts.push(docText(";"));
 	}
 	return docGroup(parts);
@@ -502,7 +494,7 @@ function inlineObjectPattern(pattern: Node, options: FormatOptions): Doc[] {
 		}
 		body.push(callPrintNode(d.patternProps[i], options));
 	}
-	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) body.push(docIfBreak(docText(","), docNil()));
+	if (!d.hasRestProp) body.push(docIfBreak(docText(","), docNil()));
 	return [docText("{"), docIndent(body), docLine(), docText("}")];
 }
 
@@ -557,7 +549,7 @@ export function paramListInParens(params: Doc[], options: FormatOptions, hug: bo
 	if (hug && params.length == 1) {
 		parts.push(params[0]);
 	} else if (params.length > 0) {
-		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
+		const paramParts = docCommaSepList(params);
 		const list: Doc[] = [docIndent(paramParts), docSoftLine()];
 		if (grouped) parts.push(docGroup(list));
 		else for (const x of list) parts.push(x);

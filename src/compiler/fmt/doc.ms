@@ -207,8 +207,8 @@ export function docWithoutSoftLines(doc: Doc): Doc {
 	};
 }
 
-// A trailing comma appears only when the list breaks and `trailing` is set.
-export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
+// A trailing comma appears only when the list breaks.
+export function docCommaSepList(items: Doc[]): Doc[] {
 	if (items.length == 0) return [];
 	const parts: Doc[] = [docSoftLine()];
 	for (let i = 0; i < items.length; i += 1) {
@@ -219,9 +219,7 @@ export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
 			parts.push(docGroup([items[i], docText(",")]));
 		} else {
 			parts.push(items[i]);
-			if (trailing) {
-				parts.push(docIfBreak(docText(","), docNil()));
-			}
+			parts.push(docIfBreak(docText(","), docNil()));
 		}
 	}
 	return parts;
@@ -229,6 +227,6 @@ export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
 
 test "docCommaSepList: trailing comma only when the list breaks" {
 	const items = [docText("a"), docText("b")];
-	assert docCommaSepList(items, true).length == 5;
-	assert docCommaSepList([], true).length == 0;
+	assert docCommaSepList(items).length == 5;
+	assert docCommaSepList([]).length == 0;
 }

@@ -8,7 +8,7 @@ import {
 	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData, makeLoc,
 	VariableDeclData, DestructuringDeclData, DeclKind, ObjectPatternData,
 } from "../../../ast/node";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
 	docLine, docHardLine, docIfBreak, docNil, docJoin,
@@ -62,8 +62,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 		if (options.singleQuote) q = "'";
 		const alias = d.importAliases[0];
 		const head = "import " + typeModifier(node) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
-		const tail = options.semi ? ";" : "";
-		return docGroup([docText(head + q + d.importSource + q + tail)]);
+		return docGroup([docText(head + q + d.importSource + q + ";")]);
 	}
 	const parts: Doc[] = [docText("import " + typeModifier(node))];
 	if (d.importNames.length > 0) {
@@ -88,9 +87,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 					nameParts.push(docGroup([names[i], docText(",")]));
 				} else {
 					nameParts.push(names[i]);
-					if (wantsTrailingComma(options, CommaContext.Collection)) {
-						nameParts.push(docIfBreak(docText(","), docNil()));
-					}
+					nameParts.push(docIfBreak(docText(","), docNil()));
 				}
 			}
 			parts.push(docGroup([
@@ -105,9 +102,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	let q = "\"";
 	if (options.singleQuote) { q = "'"; }
 	parts.push(docText(q + d.importSource + q));
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -133,8 +128,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	if (id.importNames.length == 1 && id.importNames[0] == "*") {
 		const alias = id.importAliases[0];
 		const head = "export " + typeModifier(inner) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
-		const tail = options.semi ? ";" : "";
-		return docGroup([docText(head + q + id.importSource + q + tail)]);
+		return docGroup([docText(head + q + id.importSource + q + ";")]);
 	}
 	const parts: Doc[] = [docText("export " + typeModifier(inner))];
 	if (id.importNames.length > 0) {
@@ -154,9 +148,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 					nameParts.push(docGroup([names[i], docText(",")]));
 				} else {
 					nameParts.push(names[i]);
-					if (wantsTrailingComma(options, CommaContext.Collection)) {
-						nameParts.push(docIfBreak(docText(","), docNil()));
-					}
+					nameParts.push(docIfBreak(docText(","), docNil()));
 				}
 			}
 			parts.push(docGroup([docText("{"), docIndent(nameParts), docLine(), docText("}")]));
@@ -164,7 +156,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 		parts.push(docText(" from "));
 	}
 	parts.push(docText(q + id.importSource + q));
-	if (options.semi) parts.push(docText(";"));
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -215,13 +207,11 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 			docHardLine(),
 			docText("}"),
 		];
-		if (options.semi) parts.push(docText(";"));
+		parts.push(docText(";"));
 		return docGroup(parts);
 	}
 	const parts: Doc[] = [typeAliasAssignment(head, distinct, d, node.typeExpr, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -410,9 +400,7 @@ export function printExternDecl(node: Node, options: FormatOptions): Doc {
 	if (d.nativeName != "") {
 		parts.push(docText(nativeFrom(d.nativeName)));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -630,7 +618,7 @@ function declarationList(keyword: string, node: Node, options: FormatOptions): D
 		}
 		parts.push(docIndent(list));
 	}
-	if (options.semi) parts.push(docText(";"));
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 

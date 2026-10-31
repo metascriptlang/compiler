@@ -6,7 +6,7 @@ import {
 	Node, NodeKind, IdentifierData, MemberExprData, TypeUnionData, TypeIntersectionData, TypeArrayData,
 	TypeGenericData, TypeFunctionData, TypeObjectData, makeLoc,
 } from "../../../ast/node";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docBreakParent, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
 } from "../doc";
@@ -183,7 +183,7 @@ function printFunction(node: Node, options: FormatOptions): Doc {
 		items.push(d.typExprParamNames[i] == "" ? type : docGroup([docText(d.typExprParamNames[i] + ": "), type]));
 	}
 	return docGroup([
-		printList(items, "(", ")", wantsTrailingComma(options, CommaContext.Params)),
+		printList(items, "(", ")", true),
 		docText(" => "),
 		printType(d.typExprReturn, TypeParent.Annotation, options),
 	]);

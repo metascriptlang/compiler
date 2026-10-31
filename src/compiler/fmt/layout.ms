@@ -1,7 +1,7 @@
 // Doc tree to string: an iterative command-stack printer whose fits() also measures the rest of
 // the current line.
 
-import { FormatOptions, TrailingComma } from "./options";
+import { FormatOptions } from "./options";
 import { Doc, DocKind, alignWidth, docCommaSepList, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil, docLineSuffix, docBreakParent, docGroupBreak, docSourceText, docGroupWithId, docIfGroupBreaks, docIndentIfGroupBreaks, docBestFitting, docFill, newGroupId, noGroupId, docWillBreak, docWithoutSoftLines } from "./doc";
 
 enum Mode {
@@ -421,9 +421,7 @@ const narrow: FormatOptions = {
 	tabWidth: 2,
 	source: "",
 	useTabs: false,
-	semi: true,
 	singleQuote: false,
-	trailingComma: TrailingComma.All,
 };
 
 test "layout: a group that fits stays on one line, one that does not breaks" {
@@ -492,7 +490,7 @@ test "layout: a trailing comma added by break mode counts against the last item"
 	]);
 	const call = (items: Doc[]): Doc => docGroup([
 		docText("f("),
-		docIndent(docCommaSepList(items, true)),
+		docIndent(docCommaSepList(items)),
 		docSoftLine(),
 		docText(")"),
 	]);

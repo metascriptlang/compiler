@@ -6,7 +6,7 @@ import {
 } from "../../../ast/node";
 import { SourceComment } from "../comments";
 import { commentsOfRun, commentLeading, commentTrailing, danglingOf, hasCommentsOutside, leadingDocs, takeOwnLineTrailing } from "./commentDocs";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent, docLine, docSoftLine, docHardLine, docIfBreak, docNil,
 	docBreakParent, docBestFitting, docWillBreak,
@@ -392,7 +392,7 @@ function allBrokenOut(open: string, docs: Doc[], args: Node[], expand: boolean, 
 		inner.push(docs[i]);
 		if (i < docs.length - 1) inner.push(docText(","));
 	}
-	if (wantsTrailingComma(options, CommaContext.Params)) inner.push(docIfBreak(docText(","), docNil()));
+	inner.push(docIfBreak(docText(","), docNil()));
 	const parts: Doc[] = [docText(open), docIndent(inner), docSoftLine(), docText(")")];
 	return expand ? docGroupBreak(parts) : docGroup(parts);
 }
@@ -455,7 +455,7 @@ export function printCallArguments(call: Node | null, args: Node[], node: Node, 
 		const docs: Doc[] = [];
 		for (const arg of args) docs.push(callPrintNode(arg, options));
 		const parts: Doc[] = [docText(open)];
-		for (const p of listBody(docs, wantsTrailingComma(options, CommaContext.Params), endComments)) parts.push(p);
+		for (const p of listBody(docs, endComments)) parts.push(p);
 		parts.push(docText(")"));
 		return parts;
 	}

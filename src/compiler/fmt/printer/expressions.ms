@@ -12,7 +12,7 @@ import {
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
@@ -316,9 +316,9 @@ export function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions
 	return raw != "" ? raw : "<" + node.typeArg + ">";
 }
 
-export function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[]): Doc[] {
+export function listBody(items: Doc[], endComments: SourceComment[]): Doc[] {
 	if (items.length == 0 && endComments.length == 0) return [];
-	const body = docCommaSepList(items, trailing);
+	const body = docCommaSepList(items);
 	for (const c of endComments) {
 		body.push(docHardLine());
 		body.push(docSourceText(c.text));
@@ -469,9 +469,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		}
 		indentChildren.push(entries[i]);
 	}
-	if (wantsTrailingComma(options, CommaContext.Collection)) {
-		indentChildren.push(docIfBreak(docText(","), docNil()));
-	}
+	indentChildren.push(docIfBreak(docText(","), docNil()));
 	// Append trailing comments after entries (on their own lines)
 	for (const tc of trailingComments) {
 		indentChildren.push(docLine());
@@ -499,7 +497,7 @@ export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 		elems.push(callPrintNode(el, options));
 	}
 	const parts: Doc[] = [docText("[")];
-	for (const p of listBody(elems, wantsTrailingComma(options, CommaContext.Collection), endComments)) parts.push(p);
+	for (const p of listBody(elems, endComments)) parts.push(p);
 	parts.push(docText("]"));
 	return docGroup(parts);
 }
@@ -600,7 +598,7 @@ export function assembleArrow(p: FunctionPieces, hug: ArgHug, options: FormatOpt
 	inner.push(p.body);
 	if (p.conditionalBody) inner.push(docIfBreak(docNil(), docText(")")));
 	const parts: Doc[] = [docIndent(inner)];
-	if (lastArg && wantsTrailingComma(options, CommaContext.Params)) parts.push(docIfBreak(docText(","), docNil()));
+	if (lastArg) parts.push(docIfBreak(docText(","), docNil()));
 	if (lastArg && !p.hasComments) parts.push(docSoftLine());
 	return docGroup([...head, docText(" =>"), docGroup(parts)]);
 }
@@ -756,7 +754,7 @@ export function objectPatternContent(node: Node, options: FormatOptions): Doc[] 
 		}
 		inner.push(callPrintNode(d.patternProps[i], options));
 	}
-	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) inner.push(docIfBreak(docText(","), docNil()));
+	if (!d.hasRestProp) inner.push(docIfBreak(docText(","), docNil()));
 	return [docText("{"), docIndent(inner), docLine(), docText("}")];
 }
 
