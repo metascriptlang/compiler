@@ -22,14 +22,16 @@ extern function msNetSocketUnix(): int32;
 extern function msNetBindUnix(fd: int32, path: string): int32;
 extern function msNetConnectUnix(fd: int32, path: string): int32;
 extern function msNetSend(fd: int32, data: string): int32;
-extern function msNetRecv(fd: int32, maxBytes: int32): string;
+extern function msNetSendBytes(fd: int32, data: Readonly<Span<uint8>>): int32;
+extern function msNetRecvBytes(fd: int32, maxBytes: int32): Buffer;
+extern function msNetRecvNonBlockBytes(fd: int32, maxBytes: int32): Buffer;
+extern function msNetSendNonBlockBytes(fd: int32, data: Readonly<Span<uint8>>, offset: int32): int32;
 extern function msNetLastRecvTimedOut(): int32;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
 extern function msNetSetBlocking(fd: int32): int32;
 extern function msNetAcceptNonBlock(fd: int32): int32;
-extern function msNetRecvNonBlock(fd: int32, maxBytes: int32): string;
 extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
 
 // ===== Public API =====
@@ -67,11 +69,12 @@ export function connectUnix(fd: int32, path: string): int32 {
 }
 
 export function send(fd: int32, data: Bytes): int32 {
-	return msNetSend(fd, rawString(data));
+	if (typeof data == "string") return msNetSend(fd, data);
+	return msNetSendBytes(fd, data);
 }
 
 export function recv(fd: int32, maxBytes: int32): Buffer {
-	return rawBuffer(msNetRecv(fd, maxBytes));
+	return msNetRecvBytes(fd, maxBytes);
 }
 
 // True also when a non-blocking socket had no data, so an empty recv is end of stream only when this is false.
@@ -105,11 +108,12 @@ export function acceptNonBlock(fd: int32): int32 {
 }
 
 export function recvNonBlock(fd: int32, maxBytes: int32): Buffer {
-	return rawBuffer(msNetRecvNonBlock(fd, maxBytes));
+	return msNetRecvNonBlockBytes(fd, maxBytes);
 }
 
 export function sendNonBlock(fd: int32, data: Bytes, offset: int32): int32 {
-	return msNetSendNonBlock(fd, rawString(data), offset);
+	if (typeof data == "string") return msNetSendNonBlock(fd, data, offset);
+	return msNetSendNonBlockBytes(fd, data, offset);
 }
 
 // ===== Async I/O API (Completion-based engine, for await) =====
