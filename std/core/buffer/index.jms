@@ -25,9 +25,10 @@ export function toString(this b: Buffer): string {
 // A read or write outside the buffer, an integer outside its width, or a byteLength outside 1..6 throws
 // the RangeError the Node Buffer throws; the other backends say the same words.
 function need(b: Buffer, o: number, width: number): void {
+	if (Math.floor(o) != o) throw new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${o}`);
 	const max = b.length - width;
 	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
-	if (!(o >= 0 && o <= max && o % 1 == 0)) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${o}`);
+	if (!(o >= 0 && o <= max)) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${o}`);
 }
 
 function inRange(v: number, lo: number, hi: number): void {

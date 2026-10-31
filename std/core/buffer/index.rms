@@ -398,9 +398,12 @@ function signExtend(value: int64, bits: int64): int64 {
 // throw the RangeError the Node Buffer throws, as on C and JS.
 
 function needBytes(buf: Buffer, offset: number, width: number): void {
+	if (Math.floor(offset) != offset) {
+		throw new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${offset}`);
+	}
 	const max = buf.length - width;
 	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
-	if (!(offset >= 0 && offset <= max && offset % 1 == 0)) {
+	if (!(offset >= 0 && offset <= max)) {
 		throw new RangeError(
 			`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${offset}`,
 		);
