@@ -943,8 +943,8 @@ function vmDrainFutures(vm: RaiserVM): void {
 		table.counts.gen[at] += 1;
 		table.items[at] = table.tomb;
 		table.free.push(at);
-		rcDecref(f.valueArrayHeap, f.valueObjectHeap, f.value);
-		rcDecref(f.valueArrayHeap, f.valueObjectHeap, f.error);
+		vmReleaseHeld(vm, f.valueArrayHeap, f.valueObjectHeap, f.value);
+		vmReleaseHeld(vm, f.valueArrayHeap, f.valueObjectHeap, f.error);
 		for (const d of f.dependents) futureRelease(vm, d);
 		for (const i of f.inputs) futureRelease(vm, i);
 	}
@@ -1068,13 +1068,13 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 function thenRelease(vm: RaiserVM, t: RaiserThen): void {
 	futureRelease(vm, t.input);
 	futureRelease(vm, t.output);
-	rcDecref(t.arrayHeap, t.objectHeap, t.arg);
+	vmReleaseHeld(vm, t.arrayHeap, t.objectHeap, t.arg);
 	if (t.shell != 0) {
 		if (heapBoxRc(t.shell) <= 1) heapBoxSetValue(t.shell, raiserNil());
 		rcDecrefHandle(t.arrayHeap, t.objectHeap, t.shell);
 	}
-	rcDecref(t.arrayHeap, t.objectHeap, t.fulfilled);
-	rcDecref(t.arrayHeap, t.objectHeap, t.rejected);
+	vmReleaseHeld(vm, t.arrayHeap, t.objectHeap, t.fulfilled);
+	vmReleaseHeld(vm, t.arrayHeap, t.objectHeap, t.rejected);
 }
 
 function thenFinished(vm: RaiserVM, strand: number): boolean {
@@ -1484,7 +1484,7 @@ function unhandledException(vm: RaiserVM): void {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
 		futureFail(vm, s.resultFuture, msg, vm.currentException);
-		rcDecref(vm.arrayHeap, vm.objectHeap, vm.currentException);
+		vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, vm.currentException);
 		clearException(vm);
 		releaseSpawnEnv(vm, s);
 		thenFinished(vm, vm.current);
@@ -1687,6 +1687,7 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.safePoints = s.safePoints;
 	vm.currentException = s.currentException;
 	s.status = RaiserStrandStatus.Running;
+	if (vm.dropped.length > 0) vmDrain(vm);
 }
 
 // Round-robin from the strand after the current one, so a yielding strand
@@ -2401,7 +2402,7 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 			RaiserModuleJobKind.Fulfilled => moduleAsyncFulfilled(vm, at),
 			RaiserModuleJobKind.Rejected => {
 				moduleAsyncRejected(vm, at, job.error);
-				rcDecref(vm.arrayHeap, vm.objectHeap, job.error);
+				vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, job.error);
 			},
 		}
 	}
@@ -4204,6 +4205,16 @@ function vmDestroyTop(vm: RaiserVM, handle: int64): void {
 function vmDestroyChild(vm: RaiserVM, handle: int64): void {
 	if (vmDestroyFn(vm, handle) >= 0 || vm.dropNest >= DROP_NEST_LIMIT) vm.dropped.push(handle);
 	else vmDestroyWalk(vm, handle);
+}
+
+// A count the VM holds outside any frame, on a value of the running heaps, is released as a frame's would be,
+// so a cell with a destroy routine runs it; the routine waits in `dropped` for the next strand to resume.
+function vmReleaseHeld(vm: RaiserVM, arr: RaiserArrayHeap, obj: RaiserObjectHeap, held: RaiserValue): void {
+	if (arr != vm.arrayHeap) {
+		rcDecref(arr, obj, held);
+		return;
+	}
+	if (holdsCount(held.kind)) vmReleaseChild(vm, held.intVal, false);
 }
 
 function vmReleaseChild(vm: RaiserVM, handle: int64, cyclic: boolean): void {
