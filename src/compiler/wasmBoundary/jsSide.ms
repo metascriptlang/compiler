@@ -315,9 +315,8 @@ function preludeFor(wasmModuleUrl: string): string {
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t};",
 		"})();",
-		"globalThis.__msb = __msb;",
 		GLUE.join("\n"),
-		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default();`,
+		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default({ msb: __msb });`,
 		"__msbMod._MsMain();",
 		"",
 	].join("\n");

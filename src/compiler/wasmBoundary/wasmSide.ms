@@ -1,5 +1,7 @@
 import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, signatureLetter, unwiredKind } from "./manifest";
 
+const REGISTRY = "Module['msb']";
+
 export interface WasmEntry {
 	source: string;
 	exportedFunctions: string[];
@@ -236,7 +238,7 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 }
 
 function guardedImportJs(name: string, params: string[], call: string): string {
-	return `\t${name}: (${params.join(", ")}) => { try { return ${call}; } catch (e) { throw globalThis.__msb.die(e); } },`;
+	return `\t${name}: (${params.join(", ")}) => { try { return ${call}; } catch (e) { throw ${REGISTRY}.die(e); } },`;
 }
 
 export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePath: string) => string): WasmEntry {
@@ -320,8 +322,10 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let jsLibrary = "";
 	if (signatures.length > 0 || resultImports.length > 0) {
 		const entries: string[] = [];
-		for (const s of signatures) entries.push(guardedImportJs(`msb_cb_${s}`, ["id", "...a"], "globalThis.__msb.cb(id, ...a)"));
-		for (const name of resultImports) entries.push(guardedImportJs(name, ["...a"], "globalThis.__msb.takes.pop()(...a)"));
+		for (const s of signatures) entries.push(guardedImportJs(`msb_cb_${s}`, ["id", "...a"], `${REGISTRY}.cb(id, ...a)`));
+		for (const name of resultImports) entries.push(guardedImportJs(name, ["...a"], `${REGISTRY}.takes.pop()(...a)`));
+		const first = signatures.length > 0 ? "msb_cb_" + signatures[0] : resultImports[0];
+		entries.push(`\t${first}__postset: "if (!${REGISTRY}) throw new Error('msb registry missing: pass { msb } to the wasm module factory');",`);
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
 	const runtimeMethods = hasString || readsHeap ? ["HEAPU8", "wasmMemory"] : [];

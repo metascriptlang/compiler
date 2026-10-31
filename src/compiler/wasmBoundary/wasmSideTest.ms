@@ -53,7 +53,7 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	const e = entryFor(["evaluate", "add64"]);
 	assert e.source.split("extern function msb_cb_i_i").length == 2;
 	assert e.exportedFunctions.join(",") == "_msb_calc_evaluate,_msb_calc_add64,_MsMain";
-	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, ...a) => { try { return globalThis.__msb.cb(id, ...a); } catch (e) { throw globalThis.__msb.die(e); } },\n});\n";
+	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, ...a) => { try { return Module['msb'].cb(id, ...a); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_cb_i_i__postset: \"if (!Module['msb']) throw new Error('msb registry missing: pass { msb } to the wasm module factory');\",\n});\n";
 	assert entryFor(["add64"]).jsLibrary == "";
 }
 
@@ -98,7 +98,7 @@ test "wasm entry: a struct crosses as leaf parameters and returns through one re
 	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrFrom(l_2Ptr, l_2Len), count: l_3 });");
 	assert s.includes("\tmsb_rs_ddsi(r.at.x, r.at.y, msbStrPtr(r.text), r.text.asBytes().length, r.count);");
 	assert s.split("extern function msb_rs_ddsi").length == 2;
-	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (...a) => { try { return globalThis.__msb.takes.pop()(...a); } catch (e) { throw globalThis.__msb.die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_tag,_malloc,_free,_MsMain";
 }
 
@@ -109,7 +109,7 @@ test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is h
 	assert s.includes("export function msb_calc_scale(xsPtr: uint32, xsLen: int32, k: float32): void {");
 	assert s.includes("\tconst r = msbm0_scale(msbVecFrom_float32(xsPtr, xsLen), k);");
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
-	assert e.jsLibrary.includes("\tmsb_rv: (...a) => { try { return globalThis.__msb.takes.pop()(...a); } catch (e) { throw globalThis.__msb.die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rv: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8,wasmMemory";
 }
@@ -126,6 +126,13 @@ test "wasm entry: a Span parameter is a view over the copied ptr and len, with n
 
 test "wasm entry: every callback and result import hands an exception to the registry before it leaves the import" {
 	const e = entryFor(["evaluate", "visit", "report", "sumBy", "edit", "tag", "scale"]);
-	assert e.jsLibrary.split("catch (e) { throw globalThis.__msb.die(e); } },").length == 8;
-	assert e.jsLibrary.split("\n\tmsb_").length == 8;
+	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 8;
+	assert e.jsLibrary.split("\n\tmsb_").length == 9;
+}
+
+test "wasm entry: every library entry reads the registry from the instance's Module, and one check per library names a missing one" {
+	const e = entryFor(["evaluate", "visit", "report", "sumBy", "edit", "tag", "scale"]);
+	assert !e.jsLibrary.includes("globalThis");
+	assert e.jsLibrary.split("registry missing").length == 2;
+	assert entryFor(["tag"]).jsLibrary.includes("\n\tmsb_rs_ddsi__postset: \"if (!Module['msb']) throw");
 }

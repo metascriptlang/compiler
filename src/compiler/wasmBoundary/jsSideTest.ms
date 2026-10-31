@@ -59,14 +59,14 @@ test "js side: a callback is pushed before the call, adapted per kind and popped
 	assert code.includes("const id0 = __msb.push((x0, x1) => (a0(x0 !== 0, x1 >>> 0) ? 1 : 0));");
 }
 
-test "js side: one prelude awaits the wasm module once and a stale callback id throws" {
+test "js side: one prelude awaits the wasm module once, hands it its own registry, and a stale callback id throws" {
 	const b = bindingsFor(["add64"]);
 	assert b.modules.length == 1;
 	assert b.modules[0].modulePath == "/p/calc.ms";
-	assert b.prelude.includes('const __msbMod = await (await import("./app.wasm.mjs")).default();\n__msbMod._MsMain();\n');
-	assert b.prelude.includes("globalThis.__msb = __msb;");
+	assert b.prelude.includes('const __msbMod = await (await import("./app.wasm.mjs")).default({ msb: __msb });\n__msbMod._MsMain();\n');
+	assert !b.prelude.includes("globalThis.__msb");
 	assert b.prelude.includes('throw new Error("callback used after its call returned");');
-	assert b.prelude.indexOf("globalThis.__msb") < b.prelude.indexOf("_MsMain");
+	assert b.prelude.indexOf("const __msb = ") < b.prelude.indexOf("default({ msb: __msb })");
 }
 
 test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
