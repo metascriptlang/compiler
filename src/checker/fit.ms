@@ -479,7 +479,8 @@ function refuseEqualityThroughView(ctx: CheckerContext, node: Node, ops: string[
 
 function wrapIntoCarrier(ctx: CheckerContext, operand: Node, carrier: Type, operandType: Type): Node {
 	const payload = carrier.typeReturn;
-	const taken = payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
+	const constant = numericConstantForCarrier(operand, operand.nodeType, carrier);
+	const taken = constant != null ? constant : payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
 	return synthMaybeWrap(taken, carrier, taken.nodeType ?? operandType, ctx);
 }
 
