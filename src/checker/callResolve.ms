@@ -1272,8 +1272,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const typedBy = pickedSig != null ? pickedSig : ctorRoutine;
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	if (hasCtor && ctorOwner != null) refuseHiddenConstructor(ctx, declaring != null ? declaring : ctorOwner, node.location.line, node.location.column);
-	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : (pickedSig != null && pickedSig.defaultParams.length == 0 ? ctorRoutine : typedBy);
-	const routineFormals = hasCtor && typedBy != null ? ctorFormalTypes(typedBy) : null;
+	const throughShorter = pickedSig != null && pickedSig.symbolType != null ? shorterThanImplementation(pickedSig.symbolType, ctorRoutine) : null;
+	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : (pickedSig != null && (pickedSig.defaultParams.length == 0 || throughShorter != null) ? ctorRoutine : typedBy);
+	const routineFormals = hasCtor && typedBy != null ? ctorFormalTypes(throughShorter != null ? ctorRoutine! : typedBy) : null;
 	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
 	if (routineFormals != null && defaultsFrom != null) {
 		const pd: ParamDefaults = { defaults: defaultsFrom.defaultParams, names: defaultsFrom.symbolType.typeNames.slice(1), offset: 0 };
@@ -4143,8 +4144,14 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 		const sigType = s.symbolType;
 		if (sigType == null || sigType.kind != TypeKind.Function) continue;
 		const receiver = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? 1 : 0;
-		if (sigType.typeChildren.length != implParams.length) {
+		if (sigType.typeChildren.length > implParams.length) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation has ${implParams.length - receiver}`,
+				callNode.location.line, callNode.location.column);
+			return false;
+		}
+		const implRequired = receiver == 1 ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], impl.defaultParams) + receiver : getMinArity(implFnType);
+		if (sigType.typeChildren.length < implRequired) {
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation requires ${implRequired - receiver}`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
@@ -4841,11 +4848,20 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 
-	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
+	const throughShorter = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) ? shorterThanImplementation(winnerType, impl) : null;
+	const defaultsOwner = throughShorter != null || (hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null) ? impl : winnerSymFinal;
+	const filledArity = throughShorter != null ? throughShorter.typeChildren.length : winnerType.typeChildren.length;
+	if (winnerType.kind == TypeKind.Function && argTypes.length < filledArity) {
+		fillDefaultArgsForNode(ctx, callNode, sym.name, filledArity, 0, defaultsOwner);
 	}
 	return narrowToSignatureReturn(ctx, callNode, impl, winnerSymFinal, inferGenericReturn(ctx, winnerType, argTypes, null, callNode), false);
+}
+
+// A signature may leave out the implementation's defaulted parameters: a call through it
+// fills them from the implementation, up to its arity.
+function shorterThanImplementation(signature: Type, impl: Symbol | null): Type | null {
+	const t = impl != null ? impl.symbolType : null;
+	return t != null && t.kind == TypeKind.Function && t.typeChildren.length > signature.typeChildren.length ? t : null;
 }
 
 // The call has the chosen signature's return type, while the routine it runs returns the
@@ -5289,12 +5305,14 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		argTypes[ai] = args[ai].nodeType!;
 	}
 	const ovDefaultOffset: int32 = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
-	const defaultsOwner = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) && declaredDefaults(extWinnerSym) == null ? callNode.resolvedSym : extWinnerSym;
+	const defaultsOwner = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) && (declaredDefaults(extWinnerSym) == null || shorterThanImplementation(winnerType, callNode.resolvedSym) != null) ? callNode.resolvedSym : extWinnerSym;
 	const ovSpread = spreadAt >= 0 && winnerType.kind == TypeKind.Function
 		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, defaultsOwner, ovDefaultOffset), winnerType.typeChildren, spreadAt)
 		: { spread: null, at: -1, taken: false } as SpreadTake;
-	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset, defaultsOwner);
+	const extThroughShorter = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) ? shorterThanImplementation(winnerType, callNode.resolvedSym) : null;
+	const ovFilledArity = extThroughShorter != null ? extThroughShorter.typeChildren.length : winnerType.typeChildren.length;
+	if (winnerType.kind == TypeKind.Function && argTypes.length < ovFilledArity) {
+		fillDefaultArgsForNode(ctx, callNode, methodName, ovFilledArity, ovDefaultOffset, defaultsOwner);
 	}
 	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
 	if (actorCall) checkActorCallArgs(ctx, callNode, args, winnerType.kind != TypeKind.Function || winnerType.typeReturn == null || winnerType.typeReturn.kind == TypeKind.Void);
