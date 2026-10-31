@@ -294,6 +294,10 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 			let typeText = part.slice(colonIdx + 1, part.length).trim();
 			const isSink = name.startsWith("sink ");
 			if (isSink) name = name.slice(5, name.length).trim();
+			const isRef = name.startsWith("ref ");
+			if (isRef) name = name.slice(4, name.length).trim();
+			const isOut = name.startsWith("out ");
+			if (isOut) name = name.slice(4, name.length).trim();
 			if (name.endsWith("?")) {
 				name = name.slice(0, name.length - 1).trim();
 				typeText = optionalizeTypeString(typeText);
@@ -301,7 +305,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 			}
 			paramNames.push(name);
 			const annotated = resolveAnnotation(typeText, ctx, line, col);
-			paramTypes.push(isSink ? createSink(annotated) : annotated);
+			paramTypes.push(isSink ? createSink(annotated) : isRef ? createVar(annotated) : isOut ? createOutVar(annotated) : annotated);
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx, line, col));

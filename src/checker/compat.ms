@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef, isOutParam } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -970,6 +970,10 @@ export function sinkModeDiffers(a: Type, b: Type): boolean {
 	return takesOwnership(a) != takesOwnership(b);
 }
 
+export function varModeDiffers(a: Type, b: Type): boolean {
+	return (a.kind == TypeKind.Var) != (b.kind == TypeKind.Var) || isOutParam(a) != isOutParam(b);
+}
+
 function takesOwnership(t: Type): boolean {
 	if (t.kind == TypeKind.Sink) return true;
 	const held = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
@@ -986,7 +990,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of sourceParams) {
-		if (sinkModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
+		if (sinkModeDiffers(sourceParam, targetParams[i]) || varModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -1034,7 +1038,7 @@ function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetP
 	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
 	if (element == null) return false;
 	for (let i = fixed; i < targetParams.length; i += 1) {
-		if (sinkModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+		if (sinkModeDiffers(targetParams[i], element) || varModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
 	}
 	return true;
 }
@@ -1797,7 +1801,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
-					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
+					if (sinkModeDiffers(formalParams[pi], actualParams[pi]) || varModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
