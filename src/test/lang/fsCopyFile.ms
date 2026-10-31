@@ -1,9 +1,10 @@
 import { copyFile, ensureDir, exists, modifiedTime, readFile, readFileBytes, removeAll, writeFile, writeFileBytes } from "std/fs";
+import { tmpDir } from "std/os";
 import { execFileCapture } from "std/process";
 import { Buffer } from "std/core/buffer";
 
 function scratch(name: string): string {
-	const base = "/tmp/ms-copyFile-" + name + "-" + String(Math.floor(Math.random() * 1000000000));
+	const base = tmpDir() + "/ms-copyFile-" + name + "-" + String(Math.floor(Math.random() * 1000000000));
 	ensureDir(base);
 	return base;
 }
