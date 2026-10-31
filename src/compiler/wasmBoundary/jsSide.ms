@@ -173,7 +173,7 @@ function quoted(s: string): string {
 
 const GLUE = [
 	"const __msbTe = new TextEncoder();",
-	"const __msbTd = new TextDecoder();",
+	"const __msbTd = new TextDecoder('utf-8', { ignoreBOM: true });",
 	"function __msbAlloc(n) {",
 	"\tconst p = __msbMod._malloc(n);",
 	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
