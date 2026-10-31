@@ -686,6 +686,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		if (!dup) seen.push(k);
 	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
+	if (dropEnumMembersOfPresentEnums(seen) && seen.length == 1) return seen[0];
 	if (onlyViewsAndNull(seen)) return createReadonlyView(buildUnion(seen.map((m: Type): Type => withoutReadonlyView(m)), canonical));
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
@@ -780,6 +781,26 @@ function foldBooleanLiterals(members: Type[]): boolean {
 	}
 	members.shrink(kept);
 	return true;
+}
+
+function dropEnumMembersOfPresentEnums(members: Type[]): boolean {
+	let hasMember = false;
+	let hasEnum = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.EnumLiteral) hasMember = true;
+		else if (m.kind == TypeKind.Enum) hasEnum = true;
+	}
+	if (!hasMember || !hasEnum) return false;
+	let kept = 0;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		if (m.kind == TypeKind.EnumLiteral && m.typeReturn != null && members.includes(m.typeReturn)) continue;
+		members[kept] = m;
+		kept += 1;
+	}
+	const dropped = kept < members.length;
+	members.shrink(kept);
+	return dropped;
 }
 
 function extendsDeclaredSum(types: Type[]): boolean {
