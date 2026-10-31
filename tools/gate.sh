@@ -970,7 +970,7 @@ FAKE
 # On 2026-10-29..30, 66 of 93 reds were not the slice's and each one cost its owner a re-proof and a new gate; a flake now
 # lands on a slice at most ~7% of the time, while a red the diff causes every time stays the slice's.
 TRIAGE_RUNS=3 TRIAGE_MAX=12 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
-TRIAGE_LANES=" corpus san tsan guard hcr tests suite "
+TRIAGE_LANES=" corpus san tsan guard hcr lsp tests suite "
 
 triage_subject() {
   case "$1" in
@@ -1040,6 +1040,7 @@ triage_side() {
             MSC="$cmp" "$bld" run src/test/corpus/run.ms ;;
         guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
         hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
+        lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
         tests|suite)
           [ "$lane" = tests ] || cmp=$bld
           r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
