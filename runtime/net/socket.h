@@ -203,11 +203,12 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 }
 
 #ifndef _WIN32
-/* A path that holds a NUL byte, or does not fit sun_path with its terminator, is refused: the kernel
- * would read it only up to the first NUL and bind or reach another file. */
+/* An empty path, a path holding a NUL byte, or one that does not fit sun_path with its terminator is
+ * refused: Linux binds an empty or NUL-led path in its abstract namespace, and every kernel reads a
+ * pathname only up to the first NUL, so each would bind or reach another socket. */
 static inline int32_t msNetUnixAddr(msString path, struct sockaddr_un* sa, ms_socklen_t* len) {
 	const char* bytes = msStringToCString(path);
-	if (path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
+	if (path.len == 0 || path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
 	memset(sa, 0, sizeof(*sa));
 	sa->sun_family = AF_UNIX;
 	memcpy(sa->sun_path, bytes, (size_t)path.len);
