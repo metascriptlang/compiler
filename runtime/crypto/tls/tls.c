@@ -17,6 +17,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -70,25 +72,111 @@ static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
 	return (int)ret;
 }
 
-/* ===== CA Bundle Discovery ===== */
+/* ===== CA Discovery ===== */
 
-static const char* findCaBundle(void) {
-	const char *env = getenv("SSL_CERT_FILE");
-	if (env && access(env, R_OK) == 0) return env;
+static _Thread_local char tlsLastError[512];
 
-	static const char *paths[] = {
-		"/etc/ssl/cert.pem",                          /* macOS, some Linux */
-		"/etc/ssl/certs/ca-certificates.crt",         /* Debian/Ubuntu */
-		"/etc/pki/tls/certs/ca-bundle.crt",           /* RHEL/CentOS */
-		"/usr/local/share/certs/ca-root-nss.crt",     /* FreeBSD */
-		"/etc/ssl/ca-bundle.pem",                     /* OpenSUSE */
-		NULL
-	};
+static void tlsSetError(const char *fmt, const char *detail) {
+	snprintf(tlsLastError, sizeof(tlsLastError), fmt, detail);
+}
 
-	for (int i = 0; paths[i]; i++) {
-		if (access(paths[i], R_OK) == 0) return paths[i];
+static int isDir(const char *path) {
+	struct stat st;
+	return stat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR;
+}
+
+static int loadCaSource(mbedtls_x509_crt *chain, const char *path) {
+	int ret = isDir(path) ? mbedtls_x509_crt_parse_path(chain, path)
+	                      : mbedtls_x509_crt_parse_file(chain, path);
+	return ret >= 0 && chain->version != 0;
+}
+
+#ifdef _WIN32
+static int loadCaFromWindows(mbedtls_x509_crt *chain) {
+	char path[MAX_PATH + 16];
+	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+	if (n > 0 && n < MAX_PATH) {
+		char *slash = strrchr(path, '\\');
+		if (slash) {
+			strcpy(slash + 1, "cacert.pem");
+			if (access(path, 0) == 0 && loadCaSource(chain, path)) return 1;
+		}
 	}
-	return NULL;
+	const char *p = getenv("PATH");
+	while (p && *p) {
+		const char *end = strchr(p, ';');
+		size_t len = end ? (size_t)(end - p) : strlen(p);
+		const char *dir = p;
+		if (len > 1 && dir[0] == '"' && dir[len - 1] == '"') { dir++; len -= 2; }
+		if (len > 0 && len < MAX_PATH) {
+			memcpy(path, dir, len);
+			strcpy(path + len, "\\cacert.pem");
+			if (access(path, 0) == 0 && loadCaSource(chain, path)) return 1;
+		}
+		p = end ? end + 1 : NULL;
+	}
+	return 0;
+}
+#elif defined(__APPLE__)
+static const char *caPaths[] = {
+	"/etc/ssl/cert.pem",
+	"/System/Library/OpenSSL/certs/cert.pem",
+	NULL
+};
+#elif defined(__linux__)
+static const char *caPaths[] = {
+	"/etc/ssl/certs/ca-certificates.crt",
+	"/etc/ssl/ca-bundle.pem",
+	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/usr/share/ssl/certs/ca-bundle.crt",
+	"/etc/pki/tls/certs",
+	"/data/data/com.termux/files/usr/etc/tls/cert.pem",
+	"/system/etc/security/cacerts",
+	"/etc/ssl/certs/ca-bundle.crt",
+	NULL
+};
+#else
+static const char *caPaths[] = {
+	"/etc/ssl/certs/ca-certificates.crt",
+	"/usr/local/share/certs/ca-root-nss.crt",
+	"/etc/ssl/cert.pem",
+	"/usr/local/share/certs",
+	"/etc/openssl/certs",
+	NULL
+};
+#endif
+
+static int loadCaChain(mbedtls_x509_crt *chain, const char *explicitPath) {
+	if (explicitPath) {
+		if (loadCaSource(chain, explicitPath)) return 1;
+		tlsSetError("failed to load CA certificates from %s", explicitPath);
+		return 0;
+	}
+	const char *envFile = getenv("SSL_CERT_FILE");
+	if (envFile) {
+		if (loadCaSource(chain, envFile)) return 1;
+		tlsSetError("no CA certificates found: SSL_CERT_FILE=%s did not load", envFile);
+		return 0;
+	}
+	const char *envDir = getenv("SSL_CERT_DIR");
+	if (envDir) {
+		if (loadCaSource(chain, envDir)) return 1;
+		tlsSetError("no CA certificates found: SSL_CERT_DIR=%s did not load", envDir);
+		return 0;
+	}
+#ifdef _WIN32
+	if (loadCaFromWindows(chain)) return 1;
+#else
+	for (int i = 0; caPaths[i]; i++) {
+		if (access(caPaths[i], R_OK) == 0 && loadCaSource(chain, caPaths[i])) return 1;
+	}
+#endif
+	tlsSetError("no CA certificates found%s", "; set SSL_CERT_FILE or SSL_CERT_DIR");
+	return 0;
+}
+
+msString msTlsLastError(void) {
+	return msStringNew(tlsLastError, (int64_t)strlen(tlsLastError));
 }
 
 /* ===== TCP Connect ===== */
@@ -136,54 +224,58 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	static int psa_inited = 0;
 	if (!psa_inited) { psa_crypto_init(); psa_inited = 1; }
 
-	int fd = tcpConnect(hostBuf, port);
-	if (fd < 0) return 0;
+	tlsLastError[0] = '\0';
 
 	msTlsCtx *ctx = (msTlsCtx*)msMemAlloc0(sizeof(msTlsCtx));
-	ctx->fd = fd;
+	ctx->fd = -1;
 
 	mbedtls_ssl_init(&ctx->ssl);
 	mbedtls_ssl_config_init(&ctx->conf);
 	mbedtls_x509_crt_init(&ctx->cacert);
 
-	/* Load CA bundle */
 	char caBuf[512];
-	const char *caFile = NULL;
+	const char *explicitCa = NULL;
 	if (caPath.len > 0 && caPath.p) {
 		int64_t clen = caPath.len < 511 ? caPath.len : 511;
 		memcpy(caBuf, caPath.p->data, clen);
 		caBuf[clen] = '\0';
-		caFile = caBuf;
-	} else {
-		caFile = findCaBundle();
+		explicitCa = caBuf;
 	}
+	if (!loadCaChain(&ctx->cacert, explicitCa)) goto fail;
 
-	if (caFile) {
-		if (mbedtls_x509_crt_parse_file(&ctx->cacert, caFile) < 0) {
-			/* CA parse failed, continue without verification */
-		}
+	int fd = tcpConnect(hostBuf, port);
+	if (fd < 0) {
+		tlsSetError("TCP connect to %s failed", hostBuf);
+		goto fail;
 	}
+	ctx->fd = fd;
 
 	/* Configure SSL — mbedTLS 4.x handles RNG internally via PSA crypto */
 	if (mbedtls_ssl_config_defaults(&ctx->conf,
 			MBEDTLS_SSL_IS_CLIENT,
 			MBEDTLS_SSL_TRANSPORT_STREAM,
 			MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
+		tlsSetError("TLS configuration failed%s", "");
 		goto fail;
 	}
 
-	mbedtls_ssl_conf_authmode(&ctx->conf,
-		caFile ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_OPTIONAL);
+	mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 	mbedtls_ssl_conf_ca_chain(&ctx->conf, &ctx->cacert, NULL);
 
 	/* ALPN: advertise http/1.1 — required by some CDNs (e.g. CloudFront) */
 	static const char *alpnProtocols[] = { "http/1.1", NULL };
 	mbedtls_ssl_conf_alpn_protocols(&ctx->conf, alpnProtocols);
 
-	if (mbedtls_ssl_setup(&ctx->ssl, &ctx->conf) != 0) goto fail;
+	if (mbedtls_ssl_setup(&ctx->ssl, &ctx->conf) != 0) {
+		tlsSetError("TLS session setup failed%s", "");
+		goto fail;
+	}
 
 	/* SNI + certificate hostname verification */
-	if (mbedtls_ssl_set_hostname(&ctx->ssl, hostBuf) != 0) goto fail;
+	if (mbedtls_ssl_set_hostname(&ctx->ssl, hostBuf) != 0) {
+		tlsSetError("invalid TLS hostname %s", hostBuf);
+		goto fail;
+	}
 
 	/* I/O callbacks */
 	mbedtls_ssl_set_bio(&ctx->ssl, &ctx->fd, tls_send, tls_recv, NULL);
@@ -192,8 +284,23 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	int ret;
 	while ((ret = mbedtls_ssl_handshake(&ctx->ssl)) != 0) {
 		if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+			snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: -0x%04X", (unsigned)-ret);
+			uint32_t failedFlags = mbedtls_ssl_get_verify_result(&ctx->ssl);
+			if (failedFlags != 0 && failedFlags != 0xFFFFFFFFu) {
+				char info[256];
+				mbedtls_x509_crt_verify_info(info, sizeof(info), "", failedFlags);
+				snprintf(tlsLastError, sizeof(tlsLastError), "certificate verification failed: %s", info);
+			}
 			goto fail;
 		}
+	}
+
+	uint32_t flags = mbedtls_ssl_get_verify_result(&ctx->ssl);
+	if (flags != 0) {
+		char info[256];
+		mbedtls_x509_crt_verify_info(info, sizeof(info), "", flags);
+		tlsSetError("certificate verification failed: %s", info);
+		goto fail;
 	}
 
 	return TLS_TO_HANDLE(ctx);
@@ -202,7 +309,7 @@ fail:
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
 	mbedtls_x509_crt_free(&ctx->cacert);
-	ms_close_socket(fd);
+	if (ctx->fd >= 0) ms_close_socket(ctx->fd);
 	free(ctx);
 	return 0;
 }

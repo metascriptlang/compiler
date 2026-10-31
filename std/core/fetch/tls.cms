@@ -20,7 +20,7 @@ import { doRequestOver, requestWithRedirectsOver } from "./client";
 function doRequestTls(options: RequestOptions): Result<HttpResponse, HttpError> {
 	const ctx = tlsConnect(options.hostname, options.port, "");
 	if (!ctx.ok) {
-		return Result.err(connectionFailed(`TLS handshake to ${options.hostname}:${options.port} failed`));
+		return Result.err(connectionFailed(`TLS to ${options.hostname}:${options.port} failed: ${ctx.error.message}`));
 	}
 	const tlsCtx = ctx.value;
 	return doRequestOver(

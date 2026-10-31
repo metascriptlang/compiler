@@ -22,6 +22,8 @@
  * Returns handle on success, 0 on failure. */
 int64_t msTlsConnect(msString hostname, int32_t port, msString caPath);
 
+msString msTlsLastError(void);
+
 /* Read decrypted data from TLS connection.
  * Returns msString with data, empty on error/close. */
 msString msTlsRead(int64_t ctx, int32_t maxBytes);
