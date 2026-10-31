@@ -1212,8 +1212,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const classSym = d.newCallee.resolvedSym;
 	const hasCtor = classSym != null && hasFlag(classSym, SymbolFlag.HasConstructor);
 	const implCtor = ctorRoutineOf(classSym);
-	const signatures = hasCtor ? ctorSignaturesOf(implCtor) : [];
-	const pickedSig = signatures.length > 0 ? pickCtorSignature(ctx, node, implCtor!, signatures, expected) : null;
+	const signatureImpl = hasCtor && classSym != null ? ctorRoutineOf(constructorDeclaringClass(classSym) ?? classSym) : null;
+	const signatures = ctorSignaturesOf(signatureImpl);
+	const pickedSig = signatures.length > 0 ? pickCtorSignature(ctx, node, signatureImpl!, signatures, expected) : null;
 	if (signatures.length > 0 && pickedSig == null) return resolvedType != null ? resolvedType : inferredType();
 	const declaredCtor = pickedSig != null ? pickedSig : implCtor;
 	let ctorFormals: Type[] | null = null;
