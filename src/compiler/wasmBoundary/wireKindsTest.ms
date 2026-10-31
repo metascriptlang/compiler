@@ -190,5 +190,5 @@ test "js side: every scalar callback parameter arrives converted and every scala
 	const viaBool = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.Bool))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
 	assert viaBool.includes("__msb.push(() => (a0() ? 1 : 0));"), viaBool;
 	const viaU64 = jsBindings({ functions: [functionOfCallback(callbackOf([], [], [], BoundaryKind.U64))], errors: [] }, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
-	assert viaU64.includes("__msb.push(() => a0());"), viaU64;
+	assert viaU64.includes("__msb.push(a0);"), viaU64;
 }

@@ -183,6 +183,14 @@ function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null
 	return `(${names}) => ${toWire(cb.result, call)}`;
 }
 
+function forwardsUnchanged(cb: BoundaryCallback, adapter: string, target: string): boolean {
+	const names: string[] = [];
+	for (let i = 0; i < cb.params.length; i += 1) names.push(`x${i}`);
+	const list = names.join(", ");
+	const call = `${target}(${list})`;
+	return adapter == `(${list}) => ${call}` || adapter == `(${list}) => { ${call}; }`;
+}
+
 function typedArrayOf(kind: BoundaryKind): string {
 	return match (kind) {
 		BoundaryKind.Bool | BoundaryKind.U8 => "Uint8Array",
@@ -265,7 +273,9 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 		} else if (p.kind == BoundaryKind.Callback) {
 			let resultAt: string | null = null;
 			if (options.checked) resultAt = `${quoted(f.name)}, ${quoted(`result of callback '${p.name}'`)}`;
-			lines.push(`	const id${i} = __msb.push(${adapterOf(p.callback!, `a${i}`, resultAt)});`);
+			const target = `a${i}`;
+			const adapter = adapterOf(p.callback!, target, resultAt);
+			lines.push(`	const id${i} = __msb.push(${forwardsUnchanged(p.callback!, adapter, target) ? target : adapter});`);
 			cleanup.push(`__msb.pop(id${i});`);
 			argList.push(`id${i}`);
 		} else if (p.kind == BoundaryKind.Struct) {
