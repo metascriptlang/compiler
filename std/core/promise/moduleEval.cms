@@ -190,16 +190,47 @@ function gatherAvailableAncestors(m: Ptr<ModuleRecord>): void {
 }
 
 function sortGatheredByOrdinal(list: Ptr<int32>, count: int32): void {
-	for (let i: int32 = 1; i < count; i++) {
-		const at = list[i];
-		const ordinal = recordAt(at).asyncOrdinal;
-		let j = i;
-		while (j > 0 && recordAt(list[j - 1]).asyncOrdinal > ordinal) {
-			list[j] = list[j - 1];
-			j -= 1;
+	let from = list;
+	let to = msMemAlloc((count as uint64) * 4) as Ptr<int32>;
+	const scratch = to;
+	let width: int32 = 1;
+	while (width < count) {
+		let lo: int32 = 0;
+		while (lo < count) {
+			const mid = lo + width < count ? lo + width : count;
+			const hi = lo + 2 * width < count ? lo + 2 * width : count;
+			let i = lo;
+			let j = mid;
+			let k = lo;
+			while (i < mid && j < hi) {
+				if (recordAt(from[j]).asyncOrdinal < recordAt(from[i]).asyncOrdinal) {
+					to[k] = from[j];
+					j += 1;
+				} else {
+					to[k] = from[i];
+					i += 1;
+				}
+				k += 1;
+			}
+			while (i < mid) {
+				to[k] = from[i];
+				i += 1;
+				k += 1;
+			}
+			while (j < hi) {
+				to[k] = from[j];
+				j += 1;
+				k += 1;
+			}
+			lo = hi;
 		}
-		list[j] = at;
+		const swap = from;
+		from = to;
+		to = swap;
+		width *= 2;
 	}
+	if (from != list) for (let k: int32 = 0; k < count; k++) list[k] = from[k];
+	free(scratch as Ptr<void>);
 }
 
 function asyncFulfilled(m: Ptr<ModuleRecord>): void {
