@@ -2158,6 +2158,7 @@ function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): voi
 function openInstanceReceiverScope(ctx: CheckerContext, field: Node, classType: Type): void {
 	openScope(ctx.table, ScopeKind.Block);
 	const thisSym = makeSymbol("this", SymbolKind.Parameter, classType, false);
+	stampOwner(ctx, thisSym);
 	field.paramSyms = [thisSym];
 	defineSymbol(ctx.table, thisSym);
 }
