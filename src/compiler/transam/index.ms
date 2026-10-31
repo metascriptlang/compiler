@@ -29,7 +29,7 @@ import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cach
 import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileId, getFilePath, hasFile,
+	setFileText, getFileText, getFileId, getInputId, getFilePath, hasFile,
 	getFileCount, getFilePathByIndex,
 	getFileDurability, setFileDurability
 } from "./fileInput";
@@ -468,10 +468,9 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: int32): string {
 function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProvider {
 	return createTaReadProvider((headerPath: string) => {
 		dbEnsureFileLoaded(db, headerPath);
+		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, getInputId(db.fileInput, headerPath, db.revision.value)));
 		const headerId = getFileId(db.fileInput, headerPath);
 		if (headerId < 0) return "";
-		// Record FileText dep so tryMarkGreen catches content changes
-		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, headerId));
 		// Also record module edge (eager invalidation — getTransitiveDependents)
 		if (currentFileId >= 0) recordModuleImport(db.moduleDeps, currentFileId, headerId);
 		return getFileText(db.fileInput, headerId);
@@ -580,17 +579,25 @@ function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Node
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
 	const raw = try readStdFile(filePath) catch "";
-	if (raw.byteLength == 0) return;
+	if (raw.byteLength == 0) {
+		getInputId(db.fileInput, filePath, db.revision.value);
+		return;
+	}
 	dbSetFileText(db, filePath, raw);
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
 export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
-	// Use the compiler's resolver with the db's config (includes std/, aliases, packages)
+	return resolveProbing(db, basePath, importSpec, null);
+}
+
+// `probed` collects the input of each candidate that holds no file, so the check that resolved the import depends on them.
+function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, probed: int32[] | null): string {
 	const candidates = resolveImportWithConfig(importSpec, basePath, db.resolverConfig);
 	for (const c of candidates) {
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
+		if (probed != null) probed.push(getInputId(db.fileInput, c, db.revision.value));
 	}
 	return "";
 }
@@ -775,7 +782,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 }
 
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
-function buildImportEntries(db: TransAmDb, filePath: string, program: Node): ImportEntry[] {
+function buildImportEntries(db: TransAmDb, filePath: string, program: Node, probed: int32[] | null = null): ImportEntry[] {
 	const entries: ImportEntry[] = [];
 	if (program == null) return entries;
 	if (program.kind != NodeKind.Program) return entries;
@@ -792,11 +799,11 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 		if (stmt.kind != NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
 		// Resolve import specifier using the same resolver as everything else
-		const resolvedPath = dbResolveImport(db, filePath, imp.importSource);
+		const resolvedPath = resolveProbing(db, filePath, imp.importSource, probed);
 
 		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
 	}
-	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], dbResolveImport(db, filePath, specifier), specifier, true));
+	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], resolveProbing(db, filePath, specifier, probed), specifier, true));
 	return entries;
 }
 
@@ -1036,11 +1043,13 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
 		// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
 		// from dep-order compilation; the db must do it on demand.
-		const imports = buildImportEntries(db, filePath, program);
+		const probed: int32[] = [];
+		const imports = buildImportEntries(db, filePath, program, probed);
 		db.checkInProgress.add(filePath);
 		checkMacroDeps(db, filePath, imports);
 
 		pushFrame(db.depStack, key);
+		for (const probe of probed) recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, probe));
 		const pKey = createQueryKey(TaQueryKind.Parse, fileId);
 		recordDependency(db.depStack, pKey);
 		recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
@@ -2884,4 +2893,30 @@ test "an import resolves to its highest-priority candidate whether or not a lowe
 	removeAll(dir);
 	assert fromDirIndex == dir + "/a.ms", fromDirIndex;
 	assert fromLowerExtension == dir + "/b.cms", fromLowerExtension;
+}
+
+test "a module created after an import found none is seen by its importer's next check" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/miss/a.ms", 'import { x } from "./b";\nexport const y = x;\n');
+	assert dbTypeCheck(db, "/miss/a.ms").errors.length > 0;
+	dbSetFileText(db, "/miss/b.ms", "export const x = 1;");
+	const errors = dbTypeCheck(db, "/miss/a.ms").errors;
+	assert errors.length == 0, errors[0].message;
+}
+
+test "a module created at a higher-priority path than the one an import resolved to is seen by its importer" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/prio/a/index.ms", "export const v: int32 = 1;");
+	dbSetFileText(db, "/prio/use.ms", 'import { v } from "./a";\nexport const w: int32 = v;\n');
+	assert dbTypeCheck(db, "/prio/use.ms").errors.length == 0;
+	dbSetFileText(db, "/prio/a.ms", 'export const v: string = "s";');
+	assert dbTypeCheck(db, "/prio/use.ms").errors.length > 0;
+}
+
+test "a companion source created after its header was translated changes the header's preprocessing" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/hc/api.h", HEADER_API);
+	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") < 0;
+	dbSetFileText(db, "/hc/api.c", "int apiValue(int x) { return x; }");
+	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") >= 0;
 }
