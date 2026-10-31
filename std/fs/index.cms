@@ -566,7 +566,7 @@ export function writeFile(path: string, content: string): Result<void, IoError> 
 	return errnoResult(writeFileErrno(path, content.asBytes(), "wb"), path, "write failed");
 }
 
-export function writeFileBytes(path: string, content: Buffer): Result<void, IoError> {
+export function writeFileBytes(path: string, content: uint8[]): Result<void, IoError> {
 	return errnoResult(writeFileErrno(path, content, "wb"), path, "write failed");
 }
 

@@ -1,6 +1,6 @@
 import { Buffer } from "std/core/buffer";
 
-export type Bytes = string | Buffer;
+export type Bytes = string | uint8[];
 
 extern function msRawString(data: Readonly<uint8[]>): string from "msRawString";
 extern function msBytesOf(raw: string): Buffer from "msAsBytes";

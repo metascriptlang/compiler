@@ -36,7 +36,7 @@ import { UntypedTree } from "../contracts";
 //
 // Parses a Buffer as a single CBOR data item, returns Result<CborValue, error>.
 
-export function decode(buf: Buffer): Result<CborValue, string> {
+export function decode(buf: uint8[]): Result<CborValue, string> {
 	return decodeAll(buf);
 }
 
