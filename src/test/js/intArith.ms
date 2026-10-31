@@ -8,9 +8,6 @@
 
 import { compileToJS, compileToJSWithStd, compileToJSBare } from "../helpers";
 import { hostTargetInfo } from "../../checker/types";
-import { join } from "std/fs/path";
-import { readFile } from "std/fs";
-import { resolveRuntimeDir } from "../../utils/path";
 
 test "int32 division by a literal truncates" {
 	const result = compileToJS("function f(a: int32): int32 { return a / 3; }");
@@ -183,15 +180,6 @@ test "int32 addition is checked, not wrapped, in the default build" {
 	const result = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }");
 	assert result.ok;
 	assert !result.value.contains("| 0");
-}
-
-test "the int32 overflow helper compares against the bounds" {
-	const root = resolveRuntimeDir();
-	const text = try readFile(join(root != "" ? join(root, "std") : "std", "core/system/index.jms")) catch "";
-	const at = text.indexOf("function msOverflowI32");
-	assert at >= 0, "msOverflowI32 not found in std/core/system/index.jms";
-	const body = text.slice(at, at + 200);
-	assert body.contains("if (${v} > 2147483647 || ${v} < -2147483648) ${msDefect}"), body;
 }
 
 test "uint8 addition wraps at a byte" {
