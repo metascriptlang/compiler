@@ -1091,6 +1091,10 @@ export function shortCircuitLeftShare(op: string, left: Type): Type | null {
 	return kept.length == 1 ? kept[0] : unionOfTypes(kept, null);
 }
 
+function isEnumOperand(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral);
+}
+
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	const bitSetResult = inferBitSetOp(op, leftType, rightType);
 	if (bitSetResult != null) return bitSetResult;
@@ -1109,6 +1113,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			if (rightType != null && rightType.kind == TypeKind.Ptr) return rightType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
+			if (isEnumOperand(leftType) || isEnumOperand(rightType)) return float64Type();
 			return inferredType();
 		},
 		"-" => {
@@ -1116,6 +1121,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			if (leftType != null && leftType.kind == TypeKind.Ptr) return leftType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
+			if (isEnumOperand(leftType) || isEnumOperand(rightType)) return float64Type();
 			return inferredType();
 		},
 		"*" | "/" | "%" | "**" => {
