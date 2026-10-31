@@ -10,6 +10,9 @@ export extern function needsCopy<T>(): boolean;
 @builtin("IsArray")
 export extern function isArray<T>(): boolean;
 
+@builtin("HoldsArray")
+export extern function holdsArray<T>(x: T): boolean;
+
 /** True when `T` is an object in the TypeScript sense, the question `T extends object` asks: a class, an interface, a struct, an array, a tuple or a function; false for numbers, booleans, strings, enums, literals and `null`. Answered while compiling, per instance. */
 @builtin("IsObject")
 export extern function isObject<T>(): boolean;

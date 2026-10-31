@@ -1,6 +1,6 @@
 export { toString } from "./shared";
 import { spliceStart, spliceCount } from "./shared";
-import { isArray as isArrayType } from "std/typetraits";
+import { holdsArray } from "std/typetraits";
 
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
@@ -17,8 +17,8 @@ export class Array<T> {
 }
 
 /** True when the static type of `x` is an array, as `Array.isArray` answers for any value of an array type. */
-export function isArray<T>(this typeof Array, x: T): boolean {
-	return isArrayType<T>();
+export function isArray<T>(this typeof Array, x: T): x is unknown[] {
+	return holdsArray<T>(x);
 }
 
 export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";

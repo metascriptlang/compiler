@@ -1200,7 +1200,8 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 			if (kept.length == 0) return t;
 			return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 		}
-		return predicateTarget;
+		if (t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred) return predicateTarget;
+		return typeRelation(predicateTarget, t) != TypeRelation.None ? t : predicateTarget;
 	}
 	// FalseCondition: remove variants assignable to the predicate target.
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {

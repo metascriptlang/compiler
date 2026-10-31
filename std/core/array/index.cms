@@ -21,13 +21,13 @@ export class Array<T> {
 }
 
 export { toString } from "./shared";
-import { isArray as isArrayType } from "std/typetraits";
+import { holdsArray } from "std/typetraits";
 import { spliceStart, spliceCount } from "./shared";
 import { utf8String } from "../string/bytes";
 
 /** True when the static type of `x` is an array, as `Array.isArray` answers for any value of an array type. */
-export function isArray<T>(this typeof Array, x: T): boolean {
-	return isArrayType<T>();
+export function isArray<T>(this typeof Array, x: T): x is unknown[] {
+	return holdsArray<T>(x);
 }
 
 // ===== Number Array =====

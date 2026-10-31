@@ -3,14 +3,14 @@
 // the exact kind. A single static type folds; a union asks a routine that cases
 // on the held member, one routine per union and table.
 
-import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
+import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, CallExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
+import { isArrayType, unwrapRefNullUnion, peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
 import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
 import { declaresProperty } from "../../checker/compat";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
-import { makeBinary, makeBlock, makeCall, makeFnDecl, makeIf, makeReturn, makeString, makeBool, makeTypedIdentResolved, makeNull, makeUnary } from "../util";
+import { makeBinary, makeBlock, makeCall, makeFnDecl, makeIf, makeReturn, makeString, makeBool, makeTypedIdentResolved, makeNull, makeUnary, callBuiltinKind } from "../util";
 import { cloneIfPure } from "../place";
 import { is64Kind } from "../numKinds";
 import { armOrder, holdsMember } from "./unionConvLower";
@@ -43,6 +43,10 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 		NodeKind.MatchStmt => {
 			const d = node.data as MatchStmtData;
 			d.matchStmtDisc = lowerArmsOnKind(d.matchStmtDisc, d.matchStmtCases, ctx);
+		},
+		NodeKind.CallExpr => {
+			const asked = lowerHoldsArray(node, ctx);
+			if (asked != null) return asked;
 		},
 		NodeKind.BinaryExpr => {
 			const test = lowerKindTest(node, ctx);
@@ -126,6 +130,33 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	const source: Type = t;
 	const kindRead = routineCall("msTypeofKind_", operand, ctx, node.location, (x: Symbol): Node[] => memberCases(source, x, kindNameOf, ctx, node.location));
 	return makeBinary(kindRead, op2, makeString(name, node.location), node.location);
+}
+
+function lowerHoldsArray(node: Node, ctx: TransformContext): Node | null {
+	if (callBuiltinKind(node) != "HoldsArray") return null;
+	const args = (node.data as CallExprData).arguments;
+	const operand = lowerNode(args[0], ctx);
+	const t = operand.nodeType;
+	const loc = node.location;
+	if (t == null || shapeOf(t) == Shape.Opaque) {
+		reportTransformError(ctx, `Array.isArray of a '${t != null ? typeDisplayName(t) : "unknown"}' value cannot tell an array from another value; narrow it to a concrete type or a union of them first`, loc);
+		return node;
+	}
+	const source: Type = t;
+	const held = kindsOf(source);
+	if (shapeOf(source) == Shape.Single) {
+		const answer = isArrayType(held[0]);
+		if (cloneIfPure(operand) != null || isLiteral(operand)) return makeBool(answer, loc);
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeBool(answer, loc), loc)], booleanType());
+	}
+	return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => {
+		const payload = shapeOf(source) == Shape.Nullable ? held[0] : unwrapRefNullUnion(peelTransparentInstance(source));
+		if (payload != null) {
+			const present = makeBinary(makeTypedIdentResolved(x, source, loc), "!==", makeNull(loc), loc);
+			return [makeIf(present, makeBlock([makeReturn(makeBool(isArrayType(payload), loc), loc)], loc), null, loc), makeReturn(makeBool(false, loc), loc)];
+		}
+		return memberAnswers(peelTransparentInstance(source), x, (member: Type): Node => makeBool(isArrayType(member), loc), ctx, loc);
+	}, booleanType());
 }
 
 // `x instanceof Box` with a generic `Box` asks which union member `x` holds:
