@@ -9,6 +9,7 @@
 //  6. builtinLower        — rewrite @builtin calls + extern extensions to C-compatible AST
 //  7. inductionPointer    — carry a Span index of a @computedGoto loop as a pointer under --danger (it reads the final shape of every access and call)
 //  8. loopSpanCache      — hold the length and data of the arrays a call-free loop reads or fills in a local Span under --danger (last, so it leaves a computed-goto loop as inductionPointer shaped it)
+//  9. constDataMark      — flag array literals of deep-constant elements so codegen copies one static initializer (last: the elements are in their final shape)
 //
 // NOTE: moveExprLower removed — MoveExpr survives to Phase 4 (analyzer) and Phase 5 (codegen).
 // Analyzer handles RC semantics (wasMoved, errFailedMove). Codegen unwraps to inner expression.
@@ -30,6 +31,7 @@ import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerInductionPointers } from "./inductionPointer";
 import { lowerLoopSpans } from "./loopSpanCache";
+import { markConstData } from "./constDataMark";
 import { reportShareIfRequested } from "../shareCount";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
@@ -60,6 +62,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.lowerInductionPointers");
 	result = lowerLoopSpans(result, ctx);
 	flowLap("pass.lowerLoopSpans");
+	result = markConstData(result, ctx);
+	flowLap("pass.native.markConstData");
 	reportShareIfRequested(result, "native");
 	return result;
 }
