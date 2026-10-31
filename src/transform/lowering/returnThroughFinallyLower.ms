@@ -1,5 +1,7 @@
 // The reference holds a returned value in the routine's result until the routine exits, so a
 // finally that raises or returns again releases it by the ordinary scope-exit and assignment rules.
+// The Raiser re-runs its Ret after the finally bodies, so there every returned value is held,
+// counted or not, and a finally that writes the returned variable leaves the result alone.
 
 import {
 	Node, NodeKind, DeclKind, Symbol, TypeKind,
@@ -12,24 +14,24 @@ import { makeBool, makeBlock, makeBreak, makeVarDecl, makeIdentResolved, makeAss
 import { isGenericFn, routineKindFlag } from "../../checker/context";
 import { classifyType, RcKind } from "../../analyzer/classify";
 
-export function lowerReturnThroughFinally(program: Node, ctx: TransformContext): Node {
+export function lowerReturnThroughFinally(program: Node, ctx: TransformContext, everyValue: boolean = false): Node {
 	walkNode(program, (node: Node): Node => {
 		match (node.kind) {
 			NodeKind.FunctionDecl => {
 				const d = node.data as FunctionDeclData;
-				if (plainRoutine(d.fnFlags)) d.fnBody = processBody(node, d.fnBody, ctx);
+				if (plainRoutine(d.fnFlags)) d.fnBody = processBody(node, d.fnBody, ctx, everyValue);
 			},
 			NodeKind.MethodDecl => {
 				const d = node.data as MethodDeclData;
-				if (plainRoutine(d.methodFlags)) d.methodBody = processBody(node, d.methodBody, ctx);
+				if (plainRoutine(d.methodFlags)) d.methodBody = processBody(node, d.methodBody, ctx, everyValue);
 			},
 			NodeKind.ArrowFunction => {
 				const d = node.data as ArrowFunctionData;
-				if (plainRoutine(d.arrowFlags)) d.arrowBody = processBody(node, d.arrowBody, ctx);
+				if (plainRoutine(d.arrowFlags)) d.arrowBody = processBody(node, d.arrowBody, ctx, everyValue);
 			},
 			NodeKind.FunctionExpr => {
 				const d = node.data as FunctionExprData;
-				if (plainRoutine(d.funcExprFlags)) d.funcExprBody = processBody(node, d.funcExprBody, ctx);
+				if (plainRoutine(d.funcExprFlags)) d.funcExprBody = processBody(node, d.funcExprBody, ctx, everyValue);
 			},
 			_ => {},
 		};
@@ -42,11 +44,11 @@ function plainRoutine(flags: string): boolean {
 	return !isGenericFn(flags) && routineKindFlag(flags) == "";
 }
 
-function processBody(fn: Node, body: Node, ctx: TransformContext): Node {
+function processBody(fn: Node, body: Node, ctx: TransformContext, everyValue: boolean): Node {
 	if (body == null || body.kind != NodeKind.BlockStmt) return body;
 	if (fn.nodeType == null || fn.nodeType.kind != TypeKind.Function) return body;
 	const retType = fn.nodeType.typeReturn;
-	if (retType == null || classifyType(retType, ctx, false).rcKind == RcKind.None) return body;
+	if (retType == null || (!everyValue && classifyType(retType, ctx, false).rcKind == RcKind.None)) return body;
 	if (!returnsThroughFinally(body, false)) return body;
 
 	const loc = body.location;

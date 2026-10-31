@@ -121,7 +121,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (placed) result = lowerParamReassign(result, ctx);
-	if (placed) result = lowerReturnThroughFinally(result, ctx);
+	if (placed) result = lowerReturnThroughFinally(result, ctx, true);
 	result = lowerActorClasses(result, ctx);
 	result = lowerAwaitSpill(result, ctx);
 	result = lowerAsync(result, ctx);

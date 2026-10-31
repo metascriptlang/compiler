@@ -3044,7 +3044,7 @@ test "placed: a break or continue out of a finally entered by a raise drops that
 	assert vm.output == "1 30\n", vm.output;
 }
 
-test "orc: a return inside try carries the value read at the return through the finally bodies" {
+test "placed: a return inside try carries the value read at the return through the finally bodies" {
 	const vm = evalVM("class Boom { n: number; constructor(n: number) { this.n = n; } }"
 		+ " function str(): string { let s = ''; try { return s; } finally { s += 'x'; } }"
 		+ " function num(): int32 { let n: int32 = 1; try { return n; } finally { n = 5; } }"
