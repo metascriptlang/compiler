@@ -1,28 +1,9 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
-import { join, resolve, dirname, relative, basename } from "node:path";
+import { existsSync, unlinkSync } from "node:fs";
+import { join, resolve, dirname, relative } from "node:path";
 import MagicString from "magic-string";
+import { buildCompilerGraph, canonicalPath as canon, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
-
-// Vite hands ids through the platform's real path (/tmp is a symlink to
-// /private/tmp on macOS) while plugin options and the manifest keep the
-// spelling each side was given, so both have to go through realpath before
-// they can be compared.
-function canon(p) {
-	try { return realpathSync(p); } catch { return p; }
-}
-
-function stripQuery(id) {
-	const q = id.indexOf("?");
-	return q === -1 ? id : id.slice(0, q);
-}
-
-// A generic instance with a file of its own has no source file of its own, so
-// its id is the source of the module declaring the generic plus this query.
-// The emitted file's own path would put the id under node_modules, where Vite
-// serves a module as an immutable dependency.
-const INSTANCE_RE = /[?&]instance=([^&]+)/;
 
 function relativeSpecifiers(program) {
 	const found = [];
@@ -41,17 +22,7 @@ function relativeSpecifiers(program) {
 	return found;
 }
 
-function instanceOf(id) {
-	const m = INSTANCE_RE.exec(id);
-	return m ? m[1] : "";
-}
-
-function withInstance(path, instance) {
-	return instance ? `${path}?instance=${instance}` : path;
-}
-
 export default function metascript(options = {}) {
-	const msc = options.msc ?? "msc";
 	let root = process.cwd();
 	// Default inside the project: Vite serves files under root directly, while
 	// a tmpdir has to go through /@fs and dies under a stricter server.fs.allow.
@@ -60,57 +31,64 @@ export default function metascript(options = {}) {
 	let emitted = null;
 	let server = null;
 	let compileFailed = false;
+	let dirty = true;
+	let watchFiles = new Set(entry ? [entry] : []);
+	let stopWatching = null;
 
-	// One emit covers the whole graph, so the first .ms resolve pays for all of
-	// them; later resolves reuse the tree until a source file changes. The
-	// source→output mapping comes from the compiler's manifest — re-deriving it
-	// here means replicating project-root discovery, which silently resolves
-	// nothing whenever the two disagree.
-	function emit() {
-		mkdirSync(outDir, { recursive: true });
-		// Vite reads the sourceMappingURL comment off the file it loads, so the
-		// map only has to exist beside the emitted module.
-		const args = ["build", entry, ...(options.compilerArgs ?? []), "--target=js", "--split", `--output=${outDir}`];
-		if (options.sourcemap !== false) args.push("--sourcemap");
-		try {
-			execFileSync(msc, args, {
-				stdio: options.quiet === false ? "inherit" : "pipe",
-			});
-		} catch (e) {
-			const out = [e.stdout, e.stderr].map((b) => (b ? b.toString() : "")).join("").trim();
-			throw new Error(out ? `msc build failed:\n${out}` : e.message);
-		}
-		const manifest = JSON.parse(readFileSync(join(outDir, "_manifest.json"), "utf8"));
-		const bySource = new Map();
-		const byInstance = new Map();
-		const byOutput = new Map();
-		const read = (m, instance) => {
-			const file = canon(join(outDir, m.out));
-			const mapFile = `${file}.map`;
-			const code = readFileSync(file, "utf8").replace(/\n*\/\/# sourceMappingURL=[^\n]*\n?/, "\n");
-			let map = options.sourcemap !== false && existsSync(mapFile)
-				? JSON.parse(readFileSync(mapFile, "utf8"))
-				: null;
-			if (map) map = { ...map, sources: map.sources.map(source => resolve(dirname(file), source).replace(/\\/g, "/")) };
-			const source = canon(m.source);
-			byOutput.set(file, { source, instance, code, map });
-			return file;
-		};
-		for (const m of manifest.modules) bySource.set(canon(m.source), read(m, ""));
-		for (const m of manifest.instances ?? []) {
-			const instance = basename(m.out, ".js");
-			byInstance.set(instance, read(m, instance));
-		}
-		emitted = { bySource, byInstance, byOutput };
-		// Vite only watches inside root, so .ms sources living outside it have
-		// to be registered explicitly or an edit never reaches the handler.
-		if (server) server.watcher.add([...bySource.keys()]);
+	function registerWatchFiles(context) {
+		for (const file of watchFiles) context?.addWatchFile(file);
+		if (server) server.watcher.add([...watchFiles]);
 	}
 
-	function outputOf(id) {
-		if (emitted === null) return undefined;
-		const instance = instanceOf(id);
-		return instance ? emitted.byInstance.get(instance) : emitted.bySource.get(canon(stripQuery(id)));
+	function emit(context) {
+		dirty = true;
+		watchFiles.add(entry);
+		registerWatchFiles(context);
+		const next = buildCompilerGraph({ ...options, root, entry, outDir });
+		emitted = next;
+		dirty = false;
+		watchFiles = new Set(next.dependencies);
+		registerWatchFiles(context);
+	}
+
+	function hotUpdate(ctx, context) {
+		const source = canon(ctx.file);
+		if (emitted?.byOutput.has(source)) return [];
+		if (!watchFiles.has(source)) return;
+		const previous = emitted;
+		try {
+			emit(context);
+		} catch (error) {
+			compileFailed = true;
+			ctx.server.ws.send({
+				type: "error",
+				err: { message: error.message, stack: error.stack, plugin: "vite-plugin-metascript" },
+			});
+			return [];
+		}
+		const changed = new Set();
+		for (const [file, output] of emitted.byOutput) {
+			if (previous?.byOutput.get(file)?.code !== output.code) changed.add(output);
+		}
+		for (const [file, output] of previous?.byOutput ?? []) {
+			if (!emitted.byOutput.has(file)) changed.add(output);
+		}
+		const currentFiles = new Set(emitted.artifacts.map(artifact => artifact.file));
+		for (const artifact of previous?.artifacts ?? []) {
+			if (artifact.kind !== "javascript" && artifact.kind !== "sourcemap") continue;
+			if (!currentFiles.has(artifact.file) && existsSync(artifact.file)) unlinkSync(artifact.file);
+		}
+		const modules = new Set();
+		for (const output of changed) {
+			const loaded = ctx.server.moduleGraph.getModulesByFile(output.source.replace(/\\/g, "/"));
+			if (!loaded) continue;
+			for (const module of loaded) {
+				if (instanceOf(module.id ?? "") === output.instance) modules.add(module);
+			}
+		}
+		if (compileFailed && modules.size === 0) ctx.server.ws.send({ type: "update", updates: [] });
+		compileFailed = false;
+		return [...modules];
 	}
 
 	return {
@@ -123,48 +101,49 @@ export default function metascript(options = {}) {
 			if (entry === null && options.entry) entry = canon(resolve(root, options.entry));
 		},
 
+		buildStart() {
+			registerWatchFiles(this);
+			if (entry !== null) emit(this);
+		},
+
+		watchChange(id) {
+			if (watchFiles.has(canon(stripQuery(id)))) dirty = true;
+		},
+
 		configureServer(s) {
+			stopWatching?.();
 			server = s;
-			if (emitted) s.watcher.add([...emitted.bySource.keys()]);
+			registerWatchFiles();
+			const refresh = file => {
+				const modules = hotUpdate({ file, server: s });
+				if (!modules?.length) return;
+				for (const module of modules) s.moduleGraph.invalidateModule(module);
+				s.ws.send({ type: "full-reload", path: "*" });
+			};
+			s.watcher.on("add", refresh);
+			s.watcher.on("unlink", refresh);
+			stopWatching = () => {
+				s.watcher.off("add", refresh);
+				s.watcher.off("unlink", refresh);
+			};
+		},
+
+		closeBundle() {
+			stopWatching?.();
+			stopWatching = null;
+			server = null;
 		},
 
 		handleHotUpdate(ctx) {
-			if (emitted === null) return;
-			const source = canon(ctx.file);
-			if (emitted.byOutput.has(source)) return [];
-			if (!emitted.bySource.has(source)) return;
-			const previous = emitted;
-			try {
-				emit();
-			} catch (error) {
-				compileFailed = true;
-				ctx.server.ws.send({
-					type: "error",
-					err: { message: error.message, stack: error.stack, plugin: "vite-plugin-metascript" },
-				});
-				return [];
+			return hotUpdate(ctx, this);
+		},
+
+		generateBundle() {
+			if (options.declaration !== true || entry === null) return;
+			if (dirty || emitted === null) throw new Error("MetaScript has no current build snapshot; rebuild before emitting declarations");
+			for (const declaration of emitted.declarations) {
+				this.emitFile({ type: "asset", fileName: declaration.out, source: declaration.text });
 			}
-			const changed = new Set();
-			for (const [file, output] of emitted.byOutput) {
-				if (previous.byOutput.get(file)?.code !== output.code) changed.add(output);
-			}
-			for (const [file, output] of previous.byOutput) {
-				if (emitted.byOutput.has(file)) continue;
-				changed.add(output);
-				if (existsSync(file)) unlinkSync(file);
-				if (existsSync(`${file}.map`)) unlinkSync(`${file}.map`);
-			}
-			const modules = new Set();
-			for (const output of changed) {
-				const loaded = ctx.server.moduleGraph.getModulesByFile(output.source.replace(/\\/g, "/"));
-				if (!loaded) continue;
-				for (const module of loaded) {
-					if (instanceOf(module.id ?? "") === output.instance) modules.add(module);
-				}
-			}
-			if (compileFailed && modules.size === 0) ctx.server.ws.send({ type: "update", updates: [] });
-			compileFailed = false;
-			return [...modules];
 		},
 
 		// Rollup loads the emitted file through its own fs and does not follow
@@ -172,15 +151,18 @@ export default function metascript(options = {}) {
 		// generated .js unless the map is handed over here. Dev goes through the
 		// same hook, which also spares the browser a second request for it.
 		load(id) {
-			const output = outputOf(id);
+			if (dirty && outputOf(emitted, id)) emit(this);
+			const output = outputOf(emitted, id);
 			const module = output ? emitted.byOutput.get(output) : null;
+			if (module) registerWatchFiles(this);
 			return module ? { code: module.code, map: module.map } : null;
 		},
 
 		transform(code, id) {
 			const source = canon(stripQuery(id));
-			const output = outputOf(id);
+			const output = outputOf(emitted, id);
 			if (!output) return null;
+			registerWatchFiles(this);
 			let rewritten = null;
 			for (const specifier of relativeSpecifiers(this.parse(code))) {
 				const target = emitted.byOutput.get(canon(resolve(dirname(output), specifier.value)));
@@ -199,7 +181,7 @@ export default function metascript(options = {}) {
 			const file = canon(resolve(base, stripQuery(source)));
 			if (!existsSync(file)) return null;
 			if (entry === null) entry = file;
-			if (emitted === null) emit();
+			if (emitted === null || dirty) emit(this);
 			const instance = instanceOf(source);
 			if (!emitted.bySource.has(file) || (instance && !emitted.byInstance.has(instance))) return null;
 			return withInstance(file.replace(/\\/g, "/"), instance);

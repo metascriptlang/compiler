@@ -4,11 +4,17 @@
   "description": "Vite plugin for MetaScript — resolves .ms imports to compiler-emitted ES modules",
   "type": "module",
   "main": "index.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
   },
   "files": [
-    "index.js"
+    "index.js",
+    "index.d.ts",
+    "compilerCore.js"
   ],
   "dependencies": {
     "magic-string": "^0.30.17"
