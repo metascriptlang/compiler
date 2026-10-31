@@ -508,17 +508,21 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	if (inner.kind == NodeKind.ImportDecl) {
 		if (inner.flags.has(NodeFlag.TypeOnlyImport)) return;
 		const imp = inner.data as ImportDeclData;
-		// Multi-file: every re-export form emits as `export * from` — a named
-		// list can mix runtime values with types, and naming a type binding
-		// that has no JS emission is a load-time error. Star matches at
-		// runtime, so type names simply don't participate. MS-compiled
-		// consumers resolve through the registry straight to the origin
-		// module anyway; the hub's surface only matters to hand-written JS.
 		const star = imp.importNames.length == 1 && imp.importNames[0] == "*" && imp.importAliases[0] != "*" ? `* as ${imp.importAliases[0]}` : "*";
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
 			if (spec == "") return;
-			gen.moduleRequests = gen.moduleRequests + `export ${star} from "${spec}";\n`;
+			let clause = star;
+			if (imp.importNames.length != 1 || imp.importNames[0] != "*") {
+				const bindings: string[] = [];
+				for (let i = 0; i < imp.importNames.length; i += 1) {
+					const name = imp.importNames[i];
+					const alias = imp.importAliases[i];
+					bindings.push(name == alias ? name : `${name} as ${alias}`);
+				}
+				clause = `{ ${bindings.join(", ")} }`;
+			}
+			gen.moduleRequests = gen.moduleRequests + `export ${clause} from "${spec}";\n`;
 			return;
 		}
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {

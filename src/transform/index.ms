@@ -27,9 +27,11 @@
 // 25. dce                   — dead code elimination (2-tier: statement + symbol level)
 // 26. destructorLifting     — generate per-type _destroy/_copy function bodies
 
-import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
-import { CheckerContext } from "../checker/context";
-import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
+import { Node, NodeKind, NodeFlag, ProgramData, Symbol, SymbolKind, FunctionDeclData, ClassDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, SourceLocation } from "../ast/node";
+import { CheckerContext, findExportedSymbol, isExtensionRoutine, isGenericFn } from "../checker/context";
+import { hasFlag, setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../checker/symbol";
+import { hasGenericParams } from "../checker/types";
+import { resolveImportSourcePath } from "../checker/collectPass";
 import { createTransformContextWithChecker, TransformContext, ModuleFact } from "./context";
 import { WriteSummaries, noteUnitDecls } from "../analyzer/writeEffects";
 import { bindCompilerFuncs } from "./util";
@@ -138,6 +140,63 @@ function runs(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pa
 	return false;
 }
 
+function hasJsSourceBinding(sym: Symbol): boolean {
+	const kind = sym.symbolKind;
+	if (kind == SymbolKind.Interface || kind == SymbolKind.TypeAlias || kind == SymbolKind.Struct
+		|| hasFlag(sym, SymbolFlag.CompileTime) || hasFlag(sym, SymbolFlag.ImportC)) return false;
+	const decl = sym.declNode;
+	if (decl == null) return true;
+	if (decl.kind == NodeKind.MacroDecl || decl.kind == NodeKind.ExternDecl || decl.flags.has(NodeFlag.ExternC)) return false;
+	if (kind == SymbolKind.Function && decl.kind == NodeKind.FunctionDecl) {
+		const flags = (decl.data as FunctionDeclData).fnFlags;
+		return !isExtensionRoutine(flags) && !isGenericFn(flags) && !hasGenericParams(sym.symbolType)
+			&& !routineFlagSet(flags).has(RoutineFlag.Extern)
+			&& sym.overloadIdx == 0 && sym.overloads.length == 0;
+	}
+	if (kind == SymbolKind.Class && decl.kind == NodeKind.ClassDecl && hasGenericParams(sym.symbolType)) {
+		for (const member of (decl.data as ClassDeclData).classBody) {
+			if (member.kind == NodeKind.BlockStmt || (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic)) return true;
+		}
+		return false;
+	}
+	return true;
+}
+
+function elideJsReexportBindings(program: Node, ctx: CheckerContext): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.ExportDecl) continue;
+		const decl = (stmt.data as ExportDeclData).exportedDecl;
+		if (decl.kind != NodeKind.ImportDecl || decl.flags.has(NodeFlag.TypeOnlyImport)) continue;
+		const d = decl.data as ImportDeclData;
+		if (d.importNames.length == 0 || d.importNames[0] == "*") continue;
+		const source = resolveImportSourcePath(ctx, d.importSource);
+		let preservesEvaluation = false;
+		const names: string[] = [];
+		const aliases: string[] = [];
+		const locations: SourceLocation[] = [];
+		const aliasLocations: SourceLocation[] = [];
+		for (let i = 0; i < d.importNames.length; i += 1) {
+			const name = d.importNames[i];
+			const exported = findExportedSymbol(ctx.exportRegistry, source, name);
+			if (d.importTypeNames.includes(name)) continue;
+			if (exported != null && !hasJsSourceBinding(exported.sym)) {
+				const kind = exported.sym.symbolKind;
+				if (kind != SymbolKind.Interface && kind != SymbolKind.TypeAlias && kind != SymbolKind.Struct) preservesEvaluation = true;
+				continue;
+			}
+			names.push(name);
+			aliases.push(d.importAliases[i]);
+			if (i < d.nameLocations.length) locations.push(d.nameLocations[i]);
+			if (i < d.aliasLocations.length) aliasLocations.push(d.aliasLocations[i]);
+		}
+		d.importNames = names;
+		d.importAliases = aliases;
+		d.nameLocations = locations;
+		d.aliasLocations = aliasLocations;
+		if (names.length == 0 && !preservesEvaluation) decl.flags = decl.flags.incl(NodeFlag.TypeOnlyImport);
+	}
+}
+
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null, jsOverflowChecks: boolean = true): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
@@ -146,6 +205,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
+	if (jsBackend) elideJsReexportBindings(program, checkerCtx);
 	let result = dropCtorSignatures(program, ctx);
 	flowLap("pass.dropCtorSignatures");
 	result = eraseBrandTypes(result, ctx);
