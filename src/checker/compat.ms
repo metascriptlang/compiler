@@ -1105,6 +1105,10 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassing(taken) + ", but the expected '"
 				+ signatureText(target) + "' passes it " + paramPassing(passed) + "; declare '" + name + "' the same way in both";
 		}
+		if (fnSlotReprMismatch(taken, passed) && isAssignable(passed, taken)) {
+			return " — parameter '" + name + "' takes " + signatureText(taken) + ", but the expected function passes it " + signatureText(passed)
+				+ ", and a function value's parameters are never converted; declare the parameter " + signatureText(passed) + " or leave it unannotated";
+		}
 		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
 			if (!isAssignable(passed, taken)) {
 				return " — parameter '" + name + "' is typed '" + signatureText(taken) + "', but the expected function passes it '"
