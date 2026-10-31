@@ -97,3 +97,16 @@ const l = new L("y");
 `, 1);
 	assert grand.contains("No matching overload for the constructor of 'L'"), grand;
 }
+
+test "a super call ranks the base's constructor signatures" {
+	const BASE = `class B {\n	constructor(a: string) {}\n	constructor(a: number) {}\n	constructor(a: string | number) {}\n}\n`;
+	const derived = (body: string): string => `class D extends B {\n	constructor(x: string) {}\n	constructor(x: number) {}\n	constructor(x: string | number) { ${body} }\n}\n`;
+	assert checkWith(BASE + derived(`super("k");`), 2) == "";
+	const refused = checkWith(BASE + derived(`super(x);`), 2);
+	assert refused.contains("No matching overload for the constructor of 'B'"), refused;
+}
+
+test "a constructor signature's optional parameter may be omitted" {
+	assert checkWith(`class C {\n	constructor(a: string, b?: number) {}\n	constructor(a: number) {}\n	constructor(a: string | number, b?: number) {}\n}\nconst c = new C("x");\n`, 2) == "";
+}
+

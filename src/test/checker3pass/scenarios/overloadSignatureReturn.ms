@@ -78,9 +78,15 @@ function long(a: string, n: int32, z: int32): number;
 function long(a: string, n: int32 = 1): number { return n; }
 const s = short("a");
 const l = long("a", 1, 2);
+class M {
+	cut(a: string): number;
+	cut(a: string, n: int32): number { return n; }
+}
+const c = new M().cut("a");
 `).errors;
 	const text = errors.join("\n");
 	assert text.contains("Overload signature for 'short' has 1 parameter(s) but implementation requires 2"), text;
 	assert text.contains("Overload signature for 'long' has 3 parameter(s) but implementation has 2"), text;
+	assert text.contains("Overload signature for 'cut' has 1 parameter(s) but implementation requires 2"), text;
 	assert !text.contains("'f'") && !text.contains("'m'"), text;
 }
