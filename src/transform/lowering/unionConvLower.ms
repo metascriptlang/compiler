@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
-import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
 import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase, isDiscriminatedUnion, getDiscriminantName } from "../../checker/types";
+import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead, brandArrayBase } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
@@ -348,6 +348,7 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 function heldAs(held: Node, slot: Type, loc: SourceLocation): Node {
 	if (held.nodeType == null || held.nodeType == slot) return held;
 	if (isNumeric(held.nodeType) && isNumeric(slot) && !sameType(held.nodeType, slot)) return wrapInConv(held, slot);
+	if (brandArrayBase(held.nodeType) != null) return wrapInConv(held, slot);
 	if (held.nodeType.kind != TypeKind.Ref || slot.kind != TypeKind.Ref) return held;
 	const upcast = makeHiddenSubConv(held, slot, loc);
 	upcast.nodeType = slot;

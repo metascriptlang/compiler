@@ -2984,6 +2984,7 @@ function exactMemberSlot(target: Type, member: Type): int32 {
 			if (found >= 0) return -1;
 			found = ti;
 		} else if ((member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String)
+			|| sameType(brandArrayBase(member), child)
 			|| (isClassRef(member) && isClassRef(child) && derivesFrom(member, child))) {
 			widened = widened == -1 ? ti : nearerBaseSlot(members, widened, ti);
 		}
