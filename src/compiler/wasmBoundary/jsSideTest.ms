@@ -45,7 +45,7 @@ function bindingsFor(names: string[]) {
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
 	const code = bindingsFor(["add64", "mul64u", "isEven", "flip", "wide"]).modules[0].code;
-	assert code.includes("function bundled_add64(a0, a1) {\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
+	assert code.includes("function bundled_add64(a0, a1) {\n\t__msb.enter();\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
 	assert code.includes("return BigInt.asUintN(64, __msbMod._msb_calc_mul64u(a0, a1));");
 	assert code.includes("return __msbMod._msb_calc_isEven(a0) !== 0;");
 	assert code.includes("return __msbMod._msb_calc_flip((a0 ? 1 : 0)) !== 0;");
@@ -54,7 +54,7 @@ test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
 
 test "js side: a callback is pushed before the call, adapted per kind and popped in finally" {
 	const code = bindingsFor(["evaluate", "visit", "pick"]).modules[0].code;
-	assert code.includes("function bundled_evaluate(a0, a1) {\n\tconst id1 = __msb.push((x0) => a1(x0));\n\ttry {\n\t\treturn __msbMod._msb_calc_evaluate(a0, id1);\n\t} finally {\n\t\t__msb.pop(id1);\n\t}\n}");
+	assert code.includes("function bundled_evaluate(a0, a1) {\n\t__msb.enter();\n\tconst id1 = __msb.push((x0) => a1(x0));\n\ttry {\n\t\treturn __msbMod._msb_calc_evaluate(a0, id1);\n\t} finally {\n\t\t__msb.pop(id1);\n\t}\n}");
 	assert code.includes("const id1 = __msb.push((x0, x1) => { a1(x0, x1); });");
 	assert code.includes("const id0 = __msb.push((x0, x1) => (a0(x0 !== 0, x1 >>> 0) ? 1 : 0));");
 }
@@ -71,12 +71,12 @@ test "js side: one prelude awaits the wasm module once and a stale callback id t
 
 test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
 	const code = bindingsFor(["both"]).modules[0].code;
-	assert code.includes("function bundled_both(a0, a1, a2) {\n\tlet e0, e2;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e2) __msbMod._free(e2[0]);\n\t}\n}");
+	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e2) __msbMod._free(e2[0]);\n\t}\n}");
 }
 
 test "js side: a string result is decoded with the length read right after the call" {
 	const code = bindingsFor(["twice"]).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t}\n}");
+	assert code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\treturn __msbDec(__msbMod._msb_calc_twice(e0[0], e0[1]), __msbMod._msb_ret_len());\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t}\n}");
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
@@ -187,4 +187,20 @@ test "js side: a Span is range-checked before its copy is allocated, so a throw 
 	const body = glueBody(bindingsFor(["fill"]).prelude, "__msbCopyIn");
 	assert body.startsWith("function __msbCopyIn(a, off, n, T) {\n\t__msbInRange(a, off, n);\n");
 	assert body.indexOf("__msbInRange(") < body.indexOf("__msbAlloc(");
+}
+
+test "js side: the registry poisons itself on the first exception that crossed the wasm frames and every later wrapper call refuses" {
+	const p = bindingsFor(["add64"]).prelude;
+	assert p.includes("\tlet dead = false;\n\tlet cause;\n");
+	assert p.includes("\t\tenter() { if (dead) throw new Error(\"the wasm half cannot run again: a JS exception crossed its frames\", { cause }); },\n");
+	assert p.includes("\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },\n");
+}
+
+test "js side: every wrapper enters before it pushes, encodes or allocates anything" {
+	const code = bindingsFor(["add64", "twice", "tag", "visit", "scale", "total"]).modules[0].code;
+	assert code.split("\t__msb.enter();\n").length == 7;
+	assert code.includes("function bundled_visit(a0, a1) {\n\t__msb.enter();\n\tconst id1 = __msb.push(");
+	assert code.includes("function bundled_tag(a0) {\n\t__msb.enter();\n\tlet r;\n");
+	assert code.includes("function bundled_scale(a0, a1) {\n\t__msb.enter();\n\tlet r;\n");
+	assert code.includes("function bundled_total(a0) {\n\t__msb.enter();\n\tlet e0;\n");
 }
