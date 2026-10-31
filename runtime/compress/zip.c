@@ -22,6 +22,8 @@ struct msZipReaderCtx {
     mz_zip_archive zip;
     char* dataCopy;   /* miniz reads from this buffer lazily — must outlive the archive */
     size_t dataLen;
+    int64_t statIndex;   /* index held in `stat`, -1 when none; name, size and isDir of one entry share one miniz stat */
+    mz_zip_archive_file_stat stat;
 };
 
 struct msZipWriterCtx {
@@ -38,10 +40,18 @@ static inline struct msZipWriterCtx* wHandleToCtx(int64_t h) { return (struct ms
 
 /* ===== Reader ===== */
 
+static const mz_zip_archive_file_stat* entryStat(struct msZipReaderCtx* c, int32_t index) {
+    if (c->statIndex == index) return &c->stat;
+    if (!mz_zip_reader_file_stat(&c->zip, (mz_uint)index, &c->stat)) return NULL;
+    c->statIndex = index;
+    return &c->stat;
+}
+
 int64_t msZipReaderOpen(msString data) {
     if (data.len <= 0 || !data.p) return 0;
 
     struct msZipReaderCtx* c = (struct msZipReaderCtx*)msMemAlloc0(sizeof(*c));
+    c->statIndex = -1;
 
     /* Copy the input buffer — miniz's reader holds the pointer for the
      * archive's entire lifetime and dereferences it lazily during extract
@@ -74,35 +84,48 @@ msString msZipReaderEntryName(int64_t handle, int32_t index) {
     struct msZipReaderCtx* c = rHandleToCtx(handle);
     if (!c) return MS_EMPTY_STRING;
 
-    mz_zip_archive_file_stat stat;
-    if (!mz_zip_reader_file_stat(&c->zip, (mz_uint)index, &stat)) return MS_EMPTY_STRING;
+    const mz_zip_archive_file_stat* st = entryStat(c, index);
+    if (!st) return MS_EMPTY_STRING;
 
     /* m_filename is a char[MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE] that miniz
      * guarantees to be zero-terminated, but we bound the scan defensively
      * in case of a malformed or corrupted archive. */
     size_t n = 0;
-    while (n < MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE && stat.m_filename[n] != '\0') n++;
-    return msStringNew(stat.m_filename, (int64_t)n);
+    while (n < MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE && st->m_filename[n] != '\0') n++;
+    return msStringNew(st->m_filename, (int64_t)n);
 }
 
 int64_t msZipReaderEntrySize(int64_t handle, int32_t index) {
     struct msZipReaderCtx* c = rHandleToCtx(handle);
     if (!c) return -1;
 
-    mz_zip_archive_file_stat stat;
-    if (!mz_zip_reader_file_stat(&c->zip, (mz_uint)index, &stat)) return -1;
+    const mz_zip_archive_file_stat* st = entryStat(c, index);
+    if (!st) return -1;
 
-    return (int64_t)stat.m_uncomp_size;
+    return (int64_t)st->m_uncomp_size;
 }
 
 int32_t msZipReaderEntryIsDir(int64_t handle, int32_t index) {
     struct msZipReaderCtx* c = rHandleToCtx(handle);
     if (!c) return -1;
 
-    mz_zip_archive_file_stat stat;
-    if (!mz_zip_reader_file_stat(&c->zip, (mz_uint)index, &stat)) return -1;
+    const mz_zip_archive_file_stat* st = entryStat(c, index);
+    if (!st) return -1;
 
-    return stat.m_is_directory ? 1 : 0;
+    return st->m_is_directory ? 1 : 0;
+}
+
+int32_t msZipReaderFind(int64_t handle, msString name) {
+    struct msZipReaderCtx* c = rHandleToCtx(handle);
+    if (!c) return -1;
+
+    /* miniz compares a NUL-terminated name; an embedded NUL can match no entry. */
+    if (name.len > 0 && memchr(name.p->data, '\0', (size_t)name.len)) return -1;
+
+    /* CASE_SENSITIVE keeps the exact, first-match answer; without it miniz
+     * binary-searches a lowercased index and "A" would find "a". */
+    int idx = mz_zip_reader_locate_file(&c->zip, name.len > 0 ? name.p->data : "", NULL, MZ_ZIP_FLAG_CASE_SENSITIVE);
+    return (int32_t)idx;
 }
 
 msString msZipReaderExtract(int64_t handle, int32_t index) {
