@@ -115,6 +115,15 @@ test "js side: the string decoder is built with ignoreBOM" {
 	assert p.indexOf("new TextDecoder(") == p.lastIndexOf("new TextDecoder(");
 }
 
+test "js side: a long string decodes natively first and is scanned for a surrogate only when the result holds U+FFFD" {
+	const p = bindingsFor(["twice"]).prelude;
+	assert p.includes("const s = __msbTd.decode(h.subarray(p, e));");
+	assert p.includes("if (s.indexOf(\"\\uFFFD\") < 0) return s;");
+	assert p.includes("h[i] === 0xed");
+	assert p.indexOf("const s = __msbTd.decode(h.subarray(p, e));") < p.indexOf("if (s.indexOf(\"\\uFFFD\") < 0) return s;");
+	assert p.indexOf("if (s.indexOf(\"\\uFFFD\") < 0) return s;") < p.indexOf("h[i] === 0xed");
+}
+
 test "js side: a failed wasm allocation throws instead of writing at address 0" {
 	const p = bindingsFor(["twice"]).prelude;
 	assert p.includes("if (p === 0) throw new RangeError(");
