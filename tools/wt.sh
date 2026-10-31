@@ -193,7 +193,7 @@ pick_builder() {
     [ -n "$c" ] && [ -x "$c" ] || continue
     rm -f "$w/msc" "$w/msc.exe" "$w/msc.key"
     cp "$c" "$w/msc" || return 1
-    if (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
+    if (cd "$w" && timeout -k 10 120 ./msc check src/index.ms >/dev/null 2>&1); then
       [ -z "$wk" ] || [ "$(cat "${c%.exe}.key" 2>/dev/null)" != "$wk" ] || printf '%s\n' "$wk" >"$w/msc.key"
       say "builder: $c"
       return 0
@@ -613,7 +613,7 @@ cmd_land() {
   clash=$(main_held "$old" "$(git -C "$w" diff --name-only --no-renames "$old" "$new")")
   [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes; clear it, then land again (no gate ran):
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
-  if [ "$gate" -eq 1 ] && [ -x "$w/msc" ] && ! (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
+  if [ "$gate" -eq 1 ] && [ -x "$w/msc" ] && ! (cd "$w" && timeout -k 10 120 ./msc check src/index.ms >/dev/null 2>&1); then
     say "land: $w/msc cannot check src/index.ms on $BASE $(git -C "$MAIN" rev-parse --short "$old"); picking a builder again"
     pick_builder "$w" || die "land: no builder can check src/index.ms at this rev (set MSC_BUILDER)"
   fi
