@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams, closureIntoCPointerReason } from "./compat";
 import { CheckerContext, isEngineCheckMode, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym, markUsedIn } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, isReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, awaitedType, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, isLiteralSet, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind, isOwnedRef, withoutOwned, createOwned } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, jsValueKind, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, isReadonlyView, typeNameOf, distinctWidenBody, brandBase, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, awaitedType, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, isLiteralSet, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind, isOwnedRef, withoutOwned, createOwned } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -479,7 +479,8 @@ function refuseEqualityThroughView(ctx: CheckerContext, node: Node, ops: string[
 
 function wrapIntoCarrier(ctx: CheckerContext, operand: Node, carrier: Type, operandType: Type): Node {
 	const payload = carrier.typeReturn;
-	const taken = payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
+	const constant = numericConstantForCarrier(operand, operand.nodeType, carrier);
+	const taken = constant != null ? constant : payload != null ? widenToSlotUnion(ctx, operand, payload) : operand;
 	return synthMaybeWrap(taken, carrier, taken.nodeType ?? operandType, ctx);
 }
 
@@ -752,16 +753,6 @@ function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, p
 	addError(ctx, `operator '${op}' cannot be applied to type '${left}': a distinct type does not inherit the comparisons of its base; ${fix}${follows}`, at.line, at.column);
 }
 
-function brandBase(t: Type | null): Type | null {
-	let base = distinctWidenBody(skipModifier(t));
-	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		const inner = distinctWidenBody(skipModifier(base));
-		if (inner == null) break;
-		base = inner;
-	}
-	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
-}
-
 export function brandArrayBase(t: Type | null): Type | null {
 	const base = brandBase(t);
 	return base != null && isArrayShaped(skipModifier(base)!) ? base : null;
@@ -811,7 +802,10 @@ export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean = false): Node | null {
 	const t = expr.nodeType;
 	if (t == null || refuseNamespaceText(ctx, expr)) return null;
-	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
+	if (distinctBody(t) != null) {
+		const inspected = debug ? declaredInspect(ctx, expr) : null;
+		return inspected != null ? inspected : distinctText(ctx, expr, t);
+	}
 	if (bitSetElemType(skipModifier(t) ?? t) != null) return declaredToString(ctx, expr);
 	const peeled = peelToStructOrUnion(t);
 	const dumped = dumpedShape(t, valueShape(t));
@@ -1097,6 +1091,10 @@ export function shortCircuitLeftShare(op: string, left: Type): Type | null {
 	return kept.length == 1 ? kept[0] : unionOfTypes(kept, null);
 }
 
+function isEnumOperand(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral);
+}
+
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	const bitSetResult = inferBitSetOp(op, leftType, rightType);
 	if (bitSetResult != null) return bitSetResult;
@@ -1115,6 +1113,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			if (rightType != null && rightType.kind == TypeKind.Ptr) return rightType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
+			if (isEnumOperand(leftType) || isEnumOperand(rightType)) return float64Type();
 			return inferredType();
 		},
 		"-" => {
@@ -1122,6 +1121,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			if (leftType != null && leftType.kind == TypeKind.Ptr) return leftType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
+			if (isEnumOperand(leftType) || isEnumOperand(rightType)) return float64Type();
 			return inferredType();
 		},
 		"*" | "/" | "%" | "**" => {
@@ -2843,7 +2843,11 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 	const valueType = unwrapRef(exprType);
 	const exactSlot = unionSlotOf(formal, exprType);
 	const vi = exactSlot >= 0 || formal.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
-	if (vi < 0) return null as unknown as Node;
+	if (vi < 0) {
+		const base = brandBase(exprType);
+		if (base == null) return null as unknown as Node;
+		return widenVariantToUnion(wrapInConv(expr, base), formalSlot, base, ctx);
+	}
 	if (vi != exactSlot) {
 		expr = classUpcast(expr, formal.typeChildren[vi]);
 	} else if (formal.kind == TypeKind.Union && isClassRef(exprType)) {
@@ -2986,6 +2990,7 @@ function exactMemberSlot(target: Type, member: Type): int32 {
 			if (found >= 0) return -1;
 			found = ti;
 		} else if ((member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String)
+			|| sameType(brandArrayBase(member), child)
 			|| (isClassRef(member) && isClassRef(child) && derivesFrom(member, child))) {
 			widened = widened == -1 ? ti : nearerBaseSlot(members, widened, ti);
 		}
@@ -3104,10 +3109,20 @@ export function fitUnionIntoUnion(expr: Node, exprType: Type, formal: Type): Nod
 	const storedRead = convertStoredUnionRead(expr, exprType, formal);
 	if (storedRead != null) return storedRead;
 	if (convertsUnionImplicitly(exprType, formal)) return convertUnionToUnion(expr, exprType, formal);
+	const number = fitUnionIntoNumber(expr, exprType, formal);
+	if (number != null) return number;
 	if (!isMaybeType(formal) || formal.typeReturn == null || exprType.kind != TypeKind.Union) return null;
 	const payload = formal.typeReturn;
 	const converted = convertStoredUnionRead(expr, exprType, payload) ?? (convertsUnionImplicitly(exprType, payload) ? convertUnionToUnion(expr, exprType, payload) : null);
 	return converted != null ? synthMaybeWrap(converted, formal, payload) : null;
+}
+
+function fitUnionIntoNumber(expr: Node, exprType: Type, formal: Type): Node | null {
+	if (!isNumeric(formal) || !isSlotUnion(exprType) || hasGenericParams(exprType)) return null;
+	for (const member of exprType.typeChildren) {
+		if (!isNumeric(member) || numericConvRefuses(member, formal)) return null;
+	}
+	return convertUnionToUnion(expr, exprType, formal);
 }
 
 export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type): Node | null {
@@ -3139,11 +3154,15 @@ function hasSharedDiscriminant(t: Type): boolean {
 export function storesUnionTag(t: Type): boolean {
 	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
+	const seenValue: string[] = [];
 	for (const m of t.typeChildren) {
 		const kind = jsMemberKind(m);
 		if (kind == "class" || kind == "string") continue;
 		if (seen.indexOf(kind) >= 0) return true;
 		seen.push(kind);
+		const valueKind = jsValueKind(m);
+		if (seenValue.indexOf(valueKind) >= 0) return true;
+		seenValue.push(valueKind);
 	}
 	return false;
 }
@@ -3972,9 +3991,9 @@ function numericMembersReached(exprType: Type, candidates: Type[]): Type[] {
 export function numericConstantForCarrier(expr: Node, exprType: Type | null, formal: Type | null): Node {
 	const none = null as unknown as Node;
 	if (formal == null || exprType == null || !isNumeric(exprType) || !slotRefuses(exprType, formal)) return none;
-	if (isMaybeType(formal) && formal.typeReturn != null) return numericConstantForMember(expr, exprType, formal.typeReturn);
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return none;
-	for (const member of formal.typeChildren) {
+	const carrier = isMaybeType(formal) && formal.typeReturn != null ? formal.typeReturn : formal;
+	if (carrier.kind != TypeKind.Union || carrier.typeChildren == null) return carrier == formal ? none : numericConstantForMember(expr, exprType, carrier);
+	for (const member of carrier.typeChildren) {
 		const fitted = numericConstantForMember(expr, exprType, member);
 		if (fitted != null) return fitted;
 	}

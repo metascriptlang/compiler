@@ -63,6 +63,7 @@
   #include <sys/types.h>
   #include <unistd.h>
   #include <sys/socket.h>
+  #include <sys/un.h>
   #include <sys/time.h>
   #include <netinet/in.h>
   #include <netinet/tcp.h>
@@ -105,18 +106,22 @@ extern "C" {
 
 /* ===== Socket Creation ===== */
 
+static inline int32_t msNetStreamSocket(int domain) {
+	msNetEnsureInit();
+#ifdef _WIN32
+	SOCKET s = WSASocketW(domain, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	return s == INVALID_SOCKET ? -1 : (int32_t)(intptr_t)s;
+#else
+	return (int32_t)socket(domain, SOCK_STREAM, 0);
+#endif
+}
+
 /**
  * Create a TCP socket (AF_INET, SOCK_STREAM).
  * Returns fd on success, -1 on error.
  */
 static inline int32_t msNetSocket(void) {
-	msNetEnsureInit();
-#ifdef _WIN32
-	SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-	return s == INVALID_SOCKET ? -1 : (int32_t)(intptr_t)s;
-#else
-	return (int32_t)socket(AF_INET, SOCK_STREAM, 0);
-#endif
+	return msNetStreamSocket(AF_INET);
 }
 
 /* ===== Server Operations ===== */
@@ -195,6 +200,52 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 
 	freeaddrinfo(result);
 	return (int32_t)ret;
+}
+
+#ifndef _WIN32
+/* A path that holds a NUL byte, or does not fit sun_path with its terminator, is refused: the kernel
+ * would read it only up to the first NUL and bind or reach another file. */
+static inline int32_t msNetUnixAddr(msString path, struct sockaddr_un* sa, ms_socklen_t* len) {
+	const char* bytes = msStringToCString(path);
+	if (path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
+	memset(sa, 0, sizeof(*sa));
+	sa->sun_family = AF_UNIX;
+	memcpy(sa->sun_path, bytes, (size_t)path.len);
+	*len = (ms_socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)path.len + 1);
+	return 0;
+}
+#endif
+
+static inline int32_t msNetSocketUnix(void) {
+#ifdef _WIN32
+	return -1;
+#else
+	return msNetStreamSocket(AF_UNIX);
+#endif
+}
+
+static inline int32_t msNetBindUnix(int32_t fd, msString path) {
+#ifdef _WIN32
+	(void)fd; (void)path;
+	return -1;
+#else
+	struct sockaddr_un sa;
+	ms_socklen_t len;
+	if (msNetUnixAddr(path, &sa, &len) != 0) return -1;
+	return (int32_t)bind(fd, (struct sockaddr*)&sa, len);
+#endif
+}
+
+static inline int32_t msNetConnectUnix(int32_t fd, msString path) {
+#ifdef _WIN32
+	(void)fd; (void)path;
+	return -1;
+#else
+	struct sockaddr_un sa;
+	ms_socklen_t len;
+	if (msNetUnixAddr(path, &sa, &len) != 0) return -1;
+	return (int32_t)connect(fd, (struct sockaddr*)&sa, len);
+#endif
 }
 
 /* ===== Data Transfer ===== */

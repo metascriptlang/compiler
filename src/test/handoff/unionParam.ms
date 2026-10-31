@@ -84,4 +84,6 @@ test "a string literal goes into a union with several string literals, and a str
 	assert hasError("function g(s: string): \"a\" | \"b\" | int32 { return s; }\n",
 		"Type 'string' is not assignable to type '\"a\" | \"b\" | int32'");
 	assert hasError("function g(): \"a\" | \"b\" | int32 { return \"c\"; }\n", "is not assignable to type '\"a\" | \"b\" | int32'");
+	assert hasError("function g(s: string): int32 | \"zz\" | \"b\" { return s; }\n",
+		"Type 'string' is not assignable to type '\"b\" | int32 | \"zz\"'");
 }

@@ -1503,11 +1503,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			const parentProtoKey = "proto:" + parentInitName;
 			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
-				let parentProtoParams = `${parentName}* this`;
-				for (let ppi = 1; ppi < parentType.typeChildren.length; ppi += 1) {
-					parentProtoParams = parentProtoParams + ", " + getTypeDesc(g, parentType.typeChildren[ppi]);
-				}
-				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
+				addLine(sec(g, CSection.ProcHeaders), procHeader(g, parentInitName, parentType, null, parentCtor.mutatedParams, false) + ";");
 			}
 			if (p.params.length == 0) {
 				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
@@ -1516,7 +1512,8 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			let argList = `(${parentName}*)${paramCName(p.params[0], 0)}`;
 			let ai = 0;
 			while (ai < cd.arguments.length) {
-				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
+				const argSnippet = genExpr(g, p, cd.arguments[ai]);
+				argList = argList + ", " + (ai + 1 < parentType.typeChildren.length ? shimCallArg(g, p, argSnippet, parentType.typeChildren[ai + 1], cd.arguments[ai], parentCtor.mutatedParams, ai + 1) : argSnippet);
 				ai += 1;
 			}
 			ctx.results.push(`${parentInitName}(${argList})`);
@@ -3298,6 +3295,17 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
 
+const constBlobMinElements = 64;
+
+function isNumericLiteralList(node: Readonly<Node>, d: Readonly<ArrayLiteralData>): boolean {
+	const t = node.nodeType;
+	if (t == null || !isNumeric(t.typeReturn)) return false;
+	for (const e of d.elements) {
+		if (e.kind != NodeKind.NumberLiteral) return false;
+	}
+	return true;
+}
+
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const d = node.data as ArrayLiteralData;
 
@@ -3342,6 +3350,12 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
 	}
 	const slots = isSizedArray ? `${tmpName}.data` : `${tmpName}.p->data`;
+	if (d.elements.length >= constBlobMinElements && isNumericLiteralList(node, d)) {
+		const items: string[] = [];
+		for (const e of d.elements) items.push(genExpr(g, p, e));
+		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${items.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
+		return tmpName;
+	}
 	let i = 0;
 	while (i < d.elements.length) {
 		emitStmtsLine(p, `${slots}[${i}] = ${genExpr(g, p, d.elements[i])};`);

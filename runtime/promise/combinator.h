@@ -30,20 +30,9 @@ void* msPromiseAllTyped(void* futures, void* shareFn, void* vt);
 
 /* ===== Promise.race ===== */
 
-typedef struct {
-	msFuture* result;     /* output future — settles with first settled input */
-	bool settled;          /* true after first settlement */
-	int remaining;         /* callbacks remaining — free state when 0 */
-} msPromiseRaceState;
-
-typedef struct {
-	msPromiseRaceState* state;
-	msFuture* input;
-} msPromiseRaceCbEnv;
-
 /* Resolves/rejects with the FIRST settled input.
- * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
-void* msPromiseRace(msRefArray* futures);
+ * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data, ->len. Defined in std/core/promise/combinator.cms. */
+void* msPromiseRace(void* futures);
 
 /* ===== Promise.resolve / Promise.reject ===== */
 
@@ -82,22 +71,9 @@ void* msPromiseAllSettled(msRefArray* futures);
 
 /* ===== Promise.any ===== */
 
-typedef struct {
-	msFuture* result;     /* output future — resolves with first fulfilled input */
-	int count;            /* total inputs */
-	int rejected;         /* number rejected so far */
-	bool resolved;        /* true after first fulfillment */
-	int remaining;        /* callbacks remaining — free state when 0 */
-} msPromiseAnyState;
-
-typedef struct {
-	msPromiseAnyState* state;
-	msFuture* input;
-} msPromiseAnyCbEnv;
-
 /* Resolves with FIRST fulfilled input. Rejects only if ALL reject.
- * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
-void* msPromiseAny(msRefArray* futures);
+ * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data, ->len. Defined in std/core/promise/combinator.cms. */
+void* msPromiseAny(void* futures);
 
 /* A future completed by generated code owns its result when it completes on the owner
  * thread (Amendment O): readers copy it and the future drops what is left. A pool
@@ -126,6 +102,7 @@ typedef struct {
 	msClosure onFulfilled;
 	msClosure onRejected;  /* fn NULL: .then without a rejection handler */
 	int typeTag;
+	void (*run)(void* env);
 } msFutureThenEnv;
 
 typedef struct {
@@ -133,6 +110,7 @@ typedef struct {
 	msFuture* input;
 	msClosure onRejected;
 	int typeTag;
+	void (*ok)(void* output, void* input);
 } msFutureCatchEnv;
 
 typedef struct {
@@ -148,33 +126,12 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected);
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag);
 void* msFutureFinally(void* input, msClosure onSettled);
 
-/* ===== Typed .then / .catch / .finally (per-T, reads input as inline typed field) =====
- * Correct when input future was populated via msFutureCompleteT (inline typed storage).
- * Each variant reads ((msFuture_<T>*)input)->value to preserve sizeof(T) on pass-through
- * — the generic msFuture_ptr.value read would truncate msString (16B) and structs > 8B.
- *
- * The output future is still msFuture_ptr* for now; .then callbacks don't currently
- * return values through the chain, so output storage type is irrelevant. */
-
-/* The failed input of a .then: a rejection handler receives the Error the input holds (lent:
- * the input keeps its count) and the output settles by the handler's outcome; without a
- * handler the output fails with the same Error. */
-static inline void msFutureThenRejected(msFutureThenEnv* e) {
-    if (e->onRejected.fn == NULL) {
-        msFutureFailShared(e->output, e->input->base.error);
-        return;
-    }
-    void* fn = (void*)e->onRejected.fn;
-    void* env = e->onRejected.env;
-    if (env) ((void(*)(void*, void*))fn)(e->input->base.error, env);
-    else ((void(*)(void*))fn)(e->input->base.error);
-    if (msErr) {
-        msFutureFail(e->output, (void*)msCurrException);
-        msErr = false; msCurrException = NULL;
-    } else {
-        msFutureComplete(e->output, NULL);
-    }
-}
+void* msPromiseThenAttach(void* input, void* fulfilledFn, void* fulfilledEnv, void* rejectedFn, void* rejectedEnv, int32_t typeTag, void* run);
+void* msPromiseCatchAttach(void* input, void* output, void* rejectedFn, void* rejectedEnv, void* ok);
+void* msPromiseFinallyAttach(void* input, void* settledFn, void* settledEnv);
+void msFutureThenCb(void* env);
+void msFutureCatchCb(void* env);
+void msFutureFinallyCb(void* env);
 
 /* The callback envs are counted cells: the future's callback node holds the one count (rc 0 is
  * the sole owner), destroyFn releases what the env holds, and traceFn visits those slots so a
@@ -225,22 +182,19 @@ static const msTypeInfo msFutureFinallyEnvTypeInfo = {
     .traceFn = msFutureFinallyEnvTrace, .destroyFn = msFutureFinallyEnvDestroy,
 };
 
-static inline void msFutureThenEnvFree(msFutureThenEnv* e) { msDecrefCyclic(e); }
 static inline void msFutureThenEnvDrop(void* e) { msDecrefCyclic(e); }
-static inline void msFutureCatchEnvFree(msFutureCatchEnv* e) { msDecrefCyclic(e); }
 static inline void msFutureCatchEnvDrop(void* e) { msDecrefCyclic(e); }
-static inline void msFutureFinallyEnvFree(msFutureFinallyEnv* e) { msDecrefCyclic(e); }
 static inline void msFutureFinallyEnvDrop(void* e) { msDecrefCyclic(e); }
 
-static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, msClosureFn cb) {
-    msFuture* output = (msFuture*)msFutureCreate();
-    msFutureThenEnv* env = (msFutureThenEnv*)msAllocTyped(sizeof(msFutureThenEnv), &msFutureThenEnvTypeInfo);
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output);
-    msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled;
-    msClosureCopy(onRejected); env->onRejected = onRejected;
-    env->typeTag = typeTag;
-    msFutureAddCallback(input, msActorStampIf((msClosure){.fn = cb, .env = env}, msFutureThenEnvDrop, NULL));
-    return output;
+static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, void (*run)(void*)) {
+    msClosureCopy(onFulfilled);
+    msClosureCopy(onRejected);
+    return (msFuture*)msPromiseThenAttach(input, (void*)onFulfilled.fn, onFulfilled.env, (void*)onRejected.fn, onRejected.env, typeTag, (void*)run);
+}
+
+static inline void* msFutureCatchAttach(void* input, void* output, msClosure onRejected, void (*ok)(void*, void*)) {
+    msClosureCopy(onRejected);
+    return msPromiseCatchAttach(input, output, (void*)onRejected.fn, onRejected.env, (void*)ok);
 }
 
 /* Typed .then: read input as T, pass to callback, complete output with NULL.
@@ -251,36 +205,25 @@ static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, m
  *   arg_type  — callback parameter type (usually == T; separate in case of
  *               ABI differences between storage and argument passing)
  *
- * Preconditions: input->value was written via msFutureCompleteT on the same fut_type.
- * Passing a boxed-storage input (spawn legacy path) reinterprets the heap pointer
- * as T — undefined behavior. A Session-3 assert will catch this at runtime. */
+ * name##_run is the per-T half: the shared callback in std/core/promise/combinator.cms
+ * routes a rejected input and settles the output. Preconditions: input->value was written
+ * via msFutureCompleteT on the same fut_type. Passing a boxed-storage input (spawn legacy
+ * path) reinterprets the heap pointer as T — undefined behavior. */
 #define MS_NO_DROP(value) ((void)(value))
 #define MS_DROP_REF_SLOT(slot) do { void* dropped_ = *(slot); *(slot) = NULL; msDecrefAny(dropped_); } while (0)
 #define MS_DROP_STRING_SLOT(slot) do { msString dropped_ = *(slot); *(slot) = MS_EMPTY_STRING; msStringDestroy(dropped_); } while (0)
 #define MS_DEFINE_FUTURE_THEN(name, fut_type, T, arg_type, drop) \
-static inline void name##_cb(void* raw) { \
+static inline void name##_run(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
-    if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureThenRejected(e); \
-        msFutureThenEnvFree(e); \
-        return; \
-    } \
     T val = ((fut_type*)e->input)->value; \
     void* fn = (void*)e->onFulfilled.fn; \
     void* env = e->onFulfilled.env; \
     if (env) ((void(*)(arg_type, void*))fn)(val, env); \
     else ((void(*)(arg_type))fn)(val); \
     if (e->input->base.valueDrop == NULL) drop(&((fut_type*)e->input)->value); \
-    if (msErr) { \
-        msFutureFail(e->output, (void*)msCurrException); \
-        msErr = false; msCurrException = NULL; \
-    } else { \
-        msFutureComplete(e->output, NULL); \
-    } \
-    msFutureThenEnvFree(e); \
 } \
 static inline void* name##WithRejected(void* input, msClosure onFulfilled, msClosure onRejected) { \
-    return msFutureThenAttach(input, onFulfilled, onRejected, 0, (msClosureFn)name##_cb); \
+    return msFutureThenAttach(input, onFulfilled, onRejected, 0, name##_run); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
     return name##WithRejected(input, onFulfilled, (msClosure){0}); \
@@ -296,13 +239,8 @@ static inline void* name(void* input, msClosure onFulfilled) { \
 #define MS_PASS_VALUE(value) (value)
 #define MS_PASS_REF(value) (&(value))
 #define MS_DEFINE_FUTURE_THEN_BOXED(name, T, arg_type, pass, drop) \
-static void name##_cb(void* raw) { \
+static void name##_run(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
-    if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureThenRejected(e); \
-        msFutureThenEnvFree(e); \
-        return; \
-    } \
     void* box = e->input->value; \
     bool owned = e->input->base.valueDrop != NULL; \
     if (!owned) e->input->value = NULL; \
@@ -317,48 +255,27 @@ static void name##_cb(void* raw) { \
     void* exception = (void*)msCurrException; \
     msErr = false; msCurrException = NULL; \
     if (!owned) drop(&val); \
-    if (failed) msFutureFail(e->output, exception); \
-    else msFutureComplete(e->output, NULL); \
-    msFutureThenEnvFree(e); \
+    msErr = failed; msCurrException = exception; \
 } \
 static inline void* name##WithRejected(void* input, msClosure onFulfilled, msClosure onRejected) { \
-    return msFutureThenAttach(input, onFulfilled, onRejected, 0, (msClosureFn)name##_cb); \
+    return msFutureThenAttach(input, onFulfilled, onRejected, 0, name##_run); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
     return name##WithRejected(input, onFulfilled, (msClosure){0}); \
 }
 
 /* Typed .catch: on success, propagate input value to output via typed complete.
- * On error, invoke handler with the Error the input holds (lent: the input keeps its
- * count), complete output with NULL on handler success or propagate handler's rethrow. */
+ * On error, the shared callback invokes the handler with the Error the input holds (lent:
+ * the input keeps its count), completes output with NULL on handler success or propagates
+ * the handler's rethrow. name##_ok is the per-T success half. */
 #define MS_DEFINE_FUTURE_CATCH(name, fut_type) \
-static inline void name##_cb(void* raw) { \
-    msFutureCatchEnv* e = (msFutureCatchEnv*)raw; \
-    if (e->input->base.failed || e->input->base.cancelled) { \
-        void* err = e->input->base.error; \
-        void* fn = (void*)e->onRejected.fn; \
-        void* env = e->onRejected.env; \
-        if (env) ((void(*)(void*, void*))fn)(err, env); \
-        else ((void(*)(void*))fn)(err); \
-        if (msErr) { \
-            msFutureFail(e->output, (void*)msCurrException); \
-            msErr = false; msCurrException = NULL; \
-        } else { \
-            msFutureComplete(e->output, NULL); \
-        } \
-    } else { \
-        fut_type* srcT = (fut_type*)e->input; \
-        fut_type* dstT = (fut_type*)e->output; \
-        msFutureCompleteT(dstT, srcT->value); \
-    } \
-    msFutureCatchEnvFree(e); \
+static inline void name##_ok(void* output, void* input) { \
+    fut_type* srcT = (fut_type*)input; \
+    fut_type* dstT = (fut_type*)output; \
+    msFutureCompleteT(dstT, srcT->value); \
 } \
 static inline void* name(void* input, msClosure onRejected) { \
-    msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
-    msFutureCatchEnv* env = (msFutureCatchEnv*)msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
-    msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)name##_cb, .env = env}, msFutureCatchEnvDrop, NULL)); \
-    return output; \
+    return msFutureCatchAttach(input, msAlloc(sizeof(fut_type)), onRejected, name##_ok); \
 }
 
 MS_DEFINE_FUTURE_THEN(msFutureThen_double, msFuture_double, double, double, MS_NO_DROP)
@@ -478,95 +395,37 @@ MS_PROMISE_ALL_FOR(double, msFuture_double, double, msNumberArray, msNumberPaylo
 MS_PROMISE_ALL_FOR(bool,   msFuture_bool,   double, msNumberArray, msNumberPayload, MS_COPY_TO_DOUBLE, msNumberArrayDestroy)
 MS_PROMISE_ALL_FOR(void*,  msFuture_ptr,    void*,  msRefArray,    msRefPayload,    MS_COPY_MOVE_PTR, msRefArrayDestroy)
 
-typedef struct {
-	msFuture* result;
-	msClosure share;
-	msClosure drop;
-	int32_t count;
-	bool any;
-	_Atomic(bool) settled;
-	_Atomic(int32_t) rejected;
-	_Atomic(int32_t) remaining;
-} msPromiseFirstState;
+/* The per-element-type half of the typed Promise.race / Promise.any, defined by
+ * MS_PROMISE_FIRST_FOR: futSize is the result future's size, deliver completes the result
+ * with the winning input's value. msPromiseFirstTyped is the shared body in
+ * std/core/promise/combinator.cms. */
+typedef struct msPromiseFirstVt {
+	size_t futSize;
+	void (*deliver)(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv);
+} msPromiseFirstVt;
 
-typedef struct {
-	msPromiseFirstState* state;
-	msFuture* input;
-} msPromiseFirstCbEnv;
-
-static inline bool msPromiseFirstClaim(msPromiseFirstState* s, bool fulfilled) {
-	if (fulfilled || !s->any) return !atomic_exchange_explicit(&s->settled, true, memory_order_acq_rel);
-	int32_t rejected = atomic_fetch_add_explicit(&s->rejected, 1, memory_order_acq_rel) + 1;
-	if (rejected == s->count && !atomic_exchange_explicit(&s->settled, true, memory_order_acq_rel)) {
-		msFutureFail(s->result, msMakeError(msStringFromCStr("All promises were rejected")));
-	}
-	return false;
-}
-
-static inline void msPromiseFirstRelease(msPromiseFirstState* s, msFuture* input) {
-	msDecrefAny(input);
-	if (atomic_fetch_sub_explicit(&s->remaining, 1, memory_order_acq_rel) == 1) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-static inline void* msPromiseFirstStart(msRefArray* arr, msClosure share, msClosure drop, bool any, size_t futSize, msClosureFn cb) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msAllocTyped(futSize, &msFutureTypeInfo);
-	if (count == 0 || futures == NULL) {
-		if (any) msFutureFail(result, msMakeError(msStringFromCStr("All promises were rejected")));
-		return result;
-	}
-	msPromiseFirstState* state = (msPromiseFirstState*)msMemAlloc0(sizeof(msPromiseFirstState));
-	state->result = result;
-	msIncref(result);
-	state->share = share;
-	state->drop = drop;
-	state->count = count;
-	state->any = any;
-	atomic_store_explicit(&state->remaining, count, memory_order_relaxed);
-	for (int i = 0; i < count; i++) {
-		msPromiseFirstCbEnv* env = (msPromiseFirstCbEnv*)msMemAlloc(sizeof(msPromiseFirstCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){ .fn = cb, .env = env });
-	}
-	return result;
-}
+void* msPromiseFirstTyped(void* futures, void* shareFn, void* dropFn, void* dropEnv, int32_t any, void* vt);
 
 #define MS_PROMISE_FIRST_FOR(name, futType, boxSize) \
-	static inline void name##_cb(void* raw) { \
-		msPromiseFirstCbEnv* e = (msPromiseFirstCbEnv*)raw; \
-		msPromiseFirstState* s = e->state; \
-		futType* f = (futType*)e->input; \
-		free(e); \
-		bool fulfilled = !(f->base.failed || f->base.cancelled); \
-		if (msPromiseFirstClaim(s, fulfilled)) { \
-			if (!fulfilled) { \
-				msFutureFailShared(s->result, f->base.error); \
-			} else { \
-				futType* r = (futType*)s->result; \
-				msFutureOwnResult(s->result, s->drop); \
-				if (f->base.valueDrop != NULL && s->share.fn != NULL) { \
-					void* dst = (boxSize) == 0 ? (void*)&r->value : (*(void**)&r->value = msMemAlloc0((boxSize))); \
-					((void (*)(void*, void*))s->share.fn)(dst, (void*)f); \
-				} else { \
-					memcpy(&r->value, &f->value, sizeof(r->value)); \
-					memset(&f->value, 0, sizeof(f->value)); \
-				} \
-				msFutureCompleteVoid(r); \
-			} \
+	static void name##_deliver(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) { \
+		futType* f = (futType*)input; \
+		futType* r = (futType*)result; \
+		msFutureOwnResult(result, (msClosure){ .fn = (msClosureFn)dropFn, .env = dropEnv }); \
+		if (f->base.valueDrop != NULL && shareFn != NULL) { \
+			void* dst = (boxSize) == 0 ? (void*)&r->value : (*(void**)&r->value = msMemAlloc0((boxSize))); \
+			((void (*)(void*, void*))shareFn)(dst, (void*)f); \
+		} else { \
+			memcpy(&r->value, &f->value, sizeof(r->value)); \
+			memset(&f->value, 0, sizeof(f->value)); \
 		} \
-		msPromiseFirstRelease(s, (msFuture*)f); \
+		msFutureCompleteVoid(r); \
 	} \
+	static const msPromiseFirstVt name##_vt = { .futSize = sizeof(futType), .deliver = name##_deliver }; \
 	static inline void* name##Race(msRefArray* arr, msClosure share, msClosure drop) { \
-		return msPromiseFirstStart(arr, share, drop, false, sizeof(futType), (msClosureFn)name##_cb); \
+		return msPromiseFirstTyped(arr, (void*)share.fn, (void*)drop.fn, drop.env, 0, (void*)&name##_vt); \
 	} \
 	static inline void* name##Any(msRefArray* arr, msClosure share, msClosure drop) { \
-		return msPromiseFirstStart(arr, share, drop, true, sizeof(futType), (msClosureFn)name##_cb); \
+		return msPromiseFirstTyped(arr, (void*)share.fn, (void*)drop.fn, drop.env, 1, (void*)&name##_vt); \
 	}
 
 #endif /* MS_COMBINATOR_H */

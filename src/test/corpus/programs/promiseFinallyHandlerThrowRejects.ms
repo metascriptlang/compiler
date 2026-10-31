@@ -1,6 +1,5 @@
 // @stdout: late -2 | awaited late | forwarded boom
 // @xfail(raiser): raiser-solid owns Raiser Promise APIs
-// @xfail(san): a throw in an async finally after its try returned leaks the Error (.inbox/compiler/2026-10-20-c-async-finally-that-throws-after-a-return-loses-the-throw.md)
 // note: a throw inside a finally handler rejects the promise finally makes, in place of the value
 // or the rejection it would forward: a catch after it receives the handler's Error, and so does
 // an await of it.

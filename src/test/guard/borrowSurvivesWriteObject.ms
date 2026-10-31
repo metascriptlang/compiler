@@ -7,6 +7,7 @@
 //
 // RED MEANS: a borrowed argument whose source the callee may write was not copied into an owned temp. Read processCall in inject.ms and the callee's summary in checker/writeEffects.ms.
 // GUARD-BALANCE TOTAL
+// GUARD-JS
 
 let got = "";
 function note(s: string): void { got += s + ";"; }

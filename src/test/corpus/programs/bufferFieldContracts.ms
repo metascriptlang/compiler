@@ -1,5 +1,5 @@
 // @skip-js: the js Buffer throws or reads undefined outside the bounds; the C Buffer returns 0 or the offset and writes nothing
-// @xfail(raiser): error: Undefined variable 'Buffer'
+// @xfail(raiser): error: bigint is not supported on the Raiser VM
 // @stdout: bounds entries=1620 digest=484407731
 // @stdout: byteLength rejects=96 rejectedMessages=96 accepted=48 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505

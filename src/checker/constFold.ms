@@ -175,6 +175,7 @@ export function isUntypedConstant(expr: Node, depth: int32): boolean {
 	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
 	if (expr.kind == NodeKind.NumberLiteral) return true;
 	if (expr.kind == NodeKind.Identifier) {
+		if (builtinFloatConstant(expr) != null) return true;
 		const initializer = constInitializer(expr);
 		if (initializer == null || (expr.resolvedSym.declNode.data as VariableDeclData).declType != "") return false;
 		return isUntypedConstant(initializer, depth + 1);

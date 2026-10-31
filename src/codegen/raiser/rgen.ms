@@ -593,7 +593,7 @@ function evalLowered(code: string): RaiserContext {
 		return createContext();
 	}
 	const program = parseResult.value;
-	return runProgram(transformForRaiser(program, checkProgram(program)));
+	return runProgram(transformForRaiser(program, checkProgram(program), true));
 }
 
 // --- Tests ---

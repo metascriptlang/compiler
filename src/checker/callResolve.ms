@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -11,15 +11,15 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, ExtensionRegistry, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, resolveUserOperator, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
-import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership } from "./fit";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, ExtensionRegistry, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, resolveUserOperator, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
+import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
+import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
-import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
+import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes, ctorSignaturesOf, requiredCtorArgs } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isNodeWireMetaField } from "../compiler/meta/wire";
@@ -610,7 +610,7 @@ function getCalleeNameForDefaults(callNode: Node): string {
 // Deep clone is required because defaults may be complex expressions (object literals,
 // function calls) and each call site needs its own independent AST to type-check.
 function cloneDefaultNode(node: Node): Node {
-	const clone = cloneNodeForCheck(node);
+	const clone = cloneNodeForCheck(sourceOfDefault(node));
 	// Prelude defaults are parsed but not semchecked — infer type from kind
 	if (clone.nodeType == null) {
 		match (clone.kind) {
@@ -741,7 +741,9 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 		const expectedType = paramTypes != null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
-		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		const awaitsInstance = expectedType != null && hasGenericParams(expectedType);
+		const fitted = expectedType != null && !awaitsInstance ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		if (awaitsInstance && fitted.kind != NodeKind.ObjectLiteral) fitted.flags = fitted.flags.incl(NodeFlag.DefaultAwaitsInstance);
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
 		args.push(fitted);
 		argIdx = argIdx + 1;
@@ -773,12 +775,25 @@ export function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	return null;
 }
 
+// A call through a signature runs the implementation: an omitted argument takes the
+// implementation's default, and only where it has none the signature's optional `?`.
+function defaultsThroughSignature(impl: Symbol, signature: Symbol): Node[] | null {
+	const own = declaredDefaults(impl);
+	const marked = declaredDefaults(signature);
+	if (own == null || marked == null) return own ?? marked;
+	const merged: Node[] = [];
+	for (let i = 0; i < own.length || i < marked.length; i += 1) {
+		merged.push(i < own.length && own[i] != null ? own[i] : i < marked.length ? marked[i] : null as unknown as Node);
+	}
+	return merged;
+}
+
 function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
-	totalParams: number, defaultOffset: number, chosen: Symbol | null = null): void {
+	totalParams: number, defaultOffset: number, chosen: Symbol | null = null, signature: Symbol | null = null): void {
 	const cd = callNode.data as CallExprData;
 	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
 	const defSym = chosen != null ? chosen : (cd.callee.resolvedSym != null ? cd.callee.resolvedSym : callNode.resolvedSym);
-	const fnDefaults = declaredDefaults(defSym);
+	const fnDefaults = signature != null && defSym != null ? defaultsThroughSignature(defSym, signature) : declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
 	let paramTypes: Type[] = [];
@@ -1210,7 +1225,12 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// Otherwise use struct field types as expected (positional initialization).
 	const classSym = d.newCallee.resolvedSym;
 	const hasCtor = classSym != null && hasFlag(classSym, SymbolFlag.HasConstructor);
-	const declaredCtor = ctorRoutineOf(classSym);
+	const implCtor = ctorRoutineOf(classSym);
+	const signatureImpl = hasCtor && classSym != null ? ctorRoutineOf(constructorDeclaringClass(classSym) ?? classSym) : null;
+	const signatures = ctorSignaturesOf(signatureImpl);
+	const pickedSig = signatures.length > 0 ? pickCtorSignature(ctx, node, d.newArguments, classSym!.name, signatureImpl!, signatures, expected) : null;
+	if (signatures.length > 0 && pickedSig == null) return resolvedType != null ? resolvedType : inferredType();
+	const declaredCtor = pickedSig != null ? pickedSig : implCtor;
 	let ctorFormals: Type[] | null = null;
 	if (hasCtor && classSym != null) {
 		const rawCtorTypes = ctorFormalTypes(declaredCtor);
@@ -1265,23 +1285,26 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	}
 	const ctorOwner = generic.instance != null ? generic.instance : classSym;
 	const ctorRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
+	const typedBy = pickedSig != null ? pickedSig : ctorRoutine;
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	if (hasCtor && ctorOwner != null) refuseHiddenConstructor(ctx, declaring != null ? declaring : ctorOwner, node.location.line, node.location.column);
 	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ctorRoutine;
+	const ctorDefaults = defaultsFrom == null ? null : pickedSig != null ? defaultsThroughSignature(defaultsFrom, pickedSig) : defaultsFrom.defaultParams;
 	const routineFormals = hasCtor && ctorRoutine != null ? ctorFormalTypes(ctorRoutine) : null;
 	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
 	if (routineFormals != null && defaultsFrom != null) {
-		const pd: ParamDefaults = { defaults: defaultsFrom.defaultParams, names: defaultsFrom.symbolType.typeNames.slice(1), offset: 0 };
+		const pd: ParamDefaults = { defaults: ctorDefaults, names: defaultsFrom.symbolType.typeNames.slice(1), offset: 0 };
 		ctorSpread = takeOptionalSpread(ctx, d.newArguments, [], pd, routineFormals, firstDefaulted(pd, routineFormals));
 	}
 	if (classSym != null && (ctorSpread.spread == null || ctorSpread.taken)) {
-		checkNewArity(ctx, node, classSym, innerType, ctorRoutine, defaultsFrom);
+		checkNewArity(ctx, node, classSym, innerType, typedBy, ctorDefaults);
 	}
 	if (routineFormals != null && defaultsFrom != null) {
-		fillDefaults(ctx, d.newArguments, defaultsFrom.defaultParams, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
+		fillDefaults(ctx, d.newArguments, ctorDefaults, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
 		fillTakenSpread(ctx, d.newArguments, [], ctorSpread, routineFormals);
 	}
 	node.resolvedSym = ctorRoutine;
+	if (pickedSig != null) fitNewToImplementation(ctx, d, ctorRoutine!);
 	if (!hasCtor && d.newArguments.length == 0 && d.newCallee.resolvedSym != null) {
 		const missing = fieldsWithoutDefault(ctx, d.newCallee.resolvedSym, 0);
 		if (missing.length > 0) {
@@ -1343,15 +1366,6 @@ export function refuseUnhashableKey(ctx: CheckerContext, collection: Type, at: N
 	const name = typeDisplayName(key);
 	addError(ctx, `'${name}' cannot be a ${owner.typeName} key: a distinct type hashes as its base only over an integer, char, boolean or enum, and '${name}' is over '${typeDisplayName(base)}' — declare 'function hash(this k: ${name}): int64'`, at.location.line, at.location.column);
 	return true;
-}
-
-function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int32 {
-	let required: int32 = 0;
-	for (let i = 0; i < formals.length; i += 1) {
-		const hasDefault = defaults != null && i < defaults.length && defaults[i] != null;
-		if (!hasDefault && formals[i].kind != TypeKind.Varargs) required = i + 1;
-	}
-	return required;
 }
 
 function inlineLiteralSpreads(args: Node[]): Node[] {
@@ -1433,12 +1447,12 @@ function fixedCount(formals: Type[]): int32 {
 
 interface ParamDefaults { defaults: Node[] | null; names: string[]; offset: int32; }
 
-function calleeDefaults(node: Node, chosen: Symbol | null, offset: int32): ParamDefaults {
+function calleeDefaults(node: Node, chosen: Symbol | null, offset: int32, signature: Symbol | null = null): ParamDefaults {
 	const d = node.data as CallExprData;
 	const sym = chosen != null ? chosen : (d.callee.resolvedSym != null ? d.callee.resolvedSym : node.resolvedSym);
 	const names: string[] = [];
 	if (sym != null && sym.symbolType != null) { for (const n of sym.symbolType.typeNames) names.push(n); }
-	return { defaults: declaredDefaults(sym), names, offset };
+	return { defaults: signature != null && sym != null ? defaultsThroughSignature(sym, signature) : declaredDefaults(sym), names, offset };
 }
 
 function firstDefaulted(pd: ParamDefaults, formals: Type[]): int32 {
@@ -1469,6 +1483,13 @@ function defaultReadsSpreadSlot(ctx: CheckerContext, spread: Node, pd: ParamDefa
 	return false;
 }
 
+function hideSpreadElement(args: Node[], argTypes: Type[], at: int32): Type | null {
+	if (at < 0 || at >= args.length || at >= argTypes.length || args[at].kind != NodeKind.SpreadExpr) return null;
+	const element = argTypes[at];
+	argTypes[at] = args[at].nodeType!;
+	return element;
+}
+
 function trailingArraySpread(args: Node[]): int32 {
 	const at = args.length - 1;
 	if (at < 0 || args[at].kind != NodeKind.SpreadExpr) return -1;
@@ -1488,11 +1509,33 @@ function spreadElementType(spread: Node): Type {
 
 function spreadFitsCandidate(candType: Type, at: int32, element: Type, minArgs: number): boolean {
 	const formals = candType.typeChildren;
-	if (at < minArgs || at >= fixedCount(formals) || fixedCount(formals) != formals.length) return false;
-	for (let k = at; k < formals.length; k += 1) {
+	const fixed = fixedCount(formals);
+	const hasRest = fixed != formals.length;
+	if (at < minArgs || (at >= fixed && !hasRest)) return false;
+	for (let k = at; k < fixed; k += 1) {
 		if (typeRelation(formals[k], element) == TypeRelation.None) return false;
 	}
-	return true;
+	return !hasRest || typeRelation(restElementOf(formals), element) != TypeRelation.None;
+}
+
+function restElementOf(formals: Type[]): Type {
+	return getElementType(unwrapRef(unwrapVarargs(formals[formals.length - 1])));
+}
+
+function takesRest(candType: Type): boolean {
+	return fixedCount(candType.typeChildren) != candType.typeChildren.length;
+}
+
+// A rest parameter takes each argument past the fixed ones as one element, so a call is scored against the
+// formals it would fill.
+function expandRest(formals: Type[], count: int32): Type[] {
+	const fixed = fixedCount(formals);
+	if (fixed == formals.length) return formals;
+	const expanded: Type[] = [];
+	for (let k = 0; k < fixed; k += 1) expanded.push(formals[k]);
+	const element = restElementOf(formals);
+	for (let k = fixed; k < count; k += 1) expanded.push(element);
+	return expanded;
 }
 
 interface SpreadTake { spread: Node | null; at: int32; taken: boolean; }
@@ -1608,7 +1651,65 @@ function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[
 	return false;
 }
 
-function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, routine: Symbol | null, defaultsFrom: Symbol | null): void {
+// A `new` ranks the constructor signatures and runs the implementation. The implementation is
+// never a candidate itself, as in a call to an overloaded function.
+function pickCtorSignature(ctx: CheckerContext, node: Node, args: Node[], className: string, impl: Symbol, sigs: Symbol[], expected: Type | null): Symbol | null {
+	if (!validateOverloadSigs(ctx, impl, impl, node, 1)) return null;
+	if (hasSpreadArg(args)) {
+		addError(ctx, "a spread argument cannot call an overloaded constructor", node.location.line, node.location.column);
+		return null;
+	}
+	const mark = ctx.errors.length;
+	const candidates: Type[] = sigs.map((s: Symbol): Type => stripReceiverParam(s.symbolType));
+	const argTypes: Type[] = [];
+	const skipMask: boolean[] = [];
+	for (const arg of args) {
+		skipMask.push(isContextSensitive(arg));
+		argTypes.push(skipMask[skipMask.length - 1] ? null as unknown as Type : checkArgWithExpected(ctx, arg, null as unknown as Type));
+	}
+	const scores: CandidateScore[] = candidates.map((c: Type): CandidateScore => trialScore(c, args, argTypes, skipMask));
+	let pick: int32 = -1;
+	if (!skipMask.includes(true)) {
+		pick = firstApplicable(scores, sigs);
+	} else {
+		const ranked = rankContextFits(ctx, node, sigs, candidates, scores, args, argTypes, skipMask, expected, true);
+		if (ranked.tie) {
+			addError(ctx, `Ambiguous call to the overloaded constructor of '${className}' — ${ANNOTATE_CONTEXT_ARG}`, node.location.line, node.location.column);
+			return null;
+		}
+		pick = ranked.index;
+	}
+	ctx.errors = ctx.errors.slice(0, mark);
+	for (const arg of args) clearCheckerState(arg);
+	if (pick >= 0) return sigs[pick];
+	let msg = `No matching overload for the constructor of '${className}'\n  Expected one of:`;
+	for (let ci = 0; ci < candidates.length; ci += 1) {
+		msg = `${msg}\n    ${formatCandidateSig("constructor", candidates[ci])}`;
+		const mpos = findFirstMismatch(candidates[ci].typeChildren, argTypes, getMinArity(candidates[ci]));
+		if (mpos >= 0 && mpos < argTypes.length && mpos < candidates[ci].typeChildren.length) {
+			const gotName = argTypes[mpos] != null ? typeDisplayName(argTypes[mpos]) : "<skipped>";
+			msg = `${msg}\n      first mismatch at position ${mpos + 1}: expected '${typeDisplayName(candidates[ci].typeChildren[mpos])}', got '${gotName}'`;
+		} else if (candidates[ci].typeChildren.length != argTypes.length) {
+			msg = `${msg}\n      expected ${candidates[ci].typeChildren.length} argument(s), got ${argTypes.length}`;
+		}
+	}
+	addError(ctx, msg, node.location.line, node.location.column);
+	return null;
+}
+
+// The arguments satisfied a signature, so they must also satisfy the implementation's
+// parameters: a union widens the argument there, as for a call to an overloaded function.
+function fitNewToImplementation(ctx: CheckerContext, d: NewExprData, impl: Symbol): void {
+	const formals = ctorFormalTypes(impl);
+	if (formals == null) return;
+	for (let ai = 0; ai < d.newArguments.length && ai < formals.length; ai += 1) {
+		const argType = d.newArguments[ai].nodeType;
+		if (argType == null || hasGenericParams(formals[ai])) continue;
+		d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], peelSink(formals[ai]), argType);
+	}
+}
+
+function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, routine: Symbol | null, defaults: Node[] | null): void {
 	const args = (node.data as NewExprData).newArguments;
 	if (hasFlag(classSym, SymbolFlag.ImportC)) return;
 	let required: int32 = 0;
@@ -1616,7 +1717,7 @@ function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerT
 	if (hasFlag(classSym, SymbolFlag.HasConstructor)) {
 		const formals = ctorFormalTypes(routine);
 		if (formals == null) return;
-		required = requiredCtorArgs(formals, defaultsFrom != null ? defaultsFrom.defaultParams : null);
+		required = requiredCtorArgs(formals, defaults);
 		if (refuseMisplacedSpread(ctx, args, formals, required)) return;
 		if (formals.length == 0 || formals[formals.length - 1].kind != TypeKind.Varargs) allowed = formals.length;
 	} else {
@@ -1962,6 +2063,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			return errorType();
 		}
 		d.callee.resolvedSym = parentCtor;
+		const signatureOwner = constructorDeclaringClass(parentSym) ?? parentSym;
+		const signatureImpl = ctorRoutineOf(signatureOwner);
+		const signatures = ctorSignaturesOf(signatureImpl);
+		const forwardsImplementation = ctx.currentFunction != null && hasFlag(ctx.currentFunction, SymbolFlag.InheritsConstructor);
+		if (signatures.length > 0 && !forwardsImplementation && pickCtorSignature(ctx, node, d.arguments, signatureOwner.name, signatureImpl!, signatures, null) == null) {
+			node.nodeType = voidType();
+			return voidType();
+		}
 		let ctorParamTypes = ctorFormalTypes(parentCtor);
 		if (substNames.length > 0 && ctorParamTypes != null && parentInst != null) {
 			const substParams = declaredTypeParams(parentSym, substNames.length);
@@ -1971,6 +2080,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
 			const expected = (ctorParamTypes != null && ai < ctorParamTypes.length) ? ctorParamTypes[ai] : null;
 			callCheckExpr(ctx, d.arguments[ai], expected);
+			const argType = d.arguments[ai].nodeType;
+			if (expected != null && expected.kind != TypeKind.Varargs && argType != null && d.arguments[ai].kind != NodeKind.SpreadExpr) {
+				d.arguments[ai] = fitNode(ctx, d.arguments[ai], expected, argType);
+			}
 		}
 		if (d.arguments.length < expectedCount) {
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
@@ -2197,16 +2310,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					// Actor: flag for Sendable checking + Promise<T> wrapping for non-void returns
 					// Check both direct Actor symbols (e.g. Worker.staticMethod) and
 					// variables holding actor instances (e.g. w.method where w: Ref<Worker>)
-					const receiverSym = extReceiverSym(winner);
-					const isActorReceiver = !isStaticAccess && (
-						(me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Actor)
-						|| (objType != null && objType.kind == TypeKind.Ref && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
-						|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
-						|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor)
-					);
-					const ownActorCall = isActorReceiver && callsOwnActorMethod(ctx, me.object, winner.sym);
+					const isActorReceiver = !isStaticAccess && isActorReceiverOf(me, objType, extReceiverSym(winner));
+					const freeFunctionExtension = isFreeFunctionExtension(winner.sym);
+					const ownActorCall = isActorReceiver && !freeFunctionExtension && callsOwnActorMethod(ctx, me.object, winner.sym);
 					if (ownActorCall) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
-					if (isActorReceiver && !ownActorCall) {
+					if (isActorReceiver && !ownActorCall && !freeFunctionExtension) {
 						isActorMethodCall = true;
 						if (calleeType != null
 							&& calleeType.typeReturn != null
@@ -2222,6 +2330,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					// Multi-overload: defer to post-arg scoring (needs argTypes)
 					extMultiFiltered = filtered;
 					extMultiObjType = objType;
+					const multiOwner = filtered[0].sym;
+					if (!isStaticAccess && !isFreeFunctionExtension(multiOwner) && isActorReceiverOf(me, objType, extReceiverSym(filtered[0]))) {
+						if (multiOwner != null && callsOwnActorMethod(ctx, me.object, multiOwner)) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
+						else isActorMethodCall = true;
+					}
 					extMultiMethodName = me.property;
 				}
 			}
@@ -2499,26 +2612,15 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, ctx, node);
 			}
 		}
-		// Sendable check for extension-resolved actor method calls
 		if (isActorMethodCall) {
-			// SEND-class (void return — no reply to park on) rejects plain refs;
-			// CALL-class borrows them (sound only while awaited — see below).
-			const sendClass = calleeType == null || calleeType.typeReturn == null
-				|| calleeType.typeReturn.kind == TypeKind.Void;
-			let borrowed = false;
-			for (let pi = 0; pi < d.arguments.length; pi += 1) {
-				if (checkActorArgSendable(ctx, node, d.arguments[pi], pi, sendClass)) borrowed = true;
-			}
-			if (borrowed && node == ctx.stmtPosExpr) {
-				addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
-					node.location.line, node.location.column);
-			}
+			checkActorCallArgs(ctx, node, d.arguments, calleeType == null || calleeType.typeReturn == null
+				|| calleeType.typeReturn.kind == TypeKind.Void);
 		}
 		return inferGenericReturn(ctx, calleeType!, argTypes, expectedType, node);
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
-		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node, expectedType);
+		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node, expectedType, isActorMethodCall);
 	}
 	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
 	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
@@ -2939,7 +3041,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const sendableArg = fitSendable(ctx, args[pi], paramType, argTypes[pi]);
+			const sendableArg = fitSendable(ctx, args[pi], peelSink(paramType), argTypes[pi]);
 			if (sendableArg != null) argTypes[pi] = sendableArg;
 			if (!hasGenericParams(paramType)) {
 				const ownedArg = fitOwnership(ctx, args[pi], peelSink(paramType), argTypes[pi]);
@@ -3702,6 +3804,19 @@ function ownTypeParams(sym: Symbol, genericNames: string[]): Type[] {
 	return sym.typeParams.length == genericNames.length ? sym.typeParams : [];
 }
 
+function fitDefaultToInstance(ctx: CheckerContext, call: Node, callee: Symbol, param: string, def: Node, formal: Type): Node {
+	const defCtx = pickBodyCtx(callee.modulePath, ctx);
+	const mark = defCtx.errors.length;
+	const fitted = fitNode(defCtx, def, formal, def.nodeType);
+	const misfits: string[] = [];
+	for (let ei = mark; ei < defCtx.errors.length; ei += 1) misfits.push(defCtx.errors[ei].message);
+	defCtx.errors.shrink(mark);
+	for (const why of misfits) {
+		addError(ctx, `the default of parameter '${param}' of '${callee.name}' does not fit this call, where '${param}' is ${typeDisplayName(formal)}: ${why}; pass '${param}' explicitly or declare a default that fits every instance`, call.location.line, call.location.column);
+	}
+	return fitted;
+}
+
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
@@ -3866,6 +3981,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const rawFormal = deferredTuple != null && pi >= restIdx ? deferredTuple.typeChildren[pi - restIdx] : calleeType.typeChildren[pi];
 		const substituted = applySubstitutions(rawFormal, eb);
 		if (substituted == null) continue;
+		if (arg.flags.has(NodeFlag.DefaultAwaitsInstance) && !hasGenericParams(substituted)) {
+			arg.flags = arg.flags.excl(NodeFlag.DefaultAwaitsInstance);
+			cd.arguments[pi] = fitDefaultToInstance(ctx, node, sym, pi < calleeType.typeNames.length ? calleeType.typeNames[pi] : String(pi), arg, substituted);
+			continue;
+		}
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
 			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
 			if (thunkArg != null as unknown as Node) {
@@ -4035,7 +4155,9 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node, na
 			callNode.location.line, callNode.location.column);
 		return winner;
 	}
-	return validateOverloadSigs(ctx, set, impl, callNode) ? impl : winner;
+	const declared = named.find((e: ExtensionMethod): boolean => e.sym == set);
+	const hiddenThis = declared != null && !declared.isStatic && set.declNode != null && set.declNode.kind == NodeKind.MethodDecl;
+	return validateOverloadSigs(ctx, set, impl, callNode, hiddenThis ? 1 : 0) ? impl : winner;
 }
 
 function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symbol, takesReceiver: boolean): void {
@@ -4059,11 +4181,11 @@ function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symb
 // Validate every overload sig against the implementation. Runs once per
 // overload set (flagged by `SymbolFlag.OverloadValidated` on the impl).
 // Rules:
-//   1. sig arity must equal impl arity
+//   1. sig arity lies between the impl's required count and its arity
 //   2. each sig param type must be assignable to the impl's corresponding param
 //   3. sig return type must be assignable to impl return type
 // Emits errors and returns false if any rule is violated.
-function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, callNode: Node): boolean {
+function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, callNode: Node, receiver: int32): boolean {
 	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return true;
 	setFlag(impl, SymbolFlag.OverloadValidated);
 	const implFnType = impl.symbolType;
@@ -4077,8 +4199,14 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 		if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
 		const sigType = s.symbolType;
 		if (sigType == null || sigType.kind != TypeKind.Function) continue;
-		if (sigType.typeChildren.length != implParams.length) {
-			addError(ctx, `Overload signature for '${sym.name}' has ${sigType.typeChildren.length} parameter(s) but implementation has ${implParams.length}`,
+		if (sigType.typeChildren.length > implParams.length) {
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation has ${implParams.length - receiver}`,
+				callNode.location.line, callNode.location.column);
+			return false;
+		}
+		const implRequired = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], impl.defaultParams) + receiver : getMinArity(implFnType);
+		if (sigType.typeChildren.length < implRequired) {
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation requires ${implRequired - receiver}`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
@@ -4090,24 +4218,45 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 			}
 		}
 		if (paramMismatch >= 0) {
-			addError(ctx, `Overload signature for '${sym.name}' param ${paramMismatch + 1} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
+			addError(ctx, `Overload signature for '${writtenName(sym)}' param ${paramMismatch + 1 - receiver} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 		const sRet = sigType.typeReturn;
-		if (sRet != null && implRet != null && !isAssignable(sRet, implRet)) {
-			addError(ctx, `Overload signature for '${sym.name}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
+		if (sRet != null && implRet != null && sRet.kind != TypeKind.Void && !returnHeldBy(sRet, implRet) && !returnHeldBy(implRet, sRet)) {
+			addError(ctx, `Overload signature for '${writtenName(sym)}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 		const viewParam = sRet != null && implRet != null && dropsReadonlyView(implRet, sRet) ? firstViewParam(sigType.typeChildren) : -1;
 		if (viewParam >= 0) {
-			addError(ctx, `Overload signature for '${sym.name}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
+			addError(ctx, `Overload signature for '${writtenName(sym)}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
 				callNode.location.line, callNode.location.column);
 			return false;
 		}
 	}
 	return true;
+}
+
+function returnHeldBy(from: Type, to: Type): boolean {
+	if (isAwaitable(from) && isAwaitable(to) && !isAssignable(from, to)) return returnHeldBy(awaitedType(from)!, awaitedType(to)!);
+	return isAssignable(from, to) || convertsUnionImplicitly(from, to);
+}
+
+function isFreeFunctionExtension(sym: Symbol | null): boolean {
+	return sym != null && sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl;
+}
+
+function isActorReceiverOf(me: MemberExprData, objType: Type | null, receiverSym: Symbol | null): boolean {
+	return (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Actor)
+		|| (objType != null && objType.kind == TypeKind.Ref && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
+		|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
+		|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor);
+}
+
+function writtenName(sym: Symbol): string {
+	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return "constructor";
+	return sym.declNode != null && sym.declNode.kind == NodeKind.MethodDecl ? (sym.declNode.data as MethodDeclData).methodName : sym.name;
 }
 
 function firstViewParam(params: Type[]): int32 {
@@ -4270,7 +4419,10 @@ interface ContextPick {
 function trialScore(candidate: Type, args: Node[], argTypes: Type[], skipMask: boolean[]): CandidateScore {
 	enterSpeculation();
 	try {
-		return scoreCandidateWithSkip(candidate.typeChildren, argTypes, getMinArity(candidate), skipMask, literalRelations(candidate.typeChildren, args, argTypes));
+		const formals = expandRest(candidate.typeChildren, argTypes.length);
+		const fixed = fixedCount(candidate.typeChildren);
+		const rest = takesRest(candidate);
+		return scoreCandidateWithSkip(formals, argTypes, rest && fixed < getMinArity(candidate) ? fixed : getMinArity(candidate), skipMask, literalRelations(formals, args, argTypes), rest ? fixed : -1);
 	} finally {
 		leaveSpeculation();
 	}
@@ -4349,8 +4501,11 @@ function literalSignaturesFirst(syms: Symbol[], count: int32): int32[] {
 // The reference reads the written annotation, so `x: "a"` counts and an alias of a
 // literal type does not.
 function writesLiteralParam(sym: Symbol): boolean {
-	if (sym.declNode == null || sym.declNode.kind != NodeKind.FunctionDecl) return false;
-	for (const text of (sym.declNode.data as FunctionDeclData).fnParamTypes) {
+	if (sym.declNode == null) return false;
+	const texts = sym.declNode.kind == NodeKind.FunctionDecl ? (sym.declNode.data as FunctionDeclData).fnParamTypes
+		: sym.declNode.kind == NodeKind.ConstructorDecl ? (sym.declNode.data as ConstructorDeclData).ctorParamTypes : null;
+	if (texts == null) return false;
+	for (const text of texts) {
 		if (isLiteralTypeText(text.trim())) return true;
 	}
 	return false;
@@ -4458,6 +4613,12 @@ function takesAdaptedArg(cand: Type, argTypes: Type[], skipMask: boolean[]): boo
 	return false;
 }
 
+// The reference's `chooseOverload` takes the first signature that fits, so a tie between a signature
+// with a rest parameter and one without goes to the one declared first.
+function restTie(a: Type, b: Type): boolean {
+	return takesRest(a) != takesRest(b);
+}
+
 function adapterTie(a: Type, b: Type, argTypes: Type[], skipMask: boolean[]): boolean {
 	return takesAdaptedArg(a, argTypes, skipMask) || takesAdaptedArg(b, argTypes, skipMask);
 }
@@ -4470,7 +4631,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			callNode.location.line, callNode.location.column);
 		return getReturnType(sym.symbolType);
 	}
-	if (!validateOverloadSigs(ctx, sym, impl, callNode)) {
+	if (!validateOverloadSigs(ctx, sym, impl, callNode, 0)) {
 		return getReturnType(sym.symbolType);
 	}
 
@@ -4536,7 +4697,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			bestIdx = ci;
 			bestScore = score;
 			ambiguous = false;
-		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask)) {
+		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask) && !restTie(candType, candidates[bestIdx])) {
 			ambiguous = true;
 		}
 		ci = ci + 1;
@@ -4645,23 +4806,26 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 
 	// Store the RAW winner slot (pre sig→impl redirect). This is the
 	// semantic fact "overload resolution picked candidate N" and is what
-	// hover/sig-help/rename/LSP views want to read. Codegen applies the
-	// sig→impl redirect locally when emitting the mangled call name —
-	// body-less sigs don't emit C functions, so the C backend walks from
-	// the winner sym to the body-bearing impl before mangling. Keeping
-	// the redirect localized to codegen avoids conflating "which overload
+	// hover/sig-help/rename/LSP views want to read. Codegen and the lowerings
+	// that shape arguments (overloadRoutine) apply the sig→impl redirect
+	// themselves — body-less sigs don't emit C functions, so the C backend
+	// walks from the winner sym to the body-bearing impl before mangling.
+	// Keeping the redirect at those readers avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
 	if (spreadAt >= 0 && winnerType.kind == TypeKind.Function) {
 		const picked = candSyms[bestIdx];
-		const owner = hasFlag(picked, SymbolFlag.OverloadSig) && declaredDefaults(picked) == null ? impl : picked;
-		const take = takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, owner, 0), winnerType.typeChildren, spreadAt);
+		const signature = hasFlag(picked, SymbolFlag.OverloadSig) && impl != null ? picked : null;
+		const owner = signature != null ? impl : picked;
+		const take = takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, owner, 0, signature), winnerType.typeChildren, spreadAt);
 		if (take.taken) {
-			fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, owner);
+			fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, owner, signature);
 			fillTakenSpread(ctx, args, argTypes, take, winnerType.typeChildren);
 		}
 	}
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
+		const element = hideSpreadElement(args, argTypes, spreadAt);
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
+		if (element != null) argTypes[spreadAt] = element;
 	}
 	const winnerSymFinal = candSyms[bestIdx];
 	if (gathered != null && bestIdx >= ownCount) {
@@ -4740,11 +4904,67 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 
-	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		const defaultsOwner = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && declaredDefaults(winnerSymFinal) == null ? impl : winnerSymFinal;
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, defaultsOwner);
+	const signature = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) && impl != null ? winnerSymFinal : null;
+	const filledArity = signature != null ? arityThroughSignature(winnerType, impl!.symbolType) : winnerType.typeChildren.length;
+	if (winnerType.kind == TypeKind.Function && argTypes.length < filledArity) {
+		fillDefaultArgsForNode(ctx, callNode, sym.name, filledArity, 0, signature != null ? impl : winnerSymFinal, signature);
 	}
-	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+	return narrowToSignatureReturn(ctx, callNode, impl, winnerSymFinal, inferGenericReturn(ctx, winnerType, argTypes, null, callNode), false);
+}
+
+// A signature may leave out the implementation's defaulted parameters: a call through it
+// fills them from the implementation, up to its arity.
+function arityThroughSignature(signature: Type, implementation: Type | null): number {
+	return implementation != null && implementation.kind == TypeKind.Function && implementation.typeChildren.length > signature.typeChildren.length ? implementation.typeChildren.length : signature.typeChildren.length;
+}
+
+// The call has the chosen signature's return type, while the routine it runs returns the
+// implementation's union: the call reads that member out of the union, checked. When the
+// call's value is a future (an actor call, an async routine), the future keeps the
+// implementation's payload and the await that reads it projects (`awaitedPayload`).
+function narrowToSignatureReturn(ctx: CheckerContext, callNode: Node, impl: Symbol | null, picked: Symbol, ret: Type, actorCall: boolean): Type {
+	const callType = actorCall && ret.kind != TypeKind.Void ? createPromise(ret) : ret;
+	if (impl == null || !hasFlag(picked, SymbolFlag.OverloadSig) || impl.symbolType == null) return callType;
+	let implRet = impl.symbolType.typeReturn;
+	if (implRet == null) return callType;
+	let sigRet = ret;
+	const future = actorCall || (isAwaitable(implRet) && isAwaitable(ret));
+	if (!actorCall && future) {
+		implRet = awaitedType(implRet)!;
+		sigRet = awaitedType(ret)!;
+	}
+	if (hasGenericParams(sigRet) || hasGenericParams(implRet) || sameType(implRet, sigRet) || sigRet.kind == TypeKind.Void) return callType;
+	if (!projectsSignatureReturn(implRet, sigRet)) return callType;
+	if (!future) {
+		readSignatureReturn(callNode, implRet, sigRet);
+		return ret;
+	}
+	if (ctx.awaitedCall === callNode) ctx.awaitedPayload = sigRet;
+	return createPromise(implRet);
+}
+
+function projectsSignatureReturn(implRet: Type, sigRet: Type): boolean {
+	if (isSlotUnion(sigRet) && returnHeldBy(implRet, sigRet)) return true;
+	return isSlotUnion(implRet) && tagUnionMemberSlot(implRet, sigRet) >= 0;
+}
+
+// Rewrites `target` (a call, or the await that reads a future's payload) in place to the
+// signature's return read from the implementation's `implRet`.
+export function readSignatureReturn(target: Node, implRet: Type, sigRet: Type): void {
+	const inner = createNodeAt(target.kind, target.data, target.location);
+	inner.nodeType = implRet;
+	inner.flags = target.flags;
+	inner.variantSlot = target.variantSlot;
+	inner.resolvedSym = target.resolvedSym;
+	const widens = isSlotUnion(sigRet) && returnHeldBy(implRet, sigRet);
+	const read = !widens ? checkedProjection(inner, implRet, sigRet)
+		: isSlotUnion(implRet) ? convertUnionToUnion(inner, implRet, sigRet) : widenVariantToUnion(inner, sigRet, implRet);
+	if (read == null as unknown as Node) return;
+	target.kind = read.kind;
+	target.data = read.data;
+	target.flags = read.flags;
+	target.variantSlot = read.variantSlot;
+	target.nodeType = sigRet;
 }
 
 export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at: SourceLocation): void {
@@ -4981,8 +5201,21 @@ function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], ca
 	return idx;
 }
 
+// SEND-class (void return, no reply to park on) rejects plain refs; CALL-class borrows
+// them, sound only while awaited.
+function checkActorCallArgs(ctx: CheckerContext, node: Node, args: Node[], sendClass: boolean): void {
+	let borrowed = false;
+	for (let pi = 0; pi < args.length; pi += 1) {
+		if (checkActorArgSendable(ctx, node, args[pi], pi, sendClass)) borrowed = true;
+	}
+	if (borrowed && node == ctx.stmtPosExpr) {
+		addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
+			node.location.line, node.location.column);
+	}
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
-	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null): Type {
+	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null, actorCall: boolean): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
 	// and `this unknown` would otherwise tie into ambiguity. A catch-all
 	// `this unknown` receiver only participates when no concrete-receiver
@@ -5126,19 +5359,26 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		argTypes[ai] = args[ai].nodeType!;
 	}
 	const ovDefaultOffset: int32 = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
-	const defaultsOwner = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) && declaredDefaults(extWinnerSym) == null ? callNode.resolvedSym : extWinnerSym;
+	const extImpl = callNode.resolvedSym;
+	const extSignature = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) && extImpl != null && extImpl != extWinnerSym ? extWinnerSym : null;
+	const defaultsOwner = extSignature != null ? extImpl : extWinnerSym;
 	const ovSpread = spreadAt >= 0 && winnerType.kind == TypeKind.Function
-		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, defaultsOwner, ovDefaultOffset), winnerType.typeChildren, spreadAt)
+		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, defaultsOwner, ovDefaultOffset, extSignature), winnerType.typeChildren, spreadAt)
 		: { spread: null, at: -1, taken: false } as SpreadTake;
-	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset, defaultsOwner);
+	const implFormals = extSignature != null && extImpl!.symbolType != null ? (exts[idx].isStatic ? extImpl!.symbolType : stripReceiverParam(extImpl!.symbolType)) : null;
+	const ovFilledArity = extSignature != null ? arityThroughSignature(winnerType, implFormals) : winnerType.typeChildren.length;
+	if (winnerType.kind == TypeKind.Function && argTypes.length < ovFilledArity) {
+		fillDefaultArgsForNode(ctx, callNode, methodName, ovFilledArity, ovDefaultOffset, defaultsOwner, extSignature);
 	}
 	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
+	if (actorCall) checkActorCallArgs(ctx, callNode, args, winnerType.kind != TypeKind.Function || winnerType.typeReturn == null || winnerType.typeReturn.kind == TypeKind.Void);
 	if (winnerType.kind == TypeKind.Function) {
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
-			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai]) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
+			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], ai < contextFormals[idx].typeChildren.length ? contextFormals[idx].typeChildren[ai] : null) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
 		}
+		const element = hideSpreadElement(args, argTypes, spreadAt);
 		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+		if (element != null) argTypes[spreadAt] = element;
 	}
 	if (extWinnerSym != null && callNode.resolvedSym != extWinnerSym && hasFlag(extWinnerSym, SymbolFlag.OverloadSig)) {
 		fitCallToImplementation(ctx, callNode, callNode.resolvedSym!, !exts[idx].isStatic);
@@ -5189,7 +5429,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	const callee = (callNode.data as CallExprData).callee;
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
-	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+	return narrowToSignatureReturn(ctx, callNode, callNode.resolvedSym, extWinnerSym ?? callNode.resolvedSym!, inferGenericReturn(ctx, winnerType, argTypes, null, callNode), actorCall);
 }
 
 function upcastReceiver(callNode: Node, instType: Type | null): void {
@@ -5317,7 +5557,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], at, skipMask)) {
+			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], at, skipMask) && !restTie(candidates[i], candidates[bestIdx])) {
 				ambiguous = true;
 			}
 		}
@@ -5621,6 +5861,10 @@ function boundExtensions(member: Node, byName: ExtensionMethod[]): ExtensionMeth
 	return bound;
 }
 
+export function carriesLength(t: Type): boolean {
+	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || isStringLike(t) || t.kind == TypeKind.CString;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
@@ -5672,11 +5916,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// to Tier 2 (discriminated union narrowing at call sites). The literal type is also
 		// stored on resolvedSym.symbolType so call-argument narrowing can pick it up even
 		// when no expectedType flows down.
-		const wantsLiteral = expectedType != null
-			&& expectedType.kind == TypeKind.EnumLiteral
-			&& expectedType.typeReturn != null && sameNominal(expectedType.typeReturn, objType)
-			&& expectedType.typeNames.length > 0
-			&& expectedType.typeNames[0] == propName;
+		const wantsLiteral = expectedType != null && expectsEnumMember(expectedType, objType, propName);
 		const litType = createEnumLiteral(objType, propName);
 		const reportedType = wantsLiteral ? litType : objType;
 		// Create synthetic symbol for the enum member (no scope lookup needed).
@@ -6027,7 +6267,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 
 	if (d.property == "byteLength" && node != ctx.calleeExpr && isUint8Array(resolvedObjType)) d.property = "length";
 	// Builtin properties: .length on array/string
-	if (d.property == "length" &&(resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span || isStringLike(resolvedObjType) || resolvedObjType.kind == TypeKind.CString)) {
+	if (d.property == "length" && carriesLength(resolvedObjType)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;

@@ -170,8 +170,27 @@ export function formatDefines(t: DefineTable): string {
 
 export function defineIdentity(t: DefineTable): string {
 	let out = "";
-	for (const n of t.names) out = out + " -d:" + n + "=" + definedValue(t, n);
+	for (const n of [...t.names].sort()) out = out + " -d:" + n + "=" + definedValue(t, n);
 	return out;
+}
+
+test "defines given in another order have one identity, and another value has another" {
+	const ab = createDefineTable();
+	defineSymbol(ab, "alpha", "1");
+	defineSymbol(ab, "beta", "true");
+	const ba = createDefineTable();
+	defineSymbol(ba, "beta", "true");
+	defineSymbol(ba, "alpha", "1");
+	assert defineIdentity(ab) == defineIdentity(ba);
+	const redefined = createDefineTable();
+	defineSymbol(redefined, "alpha", "0");
+	defineSymbol(redefined, "beta", "true");
+	defineSymbol(redefined, "alpha", "1");
+	assert defineIdentity(redefined) == defineIdentity(ab);
+	defineSymbol(ba, "alpha", "2");
+	assert defineIdentity(ba) != defineIdentity(ab);
+	undefSymbol(ba, "alpha");
+	assert defineIdentity(ba) != defineIdentity(ab);
 }
 
 test "define: bare flag stores true" {

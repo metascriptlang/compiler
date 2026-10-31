@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { wellFormedString } from "../string/bytes";
 
-export type Bytes = string | Buffer;
+export type Bytes = string | uint8[];
 
 export function rawString(data: Bytes): string {
 	if (typeof data == "string") return data;

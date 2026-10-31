@@ -253,7 +253,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 	}
 
 	opts.projectRoot = root;
+	opts.resolve = loadBuildConfig(join(root, "build.ms"), false).resolve;
 	opts.extraArgs = args.slice(1, args.length);
-	cmdRunRaiser(entryPath, opts, loadBuildConfig(join(root, "build.ms"), false).resolve, wantCmd);
+	cmdRunRaiser(entryPath, opts, wantCmd);
 	return true;
 }

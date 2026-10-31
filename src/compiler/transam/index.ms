@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, isCancelled } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -29,7 +29,7 @@ import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cach
 import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileId, getFilePath, hasFile,
+	setFileText, getFileText, getFileId, getInputId, getFilePath, hasFile,
 	getFileCount, getFilePathByIndex,
 	getFileDurability, setFileDurability
 } from "./fileInput";
@@ -38,13 +38,13 @@ import {
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	getRegisteredAt, setRegisteredAt, resetRegisteredAt
 } from "./moduleDeps";
-import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
+import { tryMarkGreen, executeQueryWith } from "./redGreen";
 import {
 	createCancelContext,
-	getCancelVersion, checkCancel, requestCancel, resetCancel
+	getCancelVersion, requestCancel, resetCancel
 } from "./cancel";
 
-import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
+import { parseSource } from "../../parser/statements/validation";
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
@@ -61,7 +61,7 @@ import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { ExportRegistry, ExportedSymInfo, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports, buildExportInfo } from "../../checker/context";
-import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
+import { collectTopLevel } from "../../checker/collectPass";
 import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -120,24 +120,6 @@ export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 export function dbEnsurePrelude(db: TransAmDb): void {
 	if (db.preludeCtx == null && db.stdPath.length > 0) {
 		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
-		// Pre-register exports from top-level std modules (e.g., std/build.ms)
-		// so auto-import suggestions work even without explicit imports.
-		preRegisterStdModule(db, db.stdPath + "/build.ms", "std/build");
-	}
-}
-
-// Parse a single file and register its exports into the registry.
-function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
-	const source = try readStdFile(filePath) catch "";
-	if (source.length == 0) return;
-	const pr = parseSourceLenient(source);
-	if (!pr.ok) return;
-	const tmpCtx = createTempCollectContext(filePath);
-	collectTopLevelLocal(tmpCtx, pr.value);
-	resolveDeclarations(tmpCtx, pr.value);
-	const exports = checkedByPrelude(db, filePath, collectExports(tmpCtx, filePath));
-	if (exports.length > 0) {
-		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
 }
 
@@ -269,8 +251,6 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 	if (isStdPathFor(db, filePath)) {
 		setFileDurability(db.fileInput, fileId, TaDurability.High, revision);
 	}
-	invalidateFile(db.cache, db.moduleDeps, fileId);
-	// Invalidate ExportRegistry for this file + transitive dependents
 	dbInvalidateExports(db, fileId);
 	return true;
 }
@@ -300,8 +280,20 @@ export function dbSetGlobalImports(db: TransAmDb, entries: string[]): string[] {
 	db.passModules = new HashMap<string, CheckerContext>();
 	db.passesExemptFor = null;
 	db.exemptFrom = null;
+	db.revision.value = nextRevision(db.revision);
+	db.bound = new HashMap<string, BoundCheck>();
+	dbForgetAllExports(db);
 	dbForgetAllTypeChecks(db);
 	return unresolved;
+}
+
+function dbForgetAllExports(db: TransAmDb): void {
+	for (let index = 0; index < getFileCount(db.fileInput); index = index + 1) {
+		const path = getFilePathByIndex(db.fileInput, index);
+		if (path == "" || isStdPathFor(db, path)) continue;
+		removeExportEntry(db.exportRegistry, path);
+		resetRegisteredAt(db.moduleDeps, getFileId(db.fileInput, path));
+	}
 }
 
 function sameGlobalImports(a: TaGlobalImport[], b: TaGlobalImport[]): boolean {
@@ -470,10 +462,9 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: int32): string {
 function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProvider {
 	return createTaReadProvider((headerPath: string) => {
 		dbEnsureFileLoaded(db, headerPath);
+		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, getInputId(db.fileInput, headerPath, db.revision.value)));
 		const headerId = getFileId(db.fileInput, headerPath);
 		if (headerId < 0) return "";
-		// Record FileText dep so tryMarkGreen catches content changes
-		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, headerId));
 		// Also record module edge (eager invalidation — getTransitiveDependents)
 		if (currentFileId >= 0) recordModuleImport(db.moduleDeps, currentFileId, headerId);
 		return getFileText(db.fileInput, headerId);
@@ -485,7 +476,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	if (fileId < 0) return "";
 	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return db.preprocessCache.get(fileId) ?? "";
 	}
 
@@ -513,6 +504,22 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	return out;
 }
 
+function dbMarkGreen(db: TransAmDb, key: TaQueryKey): boolean {
+	return tryMarkGreen(db.cache, db.fileInput, key, db.revision.value, (dep: TaQueryKey): boolean => refreshInput(db, dep));
+}
+
+function refreshInput(db: TransAmDb, key: TaQueryKey): boolean {
+	const path = getFilePath(db.fileInput, key.fileId);
+	if (path == "") return false;
+	if (key.queryKind == TaQueryKind.Preprocess) {
+		dbPreprocess(db, path);
+		return true;
+	}
+	if (key.queryKind != TaQueryKind.Parse || (db.handedToCheck != null && db.handedToCheck.has(key.fileId))) return false;
+	dbParse(db, path);
+	return true;
+}
+
 // Execute parse query for a file. Returns the parsed Node.
 export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -521,7 +528,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	const key = createQueryKey(TaQueryKind.Parse, fileId);
 
 	// Try cache
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, parseNodeKey(fileId));
 	}
 
@@ -565,23 +572,26 @@ function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Node
 // just reads raw and stores as-is. The Preprocess query later resolves .h imports.
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
-	const raw = try readStdFile(filePath) catch "";
-	if (raw.byteLength == 0) return;
-	dbSetFileText(db, filePath, raw);
+	const read = readStdFile(filePath);
+	if (!read.ok) {
+		getInputId(db.fileInput, filePath, db.revision.value);
+		return;
+	}
+	dbSetFileText(db, filePath, read.value);
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
 export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
-	// Use the compiler's resolver with the db's config (includes std/, aliases, packages)
+	return resolveProbing(db, basePath, importSpec, null);
+}
+
+// `probed` collects the input of each candidate that holds no file, so the check that resolved the import depends on them.
+function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, probed: int32[] | null): string {
 	const candidates = resolveImportWithConfig(importSpec, basePath, db.resolverConfig);
-	// Fast path: already in db
-	for (const c of candidates) {
-		if (getFileId(db.fileInput, c) >= 0) return c;
-	}
-	// Slow path: try loading from disk
 	for (const c of candidates) {
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
+		if (probed != null) probed.push(getInputId(db.fileInput, c, db.revision.value));
 	}
 	return "";
 }
@@ -623,7 +633,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
 		// G5: Bail early if cancelled (new keystroke arrived)
-		if (checkCancel(db.cancelCtx, startVersion)) return;
+		if (isCancelled(db.cancelCtx, startVersion)) return;
 
 		const depPath = getFilePath(db.fileInput, depId);
 		if (depPath == "") continue;
@@ -669,7 +679,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		collectTopLevel(tmpCtx, collected);
 		db.cache.collected += 1;
 		resolveDeclarations(tmpCtx, collected);
-		if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
+		if (!isCancelled(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 		db.trees.set(exportNodeKey(depId), collected);
 
 		const earlyExports = checkedByPrelude(db, depPath, collectExports(tmpCtx, depPath));
@@ -682,7 +692,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): boolean {
 	const ctx = db.contexts.get(checkCtxKey(depId));
 	if (ctx == null || checkedElsewhere(db, depPath)) return false;
-	if (!tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, depId), db.revision.value)) return false;
+	if (!dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, depId))) return false;
 	updateModuleExports(db.exportRegistry, depPath, collectExports(ctx, depPath));
 	setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 	return true;
@@ -766,7 +776,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 }
 
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
-function buildImportEntries(db: TransAmDb, filePath: string, program: Node): ImportEntry[] {
+function buildImportEntries(db: TransAmDb, filePath: string, program: Node, probed: int32[] | null = null): ImportEntry[] {
 	const entries: ImportEntry[] = [];
 	if (program == null) return entries;
 	if (program.kind != NodeKind.Program) return entries;
@@ -783,11 +793,11 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 		if (stmt.kind != NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
 		// Resolve import specifier using the same resolver as everything else
-		const resolvedPath = dbResolveImport(db, filePath, imp.importSource);
+		const resolvedPath = resolveProbing(db, filePath, imp.importSource, probed);
 
 		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
 	}
-	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], dbResolveImport(db, filePath, specifier), specifier, true));
+	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], resolveProbing(db, filePath, specifier, probed), specifier, true));
 	return entries;
 }
 
@@ -849,7 +859,7 @@ function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports
 	_checkingDb = db;
 	const ctx = dbBoundModule(filePath);
 	_checkingDb = outerDb;
-	if (ctx == null || checkCancel(db.cancelCtx, startVersion)) return;
+	if (ctx == null || isCancelled(db.cancelCtx, startVersion)) return;
 	updateModuleExports(db.exportRegistry, filePath, collectExports(ctx, filePath));
 }
 
@@ -914,8 +924,8 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		true,
 		globalImportsLayer(db, globals)
 	);
-	if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
-	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputs: bindInputs(db, filePath), unit });
+	if (!isCancelled(db.cancelCtx, startVersion)) verifyAdoption(adoption);
+	if (!isCancelled(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputs: bindInputs(db, filePath), unit });
 	return unit;
 }
 
@@ -939,11 +949,17 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), startVersion);
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
-	checkMacroDeps(db, filePath, imports);
-	const unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
+	let unit: BoundModule;
+	try {
+		checkMacroDeps(db, filePath, imports);
+		unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
+	} catch (e) {
+		db.checkInProgress.delete(filePath);
+		throw e;
+	}
 	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
-	if (!checkedElsewhere(db, filePath) && !checkCancel(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
+	if (!checkedElsewhere(db, filePath) && !isCancelled(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
 	return unit.ctx;
 }
 
@@ -988,10 +1004,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordGlobalImportEdges(db, filePath, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
-	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (recheckImports(db, key) && dbMarkGreen(db, key)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
 	const unchecked: string[] = [];
@@ -1012,81 +1028,97 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const bound = reusableBound(db, filePath);
 	const program = bound != null ? bound.program : db.handedToCheck != null ? cachedProgram : cloneNodeForCheck(cachedProgram);
 
-	// Macro-declaring deps need a FULL check first: checkProgram registers their
-	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
-	// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
-	// from dep-order compilation; the db must do it on demand.
-	const imports = buildImportEntries(db, filePath, program);
-	db.checkInProgress.add(filePath);
-	checkMacroDeps(db, filePath, imports);
+	const depth = db.depStack.frames.length;
+	const entryDb = _checkingDb;
+	const entrySink = installBodyReadSink(null);
+	installBodyReadSink(entrySink);
+	try {
+		// Macro-declaring deps need a FULL check first: checkProgram registers their
+		// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
+		// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
+		// from dep-order compilation; the db must do it on demand.
+		const probed: int32[] = [];
+		const imports = buildImportEntries(db, filePath, program, probed);
+		db.checkInProgress.add(filePath);
+		checkMacroDeps(db, filePath, imports);
 
-	pushFrame(db.depStack, key);
-	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
-	recordDependency(db.depStack, pKey);
-	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+		pushFrame(db.depStack, key);
+		for (const probe of probed) recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, probe));
+		const pKey = createQueryKey(TaQueryKind.Parse, fileId);
+		recordDependency(db.depStack, pKey);
+		recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 
-	const importDepIds = getDirectImports(db.moduleDeps, fileId);
-	const interfaceDeps: TaQueryKey[] = [];
-	const reached = new HashSet<int32>();
-	reached.add(fileId);
-	for (const depId of importDepIds) reached.add(depId);
-	for (let di = 0; di < importDepIds.length; di = di + 1) {
-		const depId = importDepIds[di];
-		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
-		const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
-		if (depCheckEntry != null) {
-			recordDependency(db.depStack, depCheckKey);
-			if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
-			continue;
+		const importDepIds = getDirectImports(db.moduleDeps, fileId);
+		const interfaceDeps: TaQueryKey[] = [];
+		const reached = new HashSet<int32>();
+		reached.add(fileId);
+		for (const depId of importDepIds) reached.add(depId);
+		for (let di = 0; di < importDepIds.length; di = di + 1) {
+			const depId = importDepIds[di];
+			const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+			const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
+			if (depCheckEntry != null) {
+				recordDependency(db.depStack, depCheckKey);
+				if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
+				continue;
+			}
+			recordParseRead(db, depId);
+			if (!checkedElsewhere(db, getFilePath(db.fileInput, depId))) recordBoundImportReads(db, depId, reached);
 		}
-		recordParseRead(db, depId);
-		if (!checkedElsewhere(db, getFilePath(db.fileInput, depId))) recordBoundImportReads(db, depId, reached);
-	}
 
-	if (!modulePassExempt(filePath)) {
-		for (const pass of modulePasses()) {
-			const passId = getFileId(db.fileInput, pass.modulePath);
-			if (passId < 0) continue;
-			recordDependency(db.depStack, createQueryKey(TaQueryKind.TypeCheck, passId));
+		if (!modulePassExempt(filePath)) {
+			for (const pass of modulePasses()) {
+				const passId = getFileId(db.fileInput, pass.modulePath);
+				if (passId < 0) continue;
+				recordDependency(db.depStack, createQueryKey(TaQueryKind.TypeCheck, passId));
+			}
 		}
-	}
 
-	const outerDb = _checkingDb;
-	_checkingDb = db;
-	if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
-	const bodyReads = new HashSet<string>();
-	const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
-	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
-	const checkerCtx = finishModuleCheck(unit);
-	for (const message of unchecked) addError(checkerCtx, message, 1, 1);
-	installBodyReadSink(outerSink);
-	_checkingDb = outerDb;
-	db.bound.delete(filePath);
+		const outerDb = _checkingDb;
+		_checkingDb = db;
+		if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
+		const bodyReads = new HashSet<string>();
+		const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
+		const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
+		const checkerCtx = finishModuleCheck(unit);
+		for (const message of unchecked) addError(checkerCtx, message, 1, 1);
+		installBodyReadSink(outerSink);
+		_checkingDb = outerDb;
+		db.bound.delete(filePath);
 
-	// If cancelled, discard frame without caching — partial result not reliable
-	if (checkCancel(db.cancelCtx, startVersion)) {
-		popFrame(db.depStack);
+		// If cancelled, discard frame without caching — partial result not reliable
+		if (isCancelled(db.cancelCtx, startVersion)) {
+			popFrame(db.depStack);
+			db.checkInProgress.delete(filePath);
+			forgetClientsOfDiscardedUnit(db, fileId);
+			return checkerCtx;
+		}
+
+		checkerCtx.disambAfterCheck = copyDisambTable(checkerCtx.disambTable);
+		db.contexts.set(checkCtxKey(fileId), checkerCtx);
+		updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
+		if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
+		db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
+		for (const read of bodyReads) {
+			const readId = getFileId(db.fileInput, read);
+			if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
+		}
+		const kept = db.handedToCheck == null;
+		const iface = kept ? ifaceDigest(checkerCtx) : null;
+		const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
+		executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
+		if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
 		db.checkInProgress.delete(filePath);
-		forgetClientsOfDiscardedUnit(db, fileId);
 		return checkerCtx;
+	} catch (e) {
+		while (db.depStack.frames.length > depth) popFrame(db.depStack);
+		db.checkInProgress.delete(filePath);
+		_checkingDb = entryDb;
+		installBodyReadSink(entrySink);
+		db.bound.delete(filePath);
+		forgetClientsOfDiscardedUnit(db, fileId);
+		throw e;
 	}
-
-	checkerCtx.disambAfterCheck = copyDisambTable(checkerCtx.disambTable);
-	db.contexts.set(checkCtxKey(fileId), checkerCtx);
-	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
-	if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
-	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	for (const read of bodyReads) {
-		const readId = getFileId(db.fileInput, read);
-		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
-	}
-	const kept = db.handedToCheck == null;
-	const iface = kept ? ifaceDigest(checkerCtx) : null;
-	const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
-	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
-	if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
-	db.checkInProgress.delete(filePath);
-	return checkerCtx;
 }
 
 function recordImplRead(db: TransAmDb, readId: int32): void {
@@ -1155,7 +1187,7 @@ export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
 export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return false;
-	return tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.TypeCheck, fileId), db.revision.value);
+	return dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, fileId));
 }
 
 function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> {
@@ -1164,14 +1196,21 @@ function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> 
 	return copy;
 }
 
+function checkedUnlessCancelled(db: TransAmDb, filePath: string): CheckerContext | null {
+	const startVersion = getCancelVersion(db.cancelCtx);
+	const ctx = dbTypeCheck(db, filePath);
+	if (ctx == null || isCancelled(db.cancelCtx, startVersion)) return null;
+	return ctx;
+}
+
 export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
-	const ctx = dbTypeCheck(db, filePath);
+	if (dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
+	const ctx = checkedUnlessCancelled(db, filePath);
 	if (ctx == null) return null as unknown as Node;
-	if (recheckImports(db, key) && tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) return dbTree(db, lowerNodeKey(fileId));
+	if (recheckImports(db, key) && dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
 	pushFrame(db.depStack, key);
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -1227,19 +1266,19 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Analyze, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, analyzeNodeKey(fileId));
 	}
 
 	// Ensure upstream queries are computed
 	const _cachedProg = dbParse(db, filePath);
 	if (_cachedProg == null) return null as unknown as Node;
-	const checkerCtx = dbTypeCheck(db, filePath);
+	const checkerCtx = checkedUnlessCancelled(db, filePath);
+	if (checkerCtx == null) return null as unknown as Node;
 
 	// Fresh parse for transform — checker already mutated its own copy
 	// (enum MemberExpr → Identifier), and transforms also mutate the AST.
-	const analyzeSrc = getFileText(db.fileInput, fileId);
-	const analyzeParse = parseSource(analyzeSrc);
+	const analyzeParse = parseSource(dbPreprocess(db, filePath));
 	const program = analyzeParse.ok ? analyzeParse.value : null as unknown as Node;
 	if (program == null) return null as unknown as Node;
 
@@ -1261,17 +1300,17 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Transform, fileId);
 
-	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
+	if (dbMarkGreen(db, key)) {
 		return dbTree(db, transformNodeKey(fileId));
 	}
 
 	const _cachedProg2 = dbParse(db, filePath);
 	if (_cachedProg2 == null) return null as unknown as Node;
-	const checkerCtx = dbTypeCheck(db, filePath);
+	const checkerCtx = checkedUnlessCancelled(db, filePath);
+	if (checkerCtx == null) return null as unknown as Node;
 
 	// Fresh parse — checker mutates AST, transforms also mutate
-	const txSrc = getFileText(db.fileInput, fileId);
-	const txParse = parseSource(txSrc);
+	const txParse = parseSource(dbPreprocess(db, filePath));
 	const program = txParse.ok ? txParse.value : null as unknown as Node;
 	if (program == null) return null as unknown as Node;
 
@@ -1310,7 +1349,7 @@ export function dbStats(db: TransAmDb): string {
 		if (count > 0) recomputed += ` ${(kind as TaQueryKind).toString()}=${count}`;
 	}
 	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
-		+ ` marked=${cache.marked} evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
+		+ ` evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
 		+ ` macros=${macroCompileCount()}`
 		+ ` recomputed:${recomputed}`;
 }
@@ -1337,10 +1376,10 @@ export {
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	getDirectImports, detectCycle
 } from "./moduleDeps";
-export { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
+export { tryMarkGreen, executeQueryWith } from "./redGreen";
 export {
 	createCancelContext,
-	getCancelVersion, checkCancel, requestCancel, resetCancel
+	getCancelVersion, requestCancel, resetCancel
 } from "./cancel";
 
 // ===== Integration Tests =====
@@ -1392,13 +1431,8 @@ test "file change invalidates parse" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const a = 1;");
 	dbParse(db, "test.ms");
-	// Change file
 	dbSetFileText(db, "test.ms", "const b = 2;");
-	// Cache entry should be RED
-	const key = createQueryKey(TaQueryKind.Parse, 0);
-	const entry = cacheGet(db.cache, key);
-	assert entry != null;
-	assert entry.state == TaQueryState.Red;
+	assert !tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.Parse, 0), db.revision.value);
 }
 
 test "preprocess query passes through non-header files" {
@@ -1428,10 +1462,8 @@ test "preprocess query invalidates on file change" {
 	dbPreprocess(db, "plain.ms");
 	dbSetFileText(db, "plain.ms", "const b = 2;");
 	const fileId = getFileId(db.fileInput, "plain.ms");
-	const key = createQueryKey(TaQueryKind.Preprocess, fileId);
-	const entry = cacheGet(db.cache, key);
-	assert entry != null;
-	assert entry.state == TaQueryState.Red;
+	assert !tryMarkGreen(db.cache, db.fileInput, createQueryKey(TaQueryKind.Preprocess, fileId), db.revision.value);
+	assert dbPreprocess(db, "plain.ms") == "const b = 2;";
 }
 
 test "full pipeline produces analyzed AST" {
@@ -1600,7 +1632,7 @@ test "a preprocess and its parse change at the revision their text last changed,
 	}
 }
 
-test "text restored before any query keeps the change revisions of its preprocess and parse" {
+test "text restored before any query keeps the change revisions of its preprocess and parse, and its parse is not rerun" {
 	const db = createTransAmDb(100);
 	const path = "/restore/value.ms";
 	const first = "export const value: int32 = 1;";
@@ -1611,7 +1643,8 @@ test "text restored before any query keeps the change revisions of its preproces
 	dbParse(db, path);
 	assert changedAtOf(db, TaQueryKind.Preprocess, path) == 1;
 	assert changedAtOf(db, TaQueryKind.Parse, path) == 1;
-	assert cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, path))).computedAt == 3;
+	const parse = cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, path)));
+	assert parse.computedAt == 1 && parse.verifiedAt == 3, `${parse.computedAt} ${parse.verifiedAt}`;
 	assert dbTypeCheck(db, path) == ctx;
 }
 
@@ -2755,4 +2788,243 @@ test "a cancelled first check of a bound-only importing module keeps the class i
 	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
 	const messages = importerErrorsAfterEdit(db, root);
 	assert messages.length == 0, messages.join("; ");
+}
+
+function throwAtProbe(db: TransAmDb, probe: int32): void {
+	const probes: int32[] = [0];
+	db.cancelCtx.inputPending = (): boolean => {
+		probes[0] += 1;
+		if (probes[0] == probe) throw new Error("probe: the checker threw");
+		return false;
+	};
+}
+
+function checkThatThrows(db: TransAmDb, path: string, probe: int32): string {
+	throwAtProbe(db, probe);
+	let message = "";
+	try {
+		dbTypeCheck(db, path);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	db.cancelCtx.inputPending = null;
+	resetCancel(db.cancelCtx);
+	return message;
+}
+
+test "a check that throws leaves no frame and no check in progress, and the next check matches a fresh one" {
+	const db = createTransAmDb(100);
+	const path = "/throwLeaf/leaf.ms";
+	dbSetFileText(db, path, "const a = 1;\nconst b = a;\nexport const value: int32 = \"wrong\";\n");
+	assert checkThatThrows(db, path, 1) == "probe: the checker threw";
+	assert db.depStack.frames.length == 0;
+	assert db.checkInProgress.size == 0;
+	assert !dbCheckIsCurrent(db, path);
+	const errors = dbTypeCheck(db, path).errors;
+	assert errors.length == 1 && errors[0].message == "Type 'string' is not assignable to type 'int32'", `${errors.length}`;
+}
+
+test "an importer check that throws while it binds its import leaves both modules checkable" {
+	const root = "/throwImporter";
+	const db = cancelledBoundProject(root);
+	assert checkThatThrows(db, `${root}/use.ms`, 2) == "probe: the checker threw";
+	assert db.depStack.frames.length == 0;
+	assert db.checkInProgress.size == 0;
+	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, `${root}/use.ms`).errors) messages.push(e.message);
+	assert messages.length == 0, messages.join("; ");
+}
+
+function headerChain(root: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/api.h`, HEADER_API);
+	dbSetFileText(db, `${root}/main.ms`, HEADER_MAIN);
+	dbSetFileText(db, `${root}/top.ms`, 'import { twice } from "./main";\nexport const four = twice();\n');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/main.ms`), getFileId(db.fileInput, `${root}/api.h`));
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/top.ms`), getFileId(db.fileInput, `${root}/main.ms`));
+	dbTypeCheck(db, `${root}/main.ms`);
+	dbTypeCheck(db, `${root}/top.ms`);
+	return db;
+}
+
+function checksAfterHeaderEdit(db: TransAmDb, root: string, header: string): int32 {
+	const before = db.cache.recomputed[TaQueryKind.TypeCheck as int32];
+	dbSetFileText(db, `${root}/api.h`, header);
+	dbTypeCheck(db, `${root}/main.ms`);
+	dbTypeCheck(db, `${root}/top.ms`);
+	return db.cache.recomputed[TaQueryKind.TypeCheck as int32] - before;
+}
+
+test "a header comment edit that leaves its module text equal rechecks none of its importers" {
+	const root = "/headerComment";
+	const db = headerChain(root);
+	const apiText = dbPreprocess(db, `${root}/api.h`);
+	assert checksAfterHeaderEdit(db, root, "// a comment\n" + HEADER_API) == 0;
+	assert dbPreprocess(db, `${root}/api.h`) == apiText;
+}
+
+test "a header signature edit rechecks its importer and the module above it" {
+	const root = "/headerSignature";
+	const db = headerChain(root);
+	assert checksAfterHeaderEdit(db, root, "int apiValue(int x, int y);") == 2;
+}
+
+import { writeFile, mkdir, removeAll } from "std/fs";
+import { normalize } from "std/fs/path";
+import { env } from "std/process";
+
+function resolveTmpDir(name: string): string {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = normalize(tmp + "/msc-transam-" + name + "-" + Math.floor(Math.random() * 1000000000));
+	mkdir(dir);
+	return dir;
+}
+
+test "an import resolves to its highest-priority candidate whether or not a lower one is loaded" {
+	const dir = resolveTmpDir("priority");
+	mkdir(dir + "/a");
+	writeFile(dir + "/a.ms", "export const v = 1;");
+	writeFile(dir + "/b.cms", "export const w = 1;");
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dir + "/a/index.ms", "export const v = 2;");
+	dbSetFileText(db, dir + "/b.ms", "export const w = 2;");
+	const fromDirIndex = dbResolveImport(db, dir + "/use.ms", "./a");
+	const fromLowerExtension = dbResolveImport(db, dir + "/use.ms", "./b");
+	removeAll(dir);
+	assert fromDirIndex == dir + "/a.ms", fromDirIndex;
+	assert fromLowerExtension == dir + "/b.cms", fromLowerExtension;
+}
+
+test "a module created after an import found none is seen by its importer's next check" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/miss/a.ms", 'import { x } from "./b";\nexport const y = x;\n');
+	assert dbTypeCheck(db, "/miss/a.ms").errors.length > 0;
+	dbSetFileText(db, "/miss/b.ms", "export const x = 1;");
+	dbRecordDepImports(db, "/miss/a.ms", dbParse(db, "/miss/a.ms"));
+	const errors = dbTypeCheck(db, "/miss/a.ms").errors;
+	assert errors.length == 0, errors[0].message;
+}
+
+test "a module created at a higher-priority path than the one an import resolved to is seen by its importer" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/prio/a/index.ms", "export const v: int32 = 1;");
+	dbSetFileText(db, "/prio/use.ms", 'import { v } from "./a";\nexport const w: int32 = v;\n');
+	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
+	assert dbTypeCheck(db, "/prio/use.ms").errors.length == 0;
+	dbSetFileText(db, "/prio/a.ms", 'export const v: string = "s";');
+	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
+	assert dbTypeCheck(db, "/prio/use.ms").errors.length > 0;
+}
+
+test "a companion source created after its header was translated changes the header's preprocessing" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/hc/api.h", HEADER_API);
+	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") < 0;
+	dbSetFileText(db, "/hc/api.c", "int apiValue(int x) { return x; }");
+	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") >= 0;
+}
+
+function globalsDb(): TransAmDb {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/gl/g.ms", "export const gv: int32 = 1;");
+	dbSetFileText(db, "/gl/use.ms", "export const u: int32 = 2;\n");
+	return db;
+}
+
+test "a changed global import list drops the transformed and analyzed trees made under the old list" {
+	const db = globalsDb();
+	const transformed = dbTransform(db, "/gl/use.ms");
+	const analyzed = dbAnalyze(db, "/gl/use.ms");
+	assert dbSetGlobalImports(db, ["/gl/g.ms"]).length == 0;
+	assert dbTransform(db, "/gl/use.ms") != transformed;
+	assert dbAnalyze(db, "/gl/use.ms") != analyzed;
+}
+
+test "a changed global import list drops the bound-only units built under the old list" {
+	const db = globalsDb();
+	bindUncheckedModule(db, "/gl/use.ms");
+	assert db.bound.has("/gl/use.ms");
+	dbSetGlobalImports(db, ["/gl/g.ms"]);
+	assert !boundInputsUnchanged(db, "/gl/use.ms");
+}
+
+test "a changed global import list drops the exports registered from checks made under the old list" {
+	const db = globalsDb();
+	dbTypeCheck(db, "/gl/use.ms");
+	assert findModuleExports(db.exportRegistry, "/gl/use.ms") != null;
+	dbSetGlobalImports(db, ["/gl/g.ms"]);
+	assert findModuleExports(db.exportRegistry, "/gl/use.ms") == null;
+}
+
+function keepLowering(checked: Node, ctx: CheckerContext, arg: int32): Node {
+	return checked;
+}
+
+function requestWhileCancelled(db: TransAmDb, path: string, query: int32): Node {
+	db.cancelCtx.inputPending = () => true;
+	const tree = query == 0 ? dbTransform(db, path) : query == 1 ? dbAnalyze(db, path) : dbLower(db, path, keepLowering, 0);
+	db.cancelCtx.inputPending = null;
+	resetCancel(db.cancelCtx);
+	return tree;
+}
+
+test "a transform, analysis or lowering requested while its check is cancelled returns and stores nothing" {
+	const kinds = [TaQueryKind.Transform, TaQueryKind.Analyze, TaQueryKind.Lower];
+	for (let query = 0; query < 3; query += 1) {
+		const db = createTransAmDb(100);
+		const path = "/cx/a.ms";
+		dbSetFileText(db, path, "export const a: int32 = 1;\nexport const b: int32 = a;\n");
+		assert requestWhileCancelled(db, path, query) == null;
+		assert !cacheContains(db.cache, createQueryKey(kinds[query], getFileId(db.fileInput, path)));
+		assert !dbCheckIsCurrent(db, path);
+	}
+}
+
+test "a transform requested after a cancelled one is made from a complete check" {
+	const db = createTransAmDb(100);
+	const path = "/cx/b.ms";
+	dbSetFileText(db, path, "export const a: int32 = 1;\nexport const b: int32 = a;\n");
+	requestWhileCancelled(db, path, 0);
+	assert dbTransform(db, path) != null;
+	assert dbTypeCheck(db, path).errors.length == 0;
+	assert dbCheckIsCurrent(db, path);
+}
+
+test "a transform and an analysis parse the preprocessed text of a header the check read" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/hp/api.h", HEADER_API);
+	assert dbTransform(db, "/hp/api.h") != null;
+	assert dbAnalyze(db, "/hp/api.h") != null;
+}
+
+test "a transform and an analysis of a graph-bound header parse the text the loader translated" {
+	const graph = headerGraph();
+	const db = createTransAmDb(100);
+	dbBindGraph(db, graph);
+	assert dbTransform(db, "/g/api.h") != null;
+	assert dbAnalyze(db, "/g/api.h") != null;
+	assert dbAnalyze(db, "/g/main.ms") != null;
+}
+
+test "an empty file on disk is a module an import resolves to" {
+	const dir = resolveTmpDir("empty");
+	writeFile(dir + "/empty.ms", "");
+	const db = createTransAmDb(100);
+	const resolved = dbResolveImport(db, dir + "/use.ms", "./empty");
+	removeAll(dir);
+	assert resolved == dir + "/empty.ms", resolved;
+}
+
+test "building the prelude registers no module exports" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbEnsurePrelude(db);
+	const prelude = db.preludeCtx;
+	assert prelude != null;
+	assert db.exportRegistry.entries.length == 0;
+	dbEnsurePrelude(db);
+	assert db.preludeCtx == prelude;
 }

@@ -9,6 +9,15 @@ when (drc && !bare && !solana) {
 
 	@compilerFunc
 	extern function msPromiseAllTyped(futures: Ptr<void>, shareFn: Ptr<void>, vt: Ptr<void>): Ptr<void> from "msPromiseAllTyped";
+
+	@compilerFunc
+	extern function msPromiseThenAttach(input: Ptr<void>, fulfilledFn: Ptr<void>, fulfilledEnv: Ptr<void> | null, rejectedFn: Ptr<void> | null, rejectedEnv: Ptr<void> | null, typeTag: int32, run: Ptr<void>): Ptr<void> from "msPromiseThenAttach";
+
+	@compilerFunc
+	extern function msPromiseCatchAttach(input: Ptr<void>, output: Ptr<void>, rejectedFn: Ptr<void>, rejectedEnv: Ptr<void> | null, ok: Ptr<void>): Ptr<void> from "msPromiseCatchAttach";
+
+	@compilerFunc
+	extern function msPromiseFinallyAttach(input: Ptr<void>, settledFn: Ptr<void>, settledEnv: Ptr<void> | null): Ptr<void> from "msPromiseFinallyAttach";
 }
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 

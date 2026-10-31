@@ -115,7 +115,7 @@ export function isPropertyName(token: Token): boolean {
 // typeAnnotation is "" if no annotation present.
 // Use extractParamNames/extractParamTypes to split the result.
 // Handles: rest params, destructured params, type annotations, default values,
-// constructor modifiers (public/private/protected/readonly)
+// constructor parameter properties (public/private/protected/readonly, see getLastParamProps)
 
 // Module-level: defaults from the last parseParamList call.
 // Indexed by param position (0-based). null = no default.
@@ -150,6 +150,15 @@ export function getLastParamPatterns(): Node[] {
 	return _lastParamPatterns;
 }
 
+// Per param of the last parseParamList call: the PropertyDecl a constructor parameter written
+// `public`/`private`/`protected`/`readonly` declares, carrying those modifiers; null for a plain
+// parameter. Its name and type are the parameter's, filled in by the constructor parser.
+let _lastParamProps: Node[] = [];
+
+export function getLastParamProps(): Node[] {
+	return _lastParamProps;
+}
+
 let _lastParamsClosed = false;
 
 // Whether the most recent parseParamList consumed the closing `)`.
@@ -168,7 +177,7 @@ export function prependParamPatterns(body: Node, patterns: Node[], locs: SourceL
 		if (pattern == null) continue;
 		const loc = i < locs.length ? locs[i] : body.location;
 		const init = createNodeAt(NodeKind.Identifier, { name: paramPatternName(i) }, loc);
-		decls.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: pattern, destrInit: init, destrIsConst: true }, loc));
+		decls.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: pattern, destrInit: init, destrIsConst: true, destrType: "" }, loc));
 	}
 	if (decls.length == 0) return body;
 	if (body.kind == NodeKind.BlockStmt) {
@@ -237,12 +246,17 @@ function hasBodyAfterParams(state: ParserState): boolean {
 	return kind == TokenKind.LBrace || kind == TokenKind.Arrow;
 }
 
-export function parseParamList(state: ParserState, fnName: string): string[] {
+function startsParamName(token: Token): boolean {
+	return isIdentLike(token) || token.kind == TokenKind.LBrace || token.kind == TokenKind.LBracket || token.kind == TokenKind.DotDotDot;
+}
+
+export function parseParamList(state: ParserState, fnName: string, isCtor: boolean = false): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
 	_lastParamTypeExprs = [];
 	_lastParamLocations = [];
 	_lastParamPatterns = [];
+	_lastParamProps = [];
 	_lastParamsClosed = false;
 	if (current(state).kind != TokenKind.LParen) { return params; }
 	advance(state);
@@ -250,10 +264,33 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		let paramPrefix = "";
 		if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
-		// Skip constructor param modifiers: public/private/protected
-		if (current(state).kind == TokenKind.Public || current(state).kind == TokenKind.Private ||
-			current(state).kind == TokenKind.Protected) {
+		let propVisibility = "";
+		let propReadonly = false;
+		const accessTok = current(state);
+		if ((accessTok.kind == TokenKind.Public || accessTok.kind == TokenKind.Private || accessTok.kind == TokenKind.Protected) && startsParamName(peek(state, 1))) {
+			propVisibility = accessTok.value;
 			advance(state);
+		}
+		if (isCtor && current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1))) {
+			propReadonly = true;
+			advance(state);
+		}
+		if (propVisibility != "" || propReadonly) {
+			const written = propVisibility != "" ? propVisibility : "readonly";
+			if (!isCtor) {
+				addError(state, `A parameter property is only allowed in a constructor: '${written}' on a parameter of '${fnName}' at line ${accessTok.line} declares a field, so write the field in the class and assign it`);
+			} else if (paramPrefix.indexOf("...") >= 0 || current(state).kind == TokenKind.DotDotDot) {
+				if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
+				addError(state, `A parameter property cannot be declared using a rest parameter (line ${accessTok.line})`);
+			} else if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
+				addError(state, `A parameter property may not be declared using a binding pattern (line ${accessTok.line})`);
+			} else {
+				while (_lastParamProps.length * 2 < params.length) _lastParamProps.push(null as unknown as Node);
+				_lastParamProps.push(createNodeAt(NodeKind.PropertyDecl, {
+					propName: "", propType: "", propIsStatic: false, propIsReadonly: propReadonly,
+					propVisibility: propVisibility, propInitializer: null as unknown as Node,
+				}, makeLoc(accessTok.line, accessTok.column)));
+			}
 		}
 		// Out parameter: out name: Type → stored as "out:name". `out` is a contextual keyword:
 		// it's the modifier only when a param name follows; `out: Type` / `out, …` / `out)` mean
@@ -387,6 +424,27 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 }
 
 // ===== Param List Extraction Helpers =====
+
+// Strips the out:/ref:/rdonly:/sink: prefixes parseParamList wrote, from `first` on, and
+// records each mode as `<mode>:<positions>` in the routine's flags.
+export function liftParamModifiers(params: string[], first: int32, flags: string): string {
+	const modes = ["out:", "ref:", "rdonly:", "sink:"];
+	const positions = ["", "", "", ""];
+	for (let i = first; i < params.length; i += 1) {
+		const at = i - first;
+		for (let m = 0; m < modes.length; m += 1) {
+			const len = modes[m].length;
+			if (params[i].length <= len || params[i].slice(0, len) != modes[m]) continue;
+			params[i] = params[i].slice(len, params[i].length);
+			positions[m] = positions[m] == "" ? `${at}` : `${positions[m]},${at}`;
+		}
+	}
+	for (let m = 0; m < modes.length; m += 1) {
+		if (positions[m] == "") continue;
+		flags = flags == "" ? `${modes[m]}${positions[m]}` : `${flags}|${modes[m]}${positions[m]}`;
+	}
+	return flags;
+}
 
 export function extractParamNames(raw: string[]): string[] {
 	const names: string[] = [];

@@ -2,8 +2,8 @@
 // `--` included; an msc option right after the file is an error that says to move it.
 // Its stdout is the program's own: the build status line goes to stderr.
 // On Raiser argv[0] is the file as given, and output streams in order with a child's.
-// `msc x <cmd>` runs a declared command on Raiser: argv[0] is the command name and its
-// exit status is msc's.
+// `msc x <cmd>` runs a declared command on Raiser, compiled with the Raiser backend's defines:
+// argv[0] is the command name and its exit status is msc's.
 //
 // WHY A SUBPROCESS: the observable is the built program's own argv, which the option
 // parser's unit tests cannot reach. The compiler under test is $MSC, else `./msc`.
@@ -11,6 +11,7 @@
 // RED PRE-FIX: the program saw only its own path; `a` and `b c` were dropped. On Raiser
 // argv was msc's own command line, and console.log printed after the child's output.
 // `msc x` built the command to C and gave it the cached binary's path as argv[0].
+// `msc x` ran the command on Raiser with the C backend's defines, so `when (c)` held in a `.rms` module.
 // `msc run` printed "Built N module(s) → …" on stdout ahead of the program's output.
 // GREEN POST-FIX: GUARD-OK.
 
@@ -95,7 +96,7 @@ if (order != "line=A|arg=child|line=C|") report(`raiser output order around a ch
 ensureDir(`${dir}/pkg/tool`);
 ensureDir(`${dir}/app`);
 writeFile(`${dir}/pkg/build.ms`, "const config = { package: { name: \"greeter\", version: \"1.0.0\", bin: { \"greet\": \"tool/greet.ms\", \"fail3\": \"tool/fail3.ms\" } } };\nexport default config;\n");
-writeFile(`${dir}/pkg/tool/greet.ms`, "import { argv } from \"std/process\";\nfor (const a of argv) { console.log(\"arg=\" + a); }\n");
+writeFile(`${dir}/pkg/tool/greet.ms`, "import { argv } from \"std/process\";\nfor (const a of argv) { console.log(\"arg=\" + a); }\nwhen (raiser) { console.log(\"backend=raiser\"); } else { console.log(\"backend=other\"); }\n");
 writeFile(`${dir}/pkg/tool/fail3.ms`, "import { exit } from \"std/process\";\nexit(3);\n");
 writeFile(`${dir}/app/build.ms`, "const config = { package: { name: \"app\", version: \"1.0.0\" }, deps: { \"greeter\": \"file:../pkg\" } };\nexport default config;\n");
 
@@ -103,6 +104,7 @@ const xGreet = execFileResult(msc, ["x", "greet", "a", "b c"], `${dir}/app`);
 const xArgs = tagged(xGreet.output);
 if (xGreet.exitCode != 0 || xArgs != "arg=greet|arg=a|arg=b c|") report(`msc x argv: exit ${xGreet.exitCode} ${xArgs}`);
 if (xGreet.output.includes("Built ")) report(`msc x printed a build line: ${xGreet.output}`);
+if (!xGreet.output.includes("backend=raiser\n")) report(`msc x compiled the command for another backend than Raiser: ${xGreet.output}${xGreet.errorOutput}`);
 
 const xFail = execFileResult(msc, ["x", "fail3"], `${dir}/app`);
 if (xFail.exitCode != 3) report(`msc x exit status: ${xFail.exitCode}`);

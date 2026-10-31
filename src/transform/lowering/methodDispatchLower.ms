@@ -1,7 +1,8 @@
 import { Node, NodeKind, NodeFlag, SymbolKind, Symbol, Type, TypeKind, IdentifierData, ProgramData, SourceLocation } from "../../ast/node";
 import { GcMode, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import { fitNode } from "../../checker/fit";
-import { declaredDefaults, fillDefaults } from "../../checker/callResolve";
+import { declaredDefaults, fillDefaults, takeDefaultArgTemps } from "../../checker/callResolve";
+import { pickBodyCtx } from "../../checker/instantiate";
 import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, newLoweredSym } from "../context";
 import { walkNode } from "../walker";
@@ -77,16 +78,25 @@ function forward(ctx: TransformContext, callee: Symbol, calleeType: Type, baseTy
 		if (i == 0) args.push(sameType(baseType.typeChildren[0], formal) ? arg : makeHiddenSubConv(arg, formal, loc));
 		else args.push(converted(ctx, arg, baseType.typeChildren[i], formal));
 	}
+	const stmts: Node[] = [];
 	if (calleeType.typeChildren.length > forwarded) {
+		const defCtx = pickBodyCtx(callee.modulePath, ctx.checkerCtx);
+		const hoistMark = defCtx.pendingHoisted.length;
 		fillDefaults(ctx.checkerCtx, args, declaredDefaults(callee), calleeType.typeChildren.length, 0, calleeType.typeChildren, callee.modulePath, calleeType.typeNames);
+		for (const t of takeDefaultArgTemps(defCtx, hoistMark)) stmts.push(t);
 		if (args.length != calleeType.typeChildren.length) throw new Error(`internal: the override '${callee.name}' declares parameters beyond the base method without a default`);
 	}
 	const target = makeTypedIdentResolved(callee, null, loc);
 	target.flags = target.flags.incl(NodeFlag.NoDispatch);
 	const call = makeCall(target, args, loc);
 	call.nodeType = calleeType.typeReturn;
-	if (!returns) return [makeExprStmt(call, loc), makeReturn(null, loc)];
-	return [makeReturn(converted(ctx, call, calleeType.typeReturn, baseType.typeReturn), loc)];
+	if (!returns) {
+		stmts.push(makeExprStmt(call, loc));
+		stmts.push(makeReturn(null, loc));
+	} else {
+		stmts.push(makeReturn(converted(ctx, call, calleeType.typeReturn, baseType.typeReturn), loc));
+	}
+	return stmts;
 }
 
 function converted(ctx: TransformContext, value: Node, from: Type | null, to: Type | null): Node {

@@ -19,7 +19,17 @@ type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => 
 type DemandFieldFn = (ctx: CheckerContext, owner: Symbol, name: string, isStatic: boolean, read: Node) => void;
 type DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
 type SelfReadTypeFn = (callee: Node) => Type | null;
+type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
+type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
 type UndefinedVariableMessageFn = (ctx: CheckerContext, name: string) => string;
+
+let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
+	throw new Error("internal: checker callback typeInstanceHooks was called before it was installed");
+};
+
+let genericTypeHookFn: GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void => {
+	throw new Error(`internal: no binder for the hook '${hook}' of a generic type is installed`);
+};
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 	throw new Error("internal: checker callback checkExpr was called before it was installed");
@@ -207,4 +217,20 @@ export function callUndefinedVariableMessage(ctx: CheckerContext, name: string):
 
 export function registerUndefinedVariableMessage(fn: UndefinedVariableMessageFn): void {
 	undefinedVariableMessageFn = fn;
+}
+
+export function callTypeInstanceHooks(instType: Type, ctx: CheckerContext, line: int32, col: int32): void {
+	typeInstanceHooksFn(instType, ctx, line, col);
+}
+
+export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
+	typeInstanceHooksFn = fn;
+}
+
+export function callGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void {
+	genericTypeHookFn(ctx, hookSym, receiver, hook, at);
+}
+
+export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
+	genericTypeHookFn = fn;
 }

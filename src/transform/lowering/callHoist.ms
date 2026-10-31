@@ -227,6 +227,26 @@ function lowerTernary(cond: Node, ctx: TransformContext): CondLower | null {
 	return { pre, expr: resRef };
 }
 
+// True when lowerShortCircuit will return non-null for `cond`. Lowering rewrites the
+// tree as it goes (plainHoist swaps each fresh call for its temp), so a bail after a
+// sibling operand was already rewritten leaves a reference to a temp nobody declares.
+// Asked before the first rewrite, the bail leaves the statement untouched.
+function canLowerShortCircuit(cond: Node): boolean {
+	if (cond.kind == NodeKind.BinaryExpr) {
+		const bd = cond.data as BinaryExprData;
+		if (bd.operator == "&&" || bd.operator == "||") {
+			if (!canLowerShortCircuit(bd.left)) return false;
+			return !containsFreshRcCall(bd.right) || canLowerShortCircuit(bd.right);
+		}
+	}
+	if (cond.kind == NodeKind.ConditionalExpr) {
+		const cd = cond.data as ConditionalExprData;
+		if (cond.nodeType != null && isRcReturning(cond.nodeType)) return false;
+		return canLowerShortCircuit(cd.ternaryCondition) && canLowerShortCircuit(cd.ternaryConsequent) && canLowerShortCircuit(cd.ternaryAlternate);
+	}
+	return !containsConditionalEval(cond);
+}
+
 // Lower a boolean condition for a once-or-per-iteration test position (if / while).
 // Returns null when there is nothing to do (no fresh RC call) or the condition can't
 // be safely lowered (fresh call inside a ternary branch).
@@ -235,6 +255,7 @@ function lowerBoolCond(cond: Node, ctx: TransformContext): CondLower | null {
 	// No conditional-eval → every fresh call runs unconditionally → plain preceding hoist.
 	if (!containsConditionalEval(cond)) return plainHoist(cond, ctx);
 	// Short-circuit operand carries the fresh call → flag/nested-if lowering.
+	if (!canLowerShortCircuit(cond)) return null;
 	return lowerShortCircuit(cond, ctx);
 }
 

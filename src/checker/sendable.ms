@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName } from "./types";
 import { recordBodyRead } from "./bodyReads";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
@@ -179,6 +179,8 @@ function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, meth
 			checkReplyBindingSoleOwner(ctx, p.resolvedSym!, result, p.location, method);
 			return null;
 		},
+		NodeKind.CallExpr when (p.resolvedSym != null && (p.resolvedSym!.builtinKind == "ResultOk" || p.resolvedSym!.builtinKind == "ResultErr")) =>
+			firstSharedReplyPart(ctx, (p.data as CallExprData).arguments, result, method),
 		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
 	};
 }
@@ -312,6 +314,14 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
 }
 
+// The env of a Sendable closure is counted by the binding that holds it, so a copy sent to an actor would be counted on two
+// threads with plain rc: the crossing is the binding's last use, as a move is.
+function consumeSentClosure(ctx: CheckerContext, ident: Node): void {
+	const sym = ident.resolvedSym;
+	if (sym == null || (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter)) return;
+	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
@@ -319,6 +329,7 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	if (t == null) return false;
 	const sent = peelView(argNode);
 	if (sent.kind == NodeKind.MoveExpr) recordActorMove(ctx, sent);
+	else if (sent.kind == NodeKind.Identifier && isSendableFunction(t)) consumeSentClosure(ctx, sent);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& sent.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
@@ -1451,14 +1462,48 @@ export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	}
 	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr) {
 		checkClosureCaptures(ctx, source, "a Sendable function");
+		markSendableReach(ctx, source);
 		return ctx.errors.length == mark;
 	}
 	const sym = source.kind == NodeKind.Identifier ? source.resolvedSym : null;
-	if (sym != null && judgedAtDeclaration(ctx, sym)) return ctx.errors.length == mark;
+	if (sym != null && judgedAtDeclaration(ctx, sym)) {
+		markSendableBinding(ctx, sym);
+		return ctx.errors.length == mark;
+	}
 	const name = describeExpr(source);
 	addError(ctx, `'${name}' is a plain function value that may capture mutable state, so it does not convert to Sendable<F> — pass a function declaration or a closure, or declare '${name}' as Sendable<F>`,
 		expr.location.line, expr.location.column);
 	return false;
+}
+
+function localClosureOf(ctx: CheckerContext, bindingSym: Symbol): Node | null {
+	const sym = aliasTarget(bindingSym);
+	if (sym == null || isModuleScoped(ctx, sym)) return null;
+	const bound = constBindingInitializer(sym);
+	const declared = sym.symbolKind == SymbolKind.Function ? sym.declNode : bound != null ? peelHidden(bound) : null;
+	if (declared != null && (declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr)) return declared;
+	return null;
+}
+
+// A closure converted to Sendable<F> owns an env that holds copies of its captures, and so does every local closure
+// its body reaches, because a shared env counted on two threads with plain rc is a data race.
+function markSendableReach(ctx: CheckerContext, closure: Node): void {
+	if (closure.flags.has(NodeFlag.SendableClosure)) return;
+	closure.flags = closure.flags.incl(NodeFlag.SendableClosure);
+	markReachedClosures(ctx, closure);
+}
+
+function markReachedClosures(ctx: CheckerContext, node: Node): void {
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
+		const reached = localClosureOf(ctx, node.resolvedSym);
+		if (reached != null) markSendableReach(ctx, reached);
+	}
+	forEachChild(node, (child: Node): void => { markReachedClosures(ctx, child); });
+}
+
+function markSendableBinding(ctx: CheckerContext, bindingSym: Symbol): void {
+	const declared = localClosureOf(ctx, bindingSym);
+	if (declared != null) markSendableReach(ctx, declared);
 }
 
 function judgedAtDeclaration(ctx: CheckerContext, bindingSym: Symbol, by: string = "a Sendable function", via: Node[] = []): boolean {
@@ -1733,7 +1778,7 @@ function escapesOwner(n: Node | null, w: OwnerWalk): boolean {
 		return false;
 	}
 	if (!rootedAtOwner(p, w)) return false;
-	return p.nodeType == null || typeCarriesRef(p.nodeType);
+	return p.nodeType == null || !isValueOnlyType(p.nodeType);
 }
 
 function isMovedName(name: string, w: OwnerWalk): boolean {
@@ -1944,8 +1989,13 @@ function isActorRef(t: Type | null): boolean {
 
 export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
 	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
-	if (sym.symbolKind == SymbolKind.Parameter) {
-		addError(ctx, "cannot move '" + sym.name + "': it is a parameter, so the caller still owns it — bind a fresh value locally and move that" + SOLE_OWNER_TAG, at.line, at.column);
+	const sinkParam = sym.symbolKind == SymbolKind.Parameter && hasFlag(sym, SymbolFlag.Sink);
+	const ownedParam = sinkParam && isValueOnlyType(sym.symbolType);
+	if (sym.symbolKind == SymbolKind.Parameter && !ownedParam) {
+		const why = sinkParam
+			? "it is a sink parameter holding a reference, and a caller that keeps using its value passes a copy that shares the graph — pass a fresh value or bind a fresh copy locally and move that"
+			: "it is a parameter, so the caller still owns it — bind a fresh value locally and move that";
+		addError(ctx, "cannot move '" + sym.name + "': " + why + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
 	if (hasFlag(sym, SymbolFlag.Global)) {
@@ -1953,7 +2003,7 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 		return;
 	}
 	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
-	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: false, reported: false };
+	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: ownedParam, reported: false };
 	if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {
 		addError(ctx, "cannot move '" + sym.name + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);

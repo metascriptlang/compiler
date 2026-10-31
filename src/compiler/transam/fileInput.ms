@@ -16,6 +16,7 @@ class TaFileEntry {
 	changedAt: int32;
 	fileId: int32;
 	durability: TaDurability;
+	present: boolean;
 }
 
 // ===== File Input Store =====
@@ -55,7 +56,8 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const idx = findByPath(store, filePath);
 	if (idx >= 0) {
 		const file = store.files[idx];
-		if (file.source == source) return false;
+		if (file.present && file.source == source) return false;
+		file.present = true;
 		file.source = source;
 		file.changedAt = revision;
 		moveChangeMarkers(store, file.durability, revision);
@@ -69,11 +71,24 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		changedAt: revision,
 		fileId,
 		durability: TaDurability.Low,
+		present: true,
 	};
 	store.pathIndex.set(filePath, store.files.length);
 	store.files.push(entry);
 	moveChangeMarkers(store, TaDurability.Low, revision);
 	return true;
+}
+
+// The id of a path's input, a path with no file included: an importer that found nothing at a
+// candidate path depends on that path, so writing the file there changes the input it read.
+export function getInputId(store: TaFileInputStore, filePath: string, revision: int32): int32 {
+	const idx = findByPath(store, filePath);
+	if (idx >= 0) return store.files[idx].fileId;
+	const fileId = store.nextFileId;
+	store.nextFileId = store.nextFileId + 1;
+	store.pathIndex.set(filePath, store.files.length);
+	store.files.push({ filePath, source: "", changedAt: revision, fileId, durability: TaDurability.Low, present: false });
+	return fileId;
 }
 
 export function getFileText(store: TaFileInputStore, fileId: int32): string {
@@ -90,29 +105,29 @@ export function getFileChangedAt(store: TaFileInputStore, fileId: int32): int32 
 
 export function getFileId(store: TaFileInputStore, filePath: string): int32 {
 	const idx = findByPath(store, filePath);
-	if (idx < 0) return -1;
+	if (idx < 0 || !store.files[idx].present) return -1;
 	return store.files[idx].fileId;
 }
 
 export function hasFile(store: TaFileInputStore, filePath: string): boolean {
-	return findByPath(store, filePath) >= 0;
+	return getFileId(store, filePath) >= 0;
 }
 
 // Reverse lookup: fileId → file path. Returns "" if not found.
 export function getFilePath(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return "";
+	if (idx < 0 || !store.files[idx].present) return "";
 	return store.files[idx].filePath;
 }
 
-// Count of all known files
+// Count of all inputs, the absent ones included
 export function getFileCount(store: TaFileInputStore): int32 {
 	return store.files.length;
 }
 
 // Get file path by sequential index (0..count-1). Returns "" if out of range.
 export function getFilePathByIndex(store: TaFileInputStore, index: int32): string {
-	if (index < 0 || index >= store.files.length) return "";
+	if (index < 0 || index >= store.files.length || !store.files[index].present) return "";
 	return store.files[index].filePath;
 }
 
@@ -254,4 +269,17 @@ test "a write of identical text leaves the change markers alone" {
 	assert !setFileText(store, "a.ms", "a", 7);
 	assert getLastChange(store, TaDurability.Low) == 1;
 	assert getLastChange(store, TaDurability.High) == 0;
+}
+
+test "a path with no file is an input a later write changes" {
+	const store = createFileInputStore();
+	const id = getInputId(store, "/a/b.ms", 2);
+	assert getFileId(store, "/a/b.ms") == -1 && !hasFile(store, "/a/b.ms");
+	assert getFilePath(store, id) == "" && getFilePathByIndex(store, 0) == "";
+	assert getFileChangedAt(store, id) == 2;
+	assert getInputId(store, "/a/b.ms", 5) == id;
+	assert getFileChangedAt(store, id) == 2;
+	assert setFileText(store, "/a/b.ms", "", 6);
+	assert getFileId(store, "/a/b.ms") == id && getFileChangedAt(store, id) == 6;
+	assert getFilePath(store, id) == "/a/b.ms";
 }

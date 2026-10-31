@@ -524,12 +524,17 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
-	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
+	const visibility = (d.ctorVisibility != "" ? d.ctorVisibility + " " : "") + (node.flags.has(NodeFlag.Abstract) ? "abstract " : "");
+	const signature = isSynthesized(node, d.ctorBody);
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
-	if (asWritten != null) return docGroup([docText(visibility), asWritten, printCollapsibleBody(d.ctorBody, options)]);
-	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations, node.typeExprs);
+	if (asWritten != null) return docGroup([docText(visibility), asWritten, signature ? docText(";") : printCollapsibleBody(d.ctorBody, options)]);
+	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations, node.typeExprs, null, d.ctorParamProps);
 	const parts: Doc[] = [docText(visibility + "constructor")];
 	for (const p of paramListInParens(params, options, hugsObjectParam(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, node.typeExprs, options))) parts.push(p);
+	if (signature) {
+		parts.push(docText(";"));
+		return docGroup(parts);
+	}
 	parts.push(docText(" "));
 	parts.push(printCollapsibleBody(d.ctorBody, options));
 	return docGroup(parts);
@@ -639,7 +644,12 @@ function declarator(node: Node, options: FormatOptions): Doc {
 		const dd = node.data as DestructuringDeclData;
 		const complex = dd.destrPattern.kind == NodeKind.ObjectPattern && isComplexObjectPattern(dd.destrPattern);
 		const shape: AssignmentShape = { leftIsShort: false, breakLeftHandSide: complex, inChain: false };
-		return printAssignmentLike(patternParts(dd.destrPattern, options), " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
+		const left = patternParts(dd.destrPattern, options);
+		if (dd.destrType != "") {
+			left.push(docText(": "));
+			left.push(printTypeAnnotation(node.typeExpr, dd.destrType, options));
+		}
+		return printAssignmentLike(left, " =", dd.destrInit, callPrintNode(dd.destrInit, options), shape, options);
 	}
 	const d = node.data as VariableDeclData;
 	const typed = d.declType != "" ? typedAsWritten(d.nameLocation.line, d.nameLocation.column + d.declName.byteLength, node.typeExpr, options) : "";

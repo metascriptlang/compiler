@@ -412,13 +412,17 @@ typedef struct {
 } msClosure;
 #endif
 
-/* ===== Exception Handling (static, no TLS) ===== */
+/* ===== Exception Handling: one program-wide state, defined in core/system.c ===== */
 #ifdef MSOS_SOLANA
 #define msErr (msSolanaCurrentContext()->err)
 #define msCurrException (msSolanaCurrentContext()->currException)
+#elif defined(MSOS_BARE)
+extern bool msErr;
+extern msException* msCurrException;
 #else
-static bool msErr = false;
-static msException* msCurrException = (msException*)0;
+#include "runtime/hcrTls.h"
+MS_TLS_EXTERN(bool, msErr);
+MS_TLS_EXTERN(msException*, msCurrException);
 #endif
 
 static inline void msClearException(void) {
@@ -752,8 +756,13 @@ static inline void* msWaitFor(void* fut)    { (void)fut; return (void*)0; }
 static inline void msWaitForReady(void* fut) { (void)fut; }
 static inline void msCallSoon(msClosure cb) { (void)cb; }
 typedef void (*msCallSoonFn)(msClosure);
-static msCallSoonFn msCallSoonProc = (msCallSoonFn)0;
-static void* msErrPayload = (void*)0;
+#ifdef MSOS_BARE
+extern msCallSoonFn msCallSoonProc;
+extern void* msErrPayload;
+#else
+MS_TLS_EXTERN(msCallSoonFn, msCallSoonProc);
+MS_TLS_EXTERN(void*, msErrPayload);
+#endif
 
 /* ===== Abort stub ===== */
 static inline void msAbortThrow(void) { msErr = true; }

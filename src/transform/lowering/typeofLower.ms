@@ -3,13 +3,14 @@
 // the exact kind. A single static type folds; a union asks a routine that cases
 // on the held member, one routine per union and table.
 
-import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
-import { isTypeofExpr, primitiveNameLiteral } from "../../checker/fit";
+import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, CallExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
+import { isArrayType, unwrapRefNullUnion, peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
+import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
+import { declaresProperty } from "../../checker/compat";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
-import { makeBinary, makeBlock, makeCall, makeFnDecl, makeIf, makeReturn, makeString, makeBool, makeTypedIdentResolved, makeNull, makeUnary } from "../util";
+import { makeBinary, makeBlock, makeCall, makeFnDecl, makeIf, makeReturn, makeString, makeBool, makeTypedIdentResolved, makeNull, makeUnary, callBuiltinKind } from "../util";
 import { cloneIfPure } from "../place";
 import { is64Kind } from "../numKinds";
 import { armOrder, holdsMember } from "./unionConvLower";
@@ -43,11 +44,17 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 			const d = node.data as MatchStmtData;
 			d.matchStmtDisc = lowerArmsOnKind(d.matchStmtDisc, d.matchStmtCases, ctx);
 		},
+		NodeKind.CallExpr => {
+			const asked = lowerHoldsArray(node, ctx);
+			if (asked != null) return asked;
+		},
 		NodeKind.BinaryExpr => {
 			const test = lowerKindTest(node, ctx);
 			if (test != null) return test;
 			const instance = lowerGenericInstanceof(node, ctx);
 			if (instance != null) return instance;
+			const named = lowerInKeyword(node, ctx);
+			if (named != null) return named;
 		},
 		_ => {},
 	};
@@ -125,6 +132,48 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	return makeBinary(kindRead, op2, makeString(name, node.location), node.location);
 }
 
+function lowerHoldsArray(node: Node, ctx: TransformContext): Node | null {
+	if (callBuiltinKind(node) != "HoldsArray") return null;
+	const args = (node.data as CallExprData).arguments;
+	const operand = lowerNode(args[0], ctx);
+	const t = operand.nodeType;
+	const loc = node.location;
+	const peeled = t != null ? peelTransparentInstance(t) : null;
+	const payload = peeled != null && isMaybeType(peeled) && peeled.typeReturn != null ? peelTransparentInstance(peeled.typeReturn) : peeled;
+	if (isUnknownType(payload)) {
+		if (cloneIfPure(operand) != null || isLiteral(operand)) return makeBool(false, loc);
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeBool(false, loc), loc)], booleanType());
+	}
+	if (peeled != null && isMaybeType(peeled) && peeled.typeReturn != null && shapeOf(peeled.typeReturn) == Shape.Union) {
+		const inner: Type = peeled.typeReturn;
+		const whole: Type = t!;
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => {
+			const absent = makeBinary(makeTypedIdentResolved(x, whole, loc), "===", makeNull(loc), loc);
+			const member = routineCall("msHoldsArray_", makeTypedIdentResolved(x, inner, loc), ctx, loc, (m: Symbol): Node[] => memberAnswers(peelTransparentInstance(inner), m, (k: Type): Node => makeBool(isArrayType(k), loc), ctx, loc), booleanType());
+			return [makeIf(absent, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc), makeReturn(member, loc)];
+		}, booleanType());
+	}
+	if (t == null || shapeOf(t) == Shape.Opaque) {
+		reportTransformError(ctx, `Array.isArray of a '${t != null ? typeDisplayName(t) : "unknown"}' value cannot tell an array from another value; narrow it to a concrete type or a union of them first`, loc);
+		return node;
+	}
+	const source: Type = t;
+	const held = kindsOf(source);
+	if (shapeOf(source) == Shape.Single) {
+		const answer = isArrayType(held[0]);
+		if (cloneIfPure(operand) != null || isLiteral(operand)) return makeBool(answer, loc);
+		return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeBool(answer, loc), loc)], booleanType());
+	}
+	return routineCall("msHoldsArray_", operand, ctx, loc, (x: Symbol): Node[] => {
+		const payload = shapeOf(source) == Shape.Nullable ? held[0] : unwrapRefNullUnion(peelTransparentInstance(source));
+		if (payload != null) {
+			const present = makeBinary(makeTypedIdentResolved(x, source, loc), "!==", makeNull(loc), loc);
+			return [makeIf(present, makeBlock([makeReturn(makeBool(isArrayType(payload), loc), loc)], loc), null, loc), makeReturn(makeBool(false, loc), loc)];
+		}
+		return memberAnswers(peelTransparentInstance(source), x, (member: Type): Node => makeBool(isArrayType(member), loc), ctx, loc);
+	}, booleanType());
+}
+
 // `x instanceof Box` with a generic `Box` asks which union member `x` holds:
 // each instance has its own identity, and the members name the instances.
 function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null {
@@ -147,6 +196,24 @@ function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null 
 	const target: Symbol = cls;
 	const prefix = "msInstanceOf_" + hashToBase36(typeKey(cls.symbolType)) + "_";
 	return routineCall(prefix, operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(derivesFromClass(member, target), loc), ctx, loc), booleanType());
+}
+
+// `"name" in u` over a union asks which member `u` holds: a member that
+// declares `name` as a field, optional or not, a method or an accessor answers true.
+function lowerInKeyword(node: Node, ctx: TransformContext): Node | null {
+	const d = node.data as BinaryExprData;
+	if (d.operator != "in" || d.right.nodeType == null) return null;
+	if (shapeOf(peelTransparentInstance(d.right.nodeType)) != Shape.Union) return null;
+	const u = peelTransparentInstance(readInStoredLayout(d.right, peelTransparentInstance(d.right.nodeType)));
+	const loc = node.location;
+	if (d.left.kind != NodeKind.StringLiteral) {
+		reportTransformError(ctx, `'in' on a '${typeDisplayName(u)}' value needs a string literal on the left, to know which members declare the property`, loc);
+		return node;
+	}
+	const name = (d.left.data as StringLiteralData).value;
+	const operand = lowerNode(d.right, ctx);
+	const held: Type = u;
+	return routineCall("msIn_" + hashToBase36(name) + "_", operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(declaresProperty(peelTransparentInstance(member), name), loc), ctx, loc), booleanType());
 }
 
 function holdsAwaitable(u: Type): boolean {
@@ -287,8 +354,11 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 		if (cloneIfPure(operand) != null || isLiteral(operand)) return tagLiteral(typeofTagOf(source), node);
 		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeString(typeofTagOf(source), loc), loc)]);
 	}
-	if (shape == Shape.Opaque || !ctx.jsBackend) return node;
-	const members = kindsOf(source);
+	if (!ctx.jsBackend) return node;
+	const peeled = peelTransparentInstance(source);
+	const nullableUnion = shape == Shape.Opaque && isMaybeType(peeled) && peeled.typeReturn != null && shapeOf(peeled.typeReturn) == Shape.Union;
+	if (shape == Shape.Opaque && !nullableUnion) return node;
+	const members = nullableUnion ? peelTransparentInstance(peeled.typeReturn).typeChildren : kindsOf(source);
 	let wide = false;
 	let big = false;
 	for (const m of members) {
@@ -296,6 +366,14 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 		if (peelTransparentInstance(m).kind == TypeKind.BigInt) big = true;
 	}
 	if (!wide) return node;
+	if (big && nullableUnion) {
+		const held: Type = peeled.typeReturn;
+		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => {
+			const absent = makeBinary(makeTypedIdentResolved(x, source, loc), "===", makeNull(loc), loc);
+			const member = routineCall("msTypeofTag_", makeTypedIdentResolved(x, held, loc), ctx, loc, (m: Symbol): Node[] => memberCases(held, m, typeofTagOf, ctx, loc));
+			return [makeIf(absent, makeBlock([makeReturn(makeString(typeofTagOf(nullType()), loc), loc)], loc), null, loc), makeReturn(member, loc)];
+		});
+	}
 	if (big) {
 		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => memberCases(source, x, typeofTagOf, ctx, loc));
 	}

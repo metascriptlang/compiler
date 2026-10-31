@@ -9,7 +9,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind,
-	FlowNode, FlowFlag, FlowList, FlowReduceLabelData,
+	FlowNode, FlowFlag, FlowList, FlowReduceLabelData, FlowSwitchClauseData,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
@@ -24,15 +24,15 @@ import { forEachChild } from "../ast/visitor";
 import { isLogicalAssignOp } from "../ast/operators";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
-	createStringLiteral, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
+	createStringLiteral, createBooleanLiteral, booleanLiteralValue, createEnumLiteral, literalDiscValue, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
 	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance, isReadonlyView,
+	classAncestorInstance, isReadonlyView, peelToStruct, hasNullMember,
 } from "./types";
-import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
+import { typeRelation, TypeRelation, sameType, findVariantByEnumMember, declaresProperty } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
 import { declaredNames } from "./bindNames";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -245,6 +245,7 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	const ft = getTypeAtFlowNode(state, flow);
 	const t = ft.t;
 	if (t == null || t == base || (base != declaredType && holdsEveryMember(t, base))) return declaredType;
+	if (declaredType.kind == TypeKind.Enum && isEnumRemainder(t)) return declaredType;
 	return t;
 }
 
@@ -735,6 +736,7 @@ function declaredMembers(declared: Type): Type[] {
 
 function isSubsetOfDeclared(t: Type, declared: Type | null): boolean {
 	if (declared == null || t == declared || sameType(t, declared)) return true;
+	if (declared.kind == TypeKind.Enum && enumMembersHeld(t, declared) != null) return true;
 	const members = declaredMembers(declared);
 	for (const part of declaredMembers(t)) {
 		let found = false;
@@ -921,6 +923,10 @@ export function canonicalizeBranchJoin(t: Type): Type {
 }
 
 function joinNarrowedTypes(parent: Type | null, members: Type[]): Type {
+	if (parent != null && parent.kind == TypeKind.Enum) {
+		const enumJoin = joinEnumMembers(parent, members);
+		if (enumJoin != null) return enumJoin;
+	}
 	if (parent != null && parent.kind == TypeKind.Union) {
 		return unionPreservingDiscriminant(parent, members);
 	}
@@ -1018,6 +1024,9 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		if (d.operator == "instanceof") {
 			return narrowTypeByInstanceof(t, d.left, d.right, refNode, assumeTrue);
 		}
+		if (d.operator == "in") {
+			return narrowTypeByInKeyword(t, d.left, d.right, refNode, assumeTrue);
+		}
 		// Logical && / || narrowing — full DeMorgan coverage:
 		//
 		// `if (a && b)`:
@@ -1112,7 +1121,11 @@ function isSynthesizedNullableEquality(cd: CallExprData): boolean {
 // all matching variants (TypeScript-parity narrowing). Single match returns the
 // variant directly to avoid pointless wrapping.
 function narrowTypeByBooleanDiscriminant(t: Type | null, propName: string, assumeTrue: boolean): Type | null {
-	if (t == null || t.kind != TypeKind.Union) return t;
+	if (t == null) return t;
+	if (t.kind != TypeKind.Union) {
+		const field = findFieldInVariant(t, propName);
+		return field != null && field.kind == TypeKind.BooleanLiteral && booleanLiteralValue(field) != assumeTrue ? neverType() : t;
+	}
 	if (t.typeChildren == null) return t;
 	const matched: Type[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
@@ -1177,20 +1190,18 @@ function narrowTypeByAssertion(t: Type | null, call: Node, refNode: Node): Type 
 }
 
 function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boolean): Type {
-	// TrueCondition: narrow to the predicate target, but only if it's
-	// compatible with the current type `t` (intersection semantics).
-	// Returning predicateTarget for a type outside `t` would widen past
-	// the declared union. Uses `typeRelation` for cross-module resilience
-	// (no pointer-identity or string-key assumptions).
 	if (assumeTrue) {
 		if (t.kind == TypeKind.Union && t.typeChildren != null) {
+			const kept: Type[] = [];
 			for (const v of t.typeChildren) {
-				const rel = typeRelation(predicateTarget, v);
-				if (rel != TypeRelation.None) return predicateTarget;
+				if (typeRelation(predicateTarget, v) != TypeRelation.None) appendIfUnique(kept, v);
+				else if (typeRelation(v, predicateTarget) != TypeRelation.None) appendIfUnique(kept, predicateTarget);
 			}
-			return t;
+			if (kept.length == 0) return t;
+			return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 		}
-		return predicateTarget;
+		if (t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred) return predicateTarget;
+		return typeRelation(predicateTarget, t) != TypeRelation.None ? t : predicateTarget;
 	}
 	// FalseCondition: remove variants assignable to the predicate target.
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {
@@ -1203,9 +1214,31 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 		}
 		if (remaining.length == 0) return t;
 		if (remaining.length == 1) return remaining[0];
-		return createUnion(remaining);
+		return unionPreservingDiscriminant(t, remaining);
 	}
 	return t;
+}
+
+// Narrow a union by `"name" in x`: a member that declares `name` as a required
+// field, a method or an accessor survives the true branch only, a member without it
+// the false branch only, and a member with it as an optional field both. A name no
+// member declares, or a member that is not a struct, leaves the type as it is.
+function narrowTypeByInKeyword(t: Type | null, left: Node, right: Node, refNode: Node, assumeTrue: boolean): Type | null {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	if (!isMatchingReference(right, refNode)) return t;
+	const name = stringLiteralValueOf(left);
+	if (name == null || !t.typeChildren.some((m: Type): boolean => declaresProperty(m, name))) return t;
+	const kept: Type[] = [];
+	for (const m of t.typeChildren) {
+		const peeled = peelToStruct(m);
+		if (peeled == null || peeled.kind != TypeKind.Struct) { kept.push(m); continue; }
+		const field = findFieldInVariant(m, name);
+		const possible = !declaresProperty(m, name) ? !assumeTrue : assumeTrue || (field != null && (hasNullMember(field) || isMaybeType(field)));
+		if (possible) kept.push(m);
+	}
+	if (kept.length == 0) return neverType();
+	if (kept.length == t.typeChildren.length) return t;
+	return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 }
 
 // ===== instanceof narrowing =====
@@ -1454,6 +1487,59 @@ export function isEndOfBodyReachable(body: Node): boolean {
 	return reachesStart(body.flowNode, []);
 }
 
+// The edge a switch without `default` takes when no case matches is dead once the cases cover every member of the discriminant's type.
+function skipsExhaustiveSwitch(clause: FlowSwitchClauseData | null): boolean {
+	if (clause == null || clause.clauseStart != clause.clauseEnd || clause.switchStatement == null) return false;
+	const sd = clause.switchStatement.data as SwitchStmtData;
+	const disc = sd.switchDisc;
+	if (disc == null || disc.nodeType == null || isTypeofOperand(disc)) return false;
+	// checkSwitch widens a number-literal discriminant in place, so its declared type is the one left to read.
+	let members = literalMemberKeys(disc.nodeType);
+	if (members == null && disc.kind == NodeKind.Identifier && disc.resolvedSym != null && disc.resolvedSym.symbolType != null) members = literalMemberKeys(disc.resolvedSym.symbolType);
+	if (members == null || members.length == 0) return false;
+	let testCount = 0;
+	for (const c of sd.switchCases) testCount += (c.data as SwitchCaseData).caseTests.length;
+	if (testCount < members.length) return false;
+	const held = new HashSet<string>();
+	for (const c of sd.switchCases) {
+		for (const test of (c.data as SwitchCaseData).caseTests) {
+			const lit = caseLiteralOf(test);
+			if (lit == null) return false;
+			held.add(caseLiteralKey(lit));
+		}
+	}
+	for (const key of members) {
+		if (!held.has(key)) return false;
+	}
+	return true;
+}
+
+function literalMemberKeys(t: Type): string[] | null {
+	if (t.kind == TypeKind.Enum) return t.typeNames.map((name) => "e:" + t.typeName + "." + name);
+	if (t.kind == TypeKind.Boolean) return ["b:true", "b:false"];
+	const parts: Type[] = t.kind == TypeKind.Union && t.typeChildren != null ? t.typeChildren : [t];
+	const keys: string[] = [];
+	for (const p of parts) {
+		if (p == null || (p.kind != TypeKind.StringLiteral && p.kind != TypeKind.NumberLiteral && p.kind != TypeKind.BooleanLiteral && p.kind != TypeKind.EnumLiteral)) return null;
+		keys.push(caseLiteralKey(p));
+	}
+	return keys;
+}
+
+function caseLiteralKey(t: Type): string {
+	if (t.kind == TypeKind.EnumLiteral) return "e:" + literalDiscValue(t);
+	if (t.kind == TypeKind.StringLiteral) return "s:" + t.typeName;
+	if (t.kind == TypeKind.BooleanLiteral) return "b:" + t.typeName;
+	return "n:" + t.typeName;
+}
+
+function caseLiteralOf(written: Node): Type | null {
+	let test = written;
+	while (test.kind == NodeKind.HiddenSubConv || test.kind == NodeKind.HiddenStdConv) test = (test.data as HiddenStdConvData).convExpr;
+	if (test.kind == NodeKind.BooleanLiteral) return createBooleanLiteral((test.data as BooleanLiteralData).boolValue);
+	return enumMemberLiteralOf(test) ?? equalityLiteralType(test);
+}
+
 function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): boolean {
 	const seen = new HashSet<FlowNode>();
 	const todo: FlowNode[] = [from];
@@ -1463,6 +1549,7 @@ function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): bool
 		seen.add(flow);
 		if (flow.flags.has(FlowFlag.Start)) return true;
 		if (flow.flags.has(FlowFlag.Call) && callNeverReturns(flow.node)) continue;
+		if (flow.flags.has(FlowFlag.SwitchClause) && skipsExhaustiveSwitch(flow.switchClauseData)) continue;
 		if (flow.flags.has(FlowFlag.ReduceLabel)) {
 			if (flow.antecedent == null) continue;
 			reduceLabels.push(flow.reduceLabelData!);
@@ -1726,6 +1813,7 @@ export function resetCapturedAssignments(): void {
 	lastAssignments = new HashMap<Symbol, int32>();
 	closureContainers = new HashMap<Node, Node>();
 	aliasPaths = new HashMap<Node, AliasPath>();
+	enumFacts = new HashMap<Type, EnumFacts>();
 }
 
 function assignmentsIn(container: Node): ContainerAssignments {
@@ -2043,7 +2131,8 @@ function typeofStringMatches(v: Type, s: string): boolean {
 export function narrowTypeByDiscriminantProperty(
 	t: Type | null, propName: string, valueExpr: Node, assumeTrue: boolean
 ): Type | null {
-	if (t == null || t.kind != TypeKind.Union) return t;
+	if (t == null) return t;
+	if (t.kind != TypeKind.Union) return !assumeTrue && soleVariantHolds(t, propName, valueExpr) ? neverType() : t;
 	if (valueExpr != null && valueExpr.kind == NodeKind.BooleanLiteral) {
 		const wanted = (valueExpr.data as BooleanLiteralData).boolValue;
 		return narrowTypeByBooleanDiscriminant(t, propName, wanted == assumeTrue);
@@ -2084,6 +2173,18 @@ export function narrowTypeByDiscriminantProperty(
 	return createUnion(remaining);
 }
 
+// A variant left alone by earlier tests holds the compared value in its discriminant
+// field, so excluding that value leaves nothing.
+function soleVariantHolds(t: Type, propName: string, valueExpr: Node | null): boolean {
+	const field = findFieldInVariant(t, propName);
+	if (field == null || valueExpr == null) return false;
+	if (field.kind == TypeKind.BooleanLiteral) {
+		return valueExpr.kind == NodeKind.BooleanLiteral && booleanLiteralValue(field) == (valueExpr.data as BooleanLiteralData).boolValue;
+	}
+	const wanted = field.kind == TypeKind.EnumLiteral ? enumMemberLiteralOf(valueExpr) : field.kind == TypeKind.StringLiteral ? createStringLiteral(stringLiteralValueOf(valueExpr) ?? "\u0000none") : null;
+	return wanted != null && wanted.kind == field.kind && literalDiscValue(wanted) == literalDiscValue(field);
+}
+
 // Residual union after excluding variants from a metadata-carrying DU.
 // Copies the discriminant contract (`typeExtra` = disc type, `typeNames` =
 // [discName, variantKey...]) so disc re-reads keep resolving and codegen's
@@ -2117,17 +2218,127 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		// !assumeTrue (!== null) removes it via removeNullFromType.
 		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
-	const value = equalityLiteralType(exactLiteralOf(skipHiddenConv(literal)));
-	if (value == null) return t;
+	const member = skipHiddenConv(literal);
+	const value = equalityLiteralType(exactLiteralOf(member));
+	if (value == null) {
+		const enumValue = enumMemberLiteralOf(member);
+		return enumValue == null || assumeTrue ? t : withoutEnumMember(t, enumValue);
+	}
 	if (isMaybeType(t) && t.typeReturn != null) {
 		const narrowed = filterByLiteral(t.typeReturn!, value, assumeTrue);
 		if (assumeTrue) return narrowed.kind == TypeKind.Never ? t : narrowed;
 		if (narrowed == t.typeReturn) return t;
 		return narrowed.kind == TypeKind.Never ? nullType() : nullableUnionOf([narrowed, nullType()]);
 	}
-	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return assumeTrue ? t : filterByLiteral(t, value, false);
 	const narrowed = filterByLiteral(t, value, assumeTrue);
-	return narrowed.kind == TypeKind.Never ? t : narrowed;
+	return narrowed.kind == TypeKind.Never && assumeTrue ? t : narrowed;
+}
+
+// The members an enum or a union of its members still holds after `!== member`;
+// nothing left is `never`. A read of the reference widens a partial remainder back to the enum.
+// A member set is one interned union over one literal per member, so a remainder costs a scan, not a union build.
+class EnumFacts {
+	literals: Type[] = [];
+	index: HashMap<string, int32> = new HashMap<string, int32>();
+	remainders: HashMap<string, Type> = new HashMap<string, Type>();
+}
+
+let enumFacts = new HashMap<Type, EnumFacts>();
+
+function enumFactsOf(enumType: Type): EnumFacts {
+	const known = enumFacts.get(enumType);
+	if (known != null) return known;
+	const facts = new EnumFacts();
+	for (let i = 0; i < enumType.typeNames.length; i += 1) {
+		facts.literals.push(createEnumLiteral(enumType, enumType.typeNames[i]));
+		facts.index.set(enumType.typeNames[i], i);
+	}
+	enumFacts.set(enumType, facts);
+	return facts;
+}
+
+function enumMask(t: Type, enumType: Type, facts: EnumFacts): boolean[] | null {
+	const held = enumMembersHeld(t, enumType);
+	if (held == null) return null;
+	const mask: boolean[] = [];
+	for (let i = 0; i < facts.literals.length; i += 1) mask.push(false);
+	for (const name of held) {
+		const at = facts.index.get(name);
+		if (at == null) return null;
+		mask[at] = true;
+	}
+	return mask;
+}
+
+function enumRemainder(enumType: Type, facts: EnumFacts, mask: boolean[]): Type {
+	const bits: string[] = [];
+	let held = 0;
+	let only = 0;
+	for (let i = 0; i < mask.length; i += 1) {
+		bits.push(mask[i] ? "1" : "0");
+		if (mask[i]) { held += 1; only = i; }
+	}
+	if (held == 0) return neverType();
+	if (held == mask.length) return enumType;
+	if (held == 1) return facts.literals[only];
+	const key = bits.join("");
+	const known = facts.remainders.get(key);
+	if (known != null) return known;
+	const members: Type[] = [];
+	for (let i = 0; i < mask.length; i += 1) {
+		if (mask[i]) members.push(facts.literals[i]);
+	}
+	const union = createUnionInOrder(members);
+	facts.remainders.set(key, union);
+	return union;
+}
+
+function withoutEnumMember(t: Type, member: Type): Type {
+	const enumType = member.typeReturn;
+	if (enumType == null) return t;
+	const facts = enumFactsOf(enumType);
+	const mask = enumMask(t, enumType, facts);
+	const at = facts.index.get(member.typeNames[0]);
+	if (mask == null || at == null || !mask[at]) return t;
+	mask[at] = false;
+	return enumRemainder(enumType, facts, mask);
+}
+
+// The join of branches that each hold members of the declared enum: the union of their member sets.
+function joinEnumMembers(declared: Type, members: Type[]): Type | null {
+	const facts = enumFactsOf(declared);
+	const joined: boolean[] = [];
+	for (let i = 0; i < facts.literals.length; i += 1) joined.push(false);
+	for (const m of members) {
+		const mask = enumMask(m, declared, facts);
+		if (mask == null) return null;
+		for (let i = 0; i < mask.length; i += 1) {
+			if (mask[i]) joined[i] = true;
+		}
+	}
+	return enumRemainder(declared, facts, joined);
+}
+
+function enumMembersHeld(t: Type, enumType: Type): string[] | null {
+	if (t.kind == TypeKind.Enum) return t.typeName == enumType.typeName ? t.typeNames : null;
+	if (t.kind == TypeKind.EnumLiteral) return t.typeName == enumType.typeName ? [t.typeNames[0]] : null;
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return null;
+	const names: string[] = [];
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.EnumLiteral || m.typeName != enumType.typeName) return null;
+		names.push(m.typeNames[0]);
+	}
+	return names;
+}
+
+function isEnumRemainder(t: Type): boolean {
+	if (t.kind == TypeKind.EnumLiteral) return true;
+	if (t.kind != TypeKind.Union || t.typeChildren == null || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.EnumLiteral) return false;
+	}
+	return true;
 }
 
 function filterByLiteral(t: Type, value: Type, assumeTrue: boolean): Type {

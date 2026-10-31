@@ -29,7 +29,7 @@ const SITES: ReaderSite[] = [
 	{ file: "checker/instantiate.ms", readers: 14, records: 2 },
 	{ file: "checker/template.ms", readers: 0, records: 1 },
 	{ file: "checker/checkPass.ms", readers: 4, records: 0 },
-	{ file: "checker/callResolve.ms", readers: 1, records: 0 },
+	{ file: "checker/callResolve.ms", readers: 2, records: 0 },
 	{ file: "checker/ctorRoutine.ms", readers: 1, records: 0 },
 	{ file: "checker/ctorDecl.ms", readers: 2, records: 0 },
 	{ file: "checker/varPartitions.ms", readers: 5, records: 2 },
@@ -48,6 +48,7 @@ const SITES: ReaderSite[] = [
 	{ file: "codegen/raiser/eval.ms", readers: 5, records: 1 },
 	{ file: "transform/lowering/iterInline.ms", readers: 4, records: 1 },
 	{ file: "transform/lowering/jsPointerLower.ms", readers: 2, records: 0 },
+	{ file: "transform/lowering/methodDispatchLower.ms", readers: 1, records: 0 },
 	{ file: "analyzer/cursors.ms", readers: 1, records: 0 },
 	{ file: "analyzer/writeEffects.ms", readers: 8, records: 0 },
 ];

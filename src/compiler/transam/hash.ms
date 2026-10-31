@@ -300,7 +300,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
-			h = hN(h, d.destrPattern); h = hN(h, d.destrInit); h = hB(h, d.destrIsConst);
+			h = hN(h, d.destrPattern); h = hN(h, d.destrInit); h = hB(h, d.destrIsConst); h = hS(h, d.destrType);
 		},
 
 		// === Statements ===
@@ -417,8 +417,9 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = bodies ? hN(h, d.ctorBody) : hNull(h); h = hS(h, d.ctorVisibility);
+			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = bodies ? hN(h, d.ctorBody) : hNull(h); h = hS(h, d.ctorVisibility); h = hS(h, d.ctorFlags);
 			h = hNodes(h, d.ctorDefaults);
+			for (const pn of d.ctorParamProps) { if (pn != null) h = hN(h, pn); }
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;

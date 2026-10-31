@@ -717,6 +717,44 @@ function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	}
 }
 
+// A nullable distinct is a union whose arm is live when the slot is not null: its hooks run on
+// the live arm only, in the order of a case object's (generateUnionArms).
+function nullableDistinctOp(hook: string, d: Type, xf: Node, yf: Node, empties: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	ensureHooks(d.typeName, d, null as unknown as Type, d, false, lctx, loc);
+	const onLiveArm = (op: string, x: Node, y: Node, live: Node): void => {
+		const arm = newBuf();
+		namedObjOp(op, d, clonePath(x, loc), clonePath(y, loc), lctx, arm, loc);
+		buf.items.push(makeIf(makeBinary(clonePath(live, loc), "!==", makeNull(loc), loc), makeBlock(arm.items, loc), null as unknown as Node, loc));
+	};
+	match (hook) {
+		"destroy" => {
+			if (empties) {
+				const old = keepOld(xf, lctx, buf, loc);
+				genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+				onLiveArm("destroy", old, old, old);
+			} else {
+				onLiveArm("destroy", xf, xf, xf);
+			}
+		},
+		"copy" => {
+			const old = keepOld(xf, lctx, buf, loc);
+			genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+			onLiveArm("copy", xf, yf, yf);
+			onLiveArm("destroy", old, old, old);
+		},
+		"sink" => {
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			onLiveArm("destroy", old, old, old);
+		},
+		"wasMoved" => {
+			onLiveArm("wasMoved", xf, xf, xf);
+			genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+		},
+		"trace" | "custody" => { onLiveArm(hook, xf, yf, xf); },
+		_ => { throw new Error(`internal: a nullable distinct field has no '${hook}' operation`); },
+	};
+}
+
 // --- Parameterized runtime op (shared by closure, map) ---
 function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasMovedSuffix: string, traceSuffix: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
 	match (hook) {
@@ -866,7 +904,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Union => {
-			const refInner = unwrapRefNullUnion(fieldType);
+			let refInner = unwrapRefNullUnion(fieldType);
+			while (refInner != null && refInner.kind == TypeKind.Distinct) {
+				if (distinctTakesOp(refInner, hook, lctx)) {
+					if (walksValue(hook, refInner, lctx)) nullableDistinctOp(hook, refInner, xf, yf, empties, lctx, buf, loc);
+					return;
+				}
+				refInner = refInner.typeReturn;
+			}
 			if (refInner != null) {
 				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
@@ -899,8 +944,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
-			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
-				if (!walksCells(hook)) {
+			if (fieldType.kind == TypeKind.Distinct && distinctTakesOp(fieldType, hook, lctx)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 				}
@@ -1096,6 +1141,19 @@ function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(t, "wasMoved", lctx)
 		|| hasUserDefinedHook(t, "dup", lctx)
 		|| hasUserDefinedHook(t, "trace", lctx);
+}
+
+function hookedNullableDistinct(held: Type, lctx: LiftCtx): boolean {
+	let t: Type | null = held;
+	while (t != null && t.kind == TypeKind.Distinct) {
+		if (hasAnyUserHook(t, lctx)) return true;
+		t = t.typeReturn;
+	}
+	return false;
+}
+
+function distinctTakesOp(t: Type, hook: string, lctx: LiftCtx): boolean {
+	return walksCells(hook) ? hasUserDefinedHook(t, "trace", lctx) : hasAnyUserHook(t, lctx);
 }
 
 function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
@@ -1397,7 +1455,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
 		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
 		const firstOwn = owner != null ? owner.typeNames.length : 0;
-		if (objType.kind == TypeKind.Union) {
+		if (objType.kind == TypeKind.Union && unwrapRefNullUnion(objType) != null) {
+			x1.nodeType = objType;
+			fillBody(hook, x1, x2, "", objType, lctx, buf, createNameSet(), loc);
+		} else if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
 			} else {
@@ -2241,7 +2302,11 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
 	}
 	const nullableRef = unwrapRefNullUnion(t);
-	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
+	if (nullableRef != null) {
+		liftTypeOps(nullableRef, lctx, loc);
+		if (hookedNullableDistinct(nullableRef, lctx)) ensureHooks(anonUnionCName(t), t, null as unknown as Type, t, false, lctx, loc);
+		return;
+	}
 	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 		// with the defining module's emission or codegen's ensureTypeInfoDef.

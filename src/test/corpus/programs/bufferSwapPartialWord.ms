@@ -1,5 +1,4 @@
 // @skip-js: the js Buffer swaps the whole leading words of a partial-word buffer; the C Buffer leaves it unchanged
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: partial swap cases=71 unchanged=71
 
 function patterned(length: int32): Buffer {

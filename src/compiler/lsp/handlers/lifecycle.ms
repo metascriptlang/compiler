@@ -3,7 +3,7 @@
 
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
-	dbForgetAllTypeChecks, getFileId, getFilePath, invalidateFile, recordModuleImport,
+	dbForgetAllTypeChecks, getFileId, getFilePath, recordModuleImport,
 	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents,
 } from "../../transam/index";
 import { lookupLocal } from "../../../checker/symbol";
@@ -20,14 +20,15 @@ import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
-	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength, lspErrorResponse,
 } from "../protocol";
-import { lspFmtPublishDiagnostics } from "../format";
+import { lspFmtPublishDiagnostics, lspFmtDiagnostic } from "../format";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
 import { lspByteColumnIn } from "../position";
+import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
-	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
+	markDocumentOpen, markDocumentClosed, forgetChangedFile, isDocumentOpen, openDocuments,
 	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
 } from "./shared";
 import {
@@ -93,11 +94,9 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 			writeStderr(`[LSP-CHANGE] ${path} check=${t1 - t0}ms cache=${t2 - t1}ms`
 				+ ` diag=${t3 - t2}ms dependents=${t4 - t3}ms total=${t4 - t0}ms\n`);
 		} catch (e) {
-			const fileId = getFileId(db.fileInput, path);
-			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
-			const emptyParams = recordPublishedDiagnostics(path, lspFmtPublishDiagnostics(uri, "[]"));
-			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", emptyParams));
+			const failedParams = recordPublishedDiagnostics(path, checkFailureDiagnostics(uri, e.message));
+			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", failedParams));
 		}
 	}
 	for (let i = 0; i < stale.length; i++) {
@@ -112,6 +111,10 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 		}
 	}
 	return result;
+}
+
+export function checkFailureDiagnostics(uri: string, message: string): string {
+	return lspFmtPublishDiagnostics(uri, `[${lspFmtDiagnostic(0, 0, 1, 1, `internal: type check failed: ${message}`, "metascript", 0, 0)}]`);
 }
 
 function requeueDiagnostics(changed: ChangedFile[], fromChanged: int32, stale: string[], fromStale: int32): void {
@@ -188,9 +191,9 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 
 export function handleDidChange(params: string, db: TransAmDb): string {
 	const uri = lspDocumentUri(params);
-	// Two-step extraction: scope search to contentChanges array (avoids matching "text" elsewhere)
-	const contentChanges = lspGetObjectField(params, "contentChanges");
-	const changes = lspGetField(contentChanges, "text");
+	const entries = lspGetArrayItems(lspGetObjectField(params, "contentChanges"));
+	if (entries.length == 0) return "";
+	const changes = lspGetField(entries[entries.length - 1], "text");
 	const path = lspUriToPath(uri);
 	// Lightweight: update text + parse only. No type check on keystrokes.
 	// Diagnostics publish post-drain via publishPendingDiagnostics().
@@ -208,6 +211,7 @@ export function handleDidClose(params: string, db: TransAmDb): string {
 	const path = lspUriToPath(uri);
 	markDocumentClosed(path);
 	forgetPublishedDiagnostics(path);
+	forgetChangedFile(path);
 	refreshFromDisk(db, path);
 	const diagParams = "{\"uri\":" + lspJsonString(uri) + ",\"diagnostics\":[]}";
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
@@ -277,7 +281,7 @@ export function watchedFilesRegistration(): string {
 
 // ===== Did Save =====
 
-export function handleDidSave(params: string, db: TransAmDb): string {
+export function handleDidSave(params: string): string {
 	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	// Reload format config when build.ms or msc.json is saved
@@ -290,6 +294,8 @@ export function handleDidSave(params: string, db: TransAmDb): string {
 
 // ===== Dispatch =====
 
+export const METHOD_NOT_FOUND: int32 = -32601;
+
 export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
 	return match (method) {
 		"initialize" => handleInitialize(id),
@@ -297,7 +303,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didOpen" => handleDidOpen(params, db),
 		"textDocument/didChange" => handleDidChange(params, db),
 		"textDocument/didClose" => handleDidClose(params, db),
-		"textDocument/didSave" => handleDidSave(params, db),
+		"textDocument/didSave" => handleDidSave(params),
 		"workspace/didChangeWatchedFiles" => handleDidChangeWatchedFiles(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
 		"textDocument/completion" => handleCompletion(id, params, db, cache),
@@ -318,7 +324,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 			return "";
 		},
 		_ => {
-			return "";
+			return id == "" ? "" : lspErrorResponse(id, METHOD_NOT_FOUND, "MethodNotFound: " + method);
 		},
 	};
 }
@@ -355,6 +361,18 @@ test "clean source has no diagnostics" {
 	assert lspGetField(diags, "uri") == "file:///test.ms";
 }
 
+test "a type check that throws publishes one error naming it, not a clean file" {
+	const params = checkFailureDiagnostics("file:///crash.ms", "boom");
+	assert lspGetField(params, "uri") == "file:///crash.ms";
+	assert params.includes("\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0}"), params;
+	assert params.includes("\"severity\":1,\"source\":\"metascript\",\"message\":\"internal: type check failed: boom\"}]"), params;
+}
+
+test "a type check failure keeps quotes and newlines of its message as JSON escapes" {
+	const params = checkFailureDiagnostics("file:///crash.ms", "slot \"x\"\nbroke");
+	assert params.includes("\"message\":\"internal: type check failed: slot \\\"x\\\"\\nbroke\"}]"), params;
+}
+
 test "actor static without readonly is reported" {
 	const db = testDb("file:///test.ms", "actor A {\n\tstatic n: int32 = 0;\n\tping(): int32 { return 1; }\n}\n");
 	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
@@ -373,10 +391,11 @@ test "shutdown" {
 	assert lspGetNumberField(r, "id") == 2;
 }
 
-test "unknown method with id" {
+test "unknown method with id answers MethodNotFound" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	assert r == "";
+	assert lspGetNumberField(r, "id") == 3;
+	assert lspGetNumberField(lspGetObjectField(r, "error"), "code") == -32601, r;
 }
 
 test "unknown notification" {
@@ -856,7 +875,7 @@ test "signature help picks matching enum-literal overload" {
 		+ "function f(k: K): string { return \"\"; }\n"
 		+ "const x = f(K.B);\n";
 	const db = testDb("file:///ovlsig.ms", src);
-	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":16}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///ovlsig.ms\"},\"position\":{\"line\":4,\"character\":15}}";
 	const r = handleSignatureHelp("40", params, db);
 	assert lspGetNumberField(r, "id") == 40;
 	assert r.indexOf("\"activeSignature\":1", 0) >= 0;
@@ -1786,9 +1805,7 @@ test "re-checking an importer after a dependency body edit reuses the importer's
 	dbParse(db, dep);
 	assert checkedType(db, user, "n") == "int32";
 	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
-	const marked = db.cache.marked;
 	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
-	assert db.cache.marked - marked == 6;
 	const revision = db.revision.value;
 	const before = recomputeCount(db);
 	dbParse(db, dep);

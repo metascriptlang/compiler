@@ -88,6 +88,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false, inField: boolean = fa
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
 			if (t.base.kind == CTypeKind.Struct && t.base.tagName != "") return `Ptr<${t.base.tagName}>`;
+			if (isAnonymousRecord(t.base)) return "Ptr<void>";
 			const inner = isMutableChar(t.base) ? `Ptr<${C_CHAR}>` : cTypeToMs(t.base, false, inField);
 			if (t.base.kind == CTypeKind.Struct || t.base.kind == CTypeKind.Union) return `Ptr<${inner}>`;
 			// Other typed pointer — a const pointee is a Borrow<T> in a parameter or return
@@ -96,21 +97,38 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false, inField: boolean = fa
 			return t.base.isConst && !inField ? `Borrow<${inner}>` : `Ptr<${inner}>`;
 		},
 		CTypeKind.Array => {
-			if (t.base == null) return "unknown";
+			if (t.base == null) throw new Error("internal: a C array type without an element type reached cTypeToMs");
 			const elem = cTypeToMs(t.base, false, inField);
 			if (t.arrayLen >= 0) return elem.includes("=>") ? `(${elem})[${t.arrayLen}]` : `${elem}[${t.arrayLen}]`;
 			return `Span<${elem}>`;
 		},
 		CTypeKind.Func => emitFuncType(t),
-		CTypeKind.Struct => {
+		CTypeKind.Struct | CTypeKind.Union => {
 			if (t.tagName != "") return t.tagName;
-			return "unknown";
+			throw new Error(`internal: an anonymous C ${t.kind == CTypeKind.Union ? "union" : "struct"} reached cTypeToMs by value; its declaration must name it as a field or be dropped`);
 		},
-		CTypeKind.Union => {
-			if (t.tagName != "") return t.tagName;
-			return "unknown";
-		},
-		_ => "unknown",
+	};
+}
+
+function isAnonymousRecord(t: CType): boolean {
+	return (t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.tagName == "" && t.typedefName == "";
+}
+
+function reachesAnonymousRecord(t: CType): boolean {
+	if (isAnonymousRecord(t)) return true;
+	return (t.kind == CTypeKind.Ptr || t.kind == CTypeKind.Array) && t.typedefName == "" && t.base != null && reachesAnonymousRecord(t.base);
+}
+
+// cTypeToMs maps a pointer to an anonymous record to Ptr<void>; any other route to one has no
+// MetaScript name outside a field.
+function holdsAnonymousByValue(t: CType, skipTypedef: boolean): boolean {
+	if (t == null || (!skipTypedef && t.typedefName != "")) return false;
+	if (isAnonymousRecord(t)) return true;
+	return match (t.kind) {
+		CTypeKind.Ptr => t.base != null && !isAnonymousRecord(t.base) && holdsAnonymousByValue(t.base, false),
+		CTypeKind.Array => holdsAnonymousByValue(t.base, false),
+		CTypeKind.Func => holdsAnonymousByValue(t.returnType, false) || t.params.some((p: CType): boolean => holdsAnonymousByValue(p, false)),
+		_ => false,
 	};
 }
 
@@ -172,14 +190,53 @@ function emitVariable(obj: Obj, prefix: string): string {
 	return `${prefix}extern const ${obj.name}: ${cTypeToMs(obj.type)};\n`;
 }
 
-function emitStructBody(name: string, t: CType, prefix: string): string {
-	let result = `${prefix}extern struct ${name} {\n`;
+interface RecordSite {
+	prefix: string;
+	owner: Obj;
+	diags: Diagnostic[];
+	nested: string[];
+}
+
+// An anonymous record a field holds is the extern struct `<owner>_<field>`, spelled in C as the
+// type of that field: `at` is a C lvalue of the record being emitted.
+function emitStructBody(name: string, t: CType, cName: string, at: string, site: RecordSite): string {
+	const from = cName != "" ? ` from "${cName}"` : "";
+	return `${site.prefix}extern struct ${name}${from} {\n${emitFields(name, t, at, site)}}\n`;
+}
+
+// A member with no name is C11's anonymous member: C reads its fields as the owner's own.
+function emitFields(name: string, t: CType, at: string, site: RecordSite): string {
+	let result = "";
 	for (const m of t.members) {
-		if (m.name == "") continue;
-		result = result + `\t${m.name}: ${cTypeToMs(m.type, false, true)};\n`;
+		if (m.name == "") {
+			if (!isAnonymousRecord(m.type)) throw new Error(`internal: an unnamed member of ${name} is not an anonymous struct or union`);
+			result = result + emitFields(name, m.type, at, site);
+			continue;
+		}
+		const ms = fieldType(m.type, `(${at}).${m.name}`, `${name}_${m.name}`, site);
+		if (ms != "") {
+			result = result + `\t${m.name}: ${ms};\n`;
+			continue;
+		}
+		site.diags.push(makeDiag(DiagSeverity.Warning, site.owner.file, site.owner.line, 1,
+			`field ${name}.${m.name} is left out: its function type passes an anonymous struct or union by value, which has no MetaScript name; give that record a tag or a typedef`));
 	}
-	result = result + "}\n";
 	return result;
+}
+
+function fieldType(t: CType, at: string, recordName: string, site: RecordSite): string {
+	if (isAnonymousRecord(t)) {
+		site.nested.push(emitStructBody(recordName, t, `__typeof__(${at})`, at, site));
+		return recordName;
+	}
+	if (!reachesAnonymousRecord(t)) return holdsAnonymousByValue(t, false) ? "" : cTypeToMs(t, false, true);
+	if (t.kind == CTypeKind.Ptr) {
+		const pointee = fieldType(t.base, `*(${at})`, recordName, site);
+		return pointee != "" ? `Ptr<${pointee}>` : "";
+	}
+	const elem = fieldType(t.base, `(${at})[0]`, recordName, site);
+	if (elem == "") return "";
+	return t.arrayLen >= 0 ? `${elem}[${t.arrayLen}]` : `Span<${elem}>`;
 }
 
 // ===== Complete extern structs =====
@@ -261,7 +318,7 @@ function exactField(t: CType, objs: Obj[], target: TargetInfo): boolean {
 		CTypeKind.Enum => t.size == 4 && enumFitsInt(t, objs),
 		CTypeKind.Ptr => t.base == null || t.base.kind != CTypeKind.Func,
 		CTypeKind.Array => t.arrayLen > 0 && t.base != null && exactField(t.base, objs, target),
-		CTypeKind.Struct | CTypeKind.Union => cTypeToMs(t) != "unknown" && isCompleteTranslation(t, objs, target),
+		CTypeKind.Struct | CTypeKind.Union => !isAnonymousRecord(t) && isCompleteTranslation(t, objs, target),
 		_ => false,
 	};
 }
@@ -309,13 +366,17 @@ function emitOpaqueTag(t: CType, prefix: string): string {
 function emitsStructBody(obj: Obj): boolean {
 	const t = obj.type;
 	if (isOpaqueTag(t) && t.tagName == obj.name) return false;
-	return (t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.members.length > 0;
+	return (t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && (t.members.length > 0 || t.tagName == "");
 }
 
-function emitTypedef(obj: Obj, prefix: string): string {
+function emitTypedef(obj: Obj, prefix: string, diags: Diagnostic[]): string {
 	const t = obj.type;
 	if (isOpaqueTag(t) && t.tagName == obj.name) return `${prefix}extern struct ${obj.name};\n`;
-	if (emitsStructBody(obj)) return emitStructBody(obj.name, t, prefix);
+	if (emitsStructBody(obj)) {
+		const site: RecordSite = { prefix, owner: obj, diags, nested: [] };
+		const body = emitStructBody(obj.name, t, "", `*(${obj.name}*)0`, site);
+		return site.nested.join("") + body;
+	}
 	// Enum typedef → handled separately via emitEnum
 	if (t.kind == CTypeKind.Enum) return "";
 	if (isNamedScalar(obj.name)) return `${prefix}extern type ${obj.name}: ${cTypeToMs(t, true)} from "${obj.name}";\n`;
@@ -358,6 +419,7 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 		return c;
 	};
 	const own = fileOf(headerPath);
+	const diags: Diagnostic[] = outDiags != null ? outDiags : [];
 
 	const emittedEnums: string[] = [];
 	const declaredNames = new HashSet<string>();
@@ -381,7 +443,7 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 			}
 			continue;
 		}
-		const text = emitObj(obj, parsed.objs, tg, emittedEnums, mine ? outCompleteKeys : null, mine);
+		const text = emitObj(obj, parsed.objs, tg, emittedEnums, mine ? outCompleteKeys : null, mine, diags);
 		if (text == "") continue;
 		if (mine) {
 			declaredNames.add(obj.name);
@@ -435,8 +497,14 @@ export function translateHeaderModule(source: string, headerPath: string = "head
 
 // `complete`: the struct layout this translation registers as complete, for the header that
 // declares it; an included file's declarations register in that file's own translation.
-function emitObj(obj: Obj, objs: Obj[], tg: TargetInfo, emittedEnums: string[], outCompleteKeys: string[] | null, complete: boolean): string {
+function emitObj(obj: Obj, objs: Obj[], tg: TargetInfo, emittedEnums: string[], outCompleteKeys: string[] | null, complete: boolean, diags: Diagnostic[]): string {
 	const prefix = "export ";
+	const declared = obj.kind == ObjKind.Function || obj.kind == ObjKind.Variable || (obj.kind == ObjKind.TypedefName && !emitsStructBody(obj));
+	if (declared && holdsAnonymousByValue(obj.type, obj.kind == ObjKind.TypedefName)) {
+		diags.push(makeDiag(DiagSeverity.Warning, obj.file, obj.line, 1,
+			`${obj.name} is left out: its type holds an anonymous struct or union by value, which has no MetaScript name; give that record a tag or a typedef`));
+		return "";
+	}
 	return match (obj.kind) {
 		ObjKind.Function => emitFunction(obj, prefix),
 		ObjKind.Variable => emitVariable(obj, prefix),
@@ -451,7 +519,7 @@ function emitObj(obj: Obj, objs: Obj[], tg: TargetInfo, emittedEnums: string[], 
 				registerCompleteStruct(key);
 				if (outCompleteKeys != null) outCompleteKeys.push(key);
 			}
-			return emitTypedef(obj, prefix);
+			return emitTypedef(obj, prefix, diags);
 		},
 		_ => "",
 	};
@@ -905,4 +973,35 @@ test "an enum whose fixed underlying type is not int width is refused, naming it
 	assert diags[2].message.includes("enum Wide has a 8-byte"), diags[2].message;
 	assert ms.includes("enum Plain {") && ms.includes("enum Unsigned {"), ms;
 	assert !ms.includes("enum Byte") && !ms.includes("enum Half") && !ms.includes("enum Wide"), ms;
+}
+
+test "an anonymous struct or union field is the extern struct of that field's C type" {
+	const diags: Diagnostic[] = [];
+	const ms = translateHeaderModule("typedef struct Outer { struct { int x; int y; } inner; union { int i; float f; } u; int z; } Outer;", "anon.h", [], diags).source;
+	assert diags.length == 0, diags.length > 0 ? diags[0].message : "";
+	assert ms.includes("extern struct Outer_inner from \"__typeof__((*(Outer*)0).inner)\" {\n\tx: int32;\n\ty: int32;\n}"), ms;
+	assert ms.includes("extern struct Outer_u from \"__typeof__((*(Outer*)0).u)\" {\n\ti: int32;\n\tf: float32;\n}"), ms;
+	assert ms.includes("extern struct Outer {\n\tinner: Outer_inner;\n\tu: Outer_u;\n\tz: int32;\n}"), ms;
+}
+
+test "an anonymous record nested, in an array, behind a pointer or unnamed is reached through its field" {
+	const diags: Diagnostic[] = [];
+	const ms = translateHeaderModule("typedef struct Deep { struct { struct { int a; } leaf[2]; } mid; struct { int b; } *p; union { long long tag; double w; }; } Deep;", "anon.h", [], diags).source;
+	assert diags.length == 0, diags.length > 0 ? diags[0].message : "";
+	assert ms.includes("extern struct Deep_mid_leaf from \"__typeof__((((*(Deep*)0).mid).leaf)[0])\" {\n\ta: int32;\n}"), ms;
+	assert ms.includes("extern struct Deep_mid from \"__typeof__((*(Deep*)0).mid)\" {\n\tleaf: Deep_mid_leaf[2];\n}"), ms;
+	assert ms.includes("extern struct Deep_p from \"__typeof__(*((*(Deep*)0).p))\" {\n\tb: int32;\n}"), ms;
+	assert ms.includes("extern struct Deep {\n\tmid: Deep_mid;\n\tp: Ptr<Deep_p>;\n\ttag: int64;\n\tw: number;\n}"), ms;
+}
+
+test "an anonymous record with no field to name it is a pointer to void or a dropped declaration, named in a warning" {
+	const diags: Diagnostic[] = [];
+	const ms = translateHeaderModule("typedef struct { int a; } *Handle;\nstruct { int b; } global;\nint keep(Handle h);\ntypedef struct Cb { void (*fn)(struct { int c; } v); int d; } Cb;\n", "anon.h", [], diags).source;
+	assert ms.includes("type Handle = Ptr<void>;"), ms;
+	assert ms.includes("extern function keep(h: Handle): int32;"), ms;
+	assert !ms.includes("global"), ms;
+	assert ms.includes("extern struct Cb {\n\td: int32;\n}"), ms;
+	assert diags.length == 2, `${diags.length}`;
+	assert diags[0].message.startsWith("global is left out: its type holds an anonymous struct or union by value"), diags[0].message;
+	assert diags[1].message.startsWith("field Cb.fn is left out"), diags[1].message;
 }

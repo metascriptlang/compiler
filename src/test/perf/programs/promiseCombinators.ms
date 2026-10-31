@@ -2,6 +2,8 @@ import { argv } from "std/process";
 
 type Resolver = (value: int32) => void;
 
+let seen: int64 = 0;
+
 async function row(n: int32): Promise<int32[]> { return [n, n]; }
 
 function inputs(n: int32, pending: boolean, resolvers: Resolver[]): Promise<int32>[] {
@@ -45,7 +47,35 @@ async function once(kind: string, pending: boolean, n: int32): Promise<int64> {
 		settleAll(resolvers);
 		return (await p).length;
 	}
+	if (kind == "thenStr") {
+		const outs: Promise<void>[] = [];
+		for (const p of wordInputs(n, pending, resolvers)) outs.push(p.then((v: string): void => { seen += v.length; }));
+		settleAll(resolvers);
+		for (const o of outs) await o;
+		return seen;
+	}
 	const ps = inputs(n, pending, resolvers);
+	if (kind == "then") {
+		const outs: Promise<void>[] = [];
+		for (const p of ps) outs.push(p.then((v: int32): void => { seen += v; }));
+		settleAll(resolvers);
+		for (const o of outs) await o;
+		return seen;
+	}
+	if (kind == "catch") {
+		const outs: Promise<int32>[] = [];
+		for (const p of ps) outs.push(p.catch((e: Error): int32 => -1));
+		settleAll(resolvers);
+		for (const o of outs) sum += await o;
+		return sum;
+	}
+	if (kind == "finally") {
+		const outs: Promise<int32>[] = [];
+		for (const p of ps) outs.push(p.finally((): void => { seen += 1; }));
+		settleAll(resolvers);
+		for (const o of outs) sum += await o;
+		return sum + seen;
+	}
 	if (kind == "all") {
 		const p = Promise.all(ps);
 		settleAll(resolvers);
@@ -79,7 +109,7 @@ async function main(): Promise<void> {
 		console.log(`${argv[1]} ${argv[2]} ${argv[3]} ${total}`);
 		return;
 	}
-	const kinds = ["all", "allArr", "allStr", "allSettled", "race", "any"];
+	const kinds = ["all", "allArr", "allStr", "allSettled", "race", "any", "then", "thenStr", "catch", "finally"];
 	const sizes: int32[] = [10, 1000, 100000];
 	let total: int64 = 0;
 	for (const kind of kinds) {

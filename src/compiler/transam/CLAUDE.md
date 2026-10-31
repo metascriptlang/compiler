@@ -13,7 +13,7 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 - **A write records its own revision** — `setFileText` takes the revision of the write and sets the file's `changedAt` and the durability change markers itself; `dbSetFileText` passes the next revision and increments only when the text differs.
 - **YELLOW means a cycle and answers false** — verification never recurses into an entry that is being verified.
 - **HIGH durability is for the std root only** — such a dependency is not walked while no HIGH input changed since the entry was verified (`getLastChange`); it invalidates only when its `changedAt` is after the entry's `verifiedAt`, and a HIGH change walks it.
-- **Cancellation is version-based** — a query captures the version at start and compares with `checkCancel`; no boolean flag.
+- **A query is cancelled by version or by flag** — it captures the version at start and asks `isCancelled` (`src/checker/context.ms`); `requestCancel` bumps the version, and `stopForInput` sets `cancelled` and `stoppedForInput` without a bump, because input pending while a check runs stops it without invalidating anything; `resetCancel` clears both flags.
 
 ## File map
 
@@ -21,15 +21,15 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 |------|-------------|
 | `revision.ms` | `TaQueryKind`, `TaQueryState`, `TaDurability`, `TaRevision`, `TaQueryKey`, `createQueryKey`, `queryKeysEqual` |
 | `query.ms` | `TaCacheEntry`, `TaDependencyStack`, `pushFrame`, `popFrame`, `recordDependency`, `recordDurability` |
-| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markQueriesRedForFile` |
-| `redGreen.ms` | `tryMarkGreen`, `executeQueryWith`, `invalidateFile` |
+| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove` |
+| `redGreen.ms` | `tryMarkGreen` (re-executes a failed dependency through its `TaRefresh`), `executeQueryWith` |
 | `fileInput.ms` | `TaFileInputStore`, `setFileText`, `getFileText`, `getFileChangedAt`, `getFileId`, `getFileDurability`, `setFileDurability`, `getLastChange` |
 | `moduleDeps.ms` | `TaModuleDepGraph`, `recordModuleImport`, `clearImportsFor`, `getTransitiveDependents`, `detectCycle` |
 | `hash.ms` | `taHashString`, `transAmHashNode`, `nodeText`, `surfaceText`, `TaText` |
 | `digest.ms` | `ifaceDigest` (a check's exact interface text), `implDigest` |
 | `outputs.ms` | `TaOutputStore`, `outputChangedAt` |
 | `adopt.ms` | `adoptDecls`, `verifyAdoption` |
-| `cancel.ms` | `getCancelVersion`, `checkCancel`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
+| `cancel.ms` | `getCancelVersion`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
 | `index.ms` | `TransAmDb`, `createTransAmDb`, `dbBindGraph`, `dbSetGlobalImports`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 
 ## Tests

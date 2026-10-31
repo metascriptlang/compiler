@@ -457,7 +457,7 @@ export function iterateThroughProxy(ctx: CheckerContext, node: Node): boolean {
 	const index = hoistedTemp(ctx, int32Type(), loc);
 	const element = createNodeAt(NodeKind.ArrayAccess, { array: boundRead(items, loc), index: boundRead(index, loc) }, loc);
 	const binding = d.forOfPattern != null
-		? createNodeAt(NodeKind.DestructuringDecl, { destrPattern: d.forOfPattern, destrInit: element, destrIsConst: d.forOfIsConst }, loc)
+		? createNodeAt(NodeKind.DestructuringDecl, { destrPattern: d.forOfPattern, destrInit: element, destrIsConst: d.forOfIsConst, destrType: "" }, loc)
 		: createNodeAt(NodeKind.VariableDecl, { declName: d.forOfBinding, declType: "", initializer: element, declKind: d.forOfIsConst ? DeclKind.Const : DeclKind.Let, nameLocation: d.bindingLocation }, d.bindingLocation);
 	const bound = ctx.adoptedDecls.get(node);
 	if (bound != null) { ctx.adoptedDecls.delete(node); ctx.adoptedDecls.set(binding, bound); }

@@ -184,3 +184,15 @@ actor Fine {
 	const messages = checkProjectDiagnostics(entries, "src/main.ms");
 	assert occurrences(messages, handleName) == 1, messages.join("\n");
 }
+
+test "actorFieldIsolation: an extension on an actor reads a field no more than any other function" {
+	const entries: MapEntry[] = [
+		counterModule(),
+		{ entryPath: "src/main.ms", entrySource: `import { make, Counter } from "./counter";
+function peek(this c: Counter): int32 { return c.n; }
+console.log(make().peek());
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert occurrences(messages, refusal) == 1, messages.join("\n");
+}

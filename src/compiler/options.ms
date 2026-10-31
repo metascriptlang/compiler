@@ -15,7 +15,7 @@ import {
 	seedProjectDir,
 } from "./defines";
 import {
-	BuildConfig, BuildSection, defaultBuildSection, loadBuildConfig, validateCacheDirectory,
+	BuildConfig, BuildSection, ResolveSection, defaultBuildSection, defaultResolveSection, loadBuildConfig, validateCacheDirectory,
 } from "./buildConfig";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { setExtraGlobalImports, setModulePasses } from "../checker/prelude";
@@ -92,6 +92,7 @@ export interface CliOptions {
 	defines: DefineTable;      // -d:name[=value] conditional symbols (Nim condsyms.nim)
 	showDefines: boolean;      // --help-defines: list every define, then exit
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
+	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
 }
 
@@ -120,7 +121,7 @@ export function buildCpu(targetOs: string, cpuTarget: string): string {
 	if (cpuTarget != "") return cpuTarget;
 	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
 	if (targetOs == "solana") return "sbf";
-	if (targetOs == platform || targetOs == "bare") return arch;
+	if (targetOs == platform || targetOs == "bare" || (platform == "darwin" && targetOs == "macos")) return arch;
 	return "amd64";
 }
 
@@ -196,6 +197,7 @@ export function newCliOptions(): CliOptions {
 		defines: createDefineTable(),
 		showDefines: false,
 		projectRoot: "",
+		resolve: defaultResolveSection(),
 		extraArgs: [],
 	};
 }
@@ -307,7 +309,12 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 	opts.projectRoot = projectRoot;
 	const buildMsPath = join(projectRoot, "build.ms");
 	const config = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
+	opts.resolve = config.resolve;
 	try applyCacheConfig(opts, config.build, projectRoot);
+	if (opts.command == "x") {
+		opts.target = Target.Raiser;
+		opts.targetExplicit = true;
+	}
 	if (config.valid) {
 		const targeted = applyBuildTarget(opts, config.build.target);
 		if (!targeted.ok) return Result.err(`${buildMsPath}: build.target: ${targeted.error}`);
@@ -601,6 +608,11 @@ test "int64 alignment packs to 4 only on i386 outside windows" {
 test "buildCpu: a host build and a bare build take the compiler's own cpu" {
 	assert buildCpu(platform, "") == arch;
 	assert buildCpu("bare", "") == arch;
+}
+
+test "buildCpu: the documented spelling of the host os keeps the host cpu" {
+	assert buildCpu(platform == "darwin" ? "macos" : platform, "") == arch;
+	assert buildCpu(platform == "darwin" ? "macos" : platform, "i386") == "i386";
 }
 
 test "buildCpu: a cross build without --cpu takes amd64, as the C compiler is told" {

@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
-import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
-import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase } from "../../checker/types";
+import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase, isDiscriminatedUnion, getDiscriminantName } from "../../checker/types";
+import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead, brandArrayBase } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
@@ -9,7 +9,7 @@ import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind } from "../util";
 import { createNode } from "../../ast/node";
-import { memberLabels } from "../native/unionProjectLower";
+import { memberLabels, discriminantValue } from "../native/unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
 import { monoInstanceName } from "../../monomorphize/registry";
 
@@ -348,6 +348,7 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 function heldAs(held: Node, slot: Type, loc: SourceLocation): Node {
 	if (held.nodeType == null || held.nodeType == slot) return held;
 	if (isNumeric(held.nodeType) && isNumeric(slot) && !sameType(held.nodeType, slot)) return wrapInConv(held, slot);
+	if (brandArrayBase(held.nodeType) != null) return wrapInConv(held, slot);
 	if (held.nodeType.kind != TypeKind.Ref || slot.kind != TypeKind.Ref) return held;
 	const upcast = makeHiddenSubConv(held, slot, loc);
 	upcast.nodeType = slot;
@@ -402,38 +403,32 @@ function classDepth(m: Type): int32 {
 	return depth;
 }
 
-function valueKind(m: Type): string {
-	const v = peelTransparentInstance(m);
-	if (v.kind == TypeKind.Int64 || v.kind == TypeKind.Uint64) return "bigint";
-	return jsMemberKind(m);
-}
-
 function testedByTypeof(kind: string): boolean {
 	return kind == "number" || kind == "string" || kind == "boolean" || kind == "bigint";
 }
 
 export function armOrder(source: Type, ctx: TransformContext, loc: SourceLocation): int32[] {
 	const order: int32[] = [];
-	if (testsByTag(source, ctx)) {
+	if (testsByTag(source, ctx) || isDiscriminatedUnion(source)) {
 		for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) order.push(vi);
 		return order;
 	}
 	let deepest = 0;
 	for (const m of source.typeChildren) {
-		if (valueKind(m) == "class" && classDepth(m) > deepest) deepest = classDepth(m);
+		if (jsValueKind(m) == "class" && classDepth(m) > deepest) deepest = classDepth(m);
 	}
 	for (let depth = deepest; depth >= 0; depth -= 1) {
 		for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) {
 			const m = source.typeChildren[vi];
-			if (valueKind(m) == "class" && classDepth(m) == depth) order.push(vi);
+			if (jsValueKind(m) == "class" && classDepth(m) == depth) order.push(vi);
 		}
 	}
 	for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) {
-		if (testedByTypeof(valueKind(source.typeChildren[vi]))) order.push(vi);
+		if (testedByTypeof(jsValueKind(source.typeChildren[vi]))) order.push(vi);
 	}
 	const rest: int32[] = [];
 	for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) {
-		const kind = valueKind(source.typeChildren[vi]);
+		const kind = jsValueKind(source.typeChildren[vi]);
 		if (kind != "class" && !testedByTypeof(kind)) rest.push(vi);
 	}
 	if (rest.length > 1) {
@@ -450,7 +445,13 @@ export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: Tran
 		const tag = makeMember(read(valueSym, source, loc), ctx.jsBackend || ctx.raiserBackend ? "$tag" : "_tag", loc);
 		tag.nodeType = int32Type();
 		test = makeBinary(tag, "==", makeIntNumber(vi as int64, loc), loc);
-	} else if (valueKind(member) == "class") {
+	} else if (isDiscriminatedUnion(source)) {
+		const want = discriminantValue(source, vi, loc);
+		if (want == null) throw new Error(`internal: member ${vi} of '${typeDisplayName(source)}' has no discriminant value`);
+		const disc = makeMember(read(valueSym, source, loc), getDiscriminantName(source), loc);
+		disc.nodeType = source.typeExtra;
+		test = makeBinary(disc, "==", want, loc);
+	} else if (jsValueKind(member) == "class") {
 		const cls = runtimeClassSym(member.typeReturn);
 		if (cls == null) throw new Error(`internal: the class member '${typeDisplayName(member)}' of '${typeDisplayName(source)}' has no runtime class`);
 		const body = member.typeReturn;
@@ -461,7 +462,7 @@ export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: Tran
 	} else {
 		const kind = makeUnary("typeof", read(valueSym, source, loc), loc);
 		kind.nodeType = stringType();
-		const want = makeString(ctx.raiserBackend ? jsMemberKind(member) : valueKind(member), loc);
+		const want = makeString(ctx.raiserBackend ? jsMemberKind(member) : jsValueKind(member), loc);
 		test = makeBinary(kind, "===", want, loc);
 	}
 	test.nodeType = booleanType();
@@ -490,6 +491,6 @@ function memberMissing(source: Type, target: Type, vi: int32, ctx: TransformCont
 	const names = createNode(NodeKind.ArrayLiteral, { elements: labels.map((l: string): Node => makeString(l, loc)) }, syntheticToken(loc));
 	names.nodeType = createArray(stringType());
 	const fail = makeCall(runtimeRef("msUnionRead", loc), [held, none, head, names], loc);
-	fail.nodeType = target;
+	fail.nodeType = unknownType();
 	return makeExprStmt(fail, loc);
 }

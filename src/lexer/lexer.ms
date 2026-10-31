@@ -247,6 +247,23 @@ test "a radix prefix or an exponent without digits is a lex error" {
 	assert lexError("1e-3") == "";
 }
 
+test "a legacy octal literal or a decimal with a leading zero is a lex error naming the 0o spelling" {
+	assert lexError("0777").startsWith("Octal literals are not allowed. Use the syntax '0o777'.");
+	assert lexError("010").startsWith("Octal literals are not allowed. Use the syntax '0o10'.");
+	assert lexError("x = 00;").startsWith("Octal literals are not allowed. Use the syntax '0o0'.");
+	assert lexError("08").startsWith("Decimals with leading zeros are not allowed.");
+	assert lexError("09").startsWith("Decimals with leading zeros are not allowed.");
+	assert lexError("0789").startsWith("Decimals with leading zeros are not allowed.");
+}
+
+test "a zero that is alone, fractional, exponential or radix-prefixed still lexes" {
+	for (const source of ["0", "0.5", "0e1", "0E1", "0x1F", "0o17", "0b101", "0n", "0.0", "0_1", "10", "100", "1.05"]) {
+		assert lexError(source) == "", source;
+	}
+	assert lexFirstVal("0") == "0";
+	assert lexFirstVal("0.5") == "0.5";
+}
+
 test "a slash inside a regex character class does not end the literal" {
 	assert lexFirstVal("/[/]/") == "/[/]/";
 	assert lexFirstVal("/[^/]+/g") == "/[^/]+/g";
@@ -283,22 +300,80 @@ test "template strings" {
 	assert lexLineAt("`a\\rb` z", 1) == 1;
 }
 
-test "operator identifiers" {
-	// Backtick-quoted operator names → OperatorIdent token
-	assert lexFirst("`==`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`==`") == "==";
-	assert lexFirst("`!=`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`!=`") == "!=";
-	assert lexFirst("`+`") == TokenKind.OperatorIdent;
-	assert lexFirst("`[]`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`[]`") == "[]";
-	assert lexFirst("`[]=`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`[]=`") == "[]=";
-	assert lexFirst("`<>`") == TokenKind.OperatorIdent;
-	assert lexFirstVal("`<>`") == "<>";
-	// Regular template strings stay as TemplateNoSub
+test "operator identifiers belong to declaration name goals" {
+	for (const name of ["==", "!=", "+", "[]", "[]=", "<>", "\\"]) {
+		const source = "function `" + name + "`";
+		assert lexKindAt(source, 1) == TokenKind.OperatorIdent;
+		assert lexValAt(source, 1) == name;
+		if (name != "\\") {
+			assert lexFirst("`" + name + "`") == TokenKind.TemplateNoSub;
+		}
+	}
 	assert lexFirst("`hello`") == TokenKind.TemplateNoSub;
 	assert lexFirst("`hello world`") == TokenKind.TemplateNoSub;
+}
+
+test "stropping preserves exported generator extern and macro name goals" {
+	const sources = [
+		"export template `\\`",
+		"async function /*a*/ * /*b*/ `\\`",
+		"@`\\`()",
+		"@module.`\\`()",
+		"@module.`+`.child.`\\`()",
+		"extern macro @`\\` from \"native\";",
+	];
+	for (const source of sources) {
+		const scanned = lex(source);
+		assert scanned.ok;
+		let found = false;
+		for (const token of scanned.value) {
+			if (token.kind == TokenKind.OperatorIdent && token.value == "\\") {
+				found = true;
+			}
+		}
+		assert found;
+	}
+	for (const kind of ["class", "const", "var", "let", "type", "enum", "interface", "struct"]) {
+		assert lexKindAt("extern " + kind + " `\\`", 2) == TokenKind.OperatorIdent;
+	}
+}
+
+test "expression templates do not inherit a preceding keyword name goal" {
+	assert lexKindAt("obj.function * `+`", 4) == TokenKind.TemplateNoSub;
+	assert lexKindAt("obj?.function * `+`", 4) == TokenKind.TemplateNoSub;
+	assert lexKindAt("@macro(`+`)", 3) == TokenKind.TemplateNoSub;
+	assert lexKindAt("@module.name(`+`)", 5) == TokenKind.TemplateNoSub;
+}
+
+test "repeated quoted macro segments preserve the final raw operator name" {
+	let source = "@root";
+	let dotted = "root";
+	for (let i = 0; i < 256; i += 1) {
+		source += ".`word`";
+		dotted += ".`+`";
+	}
+	source += ".`\\`()";
+	const named = lex(source);
+	assert named.ok;
+	const lastName = named.value[named.value.length - 4];
+	assert lastName.kind == TokenKind.OperatorIdent;
+	assert lastName.value == "\\";
+	const scanned = lex(dotted);
+	assert scanned.ok;
+	assert scanned.value.length == 514;
+	assert scanned.value[2].kind == TokenKind.TemplateNoSub;
+}
+
+test "an escaped initial backtick precedes a real interpolation" {
+	const scanned = lex("`\\`${7}`");
+	assert scanned.ok;
+	assert scanned.value[0].kind == TokenKind.TemplateHead;
+	assert scanned.value[0].value == "`";
+	assert scanned.value[0].endColumn == 6;
+	assert scanned.value[1].kind == TokenKind.Number;
+	assert scanned.value[2].kind == TokenKind.TemplateTail;
+	assert scanned.value[2].value == "";
+	assert scanned.value[2].endColumn == 9;
 }
 
 test "template interpolation tokens" {

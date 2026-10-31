@@ -36,7 +36,7 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact, reportTransformError } from "../context";
 import { skipsModule } from "../moduleFacts";
 import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
@@ -497,7 +497,7 @@ function tryExpandAwaitExpr(expr: Node | null, stmt: Node, ctx: TransformContext
 		return { stmts: expansion.stmts, replacement: expansion.resultIdent };
 	}
 	if (containsExprKind(expr, NodeKind.AwaitExpr)) {
-		ctx.errors.push(`internal: an await nested in a ${expr.kind.toString()} expression reached awaitLower; awaitSpill leaves every await as a whole initializer or statement`);
+		reportTransformError(ctx, `internal: an await nested in a ${expr.kind.toString()} expression reached awaitLower; awaitSpill leaves every await as a whole initializer or statement`, expr.location);
 	}
 	return noResult;
 }

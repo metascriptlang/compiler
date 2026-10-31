@@ -191,12 +191,18 @@ function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, s
 	return cfaAux(body, origKey, withRef, sawPlainEdge, marker);
 }
 
+function skipAbstract(t: Type): Type {
+	let s = t;
+	while ((s.kind == TypeKind.Distinct || s.kind == TypeKind.Alias) && s.typeReturn != null) s = s.typeReturn;
+	return s;
+}
+
 export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
 	if (t == null) return false;
-	let subject: Type | null = t;
+	let subject: Type | null = skipAbstract(t);
 	if (subject.kind == TypeKind.Union) {
 		const refInner = unwrapRefNullUnion(subject);
-		if (refInner != null) subject = refInner;
+		if (refInner != null) subject = skipAbstract(refInner);
 	}
 	if (subject.kind == TypeKind.Function || isUnknownType(subject)) return true;
 	if (subject.kind == TypeKind.Ptr) return false;
@@ -320,7 +326,8 @@ export function custodyReaches(t: Type | null, cyclicCache: NameSet, acyclicCach
 }
 
 function countedRefOf(t: Type): Type | null {
-	const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t);
+	const held = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t);
+	const ref = held != null ? skipAbstract(held) : null;
 	if (ref == null || ref.kind != TypeKind.Ref || isAtomicRef(ref)) return null;
 	return ref;
 }

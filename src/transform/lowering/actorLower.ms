@@ -15,7 +15,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	DoWhileStmtData, TryCatchStmtData,
 	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData, CallExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
-import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact, reportTransformError } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
@@ -24,7 +24,7 @@ import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeAbsent, makeBlock, makeBinary,
 	isValueLayoutType, makeHiddenAddr, makeHiddenDeref, makeHiddenStdConv, makeTryFinally, runtimeRef,
-	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount,
+	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount, makeMoveExpr,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
@@ -456,6 +456,8 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 				ctorBody: makeBlock([], loc),
 				ctorDefaults: cd.ctorDefaults,
 				ctorVisibility: cd.ctorVisibility,
+				ctorParamProps: cd.ctorParamProps,
+				ctorFlags: cd.ctorFlags,
 			}, syntheticToken(loc));
 			emptyCtor.resolvedSym = m.resolvedSym;
 			emptyCtor.nodeType = m.nodeType;
@@ -846,7 +848,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const name = d.actorName;
 	const result: Node[] = [];
 	if (node.resolvedSym == null) {
-		ctx.errors.push(`internal: actor lowering met actor '${name}' without a symbol`);
+		reportTransformError(ctx, `internal: actor lowering met actor '${name}' without a symbol`, node.location);
 		return result;
 	}
 	const actorType = node.resolvedSym.symbolType;
@@ -1020,7 +1022,7 @@ function actorPidMember(thisSym: Symbol, loc: SourceLocation): Node {
 	return member;
 }
 
-function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLocation, ctorParams: Symbol[]): Node[] {
+function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLocation, ctorParams: Symbol[], ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 	const actorName = actor.actorSym.name;
 	const dSym = actor.dispatch;
@@ -1062,12 +1064,28 @@ function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLo
 	const ctor = actor.ctor;
 	if (ctor != null) {
 		const ctorArgs: Node[] = [makeIdentResolved(thisSym, loc)];
-		for (let i = 1; i < ctorParams.length; i += 1) ctorArgs.push(makeIdentResolved(ctorParams[i], loc));
+		const takes: Node[] = [];
+		for (let i = 1; i < ctorParams.length; i += 1) {
+			const param = ctorParams[i];
+			if (!mayHoldCycleRoot(param.symbolType, ctx)) {
+				ctorArgs.push(makeIdentResolved(param, loc));
+				continue;
+			}
+			result.push(disownStmt(makeIdentResolved(param, loc), param.symbolType, loc));
+			const taken = freshOwnedSym(ctx, "taken_" + param.name, param.symbolType);
+			const src = makeMoveExpr(makeIdentResolved(param, loc), loc);
+			src.nodeType = param.symbolType;
+			const decl = makeVarDecl(taken.name, src, DeclKind.Let, loc);
+			decl.resolvedSym = taken;
+			decl.nodeType = param.symbolType;
+			takes.push(decl);
+			ctorArgs.push(makeIdentResolved(taken, loc));
+		}
 		const ctorCall = makeCall(makeIdentResolved(ctor, loc), ctorArgs, loc);
 		ctorCall.resolvedSym = null;
 		result.push(makeExprStmt(makeCall(runtimeRef("msActorCtorEnter", loc), [actorPidMember(thisSym, loc)], loc), loc));
 		const leave = makeExprStmt(makeCall(runtimeRef("msActorCtorLeave", loc), [actorPidMember(thisSym, loc)], loc), loc);
-		result.push(makeTryFinally(makeBlock([makeExprStmt(ctorCall, loc)], loc), makeBlock([leave], loc), loc));
+		result.push(makeTryFinally(makeBlock(takes.concat([makeExprStmt(ctorCall, loc)]), loc), makeBlock([leave], loc), loc));
 	}
 	return result;
 }
@@ -1085,6 +1103,8 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 			ctorBody: makeBlock([], loc),
 			ctorDefaults: [],
 			ctorVisibility: "",
+			ctorParamProps: [],
+			ctorFlags: "",
 		}, syntheticToken(loc));
 		ctor.nodeType = createFunction([], [], voidType());
 		ctor.resolvedSym = ctorRoutineFor(ctx.checkerCtx, actor.actorSym);
@@ -1093,11 +1113,11 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 	}
 	const params = ctor.paramSyms;
 	if (params == null || params.length == 0 || params[0].name != "this") {
-		ctx.errors.push(`internal: actor '${actor.actorSym.name}' constructor has no checked receiver`);
+		reportTransformError(ctx, `internal: actor '${actor.actorSym.name}' constructor has no checked receiver`, ctor.location);
 		return;
 	}
 	const body = (ctor.data as ConstructorDeclData).ctorBody.data as BlockStmtData;
-	for (const stmt of generateActorWiring(params[0], actor, loc, params)) body.statements.push(stmt);
+	for (const stmt of generateActorWiring(params[0], actor, loc, params, ctx)) body.statements.push(stmt);
 }
 
 function injectActorPoll(program: Node): Node {

@@ -155,8 +155,10 @@ function packDisabled(): boolean {
 
 function atomicWritePack(path: string, content: string): boolean {
 	const tmp = `${path}.tmp.${performance.now()}`;
-	const w = writeFile(tmp, content);
-	if (!w.ok) return false;
+	if (!writeFile(tmp, content).ok) {
+		ensureDir(path.slice(0, path.lastIndexOf("/")));
+		if (!writeFile(tmp, content).ok) return false;
+	}
 	const r = rename(tmp, path);
 	if (r.ok) return true;
 	remove(tmp);
@@ -836,8 +838,14 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
-	collectStaleEntries(packBase(), nowSeconds(), [".pk", ".deps"]);
+	collectUnusedPacks(nowSeconds());
 	_writeMs = _writeMs + (performance.now() - _w0);
+}
+
+const PACK_UNUSED_SECONDS: float64 = 24 * 3600;
+
+export function collectUnusedPacks(now: float64): void {
+	collectStaleEntries(packBase(), now, [".pk", ".deps"], PACK_UNUSED_SECONDS);
 }
 
 // Emit-phase sink: appends each field's serialized column. Byte-for-byte the
@@ -1211,7 +1219,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.ArrayPattern) return { patternElements: rd.nodeArr(nodes), hasRestElement: rd.flag(), patternDefaults: rd.nodeArr(nodes) } as NodeData;
 	if (kind == NodeKind.ObjectPattern) return { patternProps: rd.nodeArr(nodes), hasRestProp: rd.flag() } as NodeData;
 	if (kind == NodeKind.ObjectPatternProp) return { propKey: rd.text(), propAlias: rd.nodeRef(nodes) as Node, propDefault: rd.nodeRef(nodes) } as NodeData;
-	if (kind == NodeKind.DestructuringDecl) return { destrPattern: rd.nodeRef(nodes) as Node, destrInit: rd.nodeRef(nodes) as Node, destrIsConst: rd.flag() } as NodeData;
+	if (kind == NodeKind.DestructuringDecl) return { destrPattern: rd.nodeRef(nodes) as Node, destrInit: rd.nodeRef(nodes) as Node, destrIsConst: rd.flag(), destrType: rd.text() } as NodeData;
 	if (kind == NodeKind.VariableDecl) return { declName: rd.text(), declType: rd.text(), initializer: rd.nodeRef(nodes) as Node, declKind: rd.dec() as DeclKind, nameLocation: parseLoc(rd.str()) } as NodeData;
 	if (kind == NodeKind.IfStmt) return { condition: rd.nodeRef(nodes) as Node, consequent: rd.nodeRef(nodes) as Node, alternate: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.WhileStmt) return { whileCondition: rd.nodeRef(nodes) as Node, whileBody: rd.nodeRef(nodes) as Node, whileLabel: rd.text() } as NodeData;
@@ -1237,7 +1245,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.ClassDecl) return { className: rd.text(), classDisplayName: rd.text(), classExtends: rd.text(), classBody: rd.nodeArr(nodes), nameLocation: parseLoc(rd.str()), classImplements: splitCsv(rd.str()) } as NodeData;
 	if (kind == NodeKind.PropertyDecl) return { propName: rd.text(), propType: rd.text(), propIsStatic: rd.flag(), propIsReadonly: rd.flag(), propVisibility: rd.text(), propInitializer: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.MethodDecl) return { methodName: rd.text(), methodParams: splitCsv(rd.str()), methodParamTypes: splitCsv(rd.str()), methodBody: rd.nodeRef(nodes) as Node, methodIsStatic: rd.flag(), methodFlags: rd.text(), methodVisibility: rd.text(), methodReturnType: rd.text(), methodDefaults: rd.nodeArr(nodes), nativeName: rd.text(), nameLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.ConstructorDecl) return { ctorParams: splitCsv(rd.str()), ctorParamTypes: splitCsv(rd.str()), ctorBody: rd.nodeRef(nodes) as Node, ctorDefaults: rd.nodeArr(nodes), ctorVisibility: rd.text() } as NodeData;
+	if (kind == NodeKind.ConstructorDecl) return { ctorParams: splitCsv(rd.str()), ctorParamTypes: splitCsv(rd.str()), ctorBody: rd.nodeRef(nodes) as Node, ctorDefaults: rd.nodeArr(nodes), ctorVisibility: rd.text(), ctorParamProps: rd.nodeArr(nodes), ctorFlags: rd.text() } as NodeData;
 	if (kind == NodeKind.ThrowStmt) return { throwArg: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.TryCatchStmt) return { tryBody: rd.nodeRef(nodes) as Node, catchName: rd.text(), catchBody: rd.nodeRef(nodes) as Node, finallyBody: rd.nodeRef(nodes) as Node, catchBindingLocation: parseLoc(rd.str()), hasCatchClause: rd.flag() } as NodeData;
 	if (kind == NodeKind.MacroInvocation) return { macroName: rd.text(), macroArgs: rd.nodeArr(nodes), macroHasParens: rd.last == 9 && rd.flag() } as NodeData;
@@ -2301,4 +2309,34 @@ test "the prelude pack key moves with the parser defines" {
 	const keyed = preludePackKey("/std", ".cms");
 	setParserDefines(saved);
 	assert plain != keyed;
+}
+
+test "a pack is written even when the collector removed its emptied format directory after the writer created it" {
+	const root = `/tmp/msc-pack-rmdir-${performance.now()}`;
+	const dir = `${root}/fmt`;
+	ensureDir(dir);
+	removeAll(dir);
+	assert atomicWritePack(`${dir}/k.pk`, "pack");
+	assert (try readFile(`${dir}/k.pk`) catch "") == "pack";
+	removeAll(root);
+}
+
+test "a pack unused for a day is collected with its deps record, a pack used within the day stays" {
+	const saved = env.get("MSC_GLOBAL_CACHE_DIR");
+	const root = `/tmp/msc-pack-age-${performance.now()}`;
+	env.set("MSC_GLOBAL_CACHE_DIR", root);
+	try {
+		const dir = packRoot();
+		ensureDir(dir);
+		writeFile(`${dir}/old.pk`, "pack");
+		writeFile(`${dir}/old.deps`, "deps");
+		const written = nowSeconds();
+		collectUnusedPacks(written + 2 * 3600);
+		assert exists(`${dir}/old.pk`) && exists(`${dir}/old.deps`);
+		collectUnusedPacks(written + 25 * 3600);
+		assert !exists(`${dir}/old.pk`) && !exists(`${dir}/old.deps`);
+	} finally {
+		env.set("MSC_GLOBAL_CACHE_DIR", saved);
+		removeAll(root);
+	}
 }

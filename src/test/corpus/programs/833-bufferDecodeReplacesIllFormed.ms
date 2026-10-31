@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: E2 19 C7 01 88 0F 39 EB 2B 0A -> 10 [fffd 19 fffd 1 fffd f 39 fffd 2b a]
 // note: each line is the UTF-16 view of one decode, so every backend must replace ill-formed UTF-8 the way TextDecoder does.
 

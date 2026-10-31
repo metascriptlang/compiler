@@ -326,6 +326,7 @@ export function makeEnvStruct(state: LiftState, envName: string, fieldSyms: Symb
 	envSym.declNode = envDecl;
 	envSym.location = loc;
 	setFlag(envSym, SymbolFlag.ClosureEnv);
+	if (fieldSyms.every((s: Symbol): boolean => s == null || (s.symbolKind == SymbolKind.Variable && !hasFlag(s, SymbolFlag.Mutable)))) setFlag(envSym, SymbolFlag.ImmutableEnv);
 	envDecl.nodeType!.sym = envSym;
 	state.envFieldSyms.set(envDecl.nodeType!, fieldSyms);
 	return envDecl;
@@ -652,9 +653,10 @@ export interface PreCreatedEnv {
 	envStructType: Type;
 	fields: SymSet;
 	fieldIdents: Node[];
+	detached: boolean;
 }
 
-export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation, parentType: Type | null): PreCreatedEnv {
+export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation, parentType: Type | null, detached: boolean): PreCreatedEnv {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
 	const envName = `$Env_${state.currentFnName}_${counter}`;
@@ -678,7 +680,7 @@ export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], 
 	}
 	const envDecl = makeEnvStruct(state, envName, envFieldSyms, envFieldTypes, envResolvedTypes, loc);
 	state.envStructs.push(envDecl);
-	return { envName, envVarSym: freshEnvVarSym(state.ctx, `_env${counter}_`, envDecl.nodeType!), envStructType: envDecl.nodeType!, fields: captures, fieldIdents: capturedIdents };
+	return { envName, envVarSym: freshEnvVarSym(state.ctx, `_env${counter}_`, envDecl.nodeType!), envStructType: envDecl.nodeType!, fields: captures, fieldIdents: capturedIdents, detached };
 }
 
 // ===== Shared Env Setup (reference parity: getEnvTypeForOwner + rawClosureCreation) =====

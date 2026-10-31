@@ -16,6 +16,8 @@ async function frames(count: int32): Promise<int32> {
 	let seen: int32 = 0;
 	for (let frame: int32 = 0; frame < count; frame += 1) {
 		await sleepAsync(1);
+		seen += (await Promise.race([Promise.resolve(frame), Promise.resolve(frame)])) - frame;
+		seen += (await Promise.any([Promise.resolve(frame), Promise.resolve(frame)])) - frame;
 		if (frame == 1) {
 			place(`module.logic${EXT}`);
 			place(`module${EXT}.hcrabi`);

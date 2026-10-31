@@ -49,7 +49,7 @@ function findCRLF(data: string, pos: int32): int32 {
 function joinPieces(pieces: Readonly<Buffer[]>): Buffer {
 	let total = 0;
 	for (const piece of pieces) total += piece.length;
-	const out = new Array<uint8>(total as int64);
+	const out = new Array<uint8>(total as int64) as Buffer;
 	let at = 0;
 	for (const piece of pieces) {
 		for (let i = 0; i < piece.length; i++) out[at + i] = piece[i];
@@ -277,7 +277,7 @@ export function decodeChunked(data: Readonly<Span<uint8>>): Result<Buffer, HttpE
 		const dataEnd = dataStart + chunkSize;
 		if (dataEnd + 2 > len) return Result.err(invalidResponse("truncated chunk data"));
 
-		pieces.push([...data[dataStart..dataEnd]]);
+		pieces.push([...data[dataStart..dataEnd]] as Buffer);
 		pos = dataEnd + 2; // skip trailing \r\n
 	}
 	return Result.err(invalidResponse("chunked body not terminated"));
@@ -313,11 +313,11 @@ function chunkedReady(body: Buffer, bytesConsumed: int32): ChunkedDecodeResult {
 }
 
 function chunkedNeedMore(): ChunkedDecodeResult {
-	return { kind: "needMore", body: [], bytesConsumed: 0 };
+	return { kind: "needMore", body: Buffer.alloc(0), bytesConsumed: 0 };
 }
 
 function chunkedMalformed(): ChunkedDecodeResult {
-	return { kind: "malformed", body: [], bytesConsumed: 0 };
+	return { kind: "malformed", body: Buffer.alloc(0), bytesConsumed: 0 };
 }
 
 // Verify two bytes at `pos` form a CRLF separator.
@@ -348,7 +348,7 @@ export function tryDecodeChunked(data: Readonly<Span<uint8>>): ChunkedDecodeResu
 		if (dataEnd + 2 > len) return chunkedNeedMore();
 		if (!isCRLFAt(data, dataEnd as int32)) return chunkedMalformed();
 
-		pieces.push([...data[dataStart..dataEnd]]);
+		pieces.push([...data[dataStart..dataEnd]] as Buffer);
 		pos = (dataEnd + 2) as int32;
 	}
 	return chunkedNeedMore();
@@ -370,11 +370,11 @@ function frameReady(body: Buffer, bytesConsumed: int32): FrameResult {
 }
 
 function frameNeedMore(): FrameResult {
-	return { kind: "needMore", body: [], bytesConsumed: 0, rejectStatus: 0 };
+	return { kind: "needMore", body: Buffer.alloc(0), bytesConsumed: 0, rejectStatus: 0 };
 }
 
 function frameReject(status: int32): FrameResult {
-	return { kind: "reject", body: [], bytesConsumed: 0, rejectStatus: status };
+	return { kind: "reject", body: Buffer.alloc(0), bytesConsumed: 0, rejectStatus: status };
 }
 
 // Frame a request body from the bytes already buffered after the header block.
@@ -423,14 +423,14 @@ export function frameRequest(
 	if (hasCL) {
 		if (cl > maxBodySize) return frameReject(413);
 		if ((bufferAfterHeaders.length as int32) < cl) return frameNeedMore();
-		return frameReady([...bufferAfterHeaders[0..cl]], cl);
+		return frameReady([...bufferAfterHeaders[0..cl]] as Buffer, cl);
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.
 	if (method == HttpMethod.POST || method == HttpMethod.PUT || method == HttpMethod.PATCH) {
 		return frameReject(411);
 	}
-	return frameReady([], 0);
+	return frameReady(Buffer.alloc(0), 0);
 }
 
 // ===== Hex Helpers =====

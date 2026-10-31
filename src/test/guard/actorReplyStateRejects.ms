@@ -17,11 +17,16 @@
 // GUARD-CHECK-FAIL the reply of 'pick' may cross to the caller while the actor still reaches it — it replies with a value
 // GUARD-CHECK-FAIL the reply of 'alias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
 // GUARD-CHECK-FAIL the reply of 'kept' may cross to the caller while the actor still reaches it — 'n' is not the sole owner
+// GUARD-CHECK-FAIL the reply of 'wrapped' may cross to the caller while the actor still reaches it — it replies with 'this.top'
+// GUARD-CHECK-FAIL the reply of 'wrappedAlias' may cross to the caller while the actor still reaches it — 'r' is not the sole owner
+// GUARD-CHECK-FAIL the reply of 'refs' may cross to the caller while the actor still reaches it
+// GUARD-CHECK-FAIL the reply of 'holder' may cross to the caller while the actor still reaches it
 // GUARD-CHECK-FAIL actor method 'echo' is generic, so the reply of each instance cannot be checked before it crosses to the caller
 
 import { stop, ExitReason } from "std/actor";
 
 class Node { hits: int32 = 0; next: Node | null = null; }
+struct Holder { n: Node; tag: int32; }
 
 actor Scene {
 	top: Node = new Node();
@@ -34,6 +39,21 @@ actor Scene {
 	alias(): Node {
 		const r = this.top;
 		return r; // GUARD-REFUSED
+	}
+	wrapped(): Result<Node, string> { return Result.ok(this.top); } // GUARD-REFUSED
+	wrappedAlias(): Result<Node, string> {
+		const r = this.top;
+		return Result.ok(r); // GUARD-REFUSED
+	}
+	refs(): Vec<Node> {
+		let out: Vec<Node> = [];
+		out.push(this.top);
+		return out; // GUARD-REFUSED
+	}
+	holder(): Vec<Holder> {
+		let out: Vec<Holder> = [];
+		out.push({ n: this.top, tag: 1 });
+		return out; // GUARD-REFUSED
 	}
 	echo<T>(x: T): T { return x; } // GUARD-REFUSED
 	kept(): Node {

@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType, isLiteralSet } from "../../checker/types";
+import { isMaybeType, isTagCarriedUnion, instantiatedUnionBehind, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType, isLiteralSet } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
@@ -30,6 +30,7 @@ function projectNarrowedRead(node: Node): Node {
 function unnestProjection(outer: Node): Node {
 	const d = outer.data as HiddenStdConvData;
 	if (instantiatedUnionBehind(d.convType).kind == TypeKind.Union) return outer;
+	if (isMaybeType(d.convType) && d.convType.typeReturn != null && isTagCarriedUnion(d.convType.typeReturn)) return outer;
 	let leaf: Node = d.convExpr;
 	while (leaf != null && leaf.kind == NodeKind.TypeAssertion) leaf = (leaf.data as TypeAssertionData).asExpr;
 	if (leaf == null || leaf.kind != NodeKind.HiddenSubConv || leaf.variantSlot != outer.variantSlot) return outer;
@@ -202,7 +203,7 @@ function guardObjectSlot(p: Node): void {
 	if (carried) p.flags = p.flags.incl(NodeFlag.NoFieldCheck);
 }
 
-function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
+export function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
 	const en = ut.typeExtra;
 	if (en == null || en.kind != TypeKind.Enum || slot + 1 >= ut.typeNames.length) return null;
 	const stored = ut.typeNames[slot + 1];

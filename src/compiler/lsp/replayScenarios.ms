@@ -1894,6 +1894,231 @@ function unicodeLinePositions(): LspScenario {
 	};
 }
 
+const MEMBERS_OF_POINT = ["hash|2|() => int64", "x|5|int32", "y|5|int32"];
+
+function completionAfterWideText(): LspScenario {
+	const header = "interface Point {\n\tx: int32;\n\ty: int32;\n}\nconst p: Point = { x: 1, y: 2 };\n";
+	const sources = [
+		header + "const s = \"ab\"; const t = p.",
+		header + "const s = \"é😀\"; const t = p.",
+		header + "const s = \"😀😀\"; const t = p.",
+	];
+	const characters = [28, 29, 30];
+	const opens: string[] = [];
+	const asks: string[] = [];
+	for (let i = 0; i < sources.length; i += 1) {
+		const uri = "file:///lspwire/wide" + i + ".ms";
+		opens.push(notification("textDocument/didOpen", openParams(uri, sources[i])));
+		asks.push(request("" + (10 + i), "textDocument/completion", positionParams(uri, 5, characters[i])));
+	}
+	return {
+		name: "member completion after non-ASCII text on the same line reads the UTF-16 column",
+		batching: "any",
+		drains: [initializeDrain(), frames(opens), frames(asks)],
+		check: (r: LspReplay) => firstFailure([
+			sameRows("p. after ASCII text", MEMBERS_OF_POINT, completionRows(r, "n:10")),
+			sameRows("p. after a 2-byte character and a surrogate pair", MEMBERS_OF_POINT, completionRows(r, "n:11")),
+			sameRows("p. after two surrogate pairs", MEMBERS_OF_POINT, completionRows(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+const CACHE_SOURCE = "const abc = 1;\nconst o = { abx: 1 };\nconst q = a; const w = o.a;\n";
+
+function completionLabels(r: LspReplay, key: string): string {
+	const labels: string[] = [];
+	for (const row of completionRows(r, key)) labels.push(row.split("|")[0]);
+	return "[" + labels.join(", ") + "]";
+}
+
+function completionCacheKeepsItsKind(): LspScenario {
+	const identifierFirst = "file:///lspwire/cacheA.ms";
+	const memberFirst = "file:///lspwire/cacheB.ms";
+	return {
+		name: "a cached identifier completion does not answer a member completion on the same line, nor the reverse",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(identifierFirst, CACHE_SOURCE)),
+				notification("textDocument/didOpen", openParams(memberFirst, CACHE_SOURCE)),
+			]),
+			frames([
+				request("10", "textDocument/completion", positionParams(identifierFirst, 2, 11)),
+				request("11", "textDocument/completion", positionParams(identifierFirst, 2, 26)),
+				request("12", "textDocument/completion", positionParams(memberFirst, 2, 26)),
+				request("13", "textDocument/completion", positionParams(memberFirst, 2, 11)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			containsText("= a| lists identifiers", "abc", completionLabels(r, "n:10")),
+			lacksText("= a| lists no member", "abx", completionLabels(r, "n:10")),
+			containsText("o.a| after = a| lists the member", "abx", completionLabels(r, "n:11")),
+			lacksText("o.a| after = a| lists no identifier", "abc", completionLabels(r, "n:11")),
+			containsText("o.a| first lists the member", "abx", completionLabels(r, "n:12")),
+			lacksText("o.a| first lists no identifier", "abc", completionLabels(r, "n:12")),
+			containsText("= a| after o.a| lists identifiers", "abc", completionLabels(r, "n:13")),
+			lacksText("= a| after o.a| lists no member", "abx", completionLabels(r, "n:13")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function unknownMethodAnswersMethodNotFound(): LspScenario {
+	const uri = "file:///lspwire/unknownmethod.ms";
+	return {
+		name: "an unknown request answers MethodNotFound and an unknown notification is dropped",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				request("7", "workspace/unheardOf", "{}"),
+				notification("workspace/unheardOf", "{}"),
+				request("\"s8\"", "$/unheardOf", "{}"),
+				request("9", "textDocument/hover", positionParams(uri, 0, 0)),
+			]),
+			frames([request("10", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("n:7 error.code", "-32601", answerField(r, "n:7", "error.code")),
+			sameText("s8 error.code", "-32601", answerField(r, "s:s8", "error.code")),
+			sameText("n:9 result", "null", answerField(r, "n:9", "result")),
+			sameCount("messages", 5, r.messages.length),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function requestsBeforeInitializeAreRefused(): LspScenario {
+	const uri = "file:///lspwire/beforeinit.ms";
+	return {
+		name: "a request before initialize answers ServerNotInitialized and does not end the session",
+		batching: "any",
+		drains: [
+			frames([
+				request("5", "textDocument/hover", positionParams(uri, 0, 6)),
+				request("6", "shutdown", "null"),
+			]),
+			initializeDrain(),
+			frames([request("7", "textDocument/hover", positionParams(uri, 0, 13))]),
+			frames([request("8", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("n:5 error.code", "-32002", answerField(r, "n:5", "error.code")),
+			sameText("n:6 error.code", "-32002", answerField(r, "n:6", "error.code")),
+			sameText("n:7 result: the early shutdown did not end the session", "null", answerField(r, "n:7", "result")),
+			sameText("n:8 result", "null", answerField(r, "n:8", "result")),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function closedDocumentIsNotRepublished(): LspScenario {
+	const closed = "file:///lspwire/closedafteredit.ms";
+	const kept = "file:///lspwire/keptafteredit.ms";
+	return {
+		name: "an edit followed by a close in one drain publishes nothing more for the closed document",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(closed, GOOD_VALUE)),
+				notification("textDocument/didOpen", openParams(kept, GOOD_VALUE)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(closed, 2, BAD_VALUE)),
+				notification("textDocument/didChange", changeParams(kept, 2, BAD_VALUE)),
+				notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(closed)}}}`),
+			]),
+			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("closed document diagnostic counts per publish", "[0,0]", publishedCounts(r, closed)),
+			sameText("open document diagnostic counts per publish", "[0,1]", publishedCounts(r, kept)),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function twoChanges(uri: string, first: string, last: string): string {
+	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(first)}},{"text":${lspJsonString(last)}}]}`;
+}
+
+function lastContentChangeWins(): LspScenario {
+	const goodLast = "file:///lspwire/goodlast.ms";
+	const badLast = "file:///lspwire/badlast.ms";
+	return {
+		name: "a didChange with several content changes takes the last text",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(goodLast, GOOD_VALUE)),
+				notification("textDocument/didOpen", openParams(badLast, GOOD_VALUE)),
+			]),
+			frames([
+				notification("textDocument/didChange", twoChanges(goodLast, BAD_VALUE, GOOD_VALUE)),
+				notification("textDocument/didChange", twoChanges(badLast, GOOD_VALUE, BAD_VALUE)),
+			]),
+			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("diagnostic count after good-last", "0", finalDiagnosticCount(r, goodLast)),
+			sameText("diagnostic count after bad-last", "1", finalDiagnosticCount(r, badLast)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+const COMMAS_SOURCE = CALLS_SOURCE + "const a = clamp(5, 12, 9);\nconst b = clamp(5, /* x, y */ 12, 9);\n";
+
+function signatureHelpCountsCommas(): LspScenario {
+	const uri = "file:///lspwire/commas.ms";
+	return {
+		name: "signature help counts the commas before the cursor, and none after the closing parenthesis",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, COMMAS_SOURCE))]),
+			frames([
+				request("10", "textDocument/signatureHelp", positionParams(uri, 5, 17)),
+				request("11", "textDocument/signatureHelp", positionParams(uri, 5, 21)),
+				request("12", "textDocument/signatureHelp", positionParams(uri, 5, 24)),
+				request("13", "textDocument/signatureHelp", positionParams(uri, 5, 25)),
+				request("14", "textDocument/signatureHelp", positionParams(uri, 6, 32)),
+				request("15", "textDocument/signatureHelp", positionParams(uri, 4, 30)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("5| is the 1st argument", clampSignature(0), signatureSummary(r, "n:10")),
+			sameText("12| is the 2nd argument", clampSignature(1), signatureSummary(r, "n:11")),
+			sameText("9| is the 3rd argument", clampSignature(2), signatureSummary(r, "n:12")),
+			sameText("after the closing parenthesis", "null", answerField(r, "n:13", "result")),
+			sameText("a comma in a comment is not a separator", clampSignature(1), signatureSummary(r, "n:14")),
+			sameText("after a nested call closing parenthesis, before the outer comma", clampSignature(0), signatureSummary(r, "n:15")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -1949,6 +2174,13 @@ export function lspScenarios(): LspScenario[] {
 		rewiredImportsFollowEdits(),
 		closingAnOverlayRestoresDisk(),
 		unicodeLinePositions(),
+		completionAfterWideText(),
+		completionCacheKeepsItsKind(),
+		unknownMethodAnswersMethodNotFound(),
+		requestsBeforeInitializeAreRefused(),
+		closedDocumentIsNotRepublished(),
+		lastContentChangeWins(),
+		signatureHelpCountsCommas(),
 	];
 }
 

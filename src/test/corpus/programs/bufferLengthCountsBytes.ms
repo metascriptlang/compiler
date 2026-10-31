@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: 4 4 4 e2.82.ac.41
 // @stdout: 0 0
 // note: a Buffer is uint8[] on every target, so its length counts bytes even when they are not ASCII or not UTF-8, as node's Buffer.length does; expected lines come from node.

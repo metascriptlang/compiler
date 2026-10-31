@@ -6,10 +6,10 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
+import { errorType, stringType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
-import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry } from "./context";
+import { findAllExtensionsByName, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, noteDefaultSource, stdSymbol, createExportRegistry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -27,6 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
+import { isParamProperty } from "./paramProperty";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
@@ -38,8 +39,8 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
+import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
@@ -682,7 +683,14 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 				addFatalError(ctx, "'assert' can only be used inside test blocks", node.location.line, node.location.column);
 			}
 			checkExpr(ctx, d.assertExpr, null);
-			if (d.assertMessageExpr != null) checkExpr(ctx, d.assertMessageExpr, null);
+			const messageExpr = d.assertMessageExpr;
+			if (messageExpr != null) {
+				checkExpr(ctx, messageExpr, null);
+				const held = messageExpr.nodeType;
+				if (held != null && !isUnresolvedType(held) && held.kind != TypeKind.Error && !isAssignable(held, stringType())) {
+					addError(ctx, `an assert message must be a string, got '${typeDisplayName(held)}'; write it as a template literal or String(x)`, messageExpr.location.line, messageExpr.location.column);
+				}
+			}
 		},
 		_ => {},
 	};
@@ -840,6 +848,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		const storedRead = convertStoredUnionRead(d.initializer, initType, initType);
 		if (storedRead != null) d.initializer = storedRead;
 	}
+	if (declType == null && d.initializer != null) varType = declaredTypeOfEnumInit(d, varType);
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
 	// for self-recursive closure binding, update type and re-record.
@@ -883,6 +892,13 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	refuseStoredView(ctx, node, d, varType);
 	if (binding != null) binding.state = SymbolState.Checked;
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+function declaredTypeOfEnumInit(d: VariableDeclData, varType: Type | null): Type | null {
+	const sym = d.initializer.resolvedSym;
+	const lit = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.EnumLiteral ? sym.symbolType : null;
+	if (lit != null && d.declKind == DeclKind.Const) return lit;
+	return varType;
 }
 
 function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
@@ -1685,6 +1701,7 @@ function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: st
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(ctx, member.nodeType)) continue;
+		if (isParamProperty(member)) continue;
 		let assigned = true;
 		for (const exit of ctorExits) {
 			if (!exit.includes("this." + pd.propName)) assigned = false;
@@ -2382,6 +2399,18 @@ function definePatternBinding(ctx: CheckerContext, sym: Symbol, named: Node, dec
 	sgRecordSym(ctx, named.location.line, named.location.column, named.location.column + sym.name.length, sym, sym.symbolType, SymbolKind.Variable, sym.name, "", true);
 }
 
+function isNestedPattern(n: Node): boolean {
+	return n.kind == NodeKind.ArrayPattern || n.kind == NodeKind.ObjectPattern;
+}
+
+function defineNestedPatternBindings(ctx: CheckerContext, pattern: Node, elemType: Type, isConst: boolean, declaring: Node | null): void {
+	if (pattern.kind == NodeKind.ArrayPattern && !destructuresByPosition(elemType)) {
+		addError(ctx, `an array pattern needs a tuple or an array, and this element is '${typeDisplayName(elemType)}'`, pattern.location.line, pattern.location.column);
+	}
+	pattern.nodeType = elemType;
+	defineForOfPatternBindings(ctx, pattern, elemType, isConst, declaring);
+}
+
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, declaring: Node | null): void {
 	if (pattern.kind == NodeKind.ArrayPattern) {
 		const apd = pattern.data as ArrayPatternData;
@@ -2401,7 +2430,11 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
+			} else if (isNestedPattern(elem)) {
+				const derived = destrPositionalElemType(iterType, i);
+				defineNestedPatternBindings(ctx, elem, derived != null ? derived : inferredType(), isConst, declaring);
 			} else if (elem.kind == NodeKind.SpreadExpr) {
+				if (i != apd.patternElements.length - 1) addError(ctx, REST_NOT_LAST, elem.location.line, elem.location.column);
 				const inner = (elem.data as SpreadExprData).spreadArg;
 				if (inner.kind == NodeKind.Identifier) {
 					const id = inner.data as IdentifierData;
@@ -2439,8 +2472,10 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (hidden != "") refusePrivateField(ctx, sourceOwner, hidden, prop.location.line, prop.location.column);
 			}
 		}
-		for (const prop of opd.patternProps) {
+		for (let pi = 0; pi < opd.patternProps.length; pi += 1) {
+			const prop = opd.patternProps[pi];
 			if (prop.kind == NodeKind.SpreadExpr) {
+				if (pi != opd.patternProps.length - 1) addError(ctx, REST_NOT_LAST, prop.location.line, prop.location.column);
 				const inner = (prop.data as SpreadExprData).spreadArg;
 				if (inner.kind == NodeKind.Identifier) {
 					const restId = inner.data as IdentifierData;
@@ -2460,10 +2495,31 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			}
 			if (prop.kind != NodeKind.ObjectPatternProp) continue;
 			const p = prop.data as ObjectPatternPropData;
-			if (p.propAlias.kind == NodeKind.Identifier) {
-				const id = p.propAlias.data as IdentifierData;
+			if (p.propAlias.kind == NodeKind.Identifier || isNestedPattern(p.propAlias)) {
 				const derivedField = destrNamedFieldType(iterType, p.propKey);
+				if (derivedField == null) {
+					const settled = iterType != null && !isUnresolvedType(iterType) && iterType.kind != TypeKind.Unknown && !hasGenericParams(iterType);
+					if (sourceStruct != null) {
+						if (destructuredFieldIsMissing(ctx, iterType, sourceStruct, p.propKey)) {
+							addError(ctx, `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`, prop.location.line, prop.location.column);
+						} else if (settled && sourceStruct.typeNames.indexOf(p.propKey) < 0) {
+							addError(ctx, `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': it is an accessor, extension or dynamic member, and destructuring reads stored fields only`, prop.location.line, prop.location.column);
+						}
+					} else if (settled) {
+						const unresolved = isUnresolvedType(getProperty(iterType, p.propKey));
+						let builtinLength = false;
+						if (p.propKey == "length" && iterType != null) builtinLength = carriesLength(unwrapRef(iterType));
+						addError(ctx, unresolved && !builtinLength
+							? `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`
+							: `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': read it as a member, destructuring lowers stored fields of one struct only`, prop.location.line, prop.location.column);
+					}
+				}
 				const derived = isReadonlyView(iterType) ? propagateReadonlyView(derivedField) : derivedField;
+				if (isNestedPattern(p.propAlias)) {
+					defineNestedPatternBindings(ctx, p.propAlias, derived != null ? derived : inferredType(), isConst, declaring);
+					continue;
+				}
+				const id = p.propAlias.data as IdentifierData;
 				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
@@ -2474,6 +2530,17 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			}
 		}
 	}
+}
+
+function destructuredFieldIsMissing(ctx: CheckerContext, source: Type | null, sourceStruct: Type | null, key: string): boolean {
+	if (source == null || sourceStruct == null || sourceStruct.typeNames == null || sourceStruct.typeNames.indexOf(key) >= 0) return false;
+	if (findAccessor(ctx, source, "get_" + key) != null) return false;
+	if (ctx.extensionRegistry == null) return true;
+	if (filterExtsByReceiverType(findAllExtensionsByName(ctx.extensionRegistry, key), source).length > 0) return false;
+	for (const e of findAllExtensionsByName(ctx.extensionRegistry, "getDynamicField")) {
+		if (extDeclaresReceiver(e, source)) return false;
+	}
+	return true;
 }
 
 function destructuredStruct(t: Type | null): Type | null {
@@ -3074,14 +3141,18 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Type): void {
+function checkDefaultInParamScope(ctx: CheckerContext, defaults: Node[], at: int32, paramType: Type): void {
+	const def = defaults[at];
 	if (paramType == null || hasGenericParams(paramType) || ctx.inGenericContext > 0) return;
 	const hoistMark = ctx.pendingHoisted.length;
-	const probe = cloneNodeForCheck(def);
-	checkExpr(ctx, probe, paramType);
-	if (probe.nodeType != null) fitNode(ctx, probe, paramType, probe.nodeType);
+	const source = cloneNodeForCheck(def);
+	checkExpr(ctx, def, paramType);
+	const checked = def.nodeType != null ? fitNode(ctx, def, paramType, def.nodeType) : def;
+	if (ctx.pendingHoisted.length > hoistMark) noteDefaultSource(checked, source);
 	ctx.pendingHoisted.shrink(hoistMark);
 	noteDefaultCheckedAtDeclaration(def);
+	noteDefaultCheckedAtDeclaration(checked);
+	defaults[at] = checked;
 }
 
 export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null, defaults: Node[] | null = null): Symbol[] {
@@ -3116,6 +3187,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	let i = 0;
 	for (const param of params) {
 		let paramType = inferredType();
+		let sinkParam = false;
 		if (sym != null && sym.symbolType.kind == TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
 			// Rest param: inside the body the symbol is the packed array, not the
@@ -3126,6 +3198,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			}
 			if (paramType != null && paramType.kind == TypeKind.Sink && paramType.typeReturn != null) {
 				paramType = paramType.typeReturn;
+				sinkParam = true;
 			}
 		}
 		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
@@ -3133,8 +3206,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
 		}
 		paramTypes.push(paramType);
-		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
+		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults, i, paramType);
 		const paramSym = paramSymbol(ctx, body, i, param, SymbolKind.Parameter, paramType);
+		if (sinkParam) setFlag(paramSym, SymbolFlag.Sink);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
 			paramSym.location = paramLocs[i];
@@ -3248,8 +3322,15 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
-	checkExpr(ctx, d.destrInit, null);
-	const initType = d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
+	let declType: Type | null = null;
+	if (d.destrType != "") {
+		const typeLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
+		declType = annotatedType(d.destrType, node.typeExpr, ctx, typeLoc.line, typeLoc.column);
+		resolveTypeExpr(node.typeExpr, ctx);
+	}
+	checkExpr(ctx, d.destrInit, declType);
+	if (declType != null) d.destrInit = fitViewLocal(ctx, fitNode(ctx, d.destrInit, declType, d.destrInit.nodeType), declType);
+	const initType = declType != null ? declType : d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
 	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, node);
 }
 
@@ -4088,6 +4169,7 @@ function checkPreludeSource(stdPath: string, backendExt: string): CheckerContext
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
 	ctx.stdRoot = stdRoot;
+	defineBuiltinConstants(ctx);
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);

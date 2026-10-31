@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
+// @xfail(raiser): error: bigint is not supported on the Raiser VM
 // @stdout: reads entries=1710 digest=339260849
 // @stdout: bigint entries=7 digest=460703479
 // @stdout: writes entries=828 digest=774397002

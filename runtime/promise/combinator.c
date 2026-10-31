@@ -1,63 +1,10 @@
 #ifndef MSOS_BARE
 /*
- * MetaScript Promise Combinators — Promise.all / Promise.race
+ * MetaScript Promise Combinators — Promise.allSettled / Promise.then / Promise.catch / Promise.finally
  */
 #include "runtime/core/system.h"
 #include "runtime/promise/combinator.h"
 #include <stdlib.h>
-
-/* ===== Promise.race ===== */
-
-static void msPromiseRaceCb(void* env) {
-	msPromiseRaceCbEnv* e = (msPromiseRaceCbEnv*)env;
-	msPromiseRaceState* s = e->state;
-	msFuture* f = e->input;
-	free(e);
-
-	/* First settlement wins */
-	if (!s->settled) {
-		s->settled = true;
-		if (f->base.failed || f->base.cancelled) {
-			msFutureFailShared(s->result, f->base.error);
-		} else {
-			msFutureComplete(s->result, f->value);
-		}
-	}
-
-	msDecrefAny(f);
-
-	/* Last callback frees state */
-	s->remaining--;
-	if (s->remaining == 0) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-void* msPromiseRace(msRefArray* arr) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msFutureCreate();
-
-	if (count == 0 || futures == NULL) return result;  /* never settles — ECMAScript spec */
-
-	msPromiseRaceState* state = (msPromiseRaceState*)msMemAlloc0(sizeof(msPromiseRaceState));
-	state->result = result;
-	msIncref(result);
-	state->remaining = count;
-
-	for (int i = 0; i < count; i++) {
-		msPromiseRaceCbEnv* env = (msPromiseRaceCbEnv*)msMemAlloc(sizeof(msPromiseRaceCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){
-			.fn = (msClosureFn)msPromiseRaceCb,
-			.env = env
-		});
-	}
-	return result;
-}
 
 /* ===== Promise.allSettled ===== */
 
@@ -113,78 +60,10 @@ void* msPromiseAllSettled(msRefArray* arr) {
 	return result;
 }
 
-/* ===== Promise.any ===== */
+/* ===== Promise.then / .catch / .finally ===== */
 
-static void msPromiseAnyCb(void* env) {
-	msPromiseAnyCbEnv* e = (msPromiseAnyCbEnv*)env;
-	msPromiseAnyState* s = e->state;
-	msFuture* f = e->input;
-	free(e);
-
-	/* First fulfillment wins */
-	if (!s->resolved) {
-		if (!(f->base.failed || f->base.cancelled)) {
-			s->resolved = true;
-			msFutureComplete(s->result, f->value);
-		} else {
-			s->rejected++;
-			if (s->rejected == s->count) {
-				msFutureFail(s->result, msMakeError(msStringFromCStr("All promises were rejected")));
-			}
-		}
-	}
-
-	msDecrefAny(f);
-
-	/* Last callback frees state */
-	s->remaining--;
-	if (s->remaining == 0) {
-		msDecrefAny(s->result);
-		free(s);
-	}
-}
-
-void* msPromiseAny(msRefArray* arr) {
-	int count = (arr != NULL) ? (int)arr->len : 0;
-	msFuture** futures = (arr != NULL && arr->p != NULL) ? (msFuture**)arr->p->data : NULL;
-	msFuture* result = (msFuture*)msFutureCreate();
-
-	if (count == 0 || futures == NULL) {
-		msFutureFail(result, msMakeError(msStringFromCStr("All promises were rejected")));
-		return result;
-	}
-
-	msPromiseAnyState* state = (msPromiseAnyState*)msMemAlloc0(sizeof(msPromiseAnyState));
-	state->result = result;
-	msIncref(result);
-	state->count = count;
-	state->remaining = count;
-
-	for (int i = 0; i < count; i++) {
-		msPromiseAnyCbEnv* env = (msPromiseAnyCbEnv*)msMemAlloc(sizeof(msPromiseAnyCbEnv));
-		env->state = state;
-		env->input = futures[i];
-		msIncref(futures[i]);
-		msFutureAddCallback(futures[i], (msClosure){
-			.fn = (msClosureFn)msPromiseAnyCb,
-			.env = env
-		});
-	}
-	return result;
-}
-
-/* ===== Promise.then ===== */
-
-/* Type-aware callback dispatch for .then.
- * MetaScript convention: lifted closures have params first, env last.
- * Type tag determines how to pass the value to match the callback's C signature. */
-static void msFutureThenCb(void* raw) {
+static void msFutureThenRunTagged(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
-	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureThenRejected(e);
-		msFutureThenEnvFree(e);
-		return;
-	}
 	void* val = e->input->value;
 	e->input->value = NULL;  /* consumed — prevent double-free by valueDestructor */
 	void* fn = (void*)e->onFulfilled.fn;
@@ -222,14 +101,6 @@ static void msFutureThenCb(void* raw) {
 		else ((void(*)(void*))fn)(val);
 		break;
 	}
-
-	if (msErr) {
-		msFutureFail(e->output, (void*)msCurrException);
-		msErr = false; msCurrException = NULL;
-	} else {
-		msFutureComplete(e->output, NULL);
-	}
-	msFutureThenEnvFree(e);
 }
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
@@ -241,29 +112,11 @@ void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
 }
 
 void* msFutureThenTypedWithRejected(void* input, msClosure onFulfilled, int typeTag, msClosure onRejected) {
-	return msFutureThenAttach(input, onFulfilled, onRejected, typeTag, (msClosureFn)msFutureThenCb);
+	return msFutureThenAttach(input, onFulfilled, onRejected, typeTag, msFutureThenRunTagged);
 }
 
-/* ===== Promise.catch ===== */
-
-static void msFutureCatchCb(void* raw) {
-	msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
-	if (e->input->base.failed || e->input->base.cancelled) {
-		void* err = e->input->base.error;  /* lent: the input keeps its count */
-		void* fn = (void*)e->onRejected.fn;
-		void* env = e->onRejected.env;
-		if (env) ((void(*)(void*, void*))fn)(err, env);
-		else ((void(*)(void*))fn)(err);
-		if (msErr) {
-			msFutureFail(e->output, (void*)msCurrException);
-			msErr = false; msCurrException = NULL;
-		} else {
-			msFutureComplete(e->output, NULL);
-		}
-	} else {
-		msFutureComplete(e->output, e->input->value);
-	}
-	msFutureCatchEnvFree(e);
+static void msFutureCatchOkGeneric(void* output, void* input) {
+	msFutureComplete(output, ((msFuture*)input)->value);
 }
 
 msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
@@ -271,36 +124,13 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 }
 
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
-	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureCatchEnv* env = (msFutureCatchEnv*)msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo);
-	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = typeTag;
-	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env}, msFutureCatchEnvDrop, NULL));
-	return output;
-}
-
-/* ===== Promise.finally ===== */
-
-static void msFutureFinallyCb(void* raw) {
-	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
-	if (e->onSettled.env != NULL) {
-		((void(*)(void*))e->onSettled.fn)(e->onSettled.env);
-	} else {
-		((void(*)(void))e->onSettled.fn)();
-	}
-	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureFailShared(e->output, e->input->base.error);
-	} else {
-		msFutureComplete(e->output, e->input->value);
-	}
-	msFutureFinallyEnvFree(e);
+	(void)typeTag;
+	return msFutureCatchAttach(input, msFutureCreate(), onRejected, msFutureCatchOkGeneric);
 }
 
 void* msFutureFinally(void* input, msClosure onSettled) {
-	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureFinallyEnv* env = (msFutureFinallyEnv*)msAllocTyped(sizeof(msFutureFinallyEnv), &msFutureFinallyEnvTypeInfo);
-	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled;
-	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env}, msFutureFinallyEnvDrop, NULL));
-	return output;
+	msClosureCopy(onSettled);
+	return msPromiseFinallyAttach(input, (void*)onSettled.fn, onSettled.env);
 }
 
 #endif /* !MSOS_BARE */

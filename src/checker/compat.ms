@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, isOwnedRef, isOutParam, isStringLike, isArrayType } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -354,7 +354,15 @@ export function unmetConstraint(param: Type, bound: Type, params: Type[], types:
 	if (raw == null) return null;
 	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
-	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) ? null : constraint;
+	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) || holdsOnlyLength(bound, constraint) ? null : constraint;
+}
+
+// A `{ length: number }` constraint is met by a string or an array: the bound keeps its own type and no value is converted to the object type.
+function holdsOnlyLength(bound: Type, constraint: Type): boolean {
+	if (!isStringLike(bound) && !isArrayType(bound)) return false;
+	const shape = peelToStruct(constraint);
+	if (shape == null || shape.kind != TypeKind.Struct || shape.typeNames.length != 1 || shape.typeNames[0] != "length") return false;
+	return isAssignable(int32Type(), shape.typeChildren[0]);
 }
 
 export function isAssignable(source: Type | null, target: Type | null): boolean {
@@ -976,6 +984,14 @@ function takesOwnership(t: Type): boolean {
 	return held != null && isOwnedRef(held);
 }
 
+function isModalParam(t: Type): boolean {
+	return t.kind == TypeKind.Lent || t.kind == TypeKind.Var;
+}
+
+function paramModeDiffers(a: Type, b: Type): boolean {
+	return sinkModeDiffers(a, b) || (a.kind != b.kind && (isModalParam(a) || isModalParam(b))) || isOutParam(a) != isOutParam(b);
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
@@ -986,7 +1002,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of sourceParams) {
-		if (sinkModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
+		if (paramModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -1034,7 +1050,7 @@ function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetP
 	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
 	if (element == null) return false;
 	for (let i = fixed; i < targetParams.length; i += 1) {
-		if (sinkModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+		if (paramModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
 	}
 	return true;
 }
@@ -1089,6 +1105,10 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		const passed = targetParams[ri];
 		if (taken == null) return "";
 		const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (paramModeDiffers(taken, passed)) {
+			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassing(taken) + ", but the expected '"
+				+ signatureText(target) + "' passes it " + paramPassing(passed) + "; declare '" + name + "' the same way in both";
+		}
 		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
 			if (!isAssignable(passed, taken)) {
 				return " — parameter '" + name + "' is typed '" + signatureText(taken) + "', but the expected function passes it '"
@@ -1109,14 +1129,29 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 	return " — the function returns '" + signatureText(held) + "', but the expected function returns '" + signatureText(slot) + "'";
 }
 
+function paramModeWord(t: Type): string {
+	if (isOutParam(t)) return "out";
+	if (t.kind == TypeKind.Var) return "ref";
+	if (t.kind == TypeKind.Sink) return "sink";
+	if (t.kind == TypeKind.Lent) return "lent";
+	return "";
+}
+
+function paramPassing(t: Type): string {
+	const word = paramModeWord(t);
+	return word == "" ? "by value" : word == "ref" ? "by reference" : "as '" + word + "'";
+}
+
 function signatureText(t: Type): string {
 	if (t.kind != TypeKind.Function) return typeDisplayName(t);
 	const parts: string[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const param = t.typeChildren[i];
 		if (param != null && param.kind == TypeKind.Void) continue;
-		const text = param != null ? signatureText(param) : "?";
-		parts.push(i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text);
+		const mode = param != null ? paramModeWord(param) : "";
+		const text = param == null ? "?" : signatureText(mode != "" && param.typeReturn != null ? param.typeReturn : param);
+		const named = i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text;
+		parts.push(mode != "" ? mode + " " + named : named);
 	}
 	return "(" + parts.join(", ") + ") => " + (t.typeReturn != null ? signatureText(t.typeReturn) : "void");
 }
@@ -1267,6 +1302,11 @@ function answersTo(source: Type, fields: string[], name: string): boolean {
 		cls = classBodyOf(cls.typeExtra);
 	}
 	return false;
+}
+
+export function declaresProperty(member: Type, name: string): boolean {
+	const shape = peelToStruct(member);
+	return answersTo(member, shape != null && shape.typeNames != null ? shape.typeNames : [], name);
 }
 
 // A class instance answers to its methods and accessors as well as its fields:
@@ -1518,6 +1558,14 @@ function sameDistinct(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure =
 export function sameNominal(a: Readonly<Type>, b: Readonly<Type>): boolean {
 	if (a == b) return true;
 	return sameNominalAux(a, b, createSameTypeClosure());
+}
+
+export function expectsEnumMember(expected: Type, enumType: Type, member: string): boolean {
+	if (expected.kind == TypeKind.Union) return expected.typeChildren.some((m: Type): boolean => expectsEnumMember(m, enumType, member));
+	return expected.kind == TypeKind.EnumLiteral
+		&& expected.typeReturn != null && sameNominal(expected.typeReturn, enumType)
+		&& expected.typeNames.length > 0
+		&& expected.typeNames[0] == member;
 }
 
 function sameNominalAux(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure): boolean {
@@ -1797,7 +1845,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
-					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
+					if (paramModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
@@ -2080,7 +2128,7 @@ export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], min
 // matches (context-sensitive args in two-pass overload resolution — object
 // literals and arrow functions are re-checked with the winner's param types in
 // Pass 2, so Pass 1 scoring must not reject them for partial/incomplete typing).
-export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[] = [], literalRels: int32[] | null = null): CandidateScore {
+export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[] = [], literalRels: int32[] | null = null, restFrom: int32 = -1): CandidateScore {
 	const score = emptyCandidateScore();
 	if (argTypes.length < minArity || argTypes.length > paramTypes.length) {
 		score.exactMatches = -1;
@@ -2092,13 +2140,14 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			score.subtypeMatches = score.subtypeMatches + 1;
 			continue;
 		}
-		const rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
+		let rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
 			? literalRels[i] as TypeRelation
 			: argRelation(paramTypes[i], argTypes[i]);
 		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
 		}
+		if (restFrom >= 0 && i >= restFrom && (rel == TypeRelation.Exact || rel == TypeRelation.Generic)) rel = TypeRelation.Convertible;
 		countRelation(score, rel);
 		if (rel == TypeRelation.Exact || rel == TypeRelation.Subtype) addInheritancePenalty(score, classDistance(argTypes[i], paramTypes[i]));
 	}

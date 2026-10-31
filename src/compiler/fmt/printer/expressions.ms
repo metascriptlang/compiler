@@ -22,7 +22,7 @@ import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody } from "./statements";
+import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody, modeNames } from "./statements";
 import { printTypeAnnotation } from "./types";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -570,7 +570,7 @@ export function arrowPieces(node: Node, options: FormatOptions): FunctionPieces 
 	}
 	const head: Doc[] = isAsync ? [docText("async ")] : [];
 	const typed = d.arrowReturnType != "" ? typedAsWritten(node.location.line, node.location.column, node.typeExpr, options) : "";
-	const params = buildParamList(d.arrowParams, d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.arrowBody, d.arrowParams));
+	const params = buildParamList(modeNames(d.arrowParams, d.arrowFlags), d.arrowParamTypes, d.arrowDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.arrowBody, d.arrowParams));
 	if (typed != "") {
 		head.push(docText(typed));
 	} else {
@@ -767,18 +767,24 @@ export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	return breaksPatternProperties(d) ? docGroupBreak(parts) : docGroup(parts);
 }
 
+function sameStart(a: Node, b: Node): boolean {
+	return a.location != null && b.location != null && a.location.line == b.location.line && a.location.column == b.location.column;
+}
+
 export function printObjectPatternProp(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectPatternPropData;
-	// Shorthand `{ x }` when alias is an identifier with the same name.
-	if (d.propAlias != null && d.propAlias.kind == NodeKind.Identifier) {
+	const written = node.location != null ? rawObjectKeyAt(options.source, node.location.line, node.location.column, options.singleQuote) : "";
+	const key = written != "" ? written : d.propKey;
+	// Shorthand `{ x }` only where the source wrote it: the alias is the key's own token.
+	if (written == "" && d.propAlias != null && d.propAlias.kind == NodeKind.Identifier && sameStart(d.propAlias, node)) {
 		const aliasName = (d.propAlias.data as IdentifierData).name;
 		if (aliasName == d.propKey) {
 			if (d.propDefault != null) return docGroup([docText(d.propKey + " = "), callPrintNode(d.propDefault, options)]);
 			return docText(d.propKey);
 		}
 	}
-	if (d.propDefault != null) return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options), docText(" = "), callPrintNode(d.propDefault, options)]);
-	return docGroup([docText(d.propKey + ": "), callPrintNode(d.propAlias, options)]);
+	if (d.propDefault != null) return docGroup([docText(key + ": "), callPrintNode(d.propAlias, options), docText(" = "), callPrintNode(d.propDefault, options)]);
+	return docGroup([docText(key + ": "), callPrintNode(d.propAlias, options)]);
 }
 
 export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
@@ -808,7 +814,7 @@ export function functionExprPieces(node: Node, options: FormatOptions): Function
 	const isGen = flagHas(d.funcExprFlags, "generator") || flagHas(d.funcExprFlags, "async_generator");
 	const head: Doc[] = [docText((isAsync ? "async " : "") + "function" + (isGen ? "*" : "") + " ")];
 	const noDefaults: Node[] = [];
-	const params = buildParamList(d.funcExprParams, d.funcExprParamTypes, noDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.funcExprBody, d.funcExprParams));
+	const params = buildParamList(modeNames(d.funcExprParams, d.funcExprFlags), d.funcExprParamTypes, noDefaults, options, node.paramLocations, node.typeExprs, parameterPatterns(d.funcExprBody, d.funcExprParams));
 	const returnType: Doc[] = [];
 	if (d.funcExprReturnType != "") {
 		returnType.push(docText(": "));

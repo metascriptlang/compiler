@@ -67,6 +67,7 @@ import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
+import { lowerValueParamSnapshot } from "./lowering/valueParamSnapshot";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
@@ -88,6 +89,7 @@ import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerMethodDispatch } from "./lowering/methodDispatchLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { dropCtorSignatures } from "./lowering/ctorSignatureDrop";
 import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
@@ -136,15 +138,17 @@ function runs(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pa
 	return false;
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null, overflowChecks: boolean = true): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null, jsOverflowChecks: boolean = true): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
-	ctx.overflowChecks = overflowChecks;
+	ctx.jsOverflowChecks = jsOverflowChecks;
 	ctx.liftTables = liftTables;
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
-	let result = eraseBrandTypes(program, ctx);
+	let result = dropCtorSignatures(program, ctx);
+	flowLap("pass.dropCtorSignatures");
+	result = eraseBrandTypes(result, ctx);
 	flowLap("pass.eraseBrandTypes");
 	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
@@ -280,6 +284,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); flowLap("pass.lowerStringOps"); }
 	if (jsBackend) { result = lowerJsPointers(result, ctx); flowLap("pass.lowerJsPointers"); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); flowLap("pass.lowerJsVarParam"); }
+	if (jsBackend) { result = lowerValueParamSnapshot(result, ctx); flowLap("pass.lowerValueParamSnapshot"); }
 	result = spanLower(result, ctx, false);
 	flowLap("pass.spanLower");
 	result = lowerConditionalExpr(result, ctx);

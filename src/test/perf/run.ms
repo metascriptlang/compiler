@@ -26,7 +26,7 @@
 // changed; `*` an instr or bytes delta over 3x noise (max CV of the two arms), over 1% and,
 // for instr, over 5M (ms rows are wall time under load and never marked); `new` / `gone` a
 // flow only one arm wrote. Process totals come from /usr/bin/time -l on macOS
-// (instructions retired), `perf stat` on Linux when it exists, else /usr/bin/time -f.
+// (instructions retired), `perf stat` on Linux when its counters are allowed, else /usr/bin/time -f.
 
 import { exec, exit, env, cmdExists } from "std/process";
 import { readFile, writeFile, exists } from "std/fs";
@@ -341,16 +341,23 @@ function absDir(p: string): string {
 	return shellOut(`mkdir -p ${q(p)} && cd ${q(p)} && pwd -P`);
 }
 
+// A host can ship perf yet forbid its counters (perf_event_paranoid above 2), so the counters are tried once.
+let perfState = "";
+function perfCounts(): boolean {
+	if (perfState == "") { perfState = cmdExists("perf") && shellOut("perf stat -x, -e instructions:u true >/dev/null 2>&1 && echo ok") == "ok" ? "yes" : "no"; }
+	return perfState == "yes";
+}
+
 function timerFor(kernel: string, timeFile: string): string {
 	if (kernel == "Darwin") { return `/usr/bin/time -l -o ${q(timeFile)}`; }
-	if (cmdExists("perf")) { return `perf stat -x, -o ${q(timeFile)} -e instructions:u,task-clock`; }
-	return `/usr/bin/time -f "%e %M" -o ${q(timeFile)}`;
+	if (perfCounts()) { return `perf stat -x, -o ${q(timeFile)} -e instructions:u,task-clock`; }
+	return `/usr/bin/time -f "%U %S %M" -o ${q(timeFile)}`;
 }
 
 function timerName(kernel: string): string {
 	if (kernel == "Darwin") { return "/usr/bin/time -l (instructions retired, real, max rss)"; }
-	if (cmdExists("perf")) { return "perf stat instructions:u + task-clock (ms is cpu time, no rss)"; }
-	return "/usr/bin/time -f (real, max rss; no instructions)";
+	if (perfCounts()) { return "perf stat instructions:u + task-clock (ms is cpu time, no rss)"; }
+	return "/usr/bin/time -f (ms is cpu time, max rss; no instructions)";
 }
 
 function firstNumber(line: string): float64 {
@@ -368,7 +375,7 @@ function procRows(kernel: string, timeText: string): string {
 		}
 		return out;
 	}
-	if (cmdExists("perf")) {
+	if (perfCounts()) {
 		for (const l of lines) {
 			const f = l.split(",");
 			if (f.length < 3 || l.startsWith("#")) { continue; }
@@ -380,7 +387,7 @@ function procRows(kernel: string, timeText: string): string {
 		return out;
 	}
 	const f = timeText.trim().split("\n").pop().split(" ");
-	if (f.length == 2) { out += `proc\ttotal\tms\t${f[0].parseFloat() * 1000}\nproc\ttotal\tbytes\t${f[1].parseFloat() * 1024}\n`; }
+	if (f.length == 3) { out += `proc\ttotal\tms\t${(f[0].parseFloat() + f[1].parseFloat()) * 1000}\nproc\ttotal\tbytes\t${f[2].parseFloat() * 1024}\n`; }
 	return out;
 }
 

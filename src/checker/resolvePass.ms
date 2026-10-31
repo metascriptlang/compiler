@@ -24,11 +24,12 @@ import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/
 import { ITERATOR_HELPER_NEEDS_SOURCE, ITERATOR_HELPER_RETURNS_ITERATOR } from "./iteratorHelperTexts";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { mintCtorRoutine, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
+import { mintCtorRoutine, mintCtorSignature, isCtorSignature, linkCtorSignatures, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
 import { parseExpressionFromState } from "../parser/expressions/core";
+import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -181,7 +182,7 @@ function refuseActorParamModes(ctx: CheckerContext, actorName: string, md: Metho
 	liftParamModifiers(md.methodParams, "");
 }
 
-function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
+export function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
 	if (flags == "") return;
 	for (const fp of splitTopLevel(flags, "|")) {
 		const trimFp = fp.trim();
@@ -294,6 +295,10 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 			let typeText = part.slice(colonIdx + 1, part.length).trim();
 			const isSink = name.startsWith("sink ");
 			if (isSink) name = name.slice(5, name.length).trim();
+			const isRef = name.startsWith("ref ");
+			if (isRef) name = name.slice(4, name.length).trim();
+			const isOut = name.startsWith("out ");
+			if (isOut) name = name.slice(4, name.length).trim();
 			if (name.endsWith("?")) {
 				name = name.slice(0, name.length - 1).trim();
 				typeText = optionalizeTypeString(typeText);
@@ -301,7 +306,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 			}
 			paramNames.push(name);
 			const annotated = resolveAnnotation(typeText, ctx, line, col);
-			paramTypes.push(isSink ? createSink(annotated) : annotated);
+			paramTypes.push(isSink ? createSink(annotated) : isRef ? createVar(annotated) : isOut ? createOutVar(annotated) : annotated);
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx, line, col));
@@ -585,25 +590,6 @@ function bitSetElementAllowed(elem: Type): boolean {
 	return isOrdinalEnum(elem);
 }
 
-type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
-
-type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
-
-let genericTypeHookFn: GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void => {
-	throw new Error(`internal: no binder for the hook '${hook}' of a generic type is registered`);
-};
-
-export function registerGenericTypeHook(fn: GenericTypeHookFn): void {
-	genericTypeHookFn = fn;
-}
-
-let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
-};
-
-export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
-	typeInstanceHooksFn = fn;
-}
-
 export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null {
 	if (lookupSymbol(ctx.table, name) != null) return null;
 	const t = resolveAnnotation(name, ctx, 0, 0);
@@ -707,7 +693,7 @@ function genericInstanceOf(ctx: CheckerContext, sym: Symbol, genericParams: stri
 	const gi = createGenericInstance(baseType, args);
 	gi.typeName = sym.name;
 	instantiateGenericBody(gi, genericParams);
-	typeInstanceHooksFn(gi, ctx, line, col);
+	callTypeInstanceHooks(gi, ctx, line, col);
 	return isRefBase ? createRef(gi) : gi;
 }
 
@@ -1269,6 +1255,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 					if (fname.endsWith("?")) {
 						fname = fname.slice(0, fname.length - 1).trim();
 						fieldIsOptional = true;
+					}
+					if (fname.length >= 2 && fname.charAt(0) == "\"" && fname.charAt(fname.length - 1) == "\"") {
+						fname = fname.slice(1, fname.length - 1);
 					}
 					let ftypeStr = field.slice(colonIdx + 1, field.length).trim();
 					if (fieldIsOptional) {
@@ -2296,7 +2285,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
-				if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+				if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 				return;
 			}
 		}
@@ -2308,7 +2297,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
-	if (bindsGenericTypeHook) genericTypeHookFn(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
+	if (bindsGenericTypeHook) callGenericTypeHook(ctx, node.resolvedSym!, paramTypes[0], d.fnName, d.nameLocation);
 }
 
 function hookWritesItsReceiver(name: string): boolean {
@@ -3029,7 +3018,19 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
-	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, cd.ctorDefaults != null ? cd.ctorDefaults : []);
+	const defaults = cd.ctorDefaults != null ? cd.ctorDefaults : [];
+	if (member.flags.has(NodeFlag.Abstract)) addError(ctx, "'abstract' modifier can only appear on a class, method, or property declaration", member.location.line, member.location.column);
+	if (!isCtorSignature(member)) {
+		mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
+		return;
+	}
+	const declaring = sym.declNode;
+	if (sym.symbolKind != SymbolKind.Class || (declaring != null && declaring.flags.has(NodeFlag.ExternC))) {
+		addError(ctx, `a constructor overload signature belongs to a class with a written implementation: '${sym.name}' is ${sym.symbolKind == SymbolKind.Class ? "an extern class" : "not a class"}`, member.location.line, member.location.column);
+		return;
+	}
+	if (symGenericParams(sym) != "") addError(ctx, `a constructor of the generic class '${sym.name}' cannot have overload signatures yet`, member.location.line, member.location.column);
+	mintCtorSignature(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
 }
 
 function declaresConstructor(body: Node[]): boolean {
@@ -3071,13 +3072,13 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	}
 	const superCall = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "super" }, loc), arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: superCall }, loc)] }, loc);
-	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [], ctorVisibility: "" }, loc);
+	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [], ctorVisibility: "", ctorParamProps: [], ctorFlags: "" }, loc);
 	ctorNode.nodeType = createFunction(paramTypes, params, voidType());
 	ctorNode.paramLocations = locs;
 	d.classBody.push(ctorNode);
 	setFlag(sym, SymbolFlag.HasConstructor);
 	setFlag(sym, SymbolFlag.InheritsConstructor);
-	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []);
+	setFlag(mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []), SymbolFlag.InheritsConstructor);
 }
 
 // A resolved class names its parent by Symbol; one not resolved yet is declared in
@@ -3207,6 +3208,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			resolveConstructorType(member, sym, ctx);
 		}
 	}
+	linkCtorSignatures(ctx, sym, d.classBody);
 
 	// Update inner struct in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while inner still references them)

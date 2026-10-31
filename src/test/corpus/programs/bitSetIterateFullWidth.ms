@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM prints an enum member as its ordinal ('0,1,2,3,4,5,6,7|1,15|…'), as in 775-bitSetIterate
 // @stdout: M0,M1,M2,M3,M4,M5,M6,M7|N1,N15|O0,O31|Q0,Q63|Y0,Y71|R8|A,C|{A, C}
 // @exit: 0
 

@@ -236,9 +236,12 @@ static inline int32_t msOsCpus(CpuInfo* buf, int64_t buf_len) {
 	msString model = msOsCpuModel();
 	int32_t speed = msOsCpuSpeed();
 	for (int32_t i = 0; i < count; i++) {
-		buf[i].model = model;
+		msString own = model;
+		msStringIncref(own);
+		buf[i].model = own;
 		buf[i].speed = speed;
 	}
+	msStringDecref(model);
 	return count;
 }
 

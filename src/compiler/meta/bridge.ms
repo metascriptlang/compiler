@@ -1092,6 +1092,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "destrPattern", d.destrPattern);
 			setNode(objHeap, arrHeap, handle, "destrInit", d.destrInit);
 			setBool(objHeap, handle, "destrIsConst", d.destrIsConst);
+			setStr(objHeap, arrHeap, handle, "destrType", d.destrType);
 		},
 
 		// === Statements ===
@@ -1289,6 +1290,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "ctorBody", d.ctorBody);
 			setDefaults(objHeap, arrHeap, handle, "ctorDefaults", d.ctorDefaults, includeTypeAst);
 			setStr(objHeap, arrHeap, handle, "ctorVisibility", d.ctorVisibility);
+			setDefaults(objHeap, arrHeap, handle, "ctorParamProps", d.ctorParamProps, includeTypeAst);
+			setStr(objHeap, arrHeap, handle, "ctorFlags", d.ctorFlags);
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
@@ -2115,7 +2118,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const destrPattern = readNode(objHeap, arrHeap, h, "destrPattern", loc);
 			const destrInit = readNode(objHeap, arrHeap, h, "destrInit", loc);
 			const destrIsConst = readBool(objHeap, h, "destrIsConst");
-			return createNodeAt(NodeKind.DestructuringDecl, { destrPattern, destrInit, destrIsConst }, loc);
+			const destrType = readStr(objHeap, arrHeap, h, "destrType");
+			return createNodeAt(NodeKind.DestructuringDecl, { destrPattern, destrInit, destrIsConst, destrType }, loc);
 		},
 
 		// === Statements ===
@@ -2208,7 +2212,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.SwitchCase => {
 			const caseTests = readNodes(objHeap, arrHeap, h, "caseTests", loc);
-			const caseStmts = readNodes(objHeap, arrHeap, h, "caseStmts", loc);
+			const caseStmts = readStatements(objHeap, arrHeap, h, "caseStmts", loc);
 			const isDefault = readBool(objHeap, h, "isDefault");
 			return createNodeAt(NodeKind.SwitchCase, { caseTests, caseStmts, isDefault }, loc);
 		},
@@ -2358,6 +2362,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ConstructorDecl, {
 				ctorParams, ctorParamTypes, ctorBody, ctorDefaults: readDefaults(objHeap, arrHeap, h, "ctorDefaults", loc),
 				ctorVisibility: readStr(objHeap, arrHeap, h, "ctorVisibility"),
+				ctorParamProps: readDefaults(objHeap, arrHeap, h, "ctorParamProps", loc),
+				ctorFlags: readStr(objHeap, arrHeap, h, "ctorFlags"),
 			}, loc);
 		},
 		NodeKind.ExternDecl => {

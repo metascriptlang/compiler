@@ -318,7 +318,11 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// msIncref and scope cleanup decrefs. Without this, fields typed
 			// `T | null` (e.g. `Type.typeReturn`) are not refcounted and dangle
 			// when the original allocation is destroyed.
-			const refInner = unwrapRefNullUnion(t);
+			let refInner = unwrapRefNullUnion(t);
+			while (refInner != null && refInner.kind == TypeKind.Distinct) {
+				if (getOpByKey(refInner, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, anonUnionCName(t), t, false, requireOps);
+				refInner = refInner.typeReturn;
+			}
 			if (refInner != null) {
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a

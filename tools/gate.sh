@@ -970,7 +970,7 @@ FAKE
 # On 2026-10-29..30, 66 of 93 reds were not the slice's and each one cost its owner a re-proof and a new gate; a flake now
 # lands on a slice at most ~7% of the time, while a red the diff causes every time stays the slice's.
 TRIAGE_RUNS=3 TRIAGE_MAX=12 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
-TRIAGE_LANES=" corpus san tsan guard hcr tests suite "
+TRIAGE_LANES=" corpus san tsan guard hcr lsp tests suite "
 
 triage_subject() {
   case "$1" in
@@ -1040,6 +1040,7 @@ triage_side() {
             MSC="$cmp" "$bld" run src/test/corpus/run.ms ;;
         guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
         hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
+        lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
         tests|suite)
           [ "$lane" = tests ] || cmp=$bld
           r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
@@ -2727,6 +2728,12 @@ lane_body() {
     solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
     boundary|corpus|san|tsan|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+  esac
+  # a failed cell's build log sits in this checkout's out/, which the next gate overwrites; carry its tail in the lane log
+  case $lane in corpus|san|tsan)
+    sed -n 's/.* build failed — \(out\/[^ ]*\)$/\1/p' "$log" | head -5 | while read -r f; do
+      [ -f "$f" ] && { echo "---- $f (last 40 lines)"; tail -40 "$f" | sed 's/^/    | /'; }
+    done >>"$log" ;;
   esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
     && [ "$(tree_key HEAD)" = "$cand_key" ]; then

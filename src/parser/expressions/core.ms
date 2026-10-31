@@ -1,11 +1,12 @@
 // Core Expression Parser - Pratt parsing with operator precedence
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser } from "../cursor";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData, ConditionalExprData } from "../../ast/node";
+import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser, addError } from "../cursor";
+import { lex } from "../../lexer/lexer";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifierOrSign, liftParamModifiers } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { ArrowShape, arrowShape, parseArrowFunction, tryParseArrowFunction, parseBareIdentArrow } from "./arrow";
@@ -36,7 +37,7 @@ const NO_BINARY_PREC: int32 = 100;
 
 function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	advance(state);
-	const captured = captureType(state);
+	const captured = captureType(state, true);
 	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: captured.text }, token);
 	asNode.typeExpr = captured.expr;
 	return finishNode(state, asNode);
@@ -192,6 +193,9 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			continue;
 		}
 
+		if (op.kind == TokenKind.StarStar && isPrefixOperand(left)) {
+			addError(state, `An unary expression with the '${prefixOperatorText(left)}' operator is not allowed in the left-hand side of an exponentiation expression. Consider enclosing the expression in parentheses (line ${op.line})`);
+		}
 		advance(state);
 		// Right-associative operators (**, =, +=, etc.) use prec instead of prec+1
 		let nextPrec = prec + 1;
@@ -217,9 +221,10 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			advance(state);
 			state.noArrowReturnType = 1;
 			const consequent = try parseExprWithPrec(state, 0);
-			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
-				advance(state);
+			if (isAtEnd(state) || current(state).kind != TokenKind.Colon) {
+				return Result.err(`Expected ':' in conditional expression at line ${current(state).line}`);
 			}
+			advance(state);
 			state.noArrowReturnType = arrowReturnTypeBan;
 			const alternate = try parseExprWithPrec(state, ternaryPrec);
 			left = finishNode(state, createNode(NodeKind.ConditionalExpr, {
@@ -247,6 +252,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	const feParamLocs = getLastParamLocations();
 	const fePatterns = getLastParamPatterns();
 	const funcExprParams = extractParamNames(raw);
+	feFlags = liftParamModifiers(funcExprParams, 0, feFlags);
 	const funcExprParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);
@@ -283,6 +289,15 @@ function prefixed(operand: Node, wrap: (inner: Node) => Node): Node {
 	const td = target.data as TypeAssertionData;
 	td.asExpr = wrap(td.asExpr);
 	return operand;
+}
+
+function isPrefixOperand(n: Node): boolean {
+	return (n.kind == NodeKind.UnaryExpr || n.kind == NodeKind.AwaitExpr) && !n.flags.has(NodeFlag.Parenthesized);
+}
+
+function prefixOperatorText(n: Node): string {
+	if (n.kind == NodeKind.AwaitExpr) return "await";
+	return (n.data as UnaryExprData).unaryOp;
 }
 
 function parsePrimary(state: ParserState): ExprResult {
@@ -902,6 +917,38 @@ test "parens" { assert parseOk("(a + b) * c"); }
 // Right-associative
 test "** right assoc" { assert parseOk("a ** b ** c"); }
 
+function parseError(src: string): string {
+	const lr = lex(src);
+	if (!lr.ok) return lr.error;
+	const state = createState(lr.value);
+	const pr = parseExprWithPrec(state, 0);
+	if (state.errors.length > 0) return state.errors[0];
+	return pr.ok ? "" : pr.error;
+}
+
+function sourceOk(src: string): boolean { return parseError(src) == ""; }
+
+test "an unparenthesized prefix operand on the left of ** is refused with the operator named" {
+	for (const op of ["-", "!", "~", "typeof ", "void ", "delete "]) {
+		const err = parseError(`${op}x ** 2`);
+		assert err.startsWith(`An unary expression with the '${op.trim()}' operator is not allowed in the left-hand side of an exponentiation expression.`), op;
+	}
+	assert !sourceOk("1 + -x ** 2");
+	assert !sourceOk("-x.y ** 2");
+}
+
+test "a parenthesized prefix operand, a prefix operand on the right and an update on the left of ** stay accepted" {
+	assert sourceOk("(-x) ** 2");
+	assert sourceOk("-(x ** 2)");
+	assert sourceOk("2 ** -x");
+	assert sourceOk("(!x) ** 2");
+	assert sourceOk("(typeof x) ** 2");
+	assert sourceOk("x++ ** 2");
+	assert sourceOk("++x ** 2");
+	assert sourceOk("-x * 2");
+	assert sourceOk("-2");
+}
+
 test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
 
 test "a regex literal is the right operand of ?? and of %=" {
@@ -987,4 +1034,34 @@ test "a comment between @ and comptime leaves a comptime block" {
 test "a comment between quote and its brace leaves a quote expression" {
 	assert exprKind("quote /* c */ { const x = 1; }") == NodeKind.QuoteExpr;
 	assert exprKind("quote // c\n{ const x = 1; }") == NodeKind.QuoteExpr;
+}
+
+test "an assertion leaves its conditional question and positioned type" {
+	const node = exprNode("on as boolean ? one : two");
+	assert node.kind == NodeKind.ConditionalExpr;
+	const data = node.data as ConditionalExprData;
+	assert data.ternaryCondition.kind == NodeKind.TypeAssertion;
+	assert (data.ternaryCondition.data as TypeAssertionData).asType == "boolean";
+	assert data.ternaryCondition.typeExpr!.location.endColumn == 14;
+	assert data.ternaryConsequent.kind == NodeKind.Identifier;
+	assert data.ternaryAlternate.kind == NodeKind.Identifier;
+}
+
+test "compound assertions leave nested conditional ownership intact" {
+	for (const source of [
+		"values as int32[] ? one : two",
+		"values as List<int32> ? one : two",
+		"value as (int32 | null) ? one : two",
+		"handler as ((x: int32) => int32) ? one : two",
+		"value as typeof source ? one : two",
+		"on ? off as boolean ? one : two : three",
+		"off ? one : on as boolean ? -2 : three",
+	]) {
+		assert exprKind(source) == NodeKind.ConditionalExpr;
+	}
+}
+
+test "a conditional requires its colon" {
+	assert !parseOk("on ? one two");
+	assert !parseOk("on as boolean ? one two");
 }

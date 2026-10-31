@@ -64,6 +64,37 @@ static inline int32_t msPromiseFetchSubAcqRel(void* p, int32_t n) {
 	return atomic_fetch_sub_explicit((_Atomic(int32_t)*)p, n, memory_order_acq_rel);
 }
 
+static inline int32_t msPromiseFetchAddAcqRel(void* p, int32_t n) {
+	return atomic_fetch_add_explicit((_Atomic(int32_t)*)p, n, memory_order_acq_rel);
+}
+
+static void msPromiseFirstGenericDeliver(void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) {
+	(void)shareFn; (void)dropFn; (void)dropEnv;
+	msFutureComplete(result, ((msFuture*)input)->value);
+}
+
+static const msPromiseFirstVt msPromiseFirstGenericVt = { .futSize = sizeof(msFuture), .deliver = msPromiseFirstGenericDeliver };
+
+static inline void* msPromiseFirstGeneric(void) { return (void*)&msPromiseFirstGenericVt; }
+
+static inline void* msPromiseFirstCreate(const void* vt) {
+	return msAllocTyped(((const msPromiseFirstVt*)vt)->futSize, &msFutureTypeInfo);
+}
+
+static inline void msPromiseFirstDeliver(const void* vt, void* result, void* input, void* shareFn, void* dropFn, void* dropEnv) {
+	((const msPromiseFirstVt*)vt)->deliver(result, input, shareFn, dropFn, dropEnv);
+}
+
+static inline void* msPromiseAllRejectedError(void) {
+	return msMakeError(msStringFromCStr("All promises were rejected"));
+}
+
+void msPromiseFirstCb(void* env);
+
+static inline void msPromiseFirstWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseFirstCb, .env = env });
+}
+
 void msPromiseAllCb(void* env);
 void msPromiseAllTypedCb(void* env);
 
@@ -73,6 +104,60 @@ static inline void msPromiseAllTypedWatch(void* fut, void* env) {
 
 static inline void msPromiseAllWatch(void* fut, void* env) {
 	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseAllCb, .env = env });
+}
+
+#define MS_PTR sizeof(void*)
+_Static_assert(offsetof(msFutureThenEnv, typeTag) == 6 * MS_PTR && offsetof(msFutureThenEnv, run) == 7 * MS_PTR && sizeof(msFutureThenEnv) == 8 * MS_PTR, "ThenEnv in combinator.cms");
+_Static_assert(offsetof(msFutureCatchEnv, typeTag) == 4 * MS_PTR && offsetof(msFutureCatchEnv, ok) == 5 * MS_PTR && sizeof(msFutureCatchEnv) == 6 * MS_PTR, "CatchEnv in combinator.cms");
+_Static_assert(offsetof(msFutureFinallyEnv, onSettled) == 2 * MS_PTR && sizeof(msFutureFinallyEnv) == 4 * MS_PTR, "FinallyEnv in combinator.cms");
+#undef MS_PTR
+
+static inline void* msPromiseThenEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureThenEnv), &msFutureThenEnvTypeInfo);
+}
+
+static inline void* msPromiseCatchEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo);
+}
+
+static inline void* msPromiseFinallyEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureFinallyEnv), &msFutureFinallyEnvTypeInfo);
+}
+
+static inline void msPromiseEnvFree(void* env) { msDecrefCyclic(env); }
+
+static inline void msPromiseThenWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureThenCb, .env = env }, msFutureThenEnvDrop, NULL));
+}
+
+static inline void msPromiseCatchWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureCatchCb, .env = env }, msFutureCatchEnvDrop, NULL));
+}
+
+static inline void msPromiseFinallyWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureFinallyCb, .env = env }, msFutureFinallyEnvDrop, NULL));
+}
+
+static inline void msPromiseInvokeRun(void* run, void* env) { ((void (*)(void*))run)(env); }
+
+static inline void msPromiseInvokeOk(void* ok, void* output, void* input) { ((void (*)(void*, void*))ok)(output, input); }
+
+static inline void msPromiseCallError(void* fn, void* env, void* err) {
+	if (env) ((void (*)(void*, void*))fn)(err, env);
+	else ((void (*)(void*))fn)(err);
+}
+
+static inline void msPromiseCallVoid(void* fn, void* env) {
+	if (env) ((void (*)(void*))fn)(env);
+	else ((void (*)(void))fn)();
+}
+
+static inline bool msPromiseThrown(void) { return msErr; }
+
+static inline void* msPromiseTakeThrown(void) {
+	void* exception = (void*)msCurrException;
+	msErr = false; msCurrException = NULL;
+	return exception;
 }
 
 #endif

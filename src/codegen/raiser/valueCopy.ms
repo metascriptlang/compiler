@@ -1,6 +1,6 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
+import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findSharedStringDiscriminant, isMaybeType, isStructType, needsValueCopy, peelToStruct, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
@@ -34,6 +34,15 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
+	} else if (isMixedUnion(valueType)) {
+		const field = sharedLiteralField(valueType);
+		plan.kind = RaiserCopyKind.Literal;
+		plan.names.push(field);
+		for (const arm of valueType.typeChildren) {
+			const shape = peelToStruct(arm)!;
+			plan.names.push(shape.typeChildren[shape.typeNames.indexOf(field)].typeName);
+			plan.children.push(copyPlan(s, arm));
+		}
 	} else if (valueType.kind == TypeKind.Union && needsValueCopy(valueType)) {
 		plan.kind = RaiserCopyKind.Union;
 		plan.names.push(valueType.typeNames[0]);
@@ -43,6 +52,16 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 		}
 	}
 	return index;
+}
+
+function sharedLiteralField(union: Readonly<Type>): string {
+	const name = findSharedStringDiscriminant(union);
+	return name != "" ? name : findSharedBooleanDiscriminant(union);
+}
+
+function isMixedUnion(t: Readonly<Type>): boolean {
+	if (t.kind != TypeKind.Union || t.typeFlags.has(TypeFlag.ValueUnion) || sharedLiteralField(t) == "") return false;
+	return t.typeChildren.some((c) => needsValueCopy(c));
 }
 
 function armDiscriminant(union: Readonly<Type>, key: string): int64 {

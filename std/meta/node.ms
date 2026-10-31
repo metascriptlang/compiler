@@ -251,6 +251,7 @@ export enum SymbolFlag {
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
 	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 	IteratorHelper, // @iteratorHelper std generator: a close before its first next closes its first parameter, the source iterator
+	ImmutableEnv, // a ClosureEnv whose every captured variable is a const: no field is written after the env is built
 }
 
 // ===== Symbol =====
@@ -349,6 +350,9 @@ export enum NodeFlag {
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
 	ActorSelfCall, // checker: a call through `this` in the actor's own method runs the method body on this turn, not as a message
 	TemplateStep,  // parser: this `+` is one step of a template literal; its right operand converts to text with the string hint
+	DefaultAwaitsInstance, // checker: a filled default whose formal is still generic; the instantiation fits it to the instance's type
+	ParamProperty, // checker: this class field was declared by a constructor parameter written with `public`, `private`, `protected` or `readonly`
+	SendableClosure, // checker: this closure is converted to Sendable<F>, so lambda lifting gives it an env of its own that holds copies of its captures
 }
 
 // ===== Node Kind Enum =====
@@ -496,7 +500,7 @@ export type NodeData =
 	| { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] } // ArrayPattern
 	| { patternProps: Node[], hasRestProp: boolean }               // ObjectPattern
 	| { propKey: string, propAlias: Node, propDefault: Node | null } // ObjectPatternProp
-	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
+	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string } // DestructuringDecl
 	// Statement variants
 	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
@@ -525,7 +529,7 @@ export type NodeData =
 	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
-	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string } // ConstructorDecl
+	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[], ctorFlags: string } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
@@ -722,7 +726,7 @@ export type TypeAnnotationData = { annotationType: string };
 export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] };
 export type ObjectPatternData = { patternProps: Node[], hasRestProp: boolean };
 export type ObjectPatternPropData = { propKey: string, propAlias: Node, propDefault: Node | null };
-export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
+export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string };
 
 // Statements
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };
@@ -754,7 +758,7 @@ export type ClassDeclData = { className: string, classDisplayName: string, class
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string };
+export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[], ctorFlags: string }; // ctorParamProps: per parameter, the PropertyDecl a parameter property declares (propVisibility, propIsReadonly as written), null for a plain parameter
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };

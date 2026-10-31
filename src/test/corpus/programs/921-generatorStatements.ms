@@ -77,6 +77,15 @@ function* statementKinds(k: int32): Iterator<string> {
 	}
 }
 
+function* discardedYields(): Iterator<int32> {
+	yield 1;
+	for (let i: int32 = 2; i < 4; yield i) i++;
+}
+
+function* inferredDiscard() {
+	yield 5;
+}
+
 function collectInts(label: string, it: Iterator<int32>, expected: string): void {
 	let out: string = "";
 	for (const v of it) out = out + v.toString() + ",";
@@ -101,3 +110,5 @@ if (trace != "f1;f1;f2;") throw new Error("trace: " + trace);
 console.log("trace: " + trace);
 collectStrings("statementKinds(1)", statementKinds(1), "do0,do1,case1,arm1,try,finally,");
 collectStrings("statementKinds(2)", statementKinds(2), "do0,do1,default,wild,try,finally,");
+collectInts("discardedYields", discardedYields(), "1,3,4,");
+collectInts("inferredDiscard", inferredDiscard(), "5,");

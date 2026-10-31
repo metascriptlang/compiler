@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: 10 0 6 3
 // @stdout: 1 2 5 3 1
 // @stdout: 8 2 2 3

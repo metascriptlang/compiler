@@ -15,14 +15,23 @@ extern function copyBytes(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>
 extern function msStringMarkAscii(s: string): void;
 extern function msStringMarkNonAscii(s: string): void;
 
+@include("string.h");
+extern function cMemcpy(to: Ptr<uint8>, from: Readonly<Ptr<uint8>>, size: uint64): Ptr<uint8> from "memcpy";
+
 const highBits: uint64 = 0x8080808080808080;
+
+// Through memcpy, which clang folds into one load at any alignment.
+export function wordAt(bytes: Readonly<Ptr<uint8>>): uint64 {
+	let cell: uint64[1] = [0];
+	cMemcpy(((cell as Span<uint64>) as Ptr<uint64>) as Ptr<uint8>, bytes, 8);
+	return cell[0];
+}
 
 // Keep the scan single-exit: clang 18/21 turn a `return false` inside a byte loop of a
 // boolean function into a per-byte select, measured ~1.35x slower than the C kernel.
 export function asciiWords(bytes: Readonly<Ptr<uint8>>, wordCount: int64): int64 {
-	const words = bytes as Readonly<Ptr<uint64>>;
 	let word: int64 = 0;
-	while (word < wordCount && (words[word] & highBits) == 0) word += 1;
+	while (word < wordCount && (wordAt(bytes + (word << 3)) & highBits) == 0) word += 1;
 	return word;
 }
 

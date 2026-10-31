@@ -11,7 +11,7 @@ import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
-import { isNullableShape, isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
+import { findSharedBooleanDiscriminant, findSharedStringDiscriminant, isNullableShape, isStructType, needsValueCopy, peelToStruct, setRepr, valueCopyRepr } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName, jsPropertyKey, jsPropertyAccess, escapeJSString, identFromKey } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
@@ -59,40 +59,58 @@ function defaultValueOf(declared: Type | null, open: Type[]): string {
 }
 
 function typeKey(t: Type): string {
-	if (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return typeKey(t.typeReturn as Type);
-	if (t.kind == TypeKind.Struct) {
-		let key = "S:" + t.typeName + "(";
-		let i = 0;
-		while (i < t.typeChildren.length) {
-			const fname = i < t.typeNames.length ? t.typeNames[i] : "";
-			key = key + fname + ":" + typeKey(t.typeChildren[i]) + ",";
-			i += 1;
+	return keyOf(t, []);
+}
+
+function keyOf(t: Type, open: Type[]): string {
+	if (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return keyOf(t.typeReturn as Type, open);
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Union) {
+		const at = open.indexOf(t);
+		if (at >= 0) return "R:" + (open.length - at).toString();
+		open.push(t);
+		let key = (t.kind == TypeKind.Struct ? "S:" : "U:") + t.typeName + "(";
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			const fname = t.kind == TypeKind.Struct && i < t.typeNames.length ? t.typeNames[i] : "";
+			key = key + fname + ":" + keyOf(t.typeChildren[i], open) + ",";
 		}
+		open.pop();
 		return key + ")";
 	}
 	if (t.kind == TypeKind.Tuple) {
 		let key = "T:(";
-		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
-		return key + ")";
-	}
-	if (t.kind == TypeKind.Union) {
-		let key = "U:" + t.typeName + "(";
-		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
+		for (const c of t.typeChildren) key = key + keyOf(c, open) + ",";
 		return key + ")";
 	}
 	if (t.kind == TypeKind.Set) {
 		const repr = setRepr(t);
-		if (repr != null) return "K:" + typeKey(repr);
+		if (repr != null) return "K:" + keyOf(repr, open);
 		if (t.typeValue > 0) return "K:" + t.typeValue.toString();
 	}
-	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + typeKey(t.typeReturn);
-	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + typeKey(t.typeReturn);
+	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + keyOf(t.typeReturn, open);
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + keyOf(t.typeReturn, open);
 	return "p" + (t.kind as int32).toString();
+}
+
+function sharedDiscriminant(union: Type): string {
+	const name = findSharedStringDiscriminant(union);
+	return name != "" ? name : findSharedBooleanDiscriminant(union);
+}
+
+// An ordinary `S | R` holds a value-struct arm by value, as on C, but carries no
+// discriminant metadata: its arms are told apart by the literal field they share.
+function isMixedUnion(t: Type | null): boolean {
+	if (t == null || t.kind != TypeKind.Union || t.typeFlags.has(TypeFlag.ValueUnion)) return false;
+	if (sharedDiscriminant(t) == "") return false;
+	return t.typeChildren.some((c) => needsValueCopy(c));
+}
+
+function copies(t: Type | null): boolean {
+	return needsValueCopy(t) || isMixedUnion(valueCopyRepr(t));
 }
 
 function copyExpr(gen: JSGenerator, t: Type | null, src: string): string {
 	t = valueCopyRepr(t);
-	if (!needsValueCopy(t)) return src;
+	if (!copies(t)) return src;
 	return copyFnName(gen, t as Type) + "(" + src + ")";
 }
 
@@ -134,12 +152,12 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 		}
 		body = body + "];";
 	} else if (t.kind == TypeKind.Union) {
-		body = unionCopyBody(gen, t);
+		body = t.typeFlags.has(TypeFlag.ValueUnion) ? unionCopyBody(gen, t) : mixedUnionCopyBody(gen, t);
 	} else {
 		const elem = valueCopyRepr(t.typeReturn);
 		const typedName = t.kind == TypeKind.SizedArray && elem != null
 			? jsTypedArrayName(elem.kind) : "";
-		if (needsValueCopy(elem)) {
+		if (copies(elem)) {
 			body = "return v.map(" + copyFnName(gen, elem as Type) + ");";
 		} else if (typedName != "" ) {
 			body = "return v.slice();";
@@ -165,6 +183,19 @@ function unionCopyBody(gen: JSGenerator, union: Type): string {
 		body = body + "case " + armDiscriminant(union, union.typeNames[i + 1]) + ": return " + copyFnName(gen, union.typeChildren[i]) + "(v); ";
 	}
 	return body + "default: throw new globalThis.Error(\"copy of a union whose discriminant matches no arm\"); }";
+}
+
+function mixedUnionCopyBody(gen: JSGenerator, union: Type): string {
+	const field = sharedDiscriminant(union);
+	let body = "switch (v" + jsPropertyAccess(field) + ") { ";
+	for (const arm of union.typeChildren) {
+		if (!needsValueCopy(arm)) continue;
+		const struct = peelToStruct(arm) as Type;
+		const lit = struct.typeChildren[struct.typeNames.indexOf(field)];
+		const key = lit.kind == TypeKind.StringLiteral ? "\"" + escapeJSString(lit.typeName) + "\"" : lit.typeName;
+		body = body + "case " + key + ": return " + copyFnName(gen, arm) + "(v); ";
+	}
+	return body + "default: return v; }";
 }
 
 function isElementRead(n: Node): boolean {
@@ -202,7 +233,7 @@ function isFreshRvalue(n: Node): boolean {
 
 export function emitCopyOnRead(gen: JSGenerator, node: Node): void {
 	const t = valueCopyRepr(node.nodeType);
-	if (!needsValueCopy(t) || isFreshRvalue(node)) {
+	if (!copies(t) || isFreshRvalue(node)) {
 		emitNode(gen, node);
 		return;
 	}
@@ -213,7 +244,7 @@ export function emitCopyOnRead(gen: JSGenerator, node: Node): void {
 
 export function valueCopyFnName(gen: JSGenerator, t: Type | null): string {
 	const repr = valueCopyRepr(t);
-	if (!needsValueCopy(repr)) return "";
+	if (!copies(repr)) return "";
 	return copyFnName(gen, repr as Type);
 }
 
@@ -236,7 +267,7 @@ function assignFnName(gen: JSGenerator, t: Type): string {
 
 function assignExpr(gen: JSGenerator, t: Type | null, dst: string, src: string): string {
 	t = valueCopyRepr(t);
-	if (!needsValueCopy(t)) return src;
+	if (!needsValueCopy(t)) return copyExpr(gen, t, src);
 	return assignFnName(gen, t as Type) + "(" + dst + ", " + src + ")";
 }
 
@@ -379,9 +410,9 @@ export function emitNativeArg(gen: JSGenerator, arg: Node, formal: Type | null):
 
 export function nativeResultCopy(gen: JSGenerator, t: Type | null): string {
 	const r = valueCopyRepr(t);
-	if (needsValueCopy(r)) return copyFnName(gen, r as Type);
+	if (copies(r)) return copyFnName(gen, r as Type);
 	const arr = arrayOf(t);
-	if (arr != null && needsValueCopy(arr.typeReturn)) return copyFnName(gen, arr);
+	if (arr != null && copies(arr.typeReturn)) return copyFnName(gen, arr);
 	return "";
 }
 
@@ -395,7 +426,7 @@ export function emitArrayElement(gen: JSGenerator, el: Node): void {
 	const arg = (el.data as SpreadExprData).spreadArg;
 	const arr = arrayOf(arg.nodeType);
 	emit(gen, "...");
-	if (arr != null && needsValueCopy(arr.typeReturn) && !isFreshRvalue(arg)) {
+	if (arr != null && copies(arr.typeReturn) && !isFreshRvalue(arg)) {
 		emit(gen, copyFnName(gen, arr) + "(");
 		emitNode(gen, arg);
 		emit(gen, ")");

@@ -39,7 +39,7 @@ export function readFileBytes(path: string): Result<Buffer, IoError> {
 	return Result.ok(rawBuffer(raw));
 }
 
-export function writeFileBytes(path: string, content: Buffer): Result<void, IoError> {
+export function writeFileBytes(path: string, content: uint8[]): Result<void, IoError> {
 	return writeFile(path, rawString(content));
 }
 

@@ -151,6 +151,15 @@ export function overloadWinner(set: Symbol, idx: number): Symbol {
 	return idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
 }
 
+// A call that picked a signature runs the implementation, so its arguments are lowered against the implementation's formals.
+export function overloadRoutine(set: Symbol, idx: number): Symbol {
+	const winner = overloadWinner(set, idx);
+	if (!hasFlag(winner, SymbolFlag.OverloadSig)) return winner;
+	const impl = findOverloadImpl(set);
+	if (impl == null) throw new Error(`internal: the overload set '${set.name}' reached lowering without an implementation`);
+	return impl;
+}
+
 export function isViewBinding(sym: Symbol | null): boolean {
 	if (sym == null) return false;
 	return sym.symbolKind == SymbolKind.Parameter || hasFlag(sym, SymbolFlag.ForVar);

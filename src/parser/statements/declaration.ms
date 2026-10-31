@@ -2,12 +2,12 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ConstructorDeclData, BlockStmtData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, liftParamModifiers } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
 
@@ -108,32 +108,40 @@ function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeRes
 	// Destructuring: const { a, b } = ... or const [ x, y ] = ...
 	if (current(state).kind == TokenKind.LBrace) {
 		const pattern = try parseObjectPattern(state);
-		skipOptionalType(state);
+		const destrType = captureOptionalType(state);
+		const destrTypeExpr = getLastTypeExpr();
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
+		const destrNode = finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at)));
+			destrType,
+		}, at));
+		destrNode.typeExpr = destrTypeExpr;
+		return Result.ok(destrNode);
 	}
 
 	if (current(state).kind == TokenKind.LBracket) {
 		const pattern = try parseArrayPattern(state);
-		skipOptionalType(state);
+		const destrType = captureOptionalType(state);
+		const destrTypeExpr = getLastTypeExpr();
 		if (current(state).kind != TokenKind.Assign) {
 			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		return Result.ok(finishNode(state, createNode(NodeKind.DestructuringDecl, {
+		const destrNode = finishNode(state, createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, at)));
+			destrType,
+		}, at));
+		destrNode.typeExpr = destrTypeExpr;
+		return Result.ok(destrNode);
 	}
 
 	const nameToken = current(state);
@@ -210,50 +218,7 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 		if (flags == "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
 	}
-	// Out/ref/readonly parameters: strip prefix, encode positions in flags
-	let outPositions = "";
-	let refPositions = "";
-	let rdonlyPositions = "";
-	let sinkPositions = "";
-	for (let oi = first; oi < params.length; oi += 1) {
-		const at = oi - first;
-		if (params[oi].length > 4 && params[oi].slice(0, 4) == "out:") {
-			params[oi] = params[oi].slice(4, params[oi].length);
-			if (outPositions == "") { outPositions = `${at}`; }
-			else { outPositions = `${outPositions},${at}`; }
-		}
-		if (params[oi].length > 4 && params[oi].slice(0, 4) == "ref:") {
-			params[oi] = params[oi].slice(4, params[oi].length);
-			if (refPositions == "") { refPositions = `${at}`; }
-			else { refPositions = `${refPositions},${at}`; }
-		}
-		if (params[oi].length > 7 && params[oi].slice(0, 7) == "rdonly:") {
-			params[oi] = params[oi].slice(7, params[oi].length);
-			if (rdonlyPositions == "") { rdonlyPositions = `${at}`; }
-			else { rdonlyPositions = `${rdonlyPositions},${at}`; }
-		}
-		if (params[oi].length > 5 && params[oi].slice(0, 5) == "sink:") {
-			params[oi] = params[oi].slice(5, params[oi].length);
-			if (sinkPositions == "") { sinkPositions = `${at}`; }
-			else { sinkPositions = `${sinkPositions},${at}`; }
-		}
-	}
-	if (outPositions != "") {
-		if (flags == "") { flags = `out:${outPositions}`; }
-		else { flags = `${flags}|out:${outPositions}`; }
-	}
-	if (refPositions != "") {
-		if (flags == "") { flags = `ref:${refPositions}`; }
-		else { flags = `${flags}|ref:${refPositions}`; }
-	}
-	if (rdonlyPositions != "") {
-		if (flags == "") { flags = `rdonly:${rdonlyPositions}`; }
-		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
-	}
-	if (sinkPositions != "") {
-		if (flags == "") { flags = `sink:${sinkPositions}`; }
-		else { flags = `${flags}|sink:${sinkPositions}`; }
-	}
+	flags = liftParamModifiers(params, first, flags);
 	// Encode generic param names
 	if (genericNames != "") {
 		if (flags == "") { flags = `gen:${genericNames}`; }
@@ -1235,7 +1200,16 @@ export function parseActorDecl(state: ParserState): NodeResult {
 	return Result.ok(actorNode);
 }
 
-function parseClassMember(state: ParserState): NodeResult {
+function classModifierAhead(state: ParserState): boolean {
+	const modifier = current(state);
+	const next = peek(state, 1);
+	return (modifier.kind == TokenKind.Static || next.line == modifier.line) &&
+		(isPropertyName(next) || next.kind == TokenKind.Star ||
+			next.kind == TokenKind.LBrace || next.kind == TokenKind.LBracket ||
+			next.kind == TokenKind.String || next.kind == TokenKind.Number);
+}
+
+function parseClassMember(state: ParserState, isExtern: boolean = false): NodeResult {
 	const memberToken = current(state);
 
 	// Decorator before class member: @name(...) member
@@ -1245,7 +1219,7 @@ function parseClassMember(state: ParserState): NodeResult {
 			const dec = try parseMacroInvocation(state);
 			decorators.push(dec);
 		}
-		const member = try parseClassMember(state);
+		const member = try parseClassMember(state, isExtern);
 		return Result.ok(createNode(NodeKind.DecoratedDecl, {
 			decorators,
 			decoratedNode: finishOnce(state, member),
@@ -1254,20 +1228,20 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Capture access modifiers: public, private, protected
 	let memberVisibility = "";
-	if (current(state).kind == TokenKind.Public) {
+	if (current(state).kind == TokenKind.Public && classModifierAhead(state)) {
 		memberVisibility = "public";
 		advance(state);
-	} else if (current(state).kind == TokenKind.Private) {
+	} else if (current(state).kind == TokenKind.Private && classModifierAhead(state)) {
 		memberVisibility = "private";
 		advance(state);
-	} else if (current(state).kind == TokenKind.Protected) {
+	} else if (current(state).kind == TokenKind.Protected && classModifierAhead(state)) {
 		memberVisibility = "protected";
 		advance(state);
 	}
 
 	// Check for static
 	let memberIsStatic = false;
-	if (current(state).kind == TokenKind.Static) {
+	if (current(state).kind == TokenKind.Static && classModifierAhead(state)) {
 		memberIsStatic = true;
 		advance(state);
 	}
@@ -1278,12 +1252,13 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for readonly
 	let memberIsReadonly = false;
-	if (current(state).kind == TokenKind.Readonly) {
+	if (current(state).kind == TokenKind.Readonly && classModifierAhead(state)) {
 		memberIsReadonly = true;
 		advance(state);
 	}
 
-	const memberIsAbstract = current(state).kind == TokenKind.Abstract;
+	const memberIsAbstract = current(state).kind == TokenKind.Abstract &&
+		classModifierAhead(state);
 	if (memberIsAbstract) advance(state);
 
 	const modifier = current(state);
@@ -1305,13 +1280,14 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for extern modifier on methods
 	let memberFlags = "";
-	if (current(state).kind == TokenKind.Extern) {
+	const memberIsExtern = current(state).kind == TokenKind.Extern && classModifierAhead(state);
+	if (memberIsExtern) {
 		memberFlags = "extern";
 		advance(state);
 	}
 
 	// Check for async modifier on methods
-	if (current(state).kind == TokenKind.Async) {
+	if (current(state).kind == TokenKind.Async && classModifierAhead(state)) {
 		if (memberFlags != "") { memberFlags = `${memberFlags}_async`; }
 		else { memberFlags = "async"; }
 		advance(state);
@@ -1333,7 +1309,11 @@ function parseClassMember(state: ParserState): NodeResult {
 				`A constructor cannot have an 'override' modifier at line ${modifier.line}`,
 			);
 		}
-		return parseClassConstructor(state, memberVisibility);
+		const ctor = try parseClassConstructor(
+			state, memberVisibility, isExtern || memberIsExtern,
+		);
+		if (memberIsAbstract) ctor.flags = ctor.flags.incl(NodeFlag.Abstract);
+		return Result.ok(ctor);
 	}
 
 	// Get/Set accessors — early return
@@ -1367,7 +1347,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		if (memberIsOptional) {
 			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
 		}
-		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility);
+		const method = try parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags, memberVisibility, memberIsAbstract || isExtern || memberIsExtern);
 		if (memberIsAbstract) method.flags = method.flags.incl(NodeFlag.Abstract);
 		return Result.ok(method);
 	}
@@ -1411,23 +1391,55 @@ function parseClassMember(state: ParserState): NodeResult {
 // parseParamList and skipDefaultValue imported from ../util
 
 
-function parseClassConstructor(state: ParserState, visibility: string): NodeResult {
+function parseClassConstructor(
+	state: ParserState, visibility: string, isExtern: boolean,
+): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
-	const raw = parseParamList(state, "constructor");
+	const raw = parseParamList(state, "constructor", true);
 	const ctorParamTypeExprs = getLastParamTypeExprs();
 	const ctorParamLocs = getLastParamLocations();
 	const ctorPatterns = getLastParamPatterns();
 	const ctorDefaults = getLastParsedDefaults();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
-	const body = prependParamPatterns(try callBlockParser(state), ctorPatterns, ctorParamLocs);
+	const ctorParamProps = getLastParamProps();
+	while (ctorParamProps.length < ctorParams.length) ctorParamProps.push(null as unknown as Node);
+	for (let i = 0; i < ctorParams.length; i += 1) {
+		const prop = ctorParamProps[i];
+		if (prop == null) continue;
+		const pd = prop.data as PropertyDeclData;
+		pd.propName = ctorParams[i];
+		pd.propType = ctorParamTypes[i];
+		prop.location = ctorParamLocs[i];
+	}
+	const signature = current(state).kind == TokenKind.Semicolon;
+	if (signature && isExtern) {
+		return Result.err(
+			"Constructor signatures in an extern class are not supported " +
+			`at line ${ctorToken.line}`,
+		);
+	}
+	if (signature && ctorParamProps.some((prop: Node): boolean => prop != null)) {
+		return Result.err(
+			"A parameter property is only allowed in a constructor implementation " +
+			`at line ${ctorToken.line}`,
+		);
+	}
+	if (signature) consumeSemicolon(state);
+	const body = signature
+		? createNode(NodeKind.BlockStmt, { statements: [] }, ctorToken)
+		: prependParamPatterns(
+			try callBlockParser(state), ctorPatterns, ctorParamLocs,
+		);
 	const ctorNode = createNode(NodeKind.ConstructorDecl, {
 		ctorParams,
 		ctorParamTypes,
 		ctorBody: body,
 		ctorDefaults,
 		ctorVisibility: visibility,
+		ctorParamProps,
+		ctorFlags: signature ? "overload" : "",
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;
@@ -1524,7 +1536,7 @@ function parseStructAccessor(state: ParserState, structName: string, genericName
 	return Result.ok(fnNode);
 }
 
-function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string): NodeResult {
+function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string, isAbstractOrExtern: boolean): NodeResult {
 	// Capture optional generic params: method<T>(...) — same as regular function parser
 	const genericNames = captureGenericParams(state);
 	if (genericNames != "") {
@@ -1570,9 +1582,9 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		return Result.ok(mNode1);
 	}
 
-	// Abstract methods / extern without 'from' — just semicolon
 	if (current(state).kind == TokenKind.Semicolon) {
 		consumeSemicolon(state);
+		if (!isAbstractOrExtern) flags = flags == "" ? "overload" : `${flags}|overload`;
 		const mNode2 = createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
 			methodParams,
@@ -1640,7 +1652,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			elements.push(nested);
 		} else if (current(state).kind == TokenKind.LBrace) {
 			// Nested object pattern
-			const nested = try parseObjectPattern(state);
+			const nested = try parseObjectPattern(state, false);
 			elements.push(nested);
 		} else if (isIdentLike(current(state))) {
 			const elemToken = current(state);
@@ -1673,7 +1685,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 	}, bracketToken)));
 }
 
-export function parseObjectPattern(state: ParserState): NodeResult {
+export function parseObjectPattern(state: ParserState, allowQuotedKeys: boolean = true): NodeResult {
 	const braceToken = current(state);
 	advance(state); // consume '{'
 	const props: Node[] = [];
@@ -1691,14 +1703,20 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 					spreadArg: finishToken(createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent), restIdent),
 				}, spreadToken)));
 			}
-		} else if (isIdentLike(current(state))) {
+		} else if (isIdentLike(current(state)) || current(state).kind == TokenKind.String) {
 			const keyToken = current(state);
 			advance(state);
+			if (keyToken.kind == TokenKind.String) {
+				if (!allowQuotedKeys) return Result.err(`Quoted object binding key in a nested pattern is not supported at line ${keyToken.line}`);
+				if (current(state).kind != TokenKind.Colon || !isIdentLike(peek(state, 1))) {
+					return Result.err(`Quoted object binding key requires ':' and a direct identifier target at line ${keyToken.line}`);
+				}
+			}
 			// Check for rename: { key: alias } or { key: { nested } } or { key: [nested] }
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state); // consume ':'
 				if (current(state).kind == TokenKind.LBrace) {
-					const nested = try parseObjectPattern(state);
+					const nested = try parseObjectPattern(state, false);
 					props.push(finishNode(state, createNode(NodeKind.ObjectPatternProp, {
 						propKey: keyToken.value,
 						propAlias: nested,
@@ -1971,7 +1989,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			const members: Node[] = [];
 			while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 				if (current(state).kind == TokenKind.Semicolon) { advance(state); continue; }
-				const member = finishNode(state, try parseClassMember(state));
+				const member = finishNode(state, try parseClassMember(state, true));
 				const refusal = autoAccessorRefusal(member, "an extern class");
 				if (refusal != "") return Result.err(refusal);
 				members.push(member);
@@ -2589,6 +2607,127 @@ function parsedMethod(source: string, index: int32 = 0): MethodDeclData {
 	return cls.classBody[index].data as MethodDeclData;
 }
 
+test "class semicolon methods carry the existing overload flag" {
+	assert parsedMethod("class C { read(x: int32): int32; }").methodFlags == "overload";
+	const staticMethod = parsedMethod("class C { static read(x: int32): int32; }");
+	assert staticMethod.methodIsStatic;
+	assert staticMethod.methodFlags == "overload";
+	assert parsedMethod("class C { read<T>(x: T): T; }").methodFlags == "gen:T|overload";
+	assert parsedMethod("class C { async read<T>(x: T): T; }").methodFlags == "async|gen:T|overload";
+	assert parsedMethod("class C { read(x: int32): int32 { return x; } }").methodFlags == "";
+}
+
+test "abstract and extern semicolon methods keep declaration meaning" {
+	const abstractClass = stmtAt("abstract class C { abstract read<T>(x: T): T; }", 0).data as ClassDeclData;
+	const abstractNode = abstractClass.classBody[0];
+	assert abstractNode.flags.has(NodeFlag.Abstract);
+	assert (abstractNode.data as MethodDeclData).methodFlags == "gen:T";
+	assert parsedMethod("class C { extern read<T>(x: T): T; }").methodFlags == "extern|gen:T";
+	assert parsedMethod("class C { extern async read(): int32; }").methodFlags == "extern_async";
+	assert parsedMethod("class C { extern *read(): int32; }").methodFlags == "generator";
+	assert parsedMethod("class C { extern async *read(): int32; }").methodFlags == "generator";
+	const native = parsedMethod("class C { extern read(): int32 from \"hostRead\"; }");
+	assert native.methodFlags == "extern";
+	assert native.nativeName == "hostRead";
+}
+
+test "extern class methods keep ambient meaning through decorators" {
+	const ambient = stmtAt("extern class Host { read<T>(x: T): T; }", 0);
+	assert ambient.flags.has(NodeFlag.ExternC);
+	const member = (ambient.data as ClassDeclData).classBody[0];
+	assert (member.data as MethodDeclData).methodFlags == "gen:T";
+	const decorated = stmtAt("extern class Host { @marker read(): int32; }", 0).data as ClassDeclData;
+	const method = (decorated.classBody[0].data as DecoratedDeclData).decoratedNode;
+	assert (method.data as MethodDeclData).methodFlags == "";
+}
+
+test "modifier words retain ordinary property identity" {
+	const names = [
+		"async", "static", "readonly", "abstract",
+		"public", "private", "protected", "extern",
+	];
+	for (const name of names) {
+		const source = "class C { " + name + ": int32 = 1; }";
+		assert programOk(source);
+		const cls = stmtAt(source, 0).data as ClassDeclData;
+		const member = cls.classBody[0];
+		assert member.kind == NodeKind.PropertyDecl;
+		const property = member.data as PropertyDeclData;
+		assert property.propName == name;
+		assert !property.propIsStatic && !property.propIsReadonly;
+		assert property.propVisibility == "";
+		assert !member.flags.has(NodeFlag.Abstract);
+	}
+}
+
+test "modifier words retain ordinary method identity" {
+	const names = [
+		"async", "static", "readonly", "abstract",
+		"public", "private", "protected", "extern", "get", "set",
+	];
+	for (const name of names) {
+		const source = "class C { " + name + "(): int32 { return 1; } }";
+		const method = parsedMethod(source);
+		assert method.methodName == name;
+		assert method.methodFlags == "" && !method.methodIsStatic;
+		assert method.methodVisibility == "";
+	}
+}
+
+test "a generic keyword method is not a modifier" {
+	const method = parsedMethod(
+		"class C { async<T>(value: T): T { return value; } }",
+	);
+	assert method.methodName == "async" && method.methodFlags == "gen:T";
+}
+
+test "real class modifiers keep existing flags" {
+	assert parsedMethod("class C { async work() {} }").methodFlags == "async";
+	assert parsedMethod("class C { async *items() {} }").methodFlags ==
+		"async_generator";
+	assert parsedMethod("class C { static *items() {} }").methodIsStatic;
+	assert parsedMethod("class C { public work() {} }").methodVisibility ==
+		"public";
+	assert parsedMethod("class C { extern work(): void; }").methodFlags ==
+		"extern";
+	const source = "abstract class C { private readonly value: int32 = 1; " +
+		"abstract work(): int32; }";
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	const property = cls.classBody[0].data as PropertyDeclData;
+	assert property.propIsReadonly && property.propVisibility == "private";
+	assert cls.classBody[1].flags.has(NodeFlag.Abstract);
+}
+
+test "static can continue across a line break" {
+	const method = parsedMethod("class C { static\nwork() {} }");
+	assert method.methodIsStatic;
+	const repeated = parsedMethod("class C { static static() {} }");
+	assert repeated.methodName == "static" && repeated.methodIsStatic;
+}
+
+test "other modifiers stop at a line break" {
+	for (const name of ["async", "readonly", "abstract", "private"]) {
+		const source = "class C { " + name + "\nwork() {} }";
+		const cls = stmtAt(source, 0).data as ClassDeclData;
+		assert cls.classBody.length == 2;
+		assert cls.classBody[0].kind == NodeKind.PropertyDecl;
+		assert parsedMethod(source, 1).methodFlags == "";
+	}
+	const source = "class C { async /*\n*/ work() {} }";
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	assert cls.classBody.length == 2;
+	assert parsedMethod("class C { async /*same line*/ work() {} }").methodFlags ==
+		"async";
+}
+
+test "optional keyword property keeps its optional flag" {
+	const cls = stmtAt("class C { async?: int32; }", 0).data as ClassDeclData;
+	const member = cls.classBody[0];
+	assert member.kind == NodeKind.PropertyDecl;
+	assert member.flags.has(NodeFlag.Optional);
+	assert (member.data as PropertyDeclData).propName == "async";
+}
+
 test "override modifier reaches the existing method flags on instance and static methods" {
 	assert parsedMethod("class C { override m(): void {} }").methodFlags == "override";
 	const method = parsedMethod("class C { static override m(): void {} }");
@@ -2626,6 +2765,88 @@ test "override is refused where its assertion cannot be represented" {
 }
 
 test "constructor" { assert programOk("class Foo { constructor(x: number) { this.x = x; } }"); }
+
+test "constructor signatures carry overload intent without a body" {
+	const source = `class C {
+		constructor(value: string);
+		constructor(value: int32);
+		constructor(value: string | int32) { value; }
+	}`;
+	assert programOk(source);
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	assert cls.classBody.length == 3;
+	for (let i: int32 = 0; i < 2; i++) {
+		const member = cls.classBody[i];
+		assert member.kind == NodeKind.ConstructorDecl;
+		const signature = member.data as ConstructorDeclData;
+		assert signature.ctorFlags == "overload";
+		assert signature.ctorBody.kind == NodeKind.BlockStmt;
+		assert (signature.ctorBody.data as BlockStmtData).statements.length == 0;
+	}
+	const impl = cls.classBody[2].data as ConstructorDeclData;
+	assert impl.ctorFlags == "";
+	assert (impl.ctorBody.data as BlockStmtData).statements.length == 1;
+}
+
+test "a constructor signature refuses a parameter property" {
+	assert parseError("class C {\n\tconstructor(private x: int32);\n\tconstructor(x: int32) {}\n}").indexOf("A parameter property is only allowed in a constructor implementation") >= 0;
+	assert programOk("class C {\n\tconstructor(x: int32);\n\tconstructor(private x: int32) {}\n}");
+}
+
+test "constructor signatures retain positioned parameter metadata" {
+	const source = `class C {
+protected constructor(values: int32[]);
+protected constructor(values: int32[] = [1]) { values; }
+}`;
+	assert programOk(source);
+	const cls = stmtAt(source, 0).data as ClassDeclData;
+	const member = cls.classBody[0];
+	const signature = member.data as ConstructorDeclData;
+	assert signature.ctorVisibility == "protected";
+	assert signature.ctorParams[0] == "values";
+	assert signature.ctorParamTypes[0] == "int32[]";
+	assert member.typeExprs != null;
+	assert member.typeExprs![0].kind == NodeKind.TypeArray;
+	assert member.paramLocations != null;
+	assert member.paramLocations![0].line == 2;
+	assert member.location.line == 2 && member.location.endLine == 2;
+	assert member.location.endColumn > member.location.column;
+	const impl = cls.classBody[1].data as ConstructorDeclData;
+	assert impl.ctorVisibility == "protected" && impl.ctorFlags == "";
+	assert impl.ctorDefaults[0] != null;
+}
+
+test "constructor abstract modifiers remain distinct from class context" {
+	const source = `abstract class C {
+		constructor(value: string);
+		constructor(value: string) {}
+	}`;
+	assert programOk(source);
+	const ordinary = (stmtAt(source, 0).data as ClassDeclData).classBody[0];
+	assert !ordinary.flags.has(NodeFlag.Abstract);
+	assert (ordinary.data as ConstructorDeclData).ctorFlags == "overload";
+	const explicit = stmtAt(
+		"class C { abstract constructor(value: string) {} }", 0,
+	).data as ClassDeclData;
+	assert explicit.classBody[0].flags.has(NodeFlag.Abstract);
+	const decorated = stmtAt(
+		"class C { @marker constructor(value: string); }", 0,
+	).data as ClassDeclData;
+	const inner = (
+		decorated.classBody[0].data as DecoratedDeclData
+	).decoratedNode;
+	assert (inner.data as ConstructorDeclData).ctorFlags == "overload";
+}
+
+test "extern constructors do not acquire overload signatures" {
+	assert !programOk("extern class C { constructor(value: string); }");
+	assert !programOk("class C { extern constructor(value: string); }");
+	assert !programOk("class C { constructor(value: string) }");
+	const source = "extern class C { constructor(value: string) {} }";
+	assert programOk(source);
+	const member = (stmtAt(source, 0).data as ClassDeclData).classBody[0];
+	assert (member.data as ConstructorDeclData).ctorFlags == "";
+}
 // Modifiers — each tests a distinct parser path
 test "extends" { assert programOk("class Dog extends Animal { bark() { return 1; } }"); }
 
@@ -2710,4 +2931,53 @@ test "a binding pattern parameter cannot be optional in an implementation signat
 
 test "an optional receiver is refused" {
 	assert parseError("function f(this?: int32): void { }").indexOf("The 'this' parameter cannot be optional") >= 0;
+}
+
+test "quoted object bindings carry their decoded key and direct alias" {
+	const source = "const { \"a:b;c,d\": label = 3, ...rest } = value;";
+	assert programOk(source);
+	const data = stmtAt(source, 0).data as DestructuringDeclData;
+	const pattern = data.destrPattern.data as ObjectPatternData;
+	assert pattern.patternProps.length == 2;
+	assert pattern.hasRestProp;
+	const prop = pattern.patternProps[0].data as ObjectPatternPropData;
+	assert prop.propKey == "a:b;c,d";
+	assert prop.propAlias.kind == NodeKind.Identifier;
+	assert prop.propDefault != null;
+}
+
+test "quoted direct bindings parse in parameter and iteration contexts" {
+	assert programOk("function f({ \"x\": value }: { x: int32 }): int32 { return value; }");
+	assert programOk("for (const { \"x\": value } of values) { log(value); }");
+}
+
+test "quoted keys stay gated inside unsupported nested patterns" {
+	for (const source of [
+		"function f([{ \"x\": value }]: { x: int32 }[]): void {}",
+		"const { outer: { \"x\": value } } = source;",
+		"const [{ \"x\": value }] = source;",
+	]) {
+		assert !programOk(source);
+	}
+}
+
+test "quoted object binding keys require a direct identifier target" {
+	for (const source of [
+		"const { \"x\" } = value;",
+		"const { \"x\" target } = value;",
+		"const { \"x\": } = value;",
+		"const { \"x\": 1 } = value;",
+		"const { \"x\": { nested } } = value;",
+		"const { \"x\": [nested] } = value;",
+	]) {
+		assert parseError(source).indexOf("Quoted object binding key") >= 0;
+	}
+}
+
+test "quoted declaration bindings retain their annotation carrier" {
+	const source = "const { \"x\": value }: { x: string } = src;";
+	assert programOk(source);
+	const node = stmtAt(source, 0);
+	assert (node.data as DestructuringDeclData).destrType != "";
+	assert node.typeExpr != null;
 }

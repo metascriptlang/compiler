@@ -492,7 +492,7 @@ function bindSwitchStmt(state: BinderState, node: Node): void {
 	state.currentBreakTarget = savedBreak;
 	if (!hasDefault) {
 		// Implicit fall-through: no case matched
-		addAntecedent(postLabel, preSwitch);
+		addAntecedent(postLabel, createFlowSwitchClause(preSwitch, node, 0, 0));
 	}
 	state.currentFlow = finishFlowLabel(postLabel);
 }

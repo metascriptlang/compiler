@@ -15,11 +15,10 @@ export class TaCacheStore {
 	entries: TaCacheEntry[];
 	accessClock: int32;            // monotonic clock, incremented on each access
 	capacity: int32;
-	fileIndex: HashMap<int32, TaCacheEntry[]>;  // fileId → entries, for lookup and invalidation
+	fileIndex: HashMap<int32, TaCacheEntry[]>;  // fileId → entries, for lookup
 	hits: int32;
 	misses: int32;
 	recomputed: int32[];
-	marked: int32;
 	evicted: int32;
 	bound: int32;
 	collected: int32;
@@ -35,7 +34,6 @@ export function createCacheStore(capacity: int32): TaCacheStore {
 		hits: 0,
 		misses: 0,
 		recomputed: [],
-		marked: 0,
 		evicted: 0,
 		bound: 0,
 		collected: 0,
@@ -140,17 +138,6 @@ export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 	if (entry == null) return false;
 	evictAt(cache, positionOf(cache.entries, entry));
 	return true;
-}
-
-// ===== Bulk State Mutation =====
-
-export function markQueriesRedForFile(cache: TaCacheStore, fileId: int32): void {
-	const indexed = cache.fileIndex.get(fileId);
-	if (indexed == null) return;
-	for (const entry of indexed) {
-		entry.state = TaQueryState.Red;
-	}
-	cache.marked += indexed.length;
 }
 
 // ===== Tests =====
@@ -265,22 +252,6 @@ test "remove nonexistent returns false" {
 	assert !cacheRemove(cache, key);
 }
 
-test "markQueriesRedForFile targets specific file" {
-	const cache = createCacheStore(10);
-	const k1 = createQueryKey(TaQueryKind.Parse, 1);
-	const k2 = createQueryKey(TaQueryKind.Parse, 2);
-	const e1 = createCacheEntry(k1);
-	const e2 = createCacheEntry(k2);
-	e1.state = TaQueryState.Green;
-	e2.state = TaQueryState.Green;
-	cachePut(cache, e1);
-	cachePut(cache, e2);
-	markQueriesRedForFile(cache, 1);
-	assert cache.marked == 1;
-	assert cacheGet(cache, k1).state == TaQueryState.Red;
-	assert cacheGet(cache, k2).state == TaQueryState.Green;
-}
-
 test "get put remove address one entry per kind and file id" {
 	const cache = createCacheStore(100);
 	for (let fileId = 0; fileId < 5; fileId++) {
@@ -301,8 +272,6 @@ test "get put remove address one entry per kind and file id" {
 	cachePut(cache, replacement);
 	assert cacheGet(cache, createQueryKey(TaQueryKind.TypeCheck, 3)) == replacement;
 	assert cache.entries.length == 9;
-	markQueriesRedForFile(cache, 3);
-	assert cache.marked == 1;
 }
 
 test "eviction takes the least recently used entry across kinds and keeps insertion order" {

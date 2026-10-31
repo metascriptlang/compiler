@@ -16,7 +16,7 @@ import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { isSinkTypeForParam, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, ownedEdgeOf } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
-import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym, reportTransformError } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
@@ -34,7 +34,7 @@ import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, i
 import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, calleeToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -507,6 +507,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
+	if (calleeToCopy(dctx.writes, node, dctx.callerDefs)) cd.callee = keepArgumentAlive(cd.callee, dctx);
 	const sym = node.resolvedSym;
 
 	const sinkParams = calledRoutineType(node)?.typeChildren ?? null;
@@ -1089,7 +1090,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function identDestSym(dest: Node, dctx: DrcContext): Symbol | null {
 	if (dest.kind != NodeKind.Identifier) return null;
 	if (dest.resolvedSym == null) {
-		dctx.ctx.errors.push("DRC: assignment to '" + (dest.data as IdentifierData).name + "' reached the analyzer without a resolved symbol");
+		throw new Error("internal: DRC: assignment to '" + (dest.data as IdentifierData).name + "' reached the analyzer without a resolved symbol");
 	}
 	return dest.resolvedSym;
 }
@@ -1232,8 +1233,8 @@ function emitSaveAssignDestroySimple(stmt: Node, saveExpr: Node, rcInfo: RcInfo,
 	return makeBlock([saveTmp, stmt, makeDestroyCall(tmpSym, rcInfo, loc)], loc);
 }
 
-function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): void {
-	if (!hasEffect(rhs)) return;
+function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): Node {
+	if (!hasEffect(rhs)) return rhs;
 	const asg = stmt.kind == NodeKind.ExprStmt ? (stmt.data as ExprStmtData).expr : null;
 	const t = dest.nodeType != null ? dest.nodeType
 		: dest.resolvedSym != null && dest.resolvedSym.symbolType != null ? dest.resolvedSym.symbolType
@@ -1243,9 +1244,11 @@ function evalSourceFirst(stmt: Node, dest: Node, rhs: Node, dctx: DrcContext): v
 			message: "DRC internal error: a store whose source runs code is not a typed assignment statement, so the source cannot be evaluated before the destination's old value is read",
 			line: stmt.location.line, column: stmt.location.column, fatal: false,
 		});
-		return;
+		return rhs;
 	}
-	(asg.data as BinaryExprData).right = evalOnceTemp(rhs, t, "sinkSrc", dctx);
+	const src = evalOnceTemp(rhs, t, "sinkSrc", dctx);
+	(asg.data as BinaryExprData).right = src;
+	return src;
 }
 
 // genSink: ownership transfer — fresh/last-read values moved without copy.
@@ -1265,7 +1268,7 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		const aliased = deepAliases(dest, rhs);
 		if (aliased) clearPendingForVar(dctx, destSym);
 		if (rcInfo.sinkFn != null && !aliased) {
-			return makeSinkCall(destSym, rhs, rcInfo, loc);
+			return makeSinkCall(destSym, evalSourceFirst(stmt, dest, rhs, dctx), rcInfo, loc);
 		}
 		evalSourceFirst(stmt, dest, rhs, dctx);
 		return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
@@ -1874,10 +1877,11 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pRcInfo = classifyRc(paramTypes[pi], dctx);
 		if (pRcInfo.needsCleanup) {
+			if (paramSyms == null || pi >= paramSyms.length || paramSyms[pi] == null) throw new Error(`internal: DRC: parameter '${paramNames[pi]}' reached the analyzer without a resolved symbol`);
 			// Params are borrows registered as cursors: the caller owns the value and a
 			// store inside the callee copies at the assignment point. A constructor's
 			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, (!isSinkTypeForParam(paramTypes[pi]) && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			registerVar(dctx, pRcInfo, (!isSinkTypeForParam(paramTypes[pi]) && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms[pi]);
 		}
 	}
 }
@@ -2240,8 +2244,9 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
-		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
+		const derefFlags = MOC_IS_FIELD;
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, derefFlags, idx, stmts, dctx);
+		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, derefFlags, idx, stmts, dctx, loc);
 	}
 
 	if (bd.left.kind != NodeKind.Identifier) return stmt;
@@ -2520,6 +2525,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionDeclData;
 	if (d.fnBody == null) return stmt;
+	if (stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.Borrow)) return stmt;
 	// Generic template: its T-unbound body never reaches codegen (monomorphization emits the
 	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
 	// — its members are untyped — so skip it; only real instances get DRC.
@@ -2648,7 +2654,7 @@ function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext,
 		NodeKind.VariableDecl => {
 			const processed = processVarDecl(d.exportedDecl, idx, stmts, dctx, loc);
 			if (processed.kind != NodeKind.VariableDecl) {
-				dctx.ctx.errors.push(`DRC: exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`);
+				reportTransformError(dctx.ctx, `exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`, loc);
 				return stmt;
 			}
 			d.exportedDecl = processed;
@@ -2700,8 +2706,7 @@ function processClass(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
 	const storage = cell.symbolType != null ? cell.symbolType.typeReturn : null;
 	if (storage == null || storage.kind != TypeKind.Struct || storage.typeChildren.length != 1) {
-		dctx.ctx.errors.push(`DRC: HCR cell '${cell.name}' does not point at a one-field storage struct`);
-		return [];
+		throw new Error(`internal: DRC: HCR cell '${cell.name}' does not point at a one-field storage struct`);
 	}
 	const valueType = storage.typeChildren[0];
 	const rcInfo = classifyRc(valueType, dctx);

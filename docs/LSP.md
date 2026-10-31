@@ -7,14 +7,14 @@ This document outlines the strategy for evolving the MetaScript Language Server 
 ### LSP Module (`src/compiler/lsp/`)
 - **Status**: Production-Ready Core, Cross-Module Aware.
 - **Capabilities**: Semantic Tokens, Cross-module Hover/Definition, Zero-lag Completion, Transitive Diagnostics, Circular Dep Warnings, Doc Comment extraction, Request Queue with stdin drain + coalescing.
-- **Architecture**: "Thin Server" adapter (~1600 lines). Intelligence lives in the compiler (`src/checker/suggest.ms`). Single-threaded with `select()`-based message draining.
+- **Architecture**: "Thin Server" adapter (~10,300 lines across 22 files, inline tests included). Intelligence lives in the compiler (`src/checker/suggest.ms`). Single-threaded with `select()`-based message draining.
 
 ### Trans-Am Engine (`src/compiler/transam/`)
-- **Status**: Core Engine Complete (3,510 lines across 10 modules, inline tests included). Durability + stdlib optimizations landed. Design: [`TRANSAM.md`](TRANSAM.md).
+- **Status**: Core Engine Complete (~6,600 lines across 15 modules, inline tests included). Durability + stdlib optimizations landed. Design: [`TRANSAM.md`](TRANSAM.md).
 - **Capabilities**: Red-Green query invalidation, content-addressed hashing, dependency tracking, ExportRegistry integration, version-based cancellation, module dep graph with cycle detection, stdlib durability (G2-G5).
 
 ### Intelligence (`src/checker/suggest.ms`)
-- **Status**: Production-Ready (~2500 lines).
+- **Status**: Production-Ready (~4,200 lines).
 - **Capabilities**: AST semantic analysis, relative delta semantic tokens, workspace-wide usage tracking, rich markdown hovers.
 
 ---
@@ -37,7 +37,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 ### Phase 1-3: Core Responsiveness (COMPLETE)
 *   ~~[x] **Trans-Am Integration**: Swapped document store for incremental query engine.~~
 *   ~~[x] **Cancellation**: Integrated `db.cancelCtx` to abort stale computations on keystroke.~~
-*   ~~[x] **Completion Cache**: Zero-lag filtering for character-by-character typing.~~
+*   ~~[x] **Completion Cache**: Zero-lag filtering for character-by-character typing, served only to a request of the same file, line, completion kind and prefix start column.~~
 *   ~~[x] **Request Queue + stdin Drain**: `select()`-based non-blocking stdin check drains all buffered messages before processing. Coalesces auto-fired requests (inlayHint, semanticTokens, documentHighlight) per file. Supersede detection skips requests invalidated by later `didChange`. `setvbuf(stdin, _IONBF)` ensures `select()` accuracy. Eager `dbTypeCheck` on `didOpen` warms cache so auto-fired requests return correct results immediately.~~
 
 ### Phase 4: Reliability & Standards (IN PROGRESS)
@@ -72,7 +72,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
     - `recordDurability` was never called for Low-durability (user) files — frames stayed at High, causing user file queries to skip verification. Fixed: always call `recordDurability`.
     - `tryMarkGreen` HIGH durability skip bypassed `computedAt > entry.computedAt` recomputation check. Fixed: HIGH skip still checks `computedAt`.
     - `isStdPath` used substring match (`/std/` anywhere in path). Fixed: prefix match against `db.stdPath` set via `dbSetStdPath()`. Empty stdPath = no files get High durability (safe default).
-*   **LSP wiring note**: `dbSetStdPath` is exported but not yet called from `server.ms`. When LSP gets `stdPath` config (via init params or env var), wire it to `dbSetStdPath(db, stdPath)` to enable stdlib durability optimization.
+*   **LSP wiring note**: `server.ms` calls `dbSetStdPath(db, <runtime dir>/std)` when `initialize` arrives, so std files get High durability.
 
 ### Phase 6: Live-Coding & HCR Intelligence (Pillar D)
 *   **Goal**: expose the contracts in [`HCR.md`](HCR.md); that document owns the architecture.
@@ -84,7 +84,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 ### Phase 7: Advanced IDE Experience (Parity with `typescript-go`)
 *   **Goal**: Reach professional ergonomics and refactoring maturity.
 *   **Tasks**:
-    - [ ] **Global Auto-Imports**: Suggest symbols from un-imported modules with "Auto-import" Code Actions when no local matches are found.
+    - ~~[x] **Global Auto-Imports**: `textDocument/completion` offers exports of modules the session has loaded and the prelude's exports as items carrying the import as `additionalTextEdits`, also resolved through `completionItem/resolve` (measured: a prefix of an export of another open file answers `uniqueHelperZz`, detail `() => int32 (from ./dep)`, edit inserting `import { uniqueHelperZz } from "./dep";`). Not measured: a `textDocument/codeAction` import fix.~~
     - [ ] **Smart Code Actions (Refactoring)**: "Implement Interface" stubs, "Exhaustiveness Fix" for enums, and "Extract to Variable/Function".
     - [ ] **Semantic Search**: `workspace/symbol` support searching all symbols in the project using the Trans-Am index.
 
@@ -105,9 +105,9 @@ MetaScript follows standard reference patterns where the compiler is the primary
 1. ~~**P0: Bridge dbTypeCheck to the ExportRegistry** so imports actually resolve.~~ DONE
 2. ~~**P0: G2+G3+G4+G5** — Stdlib durability, export freeze, stale edge cleanup, cancel in export reg.~~ DONE
 3. ~~**P1: G1** — Early cutoff.~~ DONE as change revisions (9b2c5501b6)
-4. **P1: Wire `dbSetStdPath` in LSP** — Pass `stdPath` from init config to `dbSetStdPath(db, path)` to activate stdlib durability.
+4. ~~**P1: Wire `dbSetStdPath` in LSP** — Pass `stdPath` from init config to `dbSetStdPath(db, path)` to activate stdlib durability.~~ DONE (`server.ms` `trackLifecycle`)
 5. **P1: Add HCR state-layout manifest diagnostics** to surface the existing restart-required contract before build.
-6. **P2: Implement "Auto-Import" completions** to match the TypeScript developer experience.
+6. ~~**P2: Implement "Auto-Import" completions** to match the TypeScript developer experience.~~ DONE (Phase 7 above)
 
 ---
 

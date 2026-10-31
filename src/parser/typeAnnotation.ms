@@ -48,8 +48,8 @@ function skipReturnPredicateHead(state: ParserState): void {
 	}
 }
 
-export function skipTypeAnnotation(state: ParserState): void {
-	skipUnionType(state, false);
+export function skipTypeAnnotation(state: ParserState, leavesQuestion: boolean = false): void {
+	skipUnionType(state, leavesQuestion);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 		advance(state);
 		skipUnionType(state, true);
@@ -70,13 +70,13 @@ export struct CapturedType {
 }
 
 // Scan one type annotation, then parse the same tokens again for the positioned tree; the cursor ends where the scan did.
-export function captureType(state: ParserState): CapturedType {
+export function captureType(state: ParserState, leavesQuestion: boolean = false): CapturedType {
 	const start = state.position;
-	skipTypeAnnotation(state);
+	skipTypeAnnotation(state, leavesQuestion);
 	const end = state.position;
 	const text = collectTokenText(state, start, end);
 	state.position = start;
-	const expr = parseTypeExpr(state);
+	const expr = parseTypeExpr(state, leavesQuestion);
 	state.position = end;
 	finishNode(state, expr);
 	return { text, expr };
@@ -95,25 +95,25 @@ export function captureTypeText(state: ParserState): string {
 // Given an already-parsed leading atom, fold any trailing `& T & U` into a
 // TypeIntersection node. If no `&` follows, returns `first` unchanged.
 // Reused by parseTypeExpr at the top level and within each union member.
-function parseIntersectionTail(state: ParserState, first: Node): Node {
+function parseIntersectionTail(state: ParserState, first: Node, leavesQuestion: boolean = false): Node {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		const members: Node[] = [];
 		members.push(first);
 		while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 			advance(state);
-			members.push(parseTypeAtom(state));
+			members.push(parseTypeAtom(state, leavesQuestion));
 		}
 		return finishNode(state, createNodeAt(NodeKind.TypeIntersection, { typExprMembers: members }, makeLoc(first.location.line, first.location.column)));
 	}
 	return first;
 }
 
-export function parseTypeExpr(state: ParserState): Node {
+export function parseTypeExpr(state: ParserState, leavesQuestion: boolean = false): Node {
 	// Leading pipe for discriminated union types: | { ... } | { ... }
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 		advance(state);
 	}
-	const first = parseIntersectionTail(state, parseTypeAtom(state));
+	const first = parseIntersectionTail(state, parseTypeAtom(state, leavesQuestion), leavesQuestion);
 
 	// Union types: T | U | V → TypeUnion. Each union member may itself be an intersection.
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
@@ -121,7 +121,7 @@ export function parseTypeExpr(state: ParserState): Node {
 		members.push(first);
 		while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
 			advance(state);
-			members.push(parseIntersectionTail(state, parseTypeAtom(state)));
+			members.push(parseIntersectionTail(state, parseTypeAtom(state, leavesQuestion), leavesQuestion));
 		}
 		return finishNode(state, createNodeAt(NodeKind.TypeUnion, {
 			typExprMembers: members,
@@ -138,20 +138,20 @@ function isNegativeNumberAhead(state: ParserState): boolean {
 	return current(state).kind == TokenKind.Minus && peek(state, 1).kind == TokenKind.Number;
 }
 
-function parseTypeAtom(state: ParserState): Node {
+function parseTypeAtom(state: ParserState, leavesQuestion: boolean = false): Node {
 	const token = current(state);
 
 	if (token.kind == TokenKind.Distinct || token.kind == TokenKind.Keyof ||
 		token.kind == TokenKind.Readonly) {
 		advance(state);
-		return parseTypeAtom(state);
+		return parseTypeAtom(state, leavesQuestion);
 	}
 
 	if (token.kind == TokenKind.Typeof) return parseTypeQuery(state);
 
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
-		return applyArraySuffix(state, parseTypeFunctionOrParen(state));
+		return applyArraySuffix(state, parseTypeFunctionOrParen(state, leavesQuestion));
 	}
 
 	// Object type: { x: T; y: U } — with array suffix: { ... }[]
@@ -171,7 +171,7 @@ function parseTypeAtom(state: ParserState): Node {
 		}
 	}
 
-	return applyTypeSuffixes(state, result);
+	return applyTypeSuffixes(state, result, leavesQuestion);
 }
 
 function parseTypeQuery(state: ParserState): Node {
@@ -223,12 +223,12 @@ function parseTypeName(state: ParserState): Node {
 	return result;
 }
 
-function applyTypeSuffixes(state: ParserState, base: Node): Node {
+function applyTypeSuffixes(state: ParserState, base: Node, leavesQuestion: boolean = false): Node {
 	// Array type suffix: T[] or T[N] or T[][]
 	const result = applyArraySuffix(state, base);
 
 	// Optional marker: T? — treat as union with null (skip but preserve base)
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
+	if (!leavesQuestion && !isAtEnd(state) && current(state).kind == TokenKind.Question) {
 		advance(state);
 		finishNode(state, result);
 	}
@@ -306,7 +306,7 @@ function parseGenericTypeArgs(state: ParserState): Node[] {
 	return args;
 }
 
-function parseTypeFunctionOrParen(state: ParserState): Node {
+function parseTypeFunctionOrParen(state: ParserState, leavesQuestion: boolean = false): Node {
 	const parenToken = current(state);
 	advance(state); // consume (
 
@@ -350,19 +350,19 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.RParen) {
 		advance(state);
 	}
-	return finishFunctionOrParenType(state, parenToken, paramNames, paramTypes);
+	return finishFunctionOrParenType(state, parenToken, paramNames, paramTypes, leavesQuestion);
 }
 
 function reportRequiredAfterOptional(state: ParserState, nameToken: Token): void {
 	addError(state, `A required parameter cannot follow an optional parameter ('${nameToken.value}' at line ${nameToken.line})`);
 }
 
-function finishFunctionOrParenType(state: ParserState, parenToken: Token, paramNames: string[], paramTypes: Node[]): Node {
+function finishFunctionOrParenType(state: ParserState, parenToken: Token, paramNames: string[], paramTypes: Node[], leavesQuestion: boolean = false): Node {
 	// Arrow => return type
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
 		skipReturnPredicateHead(state);
-		const returnType = parseTypeAtom(state);
+		const returnType = parseTypeAtom(state, leavesQuestion);
 		return finishNode(state, createNode(NodeKind.TypeFunction, {
 			typExprParams: paramTypes,
 			typExprReturn: returnType,
@@ -506,6 +506,11 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 			advance(state); // consume the inferred type name
 		}
+		return;
+	}
+	if (token.kind == TokenKind.Typeof) {
+		advance(state);
+		skipTypeQueryOperand(state);
 		return;
 	}
 	if (token.kind == TokenKind.LParen) {
@@ -1055,4 +1060,43 @@ test "a typeof operand is located at its own token, not at a comment before it" 
 	assert node.kind == NodeKind.Identifier;
 	assert (node.data as IdentifierData).name == "x";
 	assert node.location.column == lr.value[2].column;
+}
+
+test "positioned capture ends at the same conditional boundary as its scanner" {
+	const lr = lex("List<int32> ? one : two");
+	assert lr.ok;
+	const state = createState(lr.value);
+	const captured = captureType(state, true);
+	assert captured.text == "List<int32>";
+	assert current(state).kind == TokenKind.Question;
+	assert captured.expr.kind == NodeKind.TypeGeneric;
+	assert captured.expr.location.endColumn == 12;
+	const argument = (captured.expr.data as TypeGenericData).typExprArgs[0];
+	assert (argument.data as IdentifierData).name == "int32";
+	assert argument.location.column == 6;
+}
+
+test "ordinary capture retains optional markers and unnamed function parameters" {
+	const optional = lex("int32? = value");
+	assert optional.ok;
+	const optionalState = createState(optional.value);
+	assert captureType(optionalState).text == "int32?";
+	assert current(optionalState).kind == TokenKind.Assign;
+	const routine = lex("((x: int32) => int32) => int32 = value");
+	assert routine.ok;
+	const routineState = createState(routine.value);
+	const captured = captureType(routineState);
+	assert captured.expr.kind == NodeKind.TypeFunction;
+	assert (captured.expr.data as TypeFunctionData).typExprParams[0].kind == NodeKind.TypeFunction;
+	assert current(routineState).kind == TokenKind.Assign;
+}
+
+test "conditional-delimited capture reports its original type errors" {
+	const lr = lex("(first?: int32, second: int32) => int32 = value");
+	assert lr.ok;
+	const state = createState(lr.value);
+	captureType(state, true);
+	assert state.errors.length == 1;
+	assert state.errors[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
+	assert current(state).kind == TokenKind.Assign;
 }

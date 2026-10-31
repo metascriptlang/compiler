@@ -138,3 +138,54 @@ test "callback countMatching" {
 	assert countMatching(nums, isEven) == 4;
 	assert countMatching(nums, (n: number): boolean => n > 5) == 3;
 }
+
+interface ObjectArrowItem {
+	n: int32;
+	tag: string;
+}
+
+type ObjectArrowResult = ObjectArrowItem | string;
+
+struct ObjectArrowValue {
+	n: int32;
+}
+
+test "asserted object arrow stays an expression" {
+	const make = (tag: string) => ({ n: 1, tag } as ObjectArrowItem);
+	const item = make("ok");
+	assert item.n == 1;
+	assert item.tag == "ok";
+}
+
+test "nested object arrow assertions stay expressions" {
+	const make = (tag: string) =>
+		(({ n: 2, tag } as ObjectArrowItem) as ObjectArrowItem);
+	const item = make("nested");
+	assert item.n == 2;
+	assert item.tag == "nested";
+}
+
+test "object member arrow starts with an expression" {
+	const read = () => ({ n: 3, tag: "field" } as ObjectArrowItem).n;
+	assert read() == 3;
+}
+
+test "object arrow keeps its inferred union conversion" {
+	const make = (): ObjectArrowResult => ({ n: 4, tag: "union" });
+	const item = make();
+	if (typeof item == "string") {
+		assert false;
+	} else {
+		assert item.n == 4;
+		assert item.tag == "union";
+	}
+}
+
+test "expression arrow still copies a captured value result" {
+	let state: ObjectArrowValue = { n: 5 };
+	const read = () => state;
+	let copy = read();
+	copy.n = 9;
+	assert state.n == 5;
+	assert copy.n == 9;
+}

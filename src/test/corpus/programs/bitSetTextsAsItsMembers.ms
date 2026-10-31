@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser prints an enum member as its ordinal, got 'log {0, 1}⏎template {0, 1}⏎concat {0, 1}⏎string {0, 1}⏎method {0, 1}⏎empty {}⏎wide {0, 8}⏎' (card 2026-09-25-raiser-enum-to-string-prints-the-number)
 // @stdout: log {A, B}
 // @stdout: template {A, B}
 // @stdout: concat {A, B}

@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: fffd.41./4 fffd.fffd.fffd./9 61.fffd.62./5
 // note: Buffer's UTF-8 decode replaces a malformed prefix with U+FFFD even when the replacement is as long as the bytes it replaces (F0 9F 98 is three bytes, so is U+FFFD), as node does.
 

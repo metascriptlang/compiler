@@ -16,7 +16,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, newLoweredSym, mintingChecker } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
-import { createFunction, voidType, classParentOf } from "../../checker/types";
+import { createFunction, voidType, classParentOf, getProperty, isUnresolvedType } from "../../checker/types";
 import { parentClassSymOf, makeSymbol } from "../../checker/symbol";
 import { ctorRoutineFor, ctorFormalTypes } from "../../checker/ctorRoutine";
 import { instantiateParentClass } from "../../checker/instantiate";
@@ -58,6 +58,32 @@ function fieldInitStatements(classNode: Node, cd: ClassDeclData, thisSym: Symbol
 	return stmts;
 }
 
+// A parameter property's field takes its constructor parameter's value before any field initializer runs.
+function paramPropertyStatements(classNode: Node, cd: ClassDeclData, ctorNode: Node, thisSym: Symbol | null): Node[] {
+	const stmts: Node[] = [];
+	const ctorData = ctorNode.data as ConstructorDeclData;
+	for (let i = 0; i < ctorData.ctorParamProps.length; i += 1) {
+		const written = ctorData.ctorParamProps[i];
+		if (written == null) continue;
+		const name = ctorData.ctorParams[i];
+		if (ctorNode.paramSyms == null || i + 1 >= ctorNode.paramSyms.length) {
+			throw new Error(`internal: parameter property '${name}' of class '${cd.className}' has no constructor parameter symbol`);
+		}
+		const fieldType = getProperty(classNode.nodeType, name);
+		if (isUnresolvedType(fieldType)) {
+			throw new Error(`internal: parameter property '${name}' of class '${cd.className}' declared no field`);
+		}
+		const paramSym = ctorNode.paramSyms[i + 1];
+		const receiver = thisSym != null
+			? makeTypedIdentResolved(thisSym, classNode.nodeType, written.location)
+			: makeTypedIdent("this", classNode.nodeType, written.location);
+		const target = makeMember(receiver, name, written.location);
+		target.nodeType = fieldType;
+		stmts.push(makeExprStmt(makeAssign(target, makeTypedIdentResolved(paramSym, paramSym.symbolType, written.location), written.location), written.location));
+	}
+	return stmts;
+}
+
 function isSuperCallStmt(stmt: Node): boolean {
 	if (stmt == null || stmt.kind != NodeKind.ExprStmt) return false;
 	const ed = stmt.data as ExprStmtData;
@@ -71,7 +97,7 @@ function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void
 	const ctorData = ctorNode.data as ConstructorDeclData;
 	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const thisSym = ctorNode.paramSyms != null && ctorNode.paramSyms.length > 0 ? ctorNode.paramSyms[0] : null;
-	const inits = fieldInitStatements(classNode, cd, thisSym);
+	const inits = paramPropertyStatements(classNode, cd, ctorNode, thisSym).concat(fieldInitStatements(classNode, cd, thisSym));
 	if (inits.length == 0) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	let at = 0;
@@ -125,6 +151,8 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContex
 		ctorBody: makeBlock(stmts, loc),
 		ctorDefaults: [],
 		ctorVisibility: "",
+		ctorParamProps: [],
+		ctorFlags: "",
 	}, loc);
 	// methodToFunction widens typeChildren with the receiver only when a Function
 	// type is already present; without it `this` lifts as void*.

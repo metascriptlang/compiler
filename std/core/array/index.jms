@@ -6,7 +6,7 @@ export { toString } from "./shared";
 // types carry an empty typeName, so the class-method path is never taken); only
 // `this arr: T[]` extensions reach the checker. Keep this UFCS shape.
 
-import { needsCopy, isArray as isArrayType } from "std/typetraits";
+import { needsCopy, holdsArray } from "std/typetraits";
 
 @builtin("Array")
 export class Array<T> {
@@ -14,8 +14,8 @@ export class Array<T> {
 }
 
 /** True when the static type of `x` is an array, as `Array.isArray` answers for any value of an array type. */
-export function isArray<T>(this typeof Array, x: T): boolean {
-	return isArrayType<T>();
+export function isArray<T>(this typeof Array, x: T): x is unknown[] {
+	return holdsArray<T>(x);
 }
 
 export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";

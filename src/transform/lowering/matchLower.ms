@@ -19,9 +19,9 @@ import { walkExpandBlocksHooked, containsExprKind } from "../walker";
 import { hoistGuarded, expandConditionStmt } from "./guardedLower";
 import { frameReach } from "./operandOrder";
 import {
-	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
+	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef, resultPlaceholder,
 } from "../util";
 import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -46,7 +46,7 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 	const loc = node.location;
 	const resultSym = freshTempSym(ctx, "matchres", node.nodeType);
 
-	const placeholder = makeNull(loc);
+	const placeholder = resultPlaceholder(node.nodeType, loc);
 	const letDecl = makeVarDecl(resultSym.name, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = resultSym;
 	if (node.nodeType != null) { letDecl.nodeType = node.nodeType; }
@@ -153,7 +153,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 		throw new Error(`internal: match initializer of '${varData.declName}' reached lowering without its symbol`);
 	}
 	const result: Node[] = [];
-	const placeholder = makeNull(loc);
+	const placeholder = resultPlaceholder(stmt.nodeType, loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
 	if (stmt.nodeType != null) {

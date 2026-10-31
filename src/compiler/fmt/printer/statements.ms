@@ -5,7 +5,7 @@ import {
 	ExprStmtData, BinaryExprData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
+	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, PropertyDeclData, makeLoc,
 } from "../../../ast/node";
 import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
@@ -506,7 +506,7 @@ function inlineObjectPattern(pattern: Node, options: FormatOptions): Doc[] {
 	return [docText("{"), docIndent(body), docLine(), docText("}")];
 }
 
-export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null, patterns: (Node | null)[] | null = null): Doc[] {
+export function buildParamList(names: string[], types: string[], defaults: Node[], options: FormatOptions, locs: SourceLocation[] | null = null, typeExprs: Node[] | null = null, patterns: (Node | null)[] | null = null, props: Node[] | null = null): Doc[] {
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		const pattern = patterns != null && i < patterns.length ? patterns[i] : null;
@@ -523,6 +523,11 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
 			const pattern = rawBalancedAt(options.source, locs[i].line, locs[i].column);
 			if (pattern != "") { p = pattern; written = pattern; }
+		}
+		const prop = props != null && i < props.length ? props[i] : null;
+		if (prop != null) {
+			const pd = prop.data as PropertyDeclData;
+			p = (pd.propVisibility != "" ? pd.propVisibility + " " : "") + (pd.propIsReadonly ? "readonly " : "") + p;
 		}
 		const optional = locs != null && i < locs.length && writtenOptional(options.source, locs[i].line, locs[i].column, written);
 		const type = i < types.length ? types[i] : "";
@@ -712,6 +717,16 @@ export function headerAsWritten(decl: Node, body: Node, options: FormatOptions, 
 	return docGroup([docText(head), gap.includes("\n") ? docHardLine() : docText(" ")]);
 }
 
+export function modeNames(names: string[], flags: string): string[] {
+	const spelled: string[] = [];
+	for (const n of names) spelled.push(n);
+	prefixAt(spelled, flagGet(flags, "sink"), "sink ");
+	prefixAt(spelled, flagGet(flags, "rdonly"), "readonly ");
+	prefixAt(spelled, flagGet(flags, "ref"), "ref ");
+	prefixAt(spelled, flagGet(flags, "out"), "out ");
+	return spelled;
+}
+
 function prefixAt(names: string[], positions: string, word: string): void {
 	if (positions == "") return;
 	for (const p of positions.split(",")) {
@@ -772,18 +787,13 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 		+ writtenName(options, d.nameLocation, d.fnName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.fnName), flagGet(d.fnFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
-	const names: string[] = [];
+	const names = modeNames(d.params, d.fnFlags);
 	const types: string[] = [];
 	const defaults: Node[] = [];
 	for (let i = 0; i < d.params.length; i += 1) {
-		names.push(d.params[i]);
 		types.push(i < d.fnParamTypes.length ? d.fnParamTypes[i] : "");
 		defaults.push(i < d.fnDefaults.length ? d.fnDefaults[i] : null as unknown as Node);
 	}
-	prefixAt(names, flagGet(d.fnFlags, "sink"), "sink ");
-	prefixAt(names, flagGet(d.fnFlags, "rdonly"), "readonly ");
-	prefixAt(names, flagGet(d.fnFlags, "ref"), "ref ");
-	prefixAt(names, flagGet(d.fnFlags, "out"), "out ");
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
 	const params: Doc[] = [];
 	const staticType = flagGet(d.fnFlags, "sext");

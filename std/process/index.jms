@@ -105,7 +105,7 @@ return {
 	exitCode: r.status ?? 0,
 	signal: r.signal ? (constants.signals[r.signal] ?? 0) : 0,
 	output: ${bytes} ? (r.stdout ? r.stdout.toString("utf8") : "") : (r.stdout ?? ""),
-	outputBytes: ${bytes} ? new Uint8Array(r.stdout ?? []) : new Uint8Array(0),
+	outputBytes: ${bytes} ? Array.from(r.stdout ?? []) : [],
 	errorOutput: ${bytes} ? (r.stderr ? r.stderr.toString("utf8") : "") : (r.stderr ?? ""),
 };`);
 	unreachable;

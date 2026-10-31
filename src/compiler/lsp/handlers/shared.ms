@@ -10,9 +10,7 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
 import { lspSourcePosition } from "../position";
-import { Symbol, makeLoc } from "../../../ast/node";
-
-export { lspCharacter } from "../position";
+import { Symbol } from "../../../ast/node";
 
 
 // ===== Completion Cache =====
@@ -22,6 +20,8 @@ export { lspCharacter } from "../position";
 export class CompletionCache {
 	uri: string;           // file URI of last completion
 	line: number;          // line of last completion (1-indexed, internal)
+	anchor: number;        // 0-based byte column where the typed prefix starts
+	kind: number;          // SgCompletionKind of last completion
 	prefix: string;        // prefix used for last completion
 	items: string[];       // cached per-item JSON strings
 }
@@ -46,7 +46,22 @@ export function lookupResolveEdit(key: string): string {
 }
 
 export function createCompletionCache(): CompletionCache {
-	return { uri: "", line: -1, prefix: "", items: [] };
+	return { uri: "", line: -1, anchor: -1, kind: -1, prefix: "", items: [] };
+}
+
+export function storeCompletion(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string, items: string[]): void {
+	cache.uri = pos.uri;
+	cache.line = pos.line;
+	cache.anchor = pos.col - prefix.length;
+	cache.kind = kind;
+	cache.prefix = prefix;
+	cache.items = items;
+}
+
+export function completionCacheServes(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string): boolean {
+	return cache.uri == pos.uri && cache.line == pos.line && cache.kind == kind
+		&& cache.anchor == pos.col - prefix.length
+		&& prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix);
 }
 
 // Deferred diagnostics: didChange marks files as changed. Post-drain publishes diagnostics.
@@ -64,6 +79,15 @@ export function markFileChanged(path: string, uri: string): void {
 	if (_changedPaths.has(path)) return;
 	_changedPaths.add(path);
 	_changedFiles.push({ path, uri });
+}
+
+export function forgetChangedFile(path: string): void {
+	if (!_changedPaths.delete(path)) return;
+	const kept: ChangedFile[] = [];
+	for (const changed of _changedFiles) {
+		if (changed.path != path) kept.push(changed);
+	}
+	_changedFiles = kept;
 }
 
 export function drainChangedFiles(): ChangedFile[] {
@@ -95,12 +119,12 @@ export function lspDocumentUri(params: string): string {
 	return lspGetField(lspGetObjectField(params, "textDocument"), "uri");
 }
 
-export function lspExtractPosition(params: string, db: TransAmDb | null = null): LspCursorParams {
+export function lspExtractPosition(params: string, db: TransAmDb): LspCursorParams {
 	const uri = lspDocumentUri(params);
 	const position = lspGetObjectField(params, "position");
 	const line = (lspGetNumberField(position, "line") as int32) + 1;
 	const character = lspGetNumberField(position, "character") as int32;
-	const at = db != null ? lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character) : makeLoc(line, character + 1);
+	const at = lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character);
 	return { uri, line: at.line, col: at.column - 1, col1: at.column };
 }
 

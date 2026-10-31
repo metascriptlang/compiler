@@ -302,6 +302,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.ConstructorDecl => {
 			const d: Cursor<ConstructorDeclData> = node.data as ConstructorDeclData;
 			visitChild(cb, d.ctorBody);
+			for (const p of d.ctorParamProps) visitChild(cb, p);
 		},
 		NodeKind.ExportDecl => {
 			const d: Cursor<ExportDeclData> = node.data as ExportDeclData;
@@ -679,6 +680,9 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.ConstructorDecl => {
 			const d: Cursor<ConstructorDeclData> = node.data as ConstructorDeclData;
 			d.ctorBody = f(d.ctorBody);
+			for (let i = 0; i < d.ctorParamProps.length; i += 1) {
+				if (d.ctorParamProps[i] != null) d.ctorParamProps[i] = f(d.ctorParamProps[i]);
+			}
 		},
 		NodeKind.ExportDecl => {
 			const d: Cursor<ExportDeclData> = node.data as ExportDeclData;

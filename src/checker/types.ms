@@ -4,7 +4,7 @@
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
-import { isAssignable, sameNominal } from "./compat";
+import { isAssignable, sameNominal, sameType } from "./compat";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -686,6 +686,8 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		if (!dup) seen.push(k);
 	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
+	if (dropEnumMembersOfPresentEnums(seen) && seen.length == 1) return seen[0];
+	if (dropBrandsOfPresentBases(seen) && seen.length == 1) return seen[0];
 	if (onlyViewsAndNull(seen)) return createReadonlyView(buildUnion(seen.map((m: Type): Type => withoutReadonlyView(m)), canonical));
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
@@ -782,6 +784,49 @@ function foldBooleanLiterals(members: Type[]): boolean {
 	return true;
 }
 
+function dropEnumMembersOfPresentEnums(members: Type[]): boolean {
+	let hasMember = false;
+	let hasEnum = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.EnumLiteral) hasMember = true;
+		else if (m.kind == TypeKind.Enum) hasEnum = true;
+	}
+	if (!hasMember || !hasEnum) return false;
+	let kept = 0;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		if (m.kind == TypeKind.EnumLiteral && m.typeReturn != null && members.includes(m.typeReturn)) continue;
+		members[kept] = m;
+		kept += 1;
+	}
+	const dropped = kept < members.length;
+	members.shrink(kept);
+	return dropped;
+}
+
+// A brand is the same value as its base (no run-time test tells them apart), so `Buffer | uint8[]` holds one
+// kind of value and is `uint8[]`; keeping both would give two slots of one representation.
+function dropBrandsOfPresentBases(members: Type[]): boolean {
+	let kept = 0;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		const base = brandBase(m);
+		if (base != null && holdsType(members, base)) continue;
+		members[kept] = m;
+		kept += 1;
+	}
+	const dropped = kept < members.length;
+	members.shrink(kept);
+	return dropped;
+}
+
+function holdsType(members: Type[], t: Type): boolean {
+	for (const m of members) {
+		if (sameType(m, t)) return true;
+	}
+	return false;
+}
+
 function extendsDeclaredSum(types: Type[]): boolean {
 	for (const ut of types) {
 		if (ut != null && ut.kind == TypeKind.Union && ut.typeNames != null && ut.typeNames.length >= 2) return true;
@@ -815,7 +860,8 @@ function unionMemberKey(t: Readonly<Type>): string {
 		depth += 1;
 	}
 	const ownerName = owner != null && owner.sym != null ? mangleModuleName(buildModuleNameRoots(), owner.sym.modulePath) : "";
-	return typeKey(t) + "\u0001" + ownerName;
+	const spelling = t.kind == TypeKind.StringLiteral ? t.typeName + "\u0001" : "";
+	return spelling + typeKey(t) + "\u0001" + ownerName;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
@@ -1409,7 +1455,7 @@ function peelTransparentFrom(t: Readonly<Type>, depth: int32): Readonly<Type> {
 // `typeName`; an EnumLiteral's `typeName` is the ENUM's name (shared by every
 // variant) with the member in `typeNames[0]`, so comparing `typeName` there
 // would read every variant as the same value.
-function literalDiscValue(t: Readonly<Type | null>): string {
+export function literalDiscValue(t: Readonly<Type | null>): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.EnumLiteral) {
 		return t.typeNames != null && t.typeNames.length > 0 ? t.typeName + "." + t.typeNames[0] : t.typeName;
@@ -1574,14 +1620,12 @@ const _maybeCacheNames: string[] = [];
 // Maybe<int32> ≠ Maybe<float64> ≠ Maybe<string> etc.
 function identSafeKey(s: string): string {
 	let out = "";
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.byteLength; i += 1) {
 		const b = s.byteAt(i);
-		const alnum = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
-		if (alnum) out = out + s.charAt(i);
-		i += 1;
+		const passes = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code && b != "X".code) || (b >= "0".code && b <= "9".code);
+		out = passes ? out + s.byteSlice(i, i + 1) : out + "X" + b.toString(16).toUpperCase().padStart(2, "0");
 	}
-	return out + s.length.toString();
+	return out;
 }
 
 function hasNominalIdentity(inner: Type): boolean {
@@ -1661,18 +1705,32 @@ export function createMaybeType(inner: Type): Type {
 }
 
 function maybePayloadIs(cached: Type, inner: Type): boolean {
-	return sameDeclarationsIn(cached.typeReturn, inner, 0);
+	return sameDeclarationsIn(cached.typeReturn, inner, [], []);
 }
 
-function sameDeclarationsIn(a: Type | null, b: Type | null, depth: int32): boolean {
-	if (a == null || b == null || a == b || depth > 4) return true;
+// A pair already being compared is taken as equal, the coinductive answer for a recursive type; every
+// other pair is compared to the end, so two copies of one declaration never pass for one another.
+function sameDeclarationsIn(a: Type | null, b: Type | null, seenA: Type[], seenB: Type[]): boolean {
+	if (a == null || b == null || a == b) return true;
 	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	for (let i = 0; i < seenA.length; i += 1) {
+		if (seenA[i] == a && seenB[i] == b) return true;
+	}
+	seenA.push(a);
+	seenB.push(b);
+	const same = sameDeclarationParts(a, b, seenA, seenB);
+	seenA.pop();
+	seenB.pop();
+	return same;
+}
+
+function sameDeclarationParts(a: Type, b: Type, seenA: Type[], seenB: Type[]): boolean {
 	if (a.kind == TypeKind.GenericInstance && a.typeExtra != null && b.typeExtra != null
-		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), depth + 1)) return false;
-	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, depth + 1)) return false;
+		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), seenA, seenB)) return false;
+	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, seenA, seenB)) return false;
 	const n = a.typeChildren.length < b.typeChildren.length ? a.typeChildren.length : b.typeChildren.length;
 	for (let i = 0; i < n; i += 1) {
-		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], depth + 1)) return false;
+		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], seenA, seenB)) return false;
 	}
 	return true;
 }
@@ -1852,6 +1910,28 @@ function structCarriesRef(t: Readonly<Type>, depth: int32): boolean {
 
 export function typeCarriesRef(t: Readonly<Type | null>): boolean {
 	return !isPodFieldType(t, 0);
+}
+
+// Array and struct storage is copied on every store, so a value built only of numbers, strings,
+// enums and such arrays and structs has no alias to hand out: reading it yields an independent copy.
+export function isValueOnlyType(t: Readonly<Type | null>): boolean {
+	return isValueOnlyAt(t, 0);
+}
+
+function isValueOnlyAt(t: Readonly<Type | null>, depth: int32): boolean {
+	if (t == null || isPodFieldType(t, 0)) return true;
+	if (depth > 8 || isReadonlyView(t)) return false;
+	return match (t.kind) {
+		TypeKind.Array => isValueOnlyAt(t.typeReturn, depth + 1),
+		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct => isValueOnlyAt(t.typeReturn, depth + 1),
+		TypeKind.Struct => {
+			for (const ft of t.typeChildren) {
+				if (!isValueOnlyAt(ft, depth + 1)) return false;
+			}
+			return true;
+		},
+		_ => false,
+	};
 }
 
 export function isNodeGraphType(t: Type | null): boolean {
@@ -2224,11 +2304,23 @@ export function distinctNumericBase(t: Type | null): Type | null {
 	return cur != t && isNumeric(cur) ? cur : null;
 }
 
-export function distinctWidenBody(t: Type | null): Type | null {
+export function distinctWidenBody(t: Type | null): Type | null;
+export function distinctWidenBody(t: Readonly<Type | null>): Readonly<Type | null>;
+export function distinctWidenBody(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
 	if (!isBrandDistinct(wrapper)) return null;
 	return distinctBody(t);
+}
+
+export function brandBase(t: Type | null): Type | null {
+	let base = distinctWidenBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctWidenBody(skipModifier(base));
+		if (inner == null) break;
+		base = inner;
+	}
+	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
 }
 
 export function createGenericParam(name: string): Type {
@@ -3269,6 +3361,8 @@ export function isTagCarriedUnion(t: Readonly<Type | null>): boolean {
 export function typeofTagOf(t: Readonly<Type | null>): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
+	const brandBody = distinctWidenBody(v);
+	if (brandBody != null) return typeofTagOf(brandBody);
 	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
 	if (isNumeric(v) || v.kind == TypeKind.NumberLiteral || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
@@ -3280,6 +3374,8 @@ export function typeofTagOf(t: Readonly<Type | null>): string {
 
 export function primitiveKindName(t: Type | null): string {
 	if (t == null) return "";
+	const brandBody = distinctWidenBody(peelTransparentInstance(t));
+	if (brandBody != null) return primitiveKindName(brandBody);
 	return match (peelTransparentInstance(t).kind) {
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
@@ -3324,6 +3420,12 @@ export function jsMemberKind(t: Type): string {
 	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
 	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
 	return typeofTagOf(t);
+}
+
+export function jsValueKind(t: Type): string {
+	const v = peelTransparentInstance(t);
+	if (v.kind == TypeKind.Int64 || v.kind == TypeKind.Uint64) return "bigint";
+	return jsMemberKind(t);
 }
 
 export function unionHasMemberOfKind(t: Type | null, kind: TypeKind): boolean {
@@ -3516,17 +3618,7 @@ export function tupleTypeName(t: Readonly<Type | null>): string {
 
 export function tupleTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null || t.kind != TypeKind.Tuple) return "";
-	let key = "tuple:";
-	let i = 0;
-	while (i < t.typeChildren.length) {
-		if (i > 0) key = key + ",";
-		const child = t.typeChildren[i];
-		if (child != null) {
-			key = key + typeKeyIn(roots, child, []);
-		}
-		i += 1;
-	}
-	return "msTuple_" + _stdHashToBase36(key);
+	return "msTuple_" + _stdHashToBase36(typeKeyIn(roots, t, []));
 }
 
 export function spelled(t: Type): Type {
@@ -3698,6 +3790,7 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(roots, t.typeReturn, keying);
 	if (t.kind == TypeKind.GenericParam && t.sym != null) return genericParamKey(roots, t.typeName, t.sym);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKeyIn(roots, t));
+	if (t.kind == TypeKind.StringLiteral) return "strlit" + t.typeName.length.toString() + ":" + t.typeName;
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Set) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
@@ -3723,24 +3816,24 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			return "Array(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Tuple => {
-			let k = "tuple:";
+			let k = "tuple(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
 				k = k + typeKeyIn(roots, t.typeChildren[i], keying);
 				i += 1;
 			}
-			return k;
+			return k + ")";
 		},
 		TypeKind.Function => {
-			let k = "fn(";
+			let k = "fn" + callConvKey(t) + "(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
 				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void") + callConvKey(t);
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void");
 		},
 		TypeKind.Union => {
 			let k = "union(";
@@ -3780,7 +3873,14 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			}
 			return k + ")";
 		},
-		_ => t.kind.toString(),
+		_ => {
+			let k = "k" + (t.kind as number).toString() + "<" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "") + ">(";
+			for (let i = 0; i < t.typeChildren.length; i += 1) {
+				if (i > 0) k = k + ",";
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "null");
+			}
+			return k + ")";
+		},
 	};
 }
 
@@ -4544,6 +4644,13 @@ function canonicalSubstitutedUnion(copy: Type): Type {
 	if (copy.typeName != "" || (copy.typeNames != null && copy.typeNames.length > 0)) return copy;
 	for (const m of copy.typeChildren) {
 		if (m != null && m.kind == TypeKind.Union) return createUnion(copy.typeChildren);
+	}
+	if (!hasGenericParams(copy)) {
+		const kept: Type[] = [];
+		for (const m of copy.typeChildren) {
+			if (m != null && m.kind != TypeKind.Never && !kept.some((k: Type): boolean => k == m || (k.kind == m.kind && (isNumeric(m) || m.kind == TypeKind.String || m.kind == TypeKind.Boolean || m.kind == TypeKind.Char)))) kept.push(m);
+		}
+		if (kept.length != copy.typeChildren.length) return kept.length == 0 ? neverType() : kept.length == 1 ? kept[0] : createUnion(kept);
 	}
 	sortUnionMembers(copy.typeChildren);
 	return copy;
@@ -6637,6 +6744,19 @@ test "isMaybeType false for plain interface" {
 	assert !isMaybeType(createStruct("Token", [], [], true));
 }
 
+test "a Maybe keeps payloads apart that differ only in punctuation" {
+	const i32 = int32Type();
+	const str = stringType();
+	const pair = createMaybeType(createTuple([i32, createTuple([str, i32])]));
+	const triple = createMaybeType(createTuple([i32, createTuple([str]), i32]));
+	assert pair != triple && pair.typeName != triple.typeName;
+	assert createMaybeType(createStringLiteral("a-b")) != createMaybeType(createStringLiteral("a.b"));
+	const dashed = createMaybeType(createUnion([createStringLiteral("a-b"), createStringLiteral("c")]));
+	const dotted = createMaybeType(createUnion([createStringLiteral("a.b"), createStringLiteral("c")]));
+	assert dashed != dotted;
+	assert identSafeKey("a_b") != identSafeKey("aX5Fb") && identSafeKey("a_b").indexOf("_") < 0;
+}
+
 test "createMaybeType caches by name" {
 	const inner = createStruct("Cached", [], [], true);
 	const m1 = createMaybeType(inner);
@@ -6703,6 +6823,20 @@ test "a tuple refuses a named member that has no declaring symbol" {
 		refused = e.message;
 	}
 	assert refused.contains("OrphanCell");
+}
+
+test "a tuple name keeps nested members grouped and a literal member apart from a type of its spelling" {
+	const i32 = int32Type();
+	const str = stringType();
+	assert tupleTypeName(createTuple([i32, createTuple([str, i32])])) != tupleTypeName(createTuple([i32, createTuple([str]), i32]));
+	assert tupleTypeName(createTuple([createStringLiteral("int32"), booleanType()])) != tupleTypeName(createTuple([i32, booleanType()]));
+	assert tupleTypeName(createTuple([createStringLiteral("a,b")])) != tupleTypeName(createTuple([createStringLiteral("a"), createStringLiteral("b")]));
+}
+
+test "a calling convention keys the function type it belongs to, not its return type" {
+	const plainInClosure = createClosureType([], [], createFunction([], [], numberType()));
+	const closureInPlain = createFunction([], [], createClosureType([], [], numberType()));
+	assert typeKey(plainInClosure) != typeKey(closureInPlain);
 }
 
 test "a named type has identity only from its symbol or the Spelled flag" {
@@ -6777,4 +6911,22 @@ test "a declared generic parameter is keyed by its declaration and position, nev
 	assert typeKey(ofG) != typeKey(declaredParam(box, 0, 3, 8));
 	assert typeKey(ofG) != typeKey(declaredParam(g, 1, 3, 9));
 	assert typeKey(ofG) == typeKey(declaredParam(g, 0, 5, 2)), `${typeKey(ofG)} vs ${typeKey(declaredParam(g, 0, 5, 2))}`;
+}
+
+function nestedArrayOf(inner: Type, depth: int32): Type {
+	let t = inner;
+	for (let i = 0; i < depth; i += 1) t = createArray(t);
+	return t;
+}
+
+test "an optional of a type holding one copy of a generic parameter is never the cached optional of another copy, however deep" {
+	const g = makeSymbol("g", SymbolKind.Function, null, false);
+	g.modulePath = "/src/maybeCopies.ms";
+	for (const depth of [1, 6, 12]) {
+		const first = createMaybeType(nestedArrayOf(declaredParam(g, 0, 3, 7), depth));
+		const secondPayload = nestedArrayOf(declaredParam(g, 0, 3, 7), depth);
+		const second = createMaybeType(secondPayload);
+		assert second != first && second.typeReturn == secondPayload, `depth ${depth}: the second copy got the first copy's optional`;
+		assert createMaybeType(secondPayload) == second, `depth ${depth}: the same payload is not interned`;
+	}
 }

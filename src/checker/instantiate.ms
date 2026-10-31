@@ -9,7 +9,7 @@ import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
-import { ensureShaped, registerTypeInstanceHooks, registerGenericTypeHook, refuseHookInferredReturn } from "./resolvePass";
+import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
@@ -20,7 +20,7 @@ import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, regi
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
-import { callCheckFunctionBody, callCheckLocalInstance, registerInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckFunctionBody, callCheckLocalInstance, registerInstantiateGeneric, registerTypeInstanceHooks, registerGenericTypeHook } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
@@ -1445,7 +1445,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		}
 	}
 
-	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults, ctorVisibility: ctorData.ctorVisibility };
+	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults, ctorVisibility: ctorData.ctorVisibility, ctorParamProps: ctorData.ctorParamProps, ctorFlags: ctorData.ctorFlags };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
 
 	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
@@ -1459,6 +1459,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 	const ctorSym = mintCtorRoutine(host, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
+	if (ctorNode.resolvedSym != null && hasFlag(ctorNode.resolvedSym, SymbolFlag.InheritsConstructor)) setFlag(ctorSym, SymbolFlag.InheritsConstructor);
 	ctorSym.instanceArgs = types;
 	ctorSym.instanceParams = params;
 

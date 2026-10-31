@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: utf8=0/0 hex=0/0 base64=0/0 latin1=0/0 HEX=0/0
 // @stdout: =>>>><<<=<=<<<<>=><<<<=<=<<<<>>>=<<>>>>>=<>>>>>>=
 // @stdout: ab||x|ab|0123456789abcdx|0123456789abcdex|0123456789abcdxy0123456789abcdx|0123456789abcdexy0123456789abcdex

@@ -694,6 +694,8 @@ Math.floor(3.7);  // → floor(3.7), receiver not passed
 
 Instance: receiver prepended as first arg at call site. Static: receiver stripped, just a namespaced call.
 
+An extension on an actor is a free function on the caller's side, not a message: `a.describe()` for `function describe(this a: A): string` is a `string` with no `await`, its body reaches the actor only through its messages (a field read there is refused), and an `async` one is `Promise<T>` as declared. Measured 2026-10-31 on C, `--danger`, JS and ESM (corpus `actorExtensionIsCallerSide`, handoff `actorFieldIsolation`): `a.describe()` prints `A ext` and `b.describe()` on a second actor prints `B ext`; the Raiser has no actors.
+
 An array receiver says whether the method writes. `this arr: T[]` may write the array (`push`,
 `arr[i] = …`), so a value `Vec<T>` reaches it only from a writable place: a `const`, a value parameter
 or a `for..of` binding is refused (`cannot mutate 'v' with 'zero' — 'v' is const (use 'let')`), and a
@@ -3176,8 +3178,19 @@ Strings in MetaScript are mutable when declared with `let`. All standard TypeScr
 
 - **`.length`**: Returns the number of characters (UTF-16 code units), matching TypeScript behavior.
 - **`.byteLength`**: Returns the raw number of bytes in the UTF-8 buffer (Systems-optimized).
-  A `Buffer` is `uint8[]` on every target, so `buf.length` and `buf.byteLength()` count its bytes:
+  A `Buffer` is a brand over `uint8[]` (`uint8[] & { __brand: "Buffer" }`, see "A brand over an array") on every target, so `buf.length` and `buf.byteLength()` count its bytes:
   `Buffer.fromArray([0xE2, 0x82, 0xAC, 0x41]).length` is 4 on C and JS (measured 2026-10-28).
+  It widens to `uint8[]` where one is expected, and a `uint8[]` becomes a `Buffer` only through `as Buffer`.
+  Like Node's Buffer it prints as text, serializes as `{ "type": "Buffer", "data": [...] }` and inspects as `<Buffer 61 62 63>`:
+
+  | Use of `buf` | Result |
+  |---|---|
+  | `${buf}`, `String(buf)`, `"" + buf`, `buf.toString()` | the bytes decoded as UTF-8, an ill-formed byte as U+FFFD (Raiser: WTF-8, an encoded surrogate stays) |
+  | `JSON.stringify(buf)`, a field of type `Buffer` | `{"type":"Buffer","data":[97,98]}` |
+  | `console.log(buf)`, a field or array element | `<Buffer 61 62 63>`: lowercase hex, at most 50 bytes, then ` ... N more bytes` (`1 more byte`) |
+  | `buf.slice(a, b)` | a `Buffer` copy (not Node's view) |
+
+  Measured 2026-10-31 on the candidate of `wt/std-ms-string-buffer` (corpus `bufferInterpolatesAsText`, `bufferJsonShape`, `bufferInspectForm`, `bufferProducedTextInterpolates`; C, `--danger`, JS, ESM and the Raiser except the producer pin, which needs the `Buffer` namespace the Raiser lacks). Not measured: `JSON.stringify` of a `Buffer[]` (refused by `jsonValueOf`), and a Buffer built by `[...] as Buffer` on JS, where an array literal is a plain `Array` and `subarray` is missing.
 - **`.unicodeLength`**: Returns the number of actual Unicode code points.
 
 ```typescript

@@ -189,13 +189,15 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			}
 		}
 		genStmt(g, p, d.fnBody);
+		const zero = `(${actualRetType})${zeroInit(fnType.typeReturn)}`;
+		if (p.resultSlot != "") emitProcLocalsLine(p, `${p.resultSlot} = ${zero};`);
 		const procs = sec(g, CSection.Procs);
 		addLine(procs, proto + " {");
 		emitProcBody(p, procs);
-		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
-		// to satisfy C compiler's control flow analysis for non-void functions.
+		// Reference parity (BeforeRet_ returns result): a raise that leaves after a return
+		// parked its value hands that value to the caller, which destroys it.
 		if (!nrvo && actualRetType != "void") {
-			addLine(procs, `  return (${actualRetType})${zeroInit(fnType.typeReturn)};`);
+			addLine(procs, `  return ${p.resultSlot != "" ? p.resultSlot : zero};`);
 		}
 		addLine(procs, "}");
 		addNewline(procs);
@@ -322,6 +324,7 @@ function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 	const types = sec(g, CSection.Types);
 	addLine(types, `struct ${name} {`);
 	for (let i = 0; i < fieldNames.length; i += 1) {
+		if (ifaceType != null && i < ifaceType.typeChildren.length && storesNothing(ifaceType, ifaceType.typeChildren[i])) continue;
 		addLine(types, `  ${fieldTypes[i]} ${mangleFieldName(fieldNames[i])};`);
 	}
 	addLine(types, "};");
@@ -381,6 +384,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		}
 		if (classStructType != null && classStructType.typeNames != null && classStructType.typeChildren != null) {
 			for (let i = 0; i < classStructType.typeNames.length; i += 1) {
+				if (storesNothing(classStructType, classStructType.typeChildren[i])) continue;
 				fieldNames.push(mangleFieldName(classStructType.typeNames[i]));
 				fieldTypes.push(getTypeDesc(g, classStructType.typeChildren[i]));
 			}
@@ -619,13 +623,6 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			&& node.nodeType != null
 			&& isNilableValueType(node.nodeType)) {
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType})${zeroInit(node.nodeType)};`);
-		return;
-	}
-	if (d.initializer != null
-			&& d.initializer.kind == NodeKind.NullLiteral
-			&& node.nodeType != null
-			&& (isNumeric(node.nodeType) || node.nodeType.kind == TypeKind.Boolean)) {
-		addLine(sec(g, CSection.ModuleInit), `  ${varName} = 0;`);
 		return;
 	}
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)

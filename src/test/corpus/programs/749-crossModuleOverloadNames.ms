@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: cross-name ok
 
 // Two std modules export the same function name — string.byteAt on string,
