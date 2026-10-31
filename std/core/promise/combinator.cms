@@ -213,7 +213,7 @@ struct FirstEnv {
 
 @inline function firstClaim(s: Ptr<FirstState>, fulfilled: boolean): boolean {
 	const settled = (s.settled as Ptr<Word32>) as Ptr<void>;
-	if (fulfilled || s.any == 0) return msPromiseExchangeAcqRel(settled, 1) == 0;
+	if (fulfilled || s.any == 0) return msPromiseLoadAcquire(settled) == 0 && msPromiseExchangeAcqRel(settled, 1) == 0;
 	const rejected = msPromiseFetchAddAcqRel((s.rejected as Ptr<Word32>) as Ptr<void>, 1) + 1;
 	if (rejected == s.count && msPromiseExchangeAcqRel(settled, 1) == 0) msFutureFail(s.result, msPromiseAllRejectedError());
 	return false;
