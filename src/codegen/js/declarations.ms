@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding, jsPropertyKey } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
 import { ACTOR_EXIT_STOP, useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
@@ -128,6 +128,11 @@ function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): st
 	return jsSymbolName(gen, parent, parent.name);
 }
 
+function fieldKey(name: string): string {
+	const key = jsPropertyKey(name);
+	return key == name ? safeJsName(name) : key;
+}
+
 // Instance fields are assigned by the constructor, so only a static one carries
 // an initializer that nothing else would ever run.
 function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
@@ -135,7 +140,7 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 	if (!d.propIsStatic || d.propInitializer == null) return;
 	emitIndent(gen);
 	emit(gen, "static ");
-	emit(gen, safeJsName(d.propName));
+	emit(gen, fieldKey(d.propName));
 	emit(gen, " = ");
 	emitNode(gen, d.propInitializer);
 	emit(gen, ";\n");
@@ -217,7 +222,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 						emitIndent(gen);
 						emit(gen, "})()))(this);\n");
 					} else if (pd.propInitializer != null) {
-						emit(gen, `${safeJsName(pd.propName)} = `);
+						emit(gen, `${fieldKey(pd.propName)} = `);
 						emitNode(gen, pd.propInitializer);
 						emit(gen, ";\n");
 					}
@@ -225,7 +230,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 					const zero = jsDefaultValue(member.nodeType);
 					if (zero != "") {
 						emitIndent(gen);
-						emit(gen, `${pd.propName} = ${zero};\n`);
+						emit(gen, `${jsPropertyKey(pd.propName)} = ${zero};\n`);
 					}
 				}
 			},

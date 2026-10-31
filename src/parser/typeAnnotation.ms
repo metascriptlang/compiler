@@ -441,7 +441,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			continue;
 		}
 
-		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
+		if ((isIdentLikeKind(current(state).kind) || current(state).kind == TokenKind.String) && !hasIndexSig) {
 			const fieldName = current(state).value;
 			fieldNames.push(fieldName);
 			fieldLocations.push(makeLoc(current(state).line, current(state).column));
@@ -984,6 +984,14 @@ function parseIndexSig(typeStr: string): Node {
 	if (!lr.ok) return null as unknown as Node;
 	const state = createState(lr.value);
 	return parseTypeExpr(state);
+}
+
+test "a quoted member of an object type is a field named by its value" {
+	const d = parseIndexSig("{ \"data-id\": string; \"a\"?: number }").data as TypeObjectData;
+	assert d.typExprFieldNames.length == 2;
+	assert d.typExprFieldNames[0] == "data-id";
+	assert d.typExprFieldNames[1] == "a";
+	assert d.typExprOptionalFields.length == 1;
 }
 
 test "index signature produces TypeObject" {

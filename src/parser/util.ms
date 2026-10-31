@@ -108,6 +108,11 @@ export function isPropertyName(token: Token): boolean {
 	return isIdentOrKeyword(token.kind);
 }
 
+// A member name in a declaration: a property name or a quoted string, as in `{ "data-id": string }`.
+export function isDeclaredMemberName(token: Token): boolean {
+	return isPropertyName(token) || token.kind == TokenKind.String;
+}
+
 // ===== Parameter List Parser =====
 // Parses (param1, param2: Type, ...rest) including destructured params
 // Consumes opening '(' through closing ')'.
