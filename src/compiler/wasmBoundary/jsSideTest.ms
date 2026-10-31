@@ -356,3 +356,9 @@ test "js side: a checked callback is tested before it is pushed and its result i
 	assert code.includes("const id0 = __msb.push((x0, x1) => (__msbType(a0(x0 !== 0, x1 >>> 0), \"boolean\", \"boolean\", \"pick\", \"result of callback 'f'\") ? 1 : 0));");
 	assert code.includes("return __msbType(a1(s0), \"number\", \"float32\", \"sumBy\", \"result of callback 'cb'\"); }");
 }
+
+test "js side: copying into wasm memory uses TypedArray.set for a typed source, and copying back uses it for a typed non-bool target" {
+	const p = bindingsFor(["total"]).prelude;
+	assert p.includes("if (ArrayBuffer.isView(a)) v.set(a.subarray(off, off + n));");
+	assert p.includes("if (!bool && n !== 0 && ArrayBuffer.isView(a)) a.set(v, off);");
+}
