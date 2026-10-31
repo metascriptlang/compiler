@@ -56,7 +56,7 @@ while (lf < 0 && !st.eof) {
 let end = lf < 0 ? st.pending.length : lf;
 const rest = lf < 0 ? st.pending.length : lf + 1;
 if (lf > 0 && st.pending[lf - 1] === 13) end = lf - 1;
-const line = new TextDecoder().decode(st.pending.subarray(0, end));
+const line = new TextDecoder().decode(Uint8Array.from(st.pending.slice(0, end)));
 st.pending = st.pending.slice(rest);
 return line;`);
 	unreachable;

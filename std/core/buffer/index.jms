@@ -33,6 +33,10 @@ function msBufLoad(b, o, n) {
 	for (let i = 0; i < n; i++) msBufWord.setUint8(i, b[o + i]);
 	return msBufWord;
 }
+function msBufSet(b, i, v) {
+	i = Math.trunc(i);
+	if (i >= 0 && i < b.length) b[i] = v & 255;
+}
 function msBufStore(b, o, n, put) {
 	o = msBufCheck(b, o, n);
 	put(msBufWord);
@@ -231,7 +235,10 @@ export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 export extern function byteAt(this b: Buffer, i: number): int32 from "#[#]";
 export extern function byteLength(this b: Buffer): number from "#.length";
 
-export extern function set(this b: Buffer, i: number, v: number): void from "#[#] = (#) & 255";
+extern function setInBounds(this b: Buffer, i: number, v: number): void from "msBufSet(#, #, #)";
+export function set(this b: Buffer, i: number, v: number): void {
+	b.setInBounds(i, v);
+}
 
 export function toHex(this b: Buffer): string {
 	return encodeHex(b);
