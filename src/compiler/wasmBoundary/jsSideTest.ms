@@ -23,6 +23,10 @@ export function twice(s: string): string { return s + s; }
 export function both(a: string, n: int32, b: string): int32 { return a.length + n + b.length; }
 export function sumBy(n: int32, cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<boolean>, at: int32) => void): void {}
+export function patch(cb: (xs: Span<int32>) => int32): int32 { return 0; }
+export function stamp(s: string, xs: Span<int32>): int32 { return 0; }
+export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; return out; }
+export function swap(a: Span<int32>, b: Span<int32>): void {}
 `;
 
 function bindingsFor(names: string[]) {
@@ -89,10 +93,10 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
 }
 
-test "js side: a callback Span parameter arrives as a copied view, a writable one is copied back after the call" {
+test "js side: a callback Span parameter arrives as a copied view, a writable one is copied back after the call even when the callback throws" {
 	const code = bindingsFor(["sumBy", "edit"]).modules[0].code;
-	assert code.includes("const id1 = __msb.push((x0, x1) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; const r = a1(s0); return r; });");
-	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; a0(s0, x2); __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); });");
+	assert code.includes("const id1 = __msb.push((x0, x1) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; return a1(s0); });");
+	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; try { a0(s0, x2); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); } });");
 }
 
 test "js side: the prelude carries the string glue once and reads the heap fresh" {
@@ -139,6 +143,26 @@ test "js side: a Span is copied in for the call, and a writable one is copied ba
 	assert read.includes("return __msbMod._msb_calc_total(e0[0], e0[1]);");
 	assert !read.includes("__msbCopyBack");
 	const write = bindingsFor(["fill"]).modules[0].code;
-	assert write.includes("\t\tif (e0) __msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\tif (e0) __msbMod._free(e0[0]);");
+	assert write.includes("\t\ttry {\n\t\t\t__msbMod._msb_calc_fill(e0[0], e0[1], a1);\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);");
 	assert bindingsFor(["fill"]).prelude.includes("function __msbCopyBack(p, a, off, n, T, bool) {");
+}
+
+test "js side: a callback that returns a value still copies a writable Span back after the call, also when it throws" {
+	const code = bindingsFor(["patch"]).modules[0].code;
+	assert code.includes("try { return a0(s0); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Int32Array); }");
+}
+
+test "js side: the copy-back of a Span runs only once every argument is encoded, so a failed encode writes nothing back" {
+	const code = bindingsFor(["stamp"]).modules[0].code;
+	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\ttry {\n\t\t\treturn __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]);\n\t\t} finally {\n\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);");
+}
+
+test "js side: a Vec result with a writable Span copies back inside the call's finally and restores the takers after it" {
+	const code = bindingsFor(["cut"]).modules[0].code;
+	assert code.includes("\t\t\t__msbMod._msb_calc_cut(e0[0], e0[1]);\n\t\t\treturn r;\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\t__msb.takes.length = d;");
+}
+
+test "js side: each writable Span has its own copy-back, so one that throws cannot skip the next, and the frees still run last" {
+	const code = bindingsFor(["swap"]).modules[0].code;
+	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e1) __msbMod._free(e1[0]);");
 }
