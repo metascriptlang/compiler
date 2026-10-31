@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, signatureLetter, unwiredKind } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, msTypeOf, signatureLetter, unwiredKind } from "./manifest";
 
 const REGISTRY = "Module['msb']";
 
@@ -7,28 +7,6 @@ export interface WasmEntry {
 	exportedFunctions: string[];
 	jsLibrary: string;
 	runtimeMethods: string[];
-}
-
-function msTypeOf(kind: BoundaryKind): string {
-	return match (kind) {
-		BoundaryKind.Bool => "boolean",
-		BoundaryKind.I8 => "int8",
-		BoundaryKind.I16 => "int16",
-		BoundaryKind.I32 => "int32",
-		BoundaryKind.I64 => "int64",
-		BoundaryKind.U8 => "uint8",
-		BoundaryKind.U16 => "uint16",
-		BoundaryKind.U32 => "uint32",
-		BoundaryKind.U64 => "uint64",
-		BoundaryKind.F32 => "float32",
-		BoundaryKind.F64 => "float64",
-		BoundaryKind.Void => "void",
-		BoundaryKind.Callback
-			| BoundaryKind.String
-			| BoundaryKind.Struct
-			| BoundaryKind.Vec
-			| BoundaryKind.Span => { unwiredKind(kind, "scalar type"); },
-	};
 }
 
 function valueTypeOf(kind: BoundaryKind): string {

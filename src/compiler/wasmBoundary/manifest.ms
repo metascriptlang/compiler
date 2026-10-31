@@ -82,6 +82,28 @@ export function signatureLetter(kind: BoundaryKind): string {
 	};
 }
 
+export function msTypeOf(kind: BoundaryKind): string {
+	return match (kind) {
+		BoundaryKind.Bool => "boolean",
+		BoundaryKind.I8 => "int8",
+		BoundaryKind.I16 => "int16",
+		BoundaryKind.I32 => "int32",
+		BoundaryKind.I64 => "int64",
+		BoundaryKind.U8 => "uint8",
+		BoundaryKind.U16 => "uint16",
+		BoundaryKind.U32 => "uint32",
+		BoundaryKind.U64 => "uint64",
+		BoundaryKind.F32 => "float32",
+		BoundaryKind.F64 => "float64",
+		BoundaryKind.Void => "void",
+		BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "scalar type"); },
+	};
+}
+
 function hex2(b: int32): string {
 	const digits = "0123456789abcdef";
 	return digits.slice(b >> 4, (b >> 4) + 1) + digits.slice(b & 15, (b & 15) + 1);

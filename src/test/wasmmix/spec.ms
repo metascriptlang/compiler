@@ -4,6 +4,7 @@
 export interface WasmmixSpec {
 	stdout: string[];
 	hasStdout: boolean;
+	foreignStdout: string[];
 	mixedError: string;
 	unknown: string[];
 }
@@ -15,13 +16,15 @@ function directiveValue(line: string, key: string): string {
 }
 
 export function parseSpec(src: string): WasmmixSpec {
-	const spec: WasmmixSpec = { stdout: [], hasStdout: false, mixedError: "", unknown: [] };
+	const spec: WasmmixSpec = { stdout: [], hasStdout: false, foreignStdout: [], mixedError: "", unknown: [] };
 	for (const line of src.split("\n")) {
 		const t = line.trim();
 		if (t != "" && t.indexOf("//") != 0) { break; }
 		if (t.indexOf("// @stdout:") == 0) {
 			spec.stdout.push(directiveValue(t, "@stdout"));
 			spec.hasStdout = true;
+		} else if (t.indexOf("// @foreign-stdout:") == 0) {
+			spec.foreignStdout.push(directiveValue(t, "@foreign-stdout"));
 		} else if (t.indexOf("// @mixed-error:") == 0) {
 			spec.mixedError = directiveValue(t, "@mixed-error");
 		} else if (t.indexOf("// @") == 0) {
@@ -67,4 +70,12 @@ test "describeDiff is empty on equal output and names the first differing line" 
 	assert describeDiff("a\nb\n", "a\r\nb\n") == "";
 	assert describeDiff("a\nb", "a\nc").contains("line 2");
 	assert describeDiff("a", "a\nb").contains("<missing>");
+}
+
+test "parseSpec collects @foreign-stdout apart from @stdout" {
+	const s = parseSpec("// @stdout: 1\n// @foreign-stdout: a: b\n// @foreign-stdout: c\nx");
+	assert s.stdout.length == 1;
+	assert s.foreignStdout.length == 2;
+	assert s.foreignStdout[0] == "a: b";
+	assert s.unknown.length == 0;
 }
