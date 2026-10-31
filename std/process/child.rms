@@ -74,6 +74,11 @@ export struct ReadChunk {
 	ended: boolean;
 }
 
+export struct ByteChunk {
+	data: Buffer;
+	ended: boolean;
+}
+
 export interface SpawnOptions {
 	cwd?: string;
 	mergeStderr?: boolean;
@@ -115,13 +120,24 @@ export class ChildProcess {
 		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
 		if (code == CHILD_OK) return Result.ok({ data: this.takeText(which), ended: false });
 		if (code == CHILD_ENDED) return Result.ok(this.endText(which));
-		const name = stream.toString().toLowerCase();
-		return Result.err(match (code) {
-			CHILD_TIMEOUT => timedOut(this.command, `read ${name} after ${timeoutMs} ms`),
-			CHILD_PIPE_CLOSED => pipeClosed(this.command, `${name} of a closed handle`),
-			CHILD_OVERFLOW => outputOverflow(this.command, name),
-			_ => this.osError(`read ${name}`),
-		});
+		return Result.err(this.readFailure(stream, code, timeoutMs));
+	}
+
+	readBytes(
+		stream: ChildStream, timeoutMs: int32,
+	): Result<ByteChunk, ProcessError> {
+		const which = stream as int32;
+		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
+		if (code == CHILD_OK) {
+			return Result.ok({
+				data: Buffer.fromString(msProcChildTake(this.handle, which), "utf8"),
+				ended: false,
+			});
+		}
+		if (code == CHILD_ENDED) {
+			return Result.ok({ data: Buffer.alloc(0), ended: true });
+		}
+		return Result.err(this.readFailure(stream, code, timeoutMs));
 	}
 
 	// Whatever stderr the pump has drained so far, decoded in full; does not wait.
@@ -159,6 +175,20 @@ export class ChildProcess {
 		const bytes = this.held[which];
 		this.held[which] = [];
 		return { data: bytes.asString(), ended: bytes.length == 0 };
+	}
+
+	private readFailure(
+		stream: ChildStream, code: int32, timeoutMs: int32,
+	): ProcessError {
+		const name = stream.toString().toLowerCase();
+		return match (code) {
+			CHILD_TIMEOUT => timedOut(this.command,
+				`read ${name} after ${timeoutMs} ms`),
+			CHILD_PIPE_CLOSED => pipeClosed(this.command,
+				`${name} of a closed handle`),
+			CHILD_OVERFLOW => outputOverflow(this.command, name),
+			_ => this.osError(`read ${name}`),
+		};
 	}
 
 	// The exit status, or Timeout with the child still running.
