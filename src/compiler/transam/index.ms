@@ -953,8 +953,14 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), startVersion);
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
-	checkMacroDeps(db, filePath, imports);
-	const unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
+	let unit: BoundModule;
+	try {
+		checkMacroDeps(db, filePath, imports);
+		unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
+	} catch (e) {
+		db.checkInProgress.delete(filePath);
+		throw e;
+	}
 	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
 	if (!checkedElsewhere(db, filePath) && !checkCancel(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
@@ -1026,81 +1032,95 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const bound = reusableBound(db, filePath);
 	const program = bound != null ? bound.program : db.handedToCheck != null ? cachedProgram : cloneNodeForCheck(cachedProgram);
 
-	// Macro-declaring deps need a FULL check first: checkProgram registers their
-	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
-	// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
-	// from dep-order compilation; the db must do it on demand.
-	const imports = buildImportEntries(db, filePath, program);
-	db.checkInProgress.add(filePath);
-	checkMacroDeps(db, filePath, imports);
+	const depth = db.depStack.frames.length;
+	const entryDb = _checkingDb;
+	const entrySink = installBodyReadSink(null);
+	installBodyReadSink(entrySink);
+	try {
+		// Macro-declaring deps need a FULL check first: checkProgram registers their
+		// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
+		// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
+		// from dep-order compilation; the db must do it on demand.
+		const imports = buildImportEntries(db, filePath, program);
+		db.checkInProgress.add(filePath);
+		checkMacroDeps(db, filePath, imports);
 
-	pushFrame(db.depStack, key);
-	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
-	recordDependency(db.depStack, pKey);
-	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
+		pushFrame(db.depStack, key);
+		const pKey = createQueryKey(TaQueryKind.Parse, fileId);
+		recordDependency(db.depStack, pKey);
+		recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 
-	const importDepIds = getDirectImports(db.moduleDeps, fileId);
-	const interfaceDeps: TaQueryKey[] = [];
-	const reached = new HashSet<int32>();
-	reached.add(fileId);
-	for (const depId of importDepIds) reached.add(depId);
-	for (let di = 0; di < importDepIds.length; di = di + 1) {
-		const depId = importDepIds[di];
-		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
-		const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
-		if (depCheckEntry != null) {
-			recordDependency(db.depStack, depCheckKey);
-			if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
-			continue;
+		const importDepIds = getDirectImports(db.moduleDeps, fileId);
+		const interfaceDeps: TaQueryKey[] = [];
+		const reached = new HashSet<int32>();
+		reached.add(fileId);
+		for (const depId of importDepIds) reached.add(depId);
+		for (let di = 0; di < importDepIds.length; di = di + 1) {
+			const depId = importDepIds[di];
+			const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+			const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
+			if (depCheckEntry != null) {
+				recordDependency(db.depStack, depCheckKey);
+				if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
+				continue;
+			}
+			recordParseRead(db, depId);
+			if (!checkedElsewhere(db, getFilePath(db.fileInput, depId))) recordBoundImportReads(db, depId, reached);
 		}
-		recordParseRead(db, depId);
-		if (!checkedElsewhere(db, getFilePath(db.fileInput, depId))) recordBoundImportReads(db, depId, reached);
-	}
 
-	if (!modulePassExempt(filePath)) {
-		for (const pass of modulePasses()) {
-			const passId = getFileId(db.fileInput, pass.modulePath);
-			if (passId < 0) continue;
-			recordDependency(db.depStack, createQueryKey(TaQueryKind.TypeCheck, passId));
+		if (!modulePassExempt(filePath)) {
+			for (const pass of modulePasses()) {
+				const passId = getFileId(db.fileInput, pass.modulePath);
+				if (passId < 0) continue;
+				recordDependency(db.depStack, createQueryKey(TaQueryKind.TypeCheck, passId));
+			}
 		}
-	}
 
-	const outerDb = _checkingDb;
-	_checkingDb = db;
-	if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
-	const bodyReads = new HashSet<string>();
-	const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
-	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
-	const checkerCtx = finishModuleCheck(unit);
-	for (const message of unchecked) addError(checkerCtx, message, 1, 1);
-	installBodyReadSink(outerSink);
-	_checkingDb = outerDb;
-	db.bound.delete(filePath);
+		const outerDb = _checkingDb;
+		_checkingDb = db;
+		if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
+		const bodyReads = new HashSet<string>();
+		const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
+		const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
+		const checkerCtx = finishModuleCheck(unit);
+		for (const message of unchecked) addError(checkerCtx, message, 1, 1);
+		installBodyReadSink(outerSink);
+		_checkingDb = outerDb;
+		db.bound.delete(filePath);
 
-	// If cancelled, discard frame without caching — partial result not reliable
-	if (checkCancel(db.cancelCtx, startVersion)) {
-		popFrame(db.depStack);
+		// If cancelled, discard frame without caching — partial result not reliable
+		if (checkCancel(db.cancelCtx, startVersion)) {
+			popFrame(db.depStack);
+			db.checkInProgress.delete(filePath);
+			forgetClientsOfDiscardedUnit(db, fileId);
+			return checkerCtx;
+		}
+
+		checkerCtx.disambAfterCheck = copyDisambTable(checkerCtx.disambTable);
+		db.contexts.set(checkCtxKey(fileId), checkerCtx);
+		updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
+		if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
+		db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
+		for (const read of bodyReads) {
+			const readId = getFileId(db.fileInput, read);
+			if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
+		}
+		const kept = db.handedToCheck == null;
+		const iface = kept ? ifaceDigest(checkerCtx) : null;
+		const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
+		executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
+		if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
 		db.checkInProgress.delete(filePath);
-		forgetClientsOfDiscardedUnit(db, fileId);
 		return checkerCtx;
+	} catch (e) {
+		while (db.depStack.frames.length > depth) popFrame(db.depStack);
+		db.checkInProgress.delete(filePath);
+		_checkingDb = entryDb;
+		installBodyReadSink(entrySink);
+		db.bound.delete(filePath);
+		forgetClientsOfDiscardedUnit(db, fileId);
+		throw e;
 	}
-
-	checkerCtx.disambAfterCheck = copyDisambTable(checkerCtx.disambTable);
-	db.contexts.set(checkCtxKey(fileId), checkerCtx);
-	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
-	if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
-	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	for (const read of bodyReads) {
-		const readId = getFileId(db.fileInput, read);
-		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);
-	}
-	const kept = db.handedToCheck == null;
-	const iface = kept ? ifaceDigest(checkerCtx) : null;
-	const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
-	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
-	if (kept) storeImpl(db, fileId, implDigest(cachedProgram));
-	db.checkInProgress.delete(filePath);
-	return checkerCtx;
 }
 
 function recordImplRead(db: TransAmDb, readId: int32): void {
@@ -2762,6 +2782,52 @@ test "a cancelled first check of a bound-only importing module keeps the class i
 	cancelledFirstCheck(db, `${root}/makers.ms`);
 	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
 	const messages = importerErrorsAfterEdit(db, root);
+	assert messages.length == 0, messages.join("; ");
+}
+
+function throwAtProbe(db: TransAmDb, probe: int32): void {
+	const probes: int32[] = [0];
+	db.cancelCtx.inputPending = (): boolean => {
+		probes[0] += 1;
+		if (probes[0] == probe) throw new Error("probe: the checker threw");
+		return false;
+	};
+}
+
+function checkThatThrows(db: TransAmDb, path: string, probe: int32): string {
+	throwAtProbe(db, probe);
+	let message = "";
+	try {
+		dbTypeCheck(db, path);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	db.cancelCtx.inputPending = null;
+	resetCancel(db.cancelCtx);
+	return message;
+}
+
+test "a check that throws leaves no frame and no check in progress, and the next check matches a fresh one" {
+	const db = createTransAmDb(100);
+	const path = "/throwLeaf/leaf.ms";
+	dbSetFileText(db, path, "const a = 1;\nconst b = a;\nexport const value: int32 = \"wrong\";\n");
+	assert checkThatThrows(db, path, 1) == "probe: the checker threw";
+	assert db.depStack.frames.length == 0;
+	assert db.checkInProgress.size == 0;
+	assert !dbCheckIsCurrent(db, path);
+	const errors = dbTypeCheck(db, path).errors;
+	assert errors.length == 1 && errors[0].message == "Type 'string' is not assignable to type 'int32'", `${errors.length}`;
+}
+
+test "an importer check that throws while it binds its import leaves both modules checkable" {
+	const root = "/throwImporter";
+	const db = cancelledBoundProject(root);
+	assert checkThatThrows(db, `${root}/use.ms`, 2) == "probe: the checker threw";
+	assert db.depStack.frames.length == 0;
+	assert db.checkInProgress.size == 0;
+	assert dbTypeCheck(db, `${root}/makers.ms`).errors.length == 0;
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, `${root}/use.ms`).errors) messages.push(e.message);
 	assert messages.length == 0, messages.join("; ");
 }
 
