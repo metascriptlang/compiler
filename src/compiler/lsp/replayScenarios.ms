@@ -1894,6 +1894,38 @@ function unicodeLinePositions(): LspScenario {
 	};
 }
 
+const MEMBERS_OF_POINT = ["hash|2|() => int64", "x|5|int32", "y|5|int32"];
+
+function completionAfterWideText(): LspScenario {
+	const header = "interface Point {\n\tx: int32;\n\ty: int32;\n}\nconst p: Point = { x: 1, y: 2 };\n";
+	const sources = [
+		header + "const s = \"ab\"; const t = p.",
+		header + "const s = \"é😀\"; const t = p.",
+		header + "const s = \"😀😀\"; const t = p.",
+	];
+	const characters = [28, 29, 30];
+	const opens: string[] = [];
+	const asks: string[] = [];
+	for (let i = 0; i < sources.length; i += 1) {
+		const uri = "file:///lspwire/wide" + i + ".ms";
+		opens.push(notification("textDocument/didOpen", openParams(uri, sources[i])));
+		asks.push(request("" + (10 + i), "textDocument/completion", positionParams(uri, 5, characters[i])));
+	}
+	return {
+		name: "member completion after non-ASCII text on the same line reads the UTF-16 column",
+		batching: "any",
+		drains: [initializeDrain(), frames(opens), frames(asks)],
+		check: (r: LspReplay) => firstFailure([
+			sameRows("p. after ASCII text", MEMBERS_OF_POINT, completionRows(r, "n:10")),
+			sameRows("p. after a 2-byte character and a surrogate pair", MEMBERS_OF_POINT, completionRows(r, "n:11")),
+			sameRows("p. after two surrogate pairs", MEMBERS_OF_POINT, completionRows(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -1949,6 +1981,7 @@ export function lspScenarios(): LspScenario[] {
 		rewiredImportsFollowEdits(),
 		closingAnOverlayRestoresDisk(),
 		unicodeLinePositions(),
+		completionAfterWideText(),
 	];
 }
 

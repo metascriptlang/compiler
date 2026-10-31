@@ -287,7 +287,7 @@ function lspCrossModuleCandidates(
 
 export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
 	const t0 = performance.now();
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 	const source = dbGetSource(db, path);
 	if (source == "") return lspResponse(id, "[]");

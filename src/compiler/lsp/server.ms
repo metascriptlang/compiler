@@ -796,6 +796,10 @@ test "replay: hover inside an identifier answers the range of the whole identifi
 
 test "replay: completion after . on a generic instance and after ?. on an optional value" {
 	assert runMemoryScenario("completion after . on a generic instance and after ?. on an optional value") == "";
+test "replay: member completion after non-ASCII text on the same line reads the UTF-16 column" {
+	assert runMemoryScenario("member completion after non-ASCII text on the same line reads the UTF-16 column") == "";
+}
+
 }
 
 // ===== Exports a top-level macro statement splices =====

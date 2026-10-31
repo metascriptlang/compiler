@@ -95,12 +95,12 @@ export function lspDocumentUri(params: string): string {
 	return lspGetField(lspGetObjectField(params, "textDocument"), "uri");
 }
 
-export function lspExtractPosition(params: string, db: TransAmDb | null = null): LspCursorParams {
+export function lspExtractPosition(params: string, db: TransAmDb): LspCursorParams {
 	const uri = lspDocumentUri(params);
 	const position = lspGetObjectField(params, "position");
 	const line = (lspGetNumberField(position, "line") as int32) + 1;
 	const character = lspGetNumberField(position, "character") as int32;
-	const at = db != null ? lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character) : makeLoc(line, character + 1);
+	const at = lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character);
 	return { uri, line: at.line, col: at.column - 1, col1: at.column };
 }
 
