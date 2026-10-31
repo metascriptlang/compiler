@@ -274,10 +274,16 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 			addResultImport("msb_rs_" + leafLetters(f.resultLeaves));
 		}
 		for (const p of f.params) {
-			if (p.kind == BoundaryKind.String) hasStringParam = true;
+			if (p.kind == BoundaryKind.String) {
+				hasStringParam = true;
+				copiesIn = true;
+			}
 			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.String)) hasStringParam = true;
 			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.Span)) readsHeap = true;
-			if (p.kind == BoundaryKind.Struct && leafLetters(p.leaves).includes("s")) hasStringParam = true;
+			if (p.kind == BoundaryKind.Struct && leafLetters(p.leaves).includes("s")) {
+				hasStringParam = true;
+				copiesIn = true;
+			}
 			if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) {
 				readsHeap = true;
 				copiesIn = true;
@@ -308,7 +314,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
-	if (hasString || copiesIn) {
+	if (copiesIn) {
 		exported.push("_malloc");
 		exported.push("_free");
 	}
@@ -323,6 +329,6 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		entries.push(`\t${first}__postset: "if (!${REGISTRY}) throw new Error('msb registry missing: pass { msb } to the wasm module factory');",`);
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
-	const runtimeMethods = hasString || readsHeap ? ["HEAPU8", "wasmMemory"] : [];
+	const runtimeMethods = hasString || readsHeap ? ["HEAPU8"] : [];
 	return { source: lines.join("\n") + "\n", exportedFunctions: exported, jsLibrary, runtimeMethods };
 }
