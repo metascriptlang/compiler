@@ -156,3 +156,4 @@ import "./cases/assignmentChain";
 import "./cases/parentheses";
 import "./cases/overrideModifier";
 import "./cases/emptyStatementBodies";
+import "./cases/whenBranches";
