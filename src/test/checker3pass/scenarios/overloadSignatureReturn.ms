@@ -208,3 +208,37 @@ extern class Host {
 `).errors;
 	assert errors.length == 0, errors.join("\n");
 }
+
+test "a signature not immediately followed by the rest of its set is refused at that signature" {
+	const source = `
+function f(a: string): string;
+const between = 1;
+function f(a: string | number): string { return "f"; }
+class K {
+	m(a: string): string;
+	other(): void {}
+	m(a: string | number): string { return "m"; }
+}
+class C {
+	constructor(a: string);
+	n: int32 = 0;
+	constructor(a: string | number) {}
+}
+`;
+	assert errorLines(source, "Function implementation of 'f' is missing or not immediately following the declaration").join(",") == "2";
+	assert errorLines(source, "Function implementation of 'm' is missing or not immediately following the declaration").join(",") == "6";
+	assert errorLines(source, "Constructor implementation is missing or not immediately following the declaration").join(",") == "11";
+	assert checkOnly(source).errors.length == 3, checkOnly(source).errors.join("\n");
+}
+
+test "a signature after its implementation is refused, and comments between declarations keep them consecutive" {
+	const source = `
+function g(a: string | number): string { return "g"; }
+function g(a: string): string;
+function h(a: string): string;
+// the implementation follows
+function h(a: string | number): string { return "h"; }
+`;
+	assert errorLines(source, "Function implementation of 'g' is missing or not immediately following the declaration").join(",") == "3";
+	assert checkOnly(source).errors.length == 1, checkOnly(source).errors.join("\n");
+}
