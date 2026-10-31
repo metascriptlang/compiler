@@ -1647,12 +1647,13 @@ function runWasiPlatform(): void {
 		"hostCall.ms",
 		"hostCall.h",
 		"platform.ms",
+		"clock.ms",
 		"platformProbe.h",
 		"run.cjs",
 	]) {
 		need(copyFile(`${fixtures}/${name}`, `${dir}/${name}`).ok, `copy WASI fixture ${name}`);
 	}
-	for (const name of ["minimal", "console", "hostCall", "platform"]) {
+	for (const name of ["minimal", "console", "hostCall", "platform", "clock"]) {
 		const built = command(dir, `build-${name}`, compiler, [
 			"build",
 			`${name}.ms`,
@@ -1661,14 +1662,19 @@ function runWasiPlatform(): void {
 		]);
 		need(built.code == 0, `WASI ${name} build`);
 	}
-	const names = ["minimal", "console", "hostCall", "platform", "platform"];
-	const modes = ["plain", "plain", "host", "platform", "clockFailure"];
-	const expected = ["", "7", "host=7", "1\n1234", "1\nclock failure trapped"];
+	const names = ["minimal", "console", "hostCall", "platform", "platform", "clock"];
+	const modes = ["plain", "plain", "host", "platform", "clockFailure", "plain"];
+	const expected = ["", "7", "host=7", "1\n1234", "1\nclock failure trapped", "true true 59999997"];
 	for (let i = 0; i < names.length; i++) {
 		const label = `run-${names[i]}-${modes[i]}`;
 		const ran = command(dir, label, "node", ["run.cjs", `${names[i]}.wasm`, modes[i]]);
 		record(`${label} exit`, "0", `${ran.code}`);
 		record(label, expected[i], ran.stdout.trim());
+	}
+	if (toolPresent("emcc")) {
+		const built = command(dir, "build-clock-emcc", compiler, ["build", "clock.ms", "--os=emcc", "--output=clockEmcc.js"]);
+		need(built.code == 0, "emcc clock build");
+		record("run-clock-emcc", "true true 59999997", command(dir, "run-clock-emcc", "node", ["clockEmcc.js"]).stdout.trim());
 	}
 }
 
