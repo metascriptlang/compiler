@@ -8,6 +8,10 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+// Hardware SHA-2 where the CPU has it, detected at run time; the vendor build_info reads
+// psa/crypto_config.h, not mbedtlsConfig.h, so these two are set on the command line.
+@passC("-DMBEDTLS_SHA256_USE_ARMV8_A_CRYPTO_IF_PRESENT");
+@passC("-DMBEDTLS_SHA512_USE_A64_CRYPTO_IF_PRESENT");
 @compile("runtime/crypto/hash.c");
 @compile("runtime/crypto/psaMdStubs.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
