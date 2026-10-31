@@ -23,17 +23,11 @@ function bytesOf(sb: Readonly<Span<uint8>>, first: int64, end: int64): string {
 	return text;
 }
 
-@noinline
+extern function msUtf16Units(bytes: Readonly<Ptr<uint8>>, length: int64): int64;
+
+@inline
 function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
-	const bytes = b as Readonly<Ptr<uint8>>;
-	const length = b.length as int64;
-	let count: uint64 = 0;
-	for (let i: int64 = 0; i < length; i++) {
-		const c = bytes[i];
-		count += (c & 0xC0) != 0x80 ? 1 as uint64 : 0;
-		count += c >= 0xF0 ? 1 as uint64 : 0;
-	}
-	return count as int64;
+	return msUtf16Units(b as Readonly<Ptr<uint8>>, b.length as int64);
 }
 
 @exportName("msStringLengthSlow")

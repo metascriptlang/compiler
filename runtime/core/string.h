@@ -426,6 +426,25 @@ static inline int64_t msStringLength(msString s) {
 /* Count Unicode scalar values (codepoints) */
 int64_t msStringUnicodeLength(msString s);
 
+/* UTF-16 units of well-formed WTF-8: one per non-continuation byte, one more per 4-byte lead. */
+static inline int64_t msUtf16Units(const unsigned char* p, int64_t len) {
+	const uint64_t high = 0x8080808080808080ull;
+	int64_t units = 0;
+	int64_t i = 0;
+	for (; i + 8 <= len; i += 8) {
+		uint64_t w;
+		memcpy(&w, p + i, 8);
+		const uint64_t cont = w & ~(w << 1) & high;
+		const uint64_t astral = w & (w << 1) & (w << 2) & (w << 3) & high;
+		units += 8 - __builtin_popcountll(cont) + __builtin_popcountll(astral);
+	}
+	for (; i < len; i++) {
+		units += (p[i] & 0xC0) != 0x80;
+		units += p[i] >= 0xF0;
+	}
+	return units;
+}
+
 /* Byte length (for binary protocols like LSP Content-Length) */
 static inline int64_t msStringByteLength(msString s) {
 	return s.len;
