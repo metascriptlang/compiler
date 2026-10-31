@@ -18,6 +18,7 @@ import "./typeCoercion";
 import "./arrayElementRepr";
 import "./unionNarrowing";
 import "./unionNarrow";
+import "./unionIntoNumber";
 import "./toStringResolve";
 import "./bitwiseCheck";
 import "./relationalCheck";

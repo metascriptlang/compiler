@@ -3109,10 +3109,20 @@ export function fitUnionIntoUnion(expr: Node, exprType: Type, formal: Type): Nod
 	const storedRead = convertStoredUnionRead(expr, exprType, formal);
 	if (storedRead != null) return storedRead;
 	if (convertsUnionImplicitly(exprType, formal)) return convertUnionToUnion(expr, exprType, formal);
+	const number = fitUnionIntoNumber(expr, exprType, formal);
+	if (number != null) return number;
 	if (!isMaybeType(formal) || formal.typeReturn == null || exprType.kind != TypeKind.Union) return null;
 	const payload = formal.typeReturn;
 	const converted = convertStoredUnionRead(expr, exprType, payload) ?? (convertsUnionImplicitly(exprType, payload) ? convertUnionToUnion(expr, exprType, payload) : null);
 	return converted != null ? synthMaybeWrap(converted, formal, payload) : null;
+}
+
+function fitUnionIntoNumber(expr: Node, exprType: Type, formal: Type): Node | null {
+	if (!isNumeric(formal) || !isSlotUnion(exprType) || hasGenericParams(exprType)) return null;
+	for (const member of exprType.typeChildren) {
+		if (!isNumeric(member) || numericConvRefuses(member, formal)) return null;
+	}
+	return convertUnionToUnion(expr, exprType, formal);
 }
 
 export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type): Node | null {
