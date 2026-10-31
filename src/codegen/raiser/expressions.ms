@@ -2065,6 +2065,11 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
 		return closureReg;
 	}
+	if (asyncKind == "SleepCancel" && d.arguments.length == 1) {
+		const closureReg = compileExpr(s, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.Sleep, closureReg, closureReg, 2));
+		return closureReg;
+	}
 	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
 		const dest = allocFor(s, node.nodeType);
 		const name = addConst(s, raiserConstString((d.arguments[0].data as StringLiteralData).value));

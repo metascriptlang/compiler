@@ -144,7 +144,7 @@ export enum RaiserOpcode {
 	LoadGlobal,
 	StoreGlobal,
 	StrByteLen,
-	Sleep,            // ABC: R[A] = a future settled R[B] ms from now; C = 1 instead starts the closure R[A] then, on a strand whose throw is unhandled
+	Sleep,            // ABC: R[A] = a future settled R[B] ms from now; C = 1 instead starts the closure R[A] then, on a strand whose throw is unhandled; C = 2 cancels that start
 	ArraySlice,       // ABC: R[A] = view of R[B] over [R[C], R[C+1]), bounds checked
 	BltU64,           // ABC: if R[A] < R[B] as uint64, skip C
 	BleU64,           // ABC: if R[A] <= R[B] as uint64, skip C
