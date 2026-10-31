@@ -23,6 +23,7 @@
 #include <windows.h>
 #define ms_close_socket(fd) closesocket((SOCKET)(intptr_t)(fd))
 #define MS_SOCKOPT_CAST (const char*)
+#define MS_TLS_SEND_FLAGS 0
 static inline int _ms_access(const char* path) {
 	DWORD attr = GetFileAttributesA(path);
 	return attr != INVALID_FILE_ATTRIBUTES ? 0 : -1;
@@ -36,6 +37,11 @@ static inline int _ms_access(const char* path) {
 #include <netinet/tcp.h>
 #define ms_close_socket(fd) close(fd)
 #define MS_SOCKOPT_CAST
+#ifdef MSG_NOSIGNAL
+#define MS_TLS_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define MS_TLS_SEND_FLAGS 0
+#endif
 #endif
 
 /* ===== TLS Context ===== */
@@ -51,7 +57,7 @@ typedef struct msTlsCtx {
 
 static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
-	int ret = (int)send(fd, (const char*)buf, (int)len, 0);
+	int ret = (int)send(fd, (const char*)buf, (int)len, MS_TLS_SEND_FLAGS);
 	if (ret < 0) return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
 	return (int)ret;
 }
@@ -111,6 +117,9 @@ static int tcpConnect(const char *hostname, int port) {
 
 	int flag = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
+#ifdef SO_NOSIGPIPE
+	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, MS_SOCKOPT_CAST &flag, sizeof(flag));
+#endif
 
 	return fd;
 }
