@@ -60,6 +60,8 @@ typedef struct {
 #define msIsLiteral(s) ((s).p == NULL || (msStrCapLoad((s).p) & MS_STRLIT_FLAG) != 0)
 
 /* ===== ASCII Fast Path ===== */
+#define MS_ASCII_BITS (MS_ASCII_CHECKED | MS_ASCII_FLAG)
+
 /* Check and cache whether a string is pure ASCII. O(n) first call, O(1) after. */
 static inline bool msStringIsAscii(msString s) {
 	if (s.p == NULL || s.len == 0) return true;
@@ -98,6 +100,34 @@ static inline bool msStrKnownAscii(const msStrPayload* p) {
 static inline bool msStringKnownAscii(msString s) { return msStrKnownAscii(s.p); }
 static inline void msStringMarkAscii(msString s) { msStrMarkAscii(s.p); }
 static inline void msStringMarkNonAscii(msString s) { msStrMarkNonAscii(s.p); }
+
+/* The cached ASCII answer of s as cap bits: the empty string is ASCII, an unchecked payload has none. */
+static inline int64_t msStringAsciiBits(msString s) {
+	if (s.p == NULL || s.len == 0) return MS_ASCII_BITS;
+	return msStrCapLoad(s.p) & MS_ASCII_BITS;
+}
+
+/* Answer bits of a ++ b: ASCII when both are, non-ASCII when either is, unknown otherwise. */
+static inline int64_t msAsciiBitsJoin(int64_t a, int64_t b) {
+	if ((a & b) == MS_ASCII_BITS) return MS_ASCII_BITS;
+	if ((a == MS_ASCII_CHECKED) | (b == MS_ASCII_CHECKED)) return MS_ASCII_CHECKED;
+	return 0;
+}
+
+/* Record `bits` on a payload this thread just allocated and owns exclusively (never a literal). */
+static inline void msStringSetAsciiBits(msString s, int64_t bits) {
+	if (s.p != NULL) s.p->cap = (s.p->cap & ~MS_ASCII_BITS) | bits;
+}
+
+/* The ASCII answer of the bytes copied from `from` to `to`, a fresh string, byte for byte. */
+static inline void msStringInheritAscii(msString to, msString from) {
+	msStringSetAsciiBits(to, msStringAsciiBits(from));
+}
+
+/* The ASCII answer of `to`, a fresh a ++ b. */
+static inline void msStringInheritAsciiJoin(msString to, msString a, msString b) {
+	msStringSetAsciiBits(to, msAsciiBitsJoin(msStringAsciiBits(a), msStringAsciiBits(b)));
+}
 
 /*
  * Static string literal constructor.
@@ -149,6 +179,13 @@ static inline int64_t msStrContentSize(int64_t cap) {
 
 /* Allocate + copy from raw bytes */
 msString msStringNew(const char* data, int64_t len);
+
+/* A fresh payload with the bytes of s and its cached ASCII answer, so a copy never rescans for .length. */
+static inline msString msStringDup(msString s) {
+	msString r = msStringNew(s.p->data, s.len);
+	msStringInheritAscii(r, s);
+	return r;
+}
 
 /* From null-terminated C string */
 msString msStringFromCStr(const char* cstr);

@@ -173,7 +173,7 @@ static inline bool msErrTake(void) {
 #define msStringDecref(s)     msStringDestroy(s)
 #define msStringIncref(s)     do { \
 	if ((s).p != NULL && !msIsLiteral(s)) { \
-		msString __c = msStringNew((s).p->data, (s).len); \
+		msString __c = msStringDup(s); \
 		(s) = __c; \
 	} \
 } while(0)
@@ -188,7 +188,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	   Don't free — source still owns it. Must allocate a fresh independent copy. */
 	if (dest->p == src.p) {
 		if (src.p != NULL && !msIsLiteral(src)) {
-			*dest = msStringNew(src.p->data, src.len);
+			*dest = msStringDup(src);
 		} else {
 			dest->len = src.len;  /* literal: just update length */
 		}
@@ -206,10 +206,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 		(dest->p->cap & MS_CAP_MASK) >= src.len) {
 		dest->len = src.len;
 		memcpy(dest->p->data, src.p->data, src.len + 1);
+		msStringInheritAscii(*dest, src);
 		return;
 	}
 	/* Must allocate new buffer */
-	msString newStr = msStringNew(src.p->data, src.len);
+	msString newStr = msStringDup(src);
 	if (!msIsLiteral(*dest)) free(dest->p);
 	*dest = newStr;
 }

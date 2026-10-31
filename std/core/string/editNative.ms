@@ -6,6 +6,10 @@ extern function newBytes(length: int64): string from "msStringNewUninit";
 extern function copyTo(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
 extern function msStringKnownAscii(s: string): boolean;
 extern function msStringMarkAscii(s: string): void;
+extern function msStringInheritAsciiJoin(to: string, a: string, b: string): void;
+extern function msStringAsciiBits(s: string): int64;
+extern function msStringSetAsciiBits(s: string, bits: int64): void;
+extern function msAsciiBitsJoin(a: int64, b: int64): int64;
 extern function newParts(capacity: int64): string[] from "msStringArrayNew";
 extern function asciiUnit(byte: uint8): string from "msCharTableAt";
 extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
@@ -115,6 +119,7 @@ function concatPair(a: string, b: string): string {
 	const dst = writable(out);
 	copyTo(dst, 0, ab, 0, ab.length);
 	copyTo(dst, ab.length, bb, 0, bb.length);
+	msStringInheritAsciiJoin(out, a, b);
 	return out;
 }
 
@@ -125,11 +130,14 @@ function concatParts(parts: Readonly<Span<string>>): string {
 	const out = newBytes(length);
 	const dst = writable(out);
 	let at: int64 = 0;
+	let bits = msStringAsciiBits("");
 	for (let i: int64 = 0; i < parts.length; i++) {
 		const pb = parts[i].asBytes();
 		copyTo(dst, at, pb, 0, pb.length);
 		at += pb.length;
+		bits = msAsciiBitsJoin(bits, msStringAsciiBits(parts[i]));
 	}
+	msStringSetAsciiBits(out, bits);
 	return out;
 }
 
