@@ -117,6 +117,7 @@ import "./cases/explicitDeref";
 import "./cases/awaitUnaryOperand";
 import "./cases/yieldArgument";
 import "./cases/matchCaseCommas";
+import "./cases/matchArmLayout";
 import "./cases/nestedTypeArgsWritten";
 import "./cases/structPrivateField";
 import "./cases/classImplements";
