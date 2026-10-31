@@ -770,6 +770,14 @@ Before, C and the Raiser filled the fields positionally and skipped the parent's
 backends (corpus `overrideDispatchThroughBase`); `instanceof` and a checked `as` answer the same on the
 Raiser since 2026-10-06 (corpus `classIdentityEveryLane`, `732-dynamicDispatch`).
 
+`super.m(args)` runs the parent's `m` on `this` and never the override that is running: from an
+override or any other method, through levels where the parent only inherits `m`, and from a subclass
+of a generic instance. A parent's field read through `super` is refused (`Class field 'n' defined by
+the parent class is not accessible in the child class via super`), as TS refuses it. Measured
+2026-10-31 on a candidate of this tree: corpus `1266-superMethodCall` prints `5`, `11 21
+base+mid+top`, `A.m via grand`, `7 got` on C, JS and the Raiser, and runs clean under SAN. Before, the
+checker refused `super.m()` with `Property 'm' does not exist on type 'P'`.
+
 **Abstract classes.** An `abstract` method declares its signature without a body and is answered by
 each concrete subclass, so a call through the base always reaches a body:
 

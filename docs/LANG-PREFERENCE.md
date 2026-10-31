@@ -413,8 +413,8 @@ const counter = new OffsetCounter(6);
 console.log(readCounter(counter), counter.current);
 ```
 
-The override dispatches through a base-typed reference (`7 6`). Do not extrapolate constructor
-`super(...)` to `super.method()` (§19). Native interface views/`implements` are layout-sensitive:
+The override dispatches through a base-typed reference (`7 6`), and `super.method()` runs the
+parent's method (§19). Native interface views/`implements` are layout-sensitive:
 field order and required storage matter; a method/getter does not fill a function-typed field.
 Neither structural spelling nor a cast manufactures arbitrary width-subtyping or compatible ABI.
 
@@ -2110,8 +2110,8 @@ requirements, not a claim that every combination was executed.
 
 | Surface | Current disposition |
 |---|---|
-| `super(...)` / `super.method()` | Constructor chaining/override example runs; tested `super.read()` fails on C and JS. |
-| `abstract` | An empty abstract class could still be constructed on C and JS; do not rely on abstractness enforcement. |
+| `super(...)` / `super.method()` | Constructor chaining and `super.m()` run on C, JS and the Raiser (`super.m()` since 2026-10-31, corpus `1266-superMethodCall`); a parent's field through `super` is refused, as in TS. |
+| `abstract` | `new` on an abstract class and an unanswered abstract method are refused (since 2026-10-31, checker3pass `abstractMembers`); an `abstract` property cannot be implemented yet. |
 | Predicate / assertion function | Check boolean predicates separately. The tested `asserts value is Message` followed by a read emitted an invalid native void-pointer member read; JS ran. |
 | Type-position `typeof local` | Refused with the namespace-import-only diagnostic; special static receiver syntax is not a general type query. |
 | Template-literal types | The tested literal-union template type was rejected. Runtime string templates are a different feature. |
