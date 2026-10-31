@@ -165,6 +165,9 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 		} else if (p.kind == BoundaryKind.Vec) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
 			argList.push(`msbVecFrom_${msTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`);
+		} else if (p.kind == BoundaryKind.Span) {
+			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
+			argList.push(`(${p.name}Ptr as uint64 as Ptr<${msTypeOf(p.element)}>)[0..${p.name}Len]`);
 		} else {
 			sigs.push(`${p.name}: ${msTypeOf(p.kind)}`);
 			argList.push(p.name);
@@ -234,15 +237,15 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let hasStringParam = false;
 	let hasStringResult = false;
 	let hasStructString = false;
-	let hasVec = false;
-	let hasVecParam = false;
+	let readsHeap = false;
+	let copiesIn = false;
 	let hasVecResult = false;
 	const vecElements: BoundaryKind[] = [];
 	const resultImports: string[] = [];
 	for (const f of fns) {
 		if (f.result == BoundaryKind.String) hasStringResult = true;
 		if (f.result == BoundaryKind.Vec) {
-			hasVec = true;
+			readsHeap = true;
 			hasVecResult = true;
 		}
 		if (f.result == BoundaryKind.Struct) {
@@ -254,11 +257,11 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 			if (p.kind == BoundaryKind.String) hasStringParam = true;
 			if (p.kind == BoundaryKind.Callback && p.callback!.params.includes(BoundaryKind.String)) hasStringParam = true;
 			if (p.kind == BoundaryKind.Struct && leafLetters(p.leaves).includes("s")) hasStringParam = true;
-			if (p.kind == BoundaryKind.Vec) {
-				hasVec = true;
-				hasVecParam = true;
-				if (!vecElements.includes(p.element)) vecElements.push(p.element);
+			if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) {
+				readsHeap = true;
+				copiesIn = true;
 			}
+			if (p.kind == BoundaryKind.Vec && !vecElements.includes(p.element)) vecElements.push(p.element);
 		}
 	}
 	if (hasVecResult) resultImports.push("msb_rv");
@@ -285,7 +288,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
 	if (hasStringResult) exported.push("_msb_ret_len");
-	if (hasString || hasVecParam) {
+	if (hasString || copiesIn) {
 		exported.push("_malloc");
 		exported.push("_free");
 	}
@@ -298,6 +301,6 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 		for (const name of resultImports) entries.push(`\t${name}: (...a) => globalThis.__msb.takes.pop()(...a),`);
 		jsLibrary = "addToLibrary({\n" + entries.join("\n") + "\n});\n";
 	}
-	const runtimeMethods = hasString || hasVec ? ["HEAPU8", "wasmMemory"] : [];
+	const runtimeMethods = hasString || readsHeap ? ["HEAPU8", "wasmMemory"] : [];
 	return { source: lines.join("\n") + "\n", exportedFunctions: exported, jsLibrary, runtimeMethods };
 }

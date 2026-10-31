@@ -2,11 +2,11 @@ import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, NodeKind, FunctionDeclD
 import { ExportedSymInfo, LIFECYCLE_HOOK_NAMES, isExtensionRoutine, isGenericFn, lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
-import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isMaybeType, isStructType, peelThrough, typeDisplayNameUnprofiled } from "../../checker/types";
+import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isMaybeType, isReadonlyView, isStructType, peelThrough, typeDisplayNameUnprofiled } from "../../checker/types";
 import { dirname, relative } from "std/fs/path";
 
 export enum BoundaryKind {
-	Bool, I8, I16, I32, U8, U16, U32, I64, U64, F32, F64, Void, Callback, String, Struct, Vec,
+	Bool, I8, I16, I32, U8, U16, U32, I64, U64, F32, F64, Void, Callback, String, Struct, Vec, Span,
 }
 
 export interface BoundaryLeaf {
@@ -253,10 +253,19 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 		const cb = callbackOf(c, what, t);
 		return cb == null ? null : { name, kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void };
 	}
+	if (t.kind == TypeKind.Span && t.typeReturn != null) {
+		const et = peeled(t.typeReturn!);
+		const element = isMaybeType(et) ? null : scalarKind(et);
+		if (element == null) {
+			refuse(c, what, t, "and a Span crosses the boundary for the call over bool, integer or float elements");
+			return null;
+		}
+		return { name, kind: BoundaryKind.Span, mode: isReadonlyView(t) ? BoundaryMode.Borrowed : BoundaryMode.Shared, callback: null, leaves: [], element };
+	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, what, t);
 	if (shape != null) return { name, kind: shape.kind, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
-	if (c.errors.length == errorsBefore) refuse(c, what, t, "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec of numbers or a callback");
+	if (c.errors.length == errorsBefore) refuse(c, what, t, "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
 	return null;
 }
 
@@ -270,6 +279,10 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 	const scalar = scalarKind(t);
 	if (scalar != null) return { kind: scalar, leaves: [], element: BoundaryKind.Void };
 	if (t.kind == TypeKind.String) return { kind: BoundaryKind.String, leaves: [], element: BoundaryKind.Void };
+	if (t.kind == TypeKind.Span) {
+		refuse(c, "the result", t, "and a Span borrows its memory only for the call, so it cannot outlive it: return a Vec");
+		return null;
+	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, "the result", t);
 	if (shape != null) return shape;

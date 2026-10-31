@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryParam, Manifest, leafLiteral } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral } from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -117,7 +117,11 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 				else argList.push(toWire(p.leaves[j].kind, expr));
 			}
 		} else if (p.kind == BoundaryKind.Vec) {
-			encode(`e${i}`, `a${i}, ${typedArrayOf(p.element)}`, "__msbVecIn");
+			encode(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, "__msbCopyIn");
+		} else if (p.kind == BoundaryKind.Span) {
+			const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
+			if (p.mode == BoundaryMode.Shared) cleanup.push(`if (e${i}) __msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
+			encode(`e${i}`, view, "__msbCopyIn");
 		} else {
 			argList.push(toWire(p.kind, `a${i}`));
 		}
@@ -162,12 +166,15 @@ const GLUE = [
 	"\tif (p === 0) throw new RangeError(\"wasm heap exhausted: cannot copy \" + n + \" bytes into wasm memory\");",
 	"\treturn p;",
 	"}",
-	"function __msbVecIn(a, T) {",
-	"\tconst n = a.length;",
+	"function __msbCopyIn(a, off, n, T) {",
 	"\tconst p = __msbAlloc(n * T.BYTES_PER_ELEMENT || 1);",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
-	"\tfor (let i = 0; i < n; i++) v[i] = a[i];",
+	"\tfor (let i = 0; i < n; i++) v[i] = a[off + i];",
 	"\treturn [p, n];",
+	"}",
+	"function __msbCopyBack(p, a, off, n, T, bool) {",
+	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
+	"\tfor (let i = 0; i < n; i++) a[off + i] = bool ? v[i] !== 0 : v[i];",
 	"}",
 	"function __msbVecOut(p, n, T, bool) {",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",

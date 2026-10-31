@@ -9,6 +9,8 @@ struct Point { x: float64; y: float64; }
 struct Label { at: Point; text: string; count: int32; }
 export function tag(l: Label): Label { return l; }
 export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
+export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
+export function fill(xs: Span<boolean>, at: int32): void {}
 export function add64(a: int64, b: int64): int64 { return a + b; }
 export function mul64u(a: uint64, b: uint64): uint64 { return a * b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
@@ -110,9 +112,19 @@ test "js side: a struct is passed leaf by leaf and its result is built by a take
 
 test "js side: a Vec is copied into wasm memory and its result copied out into an array" {
 	const js = bindingsFor(["scale"]).modules[0].code;
-	assert js.includes("e0 = __msbVecIn(a0, Float32Array);");
+	assert js.includes("e0 = __msbCopyIn(a0, 0, a0.length, Float32Array);");
 	assert js.includes("__msbMod._msb_calc_scale(e0[0], e0[1], a1);");
 	assert js.includes("(p, n) => { r = __msbVecOut(p >>> 0, n, Uint16Array, false); }");
 	assert js.includes("if (e0) __msbMod._free(e0[0]);");
 	assert bindingsFor(["scale"]).prelude.includes("function __msbVecOut(p, n, T, bool) {");
+}
+
+test "js side: a Span is copied in for the call, and a writable one is copied back before the copy is freed" {
+	const read = bindingsFor(["total"]).modules[0].code;
+	assert read.includes("e0 = __msbCopyIn(a0.base, a0.off, a0.len, Float32Array);");
+	assert read.includes("return __msbMod._msb_calc_total(e0[0], e0[1]);");
+	assert !read.includes("__msbCopyBack");
+	const write = bindingsFor(["fill"]).modules[0].code;
+	assert write.includes("\t\tif (e0) __msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\tif (e0) __msbMod._free(e0[0]);");
+	assert bindingsFor(["fill"]).prelude.includes("function __msbCopyBack(p, a, off, n, T, bool) {");
 }
