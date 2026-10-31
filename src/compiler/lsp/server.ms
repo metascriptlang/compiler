@@ -847,6 +847,10 @@ test "replay: a request before initialize answers ServerNotInitialized and does 
 	assert runMemoryScenario("a request before initialize answers ServerNotInitialized and does not end the session") == "";
 }
 
+test "replay: an edit followed by a close in one drain publishes nothing more for the closed document" {
+	assert runMemoryScenario("an edit followed by a close in one drain publishes nothing more for the closed document") == "";
+}
+
 }
 
 // ===== Exports a top-level macro statement splices =====

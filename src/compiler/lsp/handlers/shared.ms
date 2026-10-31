@@ -83,6 +83,15 @@ export function markFileChanged(path: string, uri: string): void {
 	_changedFiles.push({ path, uri });
 }
 
+export function forgetChangedFile(path: string): void {
+	if (!_changedPaths.delete(path)) return;
+	const kept: ChangedFile[] = [];
+	for (const changed of _changedFiles) {
+		if (changed.path != path) kept.push(changed);
+	}
+	_changedFiles = kept;
+}
+
 export function drainChangedFiles(): ChangedFile[] {
 	const drained = _changedFiles;
 	_changedFiles = [];

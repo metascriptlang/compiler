@@ -28,7 +28,7 @@ import { lspByteColumnIn } from "../position";
 import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
-	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
+	markDocumentOpen, markDocumentClosed, forgetChangedFile, isDocumentOpen, openDocuments,
 	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
 } from "./shared";
 import {
@@ -211,6 +211,7 @@ export function handleDidClose(params: string, db: TransAmDb): string {
 	const path = lspUriToPath(uri);
 	markDocumentClosed(path);
 	forgetPublishedDiagnostics(path);
+	forgetChangedFile(path);
 	refreshFromDisk(db, path);
 	const diagParams = "{\"uri\":" + lspJsonString(uri) + ",\"diagnostics\":[]}";
 	return lspNotification("textDocument/publishDiagnostics", diagParams);

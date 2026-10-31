@@ -2024,6 +2024,36 @@ function requestsBeforeInitializeAreRefused(): LspScenario {
 	};
 }
 
+function closedDocumentIsNotRepublished(): LspScenario {
+	const closed = "file:///lspwire/closedafteredit.ms";
+	const kept = "file:///lspwire/keptafteredit.ms";
+	return {
+		name: "an edit followed by a close in one drain publishes nothing more for the closed document",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(closed, GOOD_VALUE)),
+				notification("textDocument/didOpen", openParams(kept, GOOD_VALUE)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(closed, 2, BAD_VALUE)),
+				notification("textDocument/didChange", changeParams(kept, 2, BAD_VALUE)),
+				notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(closed)}}}`),
+			]),
+			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("closed document diagnostic counts per publish", "[0,0]", publishedCounts(r, closed)),
+			sameText("open document diagnostic counts per publish", "[0,1]", publishedCounts(r, kept)),
+			sameCount("exit code", 0, r.exitCode),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 export function lspScenarios(): LspScenario[] {
 	return [
 		openWithErrorThenFix(),
@@ -2083,6 +2113,7 @@ export function lspScenarios(): LspScenario[] {
 		completionCacheKeepsItsKind(),
 		unknownMethodAnswersMethodNotFound(),
 		requestsBeforeInitializeAreRefused(),
+		closedDocumentIsNotRepublished(),
 	];
 }
 
