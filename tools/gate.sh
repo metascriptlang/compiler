@@ -2729,6 +2729,12 @@ lane_body() {
     boundary|corpus|san|tsan|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
+  # a failed cell's build log sits in this checkout's out/, which the next gate overwrites; carry its tail in the lane log
+  case $lane in corpus|san|tsan)
+    sed -n 's/.* build failed — \(out\/[^ ]*\)$/\1/p' "$log" | head -5 | while read -r f; do
+      [ -f "$f" ] && { echo "---- $f (last 40 lines)"; tail -40 "$f" | sed 's/^/    | /'; }
+    done >>"$log" ;;
+  esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
     && [ "$(tree_key HEAD)" = "$cand_key" ]; then
     printf '%s\n' "$cand_key" >"$CAND.key"
