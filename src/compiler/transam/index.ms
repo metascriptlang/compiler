@@ -588,11 +588,6 @@ function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
 	// Use the compiler's resolver with the db's config (includes std/, aliases, packages)
 	const candidates = resolveImportWithConfig(importSpec, basePath, db.resolverConfig);
-	// Fast path: already in db
-	for (const c of candidates) {
-		if (getFileId(db.fileInput, c) >= 0) return c;
-	}
-	// Slow path: try loading from disk
 	for (const c of candidates) {
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
@@ -2863,4 +2858,30 @@ test "a header signature edit rechecks its importer and the module above it" {
 	const root = "/headerSignature";
 	const db = headerChain(root);
 	assert checksAfterHeaderEdit(db, root, "int apiValue(int x, int y);") == 2;
+}
+
+import { writeFile, mkdir, removeAll } from "std/fs";
+import { normalize } from "std/fs/path";
+import { env } from "std/process";
+
+function resolveTmpDir(name: string): string {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = normalize(tmp + "/msc-transam-" + name + "-" + Math.floor(Math.random() * 1000000000));
+	mkdir(dir);
+	return dir;
+}
+
+test "an import resolves to its highest-priority candidate whether or not a lower one is loaded" {
+	const dir = resolveTmpDir("priority");
+	mkdir(dir + "/a");
+	writeFile(dir + "/a.ms", "export const v = 1;");
+	writeFile(dir + "/b.cms", "export const w = 1;");
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dir + "/a/index.ms", "export const v = 2;");
+	dbSetFileText(db, dir + "/b.ms", "export const w = 2;");
+	const fromDirIndex = dbResolveImport(db, dir + "/use.ms", "./a");
+	const fromLowerExtension = dbResolveImport(db, dir + "/use.ms", "./b");
+	removeAll(dir);
+	assert fromDirIndex == dir + "/a.ms", fromDirIndex;
+	assert fromLowerExtension == dir + "/b.cms", fromLowerExtension;
 }
