@@ -457,6 +457,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 				ctorDefaults: cd.ctorDefaults,
 				ctorVisibility: cd.ctorVisibility,
 				ctorParamProps: cd.ctorParamProps,
+				ctorFlags: cd.ctorFlags,
 			}, syntheticToken(loc));
 			emptyCtor.resolvedSym = m.resolvedSym;
 			emptyCtor.nodeType = m.nodeType;
@@ -1103,6 +1104,7 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 			ctorDefaults: [],
 			ctorVisibility: "",
 			ctorParamProps: [],
+			ctorFlags: "",
 		}, syntheticToken(loc));
 		ctor.nodeType = createFunction([], [], voidType());
 		ctor.resolvedSym = ctorRoutineFor(ctx.checkerCtx, actor.actorSym);

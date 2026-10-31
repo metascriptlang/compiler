@@ -85,6 +85,7 @@ import "./scenarios/mappedTypeRefusals";
 import "./scenarios/readonlyArrayForms";
 import "./scenarios/literalLocalKeepsType";
 import "./scenarios/overrideModifier";
+import "./scenarios/constructorOverloads";
 import "./scenarios/utilityFunctionTypes";
 import "./scenarios/genericRestInference";
 import "./scenarios/inKeywordNarrows";

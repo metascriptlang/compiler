@@ -24,7 +24,7 @@ import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/
 import { ITERATOR_HELPER_NEEDS_SOURCE, ITERATOR_HELPER_RETURNS_ITERATOR } from "./iteratorHelperTexts";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { mintCtorRoutine, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
+import { mintCtorRoutine, mintCtorSignature, isCtorSignature, linkCtorSignatures, ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
@@ -3018,7 +3018,19 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
-	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, cd.ctorDefaults != null ? cd.ctorDefaults : []);
+	const defaults = cd.ctorDefaults != null ? cd.ctorDefaults : [];
+	if (member.flags.has(NodeFlag.Abstract)) addError(ctx, "'abstract' modifier can only appear on a class, method, or property declaration", member.location.line, member.location.column);
+	if (!isCtorSignature(member)) {
+		mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
+		return;
+	}
+	const declaring = sym.declNode;
+	if (sym.symbolKind != SymbolKind.Class || (declaring != null && declaring.flags.has(NodeFlag.ExternC))) {
+		addError(ctx, `a constructor overload signature belongs to a class with a written implementation: '${sym.name}' is ${sym.symbolKind == SymbolKind.Class ? "an extern class" : "not a class"}`, member.location.line, member.location.column);
+		return;
+	}
+	if (symGenericParams(sym) != "") addError(ctx, `a constructor of the generic class '${sym.name}' cannot have overload signatures yet`, member.location.line, member.location.column);
+	mintCtorSignature(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
 }
 
 function declaresConstructor(body: Node[]): boolean {
@@ -3060,7 +3072,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	}
 	const superCall = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "super" }, loc), arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: superCall }, loc)] }, loc);
-	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [], ctorVisibility: "", ctorParamProps: [] }, loc);
+	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [], ctorVisibility: "", ctorParamProps: [], ctorFlags: "" }, loc);
 	ctorNode.nodeType = createFunction(paramTypes, params, voidType());
 	ctorNode.paramLocations = locs;
 	d.classBody.push(ctorNode);
@@ -3196,6 +3208,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			resolveConstructorType(member, sym, ctx);
 		}
 	}
+	linkCtorSignatures(ctx, sym, d.classBody);
 
 	// Update inner struct in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while inner still references them)

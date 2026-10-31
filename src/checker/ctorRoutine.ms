@@ -1,6 +1,6 @@
-import { Node, NodeKind, ClassDeclData, ActorDeclData, DecoratedDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
-import { CheckerContext, newSym } from "./context";
-import { SymbolFlag, classDeclNodeOf, hasFlag, initFnName } from "./symbol";
+import { Node, NodeKind, ClassDeclData, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { CheckerContext, addError, newSym } from "./context";
+import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag } from "./symbol";
 import { createFunction, voidType } from "./types";
 import { pickBodyCtx } from "./instantiate";
 
@@ -39,6 +39,22 @@ function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
 }
 
 export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {
+	const routine = newCtorRoutine(ctx, owner, ownerName, thisType, userTypes, userNames, declNode, defaults);
+	registerCtorRoutine(owner, routine);
+	return routine;
+}
+
+export function isCtorSignature(member: Node): boolean {
+	return member.kind == NodeKind.ConstructorDecl && routineFlagSet((member.data as ConstructorDeclData).ctorFlags).has(RoutineFlag.Overload);
+}
+
+export function mintCtorSignature(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node, defaults: Node[]): Symbol {
+	const routine = newCtorRoutine(ctx, owner, ownerName, thisType, userTypes, userNames, declNode, defaults);
+	setFlag(routine, SymbolFlag.OverloadSig);
+	return routine;
+}
+
+function newCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {
 	const types: Type[] = [thisType];
 	const names: string[] = ["this"];
 	for (const t of userTypes) types.push(t);
@@ -51,8 +67,40 @@ export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: s
 		declNode.resolvedSym = routine;
 	}
 	routine.defaultParams = defaults;
-	registerCtorRoutine(owner, routine);
 	return routine;
+}
+
+// The implementation's `overloads` list holds the class's constructor signatures in declaration
+// order, the set a `new` ranks; the implementation itself is never a candidate.
+export function linkCtorSignatures(ctx: CheckerContext, owner: Symbol, body: Node[]): void {
+	const members: Node[] = [];
+	for (const raw of body) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member.kind == NodeKind.ConstructorDecl) members.push(member);
+	}
+	let impl: Symbol | null = null;
+	let implCount = 0;
+	let last: Node | null = null;
+	for (const m of members) {
+		if (!isCtorSignature(m)) { impl = m.resolvedSym; implCount += 1; } else last = m;
+	}
+	if (last == null) return;
+	if (impl == null || implCount > 1) {
+		const at = implCount > 1 ? members.filter((m: Node): boolean => !isCtorSignature(m))[1] : last;
+		if (impl == null && last.resolvedSym != null) registerCtorRoutine(owner, last.resolvedSym);
+		addError(ctx, implCount > 1 ? `Overloaded constructor of '${owner.name}' has more than one implementation: only one definition may have a body` : `Overloaded constructor of '${owner.name}' has no implementation: one definition must have a body`, at.location.line, at.location.column);
+		return;
+	}
+	for (const m of members) {
+		if (!isCtorSignature(m) || m.resolvedSym == null) continue;
+		impl.overloads.push(m.resolvedSym);
+		m.resolvedSym.overloadIdx = impl.overloads.length;
+	}
+}
+
+export function ctorSignaturesOf(routine: Symbol | null): Symbol[] {
+	if (routine == null) return [];
+	return routine.overloads.filter((s: Symbol): boolean => hasFlag(s, SymbolFlag.OverloadSig));
 }
 
 function declaredCtorRoutine(owner: Symbol): Symbol | null {
@@ -61,7 +109,7 @@ function declaredCtorRoutine(owner: Symbol): Symbol | null {
 	const body = decl.kind == NodeKind.ActorDecl ? (decl.data as ActorDeclData).actorBody : (decl.data as ClassDeclData).classBody;
 	for (const raw of body) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
-		if (member.kind == NodeKind.ConstructorDecl) return member.resolvedSym;
+		if (member.kind == NodeKind.ConstructorDecl && !isCtorSignature(member)) return member.resolvedSym;
 	}
 	return null;
 }

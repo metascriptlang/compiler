@@ -1458,6 +1458,7 @@ function parseClassConstructor(state: ParserState, visibility: string): NodeResu
 		ctorDefaults,
 		ctorVisibility: visibility,
 		ctorParamProps,
+		ctorFlags: "",
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;
