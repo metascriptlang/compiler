@@ -371,6 +371,60 @@ double msCryptoHashSize(msString algorithm) {
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */
 
+/* The hash's input block in bytes (HMAC's B): the SHA-3 rate for SHA-3, else 128 for the 64-bit
+ * SHA-2 words and 64 for the rest. */
+static size_t md_block_size(const mbedtls_md_info_t* md_info) {
+	switch (mbedtls_md_get_type(md_info)) {
+	case MBEDTLS_MD_SHA384:
+	case MBEDTLS_MD_SHA512: return 128;
+	case MBEDTLS_MD_SHA3_224: return 144;
+	case MBEDTLS_MD_SHA3_256: return 136;
+	case MBEDTLS_MD_SHA3_384: return 104;
+	case MBEDTLS_MD_SHA3_512: return 72;
+	default: return 64;
+	}
+}
+
+/* RFC 2104 with the key's two padded blocks absorbed once: ictx and octx are the inner and outer
+ * hash states after ipad and opad. Each HMAC then clones them and costs two compressions. */
+static int hmac_key_states(const mbedtls_md_info_t* md_info, const uint8_t* key, size_t key_len,
+	mbedtls_md_context_t* ictx, mbedtls_md_context_t* octx) {
+	size_t block = md_block_size(md_info);
+	uint8_t pad[144] = {0};
+	int ret = 0;
+	if (key_len > block) {
+		ret = mbedtls_md(md_info, key, key_len, pad);
+	} else if (key_len > 0) {
+		memcpy(pad, key, key_len);
+	}
+	if (ret == 0) {
+		mbedtls_md_context_t* ctxs[2] = {ictx, octx};
+		for (int i = 0; i < 2 && ret == 0; i++) {
+			uint8_t xor_byte = i == 0 ? 0x36 : 0x5c;
+			uint8_t block_bytes[144];
+			for (size_t k = 0; k < block; k++) block_bytes[k] = pad[k] ^ xor_byte;
+			ret = mbedtls_md_setup(ctxs[i], md_info, 0);
+			if (ret == 0) ret = mbedtls_md_starts(ctxs[i]);
+			if (ret == 0) ret = mbedtls_md_update(ctxs[i], block_bytes, block);
+			mbedtls_platform_zeroize(block_bytes, sizeof(block_bytes));
+		}
+	}
+	mbedtls_platform_zeroize(pad, sizeof(pad));
+	return ret;
+}
+
+/* One HMAC from the precomputed states; `work` is a set-up context of the same algorithm. */
+static int hmac_from_states(mbedtls_md_context_t* work, const mbedtls_md_context_t* ictx,
+	const mbedtls_md_context_t* octx, const uint8_t* msg, size_t msg_len, uint8_t* out, size_t hash_len) {
+	int ret = mbedtls_md_clone(work, ictx);
+	if (ret == 0) ret = mbedtls_md_update(work, msg, msg_len);
+	if (ret == 0) ret = mbedtls_md_finish(work, out);
+	if (ret == 0) ret = mbedtls_md_clone(work, octx);
+	if (ret == 0) ret = mbedtls_md_update(work, out, hash_len);
+	if (ret == 0) ret = mbedtls_md_finish(work, out);
+	return ret;
+}
+
 static int pbkdf2_hmac(
 	const mbedtls_md_info_t* md_info,
 	const uint8_t* password, size_t password_len,
@@ -383,19 +437,24 @@ static int pbkdf2_hmac(
 	uint8_t T[64];
 	uint8_t* salt_block = (uint8_t*)msMemAlloc(salt_len + 4);
 	memcpy(salt_block, salt, salt_len);
+	mbedtls_md_context_t ictx, octx, work;
+	mbedtls_md_init(&ictx);
+	mbedtls_md_init(&octx);
+	mbedtls_md_init(&work);
+	int ret = hmac_key_states(md_info, password, password_len, &ictx, &octx);
+	if (ret == 0) ret = mbedtls_md_setup(&work, md_info, 0);
 	size_t output_pos = 0;
 	uint32_t block_num = 1;
-	int ret = 0;
-	while (output_pos < output_len) {
+	while (ret == 0 && output_pos < output_len) {
 		salt_block[salt_len + 0] = (block_num >> 24) & 0xff;
 		salt_block[salt_len + 1] = (block_num >> 16) & 0xff;
 		salt_block[salt_len + 2] = (block_num >> 8) & 0xff;
 		salt_block[salt_len + 3] = block_num & 0xff;
-		ret = mbedtls_md_hmac(md_info, password, password_len, salt_block, salt_len + 4, U);
+		ret = hmac_from_states(&work, &ictx, &octx, salt_block, salt_len + 4, U, hash_len);
 		if (ret != 0) break;
 		memcpy(T, U, hash_len);
 		for (uint32_t j = 1; j < iterations; j++) {
-			ret = mbedtls_md_hmac(md_info, password, password_len, U, hash_len, U);
+			ret = hmac_from_states(&work, &ictx, &octx, U, hash_len, U, hash_len);
 			if (ret != 0) break;
 			for (size_t k = 0; k < hash_len; k++) T[k] ^= U[k];
 		}
@@ -406,6 +465,9 @@ static int pbkdf2_hmac(
 		output_pos += copy_len;
 		block_num++;
 	}
+	mbedtls_md_free(&ictx);
+	mbedtls_md_free(&octx);
+	mbedtls_md_free(&work);
 	mbedtls_platform_zeroize(U, sizeof(U));
 	mbedtls_platform_zeroize(T, sizeof(T));
 	mbedtls_platform_zeroize(salt_block, salt_len + 4);
