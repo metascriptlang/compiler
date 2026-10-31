@@ -12,6 +12,12 @@
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesni.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/gcm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aria.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/camellia.c");
+@passC("-DMBEDTLS_BLOCK_CIPHER_C");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
 
 // mbedTLS include paths (shared with base crypto module)
 @passC("-Ivendor/mbedtls/tf-psa-crypto/include");
@@ -29,9 +35,9 @@ import { newOutputBuffer, outputBytes } from "../outputBuffer";
 
 // C bindings
 extern function msCryptoAesSealInto(key: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
-extern function msCryptoAesOpen(key: string, sealed: string, aad: string, ref plainText: string): int64;
+extern function msCryptoAesOpenInto(key: string, sealed: string, aad: string, out: Ptr<uint8>): int64;
 extern function msCryptoAesCbcEncrypt(key: string, plainText: string, iv: string): string;
-extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: string): string;
+extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: string, ref plainText: string): int64;
 
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -54,7 +60,11 @@ export function seal(keyBytes: Bytes, plainTextBytes: Bytes, aadBytes: Bytes = "
 	const _v1 = try validateAesKey(key, "seal");
 	const text = rawString(plainTextBytes);
 	const sealed = newOutputBuffer(12 + (text.byteLength as int64) + 16);
-	if (msCryptoAesSealInto(key, text, rawString(aadBytes), outputBytes(sealed)) != 1) {
+	const status = msCryptoAesSealInto(key, text, rawString(aadBytes), outputBytes(sealed));
+	if (status == -1) {
+		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the OS random source failed"));
+	}
+	if (status != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "AES-GCM encryption failed"));
 	}
 	return Result.ok(sealed);
@@ -72,11 +82,11 @@ export function open(keyBytes: Bytes, sealedBytes: Bytes, aadBytes: Bytes = ""):
 	if (sealed.byteLength < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
-	let plainText = "";
-	if (msCryptoAesOpen(key, sealed, rawString(aadBytes), plainText) != 1) {
+	const plain = newOutputBuffer((sealed.byteLength as int64) - 28);
+	if (msCryptoAesOpenInto(key, sealed, rawString(aadBytes), outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
-	return Result.ok(rawBuffer(plainText));
+	return Result.ok(plain);
 }
 
 // ===== CBC Mode (expert use — no authentication) =====
@@ -103,6 +113,8 @@ export function cbcEncrypt(keyBytes: Bytes, plainTextBytes: Bytes, ivBytes: Byte
 /**
  * AES-CBC decrypt with PKCS7 unpadding.
  * Key: 16 or 32 bytes. IV: must be 16 bytes.
+ * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
+ * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
 export function cbcDecrypt(keyBytes: Bytes, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
 	const key = rawString(keyBytes);
@@ -111,11 +123,11 @@ export function cbcDecrypt(keyBytes: Bytes, cipherTextBytes: Bytes, ivBytes: Byt
 	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
-	const result = msCryptoAesCbcDecrypt(key, rawString(cipherTextBytes), iv);
-	if (result.byteLength == 0) {
+	let plainText = "";
+	if (msCryptoAesCbcDecrypt(key, rawString(cipherTextBytes), iv, plainText) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
-	return Result.ok(rawBuffer(result));
+	return Result.ok(rawBuffer(plainText));
 }
 
 function patternBuffer(size: int32): Buffer {
