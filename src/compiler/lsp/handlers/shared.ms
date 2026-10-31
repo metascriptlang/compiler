@@ -10,9 +10,7 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
 import { lspSourcePosition } from "../position";
-import { Symbol, makeLoc } from "../../../ast/node";
-
-export { lspCharacter } from "../position";
+import { Symbol } from "../../../ast/node";
 
 
 // ===== Completion Cache =====

@@ -281,7 +281,7 @@ export function watchedFilesRegistration(): string {
 
 // ===== Did Save =====
 
-export function handleDidSave(params: string, db: TransAmDb): string {
+export function handleDidSave(params: string): string {
 	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	// Reload format config when build.ms or msc.json is saved
@@ -303,7 +303,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didOpen" => handleDidOpen(params, db),
 		"textDocument/didChange" => handleDidChange(params, db),
 		"textDocument/didClose" => handleDidClose(params, db),
-		"textDocument/didSave" => handleDidSave(params, db),
+		"textDocument/didSave" => handleDidSave(params),
 		"workspace/didChangeWatchedFiles" => handleDidChangeWatchedFiles(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
 		"textDocument/completion" => handleCompletion(id, params, db, cache),
