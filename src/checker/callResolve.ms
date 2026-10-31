@@ -2492,20 +2492,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, ctx, node);
 			}
 		}
-		// Sendable check for extension-resolved actor method calls
 		if (isActorMethodCall) {
-			// SEND-class (void return — no reply to park on) rejects plain refs;
-			// CALL-class borrows them (sound only while awaited — see below).
-			const sendClass = calleeType == null || calleeType.typeReturn == null
-				|| calleeType.typeReturn.kind == TypeKind.Void;
-			let borrowed = false;
-			for (let pi = 0; pi < d.arguments.length; pi += 1) {
-				if (checkActorArgSendable(ctx, node, d.arguments[pi], pi, sendClass)) borrowed = true;
-			}
-			if (borrowed && node == ctx.stmtPosExpr) {
-				addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
-					node.location.line, node.location.column);
-			}
+			checkActorCallArgs(ctx, node, d.arguments, calleeType == null || calleeType.typeReturn == null
+				|| calleeType.typeReturn.kind == TypeKind.Void);
 		}
 		return inferGenericReturn(ctx, calleeType!, argTypes, expectedType, node);
 	}
@@ -5072,6 +5061,19 @@ function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], ca
 	return idx;
 }
 
+// SEND-class (void return, no reply to park on) rejects plain refs; CALL-class borrows
+// them, sound only while awaited.
+function checkActorCallArgs(ctx: CheckerContext, node: Node, args: Node[], sendClass: boolean): void {
+	let borrowed = false;
+	for (let pi = 0; pi < args.length; pi += 1) {
+		if (checkActorArgSendable(ctx, node, args[pi], pi, sendClass)) borrowed = true;
+	}
+	if (borrowed && node == ctx.stmtPosExpr) {
+		addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
+			node.location.line, node.location.column);
+	}
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null, actorCall: boolean): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
@@ -5225,6 +5227,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset, defaultsOwner);
 	}
 	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
+	if (actorCall) checkActorCallArgs(ctx, callNode, args, winnerType.kind != TypeKind.Function || winnerType.typeReturn == null || winnerType.typeReturn.kind == TypeKind.Void);
 	if (winnerType.kind == TypeKind.Function) {
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
 			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], ai < contextFormals[idx].typeChildren.length ? contextFormals[idx].typeChildren[ai] : null) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
