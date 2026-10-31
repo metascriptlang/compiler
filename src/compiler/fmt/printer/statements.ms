@@ -411,9 +411,6 @@ export function printMatchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchStmtData;
 	const cases: Doc[] = [];
 	for (const c of d.matchStmtCases) {
-		// Reuses printMatchCase from expressions.ms via callback if needed, 
-		// but since it's same structure we can just implement here or export it.
-		// For now, assume we'll use callPrintNode for the cases too.
 		cases.push(callPrintNode(c, options));
 	}
 	return docGroup([

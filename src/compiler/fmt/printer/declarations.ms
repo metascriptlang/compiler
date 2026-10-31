@@ -67,7 +67,6 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [docText("import " + typeModifier(node))];
 	if (d.importNames.length > 0) {
 		const names = specifierDocs(d);
-		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
 		const commented = commentedSpecifiers(names, d.nameLocations, node);
 		if (commented != null) {
 			parts.push(commented);

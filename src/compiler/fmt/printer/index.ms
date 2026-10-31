@@ -1,5 +1,4 @@
 // Printer — transforms MetaScript AST → Doc IR
-// Implementation logic follows Biome/Prettier standards (2026).
 
 import { Node, NodeKind, NodeFlag, makeLoc } from "../../../ast/node";
 import { lex } from "../../../lexer/lexer";
@@ -88,7 +87,7 @@ function printDeref(node: Node, options: FormatOptions): Doc {
 }
 
 export function printNode(node: Node, options: FormatOptions): Doc {
-	if (node == null) return docNil();
+	if (node == null) throw new Error("internal: fmt asked to print a null node");
 
 	const innerDoc = match (node.kind) {
 		// ===== Literals =====

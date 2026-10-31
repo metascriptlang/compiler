@@ -143,7 +143,6 @@ function normalizeKeyToken(raw: string, singleQuote: boolean): string {
 }
 
 // Extract the raw string token from source text using node position.
-// Prettier pattern: work from raw source, never re-escape parsed values.
 // Returns the full token including quotes (e.g., `"hello \"world\""`), or "" if unavailable.
 //
 // Defensive: bails out for synthetic StringLiteral nodes whose position
@@ -152,7 +151,7 @@ function normalizeKeyToken(raw: string, singleQuote: boolean): string {
 // would scoop up the rest of the source. Heuristic: a real string-token
 // boundary is preceded by whitespace, punctuation, or start-of-file.
 // If the preceding character is `}` (close of `${...}` interpolation) or
-// `\`` itself, we're inside a template — fall through to re-escape.
+// `\`` itself, we're inside a template.
 function extractRawStringToken(source: string, line: int32, col: int32): string {
 	const pos = sourceOffset(source, line, col);
 	if (pos < 0) return "";
@@ -418,15 +417,11 @@ export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as StringLiteralData;
 	const template = rawTemplateAt(node, options);
 	if (template != "") return docText(template);
-	let q = "\"";
-	if (options.singleQuote) { q = "'"; }
-	// Prettier pattern: extract raw token from source (preserves original escapes exactly).
-	// Only works for real parsed nodes with valid source positions, not synthetic nodes.
 	if (options.source != "" && node.location.line > 0) {
 		const raw = extractRawStringToken(options.source, node.location.line, node.location.column - 1);
 		if (raw != "") return docText(normalizeStringToken(raw, options.singleQuote));
 	}
-	// Fall back to re-escaping (synthetic nodes from transforms, template desugaring)
+	const q = options.singleQuote ? "'" : "\"";
 	return docText(q + escapeString(d.value, q.byteAt(0)) + q);
 }
 
