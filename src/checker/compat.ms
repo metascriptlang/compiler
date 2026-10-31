@@ -459,7 +459,6 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// the same slot from the same function, so the relation can never accept a
 	// widening the emitter has no tag for.
 	if (maybePayloadWidenSlot(source, target) >= 0) return true;
-	if (source.kind != TypeKind.Null && widensIntoMaybe(target, source)) return isAssignable(source, target.typeReturn);
 
 	const openNullableSource = openNullableUnionPayload(source, target);
 	if (openNullableSource != null) return isAssignable(openNullableSource, target.typeReturn);
@@ -2043,7 +2042,7 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 			for (let oj = oi + 1; oj < order.length; oj += 1) {
 				const cj = order[oj];
 				if (candParams[cj] != param || skip[cj] || outranked(fromMapped, cj, ci)) continue;
-				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
+				if (acceptsAtValueSite(candTypes[cj], bound) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
 		out.names.push(param.typeName);
@@ -2070,7 +2069,12 @@ function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
 }
 
 function candidateFits(candidate: Type, fromLiteral: boolean, bound: Type): boolean {
-	return fromLiteral ? literalShapeFits(candidate, bound) : isAssignable(candidate, bound);
+	return fromLiteral ? literalShapeFits(candidate, bound) : acceptsAtValueSite(bound, candidate);
+}
+
+function acceptsAtValueSite(target: Type, source: Type): boolean {
+	if (isAssignable(source, target)) return true;
+	return source.kind != TypeKind.Null && widensIntoMaybe(target, source) && isAssignable(source, target.typeReturn);
 }
 
 // An object literal's own type against a declared type: the literal is retyped by the

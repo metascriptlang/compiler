@@ -67,6 +67,11 @@ test "an argument outside a nullable binding is still rejected" {
 	assert hasError(NULLABLE_BOX + "put(box, 3);", "Argument type mismatch in 'put' arg 1: got int32, expected Ev | null");
 }
 
+test "a function returning X is still refused where T was bound through a function returning X | null" {
+	const src = "struct Ev { url: string; }\nfunction f<T>(a: () => T, b: () => T): void {}\nconst x = (): Ev => ({ url: \"a\" });\nconst y = (): Ev | null => null;\nf(x, y);";
+	assert strictErrorCount(src) > 0;
+}
+
 function errorOnC(source: string): string {
 	const c = compileToC(source);
 	return c.ok ? "" : c.error;
