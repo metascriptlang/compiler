@@ -16,7 +16,7 @@
 import { execFileResult, exit, env, platform } from "std/process";
 import { readFile, readDir, exists, ensureDir, remove, isDir } from "std/fs";
 import { writeStderr } from "std/io";
-import { parseSpec, describeDiff, normalizeOutput, WasmmixSpec } from "./spec";
+import { parseSpec, describeDiff, hasLineWith, normalizeOutput, WasmmixSpec } from "./spec";
 
 const PROG_DIR = "src/test/wasmmix/programs/";
 const OUT_DIR = "out/wasmmix/";
@@ -110,13 +110,17 @@ function runProgram(name: string): boolean {
 	const driver = PROG_DIR + name + "/foreign.mjs";
 	const wantsForeign = spec.foreignStdout.length > 0;
 	if (wantsForeign != exists(driver)) { problems.push(`@foreign-stdout lines and ${driver} must come together`); }
-	if (spec.mixedError != "") {
+	if (spec.mixedErrors.length > 0) {
 		if (wantsForeign) { problems.push("@foreign-stdout needs a mixed build and @mixed-error expects it to fail"); }
 		ensureDir(dir + "mixed/");
 		const b = execFileResult(MSC, ["build", entry, "--target=js", "--output=" + dir + "mixed/app.js"]);
 		const text = b.output + b.errorOutput;
-		if (b.exitCode == 0) { problems.push(`[mixed] build succeeded, expected an error containing ${JSON.stringify(spec.mixedError)}`); }
-		else if (!text.contains(spec.mixedError)) { problems.push(`[mixed] error lacks ${JSON.stringify(spec.mixedError)}:\n${tail(text)}`); }
+		if (b.exitCode == 0) { problems.push(`[mixed] build succeeded, expected an error containing ${JSON.stringify(spec.mixedErrors[0])}`); }
+		else {
+			for (const want of spec.mixedErrors) {
+				if (!hasLineWith(text, want)) { problems.push(`[mixed] error lacks ${JSON.stringify(want)}:\n${tail(text)}`); }
+			}
+		}
 	} else {
 		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
 		cols.push(mixed);

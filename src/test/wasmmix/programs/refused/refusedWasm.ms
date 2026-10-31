@@ -9,3 +9,8 @@ export class Counter {
 export function read(c: Counter): int32 {
 	return c.value;
 }
+
+@wasm
+export function make(value: int32): Counter {
+	return new Counter(value);
+}

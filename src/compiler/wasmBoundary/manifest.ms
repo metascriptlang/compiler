@@ -2,7 +2,7 @@ import { Type, TypeKind, Symbol, SymbolKind, SymbolFlag, NodeKind, FunctionDeclD
 import { ExportedSymInfo, LIFECYCLE_HOOK_NAMES, isExtensionRoutine, isGenericFn, lifecycleHookOp } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
-import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isMaybeType, isReadonlyView, isStructType, peelThrough, typeDisplayNameUnprofiled } from "../../checker/types";
+import { PEEL_ALIAS, getAttachedOp, hasGenericParams, isAtomicRef, isLockedRef, isMaybeType, isReadonlyView, isStdCollection, isStructType, literalBase, peelThrough, runtimeClassSym, typeDisplayNameUnprofiled, unwrapRefNullUnion } from "../../checker/types";
 import { dirname, relative } from "std/fs/path";
 
 export enum BoundaryKind {
@@ -261,11 +261,60 @@ function structLeaves(c: Collector, what: string, t: Type, path: string[], out: 
 		else if (ft.kind == TypeKind.String) out.push({ path: fieldPath, kind: BoundaryKind.String });
 		else if (isStructType(ft) && !isMaybeType(ft)) ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
 		else {
-			refuse(c, fieldWhat, ft, "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
+			refuse(c, fieldWhat, ft, noFormWhy(ft, NoFormAt.Field) ?? "and a struct crosses the boundary as a copy of its bool, integer, float, string and struct fields");
 			ok = false;
 		}
 	}
 	return ok;
+}
+
+enum NoFormAt { Param, Result, Field }
+
+function byPosition(at: NoFormAt, param: string, result: string, field: string): string {
+	if (at == NoFormAt.Param) return param;
+	return at == NoFormAt.Result ? result : field;
+}
+
+function isClassRef(t: Type): boolean {
+	if (isAtomicRef(t) || isLockedRef(t)) return false;
+	const target = t.kind == TypeKind.Ref && t.typeReturn != null ? peeled(t.typeReturn!) : t;
+	return runtimeClassSym(target) != null;
+}
+
+function classWhy(at: NoFormAt, nullable: boolean): string {
+	const identity = `and a ${nullable ? "nullable " : ""}class instance has an identity on one heap and does not cross as a copy: `;
+	const later = "; sharing the instance itself waits for Handle<T>, which is planned";
+	return identity + byPosition(at, "pass the values it holds as parameters or as a struct, which crosses as a copy", "return the values it holds as a struct, which crosses as a copy", "copy the values it holds into fields of the struct") + later;
+}
+
+function noFormWhy(t: Type, at: NoFormAt): string | null {
+	if (isMaybeType(t)) return null;
+	if (t.kind == TypeKind.Function) {
+		const only = "and a function crosses the boundary only as a parameter, borrowed for the call, so it cannot be ";
+		if (at == NoFormAt.Result) return only + "a result: return the value it computes";
+		if (at == NoFormAt.Field) return only + "a struct field: pass it as a separate parameter";
+		return null;
+	}
+	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) {
+		const crossing = byPosition(at, "passing 'x as int32'", "returning 'x as int32'", "declaring the field as int32 and writing 'x as int32'");
+		return `and an enum has no boundary form yet: cross its integer instead, ${crossing}, and converting back with 'n as ${describe(literalBase(t))}', which checks the range`;
+	}
+	if (t.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(t);
+		if (held != null) return isClassRef(held) ? classWhy(at, true) : null;
+		const variants = "and a union has no single boundary form: ";
+		return variants + byPosition(at, "pass a tag integer and the payload as separate parameters, or give each variant its own @wasm function", "return a struct with a tag integer and one field per variant, or give each variant its own @wasm function", "flatten it into a tag integer field and one field per variant");
+	}
+	if (isStdCollection(t)) {
+		const table = "and a Map or Set is a hash table that lives on one heap and ";
+		const noStringKeys = "(string keys have no Vec form yet)";
+		return table + byPosition(at, `does not cross: pass its keys and values as separate Vec parameters of numbers and rebuild it on the other side ${noStringKeys}`, `does not cross: return a Vec of numbers and rebuild it on the other side, a Map's keys from one @wasm function and its values from another ${noStringKeys}`, `cannot be a struct field: pass its keys and values as separate Vec parameters of numbers instead ${noStringKeys}`);
+	}
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && peeled(t.typeReturn!).kind == TypeKind.Array) {
+		const array = "and an array reference lives on one heap and does not cross";
+		return byPosition(at, `${array}: use a Vec of bool, integer or float elements, which crosses as a copy`, `${array}: return a Vec of bool, integer or float elements, which crosses as a copy`, `${array}, and a struct holds no Vec: pass the elements as a separate Vec parameter`);
+	}
+	return isClassRef(t) ? classWhy(at, false) : null;
 }
 
 function valueShape(c: Collector, what: string, t: Type): ValueShape | null {
@@ -311,7 +360,7 @@ function paramOf(c: Collector, name: string, type: Type): BoundaryParam | null {
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, what, t);
 	if (shape != null) return { name, kind: shape.kind, mode: BoundaryMode.Copied, callback: null, leaves: shape.leaves, element: shape.element };
-	if (c.errors.length == errorsBefore) refuse(c, what, t, "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
+	if (c.errors.length == errorsBefore) refuse(c, what, t, noFormWhy(t, NoFormAt.Param) ?? "which has no JS/wasm boundary form: use bool, integers, floats, string, a struct of those, a Vec or Span of numbers or a callback");
 	return null;
 }
 
@@ -332,7 +381,7 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, "the result", t);
 	if (shape != null) return shape;
-	if (c.errors.length == errorsBefore) refuse(c, "the result", t, "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
+	if (c.errors.length == errorsBefore) refuse(c, "the result", t, noFormWhy(t, NoFormAt.Result) ?? "which has no JS/wasm boundary form: return void, bool, an integer, a float, a string, a struct of those or a Vec of numbers");
 	return null;
 }
 
