@@ -7,7 +7,6 @@
 // @stdout: 7 job from sleep a
 // @stdout: 8 nested job from sleep a
 // @stdout: 9 sleep b resumed
-// @xfail(raiser): raiser runtime error: Unknown host function: msSetTimeout
 
 import { sleepAsync } from "std/core/promise";
 
