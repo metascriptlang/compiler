@@ -103,6 +103,12 @@ test "js side: the prelude carries the string glue once and reads the heap fresh
 	assert !p.includes("wasmMemory");
 }
 
+test "js side: the string decoder is built with ignoreBOM" {
+	const p = bindingsFor(["twice"]).prelude;
+	assert p.includes("const __msbTd = new TextDecoder('utf-8', { ignoreBOM: true });");
+	assert p.indexOf("new TextDecoder(") == p.lastIndexOf("new TextDecoder(");
+}
+
 test "js side: a failed wasm allocation throws instead of writing at address 0" {
 	const p = bindingsFor(["twice"]).prelude;
 	assert p.includes("if (p === 0) throw new RangeError(");
