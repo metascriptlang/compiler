@@ -525,11 +525,16 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
 	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
+	const signature = isSynthesized(node, d.ctorBody);
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
-	if (asWritten != null) return docGroup([docText(visibility), asWritten, printCollapsibleBody(d.ctorBody, options)]);
+	if (asWritten != null) return docGroup([docText(visibility), asWritten, signature ? docText(";") : printCollapsibleBody(d.ctorBody, options)]);
 	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations, node.typeExprs, null, d.ctorParamProps);
 	const parts: Doc[] = [docText(visibility + "constructor")];
 	for (const p of paramListInParens(params, options, hugsObjectParam(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, node.typeExprs, options))) parts.push(p);
+	if (signature) {
+		parts.push(docText(";"));
+		return docGroup(parts);
+	}
 	parts.push(docText(" "));
 	parts.push(printCollapsibleBody(d.ctorBody, options));
 	return docGroup(parts);
