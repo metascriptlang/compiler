@@ -1,7 +1,7 @@
 import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
 import { wasmEntrySource } from "./wasmSide";
 import { ensureDir, writeFile } from "std/fs";
@@ -36,6 +36,8 @@ export function patch(cb: (xs: Span<int32>) => int32): int32 { return 0; }
 export function stamp(s: string, xs: Span<int32>): int32 { return 0; }
 export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; return out; }
 export function swap(a: Span<int32>, b: Span<int32>): void {}
+export function bump(x: int32): int32 { return x + 1; }
+export function bump(x: float64): float64 { return x + 0.5; }
 `;
 
 function manifestOf(names: string[]): Manifest {
@@ -52,8 +54,12 @@ function manifestOf(names: string[]): Manifest {
 	return m;
 }
 
+function bindingsWith(names: string[], bundleNameOf: (f: BoundaryFunction) => string, checked: boolean = false) {
+	return jsBindings(manifestOf(names), "./app.wasm.mjs", bundleNameOf, { checked: checked });
+}
+
 function bindingsFor(names: string[], checked: boolean = false) {
-	return jsBindings(manifestOf(names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: checked });
+	return bindingsWith(names, (f) => "bundled_" + f.name, checked);
 }
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
@@ -197,7 +203,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], result: BoundaryKind.I32, signature: "i_si" };
 	const m: Manifest = {
 		functions: [{
-			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", exportSymbol: "msb_calc_note",
+			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", overloadIndex: 0, exportSymbol: "msb_calc_note",
 			params: [{ name: "cb", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void }],
 			result: BoundaryKind.Void, resultLeaves: [], resultElement: BoundaryKind.Void,
 		}],
@@ -494,4 +500,10 @@ test "js side: copying into wasm memory uses TypedArray.set for a typed source, 
 	const p = bindingsFor(["total"]).prelude;
 	assert p.includes("if (ArrayBuffer.isView(a)) v.set(a.subarray(off, off + n));");
 	assert p.includes("if (!bool && n !== 0 && ArrayBuffer.isView(a)) a.set(v, off);");
+}
+
+test "js side: each overload gets its own wrapper named for its symbol and calls its own export" {
+	const code = bindingsWith(["bump"], (f) => "bundled_bump_" + f.overloadIndex).modules[0].code;
+	assert code.includes("bundled_bump_0") && code.includes("bundled_bump_1");
+	assert code.includes("_msb_calc_bump_u0") && code.includes("_msb_calc_bump_u1");
 }

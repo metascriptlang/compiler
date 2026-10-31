@@ -241,8 +241,10 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	const aliasOf = (f: BoundaryFunction): string => `msbm${modules.indexOf(f.modulePath)}_${f.name}`;
 	for (let m = 0; m < modules.length; m += 1) {
 		let names = "";
+		const imported: string[] = [];
 		for (const f of fns) {
-			if (f.modulePath != modules[m]) continue;
+			if (f.modulePath != modules[m] || imported.includes(f.name)) continue;
+			imported.push(f.name);
 			if (names != "") names += ", ";
 			names += `${f.name} as ${aliasOf(f)}`;
 		}

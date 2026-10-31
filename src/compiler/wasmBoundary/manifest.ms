@@ -41,6 +41,7 @@ export interface BoundaryFunction {
 	modulePath: string;
 	moduleKey: string;
 	name: string;
+	overloadIndex: number;
 	exportSymbol: string;
 	params: BoundaryParam[];
 	result: BoundaryKind;
@@ -408,16 +409,12 @@ function fnDeclOf(sym: Symbol): Node | null {
 	return sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl ? sym.declNode : null;
 }
 
-function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol): BoundaryFunction | null {
+function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol, overloadIndex: number, inSet: boolean): BoundaryFunction | null {
 	c.fnName = name;
 	const decl = fnDeclOf(sym);
 	const nameAt = decl != null ? (decl.data as FunctionDeclData).nameLocation : sym.location;
 	c.at = nameAt;
 	const flags = fnFlagsOf(sym);
-	if (sym.overloads.length > 0) {
-		refuseAt(c, "overload-set", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is an overload set, and one export symbol names one function; give each overload its own name`);
-		return null;
-	}
 	if (isGenericFn(flags) || hasGenericParams(sym.symbolType)) {
 		refuseAt(c, "generic", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it is generic, and a boundary function has one concrete signature; export a non-generic wrapper`);
 		return null;
@@ -442,22 +439,95 @@ function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol):
 	c.at = resultExpr != null ? resultExpr.location : nameAt;
 	const result = resultOf(c, ft.typeReturn);
 	if (!ok || result == null) return null;
-	return { modulePath: c.modulePath, moduleKey: key, name, exportSymbol: `msb_${key}_${name}`, params, result: result.kind, resultLeaves: result.leaves, resultElement: result.element };
+	const exportSymbol = inSet ? `msb_${key}_${name}_u${overloadIndex}` : `msb_${key}_${name}`;
+	return { modulePath: c.modulePath, moduleKey: key, name, overloadIndex, exportSymbol, params, result: result.kind, resultLeaves: result.leaves, resultElement: result.element };
+}
+
+function kindList(kinds: BoundaryKind[]): string {
+	let s = "";
+	for (const k of kinds) s += k.toString() + ",";
+	return s;
+}
+
+function paramShape(p: BoundaryParam): string {
+	let s = `${p.kind.toString()}/${p.element.toString()}`;
+	for (const leaf of p.leaves) s += `/${leaf.path.join(".")}:${leaf.kind.toString()}`;
+	if (p.callback != null) s += `/(${kindList(p.callback!.params)})(${kindList(p.callback!.elements)})${p.callback!.result.toString()}`;
+	return s;
+}
+
+function callShape(f: BoundaryFunction): string {
+	const parts: string[] = [];
+	for (const p of f.params) parts.push(paramShape(p));
+	return parts.join(";");
+}
+
+function nameAtOf(sym: Symbol): SourceLocation {
+	const decl = fnDeclOf(sym);
+	return decl != null ? (decl.data as FunctionDeclData).nameLocation : sym.location;
+}
+
+function setFunctions(c: Collector, key: string, name: string, sym: Symbol, locs: SourceLocation[]): BoundaryFunction[] {
+	c.fnName = name;
+	const set: Symbol[] = [sym];
+	for (const o of sym.overloads) set.push(o);
+	let wasm = 0;
+	for (const m of set) {
+		if (hasFlag(m, SymbolFlag.OverloadSig)) {
+			c.at = nameAtOf(m);
+			refuseAt(c, "overload-signature", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: it has overload signatures, which name no function of their own; export the implementation under its own name`);
+			return [];
+		}
+		if (hasFlag(m, SymbolFlag.Wasm)) wasm += 1;
+	}
+	if (set.length > 1 && wasm != 0 && wasm != set.length) {
+		c.at = nameAtOf(set[0]);
+		refuseAt(c, "overload-partial", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: @wasm is on ${wasm} of its ${set.length} overloads; place every overload in wasm or none, because the wasm side imports the whole set and picks by argument types`);
+		return [];
+	}
+	const out: BoundaryFunction[] = [];
+	const outAt: SourceLocation[] = [];
+	for (let overloadIndex = 0; overloadIndex < set.length; overloadIndex += 1) {
+		const f = boundaryFunction(c, key, name, set[overloadIndex], overloadIndex, set.length > 1);
+		if (f == null) continue;
+		out.push(f);
+		outAt.push(nameAtOf(set[overloadIndex]));
+	}
+	for (let i = 0; i < out.length; i += 1) {
+		for (let j = 0; j < i; j += 1) {
+			if (callShape(out[i]) != callShape(out[j])) continue;
+			c.at = outAt[i];
+			refuseAt(c, "overload-same-shape", `'${name}' in '${c.modulePath}' cannot cross the JS/wasm boundary: overloads ${out[j].overloadIndex} and ${out[i].overloadIndex} take the same boundary types, so the wasm side cannot tell which one to call; make their parameters differ in count, scalar kind, element kind or struct fields`);
+		}
+	}
+	for (const at of outAt) locs.push(at);
+	return out;
 }
 
 export function manifestFor(modulePath: string, entryPath: string, exports: ExportedSymInfo[], placed: string[]): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
 	const c: Collector = { errors: [], fnName: "", modulePath, at: makeLoc(0, 0) };
 	const functions: BoundaryFunction[] = [];
+	const locs: SourceLocation[] = [];
+	const seen: string[] = [];
 	for (const name of placed) {
+		if (seen.includes(name)) continue;
+		seen.push(name);
 		let found = false;
 		for (const e of exports) {
-			if (e.name != name || e.sym.symbolKind != SymbolKind.Function || hasFlag(e.sym, SymbolFlag.OverloadSig)) continue;
+			if (e.name != name || e.sym.symbolKind != SymbolKind.Function) continue;
 			found = true;
-			const f = boundaryFunction(c, key, e.name, e.sym);
-			if (f != null) functions.push(f);
+			for (const f of setFunctions(c, key, e.name, e.sym, locs)) functions.push(f);
 		}
 		if (!found) throw new Error(`internal: wasm-placed function '${name}' has no export in '${modulePath}'`);
+	}
+	for (let i = 0; i < functions.length; i += 1) {
+		for (let j = 0; j < i; j += 1) {
+			if (functions[i].exportSymbol == functions[j].exportSymbol) {
+				c.at = locs[i];
+				refuseAt(c, "export-collision", `'${functions[i].name}' and '${functions[j].name}' in '${modulePath}' would both export the wasm symbol '${functions[i].exportSymbol}': rename one of them`);
+			}
+		}
 	}
 	return { functions, errors: c.errors };
 }

@@ -26,6 +26,8 @@ export function label(n: int32): string { return ""; }
 export function make(n: int32): Label { return { at: { x: 0, y: 0 }, text: "", count: n }; }
 export function bytes(s: string): int32 { return s.length; }
 export function ramp(n: int32): Vec<int32> { const out: Vec<int32> = []; return out; }
+export function bump(x: int32): int32 { return x + 1; }
+export function bump(x: float64): float64 { return x + 0.5; }
 `;
 
 function manifestOf(names: string[]): Manifest {
@@ -210,4 +212,13 @@ test "wasm entry: every library entry reads the registry from the instance's Mod
 	assert !e.jsLibrary.includes("globalThis");
 	assert e.jsLibrary.split("registry missing").length == 2;
 	assert entryFor(["tag"]).jsLibrary.includes("\n\tmsb_rs_ddsi__postset: \"if (!Module['msb']) throw");
+}
+
+test "wasm entry: an overload set is imported once and each overload is its own export calling the set by its argument types" {
+	const e = entryFor(["bump"]);
+	const s = e.source;
+	assert s.split('import { bump as msbm0_bump } from "./calc";').length == 2;
+	assert s.includes("export function msb_calc_bump_u0(x: int32): int32") && s.includes("@exportName(\"msb_calc_bump_u0\")");
+	assert s.includes("export function msb_calc_bump_u1(x: float64): float64") && s.includes("@exportName(\"msb_calc_bump_u1\")");
+	assert e.exportedFunctions.join(",") == "_msb_calc_bump_u0,_msb_calc_bump_u1,_MsMain";
 }

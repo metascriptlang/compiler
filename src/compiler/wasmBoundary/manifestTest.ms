@@ -224,3 +224,82 @@ export function view(xs: Readonly<Span<int32>>): Readonly<Span<int32>> { return 
 	assert m.errors[0].message.includes("'names'") && m.errors[0].message.includes("Span");
 	assert m.errors[1].message.includes("'view'") && m.errors[1].message.includes("the result") && m.errors[1].message.includes("return a Vec");
 }
+
+const OVERLOADED = `
+export function twice(x: int32): int32 { return x * 2; }
+export function twice(x: uint8): uint8 { return x + x; }
+export function twice(x: string): string { return x + x; }
+export function total(a: int32, b: int32): int32 { return a + b; }
+export function total(a: int32, b: int32, c: int32): int32 { return a + b + c; }
+export function solo(x: int32): int32 { return x; }
+`;
+
+test "manifest: each overload is its own boundary function named by its index, a lone function keeps its plain symbol" {
+	const names = ["twice", "twice", "twice", "total", "total", "solo"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(OVERLOADED, ["twice", "total", "solo"]), names);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	const symbols: string[] = [];
+	for (const f of m.functions) symbols.push(f.exportSymbol);
+	assert symbols.join(",") == "msb_calc_score_twice_u0,msb_calc_score_twice_u1,msb_calc_score_twice_u2,msb_calc_score_total_u0,msb_calc_score_total_u1,msb_calc_score_solo", symbols.join(",");
+	assert m.functions[0].overloadIndex == 0 && m.functions[2].overloadIndex == 2 && m.functions[4].overloadIndex == 1 && m.functions[5].overloadIndex == 0;
+	assert m.functions[0].params[0].kind == BoundaryKind.I32 && m.functions[1].params[0].kind == BoundaryKind.U8 && m.functions[2].params[0].kind == BoundaryKind.String;
+	assert m.functions[3].params.length == 2 && m.functions[4].params.length == 3;
+}
+
+test "manifest: two overloads with the same boundary types are refused naming both indices" {
+	const src = `
+struct P { v: float64; }
+struct Q { v: float64; }
+export function same(p: P): int32 { return 0; }
+export function same(q: Q): int32 { return 1; }
+export function spans(xs: Span<int32>): void {}
+export function spans(xs: Readonly<Span<int32>>): void {}
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["same", "spans"]), ["same", "same", "spans", "spans"]);
+	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'same'") && m.errors[0].message.includes("overloads 0 and 1") && m.errors[0].message.includes("same boundary types");
+	assert m.errors[1].message.includes("'spans'") && m.errors[1].message.includes("overloads 0 and 1");
+}
+
+test "manifest: an overload whose indexed symbol equals another export's symbol is refused" {
+	const src = `
+export function pair(a: int32): int32 { return a; }
+export function pair(a: float64): float64 { return a; }
+export function pair_u1(a: int32): int32 { return a; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["pair", "pair_u1"]), ["pair", "pair", "pair_u1"]);
+	assert m.errors.length == 1, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("msb_calc_score_pair_u1") && m.errors[0].message.includes("rename");
+}
+
+test "manifest: a set that holds an overload signature is refused by name" {
+	const src = `
+export function sig(x: int32): int32;
+export function sig(x: string): string;
+export function sig(x: int32 | string): int32 | string { return x; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["sig"]), ["sig"]);
+	assert m.functions.length == 0;
+	assert m.errors.length == 1, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'sig'") && m.errors[0].message.includes("has overload signatures");
+}
+
+test "manifest: @wasm on every overload of a set is accepted, on only some of them it is refused" {
+	const all = `
+@wasm
+export function mark(x: int32): int32 { return x; }
+@wasm
+export function mark(x: float64): float64 { return x; }
+`;
+	const ok = manifestFor(MODULE, ENTRY, exportsOf(all, ["mark"]), ["mark", "mark"]);
+	assert ok.errors.length == 0, ok.errors.map((e) => e.message).join("; ");
+	assert ok.functions.length == 2;
+	const some = `
+@wasm
+export function mark(x: int32): int32 { return x; }
+export function mark(x: float64): float64 { return x; }
+`;
+	const bad = manifestFor(MODULE, ENTRY, exportsOf(some, ["mark"]), ["mark"]);
+	assert bad.errors.length == 1, bad.errors.map((e) => e.message).join("; ");
+	assert bad.errors[0].message.includes("@wasm is on 1 of its 2 overloads");
+}

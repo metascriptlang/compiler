@@ -33,7 +33,7 @@ import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, overloadAt, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -1644,7 +1644,7 @@ function placeWasmModules(placed: string[], placedNames: string[][], graph: Modu
 	}
 	const symOf = (f: BoundaryFunction): Symbol => {
 		for (const e of exportsOf(f.modulePath)) {
-			if (e.name == f.name) return e.sym;
+			if (e.name == f.name) return overloadAt(e.sym, f.overloadIndex);
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
