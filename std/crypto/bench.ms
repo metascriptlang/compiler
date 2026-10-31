@@ -8,7 +8,7 @@
 // moves every number.
 
 import { Buffer } from "std/core/buffer";
-import { CryptoError, hashBuffer, hmacBuffer, pbkdf2, createHash, sha256 } from "std/crypto";
+import { CryptoError, hashBuffer, hmacBuffer, pbkdf2, hkdf, randomBytes, createHash, sha256 } from "std/crypto";
 import { ed25519FromSeed, ed25519PublicKey, ed25519Sign, ed25519Verify } from "std/crypto/ed25519";
 import { x25519PublicKey, x25519SharedSecret } from "std/crypto/x25519";
 import { seal } from "std/crypto/aes";
@@ -89,6 +89,8 @@ bench("sha512 hashBuffer 64 B", 0, 0, () => { sink += must(hashBuffer("sha512", 
 bench("sha512 hashBuffer 1 MB", 1048576, 0, () => { sink += must(hashBuffer("sha512", b1m)).length; });
 bench("hmac-sha256 32 B", 0, 2.1, () => { sink += must(hmacBuffer("sha256", b32, b32)).length; });
 bench("pbkdf2-sha256 100k", 0, 18500, () => { sink += must(pbkdf2("password", "salt", 100000, 32, "sha256")).length; });
+bench("hkdf-sha256 32 B", 0, 0, () => { sink += must(hkdf("sha256", b32, b32, b32, 32)).length; });
+bench("randomBytes 32 B", 0, 0, () => { sink += must(randomBytes(32)).length; });
 
 const edSecret = must(ed25519FromSeed(b32));
 const edPublic = must(ed25519PublicKey(edSecret));
