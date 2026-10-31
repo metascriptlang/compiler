@@ -46,12 +46,13 @@ export function fromCharCode(this typeof String, ...codes: int32[]): string {
 
 @compilerFunc
 export function charAt(this s: string, idx: int32): string {
-	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
+	@emit(`return ${s}.charAt(${idx});`);
 	unreachable;
 }
 
 export function charCodeAt(this s: string, idx: int32): int32 {
-	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? -1 : ${s}.charCodeAt(${idx});`);
+	@emit(`var c = ${s}.charCodeAt(${idx});
+	return c >= 0 ? c : -1;`);
 	unreachable;
 }
 
@@ -125,9 +126,8 @@ export function at(this s: string, idx: int32): string | null {
 }
 
 export function substring(this s: string, start: int32, end: int32 = 2147483647): string {
-	const a = clampIndex(start, s.length);
-	const b = clampIndex(end, s.length);
-	return a <= b ? s.slice(a, b) : s.slice(b, a);
+	@emit(`return ${s}.substring(${start}, ${end});`);
+	unreachable;
 }
 
 export function padStart(this s: string, targetLen: int32, pad: string): string {
@@ -288,5 +288,4 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-import { clampIndex } from "./shared";
 export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
