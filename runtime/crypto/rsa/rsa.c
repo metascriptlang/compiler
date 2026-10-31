@@ -7,6 +7,7 @@
 
 #include "runtime/crypto/rsa/rsa.h"
 #include "runtime/core/system.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,6 +36,7 @@ struct msCryptoEcKeyPair {
 
 /* ===== PSA Init ===== */
 
+static pthread_mutex_t psaLock = PTHREAD_MUTEX_INITIALIZER;
 static int psaInitialized = 0;
 static int ensurePsa(void) {
 	if (psaInitialized) return 0;
@@ -43,6 +45,14 @@ static int ensurePsa(void) {
 	psaInitialized = 1;
 	return 0;
 }
+
+#define LOCKED(T, name, params, args, fail) \
+	T msCrypto##name params { \
+		pthread_mutex_lock(&psaLock); \
+		T result = ensurePsa() != 0 ? (fail) : impl##name args; \
+		pthread_mutex_unlock(&psaLock); \
+		return result; \
+	}
 
 /* ===== MD Type Mapping ===== */
 
@@ -56,7 +66,7 @@ static mbedtls_md_type_t getMdType(const char* algo, size_t len) {
 
 /* ===== RSA ===== */
 
-int64_t msCryptoRsaGenerate(int32_t bits) {
+static int64_t implRsaGenerate(int32_t bits) {
 	if (ensurePsa() != 0) return 0;
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
 	psa_set_key_usage_flags(&attributes,
@@ -77,17 +87,31 @@ int64_t msCryptoRsaGenerate(int32_t bits) {
 	return RSA_TO_HANDLE(kp);
 }
 
-int64_t msCryptoRsaImportPrivatePem(msString pem) {
+static int rebuildWithPublicHalf(mbedtls_pk_context* pk) {
+	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+	mbedtls_svc_key_id_t keyId;
+	int ret = mbedtls_pk_get_psa_attributes(pk, PSA_KEY_USAGE_SIGN_HASH, &attributes);
+	if (ret == 0) ret = mbedtls_pk_import_into_psa(pk, &attributes, &keyId);
+	if (ret != 0) return ret;
+	mbedtls_pk_free(pk);
+	mbedtls_pk_init(pk);
+	ret = mbedtls_pk_copy_from_psa(keyId, pk);
+	psa_destroy_key(keyId);
+	return ret;
+}
+
+static int64_t implRsaImportPrivatePem(msString pem) {
 	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)msMemAlloc0(sizeof(msCryptoRsaKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	const char* pemStr = msStringToCString(pem);
 	int ret = mbedtls_pk_parse_key(&kp->pk, (const unsigned char*)pemStr,
 	                                strlen(pemStr) + 1, NULL, 0);
 	if (ret != 0) { mbedtls_pk_free(&kp->pk); free(kp); return 0; }
+	if (rebuildWithPublicHalf(&kp->pk) != 0) { mbedtls_pk_free(&kp->pk); free(kp); return 0; }
 	return RSA_TO_HANDLE(kp);
 }
 
-int64_t msCryptoRsaImportPublicPem(msString pem) {
+static int64_t implRsaImportPublicPem(msString pem) {
 	msCryptoRsaKeyPair* kp = (msCryptoRsaKeyPair*)msMemAlloc0(sizeof(msCryptoRsaKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	const char* pemStr = msStringToCString(pem);
@@ -97,7 +121,7 @@ int64_t msCryptoRsaImportPublicPem(msString pem) {
 	return RSA_TO_HANDLE(kp);
 }
 
-msString msCryptoRsaExportPrivatePem(int64_t handle) {
+static msString implRsaExportPrivatePem(int64_t handle) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	unsigned char buf[4096];
 	int ret = mbedtls_pk_write_key_pem(&key->pk, buf, sizeof(buf));
@@ -105,7 +129,7 @@ msString msCryptoRsaExportPrivatePem(int64_t handle) {
 	return msStringNew((const char*)buf, (int64_t)strlen((const char*)buf));
 }
 
-msString msCryptoRsaExportPublicPem(int64_t handle) {
+static msString implRsaExportPublicPem(int64_t handle) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	unsigned char buf[4096];
 	int ret = mbedtls_pk_write_pubkey_pem(&key->pk, buf, sizeof(buf));
@@ -113,7 +137,7 @@ msString msCryptoRsaExportPublicPem(int64_t handle) {
 	return msStringNew((const char*)buf, (int64_t)strlen((const char*)buf));
 }
 
-msString msCryptoRsaSign(int64_t handle, msString algorithm, msString data) {
+static msString implRsaSign(int64_t handle, msString algorithm, msString data) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	mbedtls_md_type_t mdType = getMdType(msStringToCString(algorithm), algorithm.len);
 	if (mdType == MBEDTLS_MD_NONE) return MS_EMPTY_STRING;
@@ -130,7 +154,7 @@ msString msCryptoRsaSign(int64_t handle, msString algorithm, msString data) {
 	return msStringNew((const char*)sig, (int64_t)sigLen);
 }
 
-double msCryptoRsaVerify(int64_t handle, msString algorithm, msString data, msString signature) {
+static double implRsaVerify(int64_t handle, msString algorithm, msString data, msString signature) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return 0.0;
 	mbedtls_md_type_t mdType = getMdType(msStringToCString(algorithm), algorithm.len);
 	if (mdType == MBEDTLS_MD_NONE) return 0.0;
@@ -145,7 +169,7 @@ double msCryptoRsaVerify(int64_t handle, msString algorithm, msString data, msSt
 	return (ret == 0) ? 1.0 : 0.0;
 }
 
-msString msCryptoRsaEncrypt(int64_t handle, msString data) {
+static msString implRsaEncrypt(int64_t handle, msString data) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	if (ensurePsa() != 0) return MS_EMPTY_STRING;
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -168,7 +192,7 @@ msString msCryptoRsaEncrypt(int64_t handle, msString data) {
 	return result;
 }
 
-msString msCryptoRsaDecrypt(int64_t handle, msString data) {
+static msString implRsaDecrypt(int64_t handle, msString data) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	if (ensurePsa() != 0) return MS_EMPTY_STRING;
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -191,7 +215,7 @@ msString msCryptoRsaDecrypt(int64_t handle, msString data) {
 	return result;
 }
 
-void msCryptoRsaFree(int64_t handle) {
+static void implRsaFree(int64_t handle) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle); if (key) { mbedtls_pk_free(&key->pk); free(key); }
 }
 
@@ -206,11 +230,11 @@ static int getPsaCurve(const char* curve, size_t len,
 	return -1;
 }
 
-int64_t msCryptoEcGenerate(msString curve) {
-	if (ensurePsa() != 0) return NULL;
+static int64_t implEcGenerate(msString curve) {
+	if (ensurePsa() != 0) return 0;
 	psa_ecc_family_t family;
 	size_t bits;
-	if (getPsaCurve(msStringToCString(curve), curve.len, &family, &bits) != 0) return NULL;
+	if (getPsaCurve(msStringToCString(curve), curve.len, &family, &bits) != 0) return 0;
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
 	psa_set_key_usage_flags(&attributes,
 		PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_VERIFY_HASH |
@@ -229,7 +253,7 @@ int64_t msCryptoEcGenerate(msString curve) {
 	return RSA_TO_HANDLE(kp);
 }
 
-int64_t msCryptoEcImportPrivatePem(msString pem) {
+static int64_t implEcImportPrivatePem(msString pem) {
 	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)msMemAlloc0(sizeof(msCryptoEcKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_parse_key(&kp->pk, (const unsigned char*)msStringToCString(pem),
@@ -238,7 +262,7 @@ int64_t msCryptoEcImportPrivatePem(msString pem) {
 	return RSA_TO_HANDLE(kp);
 }
 
-int64_t msCryptoEcImportPublicPem(msString pem) {
+static int64_t implEcImportPublicPem(msString pem) {
 	msCryptoEcKeyPair* kp = (msCryptoEcKeyPair*)msMemAlloc0(sizeof(msCryptoEcKeyPair));
 	mbedtls_pk_init(&kp->pk);
 	int ret = mbedtls_pk_parse_public_key(&kp->pk, (const unsigned char*)msStringToCString(pem),
@@ -247,7 +271,7 @@ int64_t msCryptoEcImportPublicPem(msString pem) {
 	return RSA_TO_HANDLE(kp);
 }
 
-msString msCryptoEcExportPrivatePem(int64_t handle) {
+static msString implEcExportPrivatePem(int64_t handle) {
 	msCryptoEcKeyPair* key = EC_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	unsigned char buf[4096];
 	int ret = mbedtls_pk_write_key_pem(&key->pk, buf, sizeof(buf));
@@ -255,7 +279,7 @@ msString msCryptoEcExportPrivatePem(int64_t handle) {
 	return msStringNew((const char*)buf, (int64_t)strlen((const char*)buf));
 }
 
-msString msCryptoEcExportPublicPem(int64_t handle) {
+static msString implEcExportPublicPem(int64_t handle) {
 	msCryptoEcKeyPair* key = EC_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	unsigned char buf[4096];
 	int ret = mbedtls_pk_write_pubkey_pem(&key->pk, buf, sizeof(buf));
@@ -263,7 +287,7 @@ msString msCryptoEcExportPublicPem(int64_t handle) {
 	return msStringNew((const char*)buf, (int64_t)strlen((const char*)buf));
 }
 
-msString msCryptoEcdsaSign(int64_t handle, msString algorithm, msString data) {
+static msString implEcdsaSign(int64_t handle, msString algorithm, msString data) {
 	msCryptoEcKeyPair* key = EC_FROM_HANDLE(handle); if (!key) return MS_EMPTY_STRING;
 	mbedtls_md_type_t mdType = getMdType(msStringToCString(algorithm), algorithm.len);
 	if (mdType == MBEDTLS_MD_NONE) return MS_EMPTY_STRING;
@@ -280,7 +304,7 @@ msString msCryptoEcdsaSign(int64_t handle, msString algorithm, msString data) {
 	return msStringNew((const char*)sig, (int64_t)sigLen);
 }
 
-double msCryptoEcdsaVerify(int64_t handle, msString algorithm, msString data, msString signature) {
+static double implEcdsaVerify(int64_t handle, msString algorithm, msString data, msString signature) {
 	msCryptoEcKeyPair* key = EC_FROM_HANDLE(handle); if (!key) return 0.0;
 	mbedtls_md_type_t mdType = getMdType(msStringToCString(algorithm), algorithm.len);
 	if (mdType == MBEDTLS_MD_NONE) return 0.0;
@@ -295,7 +319,7 @@ double msCryptoEcdsaVerify(int64_t handle, msString algorithm, msString data, ms
 	return (ret == 0) ? 1.0 : 0.0;
 }
 
-msString msCryptoEcdhDerive(int64_t privateHandle, int64_t publicHandle) {
+static msString implEcdhDerive(int64_t privateHandle, int64_t publicHandle) {
 	msCryptoEcKeyPair* privateKey = EC_FROM_HANDLE(privateHandle); msCryptoEcKeyPair* publicKey = EC_FROM_HANDLE(publicHandle); if (!privateKey || !publicKey) return MS_EMPTY_STRING;
 	if (ensurePsa() != 0) return MS_EMPTY_STRING;
 	/* Import private key into PSA */
@@ -308,7 +332,7 @@ msString msCryptoEcdhDerive(int64_t privateHandle, int64_t publicHandle) {
 	if (ret != 0) return MS_EMPTY_STRING;
 	/* Export public key raw */
 	psa_key_attributes_t pubAttr = PSA_KEY_ATTRIBUTES_INIT;
-	mbedtls_pk_get_psa_attributes(&publicKey->pk, PSA_KEY_USAGE_EXPORT, &pubAttr);
+	mbedtls_pk_get_psa_attributes(&publicKey->pk, PSA_KEY_USAGE_VERIFY_HASH, &pubAttr);
 	mbedtls_svc_key_id_t pubId;
 	ret = mbedtls_pk_import_into_psa(&publicKey->pk, &pubAttr, &pubId);
 	if (ret != 0) { psa_destroy_key(privId); return MS_EMPTY_STRING; }
@@ -327,6 +351,36 @@ msString msCryptoEcdhDerive(int64_t privateHandle, int64_t publicHandle) {
 	return msStringNew((const char*)shared, (int64_t)sharedLen);
 }
 
-void msCryptoEcFree(int64_t handle) {
+static void implEcFree(int64_t handle) {
 	msCryptoEcKeyPair* key = EC_FROM_HANDLE(handle); if (key) { mbedtls_pk_free(&key->pk); free(key); }
+}
+
+LOCKED(int64_t, RsaGenerate, (int32_t bits), (bits), 0)
+LOCKED(int64_t, RsaImportPrivatePem, (msString pem), (pem), 0)
+LOCKED(int64_t, RsaImportPublicPem, (msString pem), (pem), 0)
+LOCKED(msString, RsaExportPrivatePem, (int64_t handle), (handle), MS_EMPTY_STRING)
+LOCKED(msString, RsaExportPublicPem, (int64_t handle), (handle), MS_EMPTY_STRING)
+LOCKED(msString, RsaSign, (int64_t handle, msString algorithm, msString data), (handle, algorithm, data), MS_EMPTY_STRING)
+LOCKED(double, RsaVerify, (int64_t handle, msString algorithm, msString data, msString signature), (handle, algorithm, data, signature), 0.0)
+LOCKED(msString, RsaEncrypt, (int64_t handle, msString data), (handle, data), MS_EMPTY_STRING)
+LOCKED(msString, RsaDecrypt, (int64_t handle, msString data), (handle, data), MS_EMPTY_STRING)
+LOCKED(int64_t, EcGenerate, (msString curve), (curve), 0)
+LOCKED(int64_t, EcImportPrivatePem, (msString pem), (pem), 0)
+LOCKED(int64_t, EcImportPublicPem, (msString pem), (pem), 0)
+LOCKED(msString, EcExportPrivatePem, (int64_t handle), (handle), MS_EMPTY_STRING)
+LOCKED(msString, EcExportPublicPem, (int64_t handle), (handle), MS_EMPTY_STRING)
+LOCKED(msString, EcdsaSign, (int64_t handle, msString algorithm, msString data), (handle, algorithm, data), MS_EMPTY_STRING)
+LOCKED(double, EcdsaVerify, (int64_t handle, msString algorithm, msString data, msString signature), (handle, algorithm, data, signature), 0.0)
+LOCKED(msString, EcdhDerive, (int64_t privateHandle, int64_t publicHandle), (privateHandle, publicHandle), MS_EMPTY_STRING)
+
+void msCryptoRsaFree(int64_t handle) {
+	pthread_mutex_lock(&psaLock);
+	implRsaFree(handle);
+	pthread_mutex_unlock(&psaLock);
+}
+
+void msCryptoEcFree(int64_t handle) {
+	pthread_mutex_lock(&psaLock);
+	implEcFree(handle);
+	pthread_mutex_unlock(&psaLock);
 }
