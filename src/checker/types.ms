@@ -4690,6 +4690,27 @@ function substitutedMapped(t: Type, params: Type[], concretes: Type[], active: C
 		return unionOfParts(parts);
 	}
 	const inner = withoutParam(params, concretes, mappedParam(t));
+	if (source != null && source.kind != TypeKind.GenericParam && mappedModifiers(t).has(MappedModifier.KeyOfDeclared) && hasGenericParams(source)) {
+		const settled = substituteAllParamsInner(source, params, concretes, active);
+		const settledMembers = mappedSourceMembers(settled);
+		const targets = settledMembers.length > 0 ? settledMembers : [settled];
+		const parts: Type[] = [];
+		for (const target of targets) {
+			const each = copyTypeForSubst(t);
+			_substitutingFrom.push(source);
+			_substitutingTo.push(target);
+			const targetActive: Cursor<Type>[] = [source];
+			each.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, targetActive);
+			for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
+				each.typeChildren[ci] = substituteAllParamsInner(t.typeChildren[ci], inner.params, inner.concretes, targetActive);
+			}
+			_substitutingFrom.pop();
+			_substitutingTo.pop();
+			each.typeExtra = target;
+			parts.push(evaluateMappedType(each));
+		}
+		return unionOfParts(parts);
+	}
 	const m = copyTypeForSubst(t);
 	m.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, active);
 	for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
