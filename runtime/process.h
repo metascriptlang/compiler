@@ -1234,6 +1234,8 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 #define MS_PROC_CHILD_BUFFER_CAP ((size_t)16 * 1024 * 1024)
 
+#include "runtime/processEnv.h"
+
 static inline int32_t msProcChildIsUnsupported(int64_t spawnResult) { return spawnResult == -(int64_t)ENOSYS; }
 
 #if defined(_WIN32)
@@ -1412,7 +1414,10 @@ static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* arg
 	return wide;
 }
 
-static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msString cwd, int32_t mergeStderr) {
+static inline int64_t _msProcChildSpawnImpl(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msStringArray* environment, int supplied
+) {
 	if (_msWinRunsThroughCmd(msStringToCString(path))) return -(int64_t)EINVAL;
 	wchar_t* wcmd = _msProcChildCommandLine(path, args);
 	wchar_t* wcwd = cwd.len > 0 ? _msProcChildWide(msStringToCString(cwd), 1) : NULL;
@@ -1422,12 +1427,20 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		return -(int64_t)ENOMEM;
 	}
 
+	int failed = 0;
+	wchar_t* block = supplied ? _msEnvBlock(environment, &failed) : NULL;
+	wchar_t* executable = supplied && !failed
+		? _msEnvExecutable(path, wcwd, block, &failed) : NULL;
+	if (failed) {
+		free(wcmd); free(wcwd); free(c); free(block); free(executable);
+		return -(int64_t)failed;
+	}
+
 	HANDLE inRd = NULL, inWr = NULL, outRd = NULL, outWr = NULL, errRd = NULL, errWr = NULL;
 	SECURITY_ATTRIBUTES sa;
 	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
 	sa.bInheritHandle = TRUE;
 	sa.lpSecurityDescriptor = NULL;
-	int failed = 0;
 	DWORD nowait = PIPE_NOWAIT;
 	PROCESS_INFORMATION pi;
 	ZeroMemory(&pi, sizeof(pi));
@@ -1445,7 +1458,8 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		si.hStdInput = inRd;
 		si.hStdOutput = outWr;
 		si.hStdError = mergeStderr ? outWr : errWr;
-		if (!CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, wcwd, &si, &pi)) {
+		if (!CreateProcessW(executable, wcmd, NULL, NULL, TRUE,
+			supplied ? CREATE_UNICODE_ENVIRONMENT : 0, block, wcwd, &si, &pi)) {
 			DWORD e = GetLastError();
 			failed = _msWinStartErrno(e, path);
 			if (failed == 0) failed = EINVAL;
@@ -1457,6 +1471,8 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	free(wcmd);
 	free(wcwd);
+	free(block);
+	free(executable);
 	if (failed) {
 		_msProcChildCloseHandle(&inWr);
 		_msProcChildCloseHandle(&outRd);
@@ -1471,6 +1487,19 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 	c->out.h = outRd;
 	c->err.h = errRd;
 	return (int64_t)(intptr_t)c;
+}
+
+static inline int64_t msProcChildSpawn(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr
+) {
+	return _msProcChildSpawnImpl(path, args, cwd, mergeStderr, NULL, 0);
+}
+
+static inline int64_t msProcChildSpawnEnv(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msStringArray* environment
+) {
+	return _msProcChildSpawnImpl(path, args, cwd, mergeStderr, environment, 1);
 }
 
 static inline int32_t msProcChildPid(int64_t h) { return (int32_t)_msProcChildOf(h)->pid; }
@@ -1740,7 +1769,10 @@ static inline void _msProcChildPump(msProcChild* c, const char* data, size_t len
 
 static inline msProcChild* _msProcChildOf(int64_t h) { return (msProcChild*)(intptr_t)h; }
 
-static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msString cwd, int32_t mergeStderr) {
+static inline int64_t _msProcChildSpawnImpl(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msStringArray* environment, int supplied
+) {
 	int inPipe[2], outPipe[2], errPipe[2] = { -1, -1 };
 	if (_msSpawnPipe(inPipe) < 0) return -(int64_t)errno;
 	if (_msSpawnPipe(outPipe) < 0) {
@@ -1759,6 +1791,8 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 	char** argv = (char**)calloc((size_t)(argc + 2), sizeof(char*));
 	msProcChild* c = (msProcChild*)calloc(1, sizeof(msProcChild));
 	int failed = (argv == NULL || c == NULL) ? ENOMEM : 0;
+	char** privateEnv = !failed && supplied
+		? _msEnvPairs(environment, &failed) : NULL;
 	/* msStringToCString may reuse a shared buffer — materialize every string now. */
 	for (int64_t i = -1; !failed && i < argc; i++) {
 		const char* src = msStringToCString(i < 0 ? path : args->p->data[i]);
@@ -1801,7 +1835,9 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		if (!failed) {
 			pid_t pid = 0;
 			pthread_mutex_lock(&_msSpawnCreateLock);
-			failed = posix_spawnp(&pid, argv[0], &fa, &attr, argv, MS_SPAWN_ENVIRON);
+			failed = supplied
+				? _msEnvSpawnLocked(&pid, argv[0], &fa, &attr, argv, privateEnv)
+				: posix_spawnp(&pid, argv[0], &fa, &attr, argv, MS_SPAWN_ENVIRON);
 			pthread_mutex_unlock(&_msSpawnCreateLock);
 			c->pid = pid;
 		}
@@ -1813,6 +1849,7 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		for (int64_t j = 0; j <= argc; j++) free(argv[j]);
 		free(argv);
 	}
+	_msEnvFreePairs(privateEnv);
 
 	close(inPipe[0]);
 	close(outPipe[1]);
@@ -1835,6 +1872,19 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 	fcntl(c->inFd, F_SETNOSIGPIPE, 1);
 #endif
 	return (int64_t)(intptr_t)c;
+}
+
+static inline int64_t msProcChildSpawn(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr
+) {
+	return _msProcChildSpawnImpl(path, args, cwd, mergeStderr, NULL, 0);
+}
+
+static inline int64_t msProcChildSpawnEnv(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msStringArray* environment
+) {
+	return _msProcChildSpawnImpl(path, args, cwd, mergeStderr, environment, 1);
 }
 
 static inline int32_t msProcChildPid(int64_t h) { return (int32_t)_msProcChildOf(h)->pid; }
@@ -1979,6 +2029,13 @@ static inline void msProcChildFree(int64_t h) {
 static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msString cwd, int32_t mergeStderr) {
 	(void)path; (void)args; (void)cwd; (void)mergeStderr;
 	return -(int64_t)ENOSYS;
+}
+static inline int64_t msProcChildSpawnEnv(
+	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msStringArray* environment
+) {
+	(void)environment;
+	return msProcChildSpawn(path, args, cwd, mergeStderr);
 }
 static inline int32_t msProcChildPid(int64_t h) { (void)h; return 0; }
 static inline int32_t msProcChildErrno(int64_t h) { (void)h; return ENOSYS; }
