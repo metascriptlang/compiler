@@ -673,6 +673,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (getColor(h) == MS_COL_GRAY) return;
 	setColor(h, MS_COL_GRAY);
 	j->touched++;
+	if (type != NULL) j->typeFlags |= type->flags;
 	MS_DRC_STAT_TRACED(p, type);
 	/* +1 because rc is 0-based (0 = sole owner = 1 reference) */
 	j->rcSum += getCount(h) + 1;
@@ -688,6 +689,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 		if (getColor(ch) != MS_COL_GRAY) {
 			setColor(ch, MS_COL_GRAY);
 			j->touched++;
+			if (entry.type != NULL) j->typeFlags |= entry.type->flags;
 			MS_DRC_STAT_TRACED(child, entry.type);
 			/* +2: +1 for 0-based, +1 because we already decremented */
 			j->rcSum += getCount(ch) + 2;
@@ -748,7 +750,7 @@ static void scan(msGcEnv* j, void* p, const msTypeInfo* type) {
 /* Collect objects of the given color whose rootIdx has been cleared (-1).
  * Caller must clear rootIdx on all roots BEFORE calling this. */
 
-static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t col) {
+static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t col, bool nilSlots) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (getColor(h) != col || h->rootIdx >= 0) return;
@@ -760,7 +762,7 @@ static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t co
 	while (j->traceStack.len > 0) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
 		void* child = *(void**)entry.ptr;  /* dereference slot address */
-		*(void**)entry.ptr = NULL;          /* null out slot so destructors see nil */
+		if (nilSlots) *(void**)entry.ptr = NULL;  /* null out slot so destructors see nil */
 		if (child == NULL) continue;
 		msRefHeader* ch = msHeader(child);
 		if (getColor(ch) == col && ch->rootIdx < 0) {
@@ -770,6 +772,66 @@ static void collectColor(msGcEnv* j, void* p, const msTypeInfo* type, int32_t co
 			msTrace(child, entry.type, j);
 		}
 	}
+}
+
+/* ===== Two-phase finalization of a dead set holding an onDestroy =====
+ * Every finalizeFn runs while the set's edges hold and are counted; then the edges are dropped and
+ * each cell released and freed. Each cell carries one pin over both phases, so no decrement frees
+ * it early; its count ends at the pin exactly when no reference from outside the set remains, so a
+ * finalizer that stored a cell elsewhere fails loud before anything is freed. */
+
+_Noreturn void msRaiseDestroyKeptSelf(void* p);
+
+static void forEachEdge(msGcEnv* j, void* p, const msTypeInfo* type, bool drop) {
+	msTrace(p, type, j);
+	while (j->traceStack.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (!drop) {
+			incCount(ch);
+		} else {
+			*(void**)entry.ptr = NULL;
+			if (ch->rc & MS_COLLECTING) decCount(ch);
+			else if (msOrcDecRefIsLast(child)) {
+				MS_DESTROY_DISPATCH(ch->type, child);
+				msDestroyAndDispose(child);
+			}
+		}
+	}
+}
+
+static _Thread_local bool msOrcFinalizing = false;
+
+static void finalizeCollected(msGcEnv* j) {
+	msCellSeq* set = &j->toFree;
+	msOrcFinalizing = true;
+	for (int32_t i = 0; i < set->len; i++) forEachEdge(j, set->data[i].ptr, set->data[i].type, false);
+	for (int32_t i = 0; i < set->len; i++) {
+		msRefHeader* h = msHeader(set->data[i].ptr);
+		h->rc |= MS_COLLECTING;
+		incCount(h);
+	}
+	for (int32_t i = 0; i < set->len; i++) {
+		const msTypeInfo* type = set->data[i].type;
+		if (type != NULL && type->finalizeFn != NULL) type->finalizeFn(set->data[i].ptr);
+	}
+	for (int32_t i = 0; i < set->len; i++) forEachEdge(j, set->data[i].ptr, set->data[i].type, true);
+	for (int32_t i = 0; i < set->len; i++) {
+		if (getCount(msHeader(set->data[i].ptr)) != 0) msRaiseDestroyKeptSelf(set->data[i].ptr);
+	}
+	for (int32_t i = 0; i < set->len; i++) {
+		void* p = set->data[i].ptr;
+		const msTypeInfo* type = set->data[i].type;
+		msRefHeader* h = msHeader(p);
+		h->rc &= ~MS_COLLECTING;
+		setLastRefCount(h);
+		if (type != NULL && type->finalizeFn != NULL) MS_RELEASE_DISPATCH(type, p);
+		else MS_DESTROY_DISPATCH(type, p);
+		msDestroyAndDispose(p);
+	}
+	msOrcFinalizing = false;
 }
 
 /* ===== Core Collection (collectCyclesBacon parity) ===== */
@@ -798,10 +860,11 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 
 	/* Clear rootIdx on all roots BEFORE Phase 3.
 	 * collectColor checks rootIdx < 0 to confirm the object is eligible. */
+	bool finalizers = (j->typeFlags & MS_TYPE_FLAG_FINALIZER) != 0;
 	for (int32_t i = 0; i < msRoots.len; i++) {
 		msRefHeader* h = msHeader(msRoots.data[i].ptr);
 		h->rootIdx = -1;
-		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect);
+		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect, !finalizers);
 	}
 
 	MS_DRC_STAT_ADD(MS_DS_COLLECT, 1); MS_DRC_STAT_ADD(MS_DS_COLLECT_TRACED, j->touched);
@@ -811,13 +874,16 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	msRootsThreshold = INT32_MAX;
 	msRoots.len = 0;
 
-	/* Destroy and free collected objects */
-	for (int32_t i = 0; i < j->toFree.len; i++) {
-		void* p = j->toFree.data[i].ptr;
-		const msTypeInfo* type = j->toFree.data[i].type;
-		setLastRefCount(msHeader(p));
-		MS_DESTROY_DISPATCH(type, p);
-		msDestroyAndDispose(p);
+	if (finalizers) {
+		finalizeCollected(j);
+	} else {
+		for (int32_t i = 0; i < j->toFree.len; i++) {
+			void* p = j->toFree.data[i].ptr;
+			const msTypeInfo* type = j->toFree.data[i].type;
+			setLastRefCount(msHeader(p));
+			MS_DESTROY_DISPATCH(type, p);
+			msDestroyAndDispose(p);
+		}
 	}
 
 	msRootsThreshold = oldThreshold;
@@ -829,7 +895,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 /* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
-	if (msRoots.len == 0) return;
+	if (msRoots.len == 0 || msOrcFinalizing) return;
 
 	msGcEnv j;
 	msCellSeqInit(&j.traceStack);
@@ -839,6 +905,7 @@ void msOrcCollect(void) {
 	j.edges = 0;
 	j.rcSum = 0;
 	j.keepThreshold = false;
+	j.typeFlags = 0;
 
 	collectCyclesBacon(&j, 0);
 

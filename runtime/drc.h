@@ -117,12 +117,17 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 	msLedgerDestroy((p), (t)); \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
+#define MS_RELEASE_DISPATCH(t, p)  do { \
+	msLedgerDestroy((p), (t)); \
+	(t)->releaseFn(p); \
+} while (0)
 #else
 #define MS_LEDGER_COUNT(counter)   ((void)0)
 #define MS_LEDGER_ALLOC(p, t)      ((void)0)
 #define MS_DESTROY_DISPATCH(t, p)  do { \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
+#define MS_RELEASE_DISPATCH(t, p)  ((t)->releaseFn(p))
 #endif
 
 /* ===== Small-Object Free-List Cache ===== */
@@ -447,6 +452,7 @@ static inline bool msDropEdgeLast(void* owner, void* p) {
 #define MS_COL_GRAY    1
 #define MS_COL_WHITE   2
 #define MS_MAYBE_CYCLE 4
+#define MS_COLLECTING  8  /* in a dead set the collector is finalizing */
 #define MS_COLOR_MASK  3
 #define MS_RC_SHIFT    4
 
@@ -543,6 +549,7 @@ typedef struct {
 	intptr_t edges;
 	intptr_t rcSum;
 	bool keepThreshold;
+	uint8_t typeFlags;
 } msGcEnv;
 
 static inline void msOrcTraceRef(void* slotAddr, void* env) {
