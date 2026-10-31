@@ -31,6 +31,7 @@ function resolveMsc(): string {
 const MSC = resolveMsc();
 const BROWSER = env.get("WASMMIX_BROWSER") == "1";
 const RUN_PAGE = "src/test/wasmmix/browser/runPage.mjs";
+const SLOTS = "src/test/wasmmix/slotTable.mjs";
 
 function say(line: string): void {
 	writeStderr(line + "\n");
@@ -127,6 +128,10 @@ function runProgram(name: string): boolean {
 				const d = describeDiff(spec.stdout.concat(spec.foreignStdout).join("\n") + "\n", foreign.out);
 				if (d != "") { problems.push(`[foreign] differs from @stdout then @foreign-stdout: ${d}`); }
 			}
+		}
+		if (spec.slots && mixed.ok) {
+			const slots = runProcess("slots", "node", [SLOTS, dir + "mixed/", "app.js"]);
+			if (!slots.ok) { problems.push(`[slots] ${slots.detail}`); }
 		}
 		if (BROWSER && mixed.ok) { cols.push(runProcess("browser", "node", [RUN_PAGE, dir + "mixed/", "app.js"])); }
 	}

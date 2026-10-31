@@ -13,6 +13,7 @@ export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
 export function fill(xs: Span<boolean>, at: int32): void {}
 export function add64(a: int64, b: int64): int64 { return a + b; }
 export function evaluate(value: int32, cb: (x: int32) => int32): int32 { return cb(value) + 1; }
+export function tick(cb: () => int32): int32 { return cb() + 1; }
 export function isEven(x: uint8): boolean { return x % 2 == 0; }
 export function visit(n: int32, cb: (x: int32, y: float64) => void): void { cb(n, 1.5); }
 export function twice(s: string): string { return s + s; }
@@ -54,7 +55,7 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	const e = entryFor(["evaluate", "add64"]);
 	assert e.source.split("extern function msb_cb_i_i").length == 2;
 	assert e.exportedFunctions.join(",") == "_msb_calc_evaluate,_msb_calc_add64,_MsMain";
-	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, ...a) => { try { return Module['msb'].cb(id, ...a); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_cb_i_i__postset: \"if (!Module['msb']) throw new Error('msb registry missing: pass { msb } to the wasm module factory');\",\n});\n";
+	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, a0) => { try { return Module['msb'].cb(id)(a0); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_cb_i_i__postset: \"if (!Module['msb']) throw new Error('msb registry missing: pass { msb } to the wasm module factory');\",\n});\n";
 	assert entryFor(["add64"]).jsLibrary == "";
 }
 
@@ -140,6 +141,19 @@ test "wasm entry: every callback and result import hands an exception to the reg
 	const e = entryFor(["evaluate", "visit", "report", "sumBy", "edit", "tag", "scale"]);
 	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 8;
 	assert e.jsLibrary.split("\n\tmsb_").length == 9;
+}
+
+test "wasm entry: a callback import has the fixed arity of its signature, no rest or spread, a string or span taking two parameters" {
+	const e = entryFor(["tick", "visit", "report", "sumBy", "edit"]);
+	const lib = e.jsLibrary;
+	const tail = " } catch (e) { throw Module['msb'].die(e); } },\n";
+	assert lib.includes("\tmsb_cb_i_: (id) => { try { return Module['msb'].cb(id)();" + tail);
+	assert lib.includes("\tmsb_cb_v_id: (id, a0, a1) => { try { return Module['msb'].cb(id)(a0, a1);" + tail);
+	assert lib.includes("\tmsb_cb_i_s: (id, a0p, a0l) => { try { return Module['msb'].cb(id)(a0p, a0l);" + tail);
+	assert lib.includes("\tmsb_cb_f_p: (id, a0p, a0l) => { try { return Module['msb'].cb(id)(a0p, a0l);" + tail);
+	assert lib.includes("\tmsb_cb_v_pi: (id, a0p, a0l, a1) => { try { return Module['msb'].cb(id)(a0p, a0l, a1);" + tail);
+	assert !lib.includes("...");
+	assert e.source.includes('extern function msb_cb_v_pi(id: int32, a0p: uint32, a0l: int32, a1: int32): void from "msb_cb_v_pi";');
 }
 
 test "wasm entry: every library entry reads the registry from the instance's Module, and one check per library names a missing one" {

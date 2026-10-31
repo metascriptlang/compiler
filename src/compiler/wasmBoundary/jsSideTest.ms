@@ -77,6 +77,17 @@ test "js side: one prelude awaits the wasm module once, hands it its own registr
 	assert b.prelude.indexOf("const __msb = ") < b.prelude.indexOf("default({ msb: __msb })");
 }
 
+test "js side: callback ids are generation-tagged slots of a dense table with a free list" {
+	const p = bindingsFor(["add64"]).prelude;
+	assert !p.includes("new Map()");
+	assert !p.includes("...a");
+	assert p.includes("\t\t\tlet s = free.pop();\n\t\t\tif (s === undefined) {\n\t\t\t\tif (vals.length >= 65536) throw new RangeError(\"boundary table full: 65536 live entries\");\n");
+	assert p.includes("\t\t\tvals[s] = f;\n\t\t\treturn (gens[s] << 16) | s;\n");
+	assert p.includes("\t\t\tgens[s] = (gens[s] + 1) & 32767;\n\t\t\tfree.push(s);\n");
+	assert p.includes("\t\t\tif (vals[s] === undefined || gens[s] !== id >>> 16) throw new Error(\"boundary entry released twice\");\n");
+	assert p.includes("\t\tcb(id) {\n\t\t\tconst s = id & 65535;\n\t\t\tif (vals[s] === undefined || gens[s] !== id >>> 16) throw new Error(\"callback used after its call returned\");\n\t\t\treturn vals[s];\n\t\t},\n");
+}
+
 test "js side: a string parameter is encoded, passed as pointer and length, and released in finally" {
 	const code = bindingsFor(["both"]).modules[0].code;
 	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\tif (e2) __msbFree(e2[0]);\n\t}\n}");
