@@ -88,7 +88,7 @@ function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: 
 		TypeKind.Uint32 => "U32",
 		_ => "U64",
 	};
-	const wrapPow = op == "**" && !ctx.overflowChecks && (hk == TypeKind.Int32 || hk == TypeKind.Int64);
+	const wrapPow = op == "**" && !ctx.jsOverflowChecks && (hk == TypeKind.Int32 || hk == TypeKind.Int64);
 	const call = makeCall(runtimeRef((wrapPow ? "msPowWrap" : prefix) + suffix, loc), [left, right], loc);
 	call.nodeType = createPrimitive(hk);
 	const narrow = subIntKind(t);
@@ -100,7 +100,7 @@ function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: 
 // A double product of two int32 operands may round, but never back into range,
 // so the test needs no Math.imul.
 function overflowChecked(inner: Node, t: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	if (!ctx.overflowChecks) return wrapSigned(inner, t, loc);
+	if (!ctx.jsOverflowChecks) return wrapSigned(inner, t, loc);
 	const suffix = match (t.kind) {
 		TypeKind.Int8 => "I8",
 		TypeKind.Int16 => "I16",
@@ -251,7 +251,7 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 		if (d.isPrefix) return checked;
 		const before = makeBinary(checked, d.updateOp == "++" ? "-" : "+", stepOne(t, loc), loc);
 		before.nodeType = t;
-		return ctx.overflowChecks ? before : wrapSigned(before, t, loc);
+		return ctx.jsOverflowChecks ? before : wrapSigned(before, t, loc);
 	}
 	const stored = makeBinary(d.updateArg, "=", atWidth(makeBinary(readBack, step, makeNumber(1, loc), loc), t, loc), loc);
 	if (d.isPrefix) return stored;
