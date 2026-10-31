@@ -8,7 +8,8 @@
 // @serial
 
 import { accept, bind, bindUnix, close, connect, connectUnix, createSocket, createUnixSocket, listen, send, sendAsync, setNonBlocking } from "std/net";
-import { remove } from "std/fs";
+import { argv } from "std/process";
+import { basename, remove } from "std/fs";
 
 function tcpPair(): int32[] {
 	let port = (30000 + Date.now() % 20000) as int32;
@@ -49,5 +50,5 @@ async function afterPeerClosed(kind: string, pair: int32[]): Promise<void> {
 }
 
 await afterPeerClosed("tcp", tcpPair());
-await afterPeerClosed("unix", unixPair(`/tmp/msSigpipe-${Math.floor(Math.random() * 1e9)}.sock`));
+await afterPeerClosed("unix", unixPair(`/tmp/msSigpipe-${basename(argv[0])}-${Date.now()}.sock`));
 console.log("still running");

@@ -19,10 +19,11 @@
 // @stdout: bind on a path holding a NUL byte: -1
 // @stdout: connect to a missing socket: -1
 
-import { exists, mkdir, remove, removeAll } from "std/fs";
+import { argv } from "std/process";
+import { basename, exists, mkdir, remove, removeAll } from "std/fs";
 import { accept, acceptAsync, bindUnix, close, connectUnix, createUnixSocket, listen, recv, send, setTimeout } from "std/net";
 
-const dir = `/tmp/msUnixSock-${Math.floor(Math.random() * 1e9)}`;
+const dir = `/tmp/msUnixSock-${basename(argv[0])}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 mkdir(dir);
 const path = dir + "/s.sock";
 
