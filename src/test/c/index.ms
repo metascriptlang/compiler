@@ -8,6 +8,7 @@ import "./control";
 import "./strings";
 import "./expressions";
 import "./closures";
+import "./sendableClosureEnv";
 import "./result";
 import "./jsx";
 import "./converter";

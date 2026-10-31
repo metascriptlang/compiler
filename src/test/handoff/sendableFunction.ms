@@ -163,3 +163,32 @@ test "sendableFunction: a message to an actor charges the caller only its operan
 	const ownCall = ACTORS + "const cb: Handler = twice;\nconst job = async (n: int32): Promise<int32> => cb(n);\nconst r = runJob(job);";
 	assert strictErrorCount(ownCall) > 0, "the Sendable function itself calls a function value";
 }
+
+const KEEPER = `
+type Probe = Sendable<() => int32>;
+actor Keeper {
+	total: int32 = 0;
+	take(f: Probe): int32 { this.total += f(); return this.total; }
+	read(): int32 { return this.total; }
+}
+function takeSink(sink p: Probe): int32 { return p(); }
+`;
+
+test "sendableFunction: a closure converts to a sink Sendable parameter through the same capture check" {
+	const mutable = KEEPER + "function f(): int32 {\n\tlet n: int32 = 1;\n\tconst r = takeSink((): int32 => n);\n\tn = 2;\n\treturn r;\n}";
+	assert hasError(mutable, "mutable variable 'n' cannot be captured by a Sendable function");
+	const copy = KEEPER + "function f(): int32 {\n\tconst n: int32 = 1;\n\treturn takeSink((): int32 => n);\n}";
+	assert strictErrorCount(copy) == 0;
+}
+
+test "sendableFunction: a Sendable closure binding crosses to an actor once, as its last use" {
+	const twice = KEEPER + "async function f(k: Keeper): Promise<int32> {\n\tconst base: int32 = 5;\n" +
+		"\tconst f: Probe = () => base;\n\tconst a = await k.take(f);\n\tconst b = await k.take(f);\n\treturn a + b;\n}";
+	assert hasError(twice, "'f' was moved into a spawn thunk or an actor call and cannot be used afterwards");
+	const once = KEEPER + "async function f(k: Keeper): Promise<int32> {\n\tconst base: int32 = 5;\n" +
+		"\tconst f: Probe = () => base;\n\treturn await k.take(f);\n}";
+	assert strictErrorCount(once) == 0;
+	const literals = KEEPER + "async function f(k: Keeper): Promise<int32> {\n\tconst base: int32 = 5;\n" +
+		"\tconst a = await k.take(() => base);\n\tconst b = await k.take(() => base);\n\treturn a + b;\n}";
+	assert strictErrorCount(literals) == 0;
+}
