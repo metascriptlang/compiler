@@ -6,6 +6,7 @@
 // @exit: 0
 // @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
 // @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
+// @xfail(san): Promise.all over spawned Results never destroys their Buffers (ledger msUint8ArrayRefCell alloc=6 destroy=0), inbox card 2026-11-01-promise-all-of-spawned-results-leaks-their-payload
 
 import { ecGenerateAsync, ecdsaSignAsync, ecdsaVerify, ecFree } from "std/crypto/rsa";
 
