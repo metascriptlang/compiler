@@ -1,6 +1,7 @@
 // @stdout: s:x n:7 s:y n:8 s:z n:9
 // @stdout: 10 13 1
 // @stdout: s:x0 s:y2 s:z3
+// @stdout: s:x0 s:y2
 // A super call forwards a union or a large struct to the base constructor the way any call
 // passes them, from a written constructor and from one a derived class inherits, and a derived
 // class answers to the base's constructor signatures.
@@ -36,3 +37,5 @@ class Labeled {
 class Child extends Labeled {}
 class Grandchild extends Child {}
 console.log(new Child("x").v, new Child("y", 2).v, new Grandchild("z", 3).v);
+class Holder<T> extends Labeled { extra: T | null = null; }
+console.log(new Holder<int32>("x").v, new Holder<string>("y", 2).v);
