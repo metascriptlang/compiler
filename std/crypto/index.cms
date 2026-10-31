@@ -55,7 +55,7 @@ extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string)
 
 // Random
 extern function msCryptoRandomBytes(size: number): string;
-extern function msCryptoRandomInt(min: number, max: number): number;
+extern function msCryptoRandomIntInto(min: number, max: number, ref out: int64[1]): int32;
 extern function msCryptoRandomUuid(): string;
 
 // Timing-safe comparison
@@ -89,7 +89,7 @@ export type HashAlgorithm =
 
 export type HashEncoding = "hex" | "base64";
 
-import { CryptoError, CryptoErrorKind, hashFailed, hmacFailed, randomFailed, keyDerivationFailed } from "./errors";
+import { CryptoError, CryptoErrorKind, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidInput } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 // ===== Initialization =====
@@ -156,11 +156,15 @@ export function randomBytes(size: number): Result<Buffer, CryptoError> {
 }
 
 export function randomInt(min: number, max: number): Result<number, CryptoError> {
-	const result = msCryptoRandomInt(min, max);
-	if (result == -1) {
-		return Result.err(randomFailed("Random integer generation failed"));
-	}
-	return Result.ok(result);
+	let drawn: int64[1] = [0];
+	const status = msCryptoRandomIntInto(min, max, drawn);
+	if (status == 0) return Result.ok(drawn[0] as number);
+	if (status == 1) return Result.err(invalidInput("random", "min must be a safe integer"));
+	if (status == 2) return Result.err(invalidInput("random", "max must be a safe integer"));
+	if (status == 3) return Result.err(invalidInput("random", "max must be greater than min"));
+	if (status == 4) return Result.err(invalidInput("random", "max - min must be at most 2^48"));
+	if (status == 5) return Result.err(randomFailed("Random integer generation failed"));
+	throw new Error(`randomInt: unhandled status ${status}`);
 }
 
 export function randomUUID(): Result<string, CryptoError> {
@@ -184,6 +188,7 @@ export class Hasher {
 
 	static create(algorithm: string): Hasher {
 		const ctx = msCryptoHashInitHandle(algorithm);
+		if (ctx == 0) throw new Error(`createHash: unsupported algorithm "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
@@ -227,6 +232,7 @@ export class Hmac {
 
 	static create(algorithm: string, key: Bytes): Hmac {
 		const ctx = msCryptoHmacInitHandle(algorithm, rawString(key));
+		if (ctx == 0) throw new Error(`createHmac: unsupported algorithm "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
@@ -312,6 +318,9 @@ export function fromBase64(b64: string): Buffer {
 
 export function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: string): Result<Buffer, CryptoError> {
 	if (digest == "") digest = "sha256";
+	if (iterations < 1) return Result.err(invalidInput("pbkdf2", "iterations must be at least 1"));
+	if (keyLength < 1 || keyLength > 1048576) return Result.err(invalidInput("pbkdf2", "keyLength must be between 1 and 1048576"));
+	if (!msCryptoIsHashSupported(digest)) return Result.err(invalidInput("pbkdf2", `unsupported digest "${digest}"`));
 	const result = msCryptoPbkdf2(rawString(password), rawString(salt), iterations, keyLength, digest);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
@@ -319,6 +328,8 @@ export function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLengt
 
 export function hkdf(algorithm: string, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
 	if (algorithm == "") algorithm = "sha256";
+	if (!msCryptoIsHashSupported(algorithm)) return Result.err(invalidInput("hkdf", `unsupported algorithm "${algorithm}"`));
+	if (length < 1) return Result.err(invalidInput("hkdf", "length must be at least 1"));
 	const result = msCryptoHkdf(algorithm, rawString(ikm), rawString(salt), rawString(info), length);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(rawBuffer(result));

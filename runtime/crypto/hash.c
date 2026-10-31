@@ -43,6 +43,7 @@
 #endif
 
 #include "mbedtls/md.h"
+#include "mbedtls/platform_util.h"
 
 /* ===== Internal State ===== */
 
@@ -161,18 +162,29 @@ msString msCryptoRandomBytes(int64_t size) {
 	return result;
 }
 
-double msCryptoRandomInt(double min, double max) {
-	if (min >= max) return -1.0;
+#define MS_RANDOM_INT_MAX_SAFE 9007199254740991.0
+#define MS_RANDOM_INT_MAX_RANGE 281474976710656.0 /* 2^48 */
+
+static int is_safe_integer(double v) {
+	return v == v && v >= -MS_RANDOM_INT_MAX_SAFE && v <= MS_RANDOM_INT_MAX_SAFE && v == (double)(int64_t)v;
+}
+
+int32_t msCryptoRandomIntInto(double min, double max, int64_t* out) {
+	if (!is_safe_integer(min)) return MS_RANDOM_INT_BAD_MIN;
+	if (!is_safe_integer(max)) return MS_RANDOM_INT_BAD_MAX;
+	if (max <= min) return MS_RANDOM_INT_EMPTY_RANGE;
+	if (max - min > MS_RANDOM_INT_MAX_RANGE) return MS_RANDOM_INT_RANGE_TOO_WIDE;
 
 	int64_t lo = (int64_t)min;
-	int64_t hi = (int64_t)max;
-	int64_t range = hi - lo;
-	if (range <= 0) return -1.0;
-
+	uint64_t range = (uint64_t)((int64_t)max - lo);
+	uint64_t threshold = (0 - range) % range;
 	uint64_t r;
-	if (ms_random_fill((uint8_t*)&r, sizeof(r)) != 0) return -1.0;
+	do {
+		if (ms_random_fill((uint8_t*)&r, sizeof(r)) != 0) return MS_RANDOM_INT_SOURCE_FAILED;
+	} while (r < threshold);
 
-	return (double)(lo + (int64_t)(r % (uint64_t)range));
+	*out = lo + (int64_t)(r % range);
+	return 0;
 }
 
 msString msCryptoRandomUuid(void) {
@@ -354,7 +366,7 @@ double msCryptoIsHashSupported(msString algorithm) {
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */
 
-static void pbkdf2_hmac(
+static int pbkdf2_hmac(
 	const mbedtls_md_info_t* md_info,
 	const uint8_t* password, size_t password_len,
 	const uint8_t* salt, size_t salt_len,
@@ -362,58 +374,64 @@ static void pbkdf2_hmac(
 	uint8_t* output, size_t output_len
 ) {
 	size_t hash_len = mbedtls_md_get_size(md_info);
-	uint8_t* U = (uint8_t*)msMemAlloc(hash_len);
-	uint8_t* T = (uint8_t*)msMemAlloc(hash_len);
+	uint8_t U[64];
+	uint8_t T[64];
 	uint8_t* salt_block = (uint8_t*)msMemAlloc(salt_len + 4);
 	memcpy(salt_block, salt, salt_len);
 	size_t output_pos = 0;
 	uint32_t block_num = 1;
+	int ret = 0;
 	while (output_pos < output_len) {
 		salt_block[salt_len + 0] = (block_num >> 24) & 0xff;
 		salt_block[salt_len + 1] = (block_num >> 16) & 0xff;
 		salt_block[salt_len + 2] = (block_num >> 8) & 0xff;
 		salt_block[salt_len + 3] = block_num & 0xff;
-		mbedtls_md_hmac(md_info, password, password_len, salt_block, salt_len + 4, U);
+		ret = mbedtls_md_hmac(md_info, password, password_len, salt_block, salt_len + 4, U);
+		if (ret != 0) break;
 		memcpy(T, U, hash_len);
 		for (uint32_t j = 1; j < iterations; j++) {
-			mbedtls_md_hmac(md_info, password, password_len, U, hash_len, U);
+			ret = mbedtls_md_hmac(md_info, password, password_len, U, hash_len, U);
+			if (ret != 0) break;
 			for (size_t k = 0; k < hash_len; k++) T[k] ^= U[k];
 		}
+		if (ret != 0) break;
 		size_t copy_len = output_len - output_pos;
 		if (copy_len > hash_len) copy_len = hash_len;
 		memcpy(output + output_pos, T, copy_len);
 		output_pos += copy_len;
 		block_num++;
 	}
-	free(U); free(T); free(salt_block);
+	mbedtls_platform_zeroize(U, sizeof(U));
+	mbedtls_platform_zeroize(T, sizeof(T));
+	mbedtls_platform_zeroize(salt_block, salt_len + 4);
+	free(salt_block);
+	return ret;
 }
 
 msString msCryptoPbkdf2(msString password, msString salt,
                         int32_t iterations, int32_t keyLength, msString digest) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(digest), digest.len);
-	if (md_info == NULL || keyLength <= 0) return MS_EMPTY_STRING;
+	if (md_info == NULL || iterations < 1 || keyLength < 1 || keyLength > MS_PBKDF2_MAX_KEY_LENGTH) return MS_EMPTY_STRING;
 	uint8_t* output = (uint8_t*)msMemAlloc((size_t)keyLength);
-	pbkdf2_hmac(md_info,
+	int ret = pbkdf2_hmac(md_info,
 		(const uint8_t*)msStringToCString(password), (size_t)password.len,
 		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
 		(uint32_t)iterations, output, (size_t)keyLength);
-	msString result = msStringNew((const char*)output, (int64_t)keyLength);
+	msString result = ret == 0 ? msStringNew((const char*)output, (int64_t)keyLength) : MS_EMPTY_STRING;
+	mbedtls_platform_zeroize(output, (size_t)keyLength);
 	free(output);
 	return result;
 }
 
 /* ===== HKDF (RFC 5869 — manual implementation using MD HMAC) ===== */
 
-static msString hkdf_extract(const mbedtls_md_info_t* md_info,
-	const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len) {
+static int hkdf_extract(const mbedtls_md_info_t* md_info,
+	const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len, uint8_t* prk) {
 	size_t hash_size = mbedtls_md_get_size(md_info);
-	uint8_t prk[64];
 	uint8_t zero_salt[64] = {0};
 	const uint8_t* actual_salt = salt_len > 0 ? salt : zero_salt;
 	size_t actual_salt_len = salt_len > 0 ? salt_len : hash_size;
-	int ret = mbedtls_md_hmac(md_info, actual_salt, actual_salt_len, ikm, ikm_len, prk);
-	if (ret != 0) return MS_EMPTY_STRING;
-	return msStringNew((const char*)prk, (int64_t)hash_size);
+	return mbedtls_md_hmac(md_info, actual_salt, actual_salt_len, ikm, ikm_len, prk);
 }
 
 static msString hkdf_expand(const mbedtls_md_info_t* md_info,
@@ -425,6 +443,7 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 	size_t T_len = 0;
 	size_t okm_offset = 0;
 	uint8_t counter = 1;
+	int ret = 0;
 	while (okm_offset < length) {
 		size_t input_len = T_len + info_len + 1;
 		uint8_t* input = (uint8_t*)msMemAlloc(input_len);
@@ -432,9 +451,10 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 		if (T_len > 0) { memcpy(input + pos, T, T_len); pos += T_len; }
 		if (info_len > 0) { memcpy(input + pos, info, info_len); pos += info_len; }
 		input[pos] = counter;
-		int ret = mbedtls_md_hmac(md_info, prk, prk_len, input, input_len, T);
+		ret = mbedtls_md_hmac(md_info, prk, prk_len, input, input_len, T);
+		mbedtls_platform_zeroize(input, input_len);
 		free(input);
-		if (ret != 0) { free(okm); return MS_EMPTY_STRING; }
+		if (ret != 0) break;
 		T_len = hash_size;
 		size_t copy_len = length - okm_offset;
 		if (copy_len > hash_size) copy_len = hash_size;
@@ -442,7 +462,9 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 		okm_offset += copy_len;
 		counter++;
 	}
-	msString result = msStringNew((const char*)okm, (int64_t)length);
+	msString result = ret == 0 ? msStringNew((const char*)okm, (int64_t)length) : MS_EMPTY_STRING;
+	mbedtls_platform_zeroize(T, sizeof(T));
+	mbedtls_platform_zeroize(okm, length);
 	free(okm);
 	return result;
 }
@@ -451,13 +473,16 @@ msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,
                       msString info, int32_t length) {
 	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (md_info == NULL || length <= 0) return MS_EMPTY_STRING;
-	msString prk = hkdf_extract(md_info,
+	uint8_t prk[64];
+	if (hkdf_extract(md_info,
 		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
-		(const uint8_t*)msStringToCString(ikm), (size_t)ikm.len);
-	if (prk.len == 0) return MS_EMPTY_STRING;
+		(const uint8_t*)msStringToCString(ikm), (size_t)ikm.len, prk) != 0) {
+		mbedtls_platform_zeroize(prk, sizeof(prk));
+		return MS_EMPTY_STRING;
+	}
 	msString result = hkdf_expand(md_info,
-		(const uint8_t*)msStringToCString(prk), (size_t)prk.len,
+		prk, mbedtls_md_get_size(md_info),
 		(const uint8_t*)msStringToCString(info), (size_t)info.len, (size_t)length);
-	msStringDestroy(prk);
+	mbedtls_platform_zeroize(prk, sizeof(prk));
 	return result;
 }

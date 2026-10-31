@@ -113,8 +113,6 @@ test "streaming hash digest encoding consumes its context once" {
 			assert hasher.digestBuffer().length == 0;
 		}
 	}
-	assert createHash("bogus").digest() == "";
-	assert createHmac("bogus", "").digest() == "";
 }
 
 test "crypto codecs retain malformed input results" {
