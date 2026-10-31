@@ -1476,17 +1476,18 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 }
 
 // The decrement of a counted handle that reports whether it was the last holder, leaving the destroying to the caller;
-// a nil or constant handle is never last, and a future's last release queues it for the VM instead.
+// a nil or constant handle is never last, and a future's last release queues it for the VM instead. A last release
+// takes the cell out of the cycle roots at once, so a collection that runs before the caller frees it never reaches it.
 export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): boolean {
 	if (handle == 0) return false;
 	when (mode != "danger") { checkHeapKind(handle); }
 	const index = handleIndex(handle);
 	let last = false;
 	match (handleHeapKind(handle)) {
-		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; },
+		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc = data.rc - 1; last = data.rc <= 0; if (last) rcForgetRoot(arrHeap, objHeap, handle); },
 		RaiserHeapKind.String => { const cell = textAddress(handle); setTextRc(cell, textRc(cell) - 1); last = textRc(cell) <= 0; },
 		RaiserHeapKind.Box => { const cell = boxCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
-		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; },
+		RaiserHeapKind.Seq => { const cell = seqCellOf(handle); setCellRc(cell, cellRc(cell) - 1); last = cellRc(cell) <= 0; if (last) rcForgetRoot(arrHeap, objHeap, handle); },
 		RaiserHeapKind.Future => futureDecref(arrHeap, handle),
 		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
 	}
