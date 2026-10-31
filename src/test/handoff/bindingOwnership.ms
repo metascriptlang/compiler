@@ -209,6 +209,7 @@ test "bindingOwnership: an explicit move out of a path a dead local owns by valu
 		{ name: "an element", body: "export function run(): int32 { let xs: Vec<Leaf> = [new Leaf()]; const t = move xs[0]; return t.v; }" },
 		{ name: "a nested struct field", body: "export function run(): int32 { let o: Outer = { wrap: { leaf: new Leaf() }, n: 1 }; const t = move o.wrap.leaf; return t.v + 0; }" },
 		{ name: "a Result payload", body: "export function run(): int32 { let r = made(); if (!r.ok) return 0; const t = move r.value; return t.v; }" },
+		{ name: "a holder without a destroy hook", body: "struct Bare { leaf: Leaf; tag: number; }\nexport function run(): int32 { let b: Bare = { leaf: new Leaf(), tag: 1 }; return (move b.leaf).v; }" },
 		{ name: "a local declared inside the loop", body: "export function run(): int32 { let s = 0; for (let i = 0; i < 2; i++) { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; s += t.v; } return s; }" },
 	];
 	for (const item of kept) {
@@ -222,6 +223,9 @@ test "bindingOwnership: an explicit move out of a path a dead local owns by valu
 		{ name: "a ref parameter root", body: "function take(ref w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return take(w).v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 		{ name: "a this root", body: "function take(this w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return w.take().v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 		{ name: "a captured local", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const f = (): int32 => w.leaf.v; const t = move w.leaf; return t.v + f(); }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
+		{ name: "a destroy hook of the holder reads the slot", body: "struct Kept { leaf: Leaf; tag: number; }\nfunction onDestroy(this k: Kept): void { console.log(String(k.leaf.v)); }\nexport function run(): int32 { let k: Kept = { leaf: new Leaf(), tag: 1 }; return (move k.leaf).v; }", refusal: "and Kept's onDestroy reads it when 'k' is destroyed" },
+		{ name: "a destroy hook of the root reads a nested slot", body: "struct Inner { leaf: Leaf; }\nstruct Shell { i: Inner; tag: number; }\nfunction onDestroy(this s: Shell): void { console.log(String(s.i.leaf.v)); }\nexport function run(): int32 { let s: Shell = { i: { leaf: new Leaf() }, tag: 1 }; return (move s.i.leaf).v; }", refusal: "and Shell's onDestroy reads it when 's' is destroyed" },
+		{ name: "a destroy hook reached through an alias", body: "struct Kept { leaf: Leaf; tag: number; }\nfunction onDestroy(this k: Kept): void { console.log(String(k.leaf.v)); }\ntype Held = Kept;\nexport function run(): int32 { let k: Held = { leaf: new Leaf(), tag: 1 }; return (move k.leaf).v; }", refusal: "onDestroy reads it when 'k' is destroyed" },
 		{ name: "a global root", body: "export function run(): int32 { const t = move g.leaf; return t.v; }", refusal: "cannot move 'g.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 	];
 	for (const item of refused) {
