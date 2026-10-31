@@ -11,11 +11,11 @@ import {
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
+import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
-	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
+	docLine, docSoftLine, docHardLine, docIfBreak, docNil,
 	docCommaSepList, docWithoutSoftLines, docWillBreak,
 } from "../doc";
 import { callPrintNode, printedAncestor } from "./callbacks";
@@ -645,16 +645,18 @@ export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchExprData;
 	const cases: Doc[] = [];
+	const starts: int32[] = [];
 	for (let i = 0; i < d.matchCases.length; i += 1) {
 		const c = d.matchCases[i];
 		cases.push(withComments(c, printMatchCase(c, options, i == d.matchCases.length - 1)));
+		starts.push(startLineOf(c));
 	}
 	return docGroup([
 		docText("match ("),
 		callPrintNode(d.matchDisc, options),
 		docText(") {"),
-		docIndent([docSoftLine(), docJoin(cases, docSoftLine())]),
-		docSoftLine(),
+		docIndent([docHardLine(), ...joinKeepingBlankLines(cases, starts)]),
+		docHardLine(),
 		docText("}"),
 	]);
 }
@@ -665,7 +667,13 @@ export function printMatchCase(node: Node, options: FormatOptions, isLast: boole
 	for (const p of d.casePatterns) {
 		pats.push(callPrintNode(p, options));
 	}
-	const parts: Doc[] = [docJoin(pats, docText(" | "))];
+	const rest: Doc[] = [];
+	for (let i = 1; i < pats.length; i += 1) {
+		rest.push(docText(" |"));
+		rest.push(docLine());
+		rest.push(pats[i]);
+	}
+	const parts: Doc[] = [docGroup([pats[0], docIndent(rest)])];
 	if (d.caseGuard != null) {
 		parts.push(docText(" when "));
 		parts.push(callPrintNode(d.caseGuard, options));
