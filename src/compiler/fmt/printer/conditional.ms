@@ -8,9 +8,11 @@ import {
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { FormatOptions } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc";
+import { Doc, docText, docSourceText, docGroup, docIndent, docLine, docSoftLine, docHardLine } from "../doc";
+import { CommentKind } from "../comments";
 import { callPrintNode, printedAncestor, pushPrinted, popPrinted, keepsWrittenParensUnder } from "./callbacks";
-import { hasCommentsOutside } from "./commentDocs";
+import { hasCommentsOutside, commentsOfRun } from "./commentDocs";
+import { codeByteAfter } from "./literals";
 
 enum Slot {
 	Root,
@@ -38,14 +40,29 @@ function branchParts(child: Node, slot: Slot, options: FormatOptions): Doc[] {
 	return parts;
 }
 
+function beforeOperator(branch: Node, operator: int32): Doc[] {
+	const out: Doc[] = [];
+	for (const c of commentsOfRun().leading(branch)) {
+		if (c.formatted || codeByteAfter(c.endLine, c.endColumn) != operator) continue;
+		out.push(docSourceText(c.text));
+		out.push(c.kind == CommentKind.Line ? docHardLine() : docText(" "));
+		c.markFormatted();
+	}
+	return out;
+}
+
 function conditionalParts(node: Node, slot: Slot, options: FormatOptions): Doc[] {
 	const d = node.data as ConditionalExprData;
 	const test = callPrintNode(d.ternaryCondition, options);
+	const beforeQuestion = beforeOperator(d.ternaryConsequent, "?".code);
+	const beforeColon = beforeOperator(d.ternaryAlternate, ":".code);
 	const tail: Doc[] = [
 		docLine(),
+		...beforeQuestion,
 		docText("? "),
 		docIndent(branchParts(d.ternaryConsequent, Slot.Consequent, options)),
 		docLine(),
+		...beforeColon,
 		docText(": "),
 		docIndent(branchParts(d.ternaryAlternate, Slot.Alternate, options)),
 	];

@@ -1,7 +1,7 @@
 // Expression Printers — binary, unary, call, member, literals (object/array), etc.
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, SourceLocation,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, TypeAssertionData,
@@ -21,7 +21,7 @@ import {
 import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
-import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
+import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt, isBeforeKeyColon } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody, modeNames } from "./statements";
 import { printTypeAnnotation } from "./types";
 
@@ -406,6 +406,18 @@ function needsQuote(key: string): boolean {
 	return false;
 }
 
+function commentsBeforeColon(prop: Node, key: SourceLocation, options: FormatOptions): Doc[] {
+	const out: Doc[] = [];
+	for (const c of commentsOfRun().leading(prop)) {
+		if (c.formatted || !isBeforeKeyColon(options.source, key, c.line, c.column)) continue;
+		out.push(docText(" "));
+		out.push(docSourceText(c.text));
+		if (c.kind == CommentKind.Line) out.push(docHardLine());
+		c.markFormatted();
+	}
+	return out;
+}
+
 export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectLiteralData;
 	if (d.keys.length == 0) {
@@ -427,11 +439,12 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 		const leadingComments: Doc[] = prop != null && keyLoc != null ? commentLeadingBefore(prop, keyLoc) : [];
 		let entryDoc: Doc;
+		const keyComments: Doc[] = prop != null && keyLoc != null ? commentsBeforeColon(prop, keyLoc, options) : [];
 		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column, options.singleQuote) : "";
 		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
-			entryDoc = prop != null ? objectProperty([docText(writtenKey)], writtenKey.length, prop, options) : docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
+			entryDoc = prop != null ? objectProperty([docText(writtenKey), ...keyComments], writtenKey.length, prop, options) : docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
 		} else if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
 			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
@@ -442,7 +455,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 				entryDoc = docText(d.keys[i]);
 			} else {
 				const keyStr = needsQuote(d.keys[i]) ? "\"" + d.keys[i] + "\"" : d.keys[i];
-				entryDoc = prop != null ? objectProperty([docText(keyStr)], keyStr.length, prop, options) : docGroup([docText(keyStr + ": "), callPrintNode(prop, options)]);
+				entryDoc = prop != null ? objectProperty([docText(keyStr), ...keyComments], keyStr.length, prop, options) : docGroup([docText(keyStr + ": "), callPrintNode(prop, options)]);
 			}
 		} else {
 			entryDoc = callPrintNode(prop, options);
@@ -719,6 +732,11 @@ export function printSizeofExpr(node: Node): Doc {
 	return docText("sizeof " + d.sizeofType);
 }
 
+function isArrayHole(el: Node, options: FormatOptions): boolean {
+	return el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
+		&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
+}
+
 export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayPatternData;
 	if (d.patternElements.length == 0) return docText("[]");
@@ -726,14 +744,13 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	for (let i = 0; i < d.patternElements.length; i += 1) {
 		if (i > 0) elements.push(docText(", "));
 		const el = d.patternElements[i];
-		const hole = el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
-			&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
-		if (!hole) elements.push(callPrintNode(el, options));
+		if (!isArrayHole(el, options)) elements.push(callPrintNode(el, options));
 		if (i < d.patternDefaults.length && d.patternDefaults[i] != null) {
 			elements.push(docText(" = "));
 			elements.push(callPrintNode(d.patternDefaults[i], options));
 		}
 	}
+	if (isArrayHole(d.patternElements[d.patternElements.length - 1], options)) elements.push(docText(","));
 	return docGroup([docText("["), docGroup(elements), docText("]")]);
 }
 

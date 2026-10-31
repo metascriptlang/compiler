@@ -7,14 +7,14 @@ import {
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, PropertyDeclData, makeLoc,
 } from "../../../ast/node";
-import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
+import { WhenChain, SourceComment, CommentKind, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docLine, docCommaSepList, docIfBreak, docNil, docWillBreak } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { isAssignOp } from "../../../ast/operators";
 import { printTypeAnnotation, isObjectTypeAnnotation, inlineObjectType } from "./types";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, codeByteAfter, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
 class ListItem {
 	line: int32;
@@ -626,14 +626,35 @@ function spellParamModifiers(name: string): string {
 	return spelled + rest;
 }
 
+function itemBefore(locs: SourceLocation[], items: int32, c: SourceComment): int32 {
+	let owner = -1;
+	for (let i = 0; i < locs.length && i < items; i += 1) {
+		if (locs[i].line == c.line && locs[i].column < c.column) owner = i;
+	}
+	return owner;
+}
+
 export function commentedList(items: Doc[], locs: SourceLocation[], inner: SourceComment[], open: string, close: string): Doc {
 	const lines: int32[] = [];
-	const entries: Doc[] = [];
+	const beforeComma: Doc[][] = [];
 	for (let i = 0; i < items.length; i += 1) {
 		lines.push(i < locs.length ? locs[i].line : 0);
-		entries.push(docGroup([items[i], docText(",")]));
+		beforeComma.push([]);
 	}
-	return boxed(open, interleave(entries, lines, lines, inner), close);
+	const rest: SourceComment[] = [];
+	for (const c of inner) {
+		const owner = c.kind == CommentKind.Line || codeByteAfter(c.endLine, c.endColumn) != ",".code ? -1 : itemBefore(locs, items.length, c);
+		if (owner < 0) {
+			rest.push(c);
+			continue;
+		}
+		beforeComma[owner].push(docText(" "));
+		beforeComma[owner].push(docSourceText(c.text));
+		c.markFormatted();
+	}
+	const entries: Doc[] = [];
+	for (let i = 0; i < items.length; i += 1) entries.push(docGroup([items[i], ...beforeComma[i], docText(",")]));
+	return boxed(open, interleave(entries, lines, lines, rest), close);
 }
 
 function pushPlaced(holder: Node, out: SourceComment[]): void {

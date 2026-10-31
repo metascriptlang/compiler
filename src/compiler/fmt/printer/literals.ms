@@ -381,6 +381,44 @@ function writtenSpacingAside(source: string, from: int32, text: string): boolean
 	return true;
 }
 
+export function codeByteAfter(line: int32, column: int32): int32 {
+	let pos = sourceOffset(indexed, line, column - 1);
+	if (pos < 0) return -1;
+	while (pos < indexed.byteLength) {
+		const ch = indexed.byteAt(pos);
+		const next = pos + 1 < indexed.byteLength ? indexed.byteAt(pos + 1) : 0;
+		if (ch == " ".code || ch == "\t".code || ch == "\r".code || ch == "\n".code) pos = pos + 1;
+		else if (ch == "/".code && next == "/".code) {
+			while (pos < indexed.byteLength && indexed.byteAt(pos) != "\n".code) pos = pos + 1;
+		} else if (ch == "/".code && next == "*".code) {
+			pos = pos + 2;
+			while (pos + 1 < indexed.byteLength && !(indexed.byteAt(pos) == "*".code && indexed.byteAt(pos + 1) == "/".code)) pos = pos + 1;
+			pos = pos + 2;
+		} else return ch;
+	}
+	return -1;
+}
+
+export function isBeforeKeyColon(source: string, key: SourceLocation, line: int32, column: int32): boolean {
+	let pos = sourceOffset(source, key.line, key.column - 1);
+	const at = sourceOffset(source, line, column - 1);
+	if (pos < 0 || at <= pos) return false;
+	while (pos < source.byteLength) {
+		const ch = source.byteAt(pos);
+		const next = pos + 1 < source.byteLength ? source.byteAt(pos + 1) : 0;
+		if (ch == ":".code) return pos > at;
+		if (ch == "\"".code || ch == "'".code) pos = skipQuoted(source, pos);
+		else if (ch == "/".code && next == "/".code) {
+			while (pos < source.byteLength && source.byteAt(pos) != "\n".code) pos = pos + 1;
+		} else if (ch == "/".code && next == "*".code) {
+			pos = pos + 2;
+			while (pos + 1 < source.byteLength && !(source.byteAt(pos) == "*".code && source.byteAt(pos + 1) == "/".code)) pos = pos + 1;
+			pos = pos + 2;
+		} else pos = pos + 1;
+	}
+	return false;
+}
+
 export function rawObjectKeyAt(source: string, line: int32, column: int32, singleQuote: boolean = false): string {
 	const pos = sourceOffset(source, line, column - 1);
 	if (pos < 0) return "";
