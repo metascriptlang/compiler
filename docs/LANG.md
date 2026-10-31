@@ -1738,12 +1738,19 @@ f(K.B);  // matches sig 2
 f(K.C);  // matches impl (fallback)
 ```
 
-Rules:
-- Implementation must come LAST after all overload signatures
-- All sigs must have the same arity as the implementation
+Rules, checked at the declarations whether or not a call reaches the set; each error sits
+on the signature or definition that breaks it:
+- A sig's arity lies between the impl's required parameter count and its arity
 - Each sig's param types must be assignable to the impl's corresponding params
-- Each sig's return type must be assignable to the impl's return type
-- At least one non-sig definition (the implementation) must exist
+- A sig's return type and the impl's must be assignable one way or the other, or the sig returns `void`
+- Exactly one non-sig definition (the implementation) must exist: none gives
+  `Overloaded function 'g' has no implementation`, a second gives
+  `Overloaded function 'd' has more than one implementation`
+- Every declaration of a set agrees with the implementation on `export`, `static` and
+  `private`/`protected` (`Overload signatures of 'e' must all be exported or non-exported`)
+- A method implementation written with an empty body `{}` implements its signatures
+- Not checked yet: the implementation's position. An implementation before its
+  signatures, or a statement between them, still compiles
 - Same-name definitions with the same named parameter types cannot differ only
   in their annotated return type. The second declaration is rejected even when
   there is no call; the diagnostic names the function and previous declaration.
@@ -1751,6 +1758,12 @@ Rules:
 Measured on C and JS, 2026-10-03: the conflicting `pick(int32)` definitions error
 at line 2; overloads distinguished by `int32` versus `string` still print `7 s`.
 Contract: `src/test/c/functions.ms`.
+Measured 2026-10-31 on a candidate of this tree: a set with a 3-parameter sig over a
+1-parameter impl and no call errors at the sig's line (`Overload signature for 'f' has 3
+parameter(s) but implementation has 1`, line 2); a sig `private m` over a public `m` errors at
+line 2 and `static s` over an instance `s` at line 4; a sig over a method `ping(…): void {}`
+prints `quiet` on C, JS and Raiser (corpus `1263`). Contract:
+`src/test/checker3pass/scenarios/overloadSignatureReturn.ms`.
 
 **Known limitation — literal args**: Overload resolution currently scores each
 argument against each candidate's param type *without* per-candidate contextual
