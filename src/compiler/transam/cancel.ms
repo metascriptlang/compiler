@@ -1,13 +1,13 @@
 // Trans-Am Cancellation — version-based query cancellation for LSP
 //
 // LSP calls requestCancel() on user keystroke. Long-running queries
-// periodically call checkCancel() to self-abort. Version only increments,
+// periodically call isCancelled() to self-abort. Version only increments,
 // never resets (Salsa pattern). No atomics needed (single-threaded).
 //
 // CancelCtx type lives in checker/context.ms (single source of truth).
 // transam→checker dependency is already established (CheckerContext, etc.).
 
-import { CancelCtx, stopForInput } from "../../checker/context";
+import { CancelCtx, stopForInput, isCancelled } from "../../checker/context";
 
 // ===== Cancellation Context =====
 
@@ -20,11 +20,6 @@ export function createCancelContext(): CancelCtx {
 // Capture version at query start
 export function getCancelVersion(ctx: CancelCtx): int32 {
 	return ctx.version;
-}
-
-// Check if query should abort (version changed since start)
-export function checkCancel(ctx: CancelCtx, startingVersion: int32): boolean {
-	return ctx.version != startingVersion || ctx.cancelled;
 }
 
 // Request cancellation (called by LSP on keystroke)
@@ -49,7 +44,7 @@ test "initial state is not cancelled" {
 test "checkCancel false when version matches" {
 	const ctx = createCancelContext();
 	const ver = getCancelVersion(ctx);
-	assert !checkCancel(ctx, ver);
+	assert !isCancelled(ctx, ver);
 }
 
 test "requestCancel increments version" {
@@ -63,7 +58,7 @@ test "checkCancel true after requestCancel" {
 	const ctx = createCancelContext();
 	const ver = getCancelVersion(ctx);
 	requestCancel(ctx);
-	assert checkCancel(ctx, ver);
+	assert isCancelled(ctx, ver);
 }
 
 test "resetCancel clears flag but keeps version" {

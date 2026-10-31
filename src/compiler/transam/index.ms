@@ -41,7 +41,7 @@ import {
 import { tryMarkGreen, executeQueryWith } from "./redGreen";
 import {
 	createCancelContext,
-	getCancelVersion, checkCancel, requestCancel, resetCancel
+	getCancelVersion, requestCancel, resetCancel
 } from "./cancel";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
@@ -651,7 +651,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
 		// G5: Bail early if cancelled (new keystroke arrived)
-		if (checkCancel(db.cancelCtx, startVersion)) return;
+		if (isCancelled(db.cancelCtx, startVersion)) return;
 
 		const depPath = getFilePath(db.fileInput, depId);
 		if (depPath == "") continue;
@@ -697,7 +697,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		collectTopLevel(tmpCtx, collected);
 		db.cache.collected += 1;
 		resolveDeclarations(tmpCtx, collected);
-		if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
+		if (!isCancelled(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 		db.trees.set(exportNodeKey(depId), collected);
 
 		const earlyExports = checkedByPrelude(db, depPath, collectExports(tmpCtx, depPath));
@@ -877,7 +877,7 @@ function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports
 	_checkingDb = db;
 	const ctx = dbBoundModule(filePath);
 	_checkingDb = outerDb;
-	if (ctx == null || checkCancel(db.cancelCtx, startVersion)) return;
+	if (ctx == null || isCancelled(db.cancelCtx, startVersion)) return;
 	updateModuleExports(db.exportRegistry, filePath, collectExports(ctx, filePath));
 }
 
@@ -942,8 +942,8 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		true,
 		globalImportsLayer(db, globals)
 	);
-	if (!checkCancel(db.cancelCtx, startVersion)) verifyAdoption(adoption);
-	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputs: bindInputs(db, filePath), unit });
+	if (!isCancelled(db.cancelCtx, startVersion)) verifyAdoption(adoption);
+	if (!isCancelled(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputs: bindInputs(db, filePath), unit });
 	return unit;
 }
 
@@ -977,7 +977,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	}
 	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
-	if (!checkedElsewhere(db, filePath) && !checkCancel(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
+	if (!checkedElsewhere(db, filePath) && !isCancelled(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
 	return unit.ctx;
 }
 
@@ -1105,7 +1105,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		db.bound.delete(filePath);
 
 		// If cancelled, discard frame without caching — partial result not reliable
-		if (checkCancel(db.cancelCtx, startVersion)) {
+		if (isCancelled(db.cancelCtx, startVersion)) {
 			popFrame(db.depStack);
 			db.checkInProgress.delete(filePath);
 			forgetClientsOfDiscardedUnit(db, fileId);
@@ -1397,7 +1397,7 @@ export {
 export { tryMarkGreen, executeQueryWith } from "./redGreen";
 export {
 	createCancelContext,
-	getCancelVersion, checkCancel, requestCancel, resetCancel
+	getCancelVersion, requestCancel, resetCancel
 } from "./cancel";
 
 // ===== Integration Tests =====
