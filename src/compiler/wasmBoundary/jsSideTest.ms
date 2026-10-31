@@ -388,7 +388,7 @@ test "js side: a callback that returns a value still copies a writable Span back
 
 test "js side: the copy-back of a Span runs only once every argument is encoded, so a failed encode writes nothing back" {
 	const code = bindingsFor(["stamp"]).modules[0].code;
-	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\ttry {\n\t\t\treturn __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]);\n\t\t} finally {\n\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);");
+	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\tsent = true;\n\t\ttry {\n\t\t\treturn __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]);\n\t\t} finally {\n\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0[0]);\n\t\tif (e1) __msbFree(e1[0]);");
 }
 
 test "js side: a Vec result with a writable Span copies back inside the call's finally and restores the takers after it" {
@@ -478,7 +478,7 @@ test "js side: a checked string parameter is tested before anything is allocated
 	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();
 	let r;
 	const d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;
-	let e0;
+	let e0, sent = false;
 	const mark = __msbTop;
 	try {");
 }
