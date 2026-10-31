@@ -345,7 +345,7 @@ export enum NodeFlag {
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 	Optional,      // parser: this class field was written `name?`
 	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
-	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
+	NoDispatch,    // transform: this identifier, or the member of a `super.m` call, calls the routine it names, never the dispatcher of its overrides (reference: procCall)
 	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back

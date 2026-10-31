@@ -11,7 +11,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, CheckerError } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
 import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
 import { checkImportCall } from "./importCall";
@@ -5954,9 +5954,21 @@ export function carriesLength(t: Type): boolean {
 	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || isStringLike(t) || t.kind == TypeKind.CString;
 }
 
+// `super.m()` runs the parent's `m` on `this`: the receiver carries the method's `this` at the
+// parent's type, so the member resolves as an instance member of the parent.
+function bindSuperReceiver(ctx: CheckerContext, receiver: Node): boolean {
+	if (receiver.resolvedSym == null || receiver.resolvedSym.symbolKind != SymbolKind.Class) return false;
+	const thisSym = lookupSymbol(ctx.table, "this");
+	if (thisSym == null) return false;
+	receiver.resolvedSym = thisSym;
+	return true;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
+	const superReceiver = isSuperReceiver(d.object) && bindSuperReceiver(ctx, d.object);
+	if (superReceiver) node.flags = node.flags.incl(NodeFlag.NoDispatch);
 	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
 	if (declaredUnion != null && unionVariantHasProperty(declaredUnion, d.property)
 			&& !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
@@ -6116,6 +6128,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = uint8[]`.
 	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object, d.property);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
+	const abstractOwner = superReceiver ? abstractMethodOwnerName(resolvedObjType, d.property) : "";
+	const superRefusal = !superReceiver ? ""
+		: !isUnresolvedType(propType) ? `Class field '${d.property}' defined by the parent class is not accessible in the child class via super`
+		: abstractOwner != "" ? `Abstract method '${d.property}' in class '${abstractOwner}' cannot be accessed via super expression`
+		: "";
+	if (superRefusal != "") {
+		addError(ctx, superRefusal, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	if (!isStaticClassAccess && isUnresolvedType(propType) && fieldOwnerSym != null) {
 		callDemandField(ctx, fieldOwnerSym, d.property, false, node);
 		propType = getProperty(resolvedObjType, d.property);
@@ -6680,12 +6702,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 		const engineVirtual = resolveEngineNodeVirtualProp(ctx, resolvedObjType, d.property, node);
 		if (engineVirtual != null) return engineVirtual;
-		const abstractOwner = isSuperReceiver(d.object) ? abstractMethodOwnerName(resolvedObjType, d.property) : "";
-		if (abstractOwner != "") {
-			const msg = `Abstract method '${d.property}' in class '${abstractOwner}' cannot be accessed via super expression`;
-			const at = node.location;
-			if (!ctx.errors.some((e: CheckerError): boolean => e.line == at.line && e.column == at.column && e.message == msg)) addError(ctx, msg, at.line, at.column);
-		} else if (!suppressDynWrite) {
+		if (!suppressDynWrite) {
 			const typeName = typeDisplayName(resolvedObjType);
 			let suggestion = "";
 			if (resolvedObjType.typeNames != null) {
