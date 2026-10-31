@@ -7,3 +7,4 @@ tools/editor-plugin/**/tree-sitter/src/** linguist-generated
 docs/** linguist-documentation
 src/test/corpus/programs/comptimeReadFile/greeting.txt -text
 src/test/emitRcScanFixtures/** -text
+tools/managedToolchain/fileCaseFoldData.ms text eol=lf
