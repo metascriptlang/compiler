@@ -242,7 +242,7 @@ static void completeRecv(msIoRequest* req) {
 }
 
 static int completeAccept(msIoEngine* e, msIoRequest* req) {
-	struct sockaddr_in addr;
+	struct sockaddr_storage addr;
 	socklen_t addrLen = sizeof(addr);
 	int cfd;
 	do {
@@ -254,7 +254,7 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 		msSelectorRegister(e->selector, req->fd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
 		return 1;
 	}
-	if (cfd >= 0) {
+	if (cfd >= 0 && (addr.ss_family == AF_INET || addr.ss_family == AF_INET6)) {
 		int flag = 1;
 		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	}

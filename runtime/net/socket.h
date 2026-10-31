@@ -156,18 +156,21 @@ static inline int32_t msNetListen(int32_t fd, int32_t backlog) {
 	return (int32_t)listen(fd, backlog);
 }
 
+static inline void msNetNoDelayIfTcp(int32_t fd, const struct sockaddr_storage* peer) {
+	if (peer->ss_family != AF_INET && peer->ss_family != AF_INET6) return;
+	int flag = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
+}
+
 /**
- * Accept a connection. Sets TCP_NODELAY on accepted socket for low latency.
+ * Accept a connection. Sets TCP_NODELAY on an accepted TCP socket for low latency.
  * Returns client fd on success, -1 on error.
  */
 static inline int32_t msNetAccept(int32_t fd) {
-	struct sockaddr_in client_addr;
-	ms_socklen_t client_len = sizeof(client_addr);
-	int client_fd = accept(fd, (struct sockaddr*)&client_addr, &client_len);
-	if (MS_LIKELY(client_fd >= 0)) {
-		int flag = 1;
-		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
-	}
+	struct sockaddr_storage peer;
+	ms_socklen_t peerLen = sizeof(peer);
+	int client_fd = accept(fd, (struct sockaddr*)&peer, &peerLen);
+	if (MS_LIKELY(client_fd >= 0)) msNetNoDelayIfTcp(client_fd, &peer);
 	return (int32_t)client_fd;
 }
 
@@ -357,13 +360,10 @@ static inline int32_t msNetSetBlocking(int32_t fd) {
  * Sets TCP_NODELAY on accepted socket.
  */
 static inline int32_t msNetAcceptNonBlock(int32_t fd) {
-	struct sockaddr_in ca;
-	ms_socklen_t cl = sizeof(ca);
-	int cfd = accept(fd, (struct sockaddr*)&ca, &cl);
-	if (cfd >= 0) {
-		int f = 1;
-		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &f, sizeof(f));
-	}
+	struct sockaddr_storage peer;
+	ms_socklen_t peerLen = sizeof(peer);
+	int cfd = accept(fd, (struct sockaddr*)&peer, &peerLen);
+	if (cfd >= 0) msNetNoDelayIfTcp(cfd, &peer);
 	return (int32_t)cfd;
 }
 
