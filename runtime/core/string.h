@@ -308,6 +308,13 @@ static inline int64_t msMemMismatch(const uint8_t* a, int64_t aLen, const uint8_
 	int64_t n = aLen < bLen ? aLen : bLen;
 	if (a == b) return n;
 	int64_t i = 0;
+	while (i + 32 <= n) {
+		uint64_t x[4], y[4];
+		memcpy(x, a + i, 32);
+		memcpy(y, b + i, 32);
+		if (((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3])) != 0) break;
+		i += 32;
+	}
 	while (i + 8 <= n) {
 		uint64_t wa, wb;
 		memcpy(&wa, a + i, 8);
