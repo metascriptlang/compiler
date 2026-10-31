@@ -2284,6 +2284,10 @@ if printf '%s\n' $chosen | grep -x tsan >/dev/null && ! printf '%s\n' $chosen | 
   printf 'san\t%s\n' "tsan reads the program list the san run writes" >>"$OUT/why"
 fi
 chosen=$(printf '%s\n' $chosen | tsan_pulls_san)
+if [ -z "$lanes_arg" ] && printf '%s\n' $chosen | grep -vx 'tools\|build' | grep -q . && ! printf '%s\n' $chosen | grep -qx build; then
+  printf 'build\t%s\n' "the other lanes test the candidate; out/gate holds an earlier gate's" >>"$OUT/why"
+  chosen=$(printf '%s\n' $chosen build)
+fi
 
 lanes=""
 for l in $ORDER; do
