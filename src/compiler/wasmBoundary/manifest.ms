@@ -59,32 +59,27 @@ interface Collector {
 	modulePath: string;
 }
 
+export function unwiredKind(kind: BoundaryKind, what: string): never {
+	throw new Error(`internal: boundary kind ${BoundaryKind[kind]} has no ${what}`);
+}
+
 export function signatureLetter(kind: BoundaryKind): string {
-	switch (kind) {
-		case BoundaryKind.Bool:
-		case BoundaryKind.I8:
-		case BoundaryKind.I16:
-		case BoundaryKind.I32:
-		case BoundaryKind.U8:
-		case BoundaryKind.U16:
-		case BoundaryKind.U32:
-			return "i";
-		case BoundaryKind.I64:
-		case BoundaryKind.U64:
-			return "j";
-		case BoundaryKind.F32:
-			return "f";
-		case BoundaryKind.F64:
-			return "d";
-		case BoundaryKind.Void:
-			return "v";
-		case BoundaryKind.String:
-			return "s";
-		case BoundaryKind.Span:
-			return "p";
-		default:
-			throw new Error("internal: boundary kind " + kind.toString() + " has no callback signature letter");
-	}
+	return match (kind) {
+		BoundaryKind.Bool
+			| BoundaryKind.I8
+			| BoundaryKind.I16
+			| BoundaryKind.I32
+			| BoundaryKind.U8
+			| BoundaryKind.U16
+			| BoundaryKind.U32 => "i",
+		BoundaryKind.I64 | BoundaryKind.U64 => "j",
+		BoundaryKind.F32 => "f",
+		BoundaryKind.F64 => "d",
+		BoundaryKind.Void => "v",
+		BoundaryKind.String => "s",
+		BoundaryKind.Span => "p",
+		BoundaryKind.Callback | BoundaryKind.Struct | BoundaryKind.Vec => { unwiredKind(kind, "callback signature letter"); },
+	};
 }
 
 function hex2(b: int32): string {

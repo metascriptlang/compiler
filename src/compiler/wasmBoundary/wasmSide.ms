@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, signatureLetter } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, signatureLetter, unwiredKind } from "./manifest";
 
 export interface WasmEntry {
 	source: string;
@@ -8,21 +8,30 @@ export interface WasmEntry {
 }
 
 function msTypeOf(kind: BoundaryKind): string {
-	switch (kind) {
-		case BoundaryKind.Bool: return "boolean";
-		case BoundaryKind.I8: return "int8";
-		case BoundaryKind.I16: return "int16";
-		case BoundaryKind.I32: return "int32";
-		case BoundaryKind.I64: return "int64";
-		case BoundaryKind.U8: return "uint8";
-		case BoundaryKind.U16: return "uint16";
-		case BoundaryKind.U32: return "uint32";
-		case BoundaryKind.U64: return "uint64";
-		case BoundaryKind.F32: return "float32";
-		case BoundaryKind.F64: return "float64";
-		case BoundaryKind.Void: return "void";
-		default: throw new Error("internal: boundary kind " + kind.toString() + " has no scalar type");
-	}
+	return match (kind) {
+		BoundaryKind.Bool => "boolean",
+		BoundaryKind.I8 => "int8",
+		BoundaryKind.I16 => "int16",
+		BoundaryKind.I32 => "int32",
+		BoundaryKind.I64 => "int64",
+		BoundaryKind.U8 => "uint8",
+		BoundaryKind.U16 => "uint16",
+		BoundaryKind.U32 => "uint32",
+		BoundaryKind.U64 => "uint64",
+		BoundaryKind.F32 => "float32",
+		BoundaryKind.F64 => "float64",
+		BoundaryKind.Void => "void",
+		BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "scalar type"); },
+	};
+}
+
+function valueTypeOf(kind: BoundaryKind): string {
+	if (kind == BoundaryKind.Void) unwiredKind(kind, "value type");
+	return msTypeOf(kind);
 }
 
 function wireMsType(letter: string): string {
@@ -48,16 +57,17 @@ function wireCType(letter: string): string {
 }
 
 function toWire(kind: BoundaryKind, expr: string): string {
+	const own = valueTypeOf(kind);
 	if (kind == BoundaryKind.Bool) return `(${expr} ? 1 : 0)`;
-	const letter = signatureLetter(kind);
-	const wire = wireMsType(letter);
-	return msTypeOf(kind) == wire ? expr : `(${expr} as ${wire})`;
+	const wire = wireMsType(signatureLetter(kind));
+	return own == wire ? expr : `(${expr} as ${wire})`;
 }
 
 function fromWire(kind: BoundaryKind, expr: string): string {
+	const own = valueTypeOf(kind);
 	if (kind == BoundaryKind.Bool) return `(${expr} != 0)`;
 	const wire = wireMsType(signatureLetter(kind));
-	return msTypeOf(kind) == wire ? expr : `(${expr} as ${msTypeOf(kind)})`;
+	return own == wire ? expr : `(${expr} as ${own})`;
 }
 
 function importLines(name: string, letters: string, result: string, withId: boolean): string[] {
@@ -81,6 +91,7 @@ function importLines(name: string, letters: string, result: string, withId: bool
 }
 
 function callbackLines(cb: BoundaryCallback): string[] {
+	if (cb.result == BoundaryKind.String || cb.result == BoundaryKind.Span) unwiredKind(cb.result, "callback result letter");
 	return importLines("msb_cb_" + cb.signature, cb.signature.slice(2), cb.signature.slice(0, 1), true);
 }
 
@@ -91,7 +102,7 @@ function leafLetters(leaves: BoundaryLeaf[]): string {
 }
 
 function vecFromLines(kind: BoundaryKind): string[] {
-	const t = msTypeOf(kind);
+	const t = valueTypeOf(kind);
 	return [
 		`function msbVecFrom_${t}(ptr: uint32, len: int32): Vec<${t}> {`,
 		`\tlet out: Vec<${t}> = [];`,
@@ -113,13 +124,13 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 			continue;
 		}
 		if (params[i] == BoundaryKind.Span) {
-			const t = msTypeOf(cb.elements[i]);
+			const t = valueTypeOf(cb.elements[i]);
 			const ptr = cb.modes[i] == BoundaryMode.Shared ? `Ptr<${t}>` : `Readonly<Ptr<${t}>>`;
 			sig += `a${i}: ${cb.modes[i] == BoundaryMode.Shared ? `Span<${t}>` : `Readonly<Span<${t}>>`}`;
 			args += `, (a${i}.length == 0 ? 0 : a${i} as ${ptr} as uint64 as uint32), a${i}.length as int32`;
 			continue;
 		}
-		sig += `a${i}: ${msTypeOf(params[i])}`;
+		sig += `a${i}: ${valueTypeOf(params[i])}`;
 		args += ", " + toWire(params[i], `a${i}`);
 	}
 	const call = `msb_cb_${cb.signature}(${args})`;
@@ -164,19 +175,19 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 					sigs.push(`${leaf}Ptr: uint32, ${leaf}Len: int32`);
 					values.push(`msbStrFrom(${leaf}Ptr, ${leaf}Len)`);
 				} else {
-					sigs.push(`${leaf}: ${msTypeOf(p.leaves[j].kind)}`);
+					sigs.push(`${leaf}: ${valueTypeOf(p.leaves[j].kind)}`);
 					values.push(leaf);
 				}
 			}
 			argList.push(leafLiteral(p.leaves, values, 0));
 		} else if (p.kind == BoundaryKind.Vec) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
-			argList.push(`msbVecFrom_${msTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`);
+			argList.push(`msbVecFrom_${valueTypeOf(p.element)}(${p.name}Ptr, ${p.name}Len)`);
 		} else if (p.kind == BoundaryKind.Span) {
 			sigs.push(`${p.name}Ptr: uint32, ${p.name}Len: int32`);
-			argList.push(`(${p.name}Ptr as uint64 as Ptr<${msTypeOf(p.element)}>)[0..${p.name}Len]`);
+			argList.push(`(${p.name}Ptr as uint64 as Ptr<${valueTypeOf(p.element)}>)[0..${p.name}Len]`);
 		} else {
-			sigs.push(`${p.name}: ${msTypeOf(p.kind)}`);
+			sigs.push(`${p.name}: ${valueTypeOf(p.kind)}`);
 			argList.push(p.name);
 		}
 	}
@@ -198,7 +209,7 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 		];
 	}
 	if (f.result == BoundaryKind.Vec) {
-		const t = msTypeOf(f.resultElement);
+		const t = valueTypeOf(f.resultElement);
 		return [
 			`@exportName("${f.exportSymbol}")`,
 			`export function ${f.exportSymbol}(${sig}): void {`,
