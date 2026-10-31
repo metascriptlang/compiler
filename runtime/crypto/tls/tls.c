@@ -14,6 +14,7 @@
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
 #include "psa/crypto.h"
+#include "runtime/crypto/psaOnce.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -75,27 +76,37 @@ static _Thread_local int tlsTimedOut;
 
 static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
+	int result;
+	msPsaUnlock();
 	for (;;) {
 		int ret = (int)send(fd, (const char*)buf, (int)len, MS_TLS_SEND_FLAGS);
-		if (ret >= 0) return ret;
+		if (ret >= 0) { result = ret; break; }
 		int err = ms_sock_err();
 		if (MS_ERR_INTR(err)) continue;
-		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; return MBEDTLS_ERR_SSL_TIMEOUT; }
-		return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
+		result = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+		break;
 	}
+	msPsaLock();
+	return result;
 }
 
 static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
+	int result;
+	msPsaUnlock();
 	for (;;) {
 		int ret = (int)recv(fd, (char*)buf, (int)len, 0);
-		if (ret > 0) return ret;
-		if (ret == 0) return MBEDTLS_ERR_SSL_CONN_EOF;
+		if (ret > 0) { result = ret; break; }
+		if (ret == 0) { result = MBEDTLS_ERR_SSL_CONN_EOF; break; }
 		int err = ms_sock_err();
 		if (MS_ERR_INTR(err)) continue;
-		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; return MBEDTLS_ERR_SSL_TIMEOUT; }
-		return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
+		result = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+		break;
 	}
+	msPsaLock();
+	return result;
 }
 
 /* ===== CA Discovery ===== */
@@ -359,9 +370,12 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 		return 0;
 	}
 
-	/* Initialize PSA crypto once (required by mbedTLS 4.x for RNG) */
-	static int psa_inited = 0;
-	if (!psa_inited) { psa_crypto_init(); psa_inited = 1; }
+	msPsaLock();
+	if (msPsaEnsure() != 0) {
+		msPsaUnlock();
+		tlsSetError("PSA crypto initialisation failed%s", "");
+		return 0;
+	}
 
 	msTlsCtx *ctx = (msTlsCtx*)msMemAlloc0(sizeof(msTlsCtx));
 	ctx->fd = -1;
@@ -385,7 +399,9 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 		if (!ctx->ca) goto fail;
 	}
 
+	msPsaUnlock();
 	int fd = tcpConnect(hostBuf, port, timeoutMs);
+	msPsaLock();
 	if (fd < 0) {
 		tlsSetError(tlsTimedOut ? "TCP connect to %s timed out" : "TCP connect to %s failed", hostBuf);
 		goto fail;
@@ -447,12 +463,14 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 		goto fail;
 	}
 
+	msPsaUnlock();
 	return TLS_TO_HANDLE(ctx);
 
 fail:
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
 	mbedtls_x509_crt_free(&ctx->ownCa);
+	msPsaUnlock();
 	if (ctx->fd >= 0) ms_close_socket(ctx->fd);
 	free(ctx);
 	return 0;
@@ -469,10 +487,12 @@ msUint8Array msTlsReadBytes(int64_t handle, int32_t maxBytes) {
 	if (maxBytes > (int32_t)sizeof(tlsReadScratch)) maxBytes = (int32_t)sizeof(tlsReadScratch);
 
 	int ret;
+	msPsaLock();
 	do {
 		ret = mbedtls_ssl_read(&ctx->ssl, tlsReadScratch, (size_t)maxBytes);
 	} while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE ||
 	         ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET);
+	msPsaUnlock();
 	if (ret <= 0) {
 		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return MS_EMPTY_UINT8_ARRAY;
 		if (tlsTimedOut) tlsSetError("TLS read timed out%s", "");
@@ -493,12 +513,14 @@ int32_t msTlsWriteBytes(int64_t handle, const uint8_t *buf, int64_t len64) {
 	if (!ctx || len64 > INT32_MAX) return -1;
 	int32_t total = 0;
 	int32_t len = (int32_t)len64;
+	msPsaLock();
 	while (total < len) {
 		int ret = mbedtls_ssl_write(&ctx->ssl, buf + total, (size_t)(len - total));
 		if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
-		if (ret < 0) return -1;
+		if (ret < 0) { msPsaUnlock(); return -1; }
 		total += (int32_t)ret;
 	}
+	msPsaUnlock();
 	return total;
 }
 
@@ -511,10 +533,12 @@ void msTlsClose(int64_t handle) {
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx) return;
 
+	msPsaLock();
 	mbedtls_ssl_close_notify(&ctx->ssl);
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
 	mbedtls_x509_crt_free(&ctx->ownCa);
+	msPsaUnlock();
 	ms_close_socket(ctx->fd);
 	free(ctx);
 }

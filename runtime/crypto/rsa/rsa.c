@@ -7,7 +7,7 @@
 
 #include "runtime/crypto/rsa/rsa.h"
 #include "runtime/core/system.h"
-#include <pthread.h>
+#include "runtime/crypto/psaOnce.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -37,21 +37,13 @@ struct msCryptoEcKeyPair {
 
 /* ===== PSA Init ===== */
 
-static pthread_mutex_t psaLock = PTHREAD_MUTEX_INITIALIZER;
-static int psaInitialized = 0;
-static int ensurePsa(void) {
-	if (psaInitialized) return 0;
-	psa_status_t status = psa_crypto_init();
-	if (status != PSA_SUCCESS) return -1;
-	psaInitialized = 1;
-	return 0;
-}
+#define ensurePsa msPsaEnsure
 
 #define LOCKED(T, name, params, args, fail) \
 	T msCrypto##name params { \
-		pthread_mutex_lock(&psaLock); \
+		msPsaLock(); \
 		T result = ensurePsa() != 0 ? (fail) : impl##name args; \
-		pthread_mutex_unlock(&psaLock); \
+		msPsaUnlock(); \
 		return result; \
 	}
 
@@ -388,13 +380,13 @@ LOCKED(double, EcdsaVerify, (int64_t handle, msString algorithm, msString data, 
 LOCKED(msString, EcdhDerive, (int64_t privateHandle, int64_t publicHandle), (privateHandle, publicHandle), MS_EMPTY_STRING)
 
 void msCryptoRsaFree(int64_t handle) {
-	pthread_mutex_lock(&psaLock);
+	msPsaLock();
 	implRsaFree(handle);
-	pthread_mutex_unlock(&psaLock);
+	msPsaUnlock();
 }
 
 void msCryptoEcFree(int64_t handle) {
-	pthread_mutex_lock(&psaLock);
+	msPsaLock();
 	implEcFree(handle);
-	pthread_mutex_unlock(&psaLock);
+	msPsaUnlock();
 }

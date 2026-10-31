@@ -107,6 +107,7 @@
 
 // PSA ITS stubs (persistent key storage not used)
 @compile("runtime/crypto/tls/psaTlsStubs.c");
+@compile("runtime/crypto/psaOnce.c");
 
 // Import from ../index (not ../errors) so std/crypto's @compile directives
 // enter the alive-set transitively — md.c, sha*.c and platform_util.c, which

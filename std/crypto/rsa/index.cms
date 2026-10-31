@@ -65,6 +65,7 @@
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chachapoly.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/poly1305.c");
 @compile("runtime/crypto/tls/psaTlsStubs.c");
+@compile("runtime/crypto/psaOnce.c");
 
 @passC("-Ivendor/mbedtls/include");
 @passC("-Ivendor/mbedtls/library");
