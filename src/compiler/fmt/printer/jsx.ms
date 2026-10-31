@@ -4,7 +4,7 @@ import {
 	JSXAttributeData, JSXSpreadAttributeData,
 } from "../../../ast/node";
 import { FormatOptions } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc";
+import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docBreakParent } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt } from "./literals";
 
@@ -31,8 +31,16 @@ export function printJsxElement(node: Node, options: FormatOptions): Doc {
 	for (const child of d.jsxChildren) {
 		parts.push(callPrintNode(child, options));
 	}
+	if (writtenOnSeveralLines(d.jsxChildren)) parts.push(docBreakParent());
 	parts.push(docText("</" + d.jsxTag + ">"));
 	return docGroup(parts);
+}
+
+function writtenOnSeveralLines(children: Node[]): boolean {
+	for (const child of children) {
+		if (child.kind == NodeKind.JSXText && (child.data as JSXTextData).jsxText.includes("\n")) return true;
+	}
+	return false;
 }
 
 export function printJsxFragment(node: Node, options: FormatOptions): Doc {
@@ -41,6 +49,7 @@ export function printJsxFragment(node: Node, options: FormatOptions): Doc {
 	for (const child of d.jsxFragChildren) {
 		parts.push(callPrintNode(child, options));
 	}
+	if (writtenOnSeveralLines(d.jsxFragChildren)) parts.push(docBreakParent());
 	parts.push(docText("</>"));
 	return docGroup(parts);
 }
