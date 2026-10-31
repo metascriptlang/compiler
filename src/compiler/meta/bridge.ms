@@ -2209,7 +2209,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.SwitchCase => {
 			const caseTests = readNodes(objHeap, arrHeap, h, "caseTests", loc);
-			const caseStmts = readNodes(objHeap, arrHeap, h, "caseStmts", loc);
+			const caseStmts = readStatements(objHeap, arrHeap, h, "caseStmts", loc);
 			const isDefault = readBool(objHeap, h, "isDefault");
 			return createNodeAt(NodeKind.SwitchCase, { caseTests, caseStmts, isDefault }, loc);
 		},
