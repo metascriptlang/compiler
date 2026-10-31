@@ -298,8 +298,20 @@ export function dbSetGlobalImports(db: TransAmDb, entries: string[]): string[] {
 	db.passModules = new HashMap<string, CheckerContext>();
 	db.passesExemptFor = null;
 	db.exemptFrom = null;
+	db.revision.value = nextRevision(db.revision);
+	db.bound = new HashMap<string, BoundCheck>();
+	dbForgetAllExports(db);
 	dbForgetAllTypeChecks(db);
 	return unresolved;
+}
+
+function dbForgetAllExports(db: TransAmDb): void {
+	for (let index = 0; index < getFileCount(db.fileInput); index = index + 1) {
+		const path = getFilePathByIndex(db.fileInput, index);
+		if (path == "" || isStdPathFor(db, path)) continue;
+		removeExportEntry(db.exportRegistry, path);
+		resetRegisteredAt(db.moduleDeps, getFileId(db.fileInput, path));
+	}
 }
 
 function sameGlobalImports(a: TaGlobalImport[], b: TaGlobalImport[]): boolean {
@@ -2919,4 +2931,38 @@ test "a companion source created after its header was translated changes the hea
 	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") < 0;
 	dbSetFileText(db, "/hc/api.c", "int apiValue(int x) { return x; }");
 	assert dbPreprocess(db, "/hc/api.h").indexOf("@compile") >= 0;
+}
+
+function globalsDb(): TransAmDb {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/gl/g.ms", "export const gv: int32 = 1;");
+	dbSetFileText(db, "/gl/use.ms", "export const u: int32 = 2;\n");
+	return db;
+}
+
+test "a changed global import list drops the transformed and analyzed trees made under the old list" {
+	const db = globalsDb();
+	const transformed = dbTransform(db, "/gl/use.ms");
+	const analyzed = dbAnalyze(db, "/gl/use.ms");
+	assert dbSetGlobalImports(db, ["/gl/g.ms"]).length == 0;
+	assert dbTransform(db, "/gl/use.ms") != transformed;
+	assert dbAnalyze(db, "/gl/use.ms") != analyzed;
+}
+
+test "a changed global import list drops the bound-only units built under the old list" {
+	const db = globalsDb();
+	bindUncheckedModule(db, "/gl/use.ms");
+	assert db.bound.has("/gl/use.ms");
+	dbSetGlobalImports(db, ["/gl/g.ms"]);
+	assert !boundInputsUnchanged(db, "/gl/use.ms");
+}
+
+test "a changed global import list drops the exports registered from checks made under the old list" {
+	const db = globalsDb();
+	dbTypeCheck(db, "/gl/use.ms");
+	assert findModuleExports(db.exportRegistry, "/gl/use.ms") != null;
+	dbSetGlobalImports(db, ["/gl/g.ms"]);
+	assert findModuleExports(db.exportRegistry, "/gl/use.ms") == null;
 }
