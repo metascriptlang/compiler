@@ -1696,6 +1696,14 @@ function bigIntEqualityHint(a: Type | null, b: Type | null): string {
 	return " — convert one side first: `b == BigInt(x)` or `Number(b) == x`";
 }
 
+function charStringEqualityHint(a: Type | null, b: Type | null): string {
+	const sa = a == null ? null : operandShape(a);
+	const sb = b == null ? null : operandShape(b);
+	if (sa == null || sb == null) return "";
+	const charAgainstText = (sa.kind == TypeKind.Char && isStringLike(sb)) || (sb.kind == TypeKind.Char && isStringLike(sa));
+	return charAgainstText ? " — a char is a byte, not a one-character string: compare with its code, `c == \"a\".code`" : "";
+}
+
 function binaryPointerish(k: TypeKind): boolean {
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Cursor
 		|| k == TypeKind.Borrow || k == TypeKind.Function || k == TypeKind.Array
@@ -1751,7 +1759,10 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 	if (isNumeric(widenNumberLiteralType(a)) && isNumeric(widenNumberLiteralType(b))) return true;
 	if (a.kind == TypeKind.StringLiteral && b.kind == TypeKind.StringLiteral) return a.typeName == b.typeName;
 	if (isStringLike(a) && isStringLike(b)) return true;
-	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
+	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) {
+		const other = a.kind == TypeKind.Char ? b : a;
+		return other.kind == TypeKind.Char || isNumeric(widenNumberLiteralType(other));
+	}
 	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
@@ -1978,7 +1989,8 @@ export function refuseDisjointStrings(ctx: CheckerContext, op: string, left: Nod
 
 export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
 	if (!binaryOperandsFail(ctx, op, leftType, rightType)) return false;
-	const bigIntHint = binaryOperandClass(op) == "eq" ? bigIntEqualityHint(leftType, rightType) : "";
+	const eqClass = binaryOperandClass(op) == "eq";
+	const bigIntHint = eqClass ? bigIntEqualityHint(leftType, rightType) + charStringEqualityHint(leftType, rightType) : "";
 	if (bigIntHint != "") {
 		addError(ctx, "This comparison appears to be unintentional because the types '" + typeDisplayName(leftType) + "' and '"
 			+ typeDisplayName(rightType) + "' have no overlap" + bigIntHint, node.location.line, node.location.column);
