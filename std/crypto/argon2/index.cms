@@ -29,6 +29,8 @@ extern function msCryptoArgon2Hash(password: string, salt: string, timeCost: int
 extern function msCryptoArgon2Verify(encoded: string, password: string): boolean;
 extern function msCryptoArgon2HashRaw(password: string, salt: string, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string;
 
+extern function msCryptoArgon2Check(timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32, saltLen: int64): string;
+
 // ===== Argon2id Password Hashing =====
 
 /**
@@ -42,8 +44,9 @@ extern function msCryptoArgon2HashRaw(password: string, salt: string, timeCost: 
  */
 export function argon2Hash(password: Bytes, saltBytes: Bytes, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
 	const salt = rawString(saltBytes);
-	if (salt.byteLength < 8) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", "salt must be at least 8 bytes"));
+	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.byteLength);
+	if (invalid != "") {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", invalid));
 	}
 	const result = msCryptoArgon2Hash(rawString(password), salt, timeCost, memoryCost, parallelism, hashLen);
 	if (result == "") {
@@ -66,8 +69,9 @@ export function argon2Verify(encoded: string, password: string): boolean {
  */
 export function argon2HashRaw(password: Bytes, saltBytes: Bytes, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<Buffer, CryptoError> {
 	const salt = rawString(saltBytes);
-	if (salt.byteLength < 8) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", "salt must be at least 8 bytes"));
+	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.byteLength);
+	if (invalid != "") {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", invalid));
 	}
 	const result = msCryptoArgon2HashRaw(rawString(password), salt, timeCost, memoryCost, parallelism, hashLen);
 	if (result == "") {

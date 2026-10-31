@@ -11,6 +11,10 @@
 #include "runtime/core/string.h"
 #include <stdint.h>
 
+msString msCryptoArgon2Check(int32_t timeCost, int32_t memoryCost,
+                             int32_t parallelism, int32_t hashLen,
+                             int64_t saltLen);
+
 /* Hash a password with Argon2id (recommended).
  * Returns encoded hash string ($argon2id$...) or empty on error.
  * timeCost: number of iterations (3 recommended)
