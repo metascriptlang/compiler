@@ -2168,9 +2168,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						|| (objType != null && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
 						|| (receiverSym != null && receiverSym.symbolKind == SymbolKind.Actor)
 					);
-					const ownActorCall = isActorReceiver && callsOwnActorMethod(ctx, me.object, winner.sym);
+					const freeFunctionExtension = winner.sym != null && winner.sym.declNode != null && winner.sym.declNode.kind == NodeKind.FunctionDecl;
+					const ownActorCall = isActorReceiver && !freeFunctionExtension && callsOwnActorMethod(ctx, me.object, winner.sym);
 					if (ownActorCall) node.flags = node.flags.incl(NodeFlag.ActorSelfCall);
-					if (isActorReceiver && !ownActorCall) {
+					if (isActorReceiver && !ownActorCall && !freeFunctionExtension) {
 						isActorMethodCall = true;
 						if (calleeType != null
 							&& calleeType.typeReturn != null
