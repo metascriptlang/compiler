@@ -60,10 +60,10 @@ Three states per cached query (`TaQueryState`, `revision.ms`):
 2. YELLOW: a cycle, answer false. Otherwise mark YELLOW and walk the recorded dependencies.
 3. A `FileText` dependency is current when the file's `changedAt` is not after the entry's `verifiedAt`.
 4. A dependency of HIGH durability is not walked while no HIGH input has changed since this entry was last verified (`getLastChange`, `fileInput.ms`); then it invalidates only when its `changedAt` is after the entry's `verifiedAt`. A write at durability D moves the change marker of every durability up to D, and changing a file's durability counts as a write at its old durability. When a HIGH input changed after the entry's last verification, the dependency is walked like any other.
-5. Any other dependency is verified recursively, then the early cutoff applies: a `changedAt` after this entry's `verifiedAt` means RED; a dependency recomputed to the same output kept its old `changedAt`, so this entry stays GREEN.
+5. Any other dependency is verified recursively. A `Preprocess` or `Parse` dependency that fails is executed again (`refreshInput`, `index.ms`) before the comparison, as Salsa's deep verify does; `TypeCheck` and `Impl` dependencies are rechecked by `recheckImports` before the second verification. Then the early cutoff applies: a `changedAt` after this entry's `verifiedAt` means RED; a dependency recomputed to the same output kept its old `changedAt`, so this entry stays GREEN.
 6. Every dependency held: stamp `verifiedAt`, refresh the entry's durability from its inputs, mark GREEN.
 
-A dependency records only its key; the revisions on both sides decide. Verification never recomputes, so an entry whose dependency was not recomputed first is recomputed even when that dependency would come out the same; `Parse` still keeps its `changedAt` then, so its dependents stay GREEN.
+A dependency records only its key; the revisions on both sides decide. A header edit that leaves the header's module text equal rechecks none of its importers, and a signature edit rechecks the importer and the module above it once each (pinned in `index.ms` tests).
 
 A query function in `index.ms` (`dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbTransform`, `dbAnalyze`) follows one shape: `tryMarkGreen` and serve from the value cache, else `pushFrame`, compute while sub-queries record themselves into the frame (`recordDependency`, `recordDurability`), then `executeQueryWith` stores the entry with the frame's dependencies, its minimum durability and the revision its output changed at.
 
@@ -105,13 +105,14 @@ Import edges are recorded into the module dep graph while a module's exports are
 1. `setFileText` compares the two texts; identical content returns false and nothing else happens. A difference records the file's `changedAt` and moves the durability change markers at the revision of the write, the next revision.
 2. The revision increments.
 3. A path under the configured std root gets HIGH durability.
-4. `invalidateFile` marks the file's queries RED, then those of every transitive importer (BFS with a visited set, so import cycles terminate).
-5. The `ExportRegistry` entries of the file and its transitive importers are dropped; std paths are kept.
-6. The next query call verifies lazily through `tryMarkGreen`.
+4. The `ExportRegistry` entries of the file and its transitive importers are dropped; std paths are kept.
+5. The next query call verifies lazily through `tryMarkGreen`.
 
 A type check of a module whose dependency declares a macro runs a full check of that dependency first; `checkInProgress` guards that pre-check against cycles.
 
 An import a db only binds, outside a loaded graph (`db.bound`), is reused while its import closure lists the same files in the same order and every `Parse` and `TypeCheck` entry in it has the `changedAt` it had at bind. A bound-only module has no `TypeCheck` entry, so an entry absent at bind must still be absent.
+
+A check that is cancelled or throws stores nothing: its frames are popped, its in-progress mark, `_checkingDb` and the body-read sink are restored, its bound unit is discarded and the checks of its transitive readers are dropped, because they may hold that unit's Symbols. A throw then propagates; the LSP publishes it as an internal-error diagnostic on the file instead of an empty list.
 
 ### Bound to a loaded graph
 

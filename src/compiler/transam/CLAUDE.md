@@ -21,8 +21,8 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 |------|-------------|
 | `revision.ms` | `TaQueryKind`, `TaQueryState`, `TaDurability`, `TaRevision`, `TaQueryKey`, `createQueryKey`, `queryKeysEqual` |
 | `query.ms` | `TaCacheEntry`, `TaDependencyStack`, `pushFrame`, `popFrame`, `recordDependency`, `recordDurability` |
-| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markQueriesRedForFile` |
-| `redGreen.ms` | `tryMarkGreen`, `executeQueryWith`, `invalidateFile` |
+| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove` |
+| `redGreen.ms` | `tryMarkGreen` (re-executes a failed dependency through its `TaRefresh`), `executeQueryWith` |
 | `fileInput.ms` | `TaFileInputStore`, `setFileText`, `getFileText`, `getFileChangedAt`, `getFileId`, `getFileDurability`, `setFileDurability`, `getLastChange` |
 | `moduleDeps.ms` | `TaModuleDepGraph`, `recordModuleImport`, `clearImportsFor`, `getTransitiveDependents`, `detectCycle` |
 | `hash.ms` | `taHashString`, `transAmHashNode`, `nodeText`, `surfaceText`, `TaText` |
