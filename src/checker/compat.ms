@@ -459,6 +459,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// the same slot from the same function, so the relation can never accept a
 	// widening the emitter has no tag for.
 	if (maybePayloadWidenSlot(source, target) >= 0) return true;
+	if (source.kind != TypeKind.Null && widensIntoMaybe(target, source)) return isAssignable(source, target.typeReturn);
 
 	const openNullableSource = openNullableUnionPayload(source, target);
 	if (openNullableSource != null) return isAssignable(openNullableSource, target.typeReturn);
