@@ -8,7 +8,7 @@ import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findSharedStringDiscriminant, isMaybeType, isStructType, needsValueCopy, peelToStruct, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase, isDiscriminatedUnion } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
 import { MemKind, memKindOf } from "../../raiser/layout";
-import { RaiserValue, RaiserValueKind, createClassType, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, createClassType, CLOSURE_LAYOUT, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, unwrapRefNullUnion, isPlainFunctionPointer } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
@@ -261,7 +261,7 @@ export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: s
 	const destroyOp = t != null && body != null && (body.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
 	if (fields.length == 0 && destroyOp == null) return 0;
 	const tagged = fields.length == 0 && body != null && body.kind == TypeKind.Union;
-	const classType = tagged ? createClassType("", -1, [], [TAG_FIELD, VALUE_FIELD], [RaiserRegClass.Word, RaiserRegClass.Dyn]) : createClassType("", -1, [], fields, kinds);
+	const classType = tagged ? createClassType("", -1, [], [TAG_FIELD, VALUE_FIELD], [RaiserRegClass.Word, RaiserRegClass.Dyn]) : createClassType(isClosureValue(t) ? CLOSURE_LAYOUT : "", -1, [], fields, kinds);
 	const cyclic = slotCyclicOf(t);
 	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
 	const uncounted = slotUncountedOf(t);
@@ -436,14 +436,18 @@ export function slotClassesOf(s: RaiserCompState, shape: Type): RaiserRegClass[]
 	return kinds;
 }
 
+function isClosureValue(t: Type | null): boolean {
+	const bare = skipModifier(t);
+	return bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare);
+}
+
 // Every object of a struct, interface or class type holds its fields in the order
 // of `typeNames`, which puts a parent's fields first; a structural match is a prefix
 // of it. A function value is a closure pair. NewObject lays that order out, so the
 // type fixes each field's slot.
 export function layoutOf(t: Type | null): string[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR;
+	if (isClosureValue(t)) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }
@@ -481,8 +485,7 @@ export function slotCyclicOf(t: Type | null): boolean[] {
 // The register class each slot of layoutOf(t) holds.
 export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR_KINDS;
+	if (isClosureValue(t)) return CLOSURE_PAIR_KINDS;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
 }

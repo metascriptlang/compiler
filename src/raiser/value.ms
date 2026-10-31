@@ -1047,6 +1047,8 @@ export interface RaiserClassType {
 	tableIndex: int32;   // the entry of this type in the class type table, which a cell's header names
 }
 
+export const CLOSURE_LAYOUT = "(closure)";
+
 // A class type with its zero object computed once, so NewObject copies it instead of laying out each slot.
 export function createClassType(name: string, depth: int32, display: int64[], fields: string[], kinds: RaiserRegClass[]): RaiserClassType {
 	const zeroSlots: int64[] = [];

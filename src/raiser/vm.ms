@@ -15,7 +15,7 @@ import {
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
 	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
-	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown,
+	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown, CLOSURE_LAYOUT,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -2556,7 +2556,7 @@ function sigPrefix(sig: int64, count: int64): int64 {
 // holds to the site's signature, so a danger build skips the checks of the pair and the signature,
 // with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
 function isClosurePair(classType: RaiserClassType): boolean {
-	return classType.fields.length == 2 && classType.fields[0] == "fn" && classType.fields[1] == "env";
+	return classType.name == CLOSURE_LAYOUT;
 }
 
 function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
