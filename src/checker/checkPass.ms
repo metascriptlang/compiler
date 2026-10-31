@@ -3265,9 +3265,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 }
 
 function declaredWithoutBody(sym: Symbol | null): boolean {
-	if (sym == null || hasFlag(sym, SymbolFlag.ImportC)) return true;
+	if (sym == null || hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.NativeMethod)) return true;
 	let decl = sym.declNode;
 	while (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl != null && decl.flags.has(NodeFlag.Abstract)) return true;
 	let flags = "";
 	let native = "";
 	if (decl != null && decl.kind == NodeKind.FunctionDecl) {
