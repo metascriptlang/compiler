@@ -24,7 +24,7 @@ export function significantTokens(tokens: Token[]): Token[] {
 	return significantTokensWithGaps(tokens, gaps);
 }
 
-// `gaps[k]` is true when a dropped semicolon directly precedes token `k` of the result.
+// `gaps[k]` is true when a dropped semicolon or trailing comma directly precedes token `k` of the result.
 function significantTokensWithGaps(tokens: Token[], gaps: boolean[]): Token[] {
 	const out: Token[] = [];
 	const open: TokenKind[] = [];
@@ -37,7 +37,7 @@ function significantTokensWithGaps(tokens: Token[], gaps: boolean[]): Token[] {
 			if (out.length > before) {
 				gaps.push(semicolonDropped);
 				semicolonDropped = false;
-			} else if (t.kind == TokenKind.Semicolon) {
+			} else if (t.kind == TokenKind.Semicolon || t.kind == TokenKind.Comma) {
 				semicolonDropped = true;
 			}
 		}
@@ -277,12 +277,16 @@ function treeShape(root: Node): string {
 	return shapeText.join("");
 }
 
-function sameTreesIgnoringParens(source: string, formatted: string, first: string): Result<void, string> {
+function sameTrees(source: string, formatted: string, first: string): Result<void, string> {
 	const x = parseSource(source);
 	const y = parseSource(formatted);
-	if (!x.ok || !y.ok) return Result.err("fmt changes parentheses, " + first + ", and the source or the output does not parse");
-	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of parentheses, " + first);
+	if (!x.ok || !y.ok) return Result.err("fmt rewrites tokens, " + first + ", and the source or the output does not parse");
+	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of the program, " + first);
 	return Result.ok(null);
+}
+
+function firstRewrite(first: string, t: Token): string {
+	return first != "" ? first : describe(t, false);
 }
 
 export function checkLossless(source: string, formatted: string): Result<void, string> {
@@ -290,7 +294,10 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
 	const after = lex(formatted);
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
-	const a = greaterUnits(significantTokens(before.value));
+	const aGaps: boolean[] = [];
+	const aRaw = significantTokensWithGaps(before.value, aGaps);
+	const a = greaterUnits(aRaw);
+	const semicolonBeforeA = gapsAfterSplit(aRaw, aGaps);
 	const bGaps: boolean[] = [];
 	const bRaw = significantTokensWithGaps(after.value, bGaps);
 	const b = greaterUnits(bRaw);
@@ -298,7 +305,7 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	let i = 0;
 	let j = 0;
 	const addedClosers: int32[] = [];
-	let firstParen = "";
+	let rewrite = "";
 	while (i < a.length && j < b.length) {
 		if (addedClosers.length > 0 && addedClosers[addedClosers.length - 1] == j) {
 			addedClosers.pop();
@@ -307,34 +314,40 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 		}
 		const close = addedBodyCloserAt(a, i, b, j);
 		if (close >= 0) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			addedClosers.push(close);
 			j += 1;
 			continue;
 		}
 		if (addsArrowParens(a, i, b, j)) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			i += 1;
 			j += 3;
 			continue;
 		}
 		if (unquotesKey(a, i, b, j)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			j += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && a[i].kind == TokenKind.Comma && semicolonBefore[j] && i + 1 < a.length && sameToken(a[i + 1], b[j]) && inTypeLiteral(a, i)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && addsLeadingSeparator(b, j)) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			j += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && dropsLeadingSeparator(a, i)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && (isParen(a[i].kind) || isParen(b[j].kind))) {
-			if (firstParen == "") firstParen = describe(isParen(a[i].kind) ? a[i] : b[j], false);
+			rewrite = firstRewrite(rewrite, isParen(a[i].kind) ? a[i] : b[j]);
 			if (isParen(a[i].kind)) i += 1;
 			else j += 1;
 			continue;
@@ -343,20 +356,21 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 			const kind = a[i].value == b[j].value;
 			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
 		}
+		if (semicolonBeforeA[i] != semicolonBefore[j]) rewrite = firstRewrite(rewrite, b[j]);
 		i += 1;
 		j += 1;
 	}
 	while (i < a.length && isParen(a[i].kind)) {
-		if (firstParen == "") firstParen = describe(a[i], false);
+		rewrite = firstRewrite(rewrite, a[i]);
 		i += 1;
 	}
 	while (j < b.length && isParen(b[j].kind)) {
-		if (firstParen == "") firstParen = describe(b[j], false);
+		rewrite = firstRewrite(rewrite, b[j]);
 		j += 1;
 	}
 	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
 	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
-	if (firstParen != "") return sameTreesIgnoringParens(source, formatted, firstParen);
+	if (rewrite != "") return sameTrees(source, formatted, rewrite);
 	return Result.ok(null);
 }
 
@@ -510,4 +524,20 @@ test "lossless: a dropped parenthesis may share a file with the other accepted r
 test "lossless: parentheses in a type annotation stay part of the type" {
 	assert !checkLossless("let x: (A | B)[];", "let x: A | B[];\n").ok;
 	assert !checkLossless("type T = (A | B) & C;", "type T = A | B & C;\n").ok;
+}
+
+test "lossless: a comma in an object literal never becomes a semicolon" {
+	assert !checkLossless("f({a, b});", "f({ a; b });\n").ok;
+	assert !checkLossless("const o = [1, {a, b}];", "const o = [1, { a; b }];\n").ok;
+}
+
+test "lossless: a dropped semicolon is caught when the trees differ or the output no longer parses" {
+	assert !checkLossless("const a = 1; const b = 2;", "const a = 1 const b = 2;\n").ok;
+	assert !checkLossless("const x = a;\n(b);", "const x = a\n(b);\n").ok;
+	assert checkLossless("const a = 1\nconst b = 2", "const a = 1;\nconst b = 2;\n").ok;
+}
+
+test "lossless: parentheses added around an arrow body stay refused when they cut the body short" {
+	assert !checkLossless("const f = x => a ? b\n: c;", "const f = (x) => (a ? b)\n: c;\n").ok;
+	assert !checkLossless("f(x => a ? b\n: c);", "f((x) => (a ? b)\n: c);\n").ok;
 }
