@@ -406,10 +406,13 @@ const GLUE = [
 	"function __msbDec(p, len) {",
 	"\tconst h = __msbMod.HEAPU8;",
 	"\tif (len <= 16) return __msbDecLoop(h, p, p + len);",
-	"\tfor (let i = p, e = p + len; i < e; i++) {",
+	"\tconst e = p + len;",
+	"\tconst s = __msbTd.decode(h.subarray(p, e));",
+	"\tif (s.indexOf(\"\\uFFFD\") < 0) return s;",
+	"\tfor (let i = p; i + 1 < e; i++) {",
 	"\t\tif (h[i] === 0xed && h[i + 1] >= 0xa0) return __msbDecLoop(h, p, e);",
 	"\t}",
-	"\treturn __msbTd.decode(h.subarray(p, p + len));",
+	"\treturn s;",
 	"}",
 ];
 
