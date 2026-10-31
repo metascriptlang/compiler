@@ -2186,7 +2186,17 @@ function processAssignedValue(
 	dctx: DrcContext,
 ): Node {
 	const initializes = (mocFlags & MOC_IS_DECL) != 0;
-	return !initializes && copiesInPlace(rhs, idx, stmts, dctx) ? rhs : processNode(rhs, dctx, mode);
+	if (!initializes && copiesInPlace(rhs, idx, stmts, dctx)) return rhs;
+	if (!initializes && copiesStringElementInPlace(rhs, idx, stmts, dctx)) return processNode(rhs, dctx, DrcMode.Normal);
+	return processNode(rhs, dctx, mode);
+}
+
+// A string read from a field or element and stored into another is `=copy(dest, src)` (moveOrCopy
+// genCopy), which reuses the destination's buffer, not a fresh copy sunk over the old value.
+function copiesStringElementInPlace(rhs: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
+	if (rhs.kind != NodeKind.MemberExpr && rhs.kind != NodeKind.ArrayAccess) return false;
+	if (rhs.nodeType == null || classifyRc(rhs.nodeType, dctx).rcKind != RcKind.String) return false;
+	return !hasEffect(rhs) && !isMovableLastRead(rhs, dctx) && !isLastReadFieldSafe(rhs, idx, stmts, dctx);
 }
 
 function copiesInPlace(rhs: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
