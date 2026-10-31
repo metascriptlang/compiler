@@ -21,7 +21,7 @@ import { forEachChild, anyDescendant, initializerHoldsClosure, Visit } from "../
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, pushFuncBoundary,
-	popFuncBoundary, truncateScopeStack, defineVar, defineLocalRoutines, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
+	popFuncBoundary, truncateScopeStack, defineVar, defineLocalRoutines, defineParams, withReceiver, isLocalVar, isOuterVar, isModuleLevelVar,
 } from "./lambdaLiftingScope";
 
 // Result of capture detection over a single closure-bearing function body.
@@ -409,7 +409,7 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 	}
 	if (node.kind == NodeKind.ConstructorDecl) {
 		const d = node.data as ConstructorDeclData;
-		recordFnCaptures(node, d.ctorBody, d.ctorParams, state, ss);
+		recordFnCaptures(node, d.ctorBody, withReceiver(d.ctorParams), state, ss);
 		return;
 	}
 	if (node.kind == NodeKind.TestDecl) {

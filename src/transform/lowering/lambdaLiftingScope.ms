@@ -57,6 +57,10 @@ export function defineParams(ss: ScopeStack, paramSyms: Symbol[] | null, params:
 	}
 }
 
+export function withReceiver(params: string[]): string[] {
+	return ["this"].concat(params);
+}
+
 export function pushLoopBoundary(ss: ScopeStack): void {
 	ss.loopMarkers.push(ss.syms.length);
 }
