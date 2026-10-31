@@ -6,6 +6,7 @@
  */
 
 #include "runtime/crypto/hash.h"
+#include "runtime/crypto/randomFill.h"
 #include "runtime/core/system.h"
 #include <stdlib.h>
 #include <string.h>
@@ -141,32 +142,6 @@ msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
 
 /* ===== Random ===== */
 
-/*
- * OS-level CSPRNG — no mbedTLS dependency.
- * macOS/Linux: /dev/urandom
- * Fallback: arc4random_buf (macOS always has it)
- */
-
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
-#include <stdlib.h> /* arc4random_buf */
-#define HAS_ARC4RANDOM 1
-#else
-#define HAS_ARC4RANDOM 0
-#endif
-
-static int fill_random(uint8_t* buf, size_t len) {
-#if HAS_ARC4RANDOM
-	arc4random_buf(buf, len);
-	return 0;
-#else
-	FILE* f = fopen("/dev/urandom", "rb");
-	if (!f) return -1;
-	size_t got = fread(buf, 1, len, f);
-	fclose(f);
-	return (got == len) ? 0 : -1;
-#endif
-}
-
 msString msCryptoRandomBytes(int64_t size) {
 	if (size <= 0) return MS_EMPTY_STRING;
 	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
@@ -174,7 +149,7 @@ msString msCryptoRandomBytes(int64_t size) {
 	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + size + 1);
 
 	p->cap = size;
-	if (fill_random((uint8_t*)p->data, (size_t)size) != 0) {
+	if (ms_random_fill((uint8_t*)p->data, (size_t)size) != 0) {
 		free(p);
 		return MS_EMPTY_STRING;
 	}
@@ -195,14 +170,14 @@ double msCryptoRandomInt(double min, double max) {
 	if (range <= 0) return -1.0;
 
 	uint64_t r;
-	if (fill_random((uint8_t*)&r, sizeof(r)) != 0) return -1.0;
+	if (ms_random_fill((uint8_t*)&r, sizeof(r)) != 0) return -1.0;
 
 	return (double)(lo + (int64_t)(r % (uint64_t)range));
 }
 
 msString msCryptoRandomUuid(void) {
 	uint8_t bytes[16];
-	if (fill_random(bytes, 16) != 0) return MS_EMPTY_STRING;
+	if (ms_random_fill(bytes, 16) != 0) return MS_EMPTY_STRING;
 
 	/* RFC 4122 version 4 UUID */
 	bytes[6] = (bytes[6] & 0x0F) | 0x40; /* version 4 */

@@ -149,7 +149,7 @@ export function hmacBuffer(algorithm: string, key: Bytes, data: Bytes): Result<B
 
 export function randomBytes(size: number): Result<Buffer, CryptoError> {
 	const result = msCryptoRandomBytes(size);
-	if (result == "") {
+	if (result == "" && size != 0) {
 		return Result.err(randomFailed("Random byte generation failed"));
 	}
 	return Result.ok(rawBuffer(result));
