@@ -17,7 +17,7 @@ import { mangleProcName, mangledFunctionName, mangledGlobalName, isModuleGlobalV
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isExtensionRoutine, isNativePattern } from "../../checker/context";
+import { isExtensionRoutine, isNativePattern, routineKindFlag } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
@@ -796,7 +796,8 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrowFunctionData;
-	const isAsync = d.arrowFlags == "async" || d.arrowFlags == "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
+	const arrowKind = routineKindFlag(d.arrowFlags);
+	const isAsync = arrowKind == "async" || arrowKind == "async_generator" || needsAutoAsync(d.arrowFlags, d.arrowBody);
 	if (isAsync) { emit(gen, "async "); }
 	if (d.arrowParams.length == 1 && !isAsync) {
 		emit(gen, safeJsName(d.arrowParams[0]));
@@ -817,7 +818,7 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 export function emitFunctionExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionExprData;
 	const autoAsync = needsAutoAsync(d.funcExprFlags, d.funcExprBody);
-	match (d.funcExprFlags) {
+	match (routineKindFlag(d.funcExprFlags)) {
 		"async" => { emit(gen, "async function("); },
 		"generator" => { emit(gen, autoAsync ? "async function*(" : "function*("); },
 		"async_generator" => { emit(gen, "async function*("); },
