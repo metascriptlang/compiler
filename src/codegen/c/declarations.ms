@@ -324,6 +324,7 @@ function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 	const types = sec(g, CSection.Types);
 	addLine(types, `struct ${name} {`);
 	for (let i = 0; i < fieldNames.length; i += 1) {
+		if (ifaceType != null && i < ifaceType.typeChildren.length && storesNothing(ifaceType, ifaceType.typeChildren[i])) continue;
 		addLine(types, `  ${fieldTypes[i]} ${mangleFieldName(fieldNames[i])};`);
 	}
 	addLine(types, "};");
