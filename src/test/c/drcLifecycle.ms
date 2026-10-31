@@ -395,6 +395,21 @@ function occurrences(code: string, token: string): int32 {
 	return (code.split(token).length - 1) as int32;
 }
 
+function hooksTakingSource(code: string, source: string): string[] {
+	const pieces = code.split(`)), (&(${source}`);
+	const names: string[] = [];
+	for (let i = 0; i < pieces.length - 1; i++) {
+		const head = pieces[i].substring(0, pieces[i].lastIndexOf("((&("));
+		let from = 0;
+		for (const stop of [" ", "\t", "\n", ";", "("]) {
+			const at = head.lastIndexOf(stop) + 1;
+			if (at > from) from = at;
+		}
+		names.push(head.substring(from));
+	}
+	return names;
+}
+
 test "E2E C: an explicit move empties an indexed field path once, at the move" {
 	const c = compileToC(`
 		struct Node { kids: Vec<int32>; }
@@ -514,6 +529,8 @@ test "E2E C: a returned module-level value is copied once" {
 		function names(): string[] { return NAMES; }
 	`);
 	assert c.ok;
-	assert occurrences(c.value, ")), (&(NONE__") == 3;
+	const fromNone = hooksTakingSource(c.value, "NONE__");
+	assert fromNone.length == 3, fromNone.join(", ");
+	for (const hook of fromNone) assert hook.endsWith("Copy"), `${hook} takes the module-level value as its source`;
 	assert !c.value.contains(")), (&(dollarborrow");
 }
