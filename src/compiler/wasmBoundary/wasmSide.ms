@@ -39,6 +39,8 @@ function wireCType(letter: string): string {
 function toWire(kind: BoundaryKind, expr: string): string {
 	const own = valueTypeOf(kind);
 	if (kind == BoundaryKind.Bool) return `(${expr} ? 1 : 0)`;
+	if (kind == BoundaryKind.U32) return `msbWireU32(${expr})`;
+	if (kind == BoundaryKind.U64) return `msbWireU64(${expr})`;
 	const wire = wireMsType(signatureLetter(kind));
 	return own == wire ? expr : `(${expr} as ${wire})`;
 }
@@ -46,6 +48,8 @@ function toWire(kind: BoundaryKind, expr: string): string {
 function fromWire(kind: BoundaryKind, expr: string): string {
 	const own = valueTypeOf(kind);
 	if (kind == BoundaryKind.Bool) return `(${expr} != 0)`;
+	if (kind == BoundaryKind.U32) return `msbUnwireU32(${expr})`;
+	if (kind == BoundaryKind.U64) return `msbUnwireU64(${expr})`;
 	const wire = wireMsType(signatureLetter(kind));
 	return own == wire ? expr : `(${expr} as ${own})`;
 }
@@ -280,6 +284,15 @@ function guardedImportJs(name: string, params: string[], call: string): string {
 	return `\t${name}: (${params.join(", ")}) => { try { return ${call}; } catch (e) { throw ${REGISTRY}.die(e); } },`;
 }
 
+function unsignedWireLines(): string[] {
+	return [
+		"function msbWireU32(x: uint32): int32 { return x > 2147483647 ? -((~x) as int32) - 1 : x as int32; }",
+		"function msbUnwireU32(w: int32): uint32 { return w < 0 ? ~((-(w + 1)) as uint32) : w as uint32; }",
+		"function msbWireU64(x: uint64): int64 { return x > 9223372036854775807 ? -((~x) as int64) - 1 : x as int64; }",
+		"function msbUnwireU64(w: int64): uint64 { return w < 0 ? ~((-(w + 1)) as uint64) : w as uint64; }",
+	];
+}
+
 export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePath: string) => string): WasmEntry {
 	const lines: string[] = [];
 	const modules: string[] = [];
@@ -346,6 +359,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	}
 	if (hasVecResult) resultImports.push("msb_rv");
 	const hasString = hasStringParam || hasStringResult || hasStructString;
+	for (const l of unsignedWireLines()) lines.push(l);
 	if (hasString) for (const l of stringHelperLines()) lines.push(l);
 	if (hasScalarSome) {
 		lines.push("let msbRetSome: int32 = 0;");
