@@ -82,10 +82,11 @@ export function readsBeforeHoist(e: Node): boolean {
 	return (isStorageRead(e) || e.kind == NodeKind.ConditionalExpr) && snapshotsLikeJs(e.nodeType);
 }
 
-// An array is a counted handle: a temp keeps the object this read named, as JS does. The handle
-// sits under the deref the array operand reads through.
+// An array reached through a handle: a temp keeps the object this read named, as JS does. The
+// handle sits under the deref the array operand reads through; a Vec is a value with no handle.
 export function arrayHandleRead(e: Node): Node | null {
-	const place = e.kind == NodeKind.HiddenDeref ? (e.data as HiddenDerefData).expr : e;
+	if (e.kind != NodeKind.HiddenDeref) return null;
+	const place = (e.data as HiddenDerefData).expr;
 	return e.nodeType != null && e.nodeType.kind == TypeKind.Array && isStorageRead(place) ? place : null;
 }
 
