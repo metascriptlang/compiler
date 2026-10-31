@@ -3,6 +3,7 @@
 @compile("runtime/promise/combinator.c");
 when (drc && !bare && !solana) {
 	import "./combinator";
+	import "./moduleEval";
 
 	@compilerFunc
 	extern function msPromiseAll(futures: Ptr<void>): Ptr<void> from "msPromiseAll";

@@ -1882,7 +1882,6 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	rtFiles = rtFiles + "\n" + (opts.targetOs == "windows" ? "runtime/fs/windows.c" : "runtime/fs/posix.c");
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
-	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
 	if (opts.isHcr) {
 		rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 		rtFiles = rtFiles + "\n" + sharedDirectives;

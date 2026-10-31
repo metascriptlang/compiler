@@ -133,6 +133,7 @@ void msExit(int32_t code) {
 }
 
 int32_t msModuleEvalDepth = 0;
+void (*msModuleGuard)(msModuleRecord* record, void (*fn)(void)) = NULL;
 
 void msTestErrorFlag(void) {
 	if (!msErr || msCurrException == NULL || msModuleEvalDepth > 0) return;
