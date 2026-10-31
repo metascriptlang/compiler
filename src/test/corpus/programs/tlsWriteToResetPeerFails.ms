@@ -32,7 +32,7 @@ function readUntil(child: ChildProcess, marker: string): void {
 }
 
 function sh(script: string): void {
-	const r = spawn("/bin/sh", ["-c", script], { mergeStderr: true });
+	const r = spawn("/bin/sh", ["-c", script]);
 	if (!r.ok) throw new Error(`spawn failed: ${r.error.message}`);
 	readAll(r.value);
 	r.value.close();
@@ -65,11 +65,11 @@ printf 'subjectAltName=IP:127.0.0.1\n' > ext.cnf
 openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out server.pem -days 2 -extfile ext.cnf`);
 
 	function scenario(label: string, mode: string, marker: string): string {
-		const server = spawn("openssl", ["s_server", "-accept", `${port + (mode == "during" ? 0 : 1)}`, "-cert", `${dir}/server.pem`, "-key", `${dir}/server.key`, "-quiet"], { mergeStderr: true });
+		const server = spawn("openssl", ["s_server", "-accept", `${port + (mode == "during" ? 0 : 1)}`, "-cert", `${dir}/server.pem`, "-key", `${dir}/server.key`, "-quiet"]);
 		if (!server.ok) throw new Error(`server spawn failed: ${server.error.message}`);
 		server.value.wait(1500);
 		const portOf = port + (mode == "during" ? 0 : 1);
-		const client = spawn(argv[0], ["write", `${portOf}`, `${dir}/ca.pem`, mode], { mergeStderr: true });
+		const client = spawn(argv[0], ["write", `${portOf}`, `${dir}/ca.pem`, mode]);
 		if (!client.ok) throw new Error(`client spawn failed: ${client.error.message}`);
 		readUntil(client.value, marker);
 		client.value.wait(300);

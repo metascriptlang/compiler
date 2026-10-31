@@ -25,7 +25,7 @@ function readAll(child: ChildProcess): string {
 }
 
 function sh(script: string): void {
-	const r = spawn("/bin/sh", ["-c", script], { mergeStderr: true });
+	const r = spawn("/bin/sh", ["-c", script]);
 	if (!r.ok) throw new Error(`spawn failed: ${r.error.message}`);
 	readAll(r.value);
 	r.value.close();
@@ -74,7 +74,7 @@ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out s
 
 	// A client that outlives its wait is killed and reported as hung.
 	function client(args: string, waitMs: int32): string {
-		const c = spawn("/bin/sh", ["-c", `SSL_CERT_FILE=${dir}/ca.pem exec "$0" ${args}`, self], { mergeStderr: true });
+		const c = spawn("/bin/sh", ["-c", `SSL_CERT_FILE=${dir}/ca.pem exec "$0" ${args}`, self]);
 		if (!c.ok) throw new Error(`client spawn failed: ${c.error.message}`);
 		const status = c.value.wait(waitMs);
 		if (!status.ok) {
@@ -88,7 +88,7 @@ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out s
 	}
 
 	function holdScenario(timeoutMs: int32, p: int32): string {
-		const holder = spawn(self, ["hold", `${p}`], { mergeStderr: true });
+		const holder = spawn(self, ["hold", `${p}`]);
 		if (!holder.ok) throw new Error(`holder spawn failed: ${holder.error.message}`);
 		holder.value.wait(500);
 		const out = client(`fetch https://127.0.0.1:${p}/ ${timeoutMs} time`, timeoutMs + 6000);
@@ -102,7 +102,7 @@ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out s
 		const script = www
 			? `exec openssl s_server ${common} -www`
 			: `cd ${dir}; rm -f f${p}; mkfifo f${p}; { printf '${reply}'; sleep 25; } > f${p} & exec openssl s_server ${common} < f${p}`;
-		const s = spawn("/bin/sh", ["-c", script], { mergeStderr: true });
+		const s = spawn("/bin/sh", ["-c", script]);
 		if (!s.ok) throw new Error(`server spawn failed: ${s.error.message}`);
 		s.value.wait(1500);
 		return s.value;
@@ -115,7 +115,7 @@ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out s
 
 	function cutScenario(label: string, p: int32, reply: string): string {
 		const server = tlsServer(p, false, reply);
-		const c = spawn("/bin/sh", ["-c", `SSL_CERT_FILE=${dir}/ca.pem exec "$0" fetch https://localhost:${p}/ 20000 cut`, self], { mergeStderr: true });
+		const c = spawn("/bin/sh", ["-c", `SSL_CERT_FILE=${dir}/ca.pem exec "$0" fetch https://localhost:${p}/ 20000 cut`, self]);
 		if (!c.ok) throw new Error(`client spawn failed: ${c.error.message}`);
 		c.value.wait(1500);
 		stop(server);

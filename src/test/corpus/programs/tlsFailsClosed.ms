@@ -22,7 +22,7 @@ function readAll(child: ChildProcess): string {
 }
 
 function sh(script: string, args: string[] = []): string {
-	const r = spawn("/bin/sh", ["-c", script, ...args], { mergeStderr: true });
+	const r = spawn("/bin/sh", ["-c", script, ...args]);
 	if (!r.ok) throw new Error(`spawn failed: ${r.error.message}`);
 	const out = readAll(r.value);
 	r.value.close();
@@ -49,7 +49,7 @@ openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout serv
 printf 'subjectAltName=IP:127.0.0.1\n' > ext.cnf
 openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out server.pem -days 2 -extfile ext.cnf`);
 
-	const server = spawn("openssl", ["s_server", "-accept", `${port}`, "-cert", `${dir}/server.pem`, "-key", `${dir}/server.key`, "-quiet"], { mergeStderr: true });
+	const server = spawn("openssl", ["s_server", "-accept", `${port}`, "-cert", `${dir}/server.pem`, "-key", `${dir}/server.key`, "-quiet"]);
 	if (!server.ok) throw new Error(`server spawn failed: ${server.error.message}`);
 
 	const self = argv[0];
