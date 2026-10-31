@@ -18,6 +18,9 @@ extern function msNetBind(fd: int32, addr: string, port: int32): int32;
 extern function msNetListen(fd: int32, backlog: int32): int32;
 extern function msNetAccept(fd: int32): int32;
 extern function msNetConnect(fd: int32, host: string, port: int32): int32;
+extern function msNetSocketUnix(): int32;
+extern function msNetBindUnix(fd: int32, path: string): int32;
+extern function msNetConnectUnix(fd: int32, path: string): int32;
 extern function msNetSend(fd: int32, data: string): int32;
 extern function msNetRecv(fd: int32, maxBytes: int32): string;
 extern function msNetLastRecvTimedOut(): int32;
@@ -49,6 +52,18 @@ export function accept(fd: int32): int32 {
 
 export function connect(fd: int32, host: string, port: int32): int32 {
 	return msNetConnect(fd, host, port);
+}
+
+export function createUnixSocket(): int32 {
+	return msNetSocketUnix();
+}
+
+export function bindUnix(fd: int32, path: string): int32 {
+	return msNetBindUnix(fd, path);
+}
+
+export function connectUnix(fd: int32, path: string): int32 {
+	return msNetConnectUnix(fd, path);
 }
 
 export function send(fd: int32, data: Bytes): int32 {
