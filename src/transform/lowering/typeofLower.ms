@@ -287,15 +287,18 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 		if (cloneIfPure(operand) != null || isLiteral(operand)) return tagLiteral(typeofTagOf(source), node);
 		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeString(typeofTagOf(source), loc), loc)]);
 	}
-	if (shape == Shape.Opaque || !ctx.jsBackend) return node;
-	const members = kindsOf(source);
+	if (!ctx.jsBackend) return node;
+	const peeled = peelTransparentInstance(source);
+	const nullableUnion = shape == Shape.Opaque && isMaybeType(peeled) && peeled.typeReturn != null && shapeOf(peeled.typeReturn) == Shape.Union;
+	if (shape == Shape.Opaque && !nullableUnion) return node;
+	const members = nullableUnion ? peelTransparentInstance(peeled.typeReturn).typeChildren : kindsOf(source);
 	let wide = false;
 	let big = false;
 	for (const m of members) {
 		if (isWideInteger(m)) wide = true;
 		if (peelTransparentInstance(m).kind == TypeKind.BigInt) big = true;
 	}
-	if (!wide) return node;
+	if (!wide || (big && nullableUnion)) return node;
 	if (big) {
 		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => memberCases(source, x, typeofTagOf, ctx, loc));
 	}

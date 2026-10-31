@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
 import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots, joinBranchTypes } from "../../checker/fit";
-import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
+import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, nullType, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
@@ -87,7 +87,14 @@ function holdsTaggedUnion(n: Node): boolean {
 
 function unwrapTypeofOperand(node: Node): Node {
 	const d = node.data as UnaryExprData;
-	if (d.unaryOp == "typeof" && holdsTaggedUnion(d.operand)) d.operand = unionValue(d.operand);
+	if (d.unaryOp != "typeof") return node;
+	if (holdsTaggedUnion(d.operand)) {
+		d.operand = unionValue(d.operand);
+		return node;
+	}
+	const t = d.operand != null && d.operand.nodeType != null ? peelTransparentInstance(d.operand.nodeType) : null;
+	const ut = t != null && isMaybeType(t) ? taggedUnion(t.typeReturn) : null;
+	if (ut != null) d.operand = readUnion(true, d.operand, ut, [], "", createUnion([valueType(ut), nullType()]), node.location);
 	return node;
 }
 
@@ -241,11 +248,15 @@ function projectConv(node: Node, field: string, ctx: TransformContext): Node {
 		return makeValueRead(src, d.convType, loc);
 	}
 	const allowed: int32[] = !checked ? [] : objectSlot ? holderSlots(d, ut) : [slotOf(node, ut)];
+	return readUnion(maybe, src, ut, allowed, accessHead(field, node, ut), d.convType, loc);
+}
+
+function readUnion(maybe: boolean, src: Node, ut: Type, allowed: int32[], head: string, type: Type, loc: SourceLocation): Node {
 	const slots = createNode(NodeKind.ArrayLiteral, { elements: allowed.map((h: int32): Node => makeIntNumber(h as int64, loc)) }, syntheticToken(loc));
 	slots.nodeType = createArray(int32Type());
 	const labels = createNode(NodeKind.ArrayLiteral, { elements: memberLabels(ut).map((l: string): Node => makeString(l, loc)) }, syntheticToken(loc));
 	labels.nodeType = createArray(stringType());
-	const call = makeCall(runtimeRef(maybe ? "msUnionReadMaybe" : "msUnionRead", loc), [src, slots, makeString(accessHead(field, node, ut), loc), labels], loc);
-	call.nodeType = d.convType;
+	const call = makeCall(runtimeRef(maybe ? "msUnionReadMaybe" : "msUnionRead", loc), [src, slots, makeString(head, loc), labels], loc);
+	call.nodeType = type;
 	return call;
 }
