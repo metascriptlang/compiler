@@ -7,6 +7,8 @@ import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
+import { lowerEnumNames } from "./native/builtinLower";
+import { lowerEnumToString } from "./native/enumToStringLower";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
@@ -43,19 +45,19 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, namesEnums: boolean = false): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx);
+		return lowerForRaiser(program, ctx, namesEnums);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext): Node {
+function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolean): Node {
 	let result = planModuleTdz(program, ctx);
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
@@ -80,6 +82,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerTypeof(result, ctx);
+	if (namesEnums) result = lowerEnumToString(lowerEnumNames(result, ctx), ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);

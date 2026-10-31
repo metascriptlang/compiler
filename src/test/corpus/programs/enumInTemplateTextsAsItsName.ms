@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser prints an enum member as its ordinal (card 2026-09-25-raiser-enum-to-string-prints-the-number)
 // @stdout: plain Home|explicit C B|field Home B|nested in Home B|concat Home Home|call Home Home
 // @exit: 0
 // note: an enum interpolated in a template is String(v), its member name, on every backend; JS used to print the ordinal.

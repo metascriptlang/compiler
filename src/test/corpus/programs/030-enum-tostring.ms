@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'Color' at comptime: symbol kind is Enum
 enum Color { Red, Green, Blue }
 
 function shout(c: Color): string {

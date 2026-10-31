@@ -5018,7 +5018,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const transformed = transformForRaiser(comptimeResolved, modCtx);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, true);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };

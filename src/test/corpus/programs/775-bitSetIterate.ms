@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // Parity program — a BitSet iterates its members in ordinal order and prints
 // itself by member name, across both storage bands and for the empty set.
 //
