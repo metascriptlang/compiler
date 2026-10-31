@@ -53,7 +53,7 @@ static int ms_crypto_initialized = 0;
 static msString raw_to_buffer(const uint8_t* data, size_t len) {
 	if (len == 0) return MS_EMPTY_STRING;
 
-	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + len + 1);
+	msStrPayload* p = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + len + 1);
 
 	p->cap = (int64_t)len;
 	memcpy(p->data, data, len);
@@ -147,7 +147,7 @@ msString msCryptoRandomBytes(int64_t size) {
 	if (size <= 0) return MS_EMPTY_STRING;
 	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
-	msStrPayload* p = (msStrPayload*)msMemAlloc0(sizeof(msStrPayload) + size + 1);
+	msStrPayload* p = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + size + 1);
 
 	p->cap = size;
 	if (ms_random_fill((uint8_t*)p->data, (size_t)size) != 0) {
