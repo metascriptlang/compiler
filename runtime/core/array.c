@@ -146,16 +146,18 @@ double msNumberArrayAt(msNumberArray* arr, int64_t idx) {
 	return arr->p->data[i];
 }
 
-int64_t msNumberArrayIndexOf(msNumberArray* arr, double value) {
+int64_t msNumberArrayIndexOf(msNumberArray* arr, double value, int64_t fromIndex) {
 	if (arr->p == NULL) return -1;
-	for (int64_t i = 0; i < arr->len; i++) {
+	int64_t i = fromIndex < 0 ? arr->len + fromIndex : fromIndex;
+	if (i < 0) i = 0;
+	for (; i < arr->len; i++) {
 		if (arr->p->data[i] == value) return i;
 	}
 	return -1;
 }
 
-bool msNumberArrayIncludes(msNumberArray* arr, double value) {
-	return msNumberArrayIndexOf(arr, value) >= 0;
+bool msNumberArrayIncludes(msNumberArray* arr, double value, int64_t fromIndex) {
+	return msNumberArrayIndexOf(arr, value, fromIndex) >= 0;
 }
 
 msNumberArray msNumberArraySlice(msNumberArray* arr, int64_t start, int64_t end) {
@@ -345,9 +347,11 @@ msString msStringArrayPop(msStringArray* arr) {
 	return arr->p->data[arr->len];
 }
 
-int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
+int64_t msStringArrayIndexOf(msStringArray* arr, msString value, int64_t fromIndex) {
 	if (arr->p == NULL) return -1;
-	for (int64_t i = 0; i < arr->len; i++) {
+	int64_t i = fromIndex < 0 ? arr->len + fromIndex : fromIndex;
+	if (i < 0) i = 0;
+	for (; i < arr->len; i++) {
 		if (msStringEquals(arr->p->data[i], value)) return i;
 	}
 	return -1;
@@ -421,8 +425,8 @@ msString msStringArrayShift(msStringArray* arr) {
 	return first;
 }
 
-bool msStringArrayIncludes(msStringArray* arr, msString value) {
-	return msStringArrayIndexOf(arr, value) >= 0;
+bool msStringArrayIncludes(msStringArray* arr, msString value, int64_t fromIndex) {
+	return msStringArrayIndexOf(arr, value, fromIndex) >= 0;
 }
 
 int64_t msStringArrayCount(msStringArray* arr, msString value) {

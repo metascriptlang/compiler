@@ -238,9 +238,10 @@ export function concat<T>(this arr: Vec<T>, other: T[]): T[] {
 	return out;
 }
 
-export function indexOf<T>(this arr: Vec<T>, value: T): number {
+export function indexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): number {
 	const n = arr.length;
-	let i = 0;
+	let i = fromIndex < 0 ? n + fromIndex : fromIndex;
+	if (i < 0) i = 0;
 	while (i < n) {
 		if (arr[i] == value) return i;
 		i = i + 1;
@@ -248,9 +249,10 @@ export function indexOf<T>(this arr: Vec<T>, value: T): number {
 	return -1;
 }
 
-export function includes<T>(this arr: Vec<T>, value: T): boolean {
+export function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): boolean {
 	const n = arr.length;
-	let i = 0;
+	let i = fromIndex < 0 ? n + fromIndex : fromIndex;
+	if (i < 0) i = 0;
 	while (i < n) {
 		if (arr[i] == value) return true;
 		i = i + 1;
@@ -261,9 +263,10 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, values, keys, entries, flatMap } from "./shared";
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
-export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
+export function indexOf(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): number {
 	const n = view.length;
-	let i = 0;
+	let i = fromIndex < 0 ? n + fromIndex : fromIndex;
+	if (i < 0) i = 0;
 	while (i < n) {
 		if (view[i] == value) return i;
 		i = i + 1;
@@ -271,8 +274,8 @@ export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number 
 	return -1;
 }
 
-export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean {
-	return view.indexOf(value) >= 0;
+export function includes(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): boolean {
+	return view.indexOf(value, fromIndex) >= 0;
 }
 
 export function count<T>(this arr: Vec<T>, value: T): number {
