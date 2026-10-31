@@ -1,4 +1,4 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, BoundaryParam, Manifest, leafLiteral, unwiredKind } from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -11,20 +11,44 @@ export interface JsBindings {
 }
 
 function fromWire(kind: BoundaryKind, expr: string): string {
-	switch (kind) {
-		case BoundaryKind.Bool: return `${expr} !== 0`;
-		case BoundaryKind.I8: return `(${expr} << 24) >> 24`;
-		case BoundaryKind.I16: return `(${expr} << 16) >> 16`;
-		case BoundaryKind.U8: return `${expr} & 255`;
-		case BoundaryKind.U16: return `${expr} & 65535`;
-		case BoundaryKind.U32: return `${expr} >>> 0`;
-		case BoundaryKind.U64: return `BigInt.asUintN(64, ${expr})`;
-		default: return expr;
-	}
+	return match (kind) {
+		BoundaryKind.Bool => `${expr} !== 0`,
+		BoundaryKind.I8 => `(${expr} << 24) >> 24`,
+		BoundaryKind.I16 => `(${expr} << 16) >> 16`,
+		BoundaryKind.U8 => `${expr} & 255`,
+		BoundaryKind.U16 => `${expr} & 65535`,
+		BoundaryKind.U32 => `${expr} >>> 0`,
+		BoundaryKind.U64 => `BigInt.asUintN(64, ${expr})`,
+		BoundaryKind.I32 | BoundaryKind.I64 | BoundaryKind.F32 | BoundaryKind.F64 => expr,
+		BoundaryKind.Void
+			| BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "scalar conversion from the wasm side"); },
+	};
 }
 
 function toWire(kind: BoundaryKind, expr: string): string {
-	return kind == BoundaryKind.Bool ? `(${expr} ? 1 : 0)` : expr;
+	return match (kind) {
+		BoundaryKind.Bool => `(${expr} ? 1 : 0)`,
+		BoundaryKind.I8
+			| BoundaryKind.I16
+			| BoundaryKind.I32
+			| BoundaryKind.U8
+			| BoundaryKind.U16
+			| BoundaryKind.U32
+			| BoundaryKind.I64
+			| BoundaryKind.U64
+			| BoundaryKind.F32
+			| BoundaryKind.F64 => expr,
+		BoundaryKind.Void
+			| BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "scalar conversion to the wasm side"); },
+	};
 }
 
 function adapterOf(cb: BoundaryCallback, target: string): string {
@@ -62,21 +86,24 @@ function adapterOf(cb: BoundaryCallback, target: string): string {
 }
 
 function typedArrayOf(kind: BoundaryKind): string {
-	switch (kind) {
-		case BoundaryKind.Bool:
-		case BoundaryKind.U8:
-			return "Uint8Array";
-		case BoundaryKind.I8: return "Int8Array";
-		case BoundaryKind.I16: return "Int16Array";
-		case BoundaryKind.I32: return "Int32Array";
-		case BoundaryKind.U16: return "Uint16Array";
-		case BoundaryKind.U32: return "Uint32Array";
-		case BoundaryKind.I64: return "BigInt64Array";
-		case BoundaryKind.U64: return "BigUint64Array";
-		case BoundaryKind.F32: return "Float32Array";
-		case BoundaryKind.F64: return "Float64Array";
-		default: throw new Error("internal: boundary kind " + kind.toString() + " has no typed array");
-	}
+	return match (kind) {
+		BoundaryKind.Bool | BoundaryKind.U8 => "Uint8Array",
+		BoundaryKind.I8 => "Int8Array",
+		BoundaryKind.I16 => "Int16Array",
+		BoundaryKind.I32 => "Int32Array",
+		BoundaryKind.U16 => "Uint16Array",
+		BoundaryKind.U32 => "Uint32Array",
+		BoundaryKind.I64 => "BigInt64Array",
+		BoundaryKind.U64 => "BigUint64Array",
+		BoundaryKind.F32 => "Float32Array",
+		BoundaryKind.F64 => "Float64Array",
+		BoundaryKind.Void
+			| BoundaryKind.Callback
+			| BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Span => { unwiredKind(kind, "typed array"); },
+	};
 }
 
 function takerOf(f: BoundaryFunction): string {
@@ -154,14 +181,18 @@ function wrapperLines(f: BoundaryFunction, bundleName: string): string[] {
 	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
-	let body = [`return ${fromWire(f.result, call)};`];
-	if (f.result == BoundaryKind.Void) body = [`${call};`];
-	if (f.result == BoundaryKind.String) body = [`return __msbDec(${call}, __msbMod._msb_ret_len());`];
-	if (f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
+	let body: string[] = [];
+	if (f.result == BoundaryKind.Void) {
+		body = [`${call};`];
+	} else if (f.result == BoundaryKind.String) {
+		body = [`return __msbDec(${call}, __msbMod._msb_ret_len());`];
+	} else if (f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
 		lines.push("	let r;");
 		lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 		cleanup.push("__msb.takes.length = d;");
 		body = [`${call};`, "return r;"];
+	} else {
+		body = [`return ${fromWire(f.result, call)};`];
 	}
 	const out = [`function ${bundleName}(${sig}) {`, "	__msb.enter();"];
 	if (cleanup.length == 0) {
