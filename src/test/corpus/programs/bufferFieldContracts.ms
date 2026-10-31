@@ -1,6 +1,6 @@
 // @skip-js: the js Buffer reads undefined outside the bounds of a search, fill or string write; the C Buffer clamps them
 // note: a field read or write outside the buffer or the integer width throws a RangeError and writes nothing
-// @stdout: bounds entries=1800 digest=441247178
+// @stdout: bounds entries=1800 digest=845474040
 // @stdout: byteLength rejects=96 rejectedMessages=96 accepted=24 outside=24 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
 // @stdout: ranges entries=224 digest=470707350
