@@ -23,6 +23,35 @@ actor Hub {
 	takeFrame(f: Frame): int32 { this.total += f.n; return this.total; }
 }
 
+struct Row { key: Vec<uint8>; value: uint32 }
+
+actor Ledger {
+	total: int32 = 0;
+	takeIds(v: Vec<int32>): int32 { for (const x of v) this.total += x; return this.total; }
+	takeRow(r: Row): int32 { for (const b of r.key) this.total += b; this.total += r.value as int32; return this.total; }
+}
+
+function idsIntoActor(l: Ledger, sink ids: Vec<int32>): Promise<int32> { return l.takeIds(move ids); }
+function rowIntoActor(l: Ledger, sink row: Row): Promise<int32> { return l.takeRow(move row); }
+async function idsIntoSpawn(sink ids: Vec<int32>): Promise<int32> {
+	const r = spawn(() => { let s = 0; for (const x of ids) s += x; return s; }, { move: [ids] });
+	return await r;
+}
+async function rowIntoSpawn(sink row: Row): Promise<int32> {
+	const r = spawn(() => { let s = row.value as int32; for (const b of row.key) s += b; return s; }, { move: [row] });
+	return await r;
+}
+const idsArrowActor = (l: Ledger, sink ids: Vec<int32>): Promise<int32> => l.takeIds(move ids);
+const rowArrowActor = (l: Ledger, sink row: Row): Promise<int32> => l.takeRow(move row);
+const idsArrowSpawn = async (sink ids: Vec<int32>): Promise<int32> => {
+	const r = spawn(() => { let s = 0; for (const x of ids) s += x; return s; }, { move: [ids] });
+	return await r;
+};
+const rowArrowSpawn = async (sink row: Row): Promise<int32> => {
+	const r = spawn(() => { let s = row.value as int32; for (const b of row.key) s += b; return s; }, { move: [row] });
+	return await r;
+};
+
 function plain(c: Conn): int32 { return c.n; }
 function keep(s: Slot, sink c: Conn): void { s.held = c; }
 
@@ -57,6 +86,17 @@ async function main(): Promise<int32> {
 	const s2 = new Slot();
 	arrowSink(s2, fresh(9));
 	const k = exprPlain(fresh(10));
+	const l = new Ledger();
+	const v1 = await idsIntoActor(l, [1, 2, 3]);
+	const v2 = await rowIntoActor(l, { key: [4, 5], value: 6 });
+	const v3 = await idsIntoSpawn([10, 20]);
+	const v4 = await rowIntoSpawn({ key: [1, 2], value: 3 });
+	const v5 = await idsArrowActor(l, [7]);
+	const v6 = await rowArrowActor(l, { key: [8], value: 9 });
+	const v7 = await idsArrowSpawn([5, 6]);
+	const v8 = await rowArrowSpawn({ key: [3], value: 4 });
+	if (v1 != 6 || v2 != 21 || v3 != 30 || v4 != 6 || v5 != 28 || v6 != 45 || v7 != 11 || v8 != 7) { throw "GUARD RED: vec sink moves " + v1 + " " + v2 + " " + v3 + " " + v4 + " " + v5 + " " + v6 + " " + v7 + " " + v8; }
+	console.log(`sums ${v1} ${v2} ${v3} ${v4} ${v5} ${v6} ${v7} ${v8}`);
 	if (a != 3) { throw "GUARD RED: intoActor"; }
 	if (b != 3) { throw "GUARD RED: intoPlain"; }
 	if (s.held == null || s.held!.n != 4) { throw "GUARD RED: intoSink"; }
