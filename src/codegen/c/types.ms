@@ -191,6 +191,8 @@ function attachedOpName(op: AttachedOp): string {
 		AttachedOp.AttachedLe => "le",
 		AttachedOp.AttachedToString => "toString",
 		AttachedOp.AttachedCustody => "custody",
+		AttachedOp.AttachedFinalize => "finalize",
+		AttachedOp.AttachedRelease => "release",
 	};
 }
 
@@ -1357,12 +1359,15 @@ function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry
 		let traceName = "NULL";
 		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 		const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
+		const finalizer = info.finalize != null && info.release != null
+			? `, .finalizeFn = ${emitRttiHook(g, info.cName + "RttiFinalize", info.finalize, false)}, .releaseFn = ${emitRttiHook(g, info.cName + "RttiRelease", info.release, false)}`
+			: "";
 		let baseRef = "NULL";
 		if (info.baseKey != "") baseRef = demandedTypeInfoPointer(g, facts, info.baseKey, "base class");
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);

@@ -167,6 +167,8 @@ function hookSuffix(hook: string): string {
 		"sink" => "Sink",
 		"trace" => "Trace",
 		"custody" => "Custody",
+		"finalize" => "Finalize",
+		"release" => "Release",
 		_ => "WasMoved",
 	};
 }
@@ -202,6 +204,8 @@ function aliasLiftedOps(orig: Type, canon: Type): void {
 	aliasOpByKey(orig, canon, AttachedOp.AttachedWasMoved);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedTrace);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedCustody);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedFinalize);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedRelease);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
 }
 
@@ -278,6 +282,8 @@ function attachedOpOf(hook: string): AttachedOp {
 		"dup" => AttachedOp.AttachedDup,
 		"trace" => AttachedOp.AttachedTrace,
 		"custody" => AttachedOp.AttachedCustody,
+		"finalize" => AttachedOp.AttachedFinalize,
+		"release" => AttachedOp.AttachedRelease,
 		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
 	};
 }
@@ -315,7 +321,7 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: NodeBuf, loc
 
 function genOpCall(sym: Symbol, hook: string, x: Node, y: Node, buf: NodeBuf, loc: SourceLocation): void {
 	const callee = makeTypedIdentResolved(sym, null, loc);
-	if (hook == "destroy" || hook == "wasMoved") {
+	if (hook == "destroy" || hook == "wasMoved" || hook == "release") {
 		buf.items.push(makeExprStmt(makeCall(callee, [x], loc), loc));
 	} else {
 		buf.items.push(makeExprStmt(makeCall(callee, [x, y], loc), loc));
@@ -1410,11 +1416,12 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
+	const walk = hook == "release" ? "destroy" : hook;
 	const isTrace = walksCells(hook);
-	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
+	const isUnary = walk == "destroy" || hook == "wasMoved" || isTrace;
 	const hookParamT = classType != null ? classType : createVar(objType);
 	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
-	const n2 = match (hook) {
+	const n2 = match (walk) {
 		"trace" | "custody" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
@@ -1445,10 +1452,11 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// a user hook lets the author traverse iteratively instead. An onDestroy, of a
 	// struct or a class, still has its fields released after it, so such a hook
 	// detaches what it walked.
-	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
-	const releasesAfterHook = hookSym != null && hook == "destroy";
-	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
-	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend ? s1 : null;
+	const ownHook = getUserDefinedHookSym(subject, attachedOpOf(walk), lctx);
+	const hookSym = hook == "release" ? null : ownHook;
+	const releasesAfterHook = ownHook != null && walk == "destroy";
+	const held = hookSym != null && releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
+	lctx.dropOwner = walk == "destroy" && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
@@ -1475,7 +1483,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const x2 = isTrace ? makeIdentResolved(s2, loc) : hookParamDeref(s2, loc);
 
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
-		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
+		const owner = fieldsFlattened ? baseHookOwner(objType, walk, lctx) : null;
 		const firstOwn = owner != null ? owner.typeNames.length : 0;
 		if (objType.kind == TypeKind.Union && unwrapRefNullUnion(objType) != null) {
 			x1.nodeType = objType;
@@ -1488,19 +1496,20 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		} else if (distinctBody(objType) != null) {
 			fillBody(hook, x1, x2, "", distinctBody(objType) as Type, lctx, buf, createNameSet(), loc);
-		} else if (hook == "destroy") {
+		} else if (walk == "destroy") {
 			const releaseBase = (): void => {
 				if (owner != null) {
 					callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
 				} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
-					genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
+					const baseOp = hook == "release" && finalizesBeforeRelease(base, base, lctx) ? "release" : "destroy";
+					genOpCall(requireWalkOp(base, baseOp), baseOp, x1, x2, buf, loc);
 				}
 			};
 			if (releasesAfterHook) releaseBase();
 			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
 				if (!fieldStored(objType, i)) continue;
 				const visited: NameSet = createNameSet();
-				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
+				fillBody(walk, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
 			if (!releasesAfterHook) releaseBase();
 		} else {
@@ -1521,7 +1530,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		buf.items = [makeIf(makeBinary(hookParamDeref(s1, loc), "!==", makeNull(loc), loc), makeBlock(buf.items, loc), null as unknown as Node, loc)];
 	}
 	if (lctx.dropOwner != null && classType != null) {
-		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, held, lctx, loc);
+		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName + hookSuffix(hook), held, lctx, loc);
 	} else if (held != null) {
 		buf.items.push(leftNoRef(s1, held, loc));
 	}
@@ -1554,6 +1563,36 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	return sym;
 }
 
+// The cycle collector runs every Finalize of a dead cycle while its edges hold, then each Release:
+// a class whose destroy runs an onDestroy, its own or a base's, has both.
+function finalizesBeforeRelease(t: Type, orig: Type, lctx: LiftCtx): boolean {
+	if (hasUserDefinedHook(orig, "destroy", lctx)) return true;
+	for (let a = baseClassOf(t); a != null; a = baseClassOf(a)) {
+		if (hasUserDefinedHook(a, "destroy", lctx)) return true;
+	}
+	return false;
+}
+
+function generateFinalize(typeName: string, cName: string, objType: Type, subject: Type, classType: Type, lctx: LiftCtx, loc: SourceLocation): Symbol {
+	const buf = newBuf();
+	const self = liftSym(lctx, SymbolKind.Variable, "self", classType);
+	const own = getUserDefinedHookSym(subject, AttachedOp.AttachedDestructor, lctx);
+	if (own != null) {
+		const hookIdent = makeIdentResolved(own, loc);
+		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
+		buf.items.push(makeExprStmt(makeCall(hookIdent, [userHookArg(own, 0, self, classType, loc)], loc), loc));
+	}
+	let base = baseClassOf(objType);
+	while (base != null && !hasUserDefinedHook(base, "destroy", lctx)) base = baseClassOf(base);
+	if (base != null) callBaseHook(base, "finalize", self, self, lctx, buf, loc);
+	const name = cName + hookSuffix("finalize");
+	const fnNode = makeFnDecl(name, [self], [typeName], makeBlock(buf.items, loc), "", "void", loc);
+	setHookParamType(fnNode, 0, classType);
+	const sym = liftOp(fnNode, objType, objType, AttachedOp.AttachedFinalize, name);
+	lctx.collector.push(fnNode);
+	return sym;
+}
+
 function dropEdgeCall(stmt: Node): Node | null {
 	if (stmt.kind != NodeKind.ExprStmt) return null;
 	const call = (stmt.data as ExprStmtData).expr;
@@ -1570,7 +1609,7 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 	let edges = 0;
 	for (let i = 0; i + 1 < items.length; i += 1) if (dropEdgeCall(items[i]) != null) edges += 1;
 	if (edges == 0) return items;
-	const restName = cName + "DestroyRest";
+	const restName = cName + "Rest";
 	const ownerSym = liftSym(lctx, SymbolKind.Variable, "owner", createPtr(voidType()));
 	const resumeSym = liftSym(lctx, SymbolKind.Variable, "resume", int32Type());
 	const restFn = makeFnDecl(restName, [ownerSym, resumeSym], ["Ptr<void>", "int32"], null, "", "void", loc);
@@ -1724,6 +1763,12 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	}
 	const destroySym = generateHook("destroy",  typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
+	if (classType != null && !lctx.jsBackend && finalizesBeforeRelease(objType, orig, lctx)) {
+		liftedOp(objType, AttachedOp.AttachedFinalize, cName + hookSuffix("finalize"), null);
+		liftedOp(objType, AttachedOp.AttachedRelease, cName + hookSuffix("release"), null);
+		setOpByKey(objType, AttachedOp.AttachedFinalize, generateFinalize(typeName, cName, objType, orig, classType, lctx, loc));
+		setOpByKey(objType, AttachedOp.AttachedRelease, generateHook("release", typeName, cName, objType, orig, classType, lctx, loc));
+	}
 	const copySym = generateHook("copy",     typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
 	const sinkSym = generateHook("sink",     typeName, cName, objType, orig, classType, lctx, loc);

@@ -33,6 +33,8 @@ typedef struct msTypeInfo {
 	const struct msTypeInfo* const* display;
 	const char* displayName; /* Source spelling for diagnostics (NULL: same as name) */
 	msTraceProc custodyFn;   /* msOrcDisown's walk: traceFn, or one that also enters acyclic cells reaching a cycle */
+	msDestroyProc finalizeFn; /* the onDestroy part of destroyFn; the cycle collector runs it for a whole dead cycle first */
+	msDestroyProc releaseFn;  /* destroyFn without that part */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false
@@ -42,5 +44,6 @@ typedef struct msTypeInfo {
 #define MS_TYPE_FLAG_HCR 4
 #define MS_TYPE_FLAG_ARRAY_CELL 8  /* Array cell: the payload starts with int64_t len, and len 0 means no outgoing refs */
 #define MS_TYPE_FLAG_ATOMIC 16  /* The cell's own rc is atomic: Arc and Locked boxes */
+#define MS_TYPE_FLAG_FINALIZER 32  /* finalizeFn and releaseFn are set */
 
 #endif /* MS_TYPEINFO_H */

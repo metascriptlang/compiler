@@ -211,6 +211,8 @@ function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 		if (demand.destroy != null) markReferenced(demand.destroy, demander);
 		if (demand.trace != null) markReferenced(demand.trace, demander);
 		if (demand.custody != null) markReferenced(demand.custody, demander);
+		if (demand.finalize != null) markReferenced(demand.finalize, demander);
+		if (demand.release != null) markReferenced(demand.release, demander);
 		return;
 	}
 }
@@ -320,6 +322,8 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
 	const custody = getOpByKey(subject, AttachedOp.AttachedCustody);
+	const finalize = getOpByKey(subject, AttachedOp.AttachedFinalize);
+	const release = getOpByKey(subject, AttachedOp.AttachedRelease);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
@@ -333,12 +337,14 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 		markObjectTypeInfo(base, modulePath);
 		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody, finalize, release };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
 	if (custody != null) markReferenced(custody, owner);
+	if (finalize != null) markReferenced(finalize, owner);
+	if (release != null) markReferenced(release, owner);
 }
 
 function classBaseOf(subject: Type): Type | null {
