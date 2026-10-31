@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, isCancelled } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -1214,12 +1214,19 @@ function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> 
 	return copy;
 }
 
+function checkedUnlessCancelled(db: TransAmDb, filePath: string): CheckerContext | null {
+	const startVersion = getCancelVersion(db.cancelCtx);
+	const ctx = dbTypeCheck(db, filePath);
+	if (ctx == null || isCancelled(db.cancelCtx, startVersion)) return null;
+	return ctx;
+}
+
 export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as Node;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
 	if (dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
-	const ctx = dbTypeCheck(db, filePath);
+	const ctx = checkedUnlessCancelled(db, filePath);
 	if (ctx == null) return null as unknown as Node;
 	if (recheckImports(db, key) && dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
@@ -1284,7 +1291,8 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	// Ensure upstream queries are computed
 	const _cachedProg = dbParse(db, filePath);
 	if (_cachedProg == null) return null as unknown as Node;
-	const checkerCtx = dbTypeCheck(db, filePath);
+	const checkerCtx = checkedUnlessCancelled(db, filePath);
+	if (checkerCtx == null) return null as unknown as Node;
 
 	// Fresh parse for transform — checker already mutated its own copy
 	// (enum MemberExpr → Identifier), and transforms also mutate the AST.
@@ -1317,7 +1325,8 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 
 	const _cachedProg2 = dbParse(db, filePath);
 	if (_cachedProg2 == null) return null as unknown as Node;
-	const checkerCtx = dbTypeCheck(db, filePath);
+	const checkerCtx = checkedUnlessCancelled(db, filePath);
+	if (checkerCtx == null) return null as unknown as Node;
 
 	// Fresh parse — checker mutates AST, transforms also mutate
 	const txSrc = getFileText(db.fileInput, fileId);
@@ -2965,4 +2974,38 @@ test "a changed global import list drops the exports registered from checks made
 	assert findModuleExports(db.exportRegistry, "/gl/use.ms") != null;
 	dbSetGlobalImports(db, ["/gl/g.ms"]);
 	assert findModuleExports(db.exportRegistry, "/gl/use.ms") == null;
+}
+
+function keepLowering(checked: Node, ctx: CheckerContext, arg: int32): Node {
+	return checked;
+}
+
+function requestWhileCancelled(db: TransAmDb, path: string, query: int32): Node {
+	db.cancelCtx.inputPending = () => true;
+	const tree = query == 0 ? dbTransform(db, path) : query == 1 ? dbAnalyze(db, path) : dbLower(db, path, keepLowering, 0);
+	db.cancelCtx.inputPending = null;
+	resetCancel(db.cancelCtx);
+	return tree;
+}
+
+test "a transform, analysis or lowering requested while its check is cancelled returns and stores nothing" {
+	const kinds = [TaQueryKind.Transform, TaQueryKind.Analyze, TaQueryKind.Lower];
+	for (let query = 0; query < 3; query += 1) {
+		const db = createTransAmDb(100);
+		const path = "/cx/a.ms";
+		dbSetFileText(db, path, "export const a: int32 = 1;\nexport const b: int32 = a;\n");
+		assert requestWhileCancelled(db, path, query) == null;
+		assert !cacheContains(db.cache, createQueryKey(kinds[query], getFileId(db.fileInput, path)));
+		assert !dbCheckIsCurrent(db, path);
+	}
+}
+
+test "a transform requested after a cancelled one is made from a complete check" {
+	const db = createTransAmDb(100);
+	const path = "/cx/b.ms";
+	dbSetFileText(db, path, "export const a: int32 = 1;\nexport const b: int32 = a;\n");
+	requestWhileCancelled(db, path, 0);
+	assert dbTransform(db, path) != null;
+	assert dbTypeCheck(db, path).errors.length == 0;
+	assert dbCheckIsCurrent(db, path);
 }
