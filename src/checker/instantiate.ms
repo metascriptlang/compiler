@@ -172,6 +172,7 @@ export function resetInstantiationState(): void {
 	_localGenerics = new HashMap<Symbol, Scope>();
 	_localInstances = new HashMap<Symbol, Node[]>();
 	_placedInstances = new HashMap<Symbol, Symbol>();
+	_instanceHomes = new HashMap<Symbol, string>();
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
 	resetCtorRoutines();
@@ -385,6 +386,15 @@ export function instanceGenericOf(node: Node): Symbol | null {
 }
 
 let _placedInstances: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
+let _instanceHomes: HashMap<Symbol, string> = new HashMap<Symbol, string>();
+
+export function setInstanceHome(sym: Symbol, home: string): void {
+	_instanceHomes.set(sym, home);
+}
+
+export function instanceHomeOf(sym: Readonly<Symbol>): string {
+	return _instanceHomes.readonlyGet(sym) ?? sym.modulePath;
+}
 
 export function distinctInstances(order: Node[]): Node[] {
 	const seen = new HashMap<Symbol, CheckedInstantiation[]>();

@@ -57,7 +57,7 @@ import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, HcrTypeLayout, HcrStorageTable, hcrFunctions, lowerHcrIndirection, createHcrStorageTable, buildHcrStorage } from "../transform/native/hcrIndirect";
 import { hcrTypeCounts } from "./hcrCount";
-import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
+import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances, setInstanceHome } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { markTypeOnlyImports } from "../checker/importElision";
 import { markVmOnlyRoutines } from "../checker/vmOnly";
@@ -1537,7 +1537,8 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 		for (const instNode of placed) {
 			const sym = instNode.resolvedSym!;
 			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
-			if (instNode.kind == NodeKind.FunctionDecl || instNode.kind == NodeKind.ClassDecl) sym.modulePath = home;
+			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
+			if (instNode.kind == NodeKind.ClassDecl) setInstanceHome(sym, home);
 			if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
 		}
 		byHome.set(home, placed);
