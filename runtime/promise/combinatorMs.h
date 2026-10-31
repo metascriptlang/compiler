@@ -106,4 +106,56 @@ static inline void msPromiseAllWatch(void* fut, void* env) {
 	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseAllCb, .env = env });
 }
 
+_Static_assert(offsetof(msFutureThenEnv, typeTag) == 48 && offsetof(msFutureThenEnv, run) == 56 && sizeof(msFutureThenEnv) == 64, "ThenEnv in combinator.cms");
+_Static_assert(offsetof(msFutureCatchEnv, typeTag) == 32 && offsetof(msFutureCatchEnv, ok) == 40 && sizeof(msFutureCatchEnv) == 48, "CatchEnv in combinator.cms");
+_Static_assert(offsetof(msFutureFinallyEnv, onSettled) == 16 && sizeof(msFutureFinallyEnv) == 32, "FinallyEnv in combinator.cms");
+
+static inline void* msPromiseThenEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureThenEnv), &msFutureThenEnvTypeInfo);
+}
+
+static inline void* msPromiseCatchEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureCatchEnv), &msFutureCatchEnvTypeInfo);
+}
+
+static inline void* msPromiseFinallyEnvNew(void) {
+	return msAllocTyped(sizeof(msFutureFinallyEnv), &msFutureFinallyEnvTypeInfo);
+}
+
+static inline void msPromiseEnvFree(void* env) { msDecrefCyclic(env); }
+
+static inline void msPromiseThenWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureThenCb, .env = env }, msFutureThenEnvDrop, NULL));
+}
+
+static inline void msPromiseCatchWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureCatchCb, .env = env }, msFutureCatchEnvDrop, NULL));
+}
+
+static inline void msPromiseFinallyWatch(void* fut, void* env) {
+	msFutureAddCallback(fut, msActorStampIf((msClosure){ .fn = (msClosureFn)msFutureFinallyCb, .env = env }, msFutureFinallyEnvDrop, NULL));
+}
+
+static inline void msPromiseInvokeRun(void* run, void* env) { ((void (*)(void*))run)(env); }
+
+static inline void msPromiseInvokeOk(void* ok, void* output, void* input) { ((void (*)(void*, void*))ok)(output, input); }
+
+static inline void msPromiseCallError(void* fn, void* env, void* err) {
+	if (env) ((void (*)(void*, void*))fn)(err, env);
+	else ((void (*)(void*))fn)(err);
+}
+
+static inline void msPromiseCallVoid(void* fn, void* env) {
+	if (env) ((void (*)(void*))fn)(env);
+	else ((void (*)(void))fn)();
+}
+
+static inline bool msPromiseThrown(void) { return msErr; }
+
+static inline void* msPromiseTakeThrown(void) {
+	void* exception = (void*)msCurrException;
+	msErr = false; msCurrException = NULL;
+	return exception;
+}
+
 #endif

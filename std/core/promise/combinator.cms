@@ -275,3 +275,135 @@ function promiseRace(futures: Ptr<void>): Ptr<void> {
 function promiseAny(futures: Ptr<void>): Ptr<void> {
 	return promiseFirstTyped(futures, null, null, null, 1, msPromiseFirstGeneric());
 }
+
+extern function msPromiseThenEnvNew(): Ptr<void>;
+extern function msPromiseCatchEnvNew(): Ptr<void>;
+extern function msPromiseFinallyEnvNew(): Ptr<void>;
+extern function msPromiseEnvFree(env: Ptr<void>): void;
+extern function msPromiseThenWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msPromiseCatchWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msPromiseFinallyWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msPromiseInvokeRun(run: Ptr<void>, env: Ptr<void>): void;
+extern function msPromiseInvokeOk(ok: Ptr<void>, output: Ptr<void>, input: Ptr<void>): void;
+extern function msPromiseCallError(fn: Ptr<void>, env: Ptr<void> | null, err: Ptr<void>): void;
+extern function msPromiseCallVoid(fn: Ptr<void>, env: Ptr<void> | null): void;
+extern function msPromiseThrown(): boolean;
+extern function msPromiseTakeThrown(): Ptr<void>;
+
+struct ThenEnv {
+	output: Ptr<void>;
+	input: Ptr<void>;
+	fulfilledFn: Ptr<void>;
+	fulfilledEnv: Ptr<void> | null;
+	rejectedFn: Ptr<void> | null;
+	rejectedEnv: Ptr<void> | null;
+	typeTag: int32;
+	run: Ptr<void>;
+}
+
+function settleFromHandler(output: Ptr<void>): void {
+	if (msPromiseThrown()) msFutureFail(output, msPromiseTakeThrown());
+	else msPromiseCompleteEmpty(output);
+}
+
+@exportName("msPromiseThenAttach")
+function thenAttach(input: Ptr<void>, fulfilledFn: Ptr<void>, fulfilledEnv: Ptr<void> | null, rejectedFn: Ptr<void> | null, rejectedEnv: Ptr<void> | null, typeTag: int32, run: Ptr<void>): Ptr<void> {
+	const output = msFutureCreate();
+	const env = msPromiseThenEnvNew() as Ptr<ThenEnv>;
+	env.output = output;
+	env.input = input;
+	msPromiseHold(input);
+	msPromiseHold(output);
+	env.fulfilledFn = fulfilledFn;
+	env.fulfilledEnv = fulfilledEnv;
+	env.rejectedFn = rejectedFn;
+	env.rejectedEnv = rejectedEnv;
+	env.typeTag = typeTag;
+	env.run = run;
+	msPromiseThenWatch(input, env as Ptr<void>);
+	return output;
+}
+
+@exportName("msFutureThenCb")
+function thenCallback(raw: Ptr<void>): void {
+	const e = raw as Ptr<ThenEnv>;
+	if (msPromiseInputRejected(e.input)) {
+		const rejectedFn = e.rejectedFn;
+		if (rejectedFn == null) {
+			msFutureFailShared(e.output, msPromiseInputError(e.input));
+		} else {
+			msPromiseCallError(rejectedFn, e.rejectedEnv, msPromiseInputError(e.input));
+			settleFromHandler(e.output);
+		}
+	} else {
+		msPromiseInvokeRun(e.run, raw);
+		settleFromHandler(e.output);
+	}
+	msPromiseEnvFree(raw);
+}
+
+struct CatchEnv {
+	output: Ptr<void>;
+	input: Ptr<void>;
+	rejectedFn: Ptr<void>;
+	rejectedEnv: Ptr<void> | null;
+	typeTag: int32;
+	ok: Ptr<void>;
+}
+
+@exportName("msPromiseCatchAttach")
+function catchAttach(input: Ptr<void>, output: Ptr<void>, rejectedFn: Ptr<void>, rejectedEnv: Ptr<void> | null, ok: Ptr<void>): Ptr<void> {
+	const env = msPromiseCatchEnvNew() as Ptr<CatchEnv>;
+	env.output = output;
+	env.input = input;
+	msPromiseHold(input);
+	msPromiseHold(output);
+	env.rejectedFn = rejectedFn;
+	env.rejectedEnv = rejectedEnv;
+	env.typeTag = 0;
+	env.ok = ok;
+	msPromiseCatchWatch(input, env as Ptr<void>);
+	return output;
+}
+
+@exportName("msFutureCatchCb")
+function catchCallback(raw: Ptr<void>): void {
+	const e = raw as Ptr<CatchEnv>;
+	if (msPromiseInputRejected(e.input)) {
+		msPromiseCallError(e.rejectedFn, e.rejectedEnv, msPromiseInputError(e.input));
+		settleFromHandler(e.output);
+	} else {
+		msPromiseInvokeOk(e.ok, e.output, e.input);
+	}
+	msPromiseEnvFree(raw);
+}
+
+struct FinallyEnv {
+	output: Ptr<void>;
+	input: Ptr<void>;
+	settledFn: Ptr<void>;
+	settledEnv: Ptr<void> | null;
+}
+
+@exportName("msPromiseFinallyAttach")
+function finallyAttach(input: Ptr<void>, settledFn: Ptr<void>, settledEnv: Ptr<void> | null): Ptr<void> {
+	const output = msFutureCreate();
+	const env = msPromiseFinallyEnvNew() as Ptr<FinallyEnv>;
+	env.output = output;
+	env.input = input;
+	msPromiseHold(input);
+	msPromiseHold(output);
+	env.settledFn = settledFn;
+	env.settledEnv = settledEnv;
+	msPromiseFinallyWatch(input, env as Ptr<void>);
+	return output;
+}
+
+@exportName("msFutureFinallyCb")
+function finallyCallback(raw: Ptr<void>): void {
+	const e = raw as Ptr<FinallyEnv>;
+	msPromiseCallVoid(e.settledFn, e.settledEnv);
+	if (msPromiseInputRejected(e.input)) msFutureFailShared(e.output, msPromiseInputError(e.input));
+	else msFutureComplete(e.output, msPromiseInputValue(e.input));
+	msPromiseEnvFree(raw);
+}
