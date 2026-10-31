@@ -4258,6 +4258,7 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 		const members = groups.get(key)!;
 		if (!members.some((m: Symbol): boolean => hasFlag(m, SymbolFlag.OverloadSig))) continue;
 		const impls = members.filter((m: Symbol): boolean => !hasFlag(m, SymbolFlag.OverloadSig));
+		if (refuseDisagreeingOverload(ctx, members, impls.length == 1 ? impls[0] : members[0])) continue;
 		const isCtor = key == "constructor";
 		if (impls.length == 0 && !isCtor) refuseMissingImplementation(ctx, members, null);
 		if (impls.length > 1 && !isCtor) refuseSecondImplementation(ctx, members, impls[1]);
@@ -4265,6 +4266,33 @@ export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
 		const instanceMethod = impls[0].declNode.kind == NodeKind.MethodDecl && !(impls[0].declNode.data as MethodDeclData).methodIsStatic;
 		validateOverloadSigs(ctx, members, impls[0], isCtor || instanceMethod ? 1 : 0);
 	}
+}
+
+// Every declaration of a set shares the implementation's export, staticness and visibility,
+// because a call reaches the implementation through any of them.
+function refuseDisagreeingOverload(ctx: CheckerContext, members: Symbol[], canonical: Symbol): boolean {
+	for (const m of members) {
+		const differs = hasFlag(m, SymbolFlag.Exported) != hasFlag(canonical, SymbolFlag.Exported) ? "exported or non-exported"
+			: methodIsStatic(m) != methodIsStatic(canonical) ? "static or non-static"
+			: methodVisibility(m) != methodVisibility(canonical) ? "public, private or protected"
+			: "";
+		if (differs == "") continue;
+		rejectOverloadSet(members);
+		const at = declaredAt(m);
+		addError(ctx, `Overload signatures of '${writtenName(m)}' must all be ${differs}`, at.line, at.column);
+		return true;
+	}
+	return false;
+}
+
+function methodIsStatic(sym: Symbol): boolean {
+	return sym.declNode.kind == NodeKind.MethodDecl && (sym.declNode.data as MethodDeclData).methodIsStatic;
+}
+
+function methodVisibility(sym: Symbol): string {
+	if (sym.declNode.kind != NodeKind.MethodDecl) return "";
+	const written = (sym.declNode.data as MethodDeclData).methodVisibility;
+	return written == "public" ? "" : written;
 }
 
 function declaresSignature(decl: Node | null): boolean {
