@@ -963,9 +963,15 @@ static bool msRunOnceIn(int timeoutMs);
 bool msRunOnce(int timeoutMs) {
 	const msTaskFrame* frame = msPoolFrameSwap(NULL);
 	msActor* actor = msActorCurrentForJobs();
-	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
+	if (__builtin_expect(actor != NULL, 0)) {
+		msCurrentActor = NULL;
+		msActorRootsPark(actor);
+	}
 	bool didWork = msRunOnceIn(timeoutMs);
-	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
+	if (__builtin_expect(actor != NULL, 0)) {
+		msActorRootsResume(actor);
+		msCurrentActor = actor;
+	}
 	msPoolFrameSwap(frame);
 	return didWork;
 }

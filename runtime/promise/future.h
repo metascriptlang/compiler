@@ -92,6 +92,8 @@ MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
 MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
 MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
 MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
+MS_ACTOR_JOB_PATH void msActorRootsPark(msActor* a);
+MS_ACTOR_JOB_PATH void msActorRootsResume(msActor* a);
 
 /* Set by the first thread to enter an actor; a thread whose msCurrentActor is set has
  * set it itself, so a relaxed read is enough and a program without actors reads no TLS. */
