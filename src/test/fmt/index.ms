@@ -113,6 +113,7 @@ import "./cases/bareBlockComment";
 import "./cases/fieldSeparatorsAndHoles";
 import "./cases/operandComments";
 import "./cases/aliasComments";
+import "./cases/unionMemberLeadingBar";
 import "./cases/stableLayout";
 import "./cases/compileTimeBlocks";
 import "./cases/explicitDeref";
