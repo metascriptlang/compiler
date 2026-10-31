@@ -122,16 +122,16 @@ export function dbEnsurePrelude(db: TransAmDb): void {
 		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 		// Pre-register exports from top-level std modules (e.g., std/build.ms)
 		// so auto-import suggestions work even without explicit imports.
-		preRegisterStdModule(db, db.stdPath + "/build.ms", "std/build");
+		preRegisterStdModule(db, db.stdPath + "/build/index.ms", "std/build");
 	}
 }
 
 // Parse a single file and register its exports into the registry.
 function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
-	const source = try readStdFile(filePath) catch "";
-	if (source.length == 0) return;
-	const pr = parseSourceLenient(source);
-	if (!pr.ok) return;
+	const read = readStdFile(filePath);
+	if (!read.ok) throw new Error(`internal: std module ${filePath} cannot be read`);
+	const pr = parseSourceLenient(read.value);
+	if (!pr.ok) throw new Error(`internal: std module ${filePath} does not parse`);
 	const tmpCtx = createTempCollectContext(filePath);
 	collectTopLevelLocal(tmpCtx, pr.value);
 	resolveDeclarations(tmpCtx, pr.value);
@@ -590,12 +590,12 @@ function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Node
 // just reads raw and stores as-is. The Preprocess query later resolves .h imports.
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
-	const raw = try readStdFile(filePath) catch "";
-	if (raw.byteLength == 0) {
+	const read = readStdFile(filePath);
+	if (!read.ok) {
 		getInputId(db.fileInput, filePath, db.revision.value);
 		return;
 	}
-	dbSetFileText(db, filePath, raw);
+	dbSetFileText(db, filePath, read.value);
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
@@ -3022,4 +3022,27 @@ test "a transform and an analysis of a graph-bound header parse the text the loa
 	assert dbTransform(db, "/g/api.h") != null;
 	assert dbAnalyze(db, "/g/api.h") != null;
 	assert dbAnalyze(db, "/g/main.ms") != null;
+}
+
+test "an empty file on disk is a module an import resolves to" {
+	const dir = resolveTmpDir("empty");
+	writeFile(dir + "/empty.ms", "");
+	const db = createTransAmDb(100);
+	const resolved = dbResolveImport(db, dir + "/use.ms", "./empty");
+	removeAll(dir);
+	assert resolved == dir + "/empty.ms", resolved;
+}
+
+test "a std module the prelude pre-registers that cannot be read fails loud" {
+	const db = createTransAmDb(100);
+	let message = "";
+	try { preRegisterStdModule(db, "/nowhere/std/build/index.ms", "std/build"); } catch (e) { message = (e as Error).message; }
+	assert message == "internal: std module /nowhere/std/build/index.ms cannot be read", message;
+}
+
+test "the prelude pre-registers the exports of std/build" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbEnsurePrelude(db);
+	assert findModuleExports(db.exportRegistry, db.stdPath + "/build/index.ms") != null;
 }
