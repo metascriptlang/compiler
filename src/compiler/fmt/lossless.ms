@@ -1,6 +1,6 @@
 import { Token, TokenKind, tokenKindToString, isIdentLikeKind, isIdentOrKeyword } from "../../lexer/token";
 import { lex } from "../../lexer/lexer";
-import { parseSource } from "../../parser/statements/validation";
+import { parseForFormat } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { Node, NodeKind, NodeFlag, Type, SourceLocation, MemberExprData, CallExprData, ArrayAccessData } from "../../ast/node";
 import { FieldSink, nodeFields } from "../../ast/fieldspec";
@@ -278,8 +278,8 @@ function treeShape(root: Node): string {
 }
 
 function sameTreesIgnoringParens(source: string, formatted: string, first: string): Result<void, string> {
-	const x = parseSource(source);
-	const y = parseSource(formatted);
+	const x = parseForFormat(source);
+	const y = parseForFormat(formatted);
 	if (!x.ok || !y.ok) return Result.err("fmt changes parentheses, " + first + ", and the source or the output does not parse");
 	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of parentheses, " + first);
 	return Result.ok(null);

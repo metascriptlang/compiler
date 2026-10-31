@@ -5,7 +5,7 @@ import { removeAll } from "std/fs";
 import { basename } from "std/fs/path";
 import { lex } from "../lexer/lexer";
 import { formatToken } from "../lexer/token";
-import { parseSource } from "../parser/statements/validation";
+import { parseSource, parseForFormat } from "../parser/statements/validation";
 import { registerCoreParsers } from "../parser/statements/core"; // Moved to top
 import { ProgramData } from "../ast/node";
 import { printNode as printAstNode } from "../ast/index";
@@ -145,7 +145,7 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): void {
 	registerCoreParsers();
 	const source = readSource(filePath);
-	const result = parseSource(source);
+	const result = parseForFormat(source);
 	if (!result.ok) {
 		console.log(error("parse error") + ": " + result.error);
 		exit(1);

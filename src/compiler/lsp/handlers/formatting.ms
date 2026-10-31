@@ -1,7 +1,7 @@
 // LSP Handlers — Code Actions (quick fixes) and Document Formatting.
 
 import {
-	TransAmDb, dbParse, createTransAmDb, dbSetFileText, dbTypeCheck
+	TransAmDb, createTransAmDb, dbSetFileText, dbTypeCheck
 } from "../../transam/index";
 import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGetArrayItems, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
@@ -14,7 +14,7 @@ import { lspByteColumnIn, lspSourcePosition, lspPositionAt as positionAtByte, Ls
 import { checkLossless } from "../../fmt/lossless";
 import { ByteEdit, diffTextEdits } from "../../fmt/textEdit";
 import { registerCoreParsers } from "../../../parser/statements/core";
-import { parseSource } from "../../../parser/statements/validation";
+import { parseSource, parseForFormat } from "../../../parser/statements/validation";
 import { dbGetSource, lspDocumentUri } from "./shared";
 import { getFormatOptions } from "./diagnostics";
 import { splitLines, detectLineIndent, indentFault } from "./formatLint";
@@ -62,7 +62,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 				registerCoreParsers();
 				_fmtParsersRegistered = true;
 			}
-			const parseResult = parseSource(source);
+			const parseResult = parseForFormat(source);
 			options.source = source;
 			if (parseResult.ok) {
 				const printed = formatNode(parseResult.value, options);
@@ -103,8 +103,13 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	if (source == "") return lspResponse(id, "[]");
 
 	const t1 = performance.now();
-	const program = dbParse(db, path);
-	if (program == null) return lspResponse(id, "[]");
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+	const parsed = parseForFormat(source);
+	if (!parsed.ok) return lspResponse(id, "[]");
+	const program = parsed.value;
 	const t2 = performance.now();
 
 	const options = getFormatOptions(db, path);
@@ -172,7 +177,7 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 		registerCoreParsers();
 		_fmtParsersRegistered = true;
 	}
-	const parsed = parseSource(source);
+	const parsed = parseForFormat(source);
 	if (!parsed.ok) return lspResponse(id, "[]");
 	const stmts = rangeStatements(parsed.value, from.value, to.value);
 	if (!stmts.ok) return lspErrorResponse(id, -32603, stmts.error);
@@ -213,7 +218,7 @@ export function handleOnTypeFormatting(id: string, params: string, db: TransAmDb
 		registerCoreParsers();
 		_fmtParsersRegistered = true;
 	}
-	const parsed = parseSource(source);
+	const parsed = parseForFormat(source);
 	if (!parsed.ok) return lspResponse(id, "[]");
 	const typedAt: FmtPos = { line: cursor.value.line, column: cursor.value.column - 1 };
 	const run = rangeStatements(parsed.value, typedAt, typedAt);

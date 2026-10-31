@@ -7,7 +7,7 @@ import {
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, makeLoc,
 } from "../../../ast/node";
-import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
+import { SourceComment, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docLine, docCommaSepList, docIfBreak, docNil, docWillBreak } from "../doc";
@@ -16,71 +16,20 @@ import { isAssignOp } from "../../../ast/operators";
 import { printTypeAnnotation, isObjectTypeAnnotation, inlineObjectType } from "./types";
 import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
-class ListItem {
-	line: int32;
-	column: int32;
-	startLine: int32;
-	stmt: Node | null;
-	chain: WhenChain | null;
-	broken: boolean;
-}
-
-function chainItem(chain: WhenChain): ListItem {
-	const lead = chain.placed.leading;
-	const startLine = lead.length > 0 ? lead[0].line : chain.line;
-	return { line: chain.line, column: chain.column, startLine, stmt: null, chain, broken: true };
-}
-
-function stmtItem(stmt: Node): ListItem {
-	const trail = commentsOfRun().trailing(stmt);
-	const lead = commentsOfRun().leading(stmt);
-	return { line: stmt.location.line, column: stmt.location.column, startLine: startLineOf(stmt), stmt, chain: null, broken: lead.length > 0 || trail.length > 0 };
-}
-
-function printChain(chain: WhenChain, options: FormatOptions): Doc {
-	const text = sourceSpan(options.source, chain.line, chain.column, chain.endLine, chain.endColumn);
-	const parts: Doc[] = [];
-	for (const d of leadingDocs(chain.placed.leading)) parts.push(d);
-	parts.push(docText(text));
-	for (const d of trailingDocs(chain.placed.trailing)) parts.push(d);
-	return docGroup(parts);
-}
-
-function listItems(container: Node, stmts: Node[]): ListItem[] {
-	const items: ListItem[] = [];
-	for (const s of unpicked(stmts)) items.push(stmtItem(s));
-	for (const chain of commentsOfRun().chainsIn(container)) items.push(chainItem(chain));
-	for (let i = 1; i < items.length; i += 1) {
-		const moved = items[i];
-		let j = i - 1;
-		while (j >= 0 && (items[j].line > moved.line || (items[j].line == moved.line && items[j].column > moved.column))) {
-			items[j + 1] = items[j];
-			j -= 1;
-		}
-		items[j + 1] = moved;
-	}
-	return items;
-}
-
-function printListItem(item: ListItem, stmts: Node[], options: FormatOptions): Doc {
-	if (item.chain != null) return printChain(item.chain, options);
-	noteFollowers(stmts, item.stmt!);
-	return callPrintNode(item.stmt!, options);
-}
-
-function printItems(items: ListItem[], stmts: Node[], options: FormatOptions): Doc[] {
+function printItems(items: Node[], stmts: Node[], options: FormatOptions): Doc[] {
 	const docs: Doc[] = [];
 	const starts: int32[] = [];
 	for (const item of items) {
-		docs.push(printListItem(item, stmts, options));
-		starts.push(item.startLine);
+		noteFollowers(stmts, item);
+		docs.push(callPrintNode(item, options));
+		starts.push(startLineOf(item));
 	}
 	return joinKeepingBlankLines(docs, starts);
 }
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
-	const items = listItems(node, d.programStmts);
+	const items = listed(d.programStmts);
 	const parts = printItems(items, d.programStmts, options);
 	const orphans = danglingOf(node);
 	if (items.length == 0) return docGroup([danglingBlock(orphans)]);
@@ -135,10 +84,10 @@ function followersAfter(stmts: Node[], stmt: Node, follower: (s: Node) => Node |
 	return out;
 }
 
-function unpicked(stmts: Node[]): Node[] {
+function listed(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
-		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null && listDeclarator(s) == null) out.push(s);
+		if (!isParamPatternDecl(s) && structAccessorDecl(s) == null && listDeclarator(s) == null) out.push(s);
 	}
 	return out;
 }
@@ -166,7 +115,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	const d = node.data as BlockStmtData;
 	const collapsible = node == collapsibleBlock;
 	collapsibleBlock = null;
-	const items = listItems(node, d.statements);
+	const items = listed(d.statements);
 	const orphans = danglingOf(node);
 	if (items.length == 0) {
 		if (isEmptyStatement(node, options)) return docText(";");
@@ -263,16 +212,18 @@ function isUnwrittenElse(alt: Node, options: FormatOptions): boolean {
 	return sourceByteAt(options.source, alt.location.line, alt.location.column) != "{".code;
 }
 
+function whenHead(node: Node, body: Node, options: FormatOptions): Doc {
+	const bodyAt = makeLoc(body.location.line, body.location.column);
+	markWithin(node.location, bodyAt);
+	return docText(sourceSpan(options.source, node.location.line, node.location.column, bodyAt.line, bodyAt.column).trimEnd());
+}
+
 export function printIfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as IfStmtData;
 	const hasElse = d.alternate != null && !isUnwrittenElse(d.alternate, options);
 	const beforeElse = hasElse ? commentsBeforeElse(d, options) : [];
-	const parts: Doc[] = [
-		docText("if "),
-		...parenthesizedHeader(callPrintNode(d.condition, options)),
-		bodyGap(d.consequent, options),
-		printBody(d.consequent, options, false),
-	];
+	const head = node.flags.has(NodeFlag.WhenKept) ? [whenHead(node, d.consequent, options)] : [docText("if "), ...parenthesizedHeader(callPrintNode(d.condition, options))];
+	const parts: Doc[] = [...head, bodyGap(d.consequent, options), printBody(d.consequent, options, false)];
 	if (hasElse) {
 		const alt = d.alternate!;
 		for (const c of beforeElse) {

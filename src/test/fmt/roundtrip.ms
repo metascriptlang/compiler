@@ -9,7 +9,7 @@
 // pretty-print. If the structure shifts, parens were dropped or operators
 // were reordered, and the program now runs differently.
 
-import { parseSource } from "../../parser/statements/validation";
+import { parseForFormat } from "../../parser/statements/validation";
 import "../../parser/statements/core"; // side-effect: register sub-parsers
 import { Node, NodeKind, NodeFlag,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
@@ -28,7 +28,7 @@ import { defaultFormatOptions } from "../../compiler/fmt/options";
 import { checkLossless } from "../../compiler/fmt/lossless";
 
 export function fmt(source: string): string {
-	const parsed = parseSource(source);
+	const parsed = parseForFormat(source);
 	if (!parsed.ok) return "";
 	const opts = defaultFormatOptions();
 	opts.source = source;
@@ -366,7 +366,7 @@ function shapeList(nodes: Node[]): string {
 // Run source through fmt and assert AST shape is preserved.
 // Throws (via assert false) with a diff dump on mismatch.
 export function assertFmtPreservesAst(source: string): boolean {
-	const parsedA = parseSource(source);
+	const parsedA = parseForFormat(source);
 	if (!parsedA.ok) {
 		console.log("INPUT FAILED TO PARSE: " + parsedA.error);
 		console.log("source: " + source);
@@ -381,7 +381,7 @@ export function assertFmtPreservesAst(source: string): boolean {
 		return false;
 	}
 
-	const parsedB = parseSource(formatted);
+	const parsedB = parseForFormat(formatted);
 	if (!parsedB.ok) {
 		console.log("FORMATTED OUTPUT FAILED TO PARSE: " + parsedB.error);
 		console.log("source:    " + source);

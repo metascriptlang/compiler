@@ -44,32 +44,13 @@ export class Placed {
 	trailing: SourceComment[] = [];
 }
 
-export class WhenChain {
-	line: int32;
-	column: int32;
-	endLine: int32;
-	endColumn: int32;
-	parent: Node;
-	placed: Placed = new Placed();
-
-	constructor(first: Token, last: Token, parent: Node) {
-		this.line = first.line;
-		this.column = first.column;
-		this.endLine = last.endLine;
-		this.endColumn = last.endColumn;
-		this.parent = parent;
-	}
-}
-
 export class Comments {
 	all: SourceComment[] = [];
 	byNode: HashMap<Node, Placed> = new HashMap<Node, Placed>();
-	chains: WhenChain[] = [];
 }
 
 class Span {
 	node: Node;
-	chain: WhenChain | null = null;
 	start: int64;
 	end: int64;
 	children: Span[] = [];
@@ -88,7 +69,7 @@ function posKey(line: int32, column: int32): int64 {
 function buildSpan(node: Node): Span {
 	const span = new Span(node);
 	forEachChild(node, (child: Node): void => {
-		if (child.location.endLine == 0 || child.flags.has(NodeFlag.WhenPicked)) return;
+		if (child.location.endLine == 0) return;
 		const inner = buildSpan(child);
 		if (inner.start < span.start) span.start = inner.start;
 		if (inner.end > span.end) span.end = inner.end;
@@ -127,7 +108,6 @@ function enclosingSpan(root: Span, start: int64, end: int64): Span {
 }
 
 function placedOf(comments: Comments, span: Span): Placed {
-	if (span.chain != null) return span.chain.placed;
 	const node = span.node;
 	const existing = comments.byNode.get(node);
 	if (existing != null) return existing;
@@ -266,38 +246,30 @@ function findChains(tokens: Token[]): Token[][] {
 	return found;
 }
 
-function insideChain(c: Token, chains: Token[][]): boolean {
-	const start = posKey(c.line, c.column);
-	for (const chain of chains) {
-		if (posKey(chain[0].line, chain[0].column) <= start && start < posKey(chain[1].endLine, chain[1].endColumn)) return true;
+function keptChainAt(span: Span, at: int64): boolean {
+	if (span.node.flags.has(NodeFlag.WhenKept) && posKey(span.node.location.line, span.node.location.column) == at) return true;
+	for (const child of span.children) {
+		if (child.start <= at && at < child.end && keptChainAt(child, at)) return true;
 	}
 	return false;
 }
 
 export function decorateComments(program: Node, tokens: Token[]): Result<Comments, string> {
-	return decorateFrom(buildSpan(program), program, tokens);
+	return decorateFrom(buildSpan(program), tokens);
 }
 
-function decorateFrom(root: Span, program: Node, tokens: Token[]): Result<Comments, string> {
-	const comments = new Comments();
-	const found = findChains(tokens);
-	for (const pair of found) {
-		const chainSpan = new Span(program);
-		const chain = new WhenChain(pair[0], pair[1], program);
-		chainSpan.chain = chain;
-		chainSpan.start = posKey(chain.line, chain.column);
-		chainSpan.end = posKey(chain.endLine, chain.endColumn);
-		const parent = enclosingSpan(root, chainSpan.start, chainSpan.end);
-		chain.parent = parent.node;
-		parent.children.push(chainSpan);
-		sortChildren(parent);
-		comments.chains.push(chain);
+function decorateFrom(root: Span, tokens: Token[]): Result<Comments, string> {
+	for (const pair of findChains(tokens)) {
+		if (!keptChainAt(root, posKey(pair[0].line, pair[0].column))) {
+			return Result.err(`fmt was handed a program parsed without the branches of the 'when' at line ${pair[0].line}; parse it with parseForFormat`);
+		}
 	}
+	const comments = new Comments();
 	let prev: Token | null = null;
 	let run: SourceComment[] = [];
 	for (const t of tokens) {
 		if (t.kind == TokenKind.Comment) {
-			if (!insideChain(t, found)) run.push(new SourceComment(t));
+			run.push(new SourceComment(t));
 			continue;
 		}
 		if (run.length > 0) {
@@ -329,14 +301,6 @@ export function dangling(this comments: Comments, node: Node): SourceComment[] {
 export function trailing(this comments: Comments, node: Node): SourceComment[] {
 	const placed = comments.byNode.get(node);
 	return placed != null ? placed.trailing : noComments;
-}
-
-export function chainsIn(this comments: Comments, node: Node): WhenChain[] {
-	const out: WhenChain[] = [];
-	for (const chain of comments.chains) {
-		if (chain.parent == node) out.push(chain);
-	}
-	return out;
 }
 
 export function unformattedWithin(this comments: Comments, line: int32, column: int32, endLine: int32, endColumn: int32): SourceComment[] {

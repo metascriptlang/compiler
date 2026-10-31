@@ -23,6 +23,7 @@ export class ParserState {
 	trailingDecls: Node[];
 	splits: TokenSplit[];
 	sawImportCall: boolean;
+	keepWhenChains: boolean;
 }
 
 export interface TokenSplit {
@@ -31,7 +32,7 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false, keepWhenChains: false };
 }
 
 export interface ParserMark {

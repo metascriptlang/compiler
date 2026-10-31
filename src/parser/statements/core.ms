@@ -337,6 +337,17 @@ function deferWhen(conds: Node[], blocks: Node[], elseBlock: Node | null, from: 
 	return alternate as Node;
 }
 
+function keepWhen(conds: Node[], blocks: Node[], elseBlock: Node | null, heads: Token[]): Node {
+	let alternate: Node | null = elseBlock;
+	for (let i = conds.length - 1; i >= 0; i -= 1) {
+		const node = createNode(NodeKind.IfStmt, { condition: conds[i], consequent: blocks[i], alternate: alternate as unknown as Node }, heads[i]);
+		finishAfter(node, alternate != null ? alternate : blocks[i]);
+		node.flags = node.flags.incl(NodeFlag.WhenKept);
+		alternate = node;
+	}
+	return alternate as Node;
+}
+
 function pickWhenBranch(conds: Node[], blocks: Node[], elseBlock: Node | null, at: Token): Node[] {
 	for (let i = 0; i < conds.length; i += 1) {
 		if (!isWhenFlag(conds[i])) return [deferWhen(conds, blocks, elseBlock, i, at)];
@@ -350,6 +361,7 @@ function pickWhenBranch(conds: Node[], blocks: Node[], elseBlock: Node | null, a
 // their tokens and not consulted, mirroring semWhen's early return.
 export function parseWhenChain(state: ParserState): NodesResult {
 	const whenToken = current(state);
+	const heads: Token[] = [whenToken];
 	advance(state); // consume 'when'
 	const conds: Node[] = [try parseWhenHead(state)];
 	const blocks: Node[] = [try parseBlockStmt(state)];
@@ -358,6 +370,7 @@ export function parseWhenChain(state: ParserState): NodesResult {
 	while (current(state).kind == TokenKind.Else) {
 		advance(state);
 		if (current(state).kind == TokenKind.When) {
+			heads.push(current(state));
 			advance(state);
 			conds.push(try parseWhenHead(state));
 			blocks.push(try parseBlockStmt(state));
@@ -366,6 +379,7 @@ export function parseWhenChain(state: ParserState): NodesResult {
 			break;
 		}
 	}
+	if (state.keepWhenChains) return Result.ok([keepWhen(conds, blocks, elseBlock, heads)]);
 	const chosen = pickWhenBranch(conds, blocks, elseBlock, whenToken);
 	for (const s of chosen) s.flags = s.flags.incl(NodeFlag.WhenPicked);
 	return Result.ok(chosen);

@@ -10,9 +10,18 @@ type NodeResult = Result<Node, string>;
 // ===== Convenience: lex + parse in one step =====
 
 export function parseSource(input: string): NodeResult {
+	return parseWith(input, false);
+}
+
+export function parseForFormat(input: string): NodeResult {
+	return parseWith(input, true);
+}
+
+function parseWith(input: string, keepWhenChains: boolean): NodeResult {
 	const lr = lex(input);
 	if (!lr.ok) return Result.err(lr.error);
 	const state = createState(lr.value);
+	state.keepWhenChains = keepWhenChains;
 	const pr = parseProgram(state);
 	if (state.errors.length > 0) return Result.err(state.errors[0]);
 	if (!pr.ok) return Result.err(pr.error);
