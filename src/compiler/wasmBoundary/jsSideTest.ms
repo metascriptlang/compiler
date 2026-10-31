@@ -1,8 +1,9 @@
 import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, manifestFor } from "./manifest";
+import { BoundaryCallback, BoundaryKind, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
+import { wasmEntrySource } from "./wasmSide";
 import { ensureDir, writeFile } from "std/fs";
 import { execFileResult } from "std/process";
 
@@ -32,7 +33,7 @@ export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; r
 export function swap(a: Span<int32>, b: Span<int32>): void {}
 `;
 
-function bindingsFor(names: string[], checked: boolean = false) {
+function manifestOf(names: string[]): Manifest {
 	const ctx = checkSource(SOURCE);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
@@ -43,7 +44,11 @@ function bindingsFor(names: string[], checked: boolean = false) {
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
 	if (m.errors.length > 0) throw new Error("internal: " + m.errors.join("; "));
-	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: checked });
+	return m;
+}
+
+function bindingsFor(names: string[], checked: boolean = false) {
+	return jsBindings(manifestOf(names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: checked });
 }
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
@@ -72,14 +77,59 @@ test "js side: one prelude awaits the wasm module once, hands it its own registr
 	assert b.prelude.indexOf("const __msb = ") < b.prelude.indexOf("default({ msb: __msb })");
 }
 
-test "js side: a string parameter is encoded, passed as pointer and length, and freed in finally" {
+test "js side: a string parameter is encoded, passed as pointer and length, and released in finally" {
 	const code = bindingsFor(["both"]).modules[0].code;
-	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e2) __msbMod._free(e2[0]);\n\t}\n}");
+	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\te2 = __msbEnc(a2);\n\t\treturn __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]);\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\tif (e2) __msbFree(e2[0]);\n\t}\n}");
+}
+
+test "js side: copied arguments are bump-allocated from the scratch block, and only a heap pointer is freed" {
+	const p = bindingsFor(["twice"]).prelude;
+	assert p.includes("function __msbAlloc(n) {\n\tconst room = __msbEnd - __msbTop;\n\tif (n <= room) {\n\t\tconst a = n + 15 & -16;\n\t\tif (a <= room) {\n\t\t\tconst q = __msbTop;\n\t\t\t__msbTop = q + a;\n\t\t\treturn q;\n\t\t}\n\t}\n\tconst p = n > 4294967295 ? 0 : __msbMod._malloc(n);");
+	assert p.includes("function __msbFree(p) {\n\tif (p < __msbBase || p >= __msbEnd) __msbMod._free(p);\n}");
+	assert !bindingsFor(["twice", "scale", "tag", "fill"]).modules[0].code.includes("__msbMod._free");
+}
+
+test "js side: the scratch block is reserved once after _MsMain, and only when a wrapper copies arguments in" {
+	const used = bindingsFor(["scale"]).prelude;
+	assert used.includes("__msbMod._MsMain();\nconst __msbBase = __msbMod._malloc(16384);\nconst __msbEnd = __msbBase === 0 ? 0 : __msbBase + 16384;\nlet __msbTop = __msbBase;\n");
+	assert used.split("__msbMod._malloc(16384)").length == 2;
+	for (const name of ["both", "twice", "tag", "total", "fill"]) assert bindingsFor([name]).prelude.includes("__msbMod._malloc(16384)");
+	const none = bindingsFor(["add64", "evaluate", "sumBy"]);
+	assert none.prelude.includes("__msbMod._MsMain();\nconst __msbBase = 0;\nconst __msbEnd = 0;\nlet __msbTop = 0;\n");
+	assert !none.prelude.includes("_malloc(16384)");
+	assert !none.modules[0].code.includes("__msbTop");
+}
+
+test "js side: a wrapper marks the scratch top before its first encode and resets it first in finally, even when a copy-back throws" {
+	const code = bindingsFor(["tag", "scale", "fill"]).modules[0].code;
+	assert code.split("\tconst mark = __msbTop;\n\ttry {").length == 4;
+	assert code.split("\t} finally {\n\t\t__msbTop = mark;\n").length == 4;
+	assert code.includes("\tlet e0_2;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0_2 = __msbEnc(a0.text);");
+}
+
+const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "mul64u", "evaluate", "isEven", "flip", "wide", "visit", "pick", "twice", "banner", "both", "sumBy", "edit", "patch", "stamp", "cut", "swap"];
+
+test "js side: a wrapper takes a scratch mark exactly when its function copies an argument in, and the wasm half then exports the allocator and never adopts a copied block" {
+	for (const name of EVERY_FUNCTION) {
+		const m = manifestOf([name]);
+		const wants = copiesArgsIn(m.functions[0]);
+		const js = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
+		assert js.modules[0].code.includes("const mark = __msbTop;") == wants;
+		assert js.modules[0].code.includes("__msbFree(") == wants;
+		assert js.prelude.includes("__msbMod._malloc(16384)") == wants;
+		if (wants) {
+			const e = wasmEntrySource(m.functions, (p: string) => "./calc");
+			assert e.exportedFunctions.includes("_malloc");
+			assert e.exportedFunctions.includes("_free");
+			assert e.runtimeMethods.includes("HEAPU8");
+			assert !e.source.includes("msStringAdoptMalloced");
+		}
+	}
 }
 
 test "js side: a string result is built by a taker pushed for the call, so a nested call keeps its own" {
 	const b = bindingsFor(["twice"]);
-	assert b.modules[0].code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\t__msbMod._msb_calc_twice(e0[0], e0[1]);\n\t\treturn r;\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\t__msb.takes.length = d;\n\t}\n}");
+	assert b.modules[0].code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEnc(a0);\n\t\t__msbMod._msb_calc_twice(e0[0], e0[1]);\n\t\treturn r;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\t__msb.takes.length = d;\n\t}\n}");
 	assert !b.modules[0].code.includes("msb_ret_len");
 	assert !b.prelude.includes("msb_ret_len");
 }
@@ -138,7 +188,10 @@ test "js side: a failed wasm allocation throws instead of writing at address 0" 
 	assert !p.includes("const p = __msbMod._malloc(n || 1);") && !p.includes("const p = __msbMod._malloc(n * 3);");
 }
 
-const GLUE_STUB = `const calls = [];
+const GLUE_STUB = `const __msbBase = 0;
+const __msbEnd = 0;
+let __msbTop = 0;
+const calls = [];
 const heap = new Uint8Array(1 << 22);
 let top = 16;
 const __msbMod = {
@@ -224,7 +277,7 @@ test "js side: a Vec is copied into wasm memory and its result copied out into a
 	assert js.includes("e0 = __msbCopyIn(a0, 0, a0.length, Float32Array);");
 	assert js.includes("__msbMod._msb_calc_scale(e0[0], e0[1], a1);");
 	assert js.includes("(p, n) => { r = __msbVecOut(p >>> 0, n, Uint16Array, false); }");
-	assert js.includes("if (e0) __msbMod._free(e0[0]);");
+	assert js.includes("if (e0) __msbFree(e0[0]);");
 	assert bindingsFor(["scale"]).prelude.includes("function __msbVecOut(p, n, T, bool) {");
 }
 
@@ -234,7 +287,11 @@ test "js side: a Span is copied in for the call, and a writable one is copied ba
 	assert read.includes("return __msbMod._msb_calc_total(e0[0], e0[1]);");
 	assert !read.includes("__msbCopyBack");
 	const write = bindingsFor(["fill"]).modules[0].code;
-	assert write.includes("\t\ttry {\n\t\t\t__msbMod._msb_calc_fill(e0[0], e0[1], a1);\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);");
+	assert write.includes("\tconst mark = __msbTop;\n\ttry {");
+	assert write.includes("\t} finally {\n\t\t__msbTop = mark;\n");
+	assert write.includes("__msbFree(e0[0]);");
+	assert !write.includes("._free(");
+	assert write.includes("\t\ttry {\n\t\t\t__msbMod._msb_calc_fill(e0[0], e0[1], a1);\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);");
 	assert bindingsFor(["fill"]).prelude.includes("function __msbCopyBack(p, a, off, n, T, bool) {");
 }
 
@@ -245,17 +302,17 @@ test "js side: a callback that returns a value still copies a writable Span back
 
 test "js side: the copy-back of a Span runs only once every argument is encoded, so a failed encode writes nothing back" {
 	const code = bindingsFor(["stamp"]).modules[0].code;
-	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\ttry {\n\t\t\treturn __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]);\n\t\t} finally {\n\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);");
+	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\ttry {\n\t\t\treturn __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]);\n\t\t} finally {\n\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);");
 }
 
 test "js side: a Vec result with a writable Span copies back inside the call's finally and restores the takers after it" {
 	const code = bindingsFor(["cut"]).modules[0].code;
-	assert code.includes("\t\t\t__msbMod._msb_calc_cut(e0[0], e0[1]);\n\t\t\treturn r;\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\t__msb.takes.length = d;");
+	assert code.includes("\t\t\t__msbMod._msb_calc_cut(e0[0], e0[1]);\n\t\t\treturn r;\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\t__msb.takes.length = d;");
 }
 
 test "js side: each writable Span has its own copy-back, so one that throws cannot skip the next, and the frees still run last" {
 	const code = bindingsFor(["swap"]).modules[0].code;
-	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\tif (e0) __msbMod._free(e0[0]);\n\t\tif (e1) __msbMod._free(e1[0]);");
+	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\tif (e1) __msbFree(e1[0]);");
 }
 
 function glueBody(prelude: string, name: string): string {
@@ -336,6 +393,7 @@ test "js side: a checked string parameter is tested before anything is allocated
 	let r;
 	const d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;
 	let e0;
+	const mark = __msbTop;
 	try {");
 }
 

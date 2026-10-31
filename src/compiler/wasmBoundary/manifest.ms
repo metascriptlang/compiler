@@ -63,6 +63,18 @@ export function unwiredKind(kind: BoundaryKind, what: string): never {
 	throw new Error(`internal: boundary kind ${BoundaryKind[kind]} has no ${what}`);
 }
 
+export function copiesArgsIn(f: BoundaryFunction): boolean {
+	for (const p of f.params) {
+		if (p.kind == BoundaryKind.String || p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) return true;
+		if (p.kind == BoundaryKind.Struct) {
+			for (const leaf of p.leaves) {
+				if (leaf.kind == BoundaryKind.String) return true;
+			}
+		}
+	}
+	return false;
+}
+
 export function signatureLetter(kind: BoundaryKind): string {
 	return match (kind) {
 		BoundaryKind.Bool
