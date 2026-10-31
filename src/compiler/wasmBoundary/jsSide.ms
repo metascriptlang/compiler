@@ -205,6 +205,9 @@ function typedArrayOf(kind: BoundaryKind): string {
 }
 
 function takerOf(f: BoundaryFunction): string {
+	if (f.result == BoundaryKind.String) {
+		return "(p, n) => { r = __msbDec(p >>> 0, n); }";
+	}
 	if (f.result == BoundaryKind.Vec) {
 		return `(p, n) => { r = __msbVecOut(p >>> 0, n, ${typedArrayOf(f.resultElement)}, ${f.resultElement == BoundaryKind.Bool}); }`;
 	}
@@ -284,9 +287,7 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	let body: string[] = [];
 	if (f.result == BoundaryKind.Void) {
 		body = [`${call};`];
-	} else if (f.result == BoundaryKind.String) {
-		body = [`return __msbDec(${call}, __msbMod._msb_ret_len());`];
-	} else if (f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
+	} else if (f.result == BoundaryKind.String || f.result == BoundaryKind.Struct || f.result == BoundaryKind.Vec) {
 		lines.push("	let r;");
 		lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 		cleanup.push("__msb.takes.length = d;");

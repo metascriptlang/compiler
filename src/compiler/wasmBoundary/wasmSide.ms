@@ -118,8 +118,8 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 	return `(${sig}): ${msTypeOf(cb.result)} => ${fromWire(cb.result, call)}`;
 }
 
-function stringHelperLines(withResult: boolean): string[] {
-	const lines = [
+function stringHelperLines(): string[] {
+	return [
 		"extern function msStringNew(data: cstring, length: int64): string;",
 		"function msbStrFrom(ptr: uint32, len: int32): string {",
 		"\treturn msStringNew(ptr as uint64 as Ptr<uint8> as cstring, len as int64);",
@@ -128,12 +128,6 @@ function stringHelperLines(withResult: boolean): string[] {
 		"\treturn (s as cstring) as Ptr<uint8> as uint64 as uint32;",
 		"}",
 	];
-	if (withResult) {
-		lines.push('let msbRet: string = "";');
-		lines.push('@exportName("msb_ret_len")');
-		lines.push("export function msb_ret_len(): int32 { return msbRet.asBytes().length; }");
-	}
-	return lines;
 }
 
 function wrapperLines(f: BoundaryFunction, alias: string): string[] {
@@ -201,9 +195,9 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 	if (f.result == BoundaryKind.String) {
 		return [
 			`@exportName("${f.exportSymbol}")`,
-			`export function ${f.exportSymbol}(${sig}): uint32 {`,
-			`\tmsbRet = ${call};`,
-			"\treturn msbStrPtr(msbRet);",
+			`export function ${f.exportSymbol}(${sig}): void {`,
+			`\tconst r = ${call};`,
+			"\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);",
 			"}",
 		];
 	}
@@ -244,16 +238,21 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	let hasVecResult = false;
 	const vecElements: BoundaryKind[] = [];
 	const resultImports: string[] = [];
+	const addResultImport = (name: string): void => {
+		if (!resultImports.includes(name)) resultImports.push(name);
+	};
 	for (const f of fns) {
-		if (f.result == BoundaryKind.String) hasStringResult = true;
+		if (f.result == BoundaryKind.String) {
+			hasStringResult = true;
+			addResultImport("msb_rs_s");
+		}
 		if (f.result == BoundaryKind.Vec) {
 			readsHeap = true;
 			hasVecResult = true;
 		}
 		if (f.result == BoundaryKind.Struct) {
 			if (leafLetters(f.resultLeaves).includes("s")) hasStructString = true;
-			const name = "msb_rs_" + leafLetters(f.resultLeaves);
-			if (!resultImports.includes(name)) resultImports.push(name);
+			addResultImport("msb_rs_" + leafLetters(f.resultLeaves));
 		}
 		for (const p of f.params) {
 			if (p.kind == BoundaryKind.String) hasStringParam = true;
@@ -269,7 +268,7 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 	}
 	if (hasVecResult) resultImports.push("msb_rv");
 	const hasString = hasStringParam || hasStringResult || hasStructString;
-	if (hasString) for (const l of stringHelperLines(hasStringResult)) lines.push(l);
+	if (hasString) for (const l of stringHelperLines()) lines.push(l);
 	for (const k of vecElements) for (const l of vecFromLines(k)) lines.push(l);
 
 	const signatures: string[] = [];
@@ -290,7 +289,6 @@ export function wasmEntrySource(fns: BoundaryFunction[], importPathOf: (modulePa
 
 	const exported: string[] = [];
 	for (const f of fns) exported.push("_" + f.exportSymbol);
-	if (hasStringResult) exported.push("_msb_ret_len");
 	if (hasString || copiesIn) {
 		exported.push("_malloc");
 		exported.push("_free");
