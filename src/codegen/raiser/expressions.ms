@@ -1783,6 +1783,13 @@ function compileClosureArg(s: RaiserCompState, arg: Node, slot: int32, held: int
 	emitInst(s, raiserABC(RaiserOpcode.Move, slot, pair, 0));
 }
 
+function countLiteralEnv(s: RaiserCompState, literal: Node | null, pair: int32): void {
+	if (literal == null) return;
+	const env = allocRef(s);
+	emitInst(s, fieldInst(s, literal.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, pair, addConst(s, raiserConstString("env"))));
+	emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
+}
+
 function releaseClosureArgs(s: RaiserCompState, c: ClosureArgs): void {
 	if (c.route >= 0) {
 		s.tries.pop();
@@ -2029,11 +2036,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		const literal = closureLiteralOf(d.arguments[0]);
-		if (literal != null) {
-			const env = allocRef(s);
-			emitInst(s, fieldInst(s, literal.nodeType, "env", RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, env, closureReg, addConst(s, raiserConstString("env"))));
-			emitInst(s, raiserABC(RaiserOpcode.RcInc, env, 0, 0));
-		}
+		countLiteralEnv(s, literal, closureReg);
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
 		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
@@ -2052,6 +2055,15 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
+	}
+	if (asyncKind == "SleepTask" && d.arguments.length == 2) {
+		const delayReg = compileExpr(s, d.arguments[0]);
+		const closureReg = compileExpr(s, d.arguments[1]);
+		const literal = closureLiteralOf(d.arguments[1]);
+		countLiteralEnv(s, literal, closureReg);
+		emitInst(s, raiserABC(RaiserOpcode.Sleep, closureReg, delayReg, 1));
+		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
+		return closureReg;
 	}
 	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
 		const dest = allocFor(s, node.nodeType);

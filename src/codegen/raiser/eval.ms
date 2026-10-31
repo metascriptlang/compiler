@@ -1224,6 +1224,17 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
+const RAISER_TIER_TASK = "@builtin(\"SleepTask\") extern function task(ms: number, f: () => void): void from \"msSleepTask\";";
+
+test "engine: a due timer runs between timer tasks that keep queueing each other" {
+	const vm = evalVM(RAISER_TIER_TASK
+		+ " let stop = false; let bounces = 0;"
+		+ " function bounce(): void { bounces += 1; if (!stop) task(0, (): void => { bounce(); }); }"
+		+ " bounce(); task(10, (): void => { stop = true; console.log(`due after bounces ${bounces > 1}`); });");
+	assert vm.error == "", vm.error;
+	assert vm.output == "due after bounces true\n", vm.output;
+}
+
 const CHILD_SLEEP = platform == "windows" ? "sleep" : "/bin/sleep";
 
 const RAISER_TIER_CHILD = "extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64; extern function msProcChildKill(h: int64): int32; extern function msProcChildFree(h: int64): void;";

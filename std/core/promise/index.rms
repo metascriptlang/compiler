@@ -137,6 +137,9 @@ export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
 @builtin("SleepAsync")
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";
 
+@builtin("SleepTask")
+extern function sleepTask(ms: number, task: () => void): void from "msSleepTask";
+
 export function asyncCheck(fut: Promise<void>): void {
 }
 
@@ -222,11 +225,19 @@ function actorRefuse(job: ActorJob): void {
 }
 
 function actorKick(cell: ActorCell): void {
-	Promise.resolve(0).then((turn: int32): void => { actorPump(cell); });
+	sleepTask(0, (): void => { actorPump(cell); });
 }
 
+const ACTOR_BATCH: int32 = 64;
+
 async function actorPump(cell: ActorCell): Promise<void> {
+	let ran: int32 = 0;
 	while (cell.head < cell.jobs.length) {
+		if (ran == ACTOR_BATCH) {
+			actorKick(cell);
+			return;
+		}
+		ran = ran + 1;
 		const job = cell.jobs[cell.head];
 		cell.head = cell.head + 1;
 		if (!cell.live) {

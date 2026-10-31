@@ -88,7 +88,7 @@ export interface RaiserStrand {
 	loopCount: int64;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
-	resultFuture: int64;   // future this strand completes when it finishes; -1 for main
+	resultFuture: int64;   // future this strand completes when it finishes; -1 for main, TASK_STRAND for a timer task
 	safePoints: number[];
 	currentException: RaiserValue;
 	spawnEnv: int64;
@@ -154,6 +154,7 @@ export interface RaiserFutures {
 export interface RaiserTimer {
 	dueMs: number;
 	future: int64;
+	task: number;
 }
 
 export interface RaiserTimers {
@@ -1348,14 +1349,23 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 
 // --- Timers ---
 
-function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
+function timerDueMs(delay: RaiserValue): number {
 	let ms: int64 = 0;
 	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
 	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
-	const timer: RaiserTimer = { dueMs: performance.now() + (ms as number), future: newFuture(vm) };
+	return performance.now() + (ms as number);
+}
+
+function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
+	const timer: RaiserTimer = { dueMs: timerDueMs(delay), future: newFuture(vm), task: -1 };
 	futureHold(vm, timer.future);
 	insertTimer(vm, timer);
 	return timer.future;
+}
+
+function vmArmTask(vm: RaiserVM, closure: RaiserValue, delay: RaiserValue): void {
+	const task = closureStrand(vm, closure, "a timer task", TASK_STRAND, RaiserStrandStatus.Blocked);
+	if (task >= 0) insertTimer(vm, { dueMs: timerDueMs(delay), future: -1, task });
 }
 
 function insertTimer(vm: RaiserVM, timer: RaiserTimer): void {
@@ -1375,6 +1385,11 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
 	items.shrink(items.length - 1);
+	if (timer.task >= 0) {
+		vm.sched.strands.items[timer.task].status = RaiserStrandStatus.Ready;
+		vm.sched.readyOrder.push(timer.task);
+		return;
+	}
 	futureComplete(vm, timer.future, raiserNil());
 	futureRelease(vm, timer.future);
 }
@@ -1390,6 +1405,10 @@ function vmWaitForTimer(vm: RaiserVM): void {
 function vmHandleSleep(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	if (vm.comptime) {
 		vmError(vm, "sleepAsync is not available in compile-time evaluation: a timer would make its result depend on wall-clock time");
+		return;
+	}
+	if (ic == 1) {
+		vmArmTask(vm, getDyn(vm, ia), getDyn(vm, ib));
 		return;
 	}
 	const fut = vmArmTimer(vm, getDyn(vm, ib));
@@ -1715,8 +1734,8 @@ function schedulePick(vm: RaiserVM): number {
 // and its register file go to the next such strand, as C frees a finished task's frame.
 function retireStrand(vm: RaiserVM, idx: number): void {
 	const s = vm.sched.strands.items[idx];
-	if (idx == 0 || s.status != RaiserStrandStatus.Done || s.resultFuture < 0) return;
-	futureRelease(vm, s.resultFuture);
+	if (idx == 0 || s.status != RaiserStrandStatus.Done || s.resultFuture == -1) return;
+	if (s.resultFuture >= 0) futureRelease(vm, s.resultFuture);
 	s.resultFuture = -1;
 	s.result = raiserNil();
 	vm.sched.spareRegs.push(s.regs);
@@ -1900,14 +1919,25 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 // captures nothing; otherwise it is the callee's last argument, and `spawn`
 // takes a zero-arg closure, so env is its only one.
 function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
+	const fut = newFuture(vm);
+	futureHold(vm, fut);
+	const strand = closureStrand(vm, closure, "spawn", fut, RaiserStrandStatus.Ready);
+	if (strand < 0) return -1;
+	vm.sched.readyOrder.push(strand);
+	return fut;
+}
+
+const TASK_STRAND: int64 = -2;
+
+function closureStrand(vm: RaiserVM, closure: RaiserValue, starter: string, resultFuture: int64, status: RaiserStrandStatus): number {
 	if (closure.kind != RaiserValueKind.Object) {
-		vmError(vm, "spawn expects a closure");
+		vmError(vm, `${starter} expects a closure`);
 		return -1;
 	}
 	const fnField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "fn");
 	const funcIdx = fnField.intVal;
 	if (fnField.kind != RaiserValueKind.Int || funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
-		vmError(vm, `spawn: function index out of bounds: ${funcIdx}`);
+		vmError(vm, `${starter}: function index out of bounds: ${funcIdx}`);
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
@@ -1917,7 +1947,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	if (envField.kind == RaiserValueKind.Object) {
 		rcIncref(vm.arrayHeap, vm.objectHeap, envField);
 		if (callee.regOps.length == 0 || (callee.regOps[0] & 7) != CLS_REF) {
-			vmError(vm, `spawn: ${callee.name} does not take the closure environment in a ref register`);
+			vmError(vm, `${starter}: ${callee.name} does not take the closure environment in a ref register`);
 			return -1;
 		}
 		regs.slots[callee.regOps[0] >> 3] = envField.intVal;
@@ -1927,13 +1957,10 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const fut = newFuture(vm);
-	futureHold(vm, fut);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals: vm.globals, regs, callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), spawnEnv };
-	vm.sched.readyOrder.push(placeStrand(vm, s));
-	return fut;
+	const s: RaiserStrand = { id, globals: vm.globals, regs, callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: funcIdx as int32, base: 0, loopCount: 0, status, result, resultFuture, safePoints: sp, currentException: raiserNil(), spawnEnv };
+	return placeStrand(vm, s);
 }
 
 // Reading a future: finished → its value, pending → park the strand on it.
