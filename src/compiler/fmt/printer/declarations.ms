@@ -524,7 +524,7 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
-	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
+	const visibility = (d.ctorVisibility != "" ? d.ctorVisibility + " " : "") + (node.flags.has(NodeFlag.Abstract) ? "abstract " : "");
 	const signature = isSynthesized(node, d.ctorBody);
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
 	if (asWritten != null) return docGroup([docText(visibility), asWritten, signature ? docText(";") : printCollapsibleBody(d.ctorBody, options)]);
