@@ -1,7 +1,7 @@
 import { Node, NodeKind, ClassDeclData, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { CheckerContext, addError, newSym } from "./context";
 import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag } from "./symbol";
-import { createFunction, voidType } from "./types";
+import { createFunction, setMinArity, voidType } from "./types";
 import { pickBodyCtx } from "./instantiate";
 
 export interface CtorRow {
@@ -51,6 +51,7 @@ export function isCtorSignature(member: Node): boolean {
 export function mintCtorSignature(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node, defaults: Node[]): Symbol {
 	const routine = newCtorRoutine(ctx, owner, ownerName, thisType, userTypes, userNames, declNode, defaults);
 	setFlag(routine, SymbolFlag.OverloadSig);
+	setMinArity(routine.symbolType, requiredCtorArgs(userTypes, defaults) + 1);
 	return routine;
 }
 
@@ -135,4 +136,13 @@ export function ctorRoutineFor(ctx: CheckerContext, owner: Symbol): Symbol | nul
 export function ctorFormalTypes(routine: Symbol | null): Type[] | null {
 	if (routine == null || routine.symbolType == null || routine.symbolType.kind != TypeKind.Function) return null;
 	return routine.symbolType.typeChildren.slice(1);
+}
+
+export function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int32 {
+	let required: int32 = 0;
+	for (let i = 0; i < formals.length; i += 1) {
+		const hasDefault = defaults != null && i < defaults.length && defaults[i] != null;
+		if (!hasDefault && formals[i].kind != TypeKind.Varargs) required = i + 1;
+	}
+	return required;
 }

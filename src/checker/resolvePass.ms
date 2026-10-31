@@ -3078,7 +3078,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	d.classBody.push(ctorNode);
 	setFlag(sym, SymbolFlag.HasConstructor);
 	setFlag(sym, SymbolFlag.InheritsConstructor);
-	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []);
+	setFlag(mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []), SymbolFlag.InheritsConstructor);
 }
 
 // A resolved class names its parent by Symbol; one not resolved yet is declared in

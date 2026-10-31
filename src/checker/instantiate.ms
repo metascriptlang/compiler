@@ -1459,6 +1459,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 	const ctorSym = mintCtorRoutine(host, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
+	if (ctorNode.resolvedSym != null && hasFlag(ctorNode.resolvedSym, SymbolFlag.InheritsConstructor)) setFlag(ctorSym, SymbolFlag.InheritsConstructor);
 	ctorSym.instanceArgs = types;
 	ctorSym.instanceParams = params;
 
