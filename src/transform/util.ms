@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag, lookupSymbol } from "../checker/symbol";
-import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
+import { literalBase, distinctBody, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -499,7 +499,18 @@ export function makeAbsent(t: Type | null, loc: SourceLocation): Node {
 // Used by async/generator transforms to initialize state vars correctly.
 export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	if (t == null) return makeNull(loc);
+	const peeled = literalBase(distinctBody(t) ?? t);
+	if (peeled != t) {
+		const zero = makeDefaultValue(peeled, loc);
+		if (zero.kind != NodeKind.NullLiteral) zero.nodeType = t;
+		return zero;
+	}
 	const k = t.kind;
+	if ((k == TypeKind.Enum && isOrdinalEnum(t)) || k == TypeKind.Char) {
+		const n = makeNumber(0, loc);
+		n.nodeType = t;
+		return n;
+	}
 	if (k == TypeKind.Set) {
 		const repr = setRepr(t);
 		if (repr != null) return makeDefaultValue(repr, loc);
