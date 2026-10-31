@@ -257,11 +257,12 @@ static inline int64_t msOsTotalMem(void) {
 	int mib[2] = { CTL_HW, HW_MEMSIZE };
 	int64_t mem = 0;
 	size_t len = sizeof(mem);
-	sysctl(mib, 2, &mem, &len, NULL, 0);
+	if (sysctl(mib, 2, &mem, &len, NULL, 0) != 0) return 0;
 	return mem;
 #elif defined(__linux__)
 	long pages = sysconf(_SC_PHYS_PAGES);
 	long pageSize = sysconf(_SC_PAGE_SIZE);
+	if (pages < 0 || pageSize < 0) return 0;
 	return (int64_t)pages * (int64_t)pageSize;
 #else
 	return 0;
@@ -280,11 +281,14 @@ static inline int64_t msOsFreeMem(void) {
 	mach_port_t host = mach_host_self();
 	vm_statistics64_data_t stats;
 	mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
-	if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count) != KERN_SUCCESS) return 0;
+	kern_return_t kr = host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count);
+	mach_port_deallocate(mach_task_self(), host);
+	if (kr != KERN_SUCCESS) return 0;
 	return (int64_t)stats.free_count * (int64_t)sysconf(_SC_PAGE_SIZE);
 #elif defined(__linux__)
 	long pages = sysconf(_SC_AVPHYS_PAGES);
 	long pageSize = sysconf(_SC_PAGE_SIZE);
+	if (pages < 0 || pageSize < 0) return 0;
 	return (int64_t)pages * (int64_t)pageSize;
 #else
 	return 0;
