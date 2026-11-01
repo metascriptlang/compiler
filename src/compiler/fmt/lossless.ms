@@ -218,9 +218,14 @@ function shapePutNode(n: Node | null): void {
 
 function writtenTypeSeparatorsFree(text: string): string {
 	let out = "";
+	let opensOperand = true;
 	for (let k = 0; k < text.byteLength; k += 1) {
 		const c = text.byteAt(k);
-		if (c == " ".code || c == ",".code || c == ";".code || (c == "|".code && out == "")) continue;
+		if (c == " ".code || c == "\t".code || c == "\n".code || c == "\r".code) continue;
+		if (c == "|".code && opensOperand) continue;
+		opensOperand = c == ":".code || c == "(".code || c == "<".code || c == "[".code || c == "{".code || c == "=".code || c == ",".code || c == ";".code
+			|| (c == ">".code && out.endsWith("="));
+		if (c == ",".code || c == ";".code) continue;
 		out += text.byteSlice(k, k + 1);
 	}
 	return out;
