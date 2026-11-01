@@ -4,6 +4,7 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { Node, NodeKind, NodeFlag, Type, SourceLocation, MemberExprData, CallExprData, ArrayAccessData } from "../../ast/node";
 import { FieldSink, nodeFields } from "../../ast/fieldspec";
+import { startsType } from "./printer/types";
 
 function isCloser(kind: TokenKind): boolean {
 	return match (kind) {
@@ -218,9 +219,13 @@ function shapePutNode(n: Node | null): void {
 
 function writtenTypeSeparatorsFree(text: string): string {
 	let out = "";
+	let written = "";
 	for (let k = 0; k < text.byteLength; k += 1) {
 		const c = text.byteAt(k);
-		if (c == " ".code || c == ",".code || c == ";".code || (c == "|".code && out == "")) continue;
+		if (c == " ".code) continue;
+		const leading = (c == "|".code || c == "&".code) && startsType(written);
+		if (c != "\t".code && c != "\n".code && c != "\r".code) written += text.byteSlice(k, k + 1);
+		if (leading || c == ",".code || c == ";".code) continue;
 		out += text.byteSlice(k, k + 1);
 	}
 	return out;
@@ -507,6 +512,14 @@ test "lossless: a broken union may gain a leading bar and a hugged one lose it" 
 	assert checkLossless("type T = A | B;", "type T =\n\t| A\n\t| B;\n").ok;
 	assert checkLossless("let x: | A | null;", "let x: A | null;\n").ok;
 	assert !checkLossless("const v = a | b;", "const v = a | | b;\n").ok;
+}
+
+test "lossless: a union that starts a type inside a type literal or type arguments may gain or lose its leading bar" {
+	assert checkLossless("type T = { g: (() => A) | null };", "type T = {\n\tg:\n\t\t| (() => A)\n\t\t| null;\n};\n").ok;
+	assert checkLossless("type T = { g: | A | null };", "type T = { g: A | null };\n").ok;
+	assert checkLossless("let x: Map<K, A | null>;", "let x: Map<\n\tK,\n\t| A\n\t| null\n>;\n").ok;
+	assert checkLossless("type T = { g: B & C };", "type T = { g: & B & C };\n").ok;
+	assert !checkLossless("type T = { g: B | C };", "type T = { g: B | | C };\n").ok;
 }
 
 test "lossless: parentheses that bind nothing may be dropped or added" {

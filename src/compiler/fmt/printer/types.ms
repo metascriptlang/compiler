@@ -263,18 +263,25 @@ function flat(doc: Doc): string {
 	};
 }
 
+export function startsType(before: string): boolean {
+	if (before == "" || before.endsWith("=>")) return true;
+	const last = before.byteAt(before.byteLength - 1);
+	return last == ":".code || last == "=".code || last == "<".code || last == ",".code || last == "(".code
+		|| last == "[".code || last == "?".code;
+}
+
 // The tokens of a type with spacing, separators and quote style removed.
 function signature(text: string): string {
 	let out = "";
 	for (let i = 0; i < text.byteLength; i += 1) {
 		const c = text.byteAt(i);
 		if (c == " ".code || c == "\t".code || c == "\n".code || c == "\r".code) continue;
+		if ((c == "|".code || c == "&".code) && startsType(out)) continue;
 		const closes = c == ")".code || c == "}".code || c == ">".code || c == "]".code;
 		if (closes && out.endsWith(",")) out = out.byteSlice(0, out.byteLength - 1);
 		out += c == "'".code ? "\"" : c == ";".code ? "," : text.byteSlice(i, i + 1);
 	}
 	if (out.endsWith(",")) out = out.byteSlice(0, out.byteLength - 1);
-	if (out.startsWith("|") || out.startsWith("&")) return out.byteSlice(1, out.byteLength);
 	return out;
 }
 
