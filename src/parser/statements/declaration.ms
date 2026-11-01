@@ -4,7 +4,7 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ConstructorDeclData, BlockStmtData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
-import { skipGenericParams, captureGenericParams } from "../generics";
+import { skipGenericParams, captureGenericParams, captureDeclarationTypeParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, isDeclaredMemberName, liftParamModifiers } from "../util";
@@ -603,7 +603,8 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Tier 3: capture optional generic params: type Box<T> = ...
-	const genericNames = captureGenericParams(state);
+	const generics = captureDeclarationTypeParams(state);
+	const genericNames = generics.names;
 
 	if (current(state).kind != TokenKind.Assign) {
 		return Result.err(`Expected '=' in type alias at line ${current(state).line}`);
@@ -623,7 +624,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		if (aliasIsDistinct) {
 			return Result.err(`A discriminated union cannot be distinct at line ${current(state).line}`);
 		}
-		return parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, typeToken, nameToken);
+		const decl = try parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, typeToken, nameToken);
+		decl.genericDefaults = generics.defaults;
+		return Result.ok(decl);
 	}
 
 	if (aliasIsDistinct) {
@@ -657,6 +660,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		nameLocation: makeLocFromToken(nameToken),
 	}, typeToken);
 	aliasNode.typeExpr = aliasTypeExpr;
+	aliasNode.genericDefaults = generics.defaults;
 	return Result.ok(aliasNode);
 }
 
@@ -987,10 +991,8 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	const nameLoc = makeLocFromToken(nameToken);
 	advance(state);
 
-	let genericNames = "";
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
-		genericNames = captureGenericParams(state);
-	}
+	const generics = captureDeclarationTypeParams(state);
+	const genericNames = generics.names;
 
 	// Alias form: `struct X = TypeExpr;` or `struct X = A & B;` — composes
 	// fields from the RHS type expressions. Body is implicit empty; parent
@@ -1001,6 +1003,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 		advance(state);
 		if (nodeKind == NodeKind.StructDecl && current(state).kind == TokenKind.Match) {
 			const decl = try parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, token, nameToken);
+			decl.genericDefaults = generics.defaults;
 			decl.flags = decl.flags.incl(NodeFlag.ValueUnion);
 			return Result.ok(decl);
 		}
@@ -1032,13 +1035,16 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			interfaceOptionalFields: [],
 			nativeName: "",
 		}, token);
+		aliasNode.genericDefaults = generics.defaults;
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
 		aliasNode.paramLocations = [];
 		return Result.ok(aliasNode);
 	}
 
-	return parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind, nameLoc);
+	const decl = try parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind, nameLoc);
+	decl.genericDefaults = generics.defaults;
+	return Result.ok(decl);
 }
 
 export function parseInterfaceDecl(state: ParserState): NodeResult {
@@ -1068,10 +1074,8 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	// Optional generic type parameters: class Foo<T>
-	let classGenerics = "";
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Lt) {
-		classGenerics = captureGenericParams(state);
-	}
+	const generics = captureDeclarationTypeParams(state);
+	const classGenerics = generics.names;
 
 	// Optional extends: class Foo extends Bar / class Foo extends Bar<T>
 	let extendsName = "";
@@ -1143,6 +1147,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		classImplements: implementsNames,
 	}, classToken);
 	classNode.typeArg = classGenerics;
+	classNode.genericDefaults = generics.defaults;
 	if (isAbstract) classNode.flags = classNode.flags.incl(NodeFlag.Abstract);
 	return Result.ok(classNode);
 }

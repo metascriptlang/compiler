@@ -110,6 +110,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeChildren = source.typeChildren;
 	target.typeReturn = source.typeReturn;
 	target.typeExtra = source.typeExtra;
+	target.typeParamDefault = source.typeParamDefault;
 	target.typeFlags = source.typeFlags;
 	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
@@ -137,6 +138,7 @@ function typeOfKind(kind: TypeKind): Type {
 		typeChildren: [],
 		typeReturn: null,
 		typeExtra: null,
+		typeParamDefault: null,
 		typeFlags: 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
@@ -194,7 +196,7 @@ export function createArray(element: Type | null): Type {
 	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: element, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: element, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -206,7 +208,7 @@ export function createVarargs(arrayType: Type): Type {
 	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Varargs, typeName: "", typeNames: [], typeChildren: [arrayType],
-		typeReturn: null, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: null, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -263,7 +265,7 @@ export function createFunction(paramTypes: Type[], paramNames: string[], returnT
 	}
 	return {
 		kind: TypeKind.Function, typeName: "", typeNames: ownNames, typeChildren: ownTypes,
-		typeReturn: returnType, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: returnType, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -1944,6 +1946,7 @@ export function copyTypeShallow(t: Type): Type {
 	c.typeChildren = t.typeChildren;
 	c.typeReturn = t.typeReturn;
 	c.typeExtra = t.typeExtra;
+	c.typeParamDefault = t.typeParamDefault;
 	c.typeFlags = t.typeFlags;
 	c.callConv = t.callConv;
 	c.attachedOps = t.attachedOps;
@@ -2502,6 +2505,7 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 		typeChildren: typeArgs,
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
+		typeParamDefault: null,
 		typeFlags: innerBase != null ? innerBase.typeFlags : 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,

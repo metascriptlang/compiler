@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
@@ -1614,6 +1614,7 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 				return errorType();
 			}
 			if (sym != null) {
+				checkDefaultReference(ctx, sym.symbolType);
 				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
@@ -1888,6 +1889,16 @@ export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | nu
 }
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
+	const saved = defaultReferenceCheck;
+	defaultReferenceCheck = null;
+	try {
+		ensureShapedImpl(sym, ctx);
+	} finally {
+		defaultReferenceCheck = saved;
+	}
+}
+
+function ensureShapedImpl(sym: Symbol, ctx: CheckerContext): void {
 	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checking || sym.state == SymbolState.Checked) {
 		// A primary can reach Shaped BEFORE later overloads are appended to it:
 		// one scope shared by several modules (the prelude context) resolves
@@ -2047,10 +2058,98 @@ export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: strin
 		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed, sym, declared.length as int32));
 		constraints.push(colonPos > 0 ? trimmed.slice(colonPos + 1, trimmed.length) : "");
 	}
+	sym.typeParams = declared;
 	for (let i = 0; i < declared.length; i += 1) {
 		if (constraints[i] != "") declared[i].typeExtra = resolveTypeTest(constraints[i], ctx, 0, 0);
 	}
-	sym.typeParams = declared;
+	const defaults = sym.declNode != null ? sym.declNode.genericDefaults : null;
+	if (defaults == null) return;
+	let seenDefault = false;
+	for (let i = 0; i < declared.length; i += 1) {
+		const annotation = i < defaults.length ? defaults[i] : null;
+		if (annotation == null) {
+			if (seenDefault) addError(ctx, "Required type parameters may not follow optional type parameters", sym.location.line, sym.location.column);
+			continue;
+		}
+		seenDefault = true;
+		const loc = annotation.location;
+		const check: DefaultReferenceCheck = {
+			ctx, declared, index: i, valid: true, location: loc,
+		};
+		const value = resolveDefaultAnnotation(annotation, check);
+		if (!check.valid) continue;
+		annotation.nodeType = value;
+		resolveTypeExpr(annotation.typeExpr, ctx);
+		const constraint = declared[i].typeExtra;
+		if (constraint != null) {
+			const result = matchDefaultConstraint(value, substituteParams(constraint, [declared[i]], [value]), []);
+			if (result != DefaultConstraintMatch.Matches) {
+				addError(ctx, result == DefaultConstraintMatch.Unsupported
+					? "Checking a compound generic-dependent default constraint is not supported"
+					: "Type parameter default does not satisfy its constraint", loc.line, loc.column);
+				continue;
+			}
+		}
+		declared[i].typeParamDefault = value;
+	}
+}
+
+enum DefaultConstraintMatch {
+	Matches,
+	Mismatch,
+	Unsupported,
+}
+
+function matchDefaultConstraint(source: Type, target: Type, seen: Type[]): DefaultConstraintMatch {
+	if (sameType(source, target) || source.kind == TypeKind.Never) return DefaultConstraintMatch.Matches;
+	if (source.kind == TypeKind.GenericParam) {
+		if (seen.includes(source)) return DefaultConstraintMatch.Mismatch;
+		seen.push(source);
+		return matchDefaultConstraint(source.typeExtra != null ? source.typeExtra : unknownType(), target, seen);
+	}
+	if (target.kind == TypeKind.GenericParam) return DefaultConstraintMatch.Mismatch;
+	if (hasGenericParams(source) || hasGenericParams(target)) return DefaultConstraintMatch.Unsupported;
+	return isAssignableCheck(source, target) ? DefaultConstraintMatch.Matches : DefaultConstraintMatch.Mismatch;
+}
+
+class DefaultReferenceCheck {
+	ctx: CheckerContext;
+	declared: Type[];
+	index: int32;
+	valid: boolean;
+	location: SourceLocation;
+}
+
+let defaultReferenceCheck: DefaultReferenceCheck | null = null;
+
+function resolveDefaultAnnotation(
+	annotation: Node, check: DefaultReferenceCheck,
+): Type {
+	const saved = defaultReferenceCheck;
+	defaultReferenceCheck = check;
+	try {
+		return annotatedType(
+			(annotation.data as TypeAnnotationData).annotationType,
+			annotation.typeExpr, check.ctx,
+			check.location.line, check.location.column,
+		);
+	} finally {
+		defaultReferenceCheck = saved;
+	}
+}
+
+function checkDefaultReference(ctx: CheckerContext, type: Type): void {
+	const check = defaultReferenceCheck;
+	if (check == null || check.ctx != ctx) return;
+	for (let i = check.index; i < check.declared.length; i += 1) {
+		if (type != check.declared[i]) continue;
+		addError(ctx,
+			"Type parameter defaults can only reference previously declared type parameters",
+			check.location.line, check.location.column,
+		);
+		check.valid = false;
+		return;
+	}
 }
 
 function declaredMethodSym(ctx: CheckerContext, member: Node, written: Node): Symbol {

@@ -240,3 +240,6 @@ import "./decoratorMetadataChain";
 import "./decoratorReturnShape";
 import "./newBoundCallee";
 import "./assertMessage";
+
+import "./genericDefaultValidation";
+import "./genericDefaultClone";

@@ -107,6 +107,7 @@ export function bindsSignatureTypes(node: Node): boolean {
 // poisoning dbParse's cached immutable tree, while still giving the checker the
 // positioned type AST it needs for LSP hover/goto.
 function copyNodeMeta(src: Node, dst: Node): void {
+	dst.genericDefaults = src.genericDefaults;
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
 		dst.variantSlot = src.variantSlot;
@@ -151,6 +152,20 @@ function copyNodeMeta(src: Node, dst: Node): void {
 		dst.typeExprs = src.typeExprs;
 		dst.paramLocations = src.paramLocations;
 		dst.typeArg = src.typeArg;
+		if (src.genericDefaults != null) {
+			const defaults: (Node | null)[] = [];
+			for (const annotation of src.genericDefaults) {
+				if (annotation == null) {
+					defaults.push(null);
+					continue;
+				}
+				const cloned = cloneNodeImpl(annotation);
+				cloned.typeExpr = annotation.typeExpr != null
+					? cloneNodeImpl(annotation.typeExpr) : null;
+				defaults.push(cloned);
+			}
+			dst.genericDefaults = defaults;
+		}
 	}
 	// Enum member access was rewritten by the checker from `E.M` (MemberExpr)
 	// to `Identifier "E_M"` whose mangled name is deliberately never bound in
