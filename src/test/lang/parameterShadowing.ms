@@ -39,7 +39,7 @@ function b614ArrowParam(): int32 {
 	return f(30);
 }
 
-function b614ReadonlyShadow(readonly numbers: number[]): number {
+function b614ReadonlyShadow(numbers: Readonly<number[]>): number {
 	{
 		let numbers: number[] = [1];
 		numbers = [2];

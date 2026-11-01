@@ -276,8 +276,9 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 			propVisibility = accessTok.value;
 			advance(state);
 		}
-		if (isCtor && current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1))) {
-			propReadonly = true;
+		if (current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1))) {
+			if (isCtor || propVisibility != "") propReadonly = true;
+			else addError(state, "the `readonly` parameter modifier was removed: a scalar or struct parameter never writes back to the caller; write `Readonly<T>` for a read-only array, Vec or class handle");
 			advance(state);
 		}
 		if (propVisibility != "" || propReadonly) {
@@ -312,12 +313,6 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 		if (current(state).kind == TokenKind.Ref && isIdentLike(peek(state, 1))) {
 			advance(state);
 			paramPrefix = `${paramPrefix}ref:`;
-		}
-		// Readonly parameter: readonly name: Type → stored as "rdonly:name" (contextual, as above)
-		// Cannot combine with out/ref — readonly means value copy, out/ref means pointer
-		if (current(state).kind == TokenKind.Readonly && isIdentLike(peek(state, 1)) && paramPrefix.indexOf("out:") < 0 && paramPrefix.indexOf("ref:") < 0) {
-			advance(state);
-			paramPrefix = `${paramPrefix}rdonly:`;
 		}
 		if (current(state).kind == TokenKind.Ident && current(state).value == "sink" && isIdentLike(peek(state, 1))) {
 			advance(state);
@@ -430,11 +425,11 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 
 // ===== Param List Extraction Helpers =====
 
-// Strips the out:/ref:/rdonly:/sink: prefixes parseParamList wrote, from `first` on, and
+// Strips the out:/ref:/sink: prefixes parseParamList wrote, from `first` on, and
 // records each mode as `<mode>:<positions>` in the routine's flags.
 export function liftParamModifiers(params: string[], first: int32, flags: string): string {
-	const modes = ["out:", "ref:", "rdonly:", "sink:"];
-	const positions = ["", "", "", ""];
+	const modes = ["out:", "ref:", "sink:"];
+	const positions = ["", "", ""];
 	for (let i = first; i < params.length; i += 1) {
 		const at = i - first;
 		for (let m = 0; m < modes.length; m += 1) {

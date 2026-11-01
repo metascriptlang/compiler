@@ -23,7 +23,6 @@ import { forEachChild } from "../ast/visitor";
 import { isAssignOp } from "../ast/operators";
 import { CheckerContext, addError } from "./context";
 import { RoutineFlag, routineFlagSet } from "./symbol";
-import { splitTopLevel, parseIntStr } from "../utils/string";
 
 // ===== Public Entry Point =====
 
@@ -67,38 +66,14 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	}
 
 	let bits: int32 = 0;
-	const writes: (Node | null)[] = [];
 	let i: int32 = 0;
 	while (i < d.params.length && i < 31) {
-		const w = firstWrite(d.fnBody, paramSyms[i]);
-		writes.push(w);
-		if (w != null) {
+		if (firstWrite(d.fnBody, paramSyms[i]) != null) {
 			bits = bits | (1 << i);
 		}
 		i = i + 1;
 	}
 	sym.mutatedParams = bits;
-
-	// Cross-check: readonly params must not be mutated
-	if (bits != 0 && routine.has(RoutineFlag.ReadonlyParams)) {
-		const flagParts = splitTopLevel(d.fnFlags, "|");
-		for (const fp of flagParts) {
-			const trimFp = fp.trim();
-			if (trimFp.length > 7 && trimFp.slice(0, 7) == "rdonly:") {
-				const idxStr = trimFp.slice(7, trimFp.length);
-				const idxParts = splitTopLevel(idxStr, ",");
-				for (const ip of idxParts) {
-					const idx = parseIntStr(ip.trim());
-					if (idx >= 0 && idx < writes.length) {
-						const w = writes[idx];
-						if (w != null) {
-							addError(ctx, `cannot mutate readonly parameter '${d.params[idx]}'`, w.location.line, w.location.column);
-						}
-					}
-				}
-			}
-		}
-	}
 }
 
 // Analyze every function declared anywhere inside a body.

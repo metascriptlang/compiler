@@ -7,7 +7,7 @@ function demandHeap(text: string): string { return text + "!"; }
 function demandRead(p: DemandPayload): string { return p.text; }
 function demandChange(ref p: DemandPayload): void { p.text = p.text + "r"; }
 function demandFill(out p: DemandPayload): void { p = { text: demandHeap("out"), count: 2 }; }
-function demandReadonly(readonly p: DemandPayload): string {
+function demandLocalCopy(p: DemandPayload): string {
 	let copy = p;
 	copy.text = copy.text + "i";
 	return copy.text;
@@ -24,10 +24,10 @@ function demandBorrowRef(p: Borrow<DemandRef>): string { return p.text; }
 function demandCursorRef(p: Cursor<DemandRef>): string { return p.text; }
 function demandCollect<T>(p: T): T[] { const values: T[] = []; values.push(p); return values; }
 
-test "parameter demand: value and readonly views preserve the caller payload" {
+test "parameter demand: a value view and its local copy preserve the caller payload" {
 	const p: DemandPayload = { text: demandHeap("value"), count: 1 };
 	assert demandRead(p) == "value!";
-	assert demandReadonly(p) == "value!i";
+	assert demandLocalCopy(p) == "value!i";
 	assert p.text == "value!";
 }
 

@@ -38,6 +38,20 @@ test "a modifier outside a constructor is refused" {
 	assert !parseSource("const f = (public x: int32): int32 => x;").ok;
 }
 
+test "the readonly parameter modifier is refused outside a constructor" {
+	const removed = "the `readonly` parameter modifier was removed: a scalar or struct parameter never writes back to the caller; write `Readonly<T>` for a read-only array, Vec or class handle";
+	assert parseRefusal("function f(readonly x: int32): int32 { return x; }", removed);
+	assert parseRefusal("class K { m(readonly x: int32): int32 { return x; } }", removed);
+	assert parseRefusal("const f = (readonly x: int32): int32 => x;", removed);
+	assert parseRefusal("const f = function (readonly x: int32): int32 { return x; };", removed);
+	assert parseRefusal("function f(this typeof K, readonly x: int32): int32 { return x; }", removed);
+}
+
+test "a readonly constructor parameter still declares a field a caller cannot assign" {
+	assert strictErrorCount("class P { constructor(readonly x: int32) {} }\nconst p = new P(1);\nconsole.log(p.x);") == 0;
+	assert hasError("class P { constructor(readonly x: int32) {} }\nconst p = new P(1);\np.x = 5;", "read-only property");
+}
+
 test "a parameter property cannot be a rest parameter or a binding pattern" {
 	assert parseRefusal("class K { constructor(public ...xs: int32[]) {} }", "rest parameter");
 	assert parseRefusal("class K { constructor(public { a }: { a: int32 }) {} }", "binding pattern");

@@ -250,6 +250,6 @@ test "a bitwise compound assignment refuses what the binary operator refuses on 
 	assert hasError("let g: bigint = 5n;\ng |= 1;", "cannot mix bigint and 'int32' in '|='");
 }
 
-test "a bitwise compound assignment is a mutation of a readonly parameter" {
-	assert hasError("function h(readonly x: uint8[]): void { x[0] |= 2; }", "cannot mutate readonly parameter 'x'");
+test "a bitwise compound assignment is a write through a read-only parameter" {
+	assert hasError("function h(x: Readonly<uint8[]>): void { x[0] |= 2; }", "cannot write through Readonly<uint8[]>");
 }

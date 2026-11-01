@@ -615,7 +615,7 @@ function spellParamModifiers(name: string): string {
 	let more = true;
 	while (more) {
 		more = false;
-		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "]]) {
+		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["sink:", "sink "]]) {
 			if (rest.startsWith(code) && rest.byteLength > code.byteLength) {
 				spelled = spelled + word;
 				rest = rest.byteSlice(code.byteLength, rest.byteLength);
@@ -731,7 +731,6 @@ export function modeNames(names: string[], flags: string): string[] {
 	const spelled: string[] = [];
 	for (const n of names) spelled.push(n);
 	prefixAt(spelled, flagGet(flags, "sink"), "sink ");
-	prefixAt(spelled, flagGet(flags, "rdonly"), "readonly ");
 	prefixAt(spelled, flagGet(flags, "ref"), "ref ");
 	prefixAt(spelled, flagGet(flags, "out"), "out ");
 	return spelled;
