@@ -864,6 +864,13 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	if (node.resolvedSym != null && declaresLocal(node)) {
 		heapObjectSetField(objHeap, handle, "declSymHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 	}
+	if (node.genericDefaults != null) {
+		const defaults: Node[] = [];
+		for (const annotation of node.genericDefaults) {
+			defaults.push(annotation != null ? annotation : null as unknown as Node);
+		}
+		setDefaults(objHeap, arrHeap, handle, "genericDefaults", defaults, includeTypeAst);
+	}
 	if (node.paramSyms != null) {
 		const ph = heapAllocArray(arrHeap);
 		for (const p of node.paramSyms) heapArrayPush(arrHeap, ph, raiserInt(registerBoundSym(p) as int64));
@@ -1067,6 +1074,12 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.TypeAnnotation => {
 			const d = node.data as TypeAnnotationData;
 			setStr(objHeap, arrHeap, handle, "annotationType", d.annotationType);
+			const operand = node.typeExpr;
+			if (operand != null && operand.flags.has(NodeFlag.BoundSym)) {
+				const value = nodeToValue(operand, objHeap, arrHeap, false);
+				if (operand.typeExprs != null) setNodes(objHeap, arrHeap, value.intVal, "boundTypeNames", operand.typeExprs, false);
+				heapObjectSetField(objHeap, handle, "boundTypeExpr", value);
+			}
 		},
 
 		// === Patterns ===
@@ -1715,7 +1728,8 @@ function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: R
 function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
 	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
 		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr
-		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr;
+		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr
+		|| out.kind == NodeKind.TypeAnnotation;
 	if (!carriesTypeText) return;
 	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
 	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
@@ -1767,6 +1781,13 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
+					}
+					if (heapObjectGetField(objHeap, handle, "genericDefaults").kind == RaiserValueKind.Array) {
+						const defaults: (Node | null)[] = [];
+						for (const annotation of readDefaults(objHeap, arrHeap, handle, "genericDefaults", fallbackLoc)) {
+							defaults.push(annotation == null ? null : annotation);
+						}
+						out.genericDefaults = defaults;
 					}
 					readQuotedTypeOperands(out, handle, objHeap, arrHeap, fallbackLoc);
 					const typed = boundTypeOfObject(objHeap, handle);

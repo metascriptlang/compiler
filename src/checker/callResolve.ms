@@ -251,6 +251,7 @@ export function adoptExpansionResult(node: Node, value: Node): void {
 	node.typeArg = value.typeArg;
 	node.typeExpr = value.typeExpr;
 	node.typeExprs = value.typeExprs;
+	node.genericDefaults = value.genericDefaults;
 	if (value.location != null) node.location = value.location;
 	node.nodeType = null as unknown as Type;
 	const carried = symbolCarried(value);

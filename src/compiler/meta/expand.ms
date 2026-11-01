@@ -67,7 +67,7 @@ import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling, engineStdSymbol } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
-import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -273,7 +273,8 @@ function declaredTypeName(n: Node): string {
 
 function addOwnGenericNames(n: Node, out: string[]): void {
 	match (n.kind) {
-		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl => collectGenericNames(n.typeArg, out),
+		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl => collectGenericNames(n.typeArg, out),
+		NodeKind.TypeAliasDecl => collectGenericNames((n.data as TypeAliasDeclData).aliasGenericParams, out),
 		NodeKind.FunctionDecl => { for (const g of extractGenericNames((n.data as FunctionDeclData).fnFlags)) out.push(g); },
 		NodeKind.MethodDecl => { for (const g of extractGenericNames((n.data as MethodDeclData).methodFlags)) out.push(g); },
 		NodeKind.ArrowFunction => { for (const g of extractGenericNames((n.data as ArrowFunctionData).arrowFlags)) out.push(g); },
@@ -288,6 +289,9 @@ function scopeQuoteTypeLocals(n: Node | null, outer: string[]): void {
 	forEachChild(n, (c: Node): void => { const name = declaredTypeName(c); if (name != "") visible.push(name); });
 	addOwnGenericNames(n, visible);
 	_quoteTypeLocals.set(n, visible);
+	if (n.genericDefaults != null) {
+		for (const annotation of n.genericDefaults) scopeQuoteTypeLocals(annotation, visible);
+	}
 	forEachChild(n, (c: Node): void => { scopeQuoteTypeLocals(c, visible); });
 }
 
@@ -354,8 +358,11 @@ function namesAnyOf(text: string, names: string[]): boolean {
 // names where the quote is written, and the text resolves where the quote expands.
 function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation): Node | null {
 	if (text == "" || _metaScope == null || _metaDefiner == "") return null;
-	const ctx = _metaScope!;
-	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
+	return typeOperandInScope(text, locals, _metaScope!, _metaDefiner, loc);
+}
+
+function typeOperandInScope(text: string, locals: string[], ctx: CheckerContext, definer: string, loc: SourceLocation): Node | null {
+	const home = scopeDefining(ctx.table, definer, definer);
 	if (home == null) return null;
 	const here = ctx.table.current;
 	ctx.table.current = home;
@@ -363,6 +370,24 @@ function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation):
 	const operand = whole ?? typeNameBindings(text, locals, ctx, loc);
 	ctx.table.current = here;
 	return operand;
+}
+
+export function bindGenericDefaultTypes(node: Node, ctx: CheckerContext, definer: string): void {
+	if (node.genericDefaults == null) return;
+	const locals: string[] = [];
+	addOwnGenericNames(node, locals);
+	const defaults: (Node | null)[] = [];
+	for (const annotation of node.genericDefaults) {
+		if (annotation == null) {
+			defaults.push(null);
+			continue;
+		}
+		const copied = cloneNodeKeepSem(annotation);
+		copied.typeExpr = typeOperandInScope((copied.data as TypeAnnotationData).annotationType, locals, ctx, definer, copied.location);
+		if (copied.typeExpr != null) copied.typeExpr.flags = copied.typeExpr.flags.incl(NodeFlag.BoundSym);
+		defaults.push(copied);
+	}
+	node.genericDefaults = defaults;
 }
 
 function wholeTypeOperand(text: string, ctx: CheckerContext, loc: SourceLocation): Node | null {
@@ -455,6 +480,7 @@ function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: Sou
 		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, typeLocalsAt(node), loc); },
 		NodeKind.MethodDecl => { const d = node.data as MethodDeclData; addQuotedSignature(keys, values, d.methodParamTypes, d.methodReturnType, typeLocalsAt(node), loc); },
 		NodeKind.ConstructorDecl => addQuotedSignature(keys, values, (node.data as ConstructorDeclData).ctorParamTypes, "", typeLocalsAt(node), loc),
+		NodeKind.TypeAnnotation => addQuotedTypeOperand(keys, values, (node.data as TypeAnnotationData).annotationType, typeLocalsAt(node), loc),
 		NodeKind.PropertyDecl => addQuotedTypeOperand(keys, values, (node.data as PropertyDeclData).propType, typeLocalsAt(node), loc),
 		NodeKind.SizeofExpr => addQuotedTypeOperand(keys, values, (node.data as SizeofExprData).sizeofType, typeLocalsAt(node), loc),
 		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
@@ -528,6 +554,15 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	values.push(mkNumber(node.location.endLine, loc));
 	keys.push("endColumn");
 	values.push(mkNumber(node.location.endColumn, loc));
+
+	if (node.genericDefaults != null) {
+		const defaults: Node[] = [];
+		for (const annotation of node.genericDefaults) {
+			defaults.push(annotation != null ? annotation : null as unknown as Node);
+		}
+		addNodeArrayField(keys, values, "genericDefaults", defaults, loc, includeTypeAst);
+	}
+	if (declaredTypeName(node) != "") addStrField(keys, values, "typeArg", node.typeArg, loc);
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
@@ -1121,6 +1156,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "aliasName", d.aliasName, loc);
 		addStrField(keys, values, "aliasType", d.aliasType, loc);
 		addBoolField(keys, values, "aliasIsDistinct", d.aliasIsDistinct, loc);
+		addStrField(keys, values, "aliasGenericParams", d.aliasGenericParams, loc);
 		return;
 	}
 	if (k == NodeKind.EnumDecl) {
