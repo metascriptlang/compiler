@@ -2175,7 +2175,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		const valNodes: Node[] = [];
 		let vi = 0;
 		while (vi < d.properties.length) {
-			valNodes.push(d.properties[vi]);
+			const value = d.properties[vi];
+			valNodes.push(value.nodeType != null && isAssignable(value.nodeType, mapValType) ? fitNode(ctx, value, mapValType, value.nodeType) : value);
 			vi = vi + 1;
 		}
 		const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
