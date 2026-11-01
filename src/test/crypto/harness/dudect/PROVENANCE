@@ -1,0 +1,17 @@
+dudect.h and LICENSE are byte-identical copies of upstream files; nothing in them is edited.
+
+upstream   https://github.com/oreparaz/dudect
+commit     dc269651fb2567e46755cfb2a13d3875592968b5   (master on 2026-11-01; "Prevent potential overflow (#41)", 2024-03-19)
+dudect.h   src/dudect.h   sha256 3fb3b2bd7f9e17ae34b7c92518c1311c67342c56facc80da925d85f121b649da
+LICENSE    LICENSE        sha256 ee7cd5d500ab72e03a6c8aefe69c6311d698c83e732b19d152a6fa38fd521720   (MIT, Copyright (c) 2016-today Oscar Reparaz)
+fetched    https://raw.githubusercontent.com/oreparaz/dudect/<commit>/<path>
+
+Upstream timer: dudect.h includes <emmintrin.h> and <x86intrin.h> and defines cpucycles() as _mm_mfence() then
+__rdtsc(). It has no AArch64 branch at this commit, so it does not compile on arm64.
+
+armShim/ holds two headers found before the system ones (-isystem) on AArch64 only. They supply the two names
+cpucycles() calls: _mm_mfence() as `dsb sy` and __rdtsc() as `isb; mrs cntvct_el0`. The pinned header stays untouched
+and its statistics (Welch t-test, percentile crops, second-order test, thresholds 10 and 500) run as upstream wrote them.
+The AArch64 counter is the generic timer (cntfrq_el0 Hz; read 1000000000 on an Apple M3 Max under macOS, and 1e8 ticks
+measured 100.0 ms against CLOCK_MONOTONIC_RAW), not a CPU cycle counter.
+x25519Dudect.sh refuses a dudect.h whose sha256 differs from the one above.
