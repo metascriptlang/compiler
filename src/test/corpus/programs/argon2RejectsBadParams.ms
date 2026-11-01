@@ -4,7 +4,6 @@
 //
 // @stdout: hashLen -1 err Output is too short err Output is too short|hashLen 3 err Output is too short err Output is too short|iterations 0 err Time cost is too small err Time cost is too small|iterations -1 err Time cost is too small err Time cost is too small|memory 0 err Memory cost is too small err Memory cost is too small|memory -1 err Memory cost is too small err Memory cost is too small|memory 15 for 2 lanes err Memory cost is too small err Memory cost is too small|lanes 0 err Too few lanes err Too few lanes|lanes -1 err Too few lanes err Too few lanes|salt 7 bytes err Salt is too short err Salt is too short|valid ok ok
 // @exit: 0
-// @skip-js: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.jms
 // @skip-raiser: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.rms
 
 import { argon2Hash, argon2HashRaw } from "std/crypto/argon2";

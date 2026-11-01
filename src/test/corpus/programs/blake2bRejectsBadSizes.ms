@@ -9,7 +9,6 @@
 // @stdout: sync size 0 err|sync size 65 err|sync size 1 ok 1|sync keyed size 0 err|sync keyed key 65 err|sync keyed key 64 ok
 // @stdout: abc512 ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923 async true stream true
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (blake2b/index.cms over Monocypher); there is no blake2b.jms
 // @skip-raiser: std/crypto has only a C backend (blake2b/index.cms over Monocypher); there is no blake2b.rms
 
 import { Blake2b, blake2b, blake2bKeyed, blake2bSync, blake2bKeyedSync, createBlake2b } from "std/crypto/blake2b";

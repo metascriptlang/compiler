@@ -3,7 +3,6 @@
 //
 // @stdout: m=64,t=2,p=2 right true wrong false malformed false garbage false|m=64,t=1,p=1 right true wrong false malformed false garbage false
 // @exit: 0
-// @skip-js: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.jms
 // @skip-raiser: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.rms
 
 import { argon2Hash, argon2Verify } from "std/crypto/argon2";

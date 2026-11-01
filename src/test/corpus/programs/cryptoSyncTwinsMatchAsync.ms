@@ -10,7 +10,7 @@
 // @stdout: ecdsa sign-by-sync verified-by-async true sign-by-async verified-by-sync true ecdh true pem true
 // @stdout: rsa sign-by-sync verified-by-async true sign-by-async verified-by-sync true pss true oaep true pem true
 // @exit: 0
-// @skip-js: std/crypto/aes and std/crypto/chacha20 have no JS tier yet
+// @skip-js: std/crypto/aes has no JS tier yet
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family; none of these Buffer APIs
 
 import { Buffer } from "std/core/buffer";

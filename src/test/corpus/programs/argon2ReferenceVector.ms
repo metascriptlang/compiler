@@ -5,7 +5,6 @@
 //
 // @stdout: encoded $argon2id$v=19$m=64,t=2,p=2$c29tZXNhbHQ$NQrDciL0Nsy1wJcvHr079rlYvyBxhBNi raw 24|encoded $argon2id$v=19$m=64,t=1,p=1$c29tZXNhbHQ$pMlwOs/gn+zdvoB/AGiRNA raw 16
 // @exit: 0
-// @skip-js: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.jms
 // @skip-raiser: std/crypto/argon2 has only a C backend (index.cms over vendor/argon2); there is no argon2.rms
 
 import { argon2Hash, argon2HashRaw } from "std/crypto/argon2";
