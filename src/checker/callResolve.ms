@@ -4068,7 +4068,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		if (formalT == null || hasGenericParams(formalT) || isUnresolvedType(formalT)) continue;
 		let checkedT: Type = argT;
-		if ((!isAssignable(checkedT, formalT) && literalParamsAwaitFormal(cd.arguments[ai])) || literalShortOfSlot(cd.arguments[ai], formalT)) {
+		if ((!isAssignable(checkedT, formalT) && (literalParamsAwaitFormal(cd.arguments[ai]) || cd.arguments[ai].kind == NodeKind.ObjectLiteral)) || literalShortOfSlot(cd.arguments[ai], formalT)) {
 			clearCheckerState(cd.arguments[ai]);
 			callCheckExpr(ctx, cd.arguments[ai], formalT);
 			const retyped = cd.arguments[ai].nodeType;
