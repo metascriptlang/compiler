@@ -2009,10 +2009,25 @@ function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boo
 	return true;
 }
 
+function namespaceMacroCallee(ctx: CheckerContext, callee: Node): Node {
+	if (callee.kind != NodeKind.MemberExpr) return callee;
+	const me = callee.data as MemberExprData;
+	if (me.object.kind != NodeKind.Identifier) return callee;
+	const ns = resolveCalleeIdent(ctx, me.object);
+	if (ns == null || ns.symbolKind != SymbolKind.Module || ns.modulePath == "") return callee;
+	const exported = findExportedSymbol(ctx.exportRegistry, ns.modulePath, me.property);
+	if (exported == null || macroDeclOf(exported.sym) == null) return callee;
+	const bound = createNodeAt(NodeKind.Identifier, { name: me.property }, callee.location);
+	bound.resolvedSym = exported.sym;
+	bound.flags = bound.flags.incl(NodeFlag.BoundSym);
+	return bound;
+}
+
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
 	if (d.callee != null && isImportKeyword(d.callee)) return checkImportCall(ctx, node);
 	if (!lowerTypedCallee(ctx, node, d)) return errorType();
+	d.callee = namespaceMacroCallee(ctx, d.callee);
 	const prevCallee = ctx.calleeExpr;
 	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
