@@ -188,10 +188,7 @@ _Static_assert(offsetof(msFutureBase, finished) == 0, "msFutureBase.finished mus
 /* Primitive boxing stores value bits IN the void* pointer. Reading those bits
  * as typed inline fields (msFuture_double.value, msFuture_int32.value) is only
  * correct on little-endian where the lower bytes of the 8-byte void* contain
- * the value. arm64 and x86_64 are both little-endian. */
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-#error "future primitive boxing requires little-endian (arm64/x86_64)"
-#endif
+ * the value; runtime/types.h refuses a big-endian target. */
 
 /* ===== Monomorphic Future Structs =====
  * Each Future<T> gets a typed struct with base as FIRST field.

@@ -17,18 +17,12 @@ static inline uint64_t msHiXorLoPortable(uint64_t a, uint64_t b) { return msMulH
 static inline uint64_t msLoadLE64Raw(const uint8_t* p) {
 	uint64_t v;
 	__builtin_memcpy(&v, p, sizeof v);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	v = __builtin_bswap64(v);
-#endif
 	return v;
 }
 
 static inline uint64_t msLoadLE32Raw(const uint8_t* p) {
 	uint32_t v;
 	__builtin_memcpy(&v, p, sizeof v);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	v = __builtin_bswap32(v);
-#endif
 	return v;
 }
 

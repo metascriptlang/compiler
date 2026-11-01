@@ -11,6 +11,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "MetaScript targets little-endian CPUs only (x86, ARM, RISC-V, wasm, eBPF); this target is big-endian"
+#endif
+
 /* Destructor: called to clean up object fields before freeing */
 typedef void (*msDestroyProc)(void*);
 
