@@ -1534,6 +1534,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (srcInner != null) src = srcInner;
 	const dstInner = nonNullMemberOfNullable(target);
 	if (dstInner != null) dst = dstInner;
+	if (isMaybeType(src) && src.typeReturn != null) src = src.typeReturn;
+	if (isMaybeType(dst) && dst.typeReturn != null) dst = dst.typeReturn;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {
