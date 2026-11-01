@@ -28,7 +28,7 @@ for (const dir of [src, staging, consumer, 'home', 'tmp', 'npm-cache', 'npm-pref
   mkdirSync(isAbsolute(dir) ? dir : join(work, dir));
 }
 for (const name of ['api.ms', 'model.ms', 'feature.jms']) {
-  copyFileSync(join(here, name), join(src, name));
+  copyFileSync(join(here, 'fixtures', name), join(src, name));
 }
 writeFileSync(join(src, 'package.json'), '{"type":"module"}\n');
 for (const name of ['npm-user.npmrc', 'npm-global.npmrc']) writeFileSync(join(work, name), '');

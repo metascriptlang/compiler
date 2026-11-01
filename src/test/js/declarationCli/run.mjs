@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../../../..');
 const out = resolve(repo, 'out/declarationCli');
 const msc = resolve(process.env.MSC ?? join(repo, 'msc'));
-const source = name => realpathSync(join(here, name));
+const source = name => realpathSync(join(here, 'fixtures', name));
 mkdirSync(out, { recursive: true });
 function command(binary, args, expected = 0) {
   const result = spawnSync(binary, args, { cwd: repo, encoding: 'utf8', timeout: 60000 });

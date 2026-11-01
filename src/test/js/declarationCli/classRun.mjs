@@ -25,13 +25,13 @@ for (const split of [false, true]) {
     const root = join(out, split ? 'split' : 'bundle');
     mkdirSync(root, { recursive: true });
     const target = split ? root : join(root, 'api.mjs');
-    command(msc, ['build', join(here, 'classApi.ms'), '--target=js', '--declaration', `--output=${target}`, ...(split ? ['--split'] : [])]);
+    command(msc, ['build', join(here, 'fixtures/classApi.ms'), '--target=js', '--declaration', `--output=${target}`, ...(split ? ['--split'] : [])]);
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     let js = 'api.mjs';
     let declaration = join(root, 'api.d.mts');
     if (split) {
       const manifest = JSON.parse(readFileSync(join(root, '_manifest.json')));
-      const source = realpathSync(join(here, 'classApi.ms'));
+      const source = realpathSync(join(here, 'fixtures/classApi.ms'));
       js = manifest.modules.find(file => file.source === source).out;
       declaration = join(root, manifest.declarations.find(file => file.source === source).out);
     }

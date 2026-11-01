@@ -11,7 +11,7 @@ const msc = resolve(process.env.MSC ?? join(repo, 'msc'));
 mkdirSync(join(repo, 'out/declarationDefaults'), { recursive: true });
 const work = mkdtempSync(join(repo, 'out/declarationDefaults/run-'));
 const src = join(work, 'src'); mkdirSync(src);
-for (const name of ['api.ms', 'model.jms']) copyFileSync(join(here, name), join(src, name));
+for (const name of ['api.ms', 'model.jms']) copyFileSync(join(here, 'fixtures', name), join(src, name));
 writeFileSync(join(src, 'package.json'), '{"type":"module"}');
 function command(binary, args, expected = 0) {
   const result = spawnSync(binary, args, { cwd: repo, encoding: 'utf8', timeout: 60000 });
@@ -88,7 +88,8 @@ test('direct MS and JMS source families reuse checked default projection', async
   assert.deepEqual(Object.keys(api), ['increment']);
 });
 test('unsafe raw free-function APIs fail only in declaration mode', () => {
-  const entry = join(here, '../declarationCli/defaultParameter.ms');
+  const entry = join(src, 'defaultParameter.ms');
+  writeFileSync(entry, 'export function readDefault(value: int32 = 9): int32 { return value; }\n');
   const root = join(work, 'refused'); mkdirSync(root);
   const target = join(root, 'raw.mjs');
   command(msc, ['build', entry, '--target=js', `--output=${target}`]);
