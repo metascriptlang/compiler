@@ -1,6 +1,10 @@
 // @stdout: string-order-utf16 ok
+// @stdout: 6 >>><<>=<<><>>>>><>> >>><<>=<<><>>>>><>>
+// @stdout: sort 0 1 2 5 9 12 13 15 11 17 18 14 6 10 16 7 8 3 4
+// @stdout: by< 0 1 2 5 9 12 13 15 11 17 18 14 6 10 16 7 8 3 4
 // string < <= > >= and sort() order by UTF-16 code units: a surrogate pair (U+10000 and up) sorts below U+E000..U+FFFF,
-// where UTF-8 byte order puts it above. Every other pair keeps its byte order.
+// and above a lone low surrogate or a greater lone high one, where UTF-8 byte order disagrees. The surrogate rows print
+// indices, not strings, so a lone surrogate is not a lane divergence.
 const lo = "\u{FFFD}";
 const hi = "\u{1F600}";
 const ee = "\u{E000}";
@@ -28,3 +32,41 @@ latin.sort();
 check(latin.join(",") == "Apple,Zed,apple,cafe,café,pear,zebra,éclair");
 
 console.log(ok ? "string-order-utf16 ok" : "string-order-utf16 FAIL");
+
+const units: string[] = [
+	"a", "é", "퟿", "", "￿", "\uD800", "\uDBFF", "\uDC00", "\uDFFF",
+	"\u{10000}", "\u{10FFFF}", "\u{1F600}",
+	"\uD83D", "\uD83Dz", "\uD83D", "\uD83D\uDBFF", "\uDBFF", "\u{1F600}a", "\u{1F600}\u{10000}",
+];
+
+function sign(a: string, b: string): string {
+	return a < b ? "<" : a > b ? ">" : "=";
+}
+
+function signLe(a: string, b: string): string {
+	return a <= b ? (b <= a ? "=" : "<") : ">";
+}
+
+for (let i = 0; i < units.length; i++) {
+	let lt = "";
+	let le = "";
+	for (let j = 0; j < units.length; j++) {
+		lt += sign(units[i], units[j]);
+		le += signLe(units[i], units[j]);
+	}
+	console.log(i.toString() + " " + lt + " " + le);
+}
+
+function indices(sorted: string[]): string {
+	let out = "";
+	for (const s of sorted) out += " " + units.indexOf(s).toString();
+	return out;
+}
+
+const byDefault = units.slice();
+byDefault.sort();
+console.log("sort" + indices(byDefault));
+
+const byLess = units.slice();
+byLess.sort((a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0);
+console.log("by<" + indices(byLess));
