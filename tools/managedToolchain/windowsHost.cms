@@ -1,0 +1,21 @@
+when (windows) {
+	@include("./windowsHost.h");
+
+	extern function msToolchainNativeMachine(
+		ref machine: uint16, ref error: uint32,
+	): int32;
+}
+
+export function nativeWindowsMachine(): Result<uint16, string> {
+	when (windows) {
+		let machine: uint16 = 0;
+		let error: uint32 = 0;
+		if (msToolchainNativeMachine(machine, error) == 0) {
+			return Result.err("cannot query native Windows machine: Win32 " +
+				String(error));
+		}
+		return Result.ok(machine);
+	} else {
+		return Result.err("native Windows machine query requires Windows");
+	}
+}
