@@ -104,6 +104,7 @@ function elementArgs(kind: BoundaryKind): string {
 function valueCheck(kind: BoundaryKind, expr: string, at: string): string {
 	const b = boundsOf(kind);
 	if (b.length == 0) return `__msbType(${expr}, ${quoted(jsTypeOf(kind))}, ${quoted(msTypeOf(kind))}, ${at})`;
+	if (kind == BoundaryKind.I64 || kind == BoundaryKind.U64) return `__msbWide(${expr}, ${kind == BoundaryKind.I64}, ${quoted(msTypeOf(kind))}, ${at})`;
 	return `__msbInt(${expr}, ${quoted(jsTypeOf(kind))}, ${b[0]}, ${b[1]}, ${quoted(msTypeOf(kind))}, ${at})`;
 }
 
@@ -632,6 +633,11 @@ const CHECK_GLUE = [
 	"function __msbInt(v, k, lo, hi, t, f, p) {",
 	"\tif (typeof v !== k) throw __msbBad(f, p, t, v);",
 	"\tif (v < lo || v > hi || (k === \"number\" && !Number.isInteger(v))) throw new RangeError(f + \": \" + p + \" expected \" + t + \", got \" + v);",
+	"\treturn v;",
+	"}",
+	"function __msbWide(v, s, t, f, p) {",
+	"\tif (typeof v !== \"bigint\") throw __msbBad(f, p, t, v);",
+	"\tif ((s ? BigInt.asIntN(64, v) : BigInt.asUintN(64, v)) !== v) throw new RangeError(f + \": \" + p + \" expected \" + t + \", got \" + v);",
 	"\treturn v;",
 	"}",
 	"function __msbList(v, t, f, p) {",
