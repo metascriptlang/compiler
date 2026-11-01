@@ -101,17 +101,21 @@ export type RsaPadding = "pkcs1v15" | "pss";
 export class RsaPublicKey {
 	_h: int64;
 
-	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> {
+	static importPemSync(pem: string): Result<RsaPublicKey, CryptoError> {
 		const h = msCryptoRsaImportPublicPem(pem);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.importPem", "failed to parse an RSA public key PEM of at least 2048 bits"));
 		return Result.ok({ _h: h });
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> { return RsaPublicKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
 		const pem = msCryptoRsaExportPublicPem(this._h);
 		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.exportPem", "failed to export public key"));
 		return Result.ok(pem);
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 
 	onDestroy(): void {
 		if (this._h != 0) {
@@ -124,7 +128,7 @@ export class RsaPublicKey {
 export class RsaPrivateKey {
 	_h: int64;
 
-	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> {
+	static generateSync(bits: int32): Result<RsaPrivateKey, CryptoError> {
 		if (bits != 2048 && bits != 3072 && bits != 4096) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "RsaPrivateKey.generate", "bits must be 2048, 3072, or 4096"));
 		}
@@ -133,17 +137,23 @@ export class RsaPrivateKey {
 		return Result.ok({ _h: h });
 	}
 
-	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> {
+	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> { return RsaPrivateKey.generateSync(bits); }
+
+	static importPemSync(pem: string): Result<RsaPrivateKey, CryptoError> {
 		const h = msCryptoRsaImportPrivatePem(pem);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.importPem", "failed to parse an RSA private key PEM of at least 2048 bits"));
 		return Result.ok({ _h: h });
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> { return RsaPrivateKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
 		const pem = msCryptoRsaExportPrivatePem(this._h);
 		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.exportPem", "failed to export private key"));
 		return Result.ok(pem);
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 
 	publicKey(): RsaPublicKey {
 		const h = msCryptoRsaPublicOf(this._h);
@@ -160,26 +170,34 @@ export class RsaPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
+export function signSync(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
 	const sig = msCryptoRsaSign(key._h, hash, padding == "pss" ? 1 : 0, rawString(data));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)`));
 	return Result.ok(rawBuffer(sig));
 }
 
+export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> { return signSync(key, data, hash, padding); }
+
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
+export function verifySync(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
 	return msCryptoRsaVerify(key._h, hash, padding == "pss" ? 1 : 0, rawString(data), rawString(signature));
 }
 
+export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> { return verifySync(key, data, signature, hash, padding); }
+
 // RSA-OAEP with SHA-256.
-export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function encryptSync(key: RsaPublicKey, data: Bytes): Result<Buffer, CryptoError> {
 	const encrypted = msCryptoRsaEncrypt(key._h, rawString(data));
 	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
 	return Result.ok(rawBuffer(encrypted));
 }
 
-export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> { return encryptSync(key, data); }
+
+export function decryptSync(key: RsaPrivateKey, data: Bytes): Result<Buffer, CryptoError> {
 	const decrypted = msCryptoRsaDecrypt(key._h, rawString(data));
 	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
 	return Result.ok(rawBuffer(decrypted));
 }
+
+export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> { return decryptSync(key, data); }

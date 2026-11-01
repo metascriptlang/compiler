@@ -105,21 +105,25 @@ function curveOf(bits: int32): EcCurve {
 export class EcPublicKey {
 	_h: int64;
 
-	static async importPem(pem: string): Promise<Result<EcPublicKey, CryptoError>> {
+	static importPemSync(pem: string): Result<EcPublicKey, CryptoError> {
 		const h = msCryptoEcImportPublicPem(pem);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.importPem", "failed to parse a P-256 or P-384 public key PEM"));
 		return Result.ok({ _h: h });
 	}
 
+	static async importPem(pem: string): Promise<Result<EcPublicKey, CryptoError>> { return EcPublicKey.importPemSync(pem); }
+
 	get curve(): EcCurve {
 		return curveOf(msCryptoEcBits(this._h));
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	exportPemSync(): Result<string, CryptoError> {
 		const pem = msCryptoEcExportPublicPem(this._h);
 		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.exportPem", "failed to export public key"));
 		return Result.ok(pem);
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 
 	onDestroy(): void {
 		if (this._h != 0) {
@@ -132,27 +136,33 @@ export class EcPublicKey {
 export class EcPrivateKey {
 	_h: int64;
 
-	static async generate(curve: EcCurve): Promise<Result<EcPrivateKey, CryptoError>> {
+	static generateSync(curve: EcCurve): Result<EcPrivateKey, CryptoError> {
 		const h = msCryptoEcGenerate(curve);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "EcPrivateKey.generate", `EC key generation failed for curve ${curve}`));
 		return Result.ok({ _h: h });
 	}
 
-	static async importPem(pem: string): Promise<Result<EcPrivateKey, CryptoError>> {
+	static async generate(curve: EcCurve): Promise<Result<EcPrivateKey, CryptoError>> { return EcPrivateKey.generateSync(curve); }
+
+	static importPemSync(pem: string): Result<EcPrivateKey, CryptoError> {
 		const h = msCryptoEcImportPrivatePem(pem);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.importPem", "failed to parse a P-256 or P-384 private key PEM"));
 		return Result.ok({ _h: h });
 	}
 
+	static async importPem(pem: string): Promise<Result<EcPrivateKey, CryptoError>> { return EcPrivateKey.importPemSync(pem); }
+
 	get curve(): EcCurve {
 		return curveOf(msCryptoEcBits(this._h));
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	exportPemSync(): Result<string, CryptoError> {
 		const pem = msCryptoEcExportPrivatePem(this._h);
 		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.exportPem", "failed to export private key"));
 		return Result.ok(pem);
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 
 	publicKey(): EcPublicKey {
 		const h = msCryptoEcPublicOf(this._h);
@@ -169,20 +179,26 @@ export class EcPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> {
+export function ecdsaSignSync(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Result<Buffer, CryptoError> {
 	const sig = msCryptoEcdsaSign(key._h, hash, rawString(data));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ec.ecdsaSign", `ECDSA signing failed (hash ${hash}; sha1 is refused)`));
 	return Result.ok(rawBuffer(sig));
 }
 
+export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> { return ecdsaSignSync(key, data, hash); }
+
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> {
+export function ecdsaVerifySync(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): boolean {
 	return msCryptoEcdsaVerify(key._h, hash, rawString(data), rawString(signature));
 }
 
+export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> { return ecdsaVerifySync(key, data, signature, hash); }
+
 // The two keys must be on the same curve.
-export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> {
+export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Result<Buffer, CryptoError> {
 	const shared = msCryptoEcdhDerive(privateKey._h, publicKey._h);
 	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ec.ecdh", "ECDH key agreement failed (are the curves the same?)"));
 	return Result.ok(rawBuffer(shared));
 }
+
+export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> { return ecdhSync(privateKey, publicKey); }
