@@ -22,8 +22,16 @@ export function chain(a: Span<int32>, b: Span<int32>, c: Span<int32>): void {
 }
 
 @wasm
-export function flipAfter(all: Vec<boolean>, part: Span<boolean>): int32 {
+export function flipAfter(all: Readonly<Span<boolean>>, part: Span<boolean>): int32 {
 	part[0] = !part[0];
+	let on = 0;
+	for (let i = 0; i < all.length; i += 1) if (all[i]) on += 1;
+	return on;
+}
+
+@wasm
+export function countAfter(all: Vec<boolean>, part: Span<boolean>): int32 {
+	if (part.length > 0) part[0] = !part[0];
 	let on = 0;
 	for (const b of all) if (b) on += 1;
 	return on;
