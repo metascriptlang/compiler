@@ -4,7 +4,7 @@
 // @stdout: ecdsa worker signature verified true
 // @stdout: ed25519 worker signature verified true matches main true
 // @exit: 0
-// @skip-js: std/crypto/ec has no JS tier yet, and std/crypto/ed25519 has no *Sync forms on JS
+// @skip-js: std/crypto/ec has no JS tier yet
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family and cannot spawn
 
 import { CryptoError, fromHex, toHex } from "std/crypto";
