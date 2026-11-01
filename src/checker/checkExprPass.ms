@@ -1807,10 +1807,10 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 	if (d.operator == "+" && effLeft != null && effRight != null) {
 		if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
-			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effLeft, stringType()), d.left.location.line, d.left.location.column);
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effLeft, stringType()) + " in parentheses, (… as string), because 'as' binds looser than '+'", d.left.location.line, d.left.location.column);
 		}
 		if (effRight.kind == TypeKind.CString && isStringLike(effLeft)) {
-			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effRight, stringType()), d.right.location.line, d.right.location.column);
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effRight, stringType()) + " in parentheses, (… as string), because 'as' binds looser than '+'", d.right.location.line, d.right.location.column);
 		}
 	}
 	if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
