@@ -151,6 +151,17 @@ export function jsBundleReferenceName(sym: Symbol, text: string): string {
 	return jsReferenceName(gen, sym, text);
 }
 
+export function jsTreeFunctionName(sym: Symbol, text: string, modulePath: string, modExportKeys: string[], modExportVals: string[][], modFunctionOwnerNames: string[][]): string {
+	const gen = createJSGenerator();
+	gen.multiFile = true;
+	gen.currentModulePath = modulePath;
+	gen.currentFile = modulePath;
+	gen.modExportKeys = modExportKeys;
+	gen.modExportVals = modExportVals;
+	gen.modFunctionOwnerNames = modFunctionOwnerNames;
+	return jsExportedFunctionName(gen, sym, text);
+}
+
 function enumOfMember(sym: Symbol): Type | null {
 	const t = sym.symbolType;
 	if (t != null && t.kind == TypeKind.Enum) return t;

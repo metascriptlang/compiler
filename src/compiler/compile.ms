@@ -45,7 +45,7 @@ import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
-import { jsBundleReferenceName } from "../codegen/js/expressions";
+import { jsBundleReferenceName, jsTreeFunctionName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
 import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
@@ -1615,7 +1615,7 @@ function printBoundaryRefusal(graph: ModuleGraph, r: BoundaryRefusal): void {
 	renderModuleError(r.file, mod.rawSource, { message: r.message, line: r.line, column: r.column, severity: ErrorSeverity.Error });
 }
 
-function placeWasmModules(placed: string[], placedNames: string[][], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, opts: CliOptions): JsBindings {
+function placeWasmModules(placed: string[], placedNames: string[][], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, nameOf: (f: BoundaryFunction, sym: Symbol) => string, opts: CliOptions): JsBindings {
 	const errors = placedModuleErrors(placed, entryPath, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
 		const found = findModuleExports(graphRegistry, path);
@@ -1648,7 +1648,7 @@ function placeWasmModules(placed: string[], placedNames: string[][], graph: Modu
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => jsBundleReferenceName(symOf(f), f.name), { checked: opts.mode != MODE_DANGER });
+	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: opts.mode != MODE_DANGER });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -1762,7 +1762,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		? opts.outputPath
 		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	let wasmBindings: JsBindings = { prelude: "", modules: [] };
-	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, placedNames, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, opts);
+	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, placedNames, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, (f: BoundaryFunction, sym: Symbol): string => jsBundleReferenceName(sym, f.name), opts);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = placedPaths.length > 0;
@@ -4654,6 +4654,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const unitPaths: string[] = [];
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
+	const placedPaths: string[] = [];
+	const placedNames: string[][] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -4664,6 +4666,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const ctx = checked.ctx;
 		ctx.errors = [];
 
+		const wasmNames = opts.wasmPlacement ? wasmFunctionNames(checked.program) : [];
+		if (wasmNames.length > 0) {
+			placedPaths.push(modPath);
+			placedNames.push(wasmNames);
+		}
 		const macroExpanded = expandMacros(checked.program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 
@@ -4716,6 +4723,34 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		modFunctionOwnerNames.push(names);
 	}
 
+	// Placed modules share one bound module: the prelude evaluates once there (the wasm half
+	// is awaited at its top level), and a wrapper is declared beside the prelude's mutable
+	// scratch cursor it writes. A placed module imports its wrappers under the name the
+	// function had in its own file, so importers resolve it unchanged.
+	const placedImports: string[][] = [];
+	const placedTreeNames: string[][] = [];
+	const boundNames: string[] = [];
+	for (let i = 0; i < placedPaths.length; i += 1) { placedImports.push([]); placedTreeNames.push([]); }
+	const placedBoundRel = "_wasm/placed.bound.mjs";
+	if (placedPaths.length > 0) {
+		const dynamicPlan = planDynamicModules(graph, filePath, unitPaths, stdRoot);
+		const stem = `${outRoot}/_wasm/placed`;
+		const bindings = placeWasmModules(placedPaths, placedNames, graph, filePath, dynamicPlan, unitPaths, stem, (f: BoundaryFunction, sym: Symbol): string => {
+			const bundleName = jsBundleReferenceName(sym, f.name);
+			const treeName = jsTreeFunctionName(sym, f.name, f.modulePath, modExportKeys, modExportVals, modFunctionOwnerNames);
+			const at = placedPaths.indexOf(f.modulePath);
+			placedImports[at].push(bundleName == treeName ? treeName : `${bundleName} as ${treeName}`);
+			placedTreeNames[at].push(treeName);
+			boundNames.push(bundleName);
+			return bundleName;
+		}, opts);
+		let bound = bindings.prelude;
+		for (const m of bindings.modules) bound = bound + m.code;
+		bound = `${bound}export { ${boundNames.join(", ")} };\n`;
+		ensureDir(dirname(`${outRoot}/${placedBoundRel}`));
+		writeOutput(`${outRoot}/${placedBoundRel}`, bound);
+	}
+
 	const fileKeys: string[] = [];
 	const fileIndexOf = new HashMap<string, int32>();
 	const fileResults: JsModuleResult[] = [];
@@ -4734,6 +4769,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		}
 		refusePointerOpsOnJs(ctx, unitPrograms[ui]);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
+		if (placedPaths.includes(modPath)) withoutWasmFunctions(unitPrograms[ui]);
 		const written = new HashSet<Symbol>();
 		const writtenUnresolved = new HashSet<string>();
 		for (const stmt of (unitPrograms[ui].data as ProgramData).programStmts) {
@@ -4851,6 +4887,13 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	for (let fi = 0; fi < fileKeys.length; fi += 1) {
 		let code = fileResults[fi].code;
 		const forced = fileForced[fi];
+		const placedAt = placedPaths.indexOf(fileKeys[fi]);
+		if (placedAt >= 0) {
+			code = `${code}import { ${placedImports[placedAt].join(", ")} } from "${relSpecBetween(layout.outRelOf.get(fileKeys[fi])!, placedBoundRel)}";\n`;
+			for (const n of placedTreeNames[placedAt]) {
+				if (!forced.includes(n)) forced.push(n);
+			}
+		}
 		if (forced.length > 0) {
 			forced.sort();
 			code = `${code}export { ${forced.join(", ")} };\n`;
