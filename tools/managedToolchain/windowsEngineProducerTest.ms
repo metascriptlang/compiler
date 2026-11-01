@@ -76,6 +76,8 @@ struct Receipt {
 	systemDlls: string[];
 }
 const MARKER = "\nMS_ENGINE_FIXTURE_FACTS\n";
+const DLL_INIT_FAILED_STATUS: int32 = -1073741502;
+const DLL_INIT_FAILED_DECIMAL = "3221225794";
 let checks: int32 = 0;
 let skipped: int32 = 0;
 
@@ -107,8 +109,9 @@ function digest(path: string): string {
 	if (!result.ok) { throw new Error(result.error); }
 	return result.value;
 }
-function prepared(result: Result<WindowsEnginePrepared, string>):
-	WindowsEnginePrepared {
+function prepared(
+	result: Result<WindowsEnginePrepared, string>,
+): WindowsEnginePrepared {
 	if (!result.ok) { throw new Error(result.error); }
 	return result.value;
 }
@@ -139,7 +142,7 @@ function markerFacts(path: string): FixtureFacts {
 	if (!decoded.ok) { throw new Error("invalid controlled fixture facts"); }
 	return decoded.value;
 }
-function inspection(facts: FixtureFacts): string {
+function inspection(this facts: FixtureFacts): string {
 	let output = "ImageFileHeader {\n  Machine: FIXTURE (0x" +
 		facts.machine.toString(16) + ")\n  Characteristics [ (0x" +
 		facts.flags.toString(16) + ")\n}\nImageOptionalHeader {\n  Magic: 0x" +
@@ -179,7 +182,7 @@ function spy(): void {
 		completed(writeFile(join(facts.claimOutput, "sentinel"), "claimed\n"));
 	}
 	if (facts.warning != "") { console.error(facts.warning); }
-	console.log(inspection(facts));
+	console.log(facts.inspection());
 	if (facts.code != 0) { exit(facts.code); }
 }
 function fixtureMachine(): uint32 {
@@ -204,18 +207,18 @@ function writeSpy(path: string, facts: FixtureFacts): void {
 	else { completed(writeFile(path, "MZ")); }
 	completed(appendFile(path, MARKER + JSON.stringify(facts)));
 }
-function baseFacts(world: World, name: string): FixtureFacts {
+function baseFacts(this world: World, name: string): FixtureFacts {
 	const facts = world.facts.get(name);
 	if (facts == null) { throw new Error("no base facts for " + name); }
 	return facts;
 }
-function restore(world: World, name: string): void {
-	writeSpy(join(world.bin, name), baseFacts(world, name));
+function restore(this world: World, name: string): void {
+	writeSpy(join(world.bin, name), world.baseFacts(name));
 }
-function clearCalls(world: World): void {
+function clearCalls(this world: World): void {
 	if (exists(world.log)) { completed(remove(world.log)); }
 }
-function calls(world: World): string {
+function calls(this world: World): string {
 	return exists(world.log) ? text(world.log) : "";
 }
 function makeWorld(root: string): World {
@@ -275,7 +278,10 @@ function unchanged(root: string, before: Map<string, string>): boolean {
 	return true;
 }
 function refusal(
-	world: World, label: string, pattern: string, license: string | null,
+	this world: World,
+	label: string,
+	pattern: string,
+	license: string | null,
 ): void {
 	const output = join(world.root, label);
 	const result = prepareWindowsEngine(world.llvm, license, output);
@@ -283,7 +289,7 @@ function refusal(
 		"producer must refuse " + label + ": " +
 		(result.ok ? "unexpected success" : result.error));
 }
-function noPartials(world: World, prefix: string): boolean {
+function noPartials(this world: World, prefix: string): boolean {
 	const listed = readDirNames(world.root);
 	if (!listed.ok) { throw new Error(listed.error.message); }
 	for (const name of listed.value) {
@@ -292,7 +298,10 @@ function noPartials(world: World, prefix: string): boolean {
 	return true;
 }
 function linkRefusal(
-	world: World, name: string, original: string, pattern: string,
+	this world: World,
+	name: string,
+	original: string,
+	pattern: string,
 ): void {
 	const held = join(world.root, "held-" + name);
 	completed(rename(original, held));
@@ -302,11 +311,11 @@ function linkRefusal(
 		console.log("SKIP " + name + ": fixture symlink refused; 1 check: " +
 			made.error.message);
 	} else {
-		clearCalls(world);
+		world.clearCalls();
 		const output = join(world.root, "link-" + name);
 		const result = prepareWindowsEngine(world.llvm, world.license, output);
 		check(!result.ok && result.error.indexOf(pattern) >= 0 &&
-			!exists(output) && calls(world) == "", "early link refusal: " + name);
+			!exists(output) && world.calls() == "", "early link refusal: " + name);
 		completed(removeAll(original));
 	}
 	completed(rename(held, original));
@@ -397,7 +406,7 @@ function run(): void {
 	for (let i: int32 = 0; i < receipt.files.length; i += 1) {
 		const entry = receipt.files[i];
 		const name = basename(entry.path);
-		const original = baseFacts(world, name);
+		const original = world.baseFacts(name);
 		const expectedImports: string[] = [];
 		for (const imported of original.imports) { expectedImports.push(imported); }
 		for (const imported of original.delay) { expectedImports.push(imported); }
@@ -412,17 +421,17 @@ function run(): void {
 	check(text(join(output, "lib/clang/23/include/stddef.h")) == "stddef\n",
 		"resource paths and bytes");
 	completed(appendFile(join(output, "bin/clang.exe"), "changed"));
-	clearCalls(world);
+	world.clearCalls();
 	const corrupt = verifyWindowsEngine(output);
 	check(!corrupt.ok &&
 		corrupt.error.indexOf("hash mismatch: bin/clang.exe") >= 0 &&
-		calls(world) == "", "contract checked before executing any inspector");
+		world.calls() == "", "contract checked before executing any inspector");
 	completed(copyFile(join(world.bin, "clang.exe"),
 		join(output, "bin/clang.exe")));
 	finished(writeEngineContract(output, world.host, "23.1.0"));
 	check(audited(verifyWindowsEngine(output)).peFiles == 20,
 		"restored byte-identical file verifies");
-	let bad = baseFacts(world, "LibFoo.dll");
+	let bad = world.baseFacts("LibFoo.dll");
 	bad.flags = 0x22;
 	writeSpy(join(output, "bin/LibFoo.dll"), bad);
 	finished(writeEngineContract(output, world.host, "23.1.0"));
@@ -437,19 +446,19 @@ function run(): void {
 	check(!nested.ok && nested.error.indexOf("bin/ holds only") >= 0,
 		"bin is not an arbitrary payload directory");
 	completed(remove(join(output, "bin/notes.txt")));
-	bad = baseFacts(world, "LibFoo.dll");
+	bad = world.baseFacts("LibFoo.dll");
 	bad.imports = ["absent.dll"];
 	writeSpy(join(output, "bin/LibFoo.dll"), bad);
 	finished(writeEngineContract(output, world.host, "23.1.0"));
 	const missing = verifyWindowsEngine(output);
 	check(!missing.ok && missing.error.indexOf("imports absent.dll") >= 0,
 		"rehashed dependency closure must still be complete");
-	refusal(world, "no-license", "--license is required", null);
-	refusal(world, "missing-license", "not a regular file",
+	world.refusal("no-license", "--license is required", null);
+	world.refusal("missing-license", "not a regular file",
 		join(world.root, "absent-license"));
 	const empty = join(world.root, "empty-license");
 	completed(writeFile(empty, ""));
-	refusal(world, "empty-license-out", "is empty", empty);
+	world.refusal("empty-license-out", "is empty", empty);
 	const existing = join(world.root, "existing");
 	completed(createDirectoryExclusive(existing));
 	completed(writeFile(join(existing, "sentinel"), "held\n"));
@@ -464,50 +473,50 @@ function run(): void {
 	const ar = join(world.bin, "llvm-ar.exe");
 	const savedAr = join(world.root, "held-ar");
 	completed(rename(ar, savedAr));
-	refusal(world, "missing-tool", "needs llvm-ar.exe", world.license);
+	world.refusal("missing-tool", "needs llvm-ar.exe", world.license);
 	completed(rename(savedAr, ar));
 	writeSpy(join(world.bin, "Kernel32.dll"), freshFacts(world.log, true));
-	clearCalls(world);
-	refusal(world, "shadowed-system", "shadow the system library", world.license);
-	if (calls(world) != "") { throw new Error("system shadow ran a tool"); }
+	world.clearCalls();
+	world.refusal("shadowed-system", "shadow the system library", world.license);
+	if (world.calls() != "") { throw new Error("system shadow ran a tool"); }
 	completed(remove(join(world.bin, "Kernel32.dll")));
 	writeSpy(join(world.bin, "STRASSE.dll"), freshFacts(world.log, true));
-	refusal(world, "fold-collision", "matches 2 files", world.license);
+	world.refusal("fold-collision", "matches 2 files", world.license);
 	completed(remove(join(world.bin, "STRASSE.dll")));
 	for (const delayed of [false, true]) {
-		bad = baseFacts(world, "llvm-nm.exe");
+		bad = world.baseFacts("llvm-nm.exe");
 		bad.imports = delayed ? [] : ["absent.dll"];
 		bad.delay = delayed ? ["absent.dll"] : [];
 		writeSpy(join(world.bin, "llvm-nm.exe"), bad);
-		refusal(world, delayed ? "missing-delay" : "missing-import",
+		world.refusal(delayed ? "missing-delay" : "missing-import",
 			"needs absent.dll", world.license);
 	}
-	bad = baseFacts(world, "llvm-nm.exe");
+	bad = world.baseFacts("llvm-nm.exe");
 	bad.imports = ["C:evil.dll"];
 	writeSpy(join(world.bin, "llvm-nm.exe"), bad);
-	refusal(world, "bad-basename", "not a file basename", world.license);
-	restore(world, "llvm-nm.exe");
-	bad = baseFacts(world, "llvm-ar.exe");
+	world.refusal("bad-basename", "not a file basename", world.license);
+	world.restore("llvm-nm.exe");
+	bad = world.baseFacts("llvm-ar.exe");
 	bad.flags = 0x2022;
 	writeSpy(ar, bad);
-	refusal(world, "source-role", "is a DLL image", world.license);
-	restore(world, "llvm-ar.exe");
-	bad = baseFacts(world, "ld.lld.exe");
+	world.refusal("source-role", "is a DLL image", world.license);
+	world.restore("llvm-ar.exe");
+	bad = world.baseFacts("ld.lld.exe");
 	bad.version = "23.1.1";
 	writeSpy(join(world.bin, "ld.lld.exe"), bad);
-	refusal(world, "version-mismatch", "does not match clang", world.license);
-	restore(world, "ld.lld.exe");
+	world.refusal("version-mismatch", "does not match clang", world.license);
+	world.restore("ld.lld.exe");
 	const builtins = join(world.llvm, world.builtins);
 	const savedBuiltins = join(world.root, "held-builtins");
 	completed(rename(builtins, savedBuiltins));
-	refusal(world, "missing-resource", "missing lib/clang/23/lib/windows/",
+	world.refusal("missing-resource", "missing lib/clang/23/lib/windows/",
 		world.license);
 	completed(rename(savedBuiltins, builtins));
-	linkRefusal(world, "license", world.license, "not a regular file");
-	linkRefusal(world, "lib", join(world.llvm, "lib"), "symlink in resource");
-	linkRefusal(world, "bin", world.bin, "symlink or reparse point");
-	linkRefusal(world, "tool", ar, "is not a regular file");
-	linkRefusal(world, "header", join(world.llvm,
+	world.linkRefusal("license", world.license, "not a regular file");
+	world.linkRefusal("lib", join(world.llvm, "lib"), "symlink in resource");
+	world.linkRefusal("bin", world.bin, "symlink or reparse point");
+	world.linkRefusal("tool", ar, "is not a regular file");
+	world.linkRefusal("header", join(world.llvm,
 		"lib/clang/23/include/stddef.h"), "symlink in resource");
 	const alias = join(world.root, "alias-root");
 	const madeAlias = symlink(world.llvm, alias);
@@ -528,9 +537,9 @@ function run(): void {
 		"/d", "/c", "mklink", "/J", junction.replaceAll("/", "\\"),
 		world.llvm.replaceAll("/", "\\"),
 	]);
-	if (joined.exitCode == -1073741502 ||
+	if (joined.exitCode == DLL_INIT_FAILED_STATUS ||
 		joined.errorOutput.indexOf("0xC0000142") >= 0 ||
-		joined.output.indexOf("3221225794") >= 0) {
+		joined.output.indexOf(DLL_INIT_FAILED_DECIMAL) >= 0) {
 		throw new Error("0xC0000142: junction fixture process STOP");
 	}
 	if (!joined.started || !joined.pipeOk || joined.exitCode != 0) {
@@ -543,29 +552,29 @@ function run(): void {
 		check(reparse.ok && reparse.value && symbolic.ok && !symbolic.value,
 			"reparse point is not always a symbolic link");
 	}
-	bad = baseFacts(world, "llvm-ar.exe");
+	bad = world.baseFacts("llvm-ar.exe");
 	bad.warning = "warning: controlled malformed input";
 	writeSpy(ar, bad);
-	refusal(world, "inspector-warning", "warned: warning:", world.license);
-	restore(world, "llvm-ar.exe");
-	bad = baseFacts(world, "llvm-ar.exe");
+	world.refusal("inspector-warning", "warned: warning:", world.license);
+	world.restore("llvm-ar.exe");
+	bad = world.baseFacts("llvm-ar.exe");
 	bad.copiesFail = true;
 	writeSpy(ar, bad);
-	refusal(world, "bad-copy", "controlled copy verification failure",
+	world.refusal("bad-copy", "controlled copy verification failure",
 		world.license);
-	if (!noPartials(world, "bad-copy")) {
+	if (!world.noPartials("bad-copy")) {
 		throw new Error("failed staging leaked");
 	}
-	restore(world, "llvm-ar.exe");
+	world.restore("llvm-ar.exe");
 	const raced = join(world.root, "raced-engine");
-	bad = baseFacts(world, "clang.exe");
+	bad = world.baseFacts("clang.exe");
 	bad.claimOutput = raced;
 	writeSpy(join(world.bin, "clang.exe"), bad);
 	const race = prepareWindowsEngine(world.llvm, world.license, raced);
 	check(!race.ok && race.error.indexOf("never replaced") >= 0 &&
 		text(join(raced, "sentinel")) == "claimed\n" &&
-		noPartials(world, "raced-engine"), "late output claim is never replaced");
-	restore(world, "clang.exe");
+		world.noPartials("raced-engine"), "late output claim is never replaced");
+	world.restore("clang.exe");
 	check(unchanged(world.llvm, before),
 		"all controlled source mutations restored");
 	if (checks + skipped != 72) {
@@ -576,6 +585,11 @@ function run(): void {
 		" checks OK; " + String(skipped) + " skipped");
 	completed(removeAll(root));
 }
-if (argv.length > 1 && (argv[1] == "--version" ||
-	argv[1] == "--file-headers")) { spy(); }
-else { run(); }
+when (!testBuild) {
+	if (argv.length > 1 &&
+		(argv[1] == "--version" || argv[1] == "--file-headers")) {
+		spy();
+	} else {
+		run();
+	}
+}
