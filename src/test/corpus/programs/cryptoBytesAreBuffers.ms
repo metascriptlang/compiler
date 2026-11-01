@@ -21,11 +21,11 @@
 
 import { Buffer } from "std/core/buffer";
 import { CryptoError, digestSync, hmacSync, pbkdf2, hkdf, createHash, randomBytesSync, fromHex, fromBase64, toBase64, toHex } from "std/crypto";
-import { blake2b } from "std/crypto/blake2b";
+import { blake2bSync } from "std/crypto/blake2b";
 import { ed25519FromSeed, ed25519PublicKey, ed25519ToSeed, ed25519Sign, ed25519Verify } from "std/crypto/ed25519";
 import { x25519PublicKey, x25519SharedSecret } from "std/crypto/x25519";
-import { seal, open, cbcEncrypt, cbcDecrypt } from "std/crypto/aes";
-import { chacha20Seal, chacha20Open } from "std/crypto/chacha20";
+import { AesKey, seal, open, cbcEncrypt, cbcDecrypt } from "std/crypto/aes";
+import { ChaChaKey, seal as chachaSeal, open as chachaOpen } from "std/crypto/chacha20";
 
 function must<T>(result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error("crypto call failed");
@@ -59,7 +59,7 @@ const binary = must(fromHex("ff00fe"));
 console.log("hex", binary.length, toHex(binary), toBase64(binary));
 console.log("hex", must(fromBase64("/wD+")).length);
 
-const blake: Buffer = blake2b("abc", 32);
+const blake: Buffer = must(blake2bSync("abc", 32));
 console.log("blake2b", toHex(blake), blake.length);
 
 const seed = must(fromHex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"));
@@ -75,17 +75,19 @@ const bobPublic = must(x25519PublicKey(bobPrivate));
 console.log("x25519", toHex(alicePublic), Buffer.compare(must(x25519SharedSecret(alicePrivate, bobPublic)), must(x25519SharedSecret(bobPrivate, alicePublic))) == 0);
 
 const key16 = must(fromHex("000102030405060708090a0b0c0d0e0f"));
-const sealed: Buffer = must(seal(key16, "attack at dawn", "hdr"));
-const opened: Buffer = must(open(key16, sealed, "hdr"));
-const forged = open(key16, must(fromHex("00".repeat(sealed.length))), "hdr");
+const aesKey = must(AesKey.import(key16));
+const sealed: Buffer = must(await seal(aesKey, "attack at dawn", "hdr"));
+const opened: Buffer = must(await open(aesKey, sealed, "hdr"));
+const forged = await open(aesKey, must(fromHex("00".repeat(sealed.length))), "hdr");
 console.log("aes", sealed.length, opened.asString() == "attack at dawn", forged.ok);
 
 const key32 = must(fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"));
-const chacha: Buffer = must(chacha20Seal(key32, "attack at dawn", "hdr"));
-const chachaOpened: Buffer = must(chacha20Open(key32, chacha, "hdr"));
-const chachaForged = chacha20Open(key32, chacha, "other");
+const chachaKey = must(ChaChaKey.import(key32));
+const chacha: Buffer = must(await chachaSeal(chachaKey, "attack at dawn", "hdr"));
+const chachaOpened: Buffer = must(await chachaOpen(chachaKey, chacha, "hdr"));
+const chachaForged = await chachaOpen(chachaKey, chacha, "other");
 console.log("chacha", chacha.length, chachaOpened.asString() == "attack at dawn", chachaForged.ok);
 
 const iv = must(fromHex("101112131415161718191a1b1c1d1e1f"));
-const cbc: Buffer = must(cbcEncrypt(key16, "attack at dawn", iv));
-console.log("cbc", cbc.length, must(cbcDecrypt(key16, cbc, iv)).asString() == "attack at dawn");
+const cbc: Buffer = must(await cbcEncrypt(aesKey, "attack at dawn", iv));
+console.log("cbc", cbc.length, must(await cbcDecrypt(aesKey, cbc, iv)).asString() == "attack at dawn");

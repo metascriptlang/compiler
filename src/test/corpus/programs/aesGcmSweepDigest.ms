@@ -13,11 +13,11 @@
 
 import { Buffer } from "std/core/buffer";
 import { rawString } from "std/core/buffer/bytes";
-import { sha256, toHex } from "std/crypto";
-import { open } from "std/crypto/aes";
+import { sha256 } from "std/crypto/sha256";
+import { AesKey, open } from "std/crypto/aes";
 import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
 
-extern function msCryptoAesSealWithNonceInto(key: string, nonce: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
+extern function msCryptoAesSealWithNonceInto(key: int64, nonce: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
 
 function pattern(count: int32, salt: int32): Buffer {
 	const out = newOutputBuffer(count as int64);
@@ -25,8 +25,10 @@ function pattern(count: int32, salt: int32): Buffer {
 	return out;
 }
 
-function sweep(keyLength: int32): string {
-	const key = rawString(pattern(keyLength, 1));
+async function sweep(keyLength: int32): Promise<string> {
+	const imported = AesKey.import(pattern(keyLength, 1));
+	if (!imported.ok) throw new Error("import failed");
+	const key = imported.value;
 	const nonce = rawString(pattern(12, 99));
 	let digest = "";
 	let opened = true;
@@ -36,16 +38,14 @@ function sweep(keyLength: int32): string {
 		for (let aadLength: int32 = 0; aadLength <= 40; aadLength++) {
 			const aad = rawString(pattern(aadLength, 200));
 			const sealed = newOutputBuffer(12 + (len as int64) + 16);
-			if (msCryptoAesSealWithNonceInto(key, nonce, plainText, aad, outputBytes(sealed)) != 1) throw new Error("seal failed");
-			const back = open(key, sealed, aad);
-			if (!back.ok || toHex(back.value) != toHex(plain)) opened = false;
-			const next = sha256(digest + toHex(sealed));
-			if (!next.ok) throw new Error("sha256 failed");
-			digest = next.value;
+			if (msCryptoAesSealWithNonceInto(key._handle, nonce, plainText, aad, outputBytes(sealed)) != 1) throw new Error("seal failed");
+			const back = await open(key, sealed, aad);
+			if (!back.ok || back.value.toHex() != plain.toHex()) opened = false;
+			digest = sha256(Buffer.fromString(digest + sealed.toHex(), "utf8")).toHex();
 		}
 	}
 	return `aes${keyLength * 8} ${digest} opened ${opened}`;
 }
 
-console.log(sweep(16));
-console.log(sweep(32));
+console.log(await sweep(16));
+console.log(await sweep(32));

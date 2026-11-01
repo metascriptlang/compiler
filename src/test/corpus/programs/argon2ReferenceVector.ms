@@ -10,11 +10,11 @@
 
 import { argon2Hash, argon2HashRaw } from "std/crypto/argon2";
 
-function row(timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string {
-	const encoded = argon2Hash("password", "somesalt", timeCost, memoryCost, parallelism, hashLen);
-	const raw = argon2HashRaw("password", "somesalt", timeCost, memoryCost, parallelism, hashLen);
+async function row(timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Promise<string> {
+	const encoded = await argon2Hash("password", "somesalt", timeCost, memoryCost, parallelism, hashLen);
+	const raw = await argon2HashRaw("password", "somesalt", timeCost, memoryCost, parallelism, hashLen);
 	if (!encoded.ok || !raw.ok) throw new Error("hash failed");
 	return `encoded ${encoded.value} raw ${raw.value.length}`;
 }
 
-console.log([row(2, 64, 2, 24), row(1, 64, 1, 16)].join("|"));
+console.log([await row(2, 64, 2, 24), await row(1, 64, 1, 16)].join("|"));

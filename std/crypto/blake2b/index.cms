@@ -1,8 +1,9 @@
 // std/crypto/blake2b — BLAKE2b cryptographic hash (RFC 7693)
-// import { blake2b, blake2bKeyed } from "std/crypto/blake2b"
+// import { blake2b, blake2bSync, createBlake2b } from "std/crypto/blake2b"
 //
 // Faster than SHA-256, variable output length (1-64 bytes).
 // Uses Monocypher (audited by Cure53).
+// A hash, so it has the sync forms and the streaming hasher as well as the async default.
 
 @include("runtime/crypto/kdf/blake2b.h");
 @compile("runtime/crypto/kdf/blake2b.c");
@@ -21,39 +22,46 @@ extern function msBlake2bInit(hashSize: int32): int64;
 extern function msBlake2bUpdate(ctx: int64, data: string): void;
 extern function msBlake2bFinal(ctx: int64): string;
 
+function badHashSize(hashSize: int32, op: string): CryptoError | null {
+	if (hashSize < 1 || hashSize > 64) {
+		return cryptoError(CryptoErrorKind.InvalidInput, op, `hashSize must be 1-64, got ${hashSize}`);
+	}
+	return null;
+}
+
 // ===== One-shot Hashing =====
 
-function requireHashSize(hashSize: int32, op: string): void {
-	if (hashSize < 1 || hashSize > 64) throw new Error(`${op}: hashSize must be 1-64, got ${hashSize}`);
+export function blake2bSync(data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	const bad = badHashSize(hashSize, "blake2b");
+	if (bad != null) return Result.err(bad);
+	return Result.ok(rawBuffer(msBlake2b(rawString(data), hashSize)));
 }
 
-export function blake2b(data: Bytes, hashSize: int32 = 32): Buffer {
-	requireHashSize(hashSize, "blake2b");
-	return rawBuffer(msBlake2b(rawString(data), hashSize));
-}
-
-export function blake2bKeyed(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
 	const key = rawString(keyBytes);
 	if (key.byteLength < 1 || key.byteLength > 64) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
 	}
-	if (hashSize < 1 || hashSize > 64) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "blake2bKeyed", "hashSize must be 1-64"));
-	}
+	const bad = badHashSize(hashSize, "blake2bKeyed");
+	if (bad != null) return Result.err(bad);
 	const result = msBlake2bKeyed(key, rawString(data), hashSize);
 	if (result == "") return Result.err(cryptoError(CryptoErrorKind.HashFailed, "blake2bKeyed", "keyed hash failed"));
 	return Result.ok(rawBuffer(result));
 }
 
-// ===== Streaming =====
+/** Completes inline on C: nothing waits, so nothing spawns. */
+export async function blake2b(data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+	return blake2bSync(data, hashSize);
+}
+
+export async function blake2bKeyed(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+	return blake2bKeyedSync(keyBytes, data, hashSize);
+}
+
+// ===== Streaming (sync only) =====
 
 export class Blake2b {
 	_ctx: int64;
-
-	static create(hashSize: int32 = 32): Blake2b {
-		requireHashSize(hashSize, "Blake2b.create");
-		return { _ctx: msBlake2bInit(hashSize) };
-	}
 
 	update(data: Bytes): Blake2b {
 		if (this._ctx == 0) throw new Error("Blake2b.update: the hasher already produced its digest");
@@ -76,6 +84,27 @@ export class Blake2b {
 	}
 }
 
-export function createBlake2b(hashSize: int32 = 32): Blake2b {
-	return Blake2b.create(hashSize);
+export function createBlake2b(hashSize: int32 = 32): Result<Blake2b, CryptoError> {
+	const bad = badHashSize(hashSize, "createBlake2b");
+	if (bad != null) return Result.err(bad);
+	return Result.ok({ _ctx: msBlake2bInit(hashSize) });
+}
+
+test "blake2b async and sync agree on the RFC 7693 abc vector, keyed and streamed too" {
+	const sync = blake2bSync("abc", 64);
+	assert sync.ok;
+	const streamed = createBlake2b(64);
+	assert streamed.ok;
+	streamed.value.update("a").update("bc");
+	const streamedDigest = streamed.value.digest();
+	const awaited = await blake2b("abc", 64);
+	assert awaited.ok;
+	for (let i = 0; i < 64; i++) {
+		assert sync.value[i] == awaited.value[i];
+		assert sync.value[i] == streamedDigest[i];
+	}
+	assert sync.value[0] == 0xba && sync.value[63] == 0x23;
+	assert (await blake2bKeyed("k", "abc")).ok;
+	assert !(await blake2bKeyed("", "abc")).ok;
+	assert !(await blake2b("abc", 0)).ok;
 }

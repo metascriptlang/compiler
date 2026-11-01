@@ -1,8 +1,9 @@
 // std/crypto/aes — AES encryption module
-// import { seal, open } from "std/crypto/aes"
+// import { AesKey, seal, open } from "std/crypto/aes"
 //
 // Safe by default: seal/open use AES-GCM with auto-generated nonce.
 // CBC mode available for legacy interop (expert use).
+// Keys are AesKey objects: the raw bytes stay in native state the object owns and wipes.
 
 @include("runtime/crypto/ciphers/aes.h");
 @compile("runtime/crypto/ciphers/aes.c");
@@ -35,18 +36,61 @@ import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { newOutputBuffer, outputBytes } from "../outputBuffer";
 
 // C bindings
-extern function msCryptoAesSealInto(key: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
-extern function msCryptoAesOpenInto(key: string, sealed: string, aad: string, out: Ptr<uint8>): int64;
-extern function msCryptoAesCbcEncrypt(key: string, plainText: string, iv: string): string;
-extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: string, ref plainText: string): int64;
+extern function msCryptoAesKeyNew(raw: string): int64;
+extern function msCryptoAesKeyGenerate(byteLength: int32): int64;
+extern function msCryptoAesKeyExport(handle: int64): string;
+extern function msCryptoAesKeyFree(handle: int64): void;
+extern function msCryptoAesSealInto(key: int64, plainText: string, aad: string, out: Ptr<uint8>): int64;
+extern function msCryptoAesOpenInto(key: int64, sealed: string, aad: string, out: Ptr<uint8>): int64;
+extern function msCryptoAesCbcEncrypt(key: int64, plainText: string, iv: string): string;
+extern function msCryptoAesCbcDecrypt(key: int64, cipherText: string, iv: string, ref plainText: string): int64;
 
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
-	if (key.byteLength != 16 && key.byteLength != 32) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "key must be 16 or 32 bytes"));
+// ===== Key =====
+
+/**
+ * An AES-128 or AES-256 key. The object owns the native copy of the key bytes and wipes it when
+ * its last reference goes, so the bytes never appear in a seal/open signature.
+ */
+export class AesKey {
+	_handle: int64;
+
+	/** From exactly 16 (AES-128) or 32 (AES-256) raw bytes. */
+	static import(raw: Bytes): Result<AesKey, CryptoError> {
+		const handle = msCryptoAesKeyNew(rawString(raw));
+		if (handle == 0) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
+		}
+		return Result.ok({ _handle: handle });
 	}
-	return Result.ok(true);
+
+	/** A random key from the OS source: 128 or 256 bits. */
+	static generate(bits: int32 = 256): Result<AesKey, CryptoError> {
+		if (bits != 128 && bits != 256) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "AesKey.generate", "bits must be 128 or 256"));
+		}
+		const handle = msCryptoAesKeyGenerate(bits / 8);
+		if (handle == -1) {
+			return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "AesKey.generate", "the OS random source failed"));
+		}
+		return Result.ok({ _handle: handle });
+	}
+
+	/** A copy of the raw key bytes, for the caller that must store it. */
+	exportRaw(): Buffer {
+		return rawBuffer(msCryptoAesKeyExport(liveHandle(this, "AesKey.exportRaw")));
+	}
+}
+
+function onDestroy(this key: AesKey): void {
+	msCryptoAesKeyFree(key._handle);
+	key._handle = 0;
+}
+
+function liveHandle(key: AesKey, op: string): int64 {
+	if (key._handle == 0) throw new Error(`${op}: the key was already destroyed`);
+	return key._handle;
 }
 
 // ===== High-Level AEAD (safe by default) =====
@@ -54,14 +98,13 @@ function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
 /**
  * Encrypt with AES-GCM. Auto-generates 12-byte nonce.
  * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
- * Key: 16 bytes (AES-128) or 32 bytes (AES-256).
+ * Completes inline on C: nothing waits, so nothing spawns.
  */
-export function seal(keyBytes: Bytes, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
-	const key = rawString(keyBytes);
-	const _v1 = try validateAesKey(key, "seal");
+export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+	const handle = liveHandle(key, "seal");
 	const text = rawString(plainTextBytes);
 	const sealed = newOutputBuffer(12 + (text.byteLength as int64) + 16);
-	const status = msCryptoAesSealInto(key, text, rawString(aadBytes), outputBytes(sealed));
+	const status = msCryptoAesSealInto(handle, text, rawString(aadBytes), outputBytes(sealed));
 	if (status == -1) {
 		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the OS random source failed"));
 	}
@@ -76,15 +119,14 @@ export function seal(keyBytes: Bytes, plainTextBytes: Bytes, aadBytes: Bytes = "
  * Input: nonce(12) || cipherText || authTag(16).
  * Returns plainText or error if authentication fails.
  */
-export function open(keyBytes: Bytes, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
-	const key = rawString(keyBytes);
+export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+	const handle = liveHandle(key, "open");
 	const sealed = rawString(sealedBytes);
-	const _v2 = try validateAesKey(key, "open");
 	if (sealed.byteLength < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
 	const plain = newOutputBuffer((sealed.byteLength as int64) - 28);
-	if (msCryptoAesOpenInto(key, sealed, rawString(aadBytes), outputBytes(plain)) != 1) {
+	if (msCryptoAesOpenInto(handle, sealed, rawString(aadBytes), outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(plain);
@@ -93,18 +135,16 @@ export function open(keyBytes: Bytes, sealedBytes: Bytes, aadBytes: Bytes = ""):
 // ===== CBC Mode (expert use — no authentication) =====
 
 /**
- * AES-CBC encrypt with PKCS7 padding.
- * Key: 16 or 32 bytes. IV: must be 16 bytes.
+ * AES-CBC encrypt with PKCS7 padding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
-export function cbcEncrypt(keyBytes: Bytes, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
-	const key = rawString(keyBytes);
+export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const handle = liveHandle(key, "cbcEncrypt");
 	const iv = rawString(ivBytes);
-	const _v3 = try validateAesKey(key, "cbcEncrypt");
 	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
-	const result = msCryptoAesCbcEncrypt(key, rawString(plainTextBytes), iv);
+	const result = msCryptoAesCbcEncrypt(handle, rawString(plainTextBytes), iv);
 	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", "AES-CBC encryption failed"));
 	}
@@ -112,20 +152,18 @@ export function cbcEncrypt(keyBytes: Bytes, plainTextBytes: Bytes, ivBytes: Byte
 }
 
 /**
- * AES-CBC decrypt with PKCS7 unpadding.
- * Key: 16 or 32 bytes. IV: must be 16 bytes.
+ * AES-CBC decrypt with PKCS7 unpadding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
  * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
-export function cbcDecrypt(keyBytes: Bytes, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
-	const key = rawString(keyBytes);
+export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const handle = liveHandle(key, "cbcDecrypt");
 	const iv = rawString(ivBytes);
-	const _v4 = try validateAesKey(key, "cbcDecrypt");
 	if (iv.byteLength != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
 	let plainText = "";
-	if (msCryptoAesCbcDecrypt(key, rawString(cipherTextBytes), iv, plainText) != 1) {
+	if (msCryptoAesCbcDecrypt(handle, rawString(cipherTextBytes), iv, plainText) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
 	return Result.ok(rawBuffer(plainText));
@@ -138,23 +176,35 @@ function patternBuffer(size: int32): Buffer {
 }
 
 test "aes seal fills one buffer of nonce, cipher text and tag at every block edge" {
-	const key = "0123456789abcdef0123456789abcdef";
+	const imported = AesKey.import("0123456789abcdef0123456789abcdef");
+	assert imported.ok;
+	const key = imported.value;
 	for (const size of [0, 1, 63, 64, 65, 65536]) {
 		const plain = patternBuffer(size);
-		const sealed = seal(key, plain, "aad");
+		const sealed = await seal(key, plain, "aad");
 		assert sealed.ok;
 		assert sealed.value.length == size + 28;
-		const opened = open(key, sealed.value, "aad");
+		const opened = await open(key, sealed.value, "aad");
 		assert opened.ok;
 		assert opened.value.length == size;
 		for (let i = 0; i < size; i++) assert opened.value[i] == plain[i];
-		assert !open(key, sealed.value, "other").ok;
+		assert !(await open(key, sealed.value, "other")).ok;
 		const forged = Buffer.copy(sealed.value);
 		forged[size + 27] = (forged[size + 27] ^ 1) as uint8;
-		assert !open(key, forged, "aad").ok;
+		assert !(await open(key, forged, "aad")).ok;
 	}
 }
 
-test "aes seal rejects a bad key length" {
-	assert !seal("short", "x").ok;
+test "aes import rejects a bad key length and generate round-trips through exportRaw" {
+	assert !AesKey.import("short").ok;
+	assert !AesKey.generate(192).ok;
+	const generated = AesKey.generate(128);
+	assert generated.ok;
+	const raw = generated.value.exportRaw();
+	assert raw.length == 16;
+	const again = AesKey.import(raw);
+	assert again.ok;
+	const sealed = await seal(generated.value, "x");
+	assert sealed.ok;
+	assert (await open(again.value, sealed.value)).ok;
 }

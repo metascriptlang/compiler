@@ -9,34 +9,40 @@
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 import { Buffer } from "std/core/buffer";
-import { fromHex, toHex } from "std/crypto";
-import { cbcEncrypt, cbcDecrypt } from "std/crypto/aes";
+import { AesKey, cbcEncrypt, cbcDecrypt } from "std/crypto/aes";
 
 const iv = "0123456789abcdef";
 
-function roundTrip(key: string, plain: string): string {
-	const sealed = cbcEncrypt(key, plain, iv);
+function importKey(raw: string): AesKey {
+	const imported = AesKey.import(raw);
+	if (!imported.ok) throw new Error("import failed");
+	return imported.value;
+}
+
+async function roundTrip(key: AesKey, plain: string): Promise<string> {
+	const sealed = await cbcEncrypt(key, plain, iv);
 	if (!sealed.ok) return "encrypt failed";
-	const opened = cbcDecrypt(key, sealed.value, iv);
+	const opened = await cbcDecrypt(key, sealed.value, iv);
 	return `${opened.ok && opened.value.asString() == plain} ${sealed.value.length}`;
 }
 
-function rows(key: string): string {
-	const sealed = cbcEncrypt(key, "x", iv);
+async function rows(raw: string): Promise<string> {
+	const key = importKey(raw);
+	const sealed = await cbcEncrypt(key, "x", iv);
 	if (!sealed.ok) return "encrypt failed";
 	const corrupt = Buffer.copy(sealed.value);
 	corrupt[15] = (corrupt[15] ^ 1) as uint8;
-	const ragged = fromHex(toHex(sealed.value).substring(0, 30));
+	const ragged = sealed.value.slice(0, 15);
 	return [
-		`${key.byteLength} empty ${roundTrip(key, "")}`,
-		`1 ${roundTrip(key, "x")}`,
-		`15 ${roundTrip(key, "fifteen bytes!!")}`,
-		`16 ${roundTrip(key, "sixteen bytes!!!")}`,
-		`bad pad ${cbcDecrypt(key, corrupt, iv).ok}`,
-		`ragged ${cbcDecrypt(key, ragged, iv).ok}`,
-		`none ${cbcDecrypt(key, "", iv).ok}`,
+		`${raw.byteLength} empty ${await roundTrip(key, "")}`,
+		`1 ${await roundTrip(key, "x")}`,
+		`15 ${await roundTrip(key, "fifteen bytes!!")}`,
+		`16 ${await roundTrip(key, "sixteen bytes!!!")}`,
+		`bad pad ${(await cbcDecrypt(key, corrupt, iv)).ok}`,
+		`ragged ${(await cbcDecrypt(key, ragged, iv)).ok}`,
+		`none ${(await cbcDecrypt(key, "", iv)).ok}`,
 	].join(" | ");
 }
 
-console.log(rows("0123456789abcdef"));
-console.log(rows("0123456789abcdef0123456789abcdef"));
+console.log(await rows("0123456789abcdef"));
+console.log(await rows("0123456789abcdef0123456789abcdef"));

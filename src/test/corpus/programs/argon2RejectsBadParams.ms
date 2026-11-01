@@ -9,22 +9,22 @@
 
 import { argon2Hash, argon2HashRaw } from "std/crypto/argon2";
 
-function row(label: string, salt: string, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string {
-	const encoded = argon2Hash("password", salt, timeCost, memoryCost, parallelism, hashLen);
-	const raw = argon2HashRaw("password", salt, timeCost, memoryCost, parallelism, hashLen);
+async function row(label: string, salt: string, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Promise<string> {
+	const encoded = await argon2Hash("password", salt, timeCost, memoryCost, parallelism, hashLen);
+	const raw = await argon2HashRaw("password", salt, timeCost, memoryCost, parallelism, hashLen);
 	return `${label} ${encoded.ok ? "ok" : "err " + encoded.error.message} ${raw.ok ? "ok" : "err " + raw.error.message}`;
 }
 
 console.log([
-	row("hashLen -1", "somesalt", 1, 64, 1, -1),
-	row("hashLen 3", "somesalt", 1, 64, 1, 3),
-	row("iterations 0", "somesalt", 0, 64, 1, 16),
-	row("iterations -1", "somesalt", -1, 64, 1, 16),
-	row("memory 0", "somesalt", 1, 0, 1, 16),
-	row("memory -1", "somesalt", 1, -1, 1, 16),
-	row("memory 15 for 2 lanes", "somesalt", 1, 15, 2, 16),
-	row("lanes 0", "somesalt", 1, 64, 0, 16),
-	row("lanes -1", "somesalt", 1, 64, -1, 16),
-	row("salt 7 bytes", "1234567", 1, 64, 1, 16),
-	row("valid", "somesalt", 1, 64, 1, 16),
+	await row("hashLen -1", "somesalt", 1, 64, 1, -1),
+	await row("hashLen 3", "somesalt", 1, 64, 1, 3),
+	await row("iterations 0", "somesalt", 0, 64, 1, 16),
+	await row("iterations -1", "somesalt", -1, 64, 1, 16),
+	await row("memory 0", "somesalt", 1, 0, 1, 16),
+	await row("memory -1", "somesalt", 1, -1, 1, 16),
+	await row("memory 15 for 2 lanes", "somesalt", 1, 15, 2, 16),
+	await row("lanes 0", "somesalt", 1, 64, 0, 16),
+	await row("lanes -1", "somesalt", 1, 64, -1, 16),
+	await row("salt 7 bytes", "1234567", 1, 64, 1, 16),
+	await row("valid", "somesalt", 1, 64, 1, 16),
 ].join("|"));
