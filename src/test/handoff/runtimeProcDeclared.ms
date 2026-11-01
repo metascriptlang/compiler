@@ -56,7 +56,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 
 test "the JS prelude declares every runtime routine the lowerings synthesize" {
 	const names: string[] = [
-	"msSpanValues", "msChkIndex", "msChkArray", "msSpanAt", "msArrayAt", "msSpanCell", "msArrayCell",
+	"msSpanValues", "msChkIndex", "msIndexFail", "msChkArray", "msSpanAt", "msArrayAt", "msSpanCell", "msArrayCell",
 	"msSpanOf", "msSliceSpan", "msSliceOf", "msDivI32", "msDivI64", "msDivU32", "msDivU64", "msModI32",
 	"msModI64", "msModU32", "msModU64", "msPowI32", "msPowI64", "msPowU32", "msPowU64", "msStringLength",
 	"charAt", "msStringByteAt", "msStringByteLength", "msStringHash", "msIntToString", "asBytes", "byteLength",

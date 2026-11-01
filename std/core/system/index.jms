@@ -505,6 +505,12 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 // the corpus compares both backends' messages.
 
 @compilerFunc
+function msIndexFail(i: int64, len: int64): never {
+	@emit(`${msDefect}("index " + ${i} + " out of bounds (length " + ${len} + ")");`);
+	unreachable;
+}
+
+@compilerFunc
 function msChkIndex(i: int64, len: int64): int64 {
 	@emit(`if (!(${i} >= 0 && ${i} < ${len})) ${msDefect}("index " + ${i} + " out of bounds (length " + ${len} + ")");
 	return Number(${i});`);
