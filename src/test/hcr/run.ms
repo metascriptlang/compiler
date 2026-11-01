@@ -2390,24 +2390,32 @@ function runKeys(): void {
 		if (!started.ok) continue;
 		const child = started.value;
 		const seen = [""];
-		const asked = readUntil(child, seen, "HCR-KEYS reloaded 9", 120000);
-		if (!asked) console.log(seen[0]);
-		need(tag, asked, `key ${key}: the edited body did not reload into the running program`);
-		need(tag, seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
+		const check = (ok: boolean, why: string): void => {
+			if (ok) return;
+			console.log(seen[0]);
+			child.write("q\n", 5000);
+			if (!child.wait(30000).ok) child.kill();
+			child.close();
+			failWith(tag, why);
+		};
+		check(readUntil(child, seen, "HCR-KEYS reloaded 9", 120000), `key ${key}: the edited body did not reload into the running program`);
+		check(seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
 		if (key != "q") {
 			child.write(`${key}\n`, 5000);
 			const marker = key == "R" ? "HCR-KEYS start 9" : "watch: rebuilt on key r";
-			const answered = readUntil(child, seen, marker, 120000);
-			if (!answered) console.log(seen[0]);
-			need(tag, answered, `key ${key}: no '${marker}' after the key`);
+			check(readUntil(child, seen, marker, 120000), `key ${key}: no '${marker}' after the key`);
 			if (key == "R") {
-				need(tag, seen[0].contains("watch: restarting"), "key R: no restart notice");
-				need(tag, seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
+				check(seen[0].contains("watch: restarting"), "key R: no restart notice");
+				check(seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
 			}
 		}
 		child.write("q\n", 5000);
 		const ended = child.wait(30000);
-		if (!ended.ok) console.log(seen[0]);
+		if (!ended.ok) {
+			console.log(seen[0]);
+			child.kill();
+			child.close();
+		}
 		need(tag, ended.ok, `key ${key}: q did not end msc`);
 		readUntil(child, seen, "watch: quit", 2000);
 		need(tag, seen[0].contains("watch: quit"), `key ${key}: q printed no 'watch: quit'`);
