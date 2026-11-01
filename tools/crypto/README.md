@@ -32,6 +32,9 @@ It copies the `msc` on `PATH` to `x25519TaintBuilder` at the tree root, so `std/
 (the installed support tree would not see `std/crypto/x25519/pilot.cms`), builds each kernel for
 `--release` (-O2) and `--danger` (-O3) with `--cc=clang --lto=off`, and exits non-zero unless every row says `ok`.
 `x25519Build.sh` builds one host; `provisionValgrind.sh` fetches the tool.
+`x25519Abi.sh <outDir> [pilot|monocypher]` checks the generated entry header through both C and C++ consumers.
+Run it through `run-remote.sh` as above. Its old-builder control must fail with `FAIL missing entry header`;
+its passing summary is `ALL ABI CHECKS PASSED`.
 
 ## Init recipe
 
@@ -77,6 +80,52 @@ symbol error) is an environment or harness failure and says nothing about the ke
   secret value on the paths the cases run. It does not see a timing difference of a variable-latency instruction
   (`div`, some `mul`), and it proves nothing about other inputs or other compilers or CPUs.
 - Linux x86-64 only. Valgrind does not run on macOS arm64; ARM evidence needs another method.
-- The `pilot` branch is checked only for import, link and ABI with a throwaway copy-the-point stub (known-answer
-  status 10); the real kernel is not here yet.
-- Differential comparison with other libraries, dudect timing and cryptofuzz are not part of this component.
+- Pilot source, licences and proof limits: `std/crypto/x25519/provenance.md`. The measurements below concern
+  the real native pilot, not a stub; none authorize production replacement.
+- Differential comparison and dudect have separate runners (`x25519Diff.sh`, `x25519Dudect.sh`); neither is
+  Cryptofuzz. Cryptofuzz remains unverified and was not run for the measurements below.
+
+## Post-wipe observations, 2026-11-01
+
+Measured source tree `e79467f361219e9570ffcec9a35e851ab703bffd`; the later ABI runner alone was checked at
+`47462f08a3f58ddafe381b9fd1bf78d47fa38755`. These are bounded observations, not a security certification.
+
+- Linux oci-u, x86-64, clang 18.1.3, two cores, tree-root support; copied builder SHA-256
+  `33d7c3dcb1594bfd92c5c87f284e69a2f29ec1a9906dcbb9e07b24d497300018`. Its containing checkout reported
+  `1cc3268c91920c7fbcccb2f869036f92603e3782`; this was not an independent binary BUILD certificate.
+- `builder test src/test/lang/<module>.ms --tests-in-dir --cc=clang`, separately for `cryptoX25519Assurance`,
+  `cryptoX25519Pilot`, `cryptoX25519Wipe` in default/release/danger/ASan: 12 cells, 152 passed test executions. ASan flags:
+  `--sanitize=address --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address`; optimized cells used `--lto=off`.
+- `MSC=$PWD/builder tools/crypto/x25519Taint.sh out/cryptoPilotTaint pilot`: 12 expected rows,
+  `ALL CHECKS PASSED`, 34 s. Positive rows had zero memcheck errors and zero suppressions. An RTX attempt
+  failed loader-debug pin compatibility before running a kernel; it supplies no taint verdict.
+- `MSC=$PWD/builder tools/crypto/x25519Diff.sh out/cryptoFinalDiff 2000 0x25519d1ff`: pilot release/danger
+  each reported `samples=6592 ran=6592 mismatches=0 unexpectedRefusals=0`; corruption/refusal/noop controls
+  passed, final `ALL CHECKS PASSED`, 34 s. This is bounded seeded sampling, not Cryptofuzz.
+- `x25519Abi.sh` for both pilot and monocypher: release/danger, C/C++, 48 KAT executions, paired stdout equal.
+  Both printed `ALL ABI CHECKS PASSED` (5 s each); using the pre-header builder instead failed on the missing header.
+
+Raw kernel timing uses `src/test/crypto/x25519Measure.cms`, not the async API in `std/crypto/bench.ms`.
+M3 Max, Darwin 25.6.0, Apple clang 21, synced binary/support `1cc3268c919`, `--cc=clang --lto=off`:
+ABBA order C/pilot/pilot/C, five rounds of 4096 calls per arm, output digests equal. A 77 s scheduling-quiet
+window included timing and dudect; the machine still had load 8, and CPU affinity was not pinned.
+Median microseconds/call: release pilot 68.806 versus C 58.667; danger pilot 69.566 versus C 62.875.
+The pilot was slower in this workload. End-to-end API speed parity and a quiet x86 comparison remain unverified.
+
+M3 dudect: `DUDECT_MEASUREMENTS=5000 DUDECT_BATCHES=40 DUDECT_SEED=0x1234abcd5678ef90`
+with `x25519Dudect.sh out/cryptoFinalArm pilot`, release/danger. All eight rows had the expected verdict:
+target/null `RESULT noEvidence`, leak controls `RESULT leakage`; final `ALL CHECKS PASSED`.
+Target uncropped classes held 97400/97171 samples in each mode. The AArch64 timer counts generic timer ticks,
+not CPU cycles. Neither this bounded result nor the shorter x86 smoke proves constant time.
+
+Stripped release executable bytes (same measurement entry, empty/unused/used defines):
+x86 empty=pilot-unused=C-unused 43896, pilot-used=C-used 84944;
+M3 empty 71264, pilot-unused=C-unused 71272, pilot-used 105280, C-used 104792.
+Unused stdout matched the empty control; used smoke digests matched. This shows no measured DCE advantage.
+Do not pass `-d:cryptoEmpty=false` or similar: `when(flag)` tests presence, so omit false flags.
+
+A source-review aid compared all 13 ported field functions with the pinned fiat-crypto file in
+`std/crypto/x25519/provenance.md`: local variable types matched; 657 statements were compared after cast/address
+normalization, with differences only in the two `fiat_25519_cmovznz_u32` mask-setup statements. Those differ within the stated
+0/1 selector contract only in spelling (boolean normalization and the uint32 all-ones mask). This comparison
+omits cast semantics and is not a proof of field bounds, translation correctness or optimized code behaviour.
