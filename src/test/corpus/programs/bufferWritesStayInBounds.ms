@@ -35,5 +35,5 @@ try {
 console.log(word.length, word[0], word[1]);
 
 const latin = Buffer.alloc(4);
-latin.write("abcdefgh", 0, 8, "latin1");
+latin.write("abcdefgh", 0, 4, "latin1");
 console.log(latin.length, latin[0], latin[3]);

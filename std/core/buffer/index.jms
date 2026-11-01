@@ -9,7 +9,7 @@
 
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
-import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom } from "./codec";
 
 import { Buffer } from "./type";
 export { Buffer } from "./type";
@@ -334,27 +334,24 @@ export extern function swap32(this b: Buffer): void from "(function (u) { for (v
 export extern function swap64(this b: Buffer): void from "(function (u) { for (var i = 0; i + 7 < u.length; i += 8) { for (var k = 0; k < 4; k++) { var t = u[i + k]; u[i + k] = u[i + 7 - k]; u[i + 7 - k] = t; } } })(#)";
 
 export function write(this b: Buffer, str: string, offset: number, length: number, encoding: string): number {
+	const room = writeRoom(b.length as int64, offset, length) as number;
 	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
 		let i = 0;
-		while (i < str.length && i < length) {
+		while (i < str.length && i < room) {
 			b.set(offset + i, str.charCodeAt(i) & 255);
 			i += 1;
 		}
 		return i;
 	}
 	if (isHex(encoding) || isBase64(encoding)) {
-		const total = b.length as int64;
-		const at = offset as int64;
-		const limit = length as int64;
-		if (str.length == 0 || at < 0 || at >= total) return 0;
-		const room = limit < 0 || limit > total - at ? total - at : limit;
+		if (str.length == 0) return 0;
 		const text = str.asBytes();
-		return (isHex(encoding) ? writeHex(text, b, at, room) : writeBase64(text, b, at, room)) as number;
+		return (isHex(encoding) ? writeHex(text, b, offset as int64, room as int64) : writeBase64(text, b, offset as int64, room as int64)) as number;
 	}
 	// utf8 fallback.
 	const enc = encodeUtf8(str);
 	let i = 0;
-	while (i < enc.length && i < length) {
+	while (i < enc.length && i < room) {
 		b.set(offset + i, enc.byteAt(i));
 		i += 1;
 	}

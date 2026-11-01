@@ -52,6 +52,23 @@ when (c) {
 	}
 }
 
+/** The bytes `write` may fill from `offset`: Node's RangeError when `offset` or `length` is not an integer in 0..total, else `length` clamped to the room left. */
+export function writeRoom(total: int64, offset: number, length: number): int64 {
+	needWriteIndex("offset", offset, total as number);
+	needWriteIndex("length", length, total as number);
+	const room = total - (offset as int64);
+	return (length as int64) < room ? length as int64 : room;
+}
+
+function needWriteIndex(name: string, value: number, max: number): void {
+	if (Math.floor(value) != value) {
+		throw new RangeError(`The value of "${name}" is out of range. It must be an integer. Received ${value}`);
+	}
+	if (!(value >= 0 && value <= max)) {
+		throw new RangeError(`The value of "${name}" is out of range. It must be >= 0 && <= ${max}. Received ${value}`);
+	}
+}
+
 /** Decodes hex `text` into `bytes[at..at + limit)`; returns the bytes written. */
 export function writeHex(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64): int64 {
 	const pairs = hexCapacity(text);

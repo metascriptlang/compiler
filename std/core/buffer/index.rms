@@ -1,7 +1,7 @@
 import { Buffer } from "./type";
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
-import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom } from "./codec";
 import { utf8Text } from "../string/bytes";
 export { Buffer } from "./type";
 export { toJSON, inspect } from "./protocols";
@@ -326,13 +326,11 @@ export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: num
 }
 
 export function write(this buf: Buffer, str: string, offset: number, length: number, encoding: string): number {
-	const total = buf.length as int64;
+	const room = writeRoom(buf.length as int64, offset, length);
 	const text = str.asBytes();
 	const size = text.length as int64;
 	const at = offset as int64;
-	if (size == 0 || at < 0 || at >= total) return 0;
-	const limit = length as int64;
-	const room = limit < 0 || limit > total - at ? total - at : limit;
+	if (size == 0) return 0;
 	const codec = textCodec(encoding);
 	if (codec == hexCodec) return writeHex(text, buf, at, room) as number;
 	if (codec == base64Codec) return writeBase64(text, buf, at, room) as number;

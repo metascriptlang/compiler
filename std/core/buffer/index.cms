@@ -4,7 +4,7 @@
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
 import { newEncodingOutput, freshEncodingOutputBytes } from "std/core/encoding/output";
-import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom } from "./codec";
 import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
 import { Buffer } from "./type";
@@ -650,12 +650,10 @@ export function write(
 	length: number,
 	encoding: string,
 ): number {
-	const total = buf.byteCount();
+	const room = writeRoom(buf.byteCount(), offset, length);
 	const size = str.byteCount();
 	const at = offset as int64;
-	if (size == 0 || at < 0 || at >= total) return 0;
-	const limit = length as int64;
-	const room = limit < 0 || limit > total - at ? total - at : limit;
+	if (size == 0) return 0;
 	const codec = textCodec(encoding);
 	if (codec == hexCodec) return writeHex(str.asBytes(), buf.bytePointer(), at, room) as number;
 	if (codec == base64Codec) return writeBase64(str.asBytes(), buf.bytePointer(), at, room) as number;

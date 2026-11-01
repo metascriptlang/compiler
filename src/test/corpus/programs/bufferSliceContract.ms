@@ -22,7 +22,7 @@ function main(): void {
 	ok = check("lastIndexOfBuffer", hay.lastIndexOfBuffer(two, -1) == 2 && hay.lastIndexOfBuffer(two, 1) == 0 && hay.lastIndexOfBuffer(Buffer.alloc(0), -1) == 5) && ok;
 
 	const w = Buffer.alloc(4);
-	ok = check("writeHexClamp", w.write("0102030405", 1, 99, "hex") == 3 && bytesOf(w) == "0 1 2 3") && ok;
+	ok = check("writeHexClamp", w.write("0102030405", 1, 4, "hex") == 3 && bytesOf(w) == "0 1 2 3") && ok;
 	ok = check("writeAtEnd", w.write("x", 4, 1, "utf8") == 0) && ok;
 	ok = check("upperCaseEncoding", Buffer.fromArray([0xe9]).toStringEncoded("ASCII", 0, 1) == "i") && ok;
 

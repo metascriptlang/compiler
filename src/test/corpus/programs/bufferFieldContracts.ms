@@ -1,10 +1,10 @@
-// @skip-js: the js Buffer reads undefined outside the bounds of a search, fill or string write; the C Buffer clamps them
+// @skip-js: the js Buffer reads undefined outside the bounds of a search or fill; the C Buffer clamps them
 // note: a field read or write outside the buffer or the integer width throws a RangeError and writes nothing
 // @stdout: bounds entries=1800 digest=845474040
 // @stdout: byteLength rejects=96 rejectedMessages=96 accepted=24 outside=24 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
 // @stdout: ranges entries=224 digest=470707350
-// @stdout: strings entries=2880 digest=522388381
+// @stdout: strings entries=2880 digest=53479987
 
 let log = "";
 let entries: int32 = 0;
@@ -155,7 +155,7 @@ function checkWriteBounds(): void {
 			for (const at of [-1, 0, 2.5, 7, 8]) {
 				for (const limit of [-1, 0, 3, 100]) {
 					const out = patterned(8, 8);
-					note(out.write(text, at, limit, encoding));
+					attempt(() => out.write(text, at, limit, encoding));
 					noteBytes(out);
 				}
 			}
