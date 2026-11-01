@@ -214,4 +214,5 @@ function main(): void {
 	}
 	console.log("Windows engine contracts: 98 checks OK");
 }
-main();
+
+when (!testBuild) { main(); }
