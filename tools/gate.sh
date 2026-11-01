@@ -67,7 +67,7 @@ after another, and compare every red against src/test/known-red.json.
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --select       print the corpus programs with no recorded pass for their emitted C and JS
-  --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
+  --tree-key <rev>  print the key of the src, std and runtime tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check routing, red parsers, shared-cache publication and real C/JS emit guards
 
@@ -96,7 +96,7 @@ root; installed or symlinked builders use the full bootstrap. Response-based
 verification still regenerates gen1's link evidence. Current emit-RC scans and
 all selected test lanes still run.
 
-A GREEN run whose build lane produced the candidate for the clean src and std tree
+A GREEN run whose build lane produced the candidate for the clean src, std and runtime tree
 of HEAD makes that candidate the worktree builder ./msc (the old one stays as
 msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
 refreshed" and changes neither verdict nor exit code. --tree-key <rev> prints
@@ -316,7 +316,7 @@ tier_select() {
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 tree_key() {
   local t
-  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
+  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std runtime; } 2>/dev/null)
   [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
 }
 refresh_builder() {
@@ -339,7 +339,7 @@ adopt_builder() {
   [ "$verdict" = GREEN ] || return 0
   case " $ran " in *" build "*) ;; *) return 0 ;; esac
   [ -n "$cand_key" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
-  [ -z "$(git -C "$TOP" status --porcelain -- src std)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
+  [ -z "$(git -C "$TOP" status --porcelain -- src std runtime)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
   [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.exe"
   if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ]; then
     say "gate: builder already current for tree ${cand_key:0:12}"
@@ -2359,7 +2359,7 @@ fi
 
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 cand_key=""
-[ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
+[ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
@@ -2728,7 +2728,7 @@ lane_body() {
     boundary|corpus|san|tsan|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
-  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
+  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std runtime)" ] \
     && [ "$(tree_key HEAD)" = "$cand_key" ]; then
     printf '%s\n' "$cand_key" >"$CAND.key"
   fi
