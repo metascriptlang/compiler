@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangleProcName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
-import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
+import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, jsMovedValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isExtensionRoutine, isNativePattern, routineKindFlag } from "../../checker/context";
@@ -1111,10 +1111,40 @@ function checkedConversionTarget(node: Node): Symbol | null {
 	return instance;
 }
 
-// ===== Move Expression (no-op in JS) =====
+// ===== Move Expression =====
+
+// The slot's declared type, not the read's: an assignment narrows `h.n` to its non-null member, and the slot still empties to null.
+function movedSlotType(source: Node): Type | null {
+	if (source.kind != NodeKind.MemberExpr) return source.nodeType;
+	const md = source.data as MemberExprData;
+	const shape = spreadStructOf(md.object.nodeType);
+	if (shape == null) return source.nodeType;
+	const at = shape.typeNames.indexOf(md.property);
+	return at >= 0 && at < shape.typeChildren.length && !hasGenericParams(shape.typeChildren[at]) ? shape.typeChildren[at] : source.nodeType;
+}
 
 export function emitMoveExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MoveExprData;
+	const source = emittedNode(d.moveArg);
+	const emptied = jsMovedValue(movedSlotType(source));
+	if (emptied != "" && source.kind == NodeKind.MemberExpr && !(source.data as MemberExprData).isOptional
+			&& (source.data as MemberExprData).object.nodeType != null && (source.data as MemberExprData).object.nodeType!.kind != TypeKind.Module) {
+		const md = source.data as MemberExprData;
+		const field = "m$o" + jsPropertyAccess(md.property);
+		emit(gen, `((m$o) => { const m$v = ${field}; ${field} = ${emptied}; return m$v; })(`);
+		emitNode(gen, md.object);
+		emit(gen, ")");
+		return;
+	}
+	if (emptied != "" && source.kind == NodeKind.ArrayAccess) {
+		const ad = source.data as ArrayAccessData;
+		emit(gen, `((m$a, m$i) => { const m$v = m$a[m$i]; m$a[m$i] = ${emptied}; return m$v; })(`);
+		emitNode(gen, ad.array);
+		emit(gen, ", ");
+		emitNode(gen, ad.index);
+		emit(gen, ")");
+		return;
+	}
 	emitNode(gen, d.moveArg);
 }
 
