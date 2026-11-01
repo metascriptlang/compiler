@@ -1,5 +1,5 @@
-// wasmmix oracle (M1): each programs/<name>/main.ms runs all-C, all-JS and mixed
-// (the `@wasm` functions placed in wasm); the three stdouts must be byte-equal
+// wasmmix oracle (M1): each programs/<name>/main.ms runs all-C, all-JS, mixed and tree
+// (the `@wasm` functions placed in wasm); the stdouts must be byte-equal
 // and equal the `// @stdout:` lines.
 //
 //   // @stdout: <line>        -> one expected stdout line; repeated in order
@@ -10,7 +10,8 @@
 //
 // Columns: c = `msc run`; js = `build --target=js --wasm-placement=off` then node;
 // mixed = `build --target=js` then node, and the build must write <stem>.wasm.mjs
-// and <stem>.wasm beside the bundle, so a compiler that ignores `@wasm` is red.
+// and <stem>.wasm beside the bundle, so a compiler that ignores `@wasm` is red;
+// tree = `run --target=js` (the ES module tree), which places the same way and refuses the same programs.
 // The emcc environment (PATH, VOID_EMSDK_*, EM_CONFIG) is inherited.
 
 import { execFileResult, exit, env, platform } from "std/process";
@@ -113,17 +114,20 @@ function runProgram(name: string): boolean {
 	if (spec.mixedErrors.length > 0) {
 		if (wantsForeign) { problems.push("@foreign-stdout needs a mixed build and @mixed-error expects it to fail"); }
 		ensureDir(dir + "mixed/");
-		const b = execFileResult(MSC, ["build", entry, "--target=js", "--output=" + dir + "mixed/app.js"]);
-		const text = b.output + b.errorOutput;
-		if (b.exitCode == 0) { problems.push(`[mixed] build succeeded, expected an error containing ${JSON.stringify(spec.mixedErrors[0])}`); }
-		else {
-			for (const want of spec.mixedErrors) {
-				if (!hasLineWith(text, want)) { problems.push(`[mixed] error lacks ${JSON.stringify(want)}:\n${tail(text)}`); }
+		for (const col of [["mixed", "build", "--output=" + dir + "mixed/app.js"], ["tree", "run", ""]]) {
+			const b = col[1] == "build" ? execFileResult(MSC, ["build", entry, "--target=js", col[2]]) : execFileResult(MSC, ["run", entry, "--target=js"]);
+			const text = b.output + b.errorOutput;
+			if (b.exitCode == 0) { problems.push(`[${col[0]}] succeeded, expected an error containing ${JSON.stringify(spec.mixedErrors[0])}`); }
+			else {
+				for (const want of spec.mixedErrors) {
+					if (!hasLineWith(text, want)) { problems.push(`[${col[0]}] error lacks ${JSON.stringify(want)}:\n${tail(text)}`); }
+				}
 			}
 		}
 	} else {
 		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
 		cols.push(mixed);
+		cols.push(runProcess("tree", MSC, ["run", entry, "--target=js"]));
 		if (mixed.ok && wantsForeign && exists(driver)) {
 			const foreign = runProcess("foreign", "node", [driver, dir + "mixed/app.js"]);
 			if (!foreign.ok) {
