@@ -95,7 +95,13 @@ interface Captured {
 
 // `bytes` captures stdout as the bytes written (stderr still reads as text); otherwise `outputBytes` is empty.
 function spawnCapture(path: string, args: string[], cwd: string, shell: boolean, bytes: boolean): Captured {
-	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, shell: ${shell}, encoding: ${bytes} ? "buffer" : "utf8", maxBuffer: Infinity });
+	@emit(`function msProcBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, shell: ${shell}, encoding: ${bytes} ? "buffer" : "utf8", maxBuffer: Infinity });
 const code = r.error ? (typeof r.error.code === "string" ? r.error.code : "UNKNOWN") : "";
 const started = !r.error || r.pid !== 0;
 return {
@@ -105,7 +111,7 @@ return {
 	exitCode: r.status ?? 0,
 	signal: r.signal ? (constants.signals[r.signal] ?? 0) : 0,
 	output: ${bytes} ? (r.stdout ? r.stdout.toString("utf8") : "") : (r.stdout ?? ""),
-	outputBytes: ${bytes} ? Array.from(r.stdout ?? []) : [],
+	outputBytes: ${bytes} ? msProcBytes(r.stdout ?? []) : [],
 	errorOutput: ${bytes} ? (r.stderr ? r.stderr.toString("utf8") : "") : (r.stderr ?? ""),
 };`);
 	unreachable;

@@ -14,7 +14,13 @@ import { ed25519PublicFromSeed, ed25519Sign, ed25519Verify, ed25519Acceptable } 
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-@emit(`function msEdSubtle() {
+@emit(`function msEdBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+function msEdSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
 }
@@ -34,7 +40,7 @@ async function msEdFromSeed(seed) {
 		const key = await s.importKey("pkcs8", Uint8Array.from([...msEdPkcs8Prefix, ...seed]), { name: "Ed25519" }, true, ["sign"]);
 		const raw = msEdUnb64url((await s.exportKey("jwk", key)).x);
 		const pub = await s.importKey("raw", raw, { name: "Ed25519" }, true, ["verify"]);
-		return { key, pub, raw: Array.from(raw), error: "" };
+		return { key, pub, raw: msEdBytes(raw), error: "" };
 	} catch (e) {
 		return { key: null, pub: null, raw: [], error: msEdMessage(e) };
 	}
@@ -44,7 +50,7 @@ async function msEdImportPublic(raw) {
 	if (!s) return { key: null, pub: null, raw: [], error: msEdNoSubtle };
 	try {
 		const pub = await s.importKey("raw", Uint8Array.from(raw), { name: "Ed25519" }, true, ["verify"]);
-		return { key: null, pub, raw: Array.from(raw), error: "" };
+		return { key: null, pub, raw: msEdBytes(raw), error: "" };
 	} catch (e) {
 		return { key: null, pub: null, raw: [], error: msEdMessage(e) };
 	}
@@ -73,7 +79,7 @@ function msEdNone() {
 function msEdRandom() {
 	const out = new Uint8Array(32);
 	globalThis.crypto.getRandomValues(out);
-	return Array.from(out);
+	return msEdBytes(out);
 }`);
 
 interface Imported {
