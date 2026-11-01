@@ -136,3 +136,17 @@ test "readonlyReturn: a nullable view stays read-only whichever way it is writte
 	assert errors(node + "function f(t: Readonly<Node> | null): Readonly<Node | null> { return t; }\nfunction g(t: Readonly<Node | null>): Readonly<Node> | null { return t; }", "") == 0;
 	assert errors(node + "function f(t: Readonly<Node> | null): void { if (t != null) t.n = 1; }", "cannot write through Readonly<Node>") == 1;
 }
+
+test "readonlyReturn: a fresh literal widens into a nullable view of a struct that holds a Vec" {
+	const curve = "struct Curve { times: Vec<float32>; }\n";
+	assert errors(curve + "const x: Readonly<Curve> | null = { times: [1.0] };\nconsole.log(x == null);", "") == 0;
+	assert errors(curve + "class Track { curve: Readonly<Curve> | null = { times: [2.0] }; }\nconsole.log(new Track().curve == null);", "") == 0;
+	assert errors(curve + "function f(c: Readonly<Curve>): void { const m: Curve | null = c; }", "never converts back to the mutable type") == 1;
+}
+
+test "readonlyReturn: a const for-of element of a view parameter borrows that path" {
+	assert errors(node + "function f(all: Readonly<Node[]>, n: int32): Readonly<Node> | null {\n\tfor (const k of all) { if (k.n == n) return k; }\n\treturn null;\n}", "") == 0;
+	assert errors(node + "function f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (const k of t.kids) { for (const g of k.kids) { if (g.n > 0) return g; } }\n\treturn null;\n}", "") == 0;
+	assert errors(node + "function f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (let k of t.kids) { k = new Node(); return k; }\n\treturn null;\n}", "escapes its stack frame") == 1;
+	assert errors(node + "function mk(): Node[] { return [new Node()]; }\nfunction f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (const k of mk()) { return k; }\n\treturn null;\n}", "escapes its stack frame") == 1;
+}
