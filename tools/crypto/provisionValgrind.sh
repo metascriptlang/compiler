@@ -26,7 +26,9 @@ debugFile=$dest/libc6-dbg/usr/lib/debug/.build-id/${buildId:0:2}/${buildId:2}.de
 objdir=$(dirname "$(readlink -f "$interp")")
 mkdir -p "$dest/debugroot$objdir"
 ln -sf "$debugFile" "$dest/debugroot$objdir/${buildId:2}.debug"
-echo "loader $interp (build id $buildId) debuginfo linked under $dest/debugroot"
+libc=$(ldd /bin/true | awk '$1 == "libc.so.6" { print $3 }')
+echo "environment: stock loader $interp -> $(readlink -f "$interp") build id $buildId; libc $libc build id $(readelf -n "$(readlink -f "$libc")" | sed -n 's/.*Build ID: //p'); $(ldd --version | head -1); kernel $(uname -sr)"
+echo "debuginfo: only the pinned libc6-dbg file for that loader build id, linked under $dest/debugroot; no suppressions, no other loader or libc"
 test -x "$dest/valgrind/usr/bin/valgrind"
 test -f "$dest/valgrind/usr/include/valgrind/memcheck.h"
 VALGRIND_LIB="$dest/valgrind/usr/libexec/valgrind" "$dest/valgrind/usr/bin/valgrind" --version

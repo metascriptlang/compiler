@@ -58,6 +58,19 @@ instead starts without that file but gives about 2700 errors from glibc's own st
 The archive keeps only the current revision of a package: when the pin 404s, take the old file from
 Launchpad (same version, same hash) or move the pin.
 
+## Environment and how to read a red
+
+The loader and libc under test are the host's own stock ones (oci-u: Ubuntu 24.04.5, glibc 2.39-0ubuntu8.9, loader
+`/lib64/ld-linux-x86-64.so.2` build id `0d77dbd4379bf0b5af3e05be7fb6af1e4cea7c96`); the run prints them with the kernel
+version. The pinned `libc6-dbg` only supplies symbols for that exact build id, and `provisionValgrind.sh` fails when its
+file for the host's loader is missing, so a mismatched host is a blocker, never a weaker run. No other loader or libc is
+used, so a result says nothing about a different libc. No suppression file is passed and the positive row requires
+`suppressed: 0 from 0`.
+
+A red row is classified by the runner: status 99 with the kernel as first frame is a kernel finding; status 99 with a
+frame elsewhere, host statuses 10 to 16, or a tool that did not reach the host's end (for example Valgrind's loader
+symbol error) is an environment or harness failure and says nothing about the kernel.
+
 ## Gaps
 
 - Valgrind memcheck on the emitted object code of this binary: it reports a branch or an address that depends on a

@@ -21,10 +21,25 @@ vg=("$deps/valgrind/usr/bin/valgrind" --tool=memcheck --error-exitcode=99 --trac
 echo "tool $("${vg[0]}" --version) clang $(clang --version | head -1)"
 "$MSC" --version | sed 's/\x1b\[[0-9;]*m//g'
 
+classify() {
+	local status=$1 log=$2
+	if [ "$status" = 99 ]; then
+		if grep -A1 -E "depends on uninitialised|Use of uninitialised" "$log" | grep -q "at 0x[0-9A-F]*: x25519ScalarMult "; then
+			echo "kernel finding: memcheck error with the kernel as first frame"
+		else
+			echo "environment or harness: memcheck error outside the kernel, not a kernel verdict"
+		fi
+	elif [ "$status" -ge 10 ] 2>/dev/null && [ "$status" -le 16 ]; then
+		echo "harness check $status, not a kernel verdict"
+	else
+		echo "environment: tool did not run to the host's end, not a kernel verdict"
+	fi
+}
+
 expect() {
 	local label=$1 want=$2 got=$3 must=${4:-} log=$5
 	if [ "$got" != "$want" ]; then
-		echo "FAIL $label: status $got, wanted $want"; tail -n 20 "$log"; failures=$((failures + 1)); return
+		echo "FAIL $label: status $got, wanted $want ($(classify "$got" "$log"))"; tail -n 20 "$log"; failures=$((failures + 1)); return
 	fi
 	if [ -n "$must" ] && ! grep -q "$must" "$log"; then
 		echo "FAIL $label: status $want but '$must' missing"; tail -n 20 "$log"; failures=$((failures + 1)); return
@@ -61,7 +76,7 @@ for mode in release danger; do
 
 	build "$impl" && native "kat-native-$impl-$mode" 0 "STAGE kat ok" "$(hostFor "$impl")"
 	build "$impl" "$vgRoot" && run "taint-$impl-$mode" 0 "STAGE taint ok" "$(hostFor "$impl" t)" --taint
-	grep -q "ERROR SUMMARY: 0 errors from 0 contexts" "$out/taint-$impl-$mode.log" || { echo "FAIL taint-$impl-$mode: valgrind reported errors"; failures=$((failures + 1)); }
+	grep -q "ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)" "$out/taint-$impl-$mode.log" || { echo "FAIL taint-$impl-$mode: valgrind reported errors"; failures=$((failures + 1)); }
 
 	build leakyBranch "$vgRoot" && run "control-leakyBranch-$mode" 99 "Conditional jump or move depends on uninitialised value" "$(hostFor leakyBranch t)" --no-kat --taint --no-output-taint-check
 	frameIn "control-leakyBranch-$mode" x25519ScalarMult
