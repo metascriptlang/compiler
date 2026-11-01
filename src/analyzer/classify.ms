@@ -268,9 +268,12 @@ export function raiserStructSlotUnion(t: Readonly<Type>): boolean {
 
 // A Raiser union whose members are class refs, closures, strings, arrays, tuples or scalars stays the member's own
 // value, with no tag beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
+// A distinct member with no destroy of its own, a brand among them, is held as its body.
 export function raiserBareUnion(t: Type): boolean {
 	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
-	for (const child of t.typeChildren) {
+	for (const member of t.typeChildren) {
+		let child = member;
+		while (child.kind == TypeKind.Distinct && child.typeReturn != null && getOpByKey(child, AttachedOp.AttachedDestructor) == null) child = child.typeReturn;
 		if (child.kind == TypeKind.Ref) {
 			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
 		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function
