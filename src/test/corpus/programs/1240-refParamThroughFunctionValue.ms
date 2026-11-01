@@ -1,4 +1,4 @@
-// @stdout: 2 12 7 9 5
+// @stdout: 2 12 7 9 5 4
 
 class Holder { cb: (ref x: int32) => void; constructor(cb: (ref x: int32) => void) { this.cb = cb; } }
 class Cell { n: int32; constructor(n: int32) { this.n = n; } }
@@ -19,6 +19,7 @@ function main(): void {
 	const held = new Holder(bump);
 	let h: int32 = 4;
 	held.cb(h);
-	console.log(`${direct} ${w} ${visitOut(setSeven)} ${visitCell(replace)} ${h}`);
+	const viaLambda = visit((ref x: int32): void => { x = x + 3; });
+	console.log(`${direct} ${w} ${visitOut(setSeven)} ${visitCell(replace)} ${h} ${viaLambda}`);
 }
 main();

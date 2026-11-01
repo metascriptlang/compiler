@@ -4241,6 +4241,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	wrapModifierTypes(fnFlags, modeTypes);
 	for (let si = 0; si < paramSyms.length; si += 1) {
 		if (modeTypes[si].kind == TypeKind.Sink && paramValueTypes[si].kind != TypeKind.Sink) setFlag(paramSyms[si], SymbolFlag.Sink);
+		if (modeTypes[si].kind == TypeKind.Var && paramValueTypes[si].kind != TypeKind.Var) paramSyms[si].symbolType = modeTypes[si];
 	}
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
