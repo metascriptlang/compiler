@@ -46,12 +46,13 @@ init=$(findSymbol Init000)
 count=$(grep -c " T x25519ScalarMult\$" <<<"$symbols" || true)
 [ "$count" = 1 ] || { echo "x25519Build: x25519ScalarMult defined $count times in $lib" >&2; exit 1; }
 if grep -qw main <<<"$symbols"; then echo "x25519Build: $lib defines main" >&2; exit 1; fi
+printf '#define MS_ENTRY_DATINIT %s\n#define MS_ENTRY_INIT %s\n' "$datInit" "$init" >"$out/entry.$impl.$mode.h"
 
 taintFlags=()
 if [ -n "$vg" ]; then
 	vg=$(cd "$vg" && pwd)
 	taintFlags=(-DX25519_TAINT "-I$vg/valgrind/usr/include")
 fi
-clang -O2 -g -Wall -Werror "-DMS_ENTRY_DATINIT=$datInit" "-DMS_ENTRY_INIT=$init" "${taintFlags[@]}" \
+clang -O2 -g -Wall -Werror -include "$out/entry.$impl.$mode.h" "${taintFlags[@]}" \
 	"$hostSource" "$lib" "${@:5}" -lm -lpthread -o "$host"
 echo "$host"
