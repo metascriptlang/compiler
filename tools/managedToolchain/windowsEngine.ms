@@ -22,6 +22,8 @@ import {
 
 const WINDOWS_X64 = "x86_64-windows";
 const WINDOWS_ARM64 = "aarch64-windows";
+const MACHINE_X64: uint16 = 0x8664;
+const MACHINE_ARM64: uint16 = 0xaa64;
 const INSPECTOR = "llvm-readobj.exe";
 const RESOURCE_PREFIX = "lib/clang/";
 const LICENSE = "notices/LICENSE.TXT";
@@ -107,11 +109,11 @@ export function windowsHostSpec(
 ): Result<WindowsHostSpec, string> {
 	return match (host) {
 		WINDOWS_X64 => Result.ok({
-			machine: 0x8664 as uint32, name: "AMD64",
+			machine: MACHINE_X64 as uint32, name: "AMD64",
 			builtins: "clang_rt.builtins-x86_64.lib",
 		}),
 		WINDOWS_ARM64 => Result.ok({
-			machine: 0xaa64 as uint32, name: "ARM64",
+			machine: MACHINE_ARM64 as uint32, name: "ARM64",
 			builtins: "clang_rt.builtins-aarch64.lib",
 		}),
 		_ => Result.err("unsupported Windows engine host " + host),
@@ -123,10 +125,12 @@ function nativeWindowsHost(): Result<string, string> {
 			": only native Windows x64 or ARM64 is implemented");
 	}
 	const machine = try nativeWindowsMachine();
-	if (machine == 0x8664) { return Result.ok(WINDOWS_X64); }
-	if (machine == 0xaa64) { return Result.ok(WINDOWS_ARM64); }
-	return Result.err("unsupported host windows machine 0x" +
-		machine.toString(16));
+	return match (machine) {
+		MACHINE_X64 => Result.ok(WINDOWS_X64),
+		MACHINE_ARM64 => Result.ok(WINDOWS_ARM64),
+		_ => Result.err("unsupported host windows machine 0x" +
+			machine.toString(16)),
+	};
 }
 function systemDll(folded: string): boolean {
 	for (const name of SYSTEM_DLLS) { if (folded == name) { return true; } }
@@ -325,11 +329,14 @@ export function checkWindowsDllName(
 	}
 	return Result.ok(null);
 }
-function importedNames(info: WindowsPe): string[] {
+function importedNames(this info: WindowsPe): string[] {
 	const names: string[] = [];
 	for (const name of info.imports) { names.push(name); }
 	for (const name of info.delayImports) { names.push(name); }
 	return names;
+}
+function hasMzHeader(data: Readonly<Span<uint8>>): boolean {
+	return data.length >= 2 && data[0] == "M".code && data[1] == "Z".code;
 }
 function readPe(
 	path: string, inspector: string,
@@ -337,7 +344,7 @@ function readPe(
 	const read = readFileBytes(path);
 	if (!read.ok) { return Result.err(read.error.message); }
 	const data: Readonly<Span<uint8>> = read.value;
-	if (data.length < 2 || data[0] != 77 || data[1] != 90) {
+	if (!hasMzHeader(data)) {
 		return Result.err(path + ": not a PE image");
 	}
 	const result = captureToolUtf8(inspector,
@@ -490,7 +497,7 @@ function planClosure(
 		const role = windowsRoleProblem(dest, info, host);
 		if (!role.ok) { return Result.err(source + ": " + role.error); }
 		infos.set(dest, info);
-		for (const name of importedNames(info)) {
+		for (const name of info.importedNames()) {
 			try checkWindowsDllName(source, name);
 			if (systemDll(try foldFileName(name))) { continue; }
 			const path = try sourceFile(binDir, listing, name, source);
@@ -578,7 +585,7 @@ export function verifyWindowsEngine(
 	for (const rel of files) {
 		const info = infos.get(rel);
 		if (info == null) { return Result.err("PE facts disappeared: " + rel); }
-		for (const name of importedNames(info)) {
+		for (const name of info.importedNames()) {
 			try checkWindowsDllName(rel, name);
 			const folded = try foldFileName(name);
 			if (!systemDll(folded) && !folds.has(folded)) {
@@ -641,7 +648,7 @@ export function windowsSourcePathLiterals(
 		const read = readFileBytes(path);
 		if (!read.ok) { return Result.err(read.error.message); }
 		const data: Readonly<Span<uint8>> = read.value;
-		if (data.length < 2 || data[0] != 77 || data[1] != 90) { continue; }
+		if (!hasMzHeader(data)) { continue; }
 		let total: int64 = 0;
 		for (const needle of sources) {
 			total += countBytes(data, needle.asBytes());
@@ -708,7 +715,7 @@ function stageEngine(
 		if (!dest.startsWith(RESOURCE_PREFIX)) {
 			const info = infos.get(dest);
 			if (info == null) { return Result.err("PE facts disappeared: " + dest); }
-			files.push({ imports: importedNames(info), path: dest,
+			files.push({ imports: info.importedNames(), path: dest,
 				source, sourceSha256: try sha256File(source) });
 		}
 	}
