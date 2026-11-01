@@ -6,7 +6,7 @@
 // @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
 // @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
 
-import { rsaGenerate, rsaImportPrivate, rsaSign, rsaFree } from "std/crypto/rsa";
+import { RsaPrivateKey, sign } from "std/crypto/rsa";
 
 const weakPem = `-----BEGIN PRIVATE KEY-----
 MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAJukLkvg4THhJXDH
@@ -25,12 +25,10 @@ IA9Vrm6JJ2FHuLVd+6rPRxmrHK5ipK1LdpoBAZCb4ZfbVhSp1PTfgQrhyvLvM3dv
 fp2S1xNEDI5h
 -----END PRIVATE KEY-----
 `;
-const weak = rsaImportPrivate(weakPem);
+const weak = await RsaPrivateKey.importPem(weakPem);
 console.log("import1024", weak.ok);
-if (weak.ok) rsaFree(weak.value);
 
-const generated = rsaGenerate(2048);
-if (!generated.ok) throw new Error("rsaGenerate failed");
+const generated = await RsaPrivateKey.generate(2048);
+if (!generated.ok) throw new Error("RsaPrivateKey.generate failed");
 const key = generated.value;
-console.log("sign sha1", rsaSign(key, "msg", "sha1").ok, "sha256", rsaSign(key, "msg", "sha256").ok);
-rsaFree(key);
+console.log("sign sha1", (await sign(key, "msg", "sha1")).ok, "sha256", (await sign(key, "msg", "sha256")).ok);

@@ -1,0 +1,188 @@
+// std/crypto/ec — ECDSA and ECDH on P-256 and P-384
+// import { EcPrivateKey, EcPublicKey, ecdsaSign, ecdsaVerify, ecdh } from "std/crypto/ec"
+//
+// Heavy: compiles the PSA core and the PK layer. Only import when asymmetric crypto is needed.
+// Signatures are DER-encoded.
+
+@include("runtime/crypto/curves/ec.h");
+@compile("runtime/crypto/curves/ec.c");
+
+// The PSA core and the PK layer, the same set std/crypto/tls lists. A path is compiled once per
+// build however many modules list it, so a program importing both links one copy of each.
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_client.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_storage.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_driver_wrappers_no_static.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_mac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_aead.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ffdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_pake.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_ecc.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkparse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkwrite.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa_alt_helpers.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecjpake.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkcs5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy_poll.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/hmac_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesni.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/gcm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ccm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cmac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aria.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/camellia.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chacha20.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chachapoly.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/poly1305.c");
+@compile("runtime/crypto/tls/psaTlsStubs.c");
+@compile("runtime/crypto/psaOnce.c");
+
+@passC("-Ivendor/mbedtls/include");
+@passC("-Ivendor/mbedtls/library");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Iruntime/crypto");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+@passC("-DMBEDTLS_PLATFORM_MEMORY");
+@passC("-Wno-deprecated-declarations");
+
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msCryptoEcGenerate(curve: string): int64;
+extern function msCryptoEcImportPrivatePem(pem: string): int64;
+extern function msCryptoEcImportPublicPem(pem: string): int64;
+extern function msCryptoEcExportPrivatePem(key: int64): string;
+extern function msCryptoEcExportPublicPem(key: int64): string;
+extern function msCryptoEcPublicOf(key: int64): int64;
+extern function msCryptoEcBits(key: int64): int32;
+extern function msCryptoEcdsaSign(key: int64, algorithm: string, data: string): string;
+extern function msCryptoEcdsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
+extern function msCryptoEcdhDerive(privateKey: int64, publicKey: int64): string;
+extern function msCryptoEcFree(key: int64): void;
+
+export type EcCurve = "p256" | "p384";
+
+function curveOf(bits: int32): EcCurve {
+	return bits == 384 ? "p384" : "p256";
+}
+
+export class EcPublicKey {
+	_h: int64;
+
+	static async importPem(pem: string): Promise<Result<EcPublicKey, CryptoError>> {
+		const h = msCryptoEcImportPublicPem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.importPem", "failed to parse a P-256 or P-384 public key PEM"));
+		return Result.ok({ _h: h });
+	}
+
+	get curve(): EcCurve {
+		return curveOf(msCryptoEcBits(this._h));
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> {
+		const pem = msCryptoEcExportPublicPem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.exportPem", "failed to export public key"));
+		return Result.ok(pem);
+	}
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoEcFree(this._h);
+			this._h = 0;
+		}
+	}
+}
+
+export class EcPrivateKey {
+	_h: int64;
+
+	static async generate(curve: EcCurve): Promise<Result<EcPrivateKey, CryptoError>> {
+		const h = msCryptoEcGenerate(curve);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "EcPrivateKey.generate", `EC key generation failed for curve ${curve}`));
+		return Result.ok({ _h: h });
+	}
+
+	static async importPem(pem: string): Promise<Result<EcPrivateKey, CryptoError>> {
+		const h = msCryptoEcImportPrivatePem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.importPem", "failed to parse a P-256 or P-384 private key PEM"));
+		return Result.ok({ _h: h });
+	}
+
+	get curve(): EcCurve {
+		return curveOf(msCryptoEcBits(this._h));
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> {
+		const pem = msCryptoEcExportPrivatePem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.exportPem", "failed to export private key"));
+		return Result.ok(pem);
+	}
+
+	publicKey(): EcPublicKey {
+		const h = msCryptoEcPublicOf(this._h);
+		if (h == 0) throw new Error("EcPrivateKey.publicKey: the public half could not be copied");
+		return { _h: h };
+	}
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoEcFree(this._h);
+			this._h = 0;
+		}
+	}
+}
+
+// hash is sha256, sha384 or sha512; sha1 signatures are refused.
+export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> {
+	const sig = msCryptoEcdsaSign(key._h, hash, rawString(data));
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ec.ecdsaSign", `ECDSA signing failed (hash ${hash}; sha1 is refused)`));
+	return Result.ok(rawBuffer(sig));
+}
+
+// False on any failure: a bad signature, a malformed input or an unknown hash.
+export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> {
+	return msCryptoEcdsaVerify(key._h, hash, rawString(data), rawString(signature));
+}
+
+// The two keys must be on the same curve.
+export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> {
+	const shared = msCryptoEcdhDerive(privateKey._h, publicKey._h);
+	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ec.ecdh", "ECDH key agreement failed (are the curves the same?)"));
+	return Result.ok(rawBuffer(shared));
+}

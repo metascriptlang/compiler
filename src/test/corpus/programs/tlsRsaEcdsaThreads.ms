@@ -1,4 +1,4 @@
-// A TLS handshake and read on one thread while another thread signs with RSA and ECDSA in a loop:
+// A TLS handshake and read on a worker thread while the main thread signs with RSA and ECDSA in a loop:
 // both sides take the one PSA lock, so neither fails and nothing crashes.
 //
 // @stdout: tls: 12|sign: 40
@@ -8,7 +8,8 @@
 // @serial
 
 import { tlsConnect, write, read, close } from "std/crypto/tls";
-import { rsaGenerate, rsaSign, rsaVerify, rsaFree, ecGenerate, ecdsaSign, ecdsaVerify, ecFree } from "std/crypto/rsa";
+import { RsaPrivateKey, sign as signWithRsa, verify as verifyWithRsa } from "std/crypto/rsa";
+import { EcPrivateKey, ecdsaSign, ecdsaVerify } from "std/crypto/ec";
 import { argv } from "std/process";
 import { spawn as spawnProcess, ChildStream } from "std/process/child";
 
@@ -40,31 +41,30 @@ function tlsLoop(port: int32): int32 {
 	return ok;
 }
 
-function signLoop(rsaKey: int64, ecKey: int64): int32 {
+async function signLoop(rsaKey: RsaPrivateKey, ecKey: EcPrivateKey): Promise<int32> {
 	let ok = 0;
+	const rsaPublic = rsaKey.publicKey();
+	const ecPublic = ecKey.publicKey();
 	for (let i = 0; i < 20; i++) {
 		const message = `message ${i}`;
-		const r = rsaSign(rsaKey, message, "sha256");
-		if (r.ok && rsaVerify(rsaKey, message, r.value, "sha256")) ok += 1;
-		const e = ecdsaSign(ecKey, message, "sha256");
-		if (e.ok && ecdsaVerify(ecKey, message, e.value, "sha256")) ok += 1;
+		const r = await signWithRsa(rsaKey, message, "sha256");
+		if (r.ok && await verifyWithRsa(rsaPublic, message, r.value, "sha256")) ok += 1;
+		const e = await ecdsaSign(ecKey, message, "sha256");
+		if (e.ok && await ecdsaVerify(ecPublic, message, e.value, "sha256")) ok += 1;
 	}
 	return ok;
 }
 
 async function mixed(port: int32): Promise<void> {
-	const rsaKey = rsaGenerate(2048);
-	const ecKey = ecGenerate("p256");
+	const rsaKey = await RsaPrivateKey.generate(2048);
+	const ecKey = await EcPrivateKey.generate("p256");
 	if (!rsaKey.ok || !ecKey.ok) throw new Error("key generation failed");
 	const rk = rsaKey.value;
 	const ek = ecKey.value;
 	const t = spawn(() => tlsLoop(port));
-	const s = spawn(() => signLoop(rk, ek));
+	const signOk = await signLoop(rk, ek);
 	const tlsOk = await t;
-	const signOk = await s;
 	console.log(`tls: ${tlsOk}|sign: ${signOk}`);
-	rsaFree(rk);
-	ecFree(ek);
 }
 
 if (argv.length > 1 && argv[1] == "mixed") {

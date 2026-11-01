@@ -1,8 +1,8 @@
-// std/crypto/rsa — Asymmetric crypto (RSA + ECDSA + ECDH)
-// import { rsaGenerate, rsaSign, rsaVerify } from "std/crypto/rsa"
-// import { ecGenerate, ecdsaSign, ecdsaVerify, ecdhDerive } from "std/crypto/rsa"
+// std/crypto/rsa — RSA signatures (PKCS#1 v1.5, PSS) and OAEP encryption
+// import { RsaPrivateKey, RsaPublicKey, sign, verify, encrypt, decrypt } from "std/crypto/rsa"
 //
 // Heavy: compiles the PSA core and the PK layer. Only import when asymmetric crypto is needed.
+// Keys of at least 2048 bits only. ECDSA and ECDH are in std/crypto/ec.
 
 @include("runtime/crypto/rsa/rsa.h");
 @compile("runtime/crypto/rsa/rsa.c");
@@ -80,173 +80,106 @@
 
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
-import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-// C bindings — opaque key handles as int64 (pointer stored as 64-bit integer)
+// C bindings
 extern function msCryptoRsaGenerate(bits: int32): int64;
 extern function msCryptoRsaImportPrivatePem(pem: string): int64;
 extern function msCryptoRsaImportPublicPem(pem: string): int64;
 extern function msCryptoRsaExportPrivatePem(key: int64): string;
 extern function msCryptoRsaExportPublicPem(key: int64): string;
-extern function msCryptoRsaSign(key: int64, algorithm: string, data: string): string;
-extern function msCryptoRsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
+extern function msCryptoRsaPublicOf(key: int64): int64;
+extern function msCryptoRsaSign(key: int64, algorithm: string, pss: int32, data: string): string;
+extern function msCryptoRsaVerify(key: int64, algorithm: string, pss: int32, data: string, signature: string): boolean;
 extern function msCryptoRsaEncrypt(key: int64, data: string): string;
 extern function msCryptoRsaDecrypt(key: int64, data: string): string;
 extern function msCryptoRsaFree(key: int64): void;
 
-extern function msCryptoEcGenerate(curve: string): int64;
-extern function msCryptoEcImportPrivatePem(pem: string): int64;
-extern function msCryptoEcImportPublicPem(pem: string): int64;
-extern function msCryptoEcExportPrivatePem(key: int64): string;
-extern function msCryptoEcExportPublicPem(key: int64): string;
-extern function msCryptoEcdsaSign(key: int64, algorithm: string, data: string): string;
-extern function msCryptoEcdsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
-extern function msCryptoEcdhDerive(privateKey: int64, publicKey: int64): string;
-extern function msCryptoEcFree(key: int64): void;
+export type RsaPadding = "pkcs1v15" | "pss";
 
-// ===== RSA =====
+export class RsaPublicKey {
+	_h: int64;
 
-export function rsaGenerate(bits: int32): Result<int64, CryptoError> {
-	if (bits != 2048 && bits != 3072 && bits != 4096) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "rsaGenerate", "bits must be 2048, 3072, or 4096"));
+	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> {
+		const h = msCryptoRsaImportPublicPem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.importPem", "failed to parse an RSA public key PEM of at least 2048 bits"));
+		return Result.ok({ _h: h });
 	}
-	const key = msCryptoRsaGenerate(bits);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "rsaGenerate", "RSA key generation failed"));
-	return Result.ok(key);
+
+	async exportPem(): Promise<Result<string, CryptoError>> {
+		const pem = msCryptoRsaExportPublicPem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.exportPem", "failed to export public key"));
+		return Result.ok(pem);
+	}
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoRsaFree(this._h);
+			this._h = 0;
+		}
+	}
 }
 
-export function rsaImportPrivate(pem: string): Result<int64, CryptoError> {
-	const key = msCryptoRsaImportPrivatePem(pem);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPrivate", "failed to parse private key PEM"));
-	return Result.ok(key);
+export class RsaPrivateKey {
+	_h: int64;
+
+	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> {
+		if (bits != 2048 && bits != 3072 && bits != 4096) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "RsaPrivateKey.generate", "bits must be 2048, 3072, or 4096"));
+		}
+		const h = msCryptoRsaGenerate(bits);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", "RSA key generation failed"));
+		return Result.ok({ _h: h });
+	}
+
+	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> {
+		const h = msCryptoRsaImportPrivatePem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.importPem", "failed to parse an RSA private key PEM of at least 2048 bits"));
+		return Result.ok({ _h: h });
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> {
+		const pem = msCryptoRsaExportPrivatePem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.exportPem", "failed to export private key"));
+		return Result.ok(pem);
+	}
+
+	publicKey(): RsaPublicKey {
+		const h = msCryptoRsaPublicOf(this._h);
+		if (h == 0) throw new Error("RsaPrivateKey.publicKey: the public half could not be copied");
+		return { _h: h };
+	}
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoRsaFree(this._h);
+			this._h = 0;
+		}
+	}
 }
 
-export function rsaImportPublic(pem: string): Result<int64, CryptoError> {
-	const key = msCryptoRsaImportPublicPem(pem);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPublic", "failed to parse public key PEM"));
-	return Result.ok(key);
-}
-
-export function rsaExportPrivate(key: int64): Result<string, CryptoError> {
-	const pem = msCryptoRsaExportPrivatePem(key);
-	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPrivate", "failed to export private key"));
-	return Result.ok(pem);
-}
-
-export function rsaExportPublic(key: int64): Result<string, CryptoError> {
-	const pem = msCryptoRsaExportPublicPem(key);
-	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPublic", "failed to export public key"));
-	return Result.ok(pem);
-}
-
-export function rsaSign(key: int64, data: Bytes, algorithm: string): Result<Buffer, CryptoError> {
-	if (algorithm == "") algorithm = "sha256";
-	const sig = msCryptoRsaSign(key, algorithm, rawString(data));
-	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsaSign", "signing failed"));
+// hash is sha256, sha384 or sha512; sha1 signatures are refused.
+export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
+	const sig = msCryptoRsaSign(key._h, hash, padding == "pss" ? 1 : 0, rawString(data));
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)`));
 	return Result.ok(rawBuffer(sig));
 }
 
-export function rsaVerify(key: int64, data: Bytes, signature: Bytes, algorithm: string): boolean {
-	if (algorithm == "") algorithm = "sha256";
-	return msCryptoRsaVerify(key, algorithm, rawString(data), rawString(signature));
+// False on any failure: a bad signature, a malformed input or an unknown hash.
+export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
+	return msCryptoRsaVerify(key._h, hash, padding == "pss" ? 1 : 0, rawString(data), rawString(signature));
 }
 
-export function rsaEncrypt(key: int64, data: Bytes): Result<Buffer, CryptoError> {
-	const encrypted = msCryptoRsaEncrypt(key, rawString(data));
-	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsaEncrypt", "RSA-OAEP encryption failed"));
+// RSA-OAEP with SHA-256.
+export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const encrypted = msCryptoRsaEncrypt(key._h, rawString(data));
+	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
 	return Result.ok(rawBuffer(encrypted));
 }
 
-export function rsaDecrypt(key: int64, data: Bytes): Result<Buffer, CryptoError> {
-	const decrypted = msCryptoRsaDecrypt(key, rawString(data));
-	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsaDecrypt", "RSA-OAEP decryption failed"));
+export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const decrypted = msCryptoRsaDecrypt(key._h, rawString(data));
+	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
 	return Result.ok(rawBuffer(decrypted));
-}
-
-export function rsaFree(key: int64): void {
-	msCryptoRsaFree(key);
-}
-
-// ===== ECDSA =====
-
-export function ecGenerate(curve: string): Result<int64, CryptoError> {
-	if (curve == "") curve = "p256";
-	const key = msCryptoEcGenerate(curve);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", `EC key generation failed for curve ${curve}`));
-	return Result.ok(key);
-}
-
-export function ecImportPrivate(pem: string): Result<int64, CryptoError> {
-	const key = msCryptoEcImportPrivatePem(pem);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPrivate", "failed to parse EC private key PEM"));
-	return Result.ok(key);
-}
-
-export function ecImportPublic(pem: string): Result<int64, CryptoError> {
-	const key = msCryptoEcImportPublicPem(pem);
-	if (key == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPublic", "failed to parse EC public key PEM"));
-	return Result.ok(key);
-}
-
-export function ecExportPrivate(key: int64): Result<string, CryptoError> {
-	const pem = msCryptoEcExportPrivatePem(key);
-	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPrivate", "failed to export EC private key"));
-	return Result.ok(pem);
-}
-
-export function ecExportPublic(key: int64): Result<string, CryptoError> {
-	const pem = msCryptoEcExportPublicPem(key);
-	if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPublic", "failed to export EC public key"));
-	return Result.ok(pem);
-}
-
-export function ecdsaSign(key: int64, data: Bytes, algorithm: string): Result<Buffer, CryptoError> {
-	if (algorithm == "") algorithm = "sha256";
-	const sig = msCryptoEcdsaSign(key, algorithm, rawString(data));
-	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ecdsaSign", "ECDSA signing failed"));
-	return Result.ok(rawBuffer(sig));
-}
-
-export function ecdsaVerify(key: int64, data: Bytes, signature: Bytes, algorithm: string): boolean {
-	if (algorithm == "") algorithm = "sha256";
-	return msCryptoEcdsaVerify(key, algorithm, rawString(data), rawString(signature));
-}
-
-// ===== ECDH =====
-
-export function ecdhDerive(privateKey: int64, publicKey: int64): Result<Buffer, CryptoError> {
-	const shared = msCryptoEcdhDerive(privateKey, publicKey);
-	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ecdhDerive", "ECDH key agreement failed"));
-	return Result.ok(rawBuffer(shared));
-}
-
-export function ecFree(key: int64): void {
-	msCryptoEcFree(key);
-}
-
-// ===== Async Versions (spawn to worker thread for heavy key generation) =====
-
-export async function rsaGenerateAsync(bits: int32): Promise<Result<int64, CryptoError>> {
-	return await spawn(() => { return rsaGenerate(bits); });
-}
-
-export async function rsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<Buffer, CryptoError>> {
-	return await spawn(() => { return rsaSign(key, data, algorithm); });
-}
-
-export async function rsaEncryptAsync(key: int64, data: string): Promise<Result<Buffer, CryptoError>> {
-	return await spawn(() => { return rsaEncrypt(key, data); });
-}
-
-export async function rsaDecryptAsync(key: int64, data: string): Promise<Result<Buffer, CryptoError>> {
-	return await spawn(() => { return rsaDecrypt(key, data); });
-}
-
-export async function ecGenerateAsync(curve: string): Promise<Result<int64, CryptoError>> {
-	return await spawn(() => { return ecGenerate(curve); });
-}
-
-export async function ecdsaSignAsync(key: int64, data: string, algorithm: string): Promise<Result<Buffer, CryptoError>> {
-	return await spawn(() => { return ecdsaSign(key, data, algorithm); });
 }

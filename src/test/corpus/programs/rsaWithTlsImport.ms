@@ -6,14 +6,17 @@
 // @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
 // @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
 
-import { rsaGenerate, rsaSign, rsaVerify, rsaFree } from "std/crypto/rsa";
+import { RsaPrivateKey, sign, verify } from "std/crypto/rsa";
 import { tlsConnect } from "std/crypto/tls";
 
-const generated = rsaGenerate(2048);
-if (!generated.ok) throw new Error("rsaGenerate failed");
-const signed = rsaSign(generated.value, "both", "sha256");
-const verified = signed.ok && rsaVerify(generated.value, "both", signed.value, "sha256");
+const generated = await RsaPrivateKey.generate(2048);
+if (!generated.ok) throw new Error("RsaPrivateKey.generate failed");
+const signed = await sign(generated.value, "both", "sha256");
+let verified = false;
+if (signed.ok) {
+	const checked = await verify(generated.value.publicKey(), "both", signed.value, "sha256");
+	verified = checked;
+}
 const unreachable = signed.ok && !verified;
 if (unreachable) tlsConnect("localhost", 1);
 console.log(`rsa+tls sign ${signed.ok} verify ${verified}`);
-rsaFree(generated.value);

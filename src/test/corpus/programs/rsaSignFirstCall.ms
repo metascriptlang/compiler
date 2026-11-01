@@ -6,7 +6,7 @@
 // @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
 // @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
 
-import { rsaImportPrivate, rsaSign, rsaVerify, rsaFree } from "std/crypto/rsa";
+import { RsaPrivateKey, sign, verify } from "std/crypto/rsa";
 
 const pem = [
 	"-----BEGIN RSA PRIVATE KEY-----",
@@ -38,9 +38,12 @@ const pem = [
 	"-----END RSA PRIVATE KEY-----",
 ].join("\n") + "\n";
 
-const imported = rsaImportPrivate(pem);
-if (!imported.ok) throw new Error("rsaImportPrivate failed");
-const signed = rsaSign(imported.value, "first call", "sha256");
-const verified = signed.ok && rsaVerify(imported.value, "first call", signed.value, "sha256");
+const imported = await RsaPrivateKey.importPem(pem);
+if (!imported.ok) throw new Error("RsaPrivateKey.importPem failed");
+const signed = await sign(imported.value, "first call", "sha256");
+let verified = false;
+if (signed.ok) {
+	const checked = await verify(imported.value.publicKey(), "first call", signed.value, "sha256");
+	verified = checked;
+}
 console.log(`first-call sign ${signed.ok} verify ${verified}`);
-rsaFree(imported.value);

@@ -3,10 +3,10 @@
 //
 // @stdout: imported true false|p256 true false|p384 true false
 // @exit: 0
-// @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
-// @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
+// @skip-js: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.jms
+// @skip-raiser: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.rms
 
-import { ecImportPrivate, ecGenerate, ecdsaSign, ecdsaVerify, ecFree } from "std/crypto/rsa";
+import { EcCurve, EcPrivateKey, ecdsaSign, ecdsaVerify } from "std/crypto/ec";
 
 const pem = [
 	"-----BEGIN EC PRIVATE KEY-----",
@@ -16,24 +16,24 @@ const pem = [
 	"-----END EC PRIVATE KEY-----",
 ].join("\n") + "\n";
 
-function row(key: int64, label: string): string {
-	const signed = ecdsaSign(key, "message", "sha256");
+async function row(key: EcPrivateKey, label: string): Promise<string> {
+	const signed = await ecdsaSign(key, "message", "sha256");
 	if (!signed.ok) throw new Error("ecdsaSign failed");
 	const signature = signed.value;
-	const good = ecdsaVerify(key, "message", signature, "sha256");
-	const tampered = ecdsaVerify(key, "massage", signature, "sha256");
+	const pub = key.publicKey();
+	const good = await ecdsaVerify(pub, "message", signature, "sha256");
+	const tampered = await ecdsaVerify(pub, "massage", signature, "sha256");
 	return `${label} ${good} ${tampered}`;
 }
 
 const rows: string[] = [];
-const imported = ecImportPrivate(pem);
-if (!imported.ok) throw new Error("ecImportPrivate failed");
-rows.push(row(imported.value, "imported"));
-ecFree(imported.value);
-for (const curve of ["p256", "p384"]) {
-	const generated = ecGenerate(curve);
-	if (!generated.ok) throw new Error("ecGenerate failed");
-	rows.push(row(generated.value, curve));
-	ecFree(generated.value);
+const imported = await EcPrivateKey.importPem(pem);
+if (!imported.ok) throw new Error("EcPrivateKey.importPem failed");
+rows.push(await row(imported.value, "imported"));
+const curves: EcCurve[] = ["p256", "p384"];
+for (const curve of curves) {
+	const generated = await EcPrivateKey.generate(curve);
+	if (!generated.ok) throw new Error("EcPrivateKey.generate failed");
+	rows.push(await row(generated.value, curve));
 }
 console.log(rows.join("|"));
