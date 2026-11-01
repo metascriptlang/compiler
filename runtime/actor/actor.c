@@ -64,6 +64,7 @@ msNameEntry* msNameRegistry = NULL;
 int msNameRegistryCap = 0;
 int msNameRegistryCount = 0;
 pthread_mutex_t msNameRegistryLock = PTHREAD_MUTEX_INITIALIZER;
+pthread_once_t msNameRegistryOnce = PTHREAD_ONCE_INIT;
 
 /* Cycle detector actor (pinned to scheduler 0, created by msCDInit). */
 msActor* msCycleDetectorActor = NULL;
