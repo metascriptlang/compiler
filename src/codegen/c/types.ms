@@ -1931,7 +1931,7 @@ function elemArrayCName(elem: Readonly<Type>): string {
 // and destructorLifting (transform) both route through here — no parallel naming.
 export function arrayCTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const elem = t.typeReturn;
-	if (elem == null) return "msRefArray";
+	if (elem == null || elem.kind == TypeKind.Void) return "msRefArray";
 	// Awaitable element, nullable or not → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
 	const nonNull = unwrapRefNullUnion(elem);
 	if (isAwaitable(nonNull != null ? nonNull : elem)) return "msRefArray";
@@ -2167,7 +2167,7 @@ export function genClFullCastNrvo(g: CGen, t: Readonly<Type>, nrvoType: string):
 // false if innerType is an unsupported shape (void, nested array).
 export function ensurePromiseAllInstance(g: CGen, arrT: Readonly<Type>): string {
 	const innerType = arrT.typeReturn;
-	if (innerType == null || innerType.kind == TypeKind.Void) return "";
+	if (innerType == null || innerType.kind == TypeKind.Void || innerType.kind == TypeKind.Null) return "";
 	const innerDesc = getTypeDesc(g, innerType);
 	const shape = promiseAllShape(innerType);
 	if (shape == PromiseAllShape.None) return "";
