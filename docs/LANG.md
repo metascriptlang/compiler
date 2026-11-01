@@ -921,13 +921,12 @@ function shifted(v: Vec2): float64 {
 }
 ```
 
-Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v': value parameters are read-only views; copy it locally first`, and in a `readonly` parameter `cannot mutate readonly parameter 'v'`. Measured 2026-10-30 with installed msc 73e18a165a: the example above prints `5`, `10 3`, `0 0` on C and with `--target=js`.
+Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v': value parameters are read-only views; copy it locally first`. Measured 2026-10-30 with installed msc 73e18a165a: the example above prints `5`, `10 3`, `0 0` on C and with `--target=js`.
 
 | Parameter | C output (measured on the same build) |
 |------|----------|
 | `v: Vec2` (16 B) | `double f(Vec2 v)`: value, registers |
 | `v: BigData` (32 B) | `double f(const BigData* v)`: zero copy |
-| `readonly v: Vec2` | `double f(Vec2 v)` |
 | `ref v: Vec2` | `void f(Vec2* v)`: the write reaches the caller |
 
 #### Parameter Modifiers
@@ -935,9 +934,10 @@ Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v
 | Modifier | Syntax | Purpose |
 |---|---|---|
 | *(default)* | `f(v: Struct)` | Read-only view; the compiler picks the ABI |
-| `readonly` | `f(readonly v: Struct)` | Read-only; a write is refused |
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+There is no `readonly` parameter modifier: `function f(readonly v: Vec2)` is the parse error ``the `readonly` parameter modifier was removed: a scalar or struct parameter never writes back to the caller; write `Readonly<T>` for a read-only array, Vec or class handle``. A constructor parameter keeps it: `constructor(readonly x: int32)` declares a read-only field, and `p.x = 5` is `cannot assign to 'x' because it is a read-only property`. Measured 2026-11-01 on a candidate of this tree with `msc run` on C and `--target=js` for a function, a method and an arrow; the handoff pin `src/test/handoff/paramProperty.ms` adds a function expression and a static extension.
 
 An `out` parameter must be written on every path before the routine returns (measured 2026-10-14 on a candidate of this tree, handoff `outParameterWrites`): the end of the body, every `return`, and a `try` that returns its error each give `'x' is not assigned on every path: it is an out parameter and must be written before …`, so `function f(out x: int32, c: boolean): void { if (c) { x = 1; } }` and an early `return` before the write are errors. A branch that leaves, a `throw` and a call `g(out x)` to another out parameter count as writes or exits; writing `x[i]` or `x.f` does not count. A `throw` leaves the parameter unwritten, and the caller's variable is not assigned across a `catch`. A local that reuses an out parameter's name in the same function is an error, because the check goes by name. An `out` argument assigns the caller's variable and is written only for an out parameter (`out a` to a plain or `ref` parameter is an error); passing the variable without `out` to an out parameter assigns it too. A body-less `extern` declaration is the trust boundary and is not checked. A class method takes `out` and `ref` parameters the same way (measured on C and JS, corpus `methodOutParameter`, a generic class instance included); a constructor parameter cannot be `out` or `ref` and says so. Not covered: an out parameter on an actor method or a function expression (the parameter name keeps its `out:` prefix and the body reads `Undefined variable 'x'`), and a read of an out parameter before its first write, which the checker's identifier read path does not yet treat as a read of an unassigned local.
 
@@ -1951,7 +1951,7 @@ type Box<T> = { value: T };
 Partial<T>           // Every property optional: `{ [P in keyof T]?: T[P] }`
 Required<T>          // Every property required: `{ [P in keyof T]-?: T[P] }`
 Readonly<T>          // Read-only view of T — deep, never converts back to T; `readonly T[]` for arrays.
-                     // Not the `readonly` parameter modifier above (that one is an explicit copy). See Spawn.
+                     // See Spawn.
 Record<K, V>         // Literal keys K give an object type; `string` or `number` keys give Map<K, V>
 Pick<T, K>           // The properties of T named by K; K must be a subset of keyof T
 Omit<T, K>           // The properties of T not named by K

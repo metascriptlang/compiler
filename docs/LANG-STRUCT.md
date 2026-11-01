@@ -168,14 +168,12 @@ When resolving `struct = X & Y & ...`, walk each constituent type:
 
 Struct params are **TS-compatible by default** — mutation propagates to caller, just like TypeScript objects. The compiler uses `mutatedParams` analysis to auto-select the optimal C ABI per parameter.
 
-| Size | Mutated? | `readonly`? | Strategy | C output |
-|------|----------|-------------|----------|----------|
-| Small (≤24B) | No | No | Value (registers, cheap copy) | `void f(Vec2 v)` |
-| Small (≤24B) | Yes | No | `T*` (mutation propagates) | `void f(Vec2* v)` |
-| Small (≤24B) | — | Yes | Value (forced copy) | `void f(Vec2 v)` |
-| Big (>24B) | No | No | `const T*` (zero copy) | `void f(const BigData* v)` |
-| Big (>24B) | Yes | No | `T*` (mutation propagates) | `void f(BigData* v)` |
-| Big (>24B) | — | Yes | `T*` + copy-on-entry | `void f(const BigData* _v) { BigData v = *_v; }` |
+| Size | Mutated? | Strategy | C output |
+|------|----------|----------|----------|
+| Small (≤24B) | No | Value (registers, cheap copy) | `void f(Vec2 v)` |
+| Small (≤24B) | Yes | `T*` (mutation propagates) | `void f(Vec2* v)` |
+| Big (>24B) | No | `const T*` (zero copy) | `void f(const BigData* v)` |
+| Big (>24B) | Yes | `T*` (mutation propagates) | `void f(BigData* v)` |
 
 **Key design decision**: Unlike the standard reference (immutable params by default), MetaScript allows param mutation like TypeScript. The compiler detects mutation via `mutatedParams` bitfield analysis (checker phase) and picks the optimal path automatically. No developer effort required.
 
@@ -203,12 +201,6 @@ function summarize(data: BigData): string {
 function rename(data: BigData): void {
     data.name = "updated";  // caller sees change
 }
-
-// readonly — explicit copy, caller's value is never affected
-function tryParse(readonly data: BigData): boolean {
-    data.name = "test";  // mutates local copy only
-    return validate(data);
-}
 ```
 
 ### Parameter Modifiers
@@ -216,7 +208,6 @@ function tryParse(readonly data: BigData): boolean {
 | Modifier | Syntax | Semantics | Use when |
 |---|---|---|---|
 | *(default)* | `f(v: Struct)` | Auto-optimized: copy or `T*` based on size + mutation | Normal usage — compiler picks best |
-| `readonly` | `f(readonly v: Struct)` | Explicit copy (isolation from caller) | Want a local snapshot |
 | `ref` | `f(ref v: Struct)` | Explicit mutable borrow | Redundant for structs (default already propagates), useful for primitives |
 | `move` | `f(move v: Struct)` | Ownership transfer (caller's value zeroed) | Transferring ownership |
 | `out` | `f(out v: Struct)` | Output parameter (callee fills) | Returning via parameter |
@@ -240,7 +231,7 @@ Both backends behave identically — no surprises.
 | C | Stack | Auto: value or `T*` (see table above) | Depends on mutation + size |
 
 - **JS backend**: Structs are regular JS objects — mutation propagates naturally (TS-compatible)
-- **C backend**: `mutatedParams` analysis selects optimal ABI per-param. Small unmutated → registers. Everything else → pointer. `readonly` → explicit copy.
+- **C backend**: `mutatedParams` analysis selects optimal ABI per-param. Small unmutated → registers. Everything else → pointer.
 
 ## Implementation Roadmap
 
@@ -319,27 +310,7 @@ Design: TS-compatible mutable params by default. Compiler auto-selects ABI via `
 
 Divergence from the standard reference: reference params are immutable by default, so `ccgIntroducedPtr` never needs mutation analysis. We allow mutation (TS-compatible), so `mutatedParams` gates the optimization.
 
-**`readonly` parameter modifier — NOT YET:**
-
-`readonly` keyword for explicit copy isolation. When a developer wants value semantics (local copy, caller unaffected):
-
-```ms
-function tryParse(readonly state: ParserState): boolean {
-    state.pos = state.pos + 1;  // mutates local copy only
-    return validate(state);
-}
-
-// COMPILE ERROR — readonly param cannot be mutated
-function bad(readonly v: Vec2): void {
-    v.x = 1;  // error: cannot mutate readonly parameter 'v'
-}
-```
-
-Implementation needed:
-- Parser: Recognize `readonly` in param list (mirrors `out`/`ref` handling)
-- Checker: After `analyzeParamMutations`, cross-check `mutatedParams` bits against readonly-marked params. If `mutatedParams` bit is set for a readonly param → emit error: "cannot mutate readonly parameter 'name'"
-- LSP: Error surfaces automatically via checker diagnostics
-- Codegen: Small → emit as `T v` (value). Big → emit as `const T* _v` + `T v = *_v` copy-on-entry.
+**`readonly` parameter modifier — REMOVED:** a function, method, arrow or function expression parameter written `readonly x: T` is a parse error (``the `readonly` parameter modifier was removed: …``); a constructor parameter property `constructor(readonly x: T)` still declares a read-only field. Measured 2026-11-01 on a candidate of this tree; current rules are in [LANG.md](LANG.md) §Parameter Modifiers.
 
 **GcMode — DONE:**
 
@@ -424,7 +395,7 @@ struct Admin {
 | | — `mutatedParams` analysis | DONE |
 | | — Auto-optimized param ABI | DONE (infrastructure) |
 | | — GcMode explicit (`--mm=drc\|manual\|none`) | DONE |
-| | — `readonly` modifier | Not started |
+| | — `readonly` modifier | Removed (2026-11-01) |
 | | — Intersection syntax, method rejection | Not started |
 | ~~2.7~~ | ~~Discriminated unions (type = match)~~ | ~~DONE~~ |
 | 2.8 | Class `extends` — C backend (parent embed, field walk) | Not started |
