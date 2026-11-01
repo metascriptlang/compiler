@@ -3,7 +3,6 @@ import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { TAG_FIELD, VALUE_FIELD } from "../../transform/lowering/unionTagLower";
 import { getOpByKey } from "../c/types";
 import { isSlotUnion } from "../../checker/fit";
-import { raiserFlatCellUnion } from "../../analyzer/classify";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
@@ -43,7 +42,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
-	} else if (valueType.kind == TypeKind.Union && raiserFlatCellUnion(valueType) && !isDiscriminatedUnion(valueType)) {
+	} else if (valueType.kind == TypeKind.Union && isStructSlotUnion(valueType) && !isDiscriminatedUnion(valueType)) {
 		plan.kind = RaiserCopyKind.Object;
 		for (const arm of valueType.typeChildren) {
 			if (arm.kind == TypeKind.Function) continue;
@@ -53,9 +52,8 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 				if (at < 0) {
 					plan.names.push(arm.typeNames[i]);
 					plan.children.push(child);
-				} else if (plan.children[at] != child) {
-					if (s.copyPlans[plan.children[at]].kind != RaiserCopyKind.Preserve) throw new Error(`internal: the arms of union '${valueType.typeName}' give field '${arm.typeNames[i]}' different copy plans`);
-					plan.children[at] = child;
+				} else {
+					plan.children[at] = mergeArmPlans(s, valueType, arm.typeNames[i], plan.children[at], child);
 				}
 			}
 		}
@@ -65,6 +63,30 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 		for (let i = 0; i < valueType.typeChildren.length; i += 1) {
 			plan.discriminants.push(armDiscriminant(valueType, valueType.typeNames[i + 1]));
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
+		}
+	}
+	return index;
+}
+
+function mergeArmPlans(s: RaiserCompState, union: Readonly<Type>, field: string, held: int32, other: int32): int32 {
+	if (held == other || s.copyPlans[other].kind == RaiserCopyKind.Preserve) return held;
+	if (s.copyPlans[held].kind == RaiserCopyKind.Preserve) return other;
+	const left = s.copyPlans[held];
+	const right = s.copyPlans[other];
+	if (left.kind != RaiserCopyKind.Object || right.kind != RaiserCopyKind.Object) {
+		throw new Error(`internal: the arms of union '${union.typeName}' give field '${field}' copy plans of different kinds`);
+	}
+	const merged: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: left.names.slice(), children: left.children.slice(), discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
+	const index = s.copyPlans.length;
+	s.copyTypes.push(union);
+	s.copyPlans.push(merged);
+	for (let i = 0; i < right.names.length; i += 1) {
+		const at = merged.names.indexOf(right.names[i]);
+		if (at < 0) {
+			merged.names.push(right.names[i]);
+			merged.children.push(right.children[i]);
+		} else {
+			merged.children[at] = mergeArmPlans(s, union, right.names[i], merged.children[at], right.children[i]);
 		}
 	}
 	return index;
@@ -384,7 +406,7 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 
 const MAX_TYPE_DEPTH = 32;
 
-function isStructSlotUnion(t: Type): boolean {
+function isStructSlotUnion(t: Readonly<Type>): boolean {
 	if (!isSlotUnion(t)) return false;
 	let structs = 0;
 	for (const child of t.typeChildren) {
