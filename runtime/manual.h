@@ -475,6 +475,8 @@ static inline void msPrintln(msString s) {
 static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = (msStrPayload*)0; } while(0)
 #define msStringSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
+#define msSwap(a, b)          ({ __typeof__(a) msSwapA_ = (a); __typeof__(a) msSwapB_ = (b); \
+	__typeof__(*msSwapA_) msSwapHeld_ = *msSwapA_; *msSwapA_ = *msSwapB_; *msSwapB_ = msSwapHeld_; (void)0; })
 
 #define msArrayDestroy(arr)            ((void)0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = (void*)0; } while(0)
