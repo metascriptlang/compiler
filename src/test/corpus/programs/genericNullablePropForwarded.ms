@@ -1,9 +1,15 @@
-// @stdout: true|Ada|true|x|ok|ok|ok|ok
+// @stdout: true|Ada|true|x|ok|ok|ok|ok|true|true|Bo|true|Cy
 interface Named { name: string; }
 struct Payload { name: string; }
 function take<P>(value: P | null): P | null { return value; }
 function forward<P>(props: { value?: P | null }): P | null {
 	return take<P>(props.value);
+}
+function forwardRequired<P>(props: { value: P | null }): P | null {
+	return take<P>(props.value);
+}
+function forwardNested<P>(props: { inner: { value?: P | null } }): P | null {
+	return take<P>(props.inner.value);
 }
 
 class Nav<P> {
@@ -27,6 +33,11 @@ const absent = forward<Payload>({});
 const present = forward<Payload>({ value: { name: "Ada" } });
 const absentNum = forward<int32>({});
 const presentStr = forward<string>({ value: "x" });
+const presentNull = forward<Payload>({ value: null });
+const requiredNull = forwardRequired<Payload>({ value: null });
+const requiredValue = forwardRequired<Payload>({ value: { name: "Bo" } });
+const nestedAbsent = forwardNested<Payload>({ inner: {} });
+const nestedValue = forwardNested<Payload>({ inner: { value: { name: "Cy" } } });
 const n = new Nav<string>();
 n.go("x");
 const m = new Nav<int32>();
@@ -44,4 +55,9 @@ console.log([
 	m.last === null ? "bad" : "ok",
 	q.last === null ? "bad" : "ok",
 	d.last === null ? "bad" : "ok",
+	presentNull === null,
+	requiredNull === null,
+	requiredValue !== null ? requiredValue.name : "none",
+	nestedAbsent === null,
+	nestedValue !== null ? nestedValue.name : "none",
 ].join("|"));
