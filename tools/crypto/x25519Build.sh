@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# usage: x25519Build.sh <outDir> <impl> <release|danger> [valgrindRoot]   run from the repo root; prints the host path
+# usage: x25519Build.sh <outDir> <impl> <release|danger> [valgrindRoot [clangArg...]]   run from the repo root; prints the host path
+# X25519_HOST_SOURCE=<file.c> replaces the host source (default x25519TaintHost.c); clangArg... are passed to clang
+# verbatim, as separate arguments, right after the host source and the library (an empty valgrindRoot means no taint flags).
 set -euo pipefail
 out=${1:?outDir}
 impl=${2:?impl: monocypher|pilot|noop|leakyBranch|leakyIndex}
@@ -7,6 +9,7 @@ mode=${3:?mode: release|danger}
 vg=${4:-}
 harness=src/test/crypto/harness
 stem=x25519HostEntry
+hostSource=${X25519_HOST_SOURCE:-$harness/x25519TaintHost.c}
 lib=$out/x25519.$impl.$mode.a
 host=$out/host.$impl.$mode${vg:+.taint}
 
@@ -47,5 +50,5 @@ if [ -n "$vg" ]; then
 	taintFlags=(-DX25519_TAINT "-I$vg/valgrind/usr/include")
 fi
 clang -O2 -g -Wall -Werror "-DMS_ENTRY_DATINIT=$datInit" "-DMS_ENTRY_INIT=$init" "${taintFlags[@]}" \
-	"$harness/x25519TaintHost.c" "$lib" -lm -lpthread -o "$host"
+	"$hostSource" "$lib" "${@:5}" -lm -lpthread -o "$host"
 echo "$host"
