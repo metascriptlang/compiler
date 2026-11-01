@@ -1,6 +1,5 @@
 // @stdout: message=refused|generic=refused|record=refused|resolved=fine
 // @exit: 0
-// @xfail(raiser): an async call runs inline on the Raiser, so the rejection escapes as an unhandled exception before the waiter awaits it (card 2026-10-15-raiser-async-call-runs-inline)
 // note: an async function awaiting a promise it received as a parameter catches a rejection that happens after a suspension: a string payload, the same through a generic watcher, a struct payload holding a string, and a string promise that resolves as the control.
 
 import { sleepAsync } from "std/core/promise";
