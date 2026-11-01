@@ -4,7 +4,7 @@ import {
 	JSXAttributeData, JSXSpreadAttributeData,
 } from "../../../ast/node";
 import { FormatOptions } from "../options";
-import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc";
+import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docConcat, docBreakParent } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt } from "./literals";
 
@@ -46,7 +46,8 @@ export function printJsxFragment(node: Node, options: FormatOptions): Doc {
 }
 
 export function printJsxText(node: Node): Doc {
-	return docText((node.data as JSXTextData).jsxText);
+	const text = (node.data as JSXTextData).jsxText;
+	return text.includes("\n") ? docConcat([docText(text), docBreakParent()]) : docText(text);
 }
 
 export function printJsxExpressionContainer(node: Node, options: FormatOptions): Doc {

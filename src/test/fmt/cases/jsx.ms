@@ -58,3 +58,15 @@ test "fmt fails loud on a node kind it cannot print" {
 	const hidden = createNodeAt(NodeKind.HiddenDeref, { expr: inner }, makeLoc(1, 1));
 	assert !formatNode(hidden, defaultFormatOptions()).ok;
 }
+
+test "fmt jsx: a multi-line element among call arguments breaks the arguments on the first pass" {
+	const source = "render(<A>\n\t<B p={f({ g: (x: Item | null): string => x === null ? \"\" : x.identifier.toString() })} />\n</A>, h());\n";
+	assert assertFmtIdempotent(source);
+	assert fmt(source).startsWith("render(\n\t<A>\n");
+}
+
+test "fmt jsx: a multi-line element as the only call argument breaks the argument list on the first pass" {
+	const source = "el(<A>\n\t<B p={f({ g: (x: Item | null): string => x === null ? \"\" : x.identifier.toString() })} />\n</A>);\n";
+	assert assertFmtIdempotent(source);
+	assert fmt(source).startsWith("el(\n\t<A>\n");
+}
