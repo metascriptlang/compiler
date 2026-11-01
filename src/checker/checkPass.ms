@@ -35,6 +35,7 @@ import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseName
 import { getFlowTypeOfReference, isEndOfBodyReachable, isPostSuperFlowNode } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
+import { checkMovesIn } from "./moveCheck";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -4532,6 +4533,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	analyzeParamMutations(ctx, program);
 	runDeferredEffectChecks(ctx);
 	checkViewBorrows(ctx, program);
+	checkMovesIn(ctx, program);
 	checkPointerEscapes(ctx, program);
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,

@@ -630,12 +630,10 @@ function moveSourceText(n: Node): string {
 }
 
 function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
-	if (dctx.inEnsureMove == 0 || dctx.ctx.checkerCtx == null) return;
-	const message = srcExpr.kind == NodeKind.Identifier
-		? "cannot move '" + moveSourceText(srcExpr) + "': variable is still used after this point"
-		: "cannot move '" + moveSourceText(srcExpr) + "', which introduces an implicit copy";
+	if (dctx.inEnsureMove == 0 || dctx.ctx.checkerCtx == null || srcExpr.kind == NodeKind.Identifier) return;
 	dctx.ctx.checkerCtx.errors.push({
-		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+		message: "cannot move '" + moveSourceText(srcExpr) + "', which introduces an implicit copy",
+		line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
 	});
 }
 
@@ -932,6 +930,17 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Consuming here unconditionally left the value with no owner on either
 	// side: callee borrows, caller wasMoved — 1 leak per moved RC arg.
 	const consume = mode == DrcMode.Consumed || mode == DrcMode.SinkArg;
+	const taken = md.moveArg.resolvedSym;
+	if (consume && md.moveArg.kind == NodeKind.Identifier && taken != null && taken.symbolType != null
+			&& (taken.symbolKind == SymbolKind.Variable || taken.symbolKind == SymbolKind.Parameter) && ownsMovableValue(taken, dctx)) {
+		const rc = classifyRc(taken.symbolType, dctx);
+		if (rc.needsCleanup) {
+			if (md.moveArg.nodeType == null) md.moveArg.nodeType = taken.symbolType;
+			if (rc.wasMovedFn != null) md.moveArg = destructiveMoveVar(md.moveArg, rc, dctx);
+			recordMoveInContext(dctx, taken);
+			return node;
+		}
+	}
 	const element = consume && md.moveArg.kind == NodeKind.ArrayAccess;
 	dctx.inEnsureMove += 1;
 	md.moveArg = processNode(md.moveArg, dctx, consume && !element ? DrcMode.Consumed : DrcMode.Normal);
@@ -1808,7 +1817,13 @@ function isVarFromOuterLoopScope(sym: Symbol, dctx: DrcContext): boolean {
 }
 
 function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
-	if (sym == null) return false;
+	if (sym == null || !ownsMovableValue(sym, dctx)) return false;
+	if (hasFlag(sym, SymbolFlag.SinkTemp)) return true;
+	if (dctx.currentFuncBody == null || node == null) return false;
+	return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
+}
+
+function ownsMovableValue(sym: Symbol, dctx: DrcContext): boolean {
 	// passCopyToSink synthesizes single-use sink-arg temps and marks them SinkTemp.
 	// CFG can't see these (added to preStmts after CFG build) so it returns false
 	// (not last read) → moveOrCopy falls to genCopy → double Copy → the synthesized
@@ -1832,9 +1847,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// Moving a cursor would leave the source with a dangling pointer.
 	if (vi != null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
-	if (symListHas(dctx.finallyProtectedVars, sym)) return false;
-	if (dctx.currentFuncBody == null || node == null) return false;
-	return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
+	return !symListHas(dctx.finallyProtectedVars, sym);
 }
 
 // ===== Field-Level Last-Read Safety (Phase B) =====

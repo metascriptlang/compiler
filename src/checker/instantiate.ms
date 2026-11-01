@@ -22,6 +22,7 @@ import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, callCheckLocalInstance, registerInstantiateGeneric, registerTypeInstanceHooks, registerGenericTypeHook } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
+import { checkMovesIn } from "./moveCheck";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
@@ -1132,6 +1133,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, cloned);
+		checkMovesIn(bodyCtx, cloned);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -1503,6 +1505,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, ctorDeclNode);
+		checkMovesIn(bodyCtx, ctorDeclNode);
 		if (newSite != null && bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + classSym.name + displayTypeArgs(types) + "': " + bodyCtx.errors[errBefore].message, newSite.line, newSite.column);
 			while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();
