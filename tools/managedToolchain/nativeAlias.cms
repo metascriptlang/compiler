@@ -52,7 +52,9 @@ when (windows) {
 		ref info: AttributeTagInformation, size: uint32,
 	): int32;
 
-	function symbolicLinkKernel(path: string): Result<boolean, IoError> {
+	const SYMLINK_FLAG_RELATIVE: uint32 = 1;
+
+	function openReparsePoint(path: string): Result<Ptr<void>, IoError> {
 		const wide = widePath(path);
 		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
 		const handle = CreateFileW(wide, 0,
@@ -64,6 +66,13 @@ when (windows) {
 		if (handle == INVALID_HANDLE_VALUE) {
 			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(openError), path));
 		}
+		return Result.ok(handle);
+	}
+
+	function symbolicLinkKernel(path: string): Result<boolean, IoError> {
+		const opened = openReparsePoint(path);
+		if (!opened.ok) { return Result.err(opened.error); }
+		const handle = opened.value;
 		let info: AttributeTagInformation = {};
 		const read = GetFileInformationByHandleEx(handle, FileAttributeTagInfo,
 			info, sizeof(AttributeTagInformation) as uint32);
@@ -90,17 +99,9 @@ when (windows) {
 	function verifyKernel(path: string, target: string): Result<void, IoError> {
 		const data = Buffer.alloc(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
 		const countBytes = Buffer.alloc(4);
-		const wide = widePath(path);
-		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
-		const handle = CreateFileW(wide, 0,
-			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-			null, OPEN_EXISTING,
-			FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, null);
-		const openError = handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-		freeWide(wide);
-		if (handle == INVALID_HANDLE_VALUE) {
-			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(openError), path));
-		}
+		const opened = openReparsePoint(path);
+		if (!opened.ok) { return Result.err(opened.error); }
+		const handle = opened.value;
 		const read = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, null, 0,
 			data as Span<uint8> as Ptr<void>, data.length as uint32,
 			countBytes as Span<uint8> as Ptr<void>, null);
@@ -121,7 +122,8 @@ when (windows) {
 		if (!parsed.ok) {
 			return Result.err(ioError(IoErrorKind.Unknown, path, parsed.error));
 		}
-		if (parsed.value.tag != SYMLINK_TAG || (parsed.value.flags & 1) == 0) {
+		if (parsed.value.tag != SYMLINK_TAG ||
+			(parsed.value.flags & SYMLINK_FLAG_RELATIVE) == 0) {
 			return Result.err(mismatch(path));
 		}
 		const expected = widePath(target);
