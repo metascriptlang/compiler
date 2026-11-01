@@ -33,7 +33,10 @@ export function darwinConfigName(target: DarwinTarget): string {
 }
 
 export function renderDarwinConfig(target: DarwinTarget): string {
-	const arch = target == DarwinTarget.Arm64 ? "aarch64" : "x86_64";
+	const arch = match (target) {
+		DarwinTarget.Arm64 => "aarch64",
+		DarwinTarget.X64 => "x86_64",
+	};
 	return [
 		"--target=" + arch + "-apple-macos" + MINIMUM_MACOS_VERSION,
 		"-isysroot <CFGDIR>/" + DARWIN_SYSROOT,
