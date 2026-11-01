@@ -324,7 +324,7 @@ export function fromBase64(b64: string): Result<Buffer, CryptoError> {
 
 // ===== Key Derivation =====
 
-export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
+export function pbkdf2Sync(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
 	if (iterations < 1) return Result.err(invalidInput("pbkdf2", "iterations must be at least 1"));
 	if (keyLength < 1 || keyLength > 1048576) return Result.err(invalidInput("pbkdf2", "keyLength must be between 1 and 1048576"));
 	const result = msCryptoPbkdf2(rawString(password), rawString(salt), iterations, keyLength, digest);
@@ -332,7 +332,9 @@ export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, ke
 	return Result.ok(rawBuffer(result));
 }
 
-export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> {
+export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> { return pbkdf2Sync(password, salt, iterations, keyLength, digest); }
+
+export function hkdfSync(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
 	if (length < 1) return Result.err(invalidInput("hkdf", "length must be at least 1"));
 	const maxLength = 255 * msCryptoHashSize(algorithm);
 	if (length > maxLength) return Result.err(invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`));
@@ -340,3 +342,5 @@ export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, in
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
 }
+
+export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> { return hkdfSync(algorithm, ikm, salt, info, length); }

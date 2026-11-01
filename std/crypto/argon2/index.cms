@@ -68,7 +68,7 @@ export const defaultArgon2Limits: Argon2Limits = {
  * parallelism: threads (default 4)
  * hashLen: output bytes (default 32)
  */
-export async function argon2Hash(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<string, CryptoError>> {
+export function argon2HashSync(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Result<string, CryptoError> {
 	const salt = rawString(saltBytes);
 	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.byteLength);
 	if (invalid != "") {
@@ -81,11 +81,13 @@ export async function argon2Hash(password: Bytes, saltBytes: Bytes, timeCost: in
 	return Result.ok(result);
 }
 
+export async function argon2Hash(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<string, CryptoError>> { return argon2HashSync(password, saltBytes, timeCost, memoryCost, parallelism, hashLen); }
+
 /**
  * Hash with raw binary output (not encoded).
  * Use when you need the hash bytes directly (e.g., for key derivation).
  */
-export async function argon2HashRaw(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+export function argon2HashRawSync(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Result<Buffer, CryptoError> {
 	const salt = rawString(saltBytes);
 	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.byteLength);
 	if (invalid != "") {
@@ -97,6 +99,8 @@ export async function argon2HashRaw(password: Bytes, saltBytes: Bytes, timeCost:
 	}
 	return Result.ok(rawBuffer(result));
 }
+
+export async function argon2HashRaw(password: Bytes, saltBytes: Bytes, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<Buffer, CryptoError>> { return argon2HashRawSync(password, saltBytes, timeCost, memoryCost, parallelism, hashLen); }
 
 // ===== Verification =====
 
@@ -131,6 +135,8 @@ function withinLimits(encoded: string, limits: Argon2Limits): boolean {
  * malformed, or asks for more than `limits` allows. A plain boolean, so `if (await argon2Verify(...))`
  * can never accept a hash that was refused.
  */
-export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): Promise<boolean> {
+export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): boolean {
 	return withinLimits(encoded, limits) && msCryptoArgon2Verify(encoded, rawString(password));
 }
+
+export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): Promise<boolean> { return argon2VerifySync(encoded, password, limits); }

@@ -100,7 +100,7 @@ function liveHandle(key: AesKey, op: string): int64 {
  * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
  * Completes inline on C: nothing waits, so nothing spawns.
  */
-export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "seal");
 	const text = rawString(plainTextBytes);
 	const sealed = newOutputBuffer(12 + (text.byteLength as int64) + 16);
@@ -114,12 +114,14 @@ export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes =
 	return Result.ok(sealed);
 }
 
+export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return sealSync(key, plainTextBytes, aadBytes); }
+
 /**
  * Decrypt AES-GCM sealed blob. Verifies authentication tag.
  * Input: nonce(12) || cipherText || authTag(16).
  * Returns plainText or error if authentication fails.
  */
-export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+export function openSync(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "open");
 	const sealed = rawString(sealedBytes);
 	if (sealed.byteLength < 28) {
@@ -132,13 +134,15 @@ export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""
 	return Result.ok(plain);
 }
 
+export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return openSync(key, sealedBytes, aadBytes); }
+
 // ===== CBC Mode (expert use — no authentication) =====
 
 /**
  * AES-CBC encrypt with PKCS7 padding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
-export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function cbcEncryptSync(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "cbcEncrypt");
 	const iv = rawString(ivBytes);
 	if (iv.byteLength != 16) {
@@ -151,12 +155,14 @@ export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: By
 	return Result.ok(rawBuffer(result));
 }
 
+export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> { return cbcEncryptSync(key, plainTextBytes, ivBytes); }
+
 /**
  * AES-CBC decrypt with PKCS7 unpadding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
  * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
-export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function cbcDecryptSync(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "cbcDecrypt");
 	const iv = rawString(ivBytes);
 	if (iv.byteLength != 16) {
@@ -168,6 +174,8 @@ export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: B
 	}
 	return Result.ok(rawBuffer(plainText));
 }
+
+export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> { return cbcDecryptSync(key, cipherTextBytes, ivBytes); }
 
 function patternBuffer(size: int32): Buffer {
 	const buf = Buffer.alloc(size);

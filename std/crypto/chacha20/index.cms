@@ -74,7 +74,7 @@ function liveHandle(key: ChaChaKey, op: string): int64 {
  * Encrypt with XChaCha20-Poly1305. Returns nonce(24) || cipherText || mac(16) as one Buffer.
  * Completes inline on C: nothing waits, so nothing spawns.
  */
-export async function seal(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+export function sealSync(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "seal");
 	const text = rawString(plainText);
 	const sealed = newOutputBuffer(24 + (text.byteLength as int64) + 16);
@@ -84,7 +84,9 @@ export async function seal(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): P
 	return Result.ok(sealed);
 }
 
-export async function open(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+export async function seal(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return sealSync(key, plainText, aad); }
+
+export function openSync(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "open");
 	const sealed = rawString(sealedBytes);
 	if (sealed.byteLength < 40) {
@@ -96,6 +98,8 @@ export async function open(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""):
 	}
 	return Result.ok(plain);
 }
+
+export async function open(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return openSync(key, sealedBytes, aad); }
 
 function patternBuffer(size: int32): Buffer {
 	const buf = Buffer.alloc(size);
