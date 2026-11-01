@@ -642,8 +642,8 @@ test "new expression" {
 
 test "array access" {
 	const js = genFromSource("const arr = [1]; arr[0];");
-	assert js.startsWith("const arr = [1];\narr[msChkIndex");
-	assert js.endsWith("(0, arr.length)];\n");
+	assert js.startsWith("const arr = [1];\narr[(((0 >= 0) && (0 < arr.length)) ? 0 : msIndexFail");
+	assert js.endsWith("(0, arr.length))];\n");
 }
 
 test "std import emitted" {
