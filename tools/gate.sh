@@ -927,7 +927,7 @@ self_host_boot() {
 test_one() {
   local bin=$1 f=$2 part=$3; shift 3
   printf 'gate: test job=%s %s\n' "${part##*/}" "$*" >"$part"
-  env -u NO_COLOR -u FORCE_COLOR "$bin" test --time "$f" "$@" >>"$part" 2>&1
+  env -u NO_COLOR -u FORCE_COLOR MSC="$bin" "$bin" test --time "$f" "$@" >>"$part" 2>&1
   local rc=$?
   case $rc in 137|143) echo "(exit $rc)" >>"$part" ;; esac
   echo $rc >"$part.rc"
@@ -941,6 +941,7 @@ test_one_self_test() (
 #!/bin/bash
 printf '%s\n' "$@" >"$GATE_TEST_ARGS"
 [ -z "${NO_COLOR+x}${FORCE_COLOR+x}" ] || exit 9
+[ "$MSC" = "$0" ] || exit 8
 [ "$2" != --time ] || printf 'compiled in 1.0ms\n'
 if [ "$GATE_TEST_RC" != 0 ]; then
   printf ' FAIL  %s\n\n  × preserved failure\n' "$GATE_TEST_ENTRY"
