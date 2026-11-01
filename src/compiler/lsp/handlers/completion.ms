@@ -10,17 +10,18 @@ import {
 	lspResponse
 } from "../protocol";
 import {
-	lspFmtCompletionItem, lspFmtLeanCompletionItem, lspFmtMultiLineTextEdit,
+	lspFmtCompletionItem, lspFmtMultiLineTextEdit,
 } from "../format";
 import {
-	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates, sgCompleteLocals,
+	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates, sgFilterUnprefixedCandidates, sgCompleteLocals,
 	sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
 	sgComputeImportEdit, sgQueryAtPosition, sgQueryContextualTypeAt, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
-import { CheckerContext, findModuleExports } from "../../../checker/context";
+import { CheckerContext, findModuleExports, isCancelled } from "../../../checker/context";
+import { requestCancel, resetCancel } from "../../transam/cancel";
 import { sgJsxSiteAt, sgCompleteJsx, sgFieldDeclLine } from "../../../checker/suggest";
 import { handleDidOpen, handleDidChange } from "./lifecycle";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
@@ -33,13 +34,17 @@ import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/res
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
 	cacheResolveEdit, lookupResolveEdit, resolveKey, lspHasBuiltinDoc,
-	CompletionCache, createCompletionCache, LspCursorParams, storeCompletion, completionCacheServes
+	CompletionCache, CompletionSnapshot, createCompletionCache, LspCursorParams, completionCacheServes,
+	completionSnapshotOf, completionSnapshotCurrent, fillCompletionCache,
 } from "./shared";
 
 
-// Pre-built completion items: per-file cache (Map with capacity 10).
-// Prevents cache thrashing when jumping between open files.
-let _prebuiltCache: HashMap<string, string[]> = new HashMap<string, string[]>();
+class PrebuiltCompletion {
+	snapshot: CompletionSnapshot;
+	candidates: SgSuggest[];
+}
+
+let _prebuiltCache: HashMap<string, PrebuiltCompletion> = new HashMap<string, PrebuiltCompletion>();
 const PREBUILT_CAPACITY = 10;
 
 const STMT_KEYWORDS: string[] = ["actor", "assert", "async", "await", "break", "case", "catch", "class", "const", "continue", "converter", "default", "defer", "do", "else", "enum", "export", "extern", "false", "finally", "for", "function", "if", "import", "interface", "let", "macro", "match", "move", "new", "null", "quote", "return", "sizeof", "static", "struct", "super", "switch", "template", "test", "this", "throw", "true", "try", "type", "typeof", "undefined", "unreachable", "var", "when", "while"];
@@ -56,55 +61,17 @@ function lspKeywordItems(kind: SgCompletionKind, prefix: string): string[] {
 	return result;
 }
 
-function lspLocalsBefore(db: TransAmDb, path: string, program: Node, pos: LspCursorParams, prebuilt: string[]): string[] {
-	const ctx = dbTypeCheck(db, path);
-	if (ctx == null) return prebuilt;
-	const locals = sgCompleteLocals(ctx, program, pos.line, pos.col + 1, "", false);
-	if (locals.length == 0) return prebuilt;
-	const shadowed: HashSet<string> = new HashSet<string>();
-	for (const local of locals) shadowed.add(local.name);
-	const items = formatCompletionItemsArray(locals, db, path);
-	for (const item of prebuilt) if (!shadowed.has(lspGetField(item, "label"))) items.push(item);
-	return items;
-}
-
 export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) return;
-	const program = dbParse(db, path);
-	if (program == null) return;
-	const source = dbGetSource(db, path);
-	// Build minimal items (label + kind + sortText only) for fast stdio transfer.
-	// Defer detail/docs/textEdit to completionItem/resolve.
+	const snapshot = completionSnapshotOf(db, ctx);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
-	const items: string[] = [];
-	for (const kw of STMT_KEYWORDS) {
-		items.push(lspFmtLeanCompletionItem(kw, KEYWORD_COMPLETION_KIND, "15"));
-	}
-	for (const c of candidates) {
-		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
-		const sortText = lspCompletionSortText(c);
-		items.push(lspFmtLeanCompletionItem(c.name, kindNum, sortText));
-	}
-	// Cross-module candidates (also minimal — just label + kind)
-	if (db.exportRegistry != null) {
-		const inScopeSet: HashSet<string> = new HashSet<string>();
-		for (const c of candidates) { inScopeSet.add(c.name); }
-		for (const entry of db.exportRegistry.entries) {
-			if (entry.modulePath == path) continue;
-			for (const sym of entry.symbols) {
-				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
-				if (sym.ext != null) continue;
-				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
-				items.push(lspFmtLeanCompletionItem(sym.name, kindNum, "25", resolveKey(entry.modulePath, sym.name)));
-			}
-		}
-	}
+	if (isCancelled(db.cancelCtx, snapshot.cancelVersion) || db.revision.value != snapshot.revision) return;
 	// Evict oldest if at capacity (simple: clear all — LRU is overkill for 10 entries)
 	if (_prebuiltCache.size >= PREBUILT_CAPACITY) {
-		_prebuiltCache = new HashMap<string, string[]>();
+		_prebuiltCache = new HashMap<string, PrebuiltCompletion>();
 	}
-	_prebuiltCache.set(uri, items);
+	_prebuiltCache.set(uri, { snapshot, candidates });
 }
 
 // ===== Object Literal Type Resolution (AST-Based) =====
@@ -329,6 +296,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (kind == SgCompletionKind.ObjectField) {
 		const ctx = dbTypeCheck(db, path);
 		if (ctx != null) {
+			const snapshot = completionSnapshotOf(db, ctx);
 			// The checker records every object literal's contextual type at the
 			// literal's own '{'. Resolving the INNERMOST literal that way needs no
 			// field path and works in argument/return/nested position; the
@@ -345,7 +313,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 					const innerCands = sgCompleteObjectFields(ctx, prefix, innerSg.symType, emptyPath, innerKeys);
 					if (innerCands.length > 0) {
 						const innerItems = formatCompletionItemsArray(innerCands, db, path);
-						storeCompletion(cache, pos, kind as int32, prefix, innerItems);
+						fillCompletionCache(cache, snapshot, pos, kind as int32, prefix, innerItems);
 						return lspResponse(id, joinJsonItems(innerItems));
 					}
 				}
@@ -360,30 +328,15 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			if (rootType != null) {
 				const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
 				const objItems = formatCompletionItemsArray(objCandidates, db, path);
-				storeCompletion(cache, pos, kind as int32, prefix, objItems);
+				fillCompletionCache(cache, snapshot, pos, kind as int32, prefix, objItems);
 				return lspResponse(id, joinJsonItems(objItems));
 			}
 		}
 		return lspResponse(id, "[]");
 	}
 
-	// Prebuilt cache hit: return pre-computed items instantly, after the cursor's locals, which
-	// the file-wide list cannot hold. Skip for member access (char before cursor is '.') and
-	// import triggers.
-	const charBefore = pos.col > 0 ? source.byteAt(lineOffset(source, pos.line) + pos.col - 1) : 0;
-	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
-	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
-		const limited = lspLocalsBefore(db, path, program, pos, prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems);
-		storeCompletion(cache, pos, kind as int32, "", limited);
-		return lspResponse(id, joinJsonItems(limited));
-	}
-
-	// Cache hit: same file, same line, prefix extends previous — filter instantly
-	if (completionCacheServes(cache, pos, kind as int32, prefix)) {
-		const filtered = filterCompletionItems(cache.items, prefix);
-		storeCompletion(cache, pos, kind as int32, prefix, filtered);
-		return lspResponse(id, joinJsonItems(filtered));
-	}
+	const reuseScope = completionCacheServes(cache, pos, kind as int32, prefix) && completionSnapshotCurrent(cache.snapshot, db, path);
+	if (reuseScope && prefix == cache.prefix) return lspResponse(id, joinJsonItems(cache.items));
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) {
@@ -398,6 +351,8 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		}
 		return lspResponse(id, "[]");
 	}
+
+	const snapshot = completionSnapshotOf(db, ctx);
 
 	// For MemberAccess, resolve receiver type via symRecords.
 	// Works for both simple (config.) and nested (config.fmt.) chains:
@@ -443,7 +398,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// ObjectField handled early (before caches) — see above
 
-	let candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType, staticOwner);
+	const prebuilt = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
+	const scopeCandidates = reuseScope ? cache.scopeCandidates
+		: kind == SgCompletionKind.Identifier && prebuilt != null && completionSnapshotCurrent(prebuilt.snapshot, db, path)
+			? prebuilt.candidates
+			: sgGetCompletionCandidates(ctx, kind, "", receiverType, staticOwner);
+	let candidates = sgFilterUnprefixedCandidates(scopeCandidates, prefix);
 	if (kind == SgCompletionKind.Identifier || kind == SgCompletionKind.TypeAnnotation) {
 		const locals = sgCompleteLocals(ctx, program, pos.line, pos.col + 1, prefix, kind == SgCompletionKind.TypeAnnotation);
 		const shadowed: HashSet<string> = new HashSet<string>();
@@ -452,7 +412,6 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		candidates = locals;
 	}
 
-	// Cache the individual formatted items for future prefix filtering
 	const cachedItems = formatCompletionItemsArray(candidates, db, path);
 
 	// Cross-module auto-import candidates
@@ -474,7 +433,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		}
 	}
 
-	storeCompletion(cache, pos, kind as int32, prefix, cachedItems);
+	fillCompletionCache(cache, snapshot, pos, kind as int32, prefix, cachedItems, scopeCandidates);
 
 	return lspResponse(id, joinJsonItems(cachedItems));
 }
@@ -733,17 +692,6 @@ function joinJsonItems(items: string[]): string {
 }
 
 // Filter cached completion items by prefix match on label.
-function filterCompletionItems(items: string[], prefix: string): string[] {
-	const result: string[] = [];
-	for (let i = 0; i < items.length; i = i + 1) {
-		const label = lspGetField(items[i], "label");
-		if (label.startsWith(prefix)) {
-			result.push(items[i]);
-		}
-	}
-	return result;
-}
-
 // ===== Object-field completion: the contextual type, not the declaration =====
 // Completion used to resolve an object literal's type by climbing to an
 // annotated VariableDecl, so it only fired for `const x: T = { … }`. The
@@ -1018,4 +966,164 @@ test "completion resolve: an item without its data key gets no edit" {
 	cacheResolveEdit(resolveKey("/m/c.ms", "lonely"), "[C]");
 	const r = handleCompletionResolve("1", `{"label":"lonely"}`);
 	assert r.indexOf("additionalTextEdits", 0) < 0;
+}
+
+function cacheProbeParams(uri: string, line: int32, col: int32): string {
+	return `{"textDocument":{"uri":"${uri}"},"position":{"line":${line},"character":${col}}}`;
+}
+
+test "completion cache: an input edit that keeps the line and prefix drops the cached list" {
+	const uri = "file:///cachedit.ms";
+	const path = lspUriToPath(uri);
+	const db = createTransAmDb(100);
+	const cache = createCompletionCache();
+	dbSetFileText(db, path, "const alpone = 1;\nconst alptwo = 2;\nalp");
+	const first = handleCompletion("1", cacheProbeParams(uri, 2, 3), db, cache);
+	assert first.indexOf("\"label\":\"alpone\"", 0) >= 0;
+	dbSetFileText(db, path, "const alpone = 1;\nconst alpnew = 2;\nalp");
+	const second = handleCompletion("2", cacheProbeParams(uri, 2, 3), db, cache);
+	assert second.indexOf("\"label\":\"alpnew\"", 0) >= 0;
+	assert second.indexOf("\"label\":\"alptwo\"", 0) < 0;
+}
+
+test "completion cache: an extended prefix reuses unprefixed scope candidates" {
+	const uri = "file:///cachereuse.ms";
+	const path = lspUriToPath(uri);
+	const db = createTransAmDb(100);
+	const cache = createCompletionCache();
+	dbSetFileText(db, path, "const alpone = 1;\nconst betone = 2;\nal");
+	handleCompletion("1", cacheProbeParams(uri, 2, 1), db, cache);
+	handleCompletion("2", cacheProbeParams(uri, 2, 1), db, cache);
+	assert cache.snapshot != null;
+	const firstCandidate = cache.scopeCandidates[0];
+	assert cache.prefix == "a";
+	const narrowed = handleCompletion("3", cacheProbeParams(uri, 2, 2), db, cache);
+	assert cache.scopeCandidates[0] == firstCandidate;
+	assert cache.prefix == "al";
+	assert narrowed.indexOf("\"label\":\"alpone\"", 0) >= 0;
+	assert narrowed.indexOf("\"label\":\"betone\"", 0) < 0;
+}
+
+test "completion cache: stable prefixes keep case and substring matches" {
+	for (const prefix of ["fo", "oo"]) {
+		const uri = "file:///cachefuzzy.ms";
+		const path = lspUriToPath(uri);
+		const db = createTransAmDb(100);
+		const cache = createCompletionCache();
+		dbSetFileText(db, path, "const Foobar = 1;\n" + prefix + "\n");
+		handleCompletion("0", cacheProbeParams(uri, 1, 1), db, cache);
+		handleCompletion("0", cacheProbeParams(uri, 1, 1), db, cache);
+		assert cache.snapshot != null;
+		const cached = handleCompletion("1", cacheProbeParams(uri, 1, 2), db, cache);
+		const direct = handleCompletion("1", cacheProbeParams(uri, 1, 2), db, createCompletionCache());
+		assert direct.indexOf("\"label\":\"Foobar\"", 0) >= 0;
+		assert cached == direct;
+	}
+}
+
+test "completion cache: filtering unprefixed candidates preserves checker ranking without mutating them" {
+	const db = createTransAmDb(100);
+	const path = "/cacherank.ms";
+	dbSetFileText(db, path, "const xazz = 1;\nconst aaaz = 2;\nconst Foobar = 3;\n");
+	const ctx = dbTypeCheck(db, path);
+	assert ctx != null;
+	const all = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
+	for (const prefix of ["a", "az", "fo", "oo"]) {
+		const filtered = sgFilterUnprefixedCandidates(all, prefix);
+		const direct = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, prefix, null);
+		assert filtered.length == direct.length;
+		for (let i: int32 = 0; i < direct.length; i++) {
+			assert filtered[i].sym == direct[i].sym;
+			assert filtered[i].prefixScore == direct[i].prefixScore;
+		}
+	}
+	for (const candidate of all) assert candidate.prefixScore == 2;
+}
+
+test "completion cache: another db never reuses the list of the first" {
+	const uri = "file:///cachedbs.ms";
+	const path = lspUriToPath(uri);
+	const first = createTransAmDb(100);
+	const second = createTransAmDb(100);
+	const cache = createCompletionCache();
+	dbSetFileText(first, path, "const alpone = 1;\nal");
+	dbSetFileText(second, path, "const alpzzz = 1;\nal");
+	handleCompletion("1", cacheProbeParams(uri, 1, 2), first, cache);
+	const fromSecond = handleCompletion("2", cacheProbeParams(uri, 1, 2), second, cache);
+	assert fromSecond.indexOf("\"label\":\"alpzzz\"", 0) >= 0;
+	assert fromSecond.indexOf("\"label\":\"alpone\"", 0) < 0;
+}
+
+test "completion cache: a prebuilt list built before an edit is not served after it" {
+	const uri = "file:///prebuiltedit.ms";
+	const path = lspUriToPath(uri);
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, "const oldname = 1;\n\n");
+	prebuildCompletionCache(db, path, uri);
+	dbSetFileText(db, path, "const newname = 1;\n\n");
+	const r = handleCompletion("1", cacheProbeParams(uri, 1, 0), db, createCompletionCache());
+	assert r.indexOf("\"label\":\"newname\"", 0) >= 0;
+	assert r.indexOf("\"label\":\"oldname\"", 0) < 0;
+}
+
+test "completion cache: a prebuilt list of an unchanged snapshot is served" {
+	const uri = "file:///prebuiltkeep.ms";
+	const path = lspUriToPath(uri);
+	const db = createTransAmDb(100);
+	const cache = createCompletionCache();
+	dbSetFileText(db, path, "const keepname = 1;\n\n");
+	handleCompletion("0", cacheProbeParams(uri, 1, 0), db, cache);
+	prebuildCompletionCache(db, path, uri);
+	const r = handleCompletion("1", cacheProbeParams(uri, 1, 0), db, cache);
+	assert r.indexOf("\"label\":\"keepname\"", 0) >= 0;
+	assert cache.snapshot != null;
+	assert cache.prefix == "";
+}
+
+test "completion cache: a prebuilt list answers the payload an uncached completion does" {
+	const uri = "file:///prebuiltsame.ms";
+	const path = lspUriToPath(uri);
+	const globals = ["const pinglobal = 1;"];
+	for (let i: int32 = 0; i < 101; i++) {
+		globals.push(`const pinextra${i} = ${i};`);
+	}
+	const params = cacheProbeParams(uri, globals.length + 2, 1);
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, globals.join("\n") +
+		"\nfunction pinfn(pinparam: int32): void {\n\tconst pinlocal = pinparam;\n\t\n}\n");
+	handleCompletion("0", params, db, createCompletionCache());
+	prebuildCompletionCache(db, path, uri);
+	const cache = createCompletionCache();
+	const viaPrebuilt = handleCompletion("1", params, db, cache);
+	assert cache.snapshot != null;
+	_prebuiltCache = new HashMap<string, PrebuiltCompletion>();
+	const uncached = handleCompletion("1", params, db, createCompletionCache());
+	assert viaPrebuilt == uncached;
+	assert viaPrebuilt.indexOf("\"label\":\"pinglobal\"", 0) >= 0;
+	assert viaPrebuilt.indexOf("\"label\":\"pinlocal\"", 0) >= 0;
+	assert viaPrebuilt.indexOf("\"label\":\"pinparam\"", 0) >= 0;
+	const labels = viaPrebuilt.split("\"label\":").length - 1;
+	assert labels > 100;
+	assert viaPrebuilt.split("\"detail\":").length - 1 == labels;
+}
+
+test "completion cache: a computation cancelled or overtaken by an input change is not stored" {
+	const path = lspUriToPath("file:///cachestop.ms");
+	const db = createTransAmDb(100);
+	const cache = createCompletionCache();
+	dbSetFileText(db, path, "const stopone = 1;\n");
+	const ctx = dbTypeCheck(db, path);
+	assert ctx != null;
+	const snapshot = completionSnapshotOf(db, ctx);
+	const pos: LspCursorParams = { uri: "file:///cachestop.ms", line: 1, col: 0, col1: 1 };
+	requestCancel(db.cancelCtx);
+	fillCompletionCache(cache, snapshot, pos, 0, "", ["{}"]);
+	assert cache.snapshot == null && cache.items.length == 0;
+	resetCancel(db.cancelCtx);
+	fillCompletionCache(cache, snapshot, pos, 0, "", ["{}"]);
+	assert cache.snapshot == null && cache.items.length == 0;
+	const beforeEdit = completionSnapshotOf(db, dbTypeCheck(db, path));
+	dbSetFileText(db, path, "const stoptwo = 1;\n");
+	fillCompletionCache(cache, beforeEdit, pos, 0, "", ["{}"]);
+	assert cache.snapshot == null && cache.items.length == 0;
 }

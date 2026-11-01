@@ -465,16 +465,23 @@ test "unknown doc returns empty" {
 	assert lspGetNumberField(r, "id") == 6;
 }
 
-test "completion cache hit on prefix extend" {
+test "completion cache reuses scope candidates on prefix extend" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const cache = testCache();
 	const params1 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":2}}";
+	handleCompletion("9", params1, db, cache);
 	const r1 = handleCompletion("10", params1, db, cache);
 	assert cache.items.length > 0;
 	assert cache.uri == "file:///test.ms";
+	const snapshot = cache.snapshot;
+	assert snapshot != null && cache.scopeCandidates.length > 0;
+	const firstCandidate = cache.scopeCandidates[0];
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r2 = handleCompletion("11", params2, db, cache);
 	assert r2.length > 0;
+	assert cache.snapshot != null;
+	assert cache.snapshot.check == snapshot.check && cache.snapshot.revision == snapshot.revision;
+	assert cache.scopeCandidates[0] == firstCandidate;
 }
 
 test "completion cache miss on different line" {
@@ -1848,6 +1855,13 @@ function syncWatchedParams(path: string, changeType: int32): string {
 	return "{\"changes\":[{\"uri\":" + lspJsonString(lspPathToUri(path)) + ",\"type\":" + changeType + "}]}";
 }
 
+function syncMemberParams(path: string): string {
+	const col = USE_PERCENT.split("\n")[1].indexOf("dice.percent") + 5;
+	const document = syncDocumentParams(path);
+	return document.byteSlice(0, document.byteLength - 1) +
+		`,"position":{"line":1,"character":${col}}}`;
+}
+
 function syncReportsMissingPercent(db: TransAmDb, path: string): boolean {
 	return buildDiagnosticsJson(lspPathToUri(path), db, path).indexOf("'percent'") >= 0;
 }
@@ -1865,10 +1879,19 @@ test "a dependency changed on disk re-checks an open importer" {
 	const db = createTransAmDb(100);
 	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
 	assert syncReportsMissingPercent(db, usePath);
+	const cache = createCompletionCache();
+	const params = syncMemberParams(usePath);
+	handleCompletion("1", params, db, cache);
+	const before = handleCompletion("2", params, db, cache);
+	assert cache.snapshot != null;
+	assert before.includes("\"label\":\"pct\"");
 	writeFile(depPath, DEP_WITH_PERCENT);
 	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
 	publishPendingDiagnostics(db);
 	assert !syncReportsMissingPercent(db, usePath);
+	const after = handleCompletion("3", params, db, cache);
+	assert after.includes("\"label\":\"percent\"");
+	assert !after.includes("\"label\":\"pct\"");
 	markDocumentClosed(usePath);
 }
 
@@ -1908,10 +1931,19 @@ test "closing a document falls back to disk and re-checks its importers" {
 	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
 	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
 	assert !syncReportsMissingPercent(db, usePath);
+	const cache = createCompletionCache();
+	const params = syncMemberParams(usePath);
+	handleCompletion("1", params, db, cache);
+	const before = handleCompletion("2", params, db, cache);
+	assert cache.snapshot != null;
+	assert before.includes("\"label\":\"percent\"");
 	handleDidClose(syncDocumentParams(depPath), db);
 	assert dbGetSource(db, depPath) == DEP_WITH_PCT;
 	assert publishPendingDiagnostics(db).indexOf("'percent'") >= 0;
 	assert syncReportsMissingPercent(db, usePath);
+	const after = handleCompletion("3", params, db, cache);
+	assert after.includes("\"label\":\"pct\"");
+	assert !after.includes("\"label\":\"percent\"");
 	markDocumentClosed(usePath);
 }
 

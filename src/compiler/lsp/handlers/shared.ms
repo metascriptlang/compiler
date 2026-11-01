@@ -3,7 +3,10 @@
 // Contains CompletionCache, deferred diagnostics publishing, cursor extraction,
 // source text access, and import resolution.
 
-import { TransAmDb, dbSetFileText, getFileText, getFileId } from "../../transam/index";
+import { TransAmDb, dbSetFileText, dbTypeCheck, getFileText, getFileId } from "../../transam/index";
+import { CheckerContext, isCancelled } from "../../../checker/context";
+import { SgSuggest } from "../../../checker/suggest";
+import { getCancelVersion } from "../../transam/cancel";
 import { readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import {
@@ -14,16 +17,56 @@ import { Symbol } from "../../../ast/node";
 
 
 // ===== Completion Cache =====
-// Caches last completion list per file for zero-lag character-by-character filtering.
 // Shared with server.ms via LspServerState.
 
+export class CompletionSnapshot {
+	db: TransAmDb;
+	revision: int32;
+	cancelVersion: int32;
+	check: CheckerContext;
+}
+
 export class CompletionCache {
+	snapshot: CompletionSnapshot | null;
 	uri: string;           // file URI of last completion
 	line: number;          // line of last completion (1-indexed, internal)
 	anchor: number;        // 0-based byte column where the typed prefix starts
 	kind: number;          // SgCompletionKind of last completion
 	prefix: string;        // prefix used for last completion
 	items: string[];       // cached per-item JSON strings
+	scopeCandidates: SgSuggest[];
+}
+
+export function completionSnapshotOf(db: TransAmDb, check: CheckerContext): CompletionSnapshot {
+	return { db, revision: db.revision.value, cancelVersion: getCancelVersion(db.cancelCtx), check };
+}
+
+export function completionSnapshotCurrent(snapshot: CompletionSnapshot | null, db: TransAmDb, path: string): boolean {
+	if (snapshot == null || snapshot.db != db || snapshot.revision != db.revision.value) return false;
+	const cancelVersion = getCancelVersion(db.cancelCtx);
+	const check = dbTypeCheck(db, path);
+	return check == snapshot.check && snapshot.revision == db.revision.value && !isCancelled(db.cancelCtx, cancelVersion);
+}
+
+export function clearCompletionCache(cache: CompletionCache): void {
+	cache.snapshot = null;
+	cache.uri = "";
+	cache.line = -1;
+	cache.anchor = -1;
+	cache.kind = -1;
+	cache.prefix = "";
+	cache.items = [];
+	cache.scopeCandidates = [];
+}
+
+export function fillCompletionCache(cache: CompletionCache, snapshot: CompletionSnapshot, pos: LspCursorParams, kind: int32, prefix: string, items: string[], scopeCandidates: SgSuggest[] = []): void {
+	if (isCancelled(snapshot.db.cancelCtx, snapshot.cancelVersion) || snapshot.db.revision.value != snapshot.revision) {
+		clearCompletionCache(cache);
+		return;
+	}
+	cache.snapshot = snapshot;
+	cache.scopeCandidates = scopeCandidates;
+	storeCompletion(cache, pos, kind, prefix, items);
 }
 
 // Resolve cache: maps an item's data key to additionalTextEdits JSON for completionItem/resolve.
@@ -46,7 +89,7 @@ export function lookupResolveEdit(key: string): string {
 }
 
 export function createCompletionCache(): CompletionCache {
-	return { uri: "", line: -1, anchor: -1, kind: -1, prefix: "", items: [] };
+	return { snapshot: null, uri: "", line: -1, anchor: -1, kind: -1, prefix: "", items: [], scopeCandidates: [] };
 }
 
 export function storeCompletion(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string, items: string[]): void {

@@ -20,7 +20,7 @@ import { env } from "std/process";
 import { newCliOptions, applyProjectConfig } from "../options";
 import { buildResolverConfig } from "../compile";
 import { resetCancel } from "../transam/cancel";
-import { CompletionCache, createCompletionCache, markDependentsStale } from "./handlers/shared";
+import { CompletionCache, createCompletionCache, clearCompletionCache, markDependentsStale } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
 import { projectUniverse } from "./projectUniverse";
 
@@ -391,12 +391,6 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 		return state.watchFilesThroughClient ? lspFormatMessage(watchedFilesRegistration()) : "";
 	}
 
-	// Invalidate completion cache when new content arrives
-	if (method == DID_CHANGE || method == "textDocument/didOpen") {
-		state.completionCache.uri = "";
-		state.completionCache.line = -1;
-	}
-
 	let flushed = qm.fileUri != "" ? selectProject(state, findProjectRoot(lspUriToPath(qm.fileUri))) : "";
 
 	const isCompletion = method == "textDocument/completion";
@@ -422,8 +416,7 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 	resetCancel(state.db.cancelCtx);
 	if (stopped) {
 		state.yieldToInput = true;
-		state.completionCache.uri = "";
-		state.completionCache.line = -1;
+		clearCompletionCache(state.completionCache);
 		if (idStr != "") return flushed;
 	}
 
