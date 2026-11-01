@@ -50,6 +50,8 @@ test "bindingOwnership: a variable read after its move is refused on every backe
 		{ name: "a Vec read after its move", body: "export function run(): int32 { const v: Vec<int32> = [1, 2]; const w = move v; return w.length + v.length; }", variable: "v" },
 		{ name: "a POD struct read after its move", body: "export function run(): int32 { const a: P = { x: 7 }; const b = move a; return b.x + a.x; }", variable: "a" },
 		{ name: "an int read after its move", body: "export function run(): int32 { let n: int32 = 5; const m = move n; return m + n; }", variable: "n" },
+		{ name: "a read after a move that follows a for..of loop", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (const k of xs) s += k; const a = take(move x); return a + s + x.id; }", variable: "x" },
+		{ name: "a for..of loop that reads the name in the next outer iteration", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (let i = 0; i < 2; i++) { for (const k of xs) s += k + x.id; s += take(move x); } return s; }", variable: "x" },
 	];
 	for (const item of refused) {
 		const errors = refusedOnBothBackends(shapes + item.body);
@@ -62,6 +64,8 @@ test "bindingOwnership: a variable read after its move is refused on every backe
 		{ name: "a variable declared in the loop body", body: "export function run(): int32 { let s = 0; for (let i = 0; i < 3; i++) { const x = new N(); s += take(move x); } return s; }" },
 		{ name: "a catch binding moved in a loop", body: "function boom(): int32 { throw new Error(\"b\"); }\nexport function run(): int32 { const kept: Error[] = []; for (let i = 0; i < 2; i++) { try { boom(); } catch (e) { kept.push(move e); } } return kept.length; }" },
 		{ name: "a POD struct moved at its last read", body: "export function run(): int32 { const a: P = { x: 7 }; const b = move a; return b.x; }" },
+		{ name: "a move after a for..of loop that reads the name", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (const k of xs) s += k + x.id; return s + take(move x); }" },
+		{ name: "a Vec filled in a for..of loop and moved after it", body: "function takeVec(sink v: Vec<int32>): int32 { return v.length; }\nexport function run(): int32 { const xs: Vec<int32> = [1, 2]; let known: Vec<int32> = []; for (const k of xs) known.push(k); return takeVec(move known); }" },
 	];
 	for (const item of kept) {
 		const errors = keptOnBothBackends(shapes + item.body);

@@ -303,10 +303,11 @@ function maybeMoved(scan: MoveScan, read: Node, sym: Symbol, events: HashMap<Flo
 		}
 		if (flags.has(FlowFlag.Assignment) && declaresSym(flow.node, sym)) continue;
 		if (flags.has(FlowFlag.Call) && writesOut(flow.node, sym)) continue;
-		if (flow.antecedent != null) todo.push({ flow: flow.antecedent, anchor: null });
+		const from = flow.node != null && scan.order.has(flow.node) ? flow.node : null;
+		if (flow.antecedent != null) todo.push({ flow: flow.antecedent, anchor: from });
 		let list: FlowList | null = flow.antecedents;
 		while (list != null) {
-			todo.push({ flow: list.flow, anchor: null });
+			todo.push({ flow: list.flow, anchor: from });
 			list = list.next;
 		}
 	}
