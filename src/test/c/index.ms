@@ -41,6 +41,7 @@ import "./promiseThenTyped";
 import "./buildIsolation";
 import "./instanceHome";
 import "./instanceWarm";
+import "./hookHome";
 import "./aggregateLifecycle";
 import "./inheritedTrace";
 import "./referenceTransfer";
