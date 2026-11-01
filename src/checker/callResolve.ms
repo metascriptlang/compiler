@@ -3108,7 +3108,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						? "cannot pass an argument to a 'ref' or 'out' parameter through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)"
 						: ro != null
 						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
-						: writeRefusal(lvArg, WriteSite.RefArg);
+						: writeRefusal(lvArg, paramType.typeReturn != null && paramType.typeReturn.kind == TypeKind.Span ? WriteSite.View : WriteSite.RefArg);
 					if (refusal != null) addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 					else if (lvArg.kind == NodeKind.MemberExpr) callReadonlyFieldWrite(ctx, lvArg);
 					const written = paramType.typeReturn;
