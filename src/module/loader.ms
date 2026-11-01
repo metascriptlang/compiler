@@ -50,7 +50,7 @@ export interface MapEntry {
 
 // Custom read function for Trans-Am integration. When set, bypasses entries/useFileSystem
 // and uses the callback (which can record deps in the caller's query frame).
-type TaReadFn = (path: string) => string;
+type TaReadFn = (path: string) => Result<string, string>;
 
 export class SourceProvider {
 	sources: HashMap<string, string>;  // path → text, the first entry for a path
@@ -73,7 +73,7 @@ export function createFileSystemProvider(): SourceProvider {
 }
 
 // Trans-Am-backed provider. The callback MUST load the file into Trans-Am, record a
-// FileText dependency on the current query frame, and return the raw source string.
+// FileText dependency on the current query frame, and return the source read result.
 // Constructed by transam/index.ms:createTaSourceProvider.
 export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
 	return { sources: new HashMap<string, string>(), stdRoots: new HashMap<string, string>(), useFileSystem: false, taReadFn: readFn, readLog: null };
@@ -81,9 +81,7 @@ export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {
 	if (provider.taReadFn != null) {
-		const content = provider.taReadFn(path);
-		if (content.length > 0) return Result.ok(content);
-		return Result.err(`File not found: ${path}`);
+		return provider.taReadFn(path);
 	}
 	const known = provider.sources.get(path);
 	if (known != null) {
@@ -91,11 +89,11 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 		return Result.ok(known);
 	}
 	if (provider.useFileSystem) {
-		const content = try readFile(path) catch "";
-		if (content.length > 0) {
-			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(content)}`);
-			provider.sources.set(path, content);
-			return Result.ok(content);
+		const read = readFile(path);
+		if (read.ok) {
+			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(read.value)}`);
+			provider.sources.set(path, read.value);
+			return Result.ok(read.value);
 		}
 	}
 	if (provider.readLog != null) provider.readLog.push(`${path}\t-`);

@@ -102,11 +102,11 @@ export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 	db.graph = graph;
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod != null && mod.source != "") dbSetFileText(db, path, mod.rawSource);
+		if (mod != null && (mod.source != "" || mod.program != null)) dbSetFileText(db, path, mod.rawSource);
 	}
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null || mod.source == "") continue;
+		if (mod == null || (mod.source == "" && mod.program == null)) continue;
 		const fileId = getFileId(db.fileInput, path);
 		clearImportsFor(db.moduleDeps, fileId);
 		for (const imp of mod.imports) {
@@ -460,14 +460,14 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: int32): string {
 // provider, the read records a FileText dependency on the current query frame, so the
 // containing Preprocess query auto-invalidates when the .h file changes.
 function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProvider {
-	return createTaReadProvider((headerPath: string) => {
+	return createTaReadProvider((headerPath: string): Result<string, string> => {
 		dbEnsureFileLoaded(db, headerPath);
 		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, getInputId(db.fileInput, headerPath, db.revision.value)));
 		const headerId = getFileId(db.fileInput, headerPath);
-		if (headerId < 0) return "";
+		if (headerId < 0) return Result.err(`File not found: ${headerPath}`);
 		// Also record module edge (eager invalidation — getTransitiveDependents)
 		if (currentFileId >= 0) recordModuleImport(db.moduleDeps, currentFileId, headerId);
-		return getFileText(db.fileInput, headerId);
+		return Result.ok(getFileText(db.fileInput, headerId));
 	});
 }
 

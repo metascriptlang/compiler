@@ -168,7 +168,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const checked: { mod: Module, ctx: CheckerContext }[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
-		if (mod == null || mod.source == "" || preludeOwned.has(path)) continue;
+		if (mod == null || (mod.source == "" && mod.program == null) || preludeOwned.has(path)) continue;
 		mod.exportNames = [];
 		const injectedIncludes = baseCtx.includeDirectives;
 		const injectedFlags = baseCtx.compilerFlags;
