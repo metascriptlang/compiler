@@ -7,7 +7,7 @@
 // @skip-raiser: std/crypto/tls has only a C backend and the Raiser VM cannot spawn processes
 // @serial
 
-import { tlsConnect, tlsClose } from "std/crypto/tls";
+import { tlsConnect, close } from "std/crypto/tls";
 import { argv } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
 
@@ -31,9 +31,9 @@ function sh(script: string, args: string[] = []): string {
 
 if (argv.length > 1 && argv[1] == "connect") {
 	const ca = argv[3] == "-" ? "" : argv[3];
-	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, ca);
+	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, { caPath: ca });
 	if (r.ok) {
-		tlsClose(r.value);
+		r.value.close();
 		console.log("connected");
 	} else {
 		console.log(r.error.message);

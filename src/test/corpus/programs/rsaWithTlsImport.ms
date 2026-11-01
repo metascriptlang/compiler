@@ -14,6 +14,6 @@ if (!generated.ok) throw new Error("rsaGenerate failed");
 const signed = rsaSign(generated.value, "both", "sha256");
 const verified = signed.ok && rsaVerify(generated.value, "both", signed.value, "sha256");
 const unreachable = signed.ok && !verified;
-if (unreachable) tlsConnect("localhost", 1, "");
+if (unreachable) tlsConnect("localhost", 1);
 console.log(`rsa+tls sign ${signed.ok} verify ${verified}`);
 rsaFree(generated.value);

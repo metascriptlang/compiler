@@ -1,6 +1,6 @@
 // An https fetch honours its timeout against a server that accepts and never answers, reaches an
 // IPv4-only server through `localhost`, tells a close_notify end of body from a cut connection, and
-// tlsWrite and tlsConnect refuse the cases the transport used to swallow.
+// write and tlsConnect refuse the cases the transport used to swallow.
 //
 // @stdout: timeout 1000: Timeout in range|timeout 2500: Timeout in range|localhost ipv4-only: 200 clean-close|empty write: 0|long caPath: CA path is longer than 511 bytes|cut no length: Reset closed without close_notify|cut short length: Reset closed without close_notify
 // @exit: 0
@@ -8,7 +8,7 @@
 // @skip-raiser: std/crypto/tls has only a C backend and the Raiser VM cannot spawn processes
 // @serial
 
-import { tlsConnect, tlsWrite, tlsClose } from "std/crypto/tls";
+import { tlsConnect, write, close } from "std/crypto/tls";
 import { fetch, HttpErrorKind } from "std/core/fetch";
 import { createSocket, bind, listen, accept, recv } from "std/net";
 import { argv } from "std/process";
@@ -52,14 +52,14 @@ if (argv.length > 1 && argv[1] == "hold") {
 		console.log(`${kind} ${r.error.message.includes("closed without close_notify") ? "closed without close_notify" : r.error.message}`);
 	}
 } else if (argv.length > 1 && argv[1] == "write0") {
-	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, argv[3]);
+	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, { caPath: argv[3] });
 	if (!r.ok) throw new Error(r.error.message);
-	console.log(`${tlsWrite(r.value, "")}`);
-	tlsClose(r.value);
+	console.log(`${r.value.write("")}`);
+	r.value.close();
 } else if (argv.length > 1 && argv[1] == "longca") {
 	let ca = "/";
 	for (let i = 0; i < 600; i++) ca += "a";
-	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, ca);
+	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, { caPath: ca });
 	console.log(r.ok ? "connected" : r.error.message.includes("longer than 511") ? "CA path is longer than 511 bytes" : r.error.message.slice(0, 60));
 } else {
 	const dir = `/tmp/msTlsTransport-${Date.now()}`;

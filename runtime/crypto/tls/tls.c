@@ -68,14 +68,18 @@ typedef struct msTlsCtx {
 	mbedtls_ssl_config conf;
 	mbedtls_x509_crt ownCa; /* parsed for an explicit caPath only */
 	mbedtls_x509_crt *ca;   /* ownCa, or the process-wide default chain */
+	int timedOut;           /* the last read or write wait ran out */
+	char lastError[512];    /* why the last read ended the stream; empty after a clean read */
 } msTlsCtx;
 
 /* ===== I/O Callbacks for mbedTLS ===== */
 
+/* Connect only: a connection keeps its own timedOut and lastError once it exists. */
 static _Thread_local int tlsTimedOut;
 
-static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
-	int fd = *(int*)ctx;
+static int tls_send(void *bio, const unsigned char *buf, size_t len) {
+	msTlsCtx *ctx = (msTlsCtx*)bio;
+	int fd = ctx->fd;
 	int result;
 	msPsaUnlock();
 	for (;;) {
@@ -83,7 +87,7 @@ static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 		if (ret >= 0) { result = ret; break; }
 		int err = ms_sock_err();
 		if (MS_ERR_INTR(err)) continue;
-		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
+		if (MS_ERR_TIMEOUT(err)) { ctx->timedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
 		result = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
 		break;
 	}
@@ -91,8 +95,9 @@ static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 	return result;
 }
 
-static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
-	int fd = *(int*)ctx;
+static int tls_recv(void *bio, unsigned char *buf, size_t len) {
+	msTlsCtx *ctx = (msTlsCtx*)bio;
+	int fd = ctx->fd;
 	int result;
 	msPsaUnlock();
 	for (;;) {
@@ -101,7 +106,7 @@ static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
 		if (ret == 0) { result = MBEDTLS_ERR_SSL_CONN_EOF; break; }
 		int err = ms_sock_err();
 		if (MS_ERR_INTR(err)) continue;
-		if (MS_ERR_TIMEOUT(err)) { tlsTimedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
+		if (MS_ERR_TIMEOUT(err)) { ctx->timedOut = 1; result = MBEDTLS_ERR_SSL_TIMEOUT; break; }
 		result = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
 		break;
 	}
@@ -436,13 +441,16 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 	}
 
 	/* I/O callbacks */
-	mbedtls_ssl_set_bio(&ctx->ssl, &ctx->fd, tls_send, tls_recv, NULL);
+	mbedtls_ssl_set_bio(&ctx->ssl, ctx, tls_send, tls_recv, NULL);
 
 	/* TLS handshake */
 	int ret;
 	while ((ret = mbedtls_ssl_handshake(&ctx->ssl)) != 0) {
 		if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-			if (tlsTimedOut) snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake timed out");
+			if (ctx->timedOut) {
+				tlsTimedOut = 1;
+				snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake timed out");
+			}
 			else if (ret == MBEDTLS_ERR_SSL_CONN_EOF) snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: connection closed by the peer");
 			else snprintf(tlsLastError, sizeof(tlsLastError), "TLS handshake failed: -0x%04X", (unsigned)-ret);
 			uint32_t failedFlags = mbedtls_ssl_get_verify_result(&ctx->ssl);
@@ -478,12 +486,12 @@ fail:
 
 static _Thread_local unsigned char tlsReadScratch[16384]; /* one TLS record */
 
-/* An empty result is a clean close_notify when msTlsLastError() is empty; otherwise it names a timeout (msTlsTimedOut), a failure, or a close without close_notify. */
+/* An empty result is a clean close_notify when msTlsConnLastError() is empty; otherwise it names a timeout (msTlsConnTimedOut), a failure, or a close without close_notify. */
 msUint8Array msTlsReadBytes(int64_t handle, int32_t maxBytes) {
-	tlsLastError[0] = '\0';
-	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx || maxBytes <= 0) return MS_EMPTY_UINT8_ARRAY;
+	ctx->lastError[0] = '\0';
+	ctx->timedOut = 0;
 	if (maxBytes > (int32_t)sizeof(tlsReadScratch)) maxBytes = (int32_t)sizeof(tlsReadScratch);
 
 	int ret;
@@ -495,9 +503,9 @@ msUint8Array msTlsReadBytes(int64_t handle, int32_t maxBytes) {
 	msPsaUnlock();
 	if (ret <= 0) {
 		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return MS_EMPTY_UINT8_ARRAY;
-		if (tlsTimedOut) tlsSetError("TLS read timed out%s", "");
-		else if (ret == 0) tlsSetError("TLS connection closed without close_notify%s", "");
-		else snprintf(tlsLastError, sizeof(tlsLastError), "TLS read failed: -0x%04X", (unsigned)-ret);
+		if (ctx->timedOut) snprintf(ctx->lastError, sizeof(ctx->lastError), "TLS read timed out");
+		else if (ret == 0) snprintf(ctx->lastError, sizeof(ctx->lastError), "TLS connection closed without close_notify");
+		else snprintf(ctx->lastError, sizeof(ctx->lastError), "TLS read failed: -0x%04X", (unsigned)-ret);
 		return MS_EMPTY_UINT8_ARRAY;
 	}
 	return msBufferFrom(tlsReadScratch, (int64_t)ret);
@@ -507,10 +515,21 @@ int32_t msTlsTimedOut(void) {
 	return tlsTimedOut;
 }
 
+int32_t msTlsConnTimedOut(int64_t handle) {
+	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
+	return ctx ? ctx->timedOut : 0;
+}
+
+msString msTlsConnLastError(int64_t handle) {
+	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
+	if (!ctx) return MS_EMPTY_STRING;
+	return msStringNew(ctx->lastError, (int64_t)strlen(ctx->lastError));
+}
+
 int32_t msTlsWriteBytes(int64_t handle, const uint8_t *buf, int64_t len64) {
-	tlsTimedOut = 0;
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx || len64 > INT32_MAX) return -1;
+	ctx->timedOut = 0;
 	int32_t total = 0;
 	int32_t len = (int32_t)len64;
 	msPsaLock();

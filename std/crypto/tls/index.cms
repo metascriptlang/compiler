@@ -114,51 +114,92 @@
 // the PSA drivers here call into. psa_util.c is no longer among them; this
 // module compiles it directly (see above).
 import { CryptoError, CryptoErrorKind, cryptoError } from "../index";
-import { Bytes } from "std/core/buffer/bytes";
+import { Bytes, rawBuffer } from "std/core/buffer/bytes";
 
 // C bindings
 extern function msTlsConnect(hostname: string, port: int32, caPath: string, timeoutMs: int32): int64;
 extern function msTlsTimedOut(): int32;
+extern function msTlsLastError(): string;
+extern function msTlsConnTimedOut(ctx: int64): int32;
+extern function msTlsConnLastError(ctx: int64): string;
 extern function msTlsReadBytes(ctx: int64, maxBytes: int32): Buffer;
 extern function msTlsWrite(ctx: int64, data: string): int32;
 extern function msTlsWriteBytes(ctx: int64, data: Readonly<Span<uint8>>): int32;
 extern function msTlsClose(ctx: int64): void;
 extern function msTlsPeerCertSubject(ctx: int64): string;
-extern function msTlsLastError(): string;
 
 // ===== Public API =====
 
-export function tlsConnect(hostname: string, port: int32, caPath: string = "", timeoutMs: int32 = 0): Result<int64, CryptoError> {
-	const ctx = msTlsConnect(hostname, port, caPath, timeoutMs);
-	if (ctx == 0) {
-		return Result.err(cryptoError(CryptoErrorKind.ConnectionFailed, "tlsConnect", msTlsLastError()));
+// `operation` of the error tlsConnect returns when the connect or handshake wait ran out.
+export const tlsConnectTimeoutOperation = "tlsConnect:timeout";
+
+export const tlsClosedMessage = "TLS connection is closed";
+
+export interface TlsOptions {
+	caPath?: string;
+	timeoutMs?: int32;
+}
+
+// An open TLS connection, blocking. Dropping it closes it; close() earlier is allowed and a second close,
+// or a read or write after it, fails with tlsClosedMessage and never reaches the C context again.
+export class TlsConnection {
+	_handle: int64;
+	// After an empty read: "" is a clean close_notify, anything else is why the stream ended.
+	lastError: string;
+	// True when the last read or write failed because its wait ran out.
+	timedOut: boolean;
+
+	constructor(handle: int64) {
+		this._handle = handle;
+		this.lastError = "";
+		this.timedOut = false;
 	}
-	return Result.ok(ctx);
 }
 
-export function tlsRead(ctx: int64, maxBytes: int32 = 4096): Buffer {
-	return msTlsReadBytes(ctx, maxBytes);
+export function tlsConnect(hostname: string, port: int32, opts: TlsOptions = {}): Result<TlsConnection, CryptoError> {
+	const handle = msTlsConnect(hostname, port, opts.caPath ?? "", opts.timeoutMs ?? 0);
+	if (handle == 0) {
+		const operation = msTlsTimedOut() != 0 ? tlsConnectTimeoutOperation : "tlsConnect";
+		return Result.err(cryptoError(CryptoErrorKind.ConnectionFailed, operation, msTlsLastError()));
+	}
+	return Result.ok(new TlsConnection(handle));
 }
 
-// After an empty tlsRead: "" is a clean close_notify, anything else is why the stream ended.
-export function tlsLastError(): string {
-	return msTlsLastError();
+export function read(this conn: TlsConnection, maxBytes: int32 = 4096): Buffer {
+	if (conn._handle == 0) {
+		conn.lastError = tlsClosedMessage;
+		conn.timedOut = false;
+		return rawBuffer("");
+	}
+	const chunk = msTlsReadBytes(conn._handle, maxBytes);
+	conn.lastError = msTlsConnLastError(conn._handle);
+	conn.timedOut = msTlsConnTimedOut(conn._handle) != 0;
+	return chunk;
 }
 
-// True when the last tlsConnect, tlsRead or tlsWrite failed because its wait ran out.
-export function tlsTimedOut(): boolean {
-	return msTlsTimedOut() != 0;
+// Bytes written, 0 for empty data, -1 on failure.
+export function write(this conn: TlsConnection, data: Bytes): int32 {
+	if (conn._handle == 0) {
+		conn.lastError = tlsClosedMessage;
+		conn.timedOut = false;
+		return -1;
+	}
+	const written = typeof data == "string" ? msTlsWrite(conn._handle, data) : msTlsWriteBytes(conn._handle, data);
+	conn.timedOut = msTlsConnTimedOut(conn._handle) != 0;
+	conn.lastError = written < 0 ? (conn.timedOut ? "TLS write timed out" : "TLS write failed") : "";
+	return written;
 }
 
-export function tlsWrite(ctx: int64, data: Bytes): int32 {
-	if (typeof data == "string") return msTlsWrite(ctx, data);
-	return msTlsWriteBytes(ctx, data);
+export function close(this conn: TlsConnection): void {
+	const handle = conn._handle;
+	conn._handle = 0;
+	msTlsClose(handle);
 }
 
-export function tlsClose(ctx: int64): void {
-	msTlsClose(ctx);
+export function peerCert(this conn: TlsConnection): string {
+	return conn._handle == 0 ? "" : msTlsPeerCertSubject(conn._handle);
 }
 
-export function tlsPeerCert(ctx: int64): string {
-	return msTlsPeerCertSubject(ctx);
+function onDestroy(this conn: TlsConnection): void {
+	conn.close();
 }

@@ -8,7 +8,7 @@
 // @skip-raiser: std/crypto/tls has only a C backend and the Raiser VM cannot spawn processes
 // @serial
 
-import { tlsConnect, tlsRead, tlsWrite } from "std/crypto/tls";
+import { tlsConnect, read, write } from "std/crypto/tls";
 import { argv } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
 
@@ -39,20 +39,20 @@ function sh(script: string): void {
 }
 
 if (argv.length > 1 && argv[1] == "write") {
-	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, argv[3]);
+	const r = tlsConnect("127.0.0.1", parseInt(argv[2]) as int32, { caPath: argv[3] });
 	if (!r.ok) throw new Error(r.error.message);
 	const ctx = r.value;
 	let chunk = "";
 	for (let i = 0; i < 65536; i++) chunk += "x";
 	if (argv[4] == "during") {
 		console.log("writing");
-		while (tlsWrite(ctx, chunk) > 0) {}
+		while (ctx.write(chunk) > 0) {}
 	} else {
-		tlsWrite(ctx, "first");
+		ctx.write("first");
 		console.log("connected");
-		tlsRead(ctx, 16);
+		ctx.read(16);
 		let written = 1;
-		while (written > 0) written = tlsWrite(ctx, chunk);
+		while (written > 0) written = ctx.write(chunk);
 	}
 	console.log("write -1");
 } else {

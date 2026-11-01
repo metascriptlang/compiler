@@ -7,17 +7,17 @@
 // @skip-raiser: std/crypto/tls has only a C backend and the Raiser VM cannot spawn processes
 // @serial
 
-import { tlsConnect, tlsWrite, tlsRead, tlsClose } from "std/crypto/tls";
+import { tlsConnect, write, read, close } from "std/crypto/tls";
 import { rsaGenerate, rsaSign, rsaVerify, rsaFree, ecGenerate, ecdsaSign, ecdsaVerify, ecFree } from "std/crypto/rsa";
 import { argv } from "std/process";
 import { spawn as spawnProcess, ChildStream } from "std/process/child";
 
 function exchange(port: int32, ca: string): int32 {
-	const r = tlsConnect("127.0.0.1", port, ca);
+	const r = tlsConnect("127.0.0.1", port, { caPath: ca });
 	if (!r.ok) return 0;
-	tlsWrite(r.value, "GET / HTTP/1.0\r\n\r\n");
-	const head = tlsRead(r.value, 64);
-	tlsClose(r.value);
+	r.value.write("GET / HTTP/1.0\r\n\r\n");
+	const head = r.value.read(64);
+	r.value.close();
 	return head.length >= 8 ? 1 : 0;
 }
 

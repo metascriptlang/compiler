@@ -8,7 +8,7 @@
 // mbedtls) into the alive-set. The @compile chain via std/crypto/tls fires
 // only when one of this module's exports is reachable.
 
-import { tlsConnect, tlsRead, tlsWrite, tlsClose, tlsLastError, tlsTimedOut } from "std/crypto/tls";
+import { tlsConnect, tlsConnectTimeoutOperation, read, write, close } from "std/crypto/tls";
 
 import { HttpResponse, RequestOptions } from "./types";
 import { HttpError, connectionFailed, connectionReset, timeout } from "./errors";
@@ -18,25 +18,24 @@ import { doRequestOver, requestWithRedirectsOver } from "./client";
 // ===== TLS transport =====
 
 function doRequestTls(options: RequestOptions): Result<HttpResponse, HttpError> {
-	const ctx = tlsConnect(options.hostname, options.port, "", options.timeout > 0 ? options.timeout : 0);
-	if (!ctx.ok) {
-		const message = `TLS to ${options.hostname}:${options.port} failed: ${ctx.error.message}`;
-		return Result.err(tlsTimedOut() ? timeout(message) : connectionFailed(message));
+	const opened = tlsConnect(options.hostname, options.port, { timeoutMs: options.timeout > 0 ? options.timeout : 0 });
+	if (!opened.ok) {
+		const message = `TLS to ${options.hostname}:${options.port} failed: ${opened.error.message}`;
+		return Result.err(opened.error.operation == tlsConnectTimeoutOperation ? timeout(message) : connectionFailed(message));
 	}
-	const tlsCtx = ctx.value;
+	const conn = opened.value;
 	const faults: HttpError[] = [];
 	const response = doRequestOver(
 		options,
-		(data: Bytes) => tlsWrite(tlsCtx, data),
+		(data: Bytes) => conn.write(data),
 		(maxBytes: int32) => {
-			const chunk = tlsRead(tlsCtx, maxBytes);
-			if (chunk.length == 0) {
-				const why = tlsLastError();
-				if (why != "") faults.push(tlsTimedOut() ? timeout(why) : connectionReset(why));
+			const chunk = conn.read(maxBytes);
+			if (chunk.length == 0 && conn.lastError != "") {
+				faults.push(conn.timedOut ? timeout(conn.lastError) : connectionReset(conn.lastError));
 			}
 			return chunk;
 		},
-		() => tlsClose(tlsCtx),
+		() => conn.close(),
 	);
 	if (faults.length > 0) return Result.err(faults[0]);
 	return response;

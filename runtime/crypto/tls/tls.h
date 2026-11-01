@@ -24,13 +24,20 @@
  * Returns handle on success, 0 on failure. */
 int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t timeoutMs);
 
-/* 1 when the last connect, read or write failed because its wait ran out. */
+/* 1 when the last connect on this thread failed because its wait ran out. */
 int32_t msTlsTimedOut(void);
 
+/* 1 when the connection's last read or write failed because its wait ran out. */
+int32_t msTlsConnTimedOut(int64_t ctx);
+
+/* The connection's last read: "" after data or a clean close_notify, else why the stream ended. */
+msString msTlsConnLastError(int64_t ctx);
+
+/* Why the last connect on this thread failed. */
 msString msTlsLastError(void);
 
 /* Read decrypted data from TLS connection, at most one TLS record (16384 bytes) per call.
- * Empty is end of stream, and an error when msTlsLastError() is then
+ * Empty is end of stream, and an error when msTlsConnLastError() is then
  * non-empty (timeout, failure, or a close without close_notify). */
 msUint8Array msTlsReadBytes(int64_t ctx, int32_t maxBytes);
 
