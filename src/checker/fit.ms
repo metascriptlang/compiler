@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, HiddenStdConvData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, HiddenDerefData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, HiddenStdConvData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams, closureIntoCPointerReason } from "./compat";
@@ -2909,12 +2909,20 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
 export function nullConstantOfRead(expr: Node, exprType: Type, formal: Type): Node {
-	if (exprType.kind != TypeKind.Null || expr.kind != NodeKind.Identifier || !isNullableShape([formal])) return expr;
+	if (exprType.kind != TypeKind.Null || !readsFieldPath(expr) || !isNullableShape([formal])) return expr;
 	const stored = declaredTypeOfLocation(expr);
 	if (stored == null || stored.kind != TypeKind.Null) return expr;
 	const literal = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, expr.location);
 	literal.nodeType = exprType;
 	return literal;
+}
+
+function readsFieldPath(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) return n.resolvedSym != null;
+	if (n.kind == NodeKind.HiddenDeref) return readsFieldPath((n.data as HiddenDerefData).expr);
+	if (n.kind != NodeKind.MemberExpr) return false;
+	const d = n.data as MemberExprData;
+	return d.object != null && declaredTypeOfLocation(n) != null && readsFieldPath(d.object);
 }
 
 export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): Type {
