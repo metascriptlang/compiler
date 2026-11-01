@@ -1,15 +1,22 @@
 @include("errno.h");
 
-import { dirname, realpath, resolve } from "std/fs";
-import { cwd } from "std/process";
+import { dirname, realpath } from "std/fs";
 import { IoError, IoErrorKind, ioError, ioErrorFromErrno } from "std/io/errors";
 
 extern const EINVAL: int32;
+extern const ENOMEM: int32;
 
 when (windows) {
 	@include("windows.h");
 	@include("runtime/fs/header.h");
-	import { freeWide, widePath } from "std/fs/widePath";
+	import { normalize } from "std/fs";
+	import { freeWide, widePath, allocWide, utf8Of } from "std/fs/widePath";
+
+	extern const MAX_PATH: uint32;
+	extern function GetFullPathNameW(
+		path: Ptr<uint16>, room: uint32, buffer: Ptr<uint16> | null,
+		filePart: Ptr<Ptr<uint16>> | null,
+	): uint32;
 
 	extern const FILE_SHARE_READ: uint32;
 	extern const FILE_SHARE_WRITE: uint32;
@@ -33,6 +40,40 @@ when (windows) {
 	extern function GetFileInformationByHandle(
 		handle: Ptr<void>, ref info: FileInformation,
 	): int32;
+
+	function absoluteKernel(path: string): Result<string, IoError> {
+		const wide = widePath(normalize(path));
+		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
+		defer freeWide(wide);
+		let room: uint32 = MAX_PATH;
+		while (true) {
+			const buffer = allocWide(room as uint64);
+			if (buffer == null) {
+				return Result.err(ioErrorFromErrno(ENOMEM, path));
+			}
+			const count = GetFullPathNameW(wide, room, buffer, null);
+			const error = count == 0 ? GetLastError() : 0;
+			if (count == 0) {
+				freeWide(buffer);
+				return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(error), path));
+			}
+			if (count >= room) {
+				freeWide(buffer);
+				if (count == (0xffffffff as uint32)) {
+					return Result.err(ioErrorFromErrno(EINVAL, path));
+				}
+				room = count + 1;
+				continue;
+			}
+			const absolute = utf8Of(buffer);
+			freeWide(buffer);
+			if (absolute == "") {
+				return Result.err(ioError(IoErrorKind.Unknown, path,
+					"cannot encode absolute path as UTF-8: " + path));
+			}
+			return Result.ok(absolute);
+		}
+	}
 
 	function openMetadata(path: Ptr<uint16>): Ptr<void> {
 		return CreateFileW(path, 0,
@@ -91,6 +132,8 @@ when (windows) {
 	}
 } else {
 	@include("sys/stat.h");
+	import { resolve } from "std/fs";
+	import { cwd } from "std/process";
 	extern let errno: int32;
 	when (macos) {
 		extern struct NativeStat from "struct stat" {
@@ -107,6 +150,10 @@ when (windows) {
 		path: cstring, ref value: NativeStat,
 	): int32 from "stat";
 
+	function absoluteKernel(path: string): Result<string, IoError> {
+		return Result.ok(resolve(path, cwd()));
+	}
+
 	function sameKernel(left: string, right: string): Result<boolean, IoError> {
 		let first: NativeStat = {};
 		let second: NativeStat = {};
@@ -121,6 +168,13 @@ when (windows) {
 		return Result.ok(first.st_dev == second.st_dev &&
 			first.st_ino == second.st_ino);
 	}
+}
+
+export function absoluteNativePath(path: string): Result<string, IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	return absoluteKernel(path);
 }
 
 export function samePhysicalFile(
@@ -148,7 +202,7 @@ export function containsExistingRoot(
 	if (child.indexOf("\0") >= 0) {
 		return Result.err(ioErrorFromErrno(EINVAL, child));
 	}
-	let at = resolve(child, cwd());
+	let at = try absoluteNativePath(child);
 	while (true) {
 		const present = samePhysicalFile(at, at);
 		if (present.ok) { break; }

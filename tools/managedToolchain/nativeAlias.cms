@@ -1,6 +1,7 @@
 @include("errno.h");
 
 import { IoError, IoErrorKind, ioError, ioErrorFromErrno } from "std/io/errors";
+import { isLinkLike } from "std/fs";
 
 extern const EINVAL: int32;
 
@@ -40,6 +41,39 @@ when (windows) {
 		inputLength: uint32, output: Ptr<void>, outputLength: uint32,
 		returned: Ptr<void>, overlapped: Ptr<void> | null,
 	): int32;
+
+	extern const FileAttributeTagInfo: int32;
+	extern struct AttributeTagInformation from "FILE_ATTRIBUTE_TAG_INFO" {
+		FileAttributes: uint32;
+		ReparseTag: uint32;
+	}
+	extern function GetFileInformationByHandleEx(
+		handle: Ptr<void>, infoClass: int32,
+		ref info: AttributeTagInformation, size: uint32,
+	): int32;
+
+	function symbolicLinkKernel(path: string): Result<boolean, IoError> {
+		const wide = widePath(path);
+		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
+		const handle = CreateFileW(wide, 0,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING,
+			FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, null);
+		const openError = handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+		freeWide(wide);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(openError), path));
+		}
+		let info: AttributeTagInformation = {};
+		const read = GetFileInformationByHandleEx(handle, FileAttributeTagInfo,
+			info, sizeof(AttributeTagInformation) as uint32);
+		const error = read == 0 ? GetLastError() : 0;
+		CloseHandle(handle);
+		if (read == 0) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(error), path));
+		}
+		return Result.ok(info.ReparseTag == SYMLINK_TAG);
+	}
 
 	function matchesUnits(
 		actual: Readonly<Span<uint8>>, expected: Ptr<uint16>, units: int32,
@@ -122,6 +156,13 @@ when (windows) {
 		}
 		return Result.ok(null);
 	}
+}
+
+export function isSymbolicLink(path: string): Result<boolean, IoError> {
+	const linked = isLinkLike(path);
+	if (!linked.ok || !linked.value) { return linked; }
+	when (windows) { return symbolicLinkKernel(path); }
+	return linked;
 }
 
 export function verifyStoredRelativeTarget(
