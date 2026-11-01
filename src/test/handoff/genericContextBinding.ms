@@ -156,8 +156,8 @@ test "genericContextBinding: a fitting result keeps the instance its arguments b
 	];
 	for (const row of rows) {
 		const code = emittedC(CALLS + row.body);
-		assert code.contains("__int32__"), row.name;
-		assert !code.contains("__int64__"), row.name;
+		assert code.contains("__int32"), row.name;
+		assert !code.contains("__int64"), row.name;
 	}
 }
 
