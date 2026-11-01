@@ -699,8 +699,8 @@ function envStructNamed(state: LiftState, name: string): boolean {
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
-export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet): void {
-	const lent: CaptureCursors = inferCaptureCursors(state.writes, body, state.currentParams.items);
+export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet, suspends: boolean): void {
+	const lent: CaptureCursors = suspends ? { lent: new HashSet<Symbol>(), envEscapes: true } : inferCaptureCursors(state.writes, body, state.currentParams.items);
 	const outerEnvName = entryChainNames.length > 0 ? entryChainNames[0] : "";
 	const outerEnvStructType = entryChainTypes.length > 0 ? entryChainTypes[0] : (null as unknown as Type);
 	const frameCaptures = createSymSet();

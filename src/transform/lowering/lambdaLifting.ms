@@ -33,6 +33,7 @@ import {
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { routineFlags } from "../../checker/context";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx, checkedFnBodyStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import {
@@ -897,6 +898,11 @@ function noopPreWalk(): void {}
 // One frame's body: the captures detection recorded for `node` become its shared
 // env, set up in walkLiftBody's preWalk so the env decl is hoisted into this frame
 // and its name is in scope before any closure in the body is lifted.
+function suspends(routine: Node): boolean {
+	const flags = routineFlagSet(routineFlags(routine));
+	return flags.has(RoutineFlag.Generator) || flags.has(RoutineFlag.Async);
+}
+
 function walkLiftFrame(node: Node, body: Node, state: LiftState): void {
 	const savedShared = saveSharedEnv(state);
 	const allCaptures = detectionGetCaptures(state.detection, node);
@@ -906,7 +912,7 @@ function walkLiftFrame(node: Node, body: Node, state: LiftState): void {
 	const loopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (allCaptures.items.length > 0) {
-			setupSharedEnv(state, body, allCaptures, allCapturedIdents, node.location, chain.names, chain.types, null, loopSyms);
+			setupSharedEnv(state, body, allCaptures, allCapturedIdents, node.location, chain.names, chain.types, null, loopSyms, suspends(node));
 		}
 	});
 	restoreSharedEnv(state, savedShared);
@@ -1232,7 +1238,7 @@ function liftCapturingClosureBody(
 	const bodyLoopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
+			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms, suspends(node));
 		}
 	});
 	state.capturedIdents = [];
