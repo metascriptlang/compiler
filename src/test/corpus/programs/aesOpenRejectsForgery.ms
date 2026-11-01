@@ -3,7 +3,6 @@
 //
 // @stdout: 16 empty genuine true forged false aad false|16 text genuine true forged false aad false|32 empty genuine true forged false aad false|32 text genuine true forged false aad false
 // @exit: 0
-// @skip-js: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.jms
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 import { AesKey, seal, open } from "std/crypto/aes";

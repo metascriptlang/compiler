@@ -6,7 +6,7 @@
 // @stdout: aes128 8117b942f0bd360bf8d3c06bb1dbce69a2264df9184760718fe61b343fe63b63 opened true
 // @stdout: aes256 d7251f32bcb2d82b93b198fc5b9240359c5fec4c9dee66d071290548ce7ca9c0 opened true
 // @exit: 0
-// @skip-js: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.jms
+// @skip-js: the fixed-nonce seal is the C test seam msCryptoAesSealWithNonceInto; cryptoJsAesSweep pins the same digests through the portable seal
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 @include("runtime/crypto/ciphers/aes.h");

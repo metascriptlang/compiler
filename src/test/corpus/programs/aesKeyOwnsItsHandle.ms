@@ -9,7 +9,7 @@
 // @stdout: bad length refused true live 0
 // @stdout: export copy 16 kept true live 0
 // @exit: 0
-// @skip-js: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.jms
+// @skip-js: the C key handle count msCryptoAesKeysLive has no JS counterpart; an AesKey there is garbage collected
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 @include("runtime/crypto/ciphers/aes.h");

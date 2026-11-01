@@ -5,7 +5,6 @@
 // @stdout: 16 empty true 16 | 1 true 16 | 15 true 16 | 16 true 32 | bad pad false | ragged false | none false
 // @stdout: 32 empty true 16 | 1 true 16 | 15 true 16 | 16 true 32 | bad pad false | ragged false | none false
 // @exit: 0
-// @skip-js: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.jms
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 import { Buffer } from "std/core/buffer";
