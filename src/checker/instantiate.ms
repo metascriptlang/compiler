@@ -149,10 +149,20 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 		if (engineCtx != null) return engineCtx;
 	}
 	const defining = lookupModuleCtx(definingModulePath);
-	if (defining != null) return defining;
+	if (defining != null && !preludeModuleDeclares(ctx.preludeCtx != null ? ctx.preludeCtx! : ctx, definingModulePath, owner)) return defining;
 	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx.preludeCtx, definingModulePath);
 	if (ctx.preludeModuleScopes.has(definingModulePath)) return preludeBodyCtx(ctx, definingModulePath);
 	return ctx;
+}
+
+function preludeModuleDeclares(prelude: CheckerContext, modulePath: string, owner: Symbol | null): boolean {
+	if (owner == null) return false;
+	const members = prelude.preludeModuleScopes.get(modulePath);
+	if (members == null) return false;
+	for (const held of members) {
+		if (held == owner || held.overloads.includes(owner)) return true;
+	}
+	return false;
 }
 
 const _preludeBodyCtxs = new HashMap<CheckerContext, HashMap<string, CheckerContext>>();
