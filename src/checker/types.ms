@@ -2075,39 +2075,152 @@ export function isViewKind(t: Type | null): boolean {
 		|| t.kind == TypeKind.Lent || t.kind == TypeKind.Var);
 }
 
-// Struct and class fields are not descended: a field never holds a view (refused at its declaration).
 export function findViewType(t: Type | null): Type | null {
-	return findViewTypeAt(t, 0);
+	return findViewIn(t, new TypeVisitSet(), null);
 }
 
-function findViewTypeAt(t: Type | null, depth: int32): Type | null {
-	if (t == null || depth > 8) return null;
+export function viewTypeArgumentFault(built: Type): string {
+	let t: Type | null = built;
+	while (t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance) t = t.typeReturn;
+	if (t == null || t.kind != TypeKind.GenericInstance) return "";
+	let base: Type | null = t.typeExtra;
+	while (base != null && base.kind == TypeKind.Ref) base = base.typeReturn;
+	const kind = base != null && base.sym != null ? base.sym.symbolKind : SymbolKind.Variable;
+	if (kind != SymbolKind.Class && kind != SymbolKind.Interface && kind != SymbolKind.Actor) return "";
+	for (const arg of t.typeChildren) {
+		const view = findViewType(arg);
+		if (view != null) return `type argument '${typeDisplayName(arg)}' of '${t.typeName}' cannot hold ${viewShown(arg, view)}: a field of a class can hold it, and a view borrows memory its source can free while the field still holds it — store ${ownedAlternativeOf(view)}`;
+	}
+	return "";
+}
+
+export function viewHolderOf(t: Type | null): Type | null {
+	const via: Type[] = [];
+	findViewIn(t, new TypeVisitSet(), via);
+	return via.length > 0 ? via[0] : null;
+}
+
+export function viewShown(t: Type | null, view: Type): string {
+	const holder = viewHolderOf(t);
+	return holder == null ? typeDisplayName(view) : typeDisplayName(withoutNullMember(holder)) + ", a struct that holds " + typeDisplayName(view);
+}
+
+export function nestedViewShown(t: Type | null, view: Type): string {
+	const via: Type[] = [];
+	nestedViewIn(t, new TypeVisitSet(), via);
+	return via.length > 0 ? typeDisplayName(withoutNullMember(via[0])) + ", a struct that holds " + typeDisplayName(view) : typeDisplayName(view);
+}
+
+function findViewIn(t: Type | null, seen: TypeVisitSet, via: Type[] | null): Type | null {
+	if (t == null) return null;
 	if (isViewKind(t)) return t;
+	if (!typeVisitAdd(seen, t)) return null;
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Ref
 			|| t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink) {
-		return findViewTypeAt(t.typeReturn, depth + 1);
+		return findViewIn(t.typeReturn, seen, via);
+	}
+	if (t.kind == TypeKind.Struct) {
+		if (fieldsRefuseViewsAtDeclaration(t)) return null;
+		for (const c of t.typeChildren) {
+			const v = findViewIn(c, seen, via);
+			if (v == null) continue;
+			if (via != null) {
+				if (via.length == 0) via.push(t);
+				else via[0] = t;
+			}
+			return v;
+		}
+		return null;
+	}
+	if (t.kind == TypeKind.GenericInstance) {
+		const v = findViewIn(t.typeReturn != null ? t.typeReturn : t.typeExtra, seen, via);
+		if (v != null) {
+			if (via != null && via.length > 0) via[0] = t;
+			return v;
+		}
 	}
 	if (t.kind == TypeKind.Tuple || t.kind == TypeKind.Union || t.kind == TypeKind.GenericInstance
 			|| t.kind == TypeKind.Varargs) {
 		for (const c of t.typeChildren) {
-			const v = findViewTypeAt(c, depth + 1);
+			const v = findViewIn(c, seen, via);
 			if (v != null) return v;
 		}
 	}
 	return null;
 }
 
-export function nestedViewType(t: Type | null): Type | null {
-	let top = t;
-	if (top != null && top.kind == TypeKind.Union && top.typeChildren.length == 2) {
-		const a = top.typeChildren[0];
-		const b = top.typeChildren[1];
-		if (a != null && a.kind == TypeKind.Null) top = b;
-		else if (b != null && b.kind == TypeKind.Null) top = a;
+function fieldsRefuseViewsAtDeclaration(t: Type): boolean {
+	return t.sym != null && (t.sym.symbolKind == SymbolKind.Class || t.sym.symbolKind == SymbolKind.Interface || t.sym.symbolKind == SymbolKind.Actor);
+}
+
+function viewStructBody(t: Type | null): Type | null {
+	let s = t;
+	while (s != null && (s.kind == TypeKind.Alias || s.kind == TypeKind.Distinct || s.kind == TypeKind.GenericInstance)) {
+		s = s.kind == TypeKind.GenericInstance && s.typeReturn == null ? s.typeExtra : s.typeReturn;
 	}
-	if (top != null && top.kind == TypeKind.Var && top.typeReturn != null && top.typeReturn.kind == TypeKind.Span) top = top.typeReturn;
-	if (isViewKind(top)) return findViewType(top!.typeReturn);
-	return findViewType(top);
+	if (s == null || s.kind != TypeKind.Struct || fieldsRefuseViewsAtDeclaration(s)) return null;
+	return findViewType(s) != null ? s : null;
+}
+
+export function viewStructChangesInPlace(t: Type | null): boolean {
+	const body = viewStructBody(t);
+	if (body == null) return false;
+	for (const f of body.typeChildren) {
+		if (!holdsNothingOwned(isViewKind(f) ? f!.typeReturn : f) && !viewStructChangesInPlace(f)) return false;
+	}
+	return true;
+}
+
+export function ownsNoStorage(t: Type | null): boolean {
+	let s = withoutNullArm(t);
+	while (s != null && (s.kind == TypeKind.Alias || s.kind == TypeKind.Distinct || s.kind == TypeKind.Var)) s = s.typeReturn;
+	if (s == null) return false;
+	if (isViewKind(s) || holdsNothingOwned(s)) return true;
+	const body = viewStructBody(s);
+	if (body == null) return false;
+	for (const f of body.typeChildren) {
+		if (!ownsNoStorage(f)) return false;
+	}
+	return true;
+}
+
+function holdsNothingOwned(t: Type | null): boolean {
+	let s = t;
+	while (s != null && (s.kind == TypeKind.Alias || s.kind == TypeKind.Distinct)) s = s.typeReturn;
+	return s != null && (isPrimitiveKind(s.kind) || s.kind == TypeKind.Enum || s.kind == TypeKind.Char) && s.kind != TypeKind.Void && s.kind != TypeKind.Null;
+}
+
+export function isViewStruct(t: Type | null): boolean {
+	return viewStructBody(t) != null;
+}
+
+function withoutNullArm(t: Type | null): Type | null {
+	if (t != null && t.kind == TypeKind.Union && t.typeChildren.length == 2) {
+		const a = t.typeChildren[0];
+		const b = t.typeChildren[1];
+		if (a != null && a.kind == TypeKind.Null) return b;
+		if (b != null && b.kind == TypeKind.Null) return a;
+	}
+	return t;
+}
+
+export function nestedViewType(t: Type | null): Type | null {
+	return nestedViewIn(t, new TypeVisitSet(), null);
+}
+
+function nestedViewIn(t: Type | null, bodies: TypeVisitSet, via: Type[] | null): Type | null {
+	let top = withoutNullArm(t);
+	if (top != null && top.kind == TypeKind.Var && top.typeReturn != null
+		&& (top.typeReturn.kind == TypeKind.Span || isViewStruct(top.typeReturn))) top = top.typeReturn;
+	if (isViewKind(top)) return findViewIn(top!.typeReturn, new TypeVisitSet(), via);
+	const body = viewStructBody(top);
+	if (body == null) return findViewIn(top, new TypeVisitSet(), via);
+	if (!typeVisitAdd(bodies, body)) return null;
+	for (const f of body.typeChildren) {
+		const v = nestedViewIn(f, bodies, via);
+		if (v != null) return v;
+	}
+	return null;
 }
 
 export function ownedAlternativeOf(view: Type): string {
@@ -4539,7 +4652,7 @@ function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor => holdsView(t.typeReturn, seen),
 		TypeKind.Distinct | TypeKind.Array | TypeKind.SizedArray => holdsView(t.typeReturn, seen),
 		TypeKind.Ref => holdsView(t.typeReturn, seen),
-		TypeKind.GenericInstance => holdsView(t.typeExtra, seen),
+		TypeKind.GenericInstance => t.typeReturn != null ? holdsView(t.typeReturn, seen) : (holdsView(t.typeExtra, seen) || anyChildHoldsView(t, seen)),
 		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => anyChildHoldsView(t, seen),
 		_ => false,
 	};

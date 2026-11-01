@@ -16,7 +16,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, expectsEnumMember, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
+import { viewTypeArgumentFault, distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes, refuseViewField } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -813,7 +813,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			}
 			node.nodeType = inferredType(); return;
 		},
-		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
+		NodeKind.NewExpr => refuseViewTypeArguments(ctx, node, checkNewExpr(ctx, node, expectedType)),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node, expectedType),
 		NodeKind.AwaitExpr => { checkAwaitExpr(ctx, node, expectedType); return; },
@@ -2166,6 +2166,12 @@ function givenAfter(d: ObjectLiteralData, at: int32, name: string): boolean {
 		if (d.keys[j] == "..." && spreadFieldType(d.properties[j], name) != null && !spreadFieldOptional(d.properties[j], name)) return true;
 	}
 	return false;
+}
+
+function refuseViewTypeArguments(ctx: CheckerContext, node: Node, built: Type): Type {
+	const fault = viewTypeArgumentFault(built);
+	if (fault != "") addError(ctx, fault, node.location.line, node.location.column);
+	return built;
 }
 
 function refuseOverwrittenKeys(ctx: CheckerContext, d: ObjectLiteralData, spreadAt: int32, name: string): void {
