@@ -1,15 +1,17 @@
 /** Arbitrary-size integer helpers for the portable RSA and elliptic-curve code, and the random bytes they draw. Not constant-time. */
 
-@emit(`function msPureRandom(size) {
+when (js) {
+	@emit(`function msPureRandom(size) {
 	const out = new Uint8Array(size);
 	for (let at = 0; at < size; at += 65536) globalThis.crypto.getRandomValues(out.subarray(at, Math.min(at + 65536, size)));
 	return Array.from(out);
 }`);
 
-extern function pureRandom(size: int32): uint8[] from "msPureRandom(#)";
+	extern function pureRandom(size: int32): uint8[] from "msPureRandom(#)";
+}
 
 export function randomOctets(size: int32): uint8[] {
-	return pureRandom(size);
+	when (js) { return pureRandom(size); } else { throw new Error("randomOctets: the portable code draws its random bytes on the JS tier only"); }
 }
 
 export function bigFromBytes(bytes: Readonly<uint8[]>): bigint {
