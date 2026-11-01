@@ -94,5 +94,7 @@ function main(): int32 {
 	}
 	return 0;
 }
-const code = main();
-if (code != 0) { exit(code); }
+when (!testBuild) {
+	const code = main();
+	if (code != 0) { exit(code); }
+}
