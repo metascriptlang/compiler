@@ -1899,6 +1899,49 @@ function entryEditsMoveTheNavigationUniverse(): LspScenario {
 	};
 }
 
+function closingAnOverlayRestoresDiskMembers(): LspScenario {
+	const dep = PROJECT_URI + "close/dep.ms";
+	const user = PROJECT_URI + "close/user.ms";
+	const saved = "export interface Box { saved: int32; }\nexport const box: Box = { saved: 1 };\n";
+	const unsaved = saved.replace("saved: int32", "unsaved: int32").replace("saved: 1", "unsaved: 1");
+	const member = "import { box } from \"./dep\";\nbox.\n";
+	const prefixed = "import { box } from \"./dep\";\nbox.sa\n";
+	return {
+		name: "completion after closing an unsaved dependency lists the disk members, not the overlay's",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(user, member)),
+				notification("textDocument/didOpen", openParams(dep, saved)),
+			]),
+			frames([notification("textDocument/didChange", changeParams(dep, 2, unsaved))]),
+			frames([request("10", "textDocument/completion", positionParams(user, 1, 4))]),
+			frames([notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(dep)}}}`)]),
+			frames([request("11", "textDocument/completion", positionParams(user, 1, 4))]),
+			frames([notification("textDocument/didChange", changeParams(user, 2, prefixed))]),
+			frames([request("12", "textDocument/completion", positionParams(user, 1, 6))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameRows("members of the unsaved overlay", ["hash|2|() => int64", "unsaved|5|int32"], completionRows(r, "n:10")),
+			sameRows("members after the close", ["hash|2|() => int64", "saved|5|int32"], completionRows(r, "n:11")),
+			lacksText("the overlay member after the close", "unsaved", completionRows(r, "n:11").join(", ")),
+			sameRows("members matching the prefix sa after the close", ["saved|5|int32"], completionRows(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [7],
+			probes: [{ uri: user, line: 1, character: 1 }, { uri: user, line: 1, character: 6 }],
+			publications: [{ afterDrain: 4, uri: dep }],
+		},
+		project: [
+			{ path: "close/build.ms", text: "const config = { entry: \"./user\" };\nexport default config;\n" },
+			{ path: "close/dep.ms", text: saved },
+			{ path: "close/user.ms", text: member },
+		],
+	};
+}
+
 const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
 
 function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
@@ -2416,6 +2459,7 @@ export function lspScenarios(): LspScenario[] {
 		closedDocumentIsNotRepublished(),
 		lastContentChangeWins(),
 		signatureHelpCountsCommas(),
+		closingAnOverlayRestoresDiskMembers(),
 	];
 }
 
