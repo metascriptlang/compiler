@@ -842,6 +842,12 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	const arrayType = arrayOf(node.nodeType);
 	if (arrayType != null && d.newArguments.length == 1) {
 		const zero = jsDefaultValue(arrayType.typeReturn);
+		if (zero == "0" || zero == "0n" || zero == "false" || zero == "\"\"" || zero == "null") {
+			emit(gen, "new globalThis.Array(");
+			emitNode(gen, d.newArguments[0]);
+			emit(gen, ").fill(" + zero + ")");
+			return;
+		}
 		if (zero != "") {
 			emit(gen, "globalThis.Array.from({ length: ");
 			emitNode(gen, d.newArguments[0]);
