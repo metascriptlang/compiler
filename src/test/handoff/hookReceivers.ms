@@ -85,10 +85,8 @@ test "hook receivers: a class receiver is the class itself, never a pointer to i
 	for (const hook of hooks) {
 		if (hook == "onDestroy" || hook == "onTrace") {
 			expectRefused(problems, hook, "this ref x: C", "C", "points at the class reference");
-			expectRefused(problems, hook, "this x: Var<C>", "C", "points at the class reference");
 		} else {
 			expectClassRefused(problems, hook, "this ref x: C");
-			expectClassRefused(problems, hook, "this x: Var<C>");
 		}
 	}
 	assert problems.length == 0, problems.join("\n");
@@ -108,7 +106,16 @@ test "hook receivers: a hook that writes its receiver refuses a read-only view a
 test "hook receivers: onClone takes its receiver by value" {
 	const problems: string[] = [];
 	expectRefused(problems, "onClone", "this ref x: S", "S", "a clone is a new value");
-	expectRefused(problems, "onClone", "this x: Var<S>", "S", "a clone is a new value");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook receivers: a Var<T> receiver is refused as removed and nothing else" {
+	const problems: string[] = [];
+	const removed = "'Var<S>' was removed: write 'ref name: S' on the parameter";
+	for (const hook of hooks) {
+		const errors = errorsOf(hookSource(hook, "this x: Var<S>", "S"));
+		if (errors.length != 1 || errors[0] != removed) problems.push(hook + ": [" + errors.join(" | ") + "]");
+	}
 	assert problems.length == 0, problems.join("\n");
 }
 
@@ -128,7 +135,6 @@ test "hook receivers: the shapes the reference accepts still compile" {
 	expectAccepted(problems, "onClone", "this x: Readonly<S>", "S");
 	for (const hook of ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace"]) {
 		expectAccepted(problems, hook, "this ref x: S", "S");
-		expectAccepted(problems, hook, "this x: Var<S>", "S");
 	}
 	expectAccepted(problems, "onTrace", "this x: C", "C");
 	assert problems.length == 0, problems.join("\n");

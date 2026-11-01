@@ -1,5 +1,5 @@
 // @stdout: ptr=7/6/6 var=b/c/d generic=5/6/6 pick=ptr rex/value rex/ptr rex nullable=7/7
-// note: a receiver declared `Ptr<T>` or `Var<T>` is found in method form and behaves as the free call: `p.f()` writes through the pointer, a `Var<T>` receiver writes through to the caller's place like `this ref`, a generic `Ptr<Box<T>>` receiver binds `T`, overloads on `Ptr<T>` and `T` are picked by the receiver, and a narrowed `Ptr<T> | null` is a receiver. Same output on every backend.
+// note: a receiver declared `Ptr<T>` or `this ref` is found in method form and behaves as the free call: `p.f()` writes through the pointer, a `this ref` receiver writes through to the caller's place, a generic `Ptr<Box<T>>` receiver binds `T`, overloads on `Ptr<T>` and `T` are picked by the receiver, and a narrowed `Ptr<T> | null` is a receiver. Same output on every backend.
 
 struct Pet { hunger: uint16; name: string; }
 struct Box<T> { item: T; count: int32; }
@@ -8,7 +8,7 @@ function feed(this pet: Ptr<Pet>, portions: uint16): uint16 {
 	pet.hunger = pet.hunger - portions;
 	return pet.hunger;
 }
-function rename(this pet: Var<Pet>, name: string): void { pet.name = name; }
+function rename(this ref pet: Pet, name: string): void { pet.name = name; }
 function grow<T>(this b: Ptr<Box<T>>, by: int32): int32 {
 	b.count = b.count + by;
 	return b.count;

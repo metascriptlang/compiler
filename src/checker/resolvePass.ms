@@ -914,7 +914,6 @@ enum AnnotationWrap {
 	Locked,
 	Owned,
 	Readonly,
-	Var,
 }
 
 struct AnnotationLayer { wrap: AnnotationWrap; size: int32; inner: string; }
@@ -1004,7 +1003,6 @@ function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext
 		AnnotationWrap.Locked => createLocked(inner),
 		AnnotationWrap.Owned => ownedAnnotationOf(ctx, inner, line, col),
 		AnnotationWrap.Readonly => readonlyAnnotationOf(inner),
-		AnnotationWrap.Var => createVar(inner),
 	};
 }
 
@@ -1456,7 +1454,9 @@ function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32
 		const utility = utilityType(builtinHead, args, ctx, line, col);
 		if (utility != null) return utility;
 		if (builtinHead == "Var" && args.length == 1) {
-			return peelAnnotation(layers, AnnotationWrap.Var, args[0], 0);
+			const pointee = args[0].trim();
+			addError(ctx, `'Var<${pointee}>' was removed: write 'ref name: ${pointee}' on the parameter`, line, col);
+			return errorType();
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericSym = lookupTypeSym(ctx, writtenName);
@@ -2468,9 +2468,9 @@ function hookObjectName(t: Type): string {
 
 function hookReceiverShapes(hook: string): string {
 	const object = " (T a struct, a class or a generic instance of one)";
-	if (hook == "onDestroy") return "'this x: T', or for a struct also 'this ref x: T' and 'this x: Var<T>'" + object;
+	if (hook == "onDestroy") return "'this x: T', or for a struct also 'this ref x: T'" + object;
 	if (hook == "onClone") return "'this x: T'" + object;
-	return "'this ref x: T' or 'this x: Var<T>' for a struct, 'this x: T' for a class" + object;
+	return "'this ref x: T' for a struct, 'this x: T' for a class" + object;
 }
 
 function hookReceiverFault(hook: string, key: string, written: string, recv: Type): string {
@@ -2487,7 +2487,7 @@ function hookReceiverFault(hook: string, key: string, written: string, recv: Typ
 		obj = obj.typeReturn;
 	}
 	if (obj.kind == TypeKind.Error) return "";
-	const display = byVar && !written.startsWith("Var") ? "ref " + written : written;
+	const display = byVar ? "ref " + written : written;
 	if (obj.kind == TypeKind.Ptr) return "'" + display + "' addresses the type, it is not the type the hook belongs to, so the hook would never run";
 	if (isMaybeType(obj) || unwrapRefNullUnion(obj) != null) return "'" + typeDisplayName(recv) + "' may be null, and a hook always receives the object itself";
 	const name = hookObjectName(obj);
@@ -2513,7 +2513,7 @@ function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[],
 	const key = getExtReceiverType(d.fnFlags);
 	if (key == "") return false;
 	const recv = paramTypes[0];
-	if (recv == null || isUnresolvedType(recv)) return false;
+	if (recv == null || isUnresolvedType(recv) || recv.kind == TypeKind.Error) return false;
 	const fault = hookReceiverFault(d.fnName, key, getExtReceiverText(d.fnFlags), recv);
 	if (fault != "") {
 		const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
