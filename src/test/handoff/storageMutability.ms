@@ -474,6 +474,17 @@ test "a const binding of a reference type is rebound neither by an assignment no
 	}
 }
 
+test "a ref Span parameter writes the elements of a const array, not its binding" {
+	const head = "function fill(ref buf: Span<int32>): void { buf[0] = 7; }\n";
+	for (const decl of ["const xs: int32[] = [0, 0];", "let xs: int32[] = [0, 0];"]) {
+		const source = head + `function run(): void { ${decl} fill(xs); console.log(xs[0]); }\nrun();\n`;
+		const c = compileToCWithStd(source);
+		assert c.ok, c.ok ? "" : decl + ": " + c.error;
+	}
+	const sized = compileToCWithStd(head + "function run(): void { const xs: SizedArray<int32, 2> = [0, 0]; fill(xs); }\nrun();\n");
+	assert !sized.ok, "a const fixed array's elements are refused";
+}
+
 test "a readonly field passed to a ref or out parameter is refused as the write it stands for" {
 	const head = "class Leaf { n: number; constructor(n: number) { this.n = n; } }\nstruct P { x: int32; }\nclass Holder { readonly ro: Leaf = new Leaf(1); readonly p: P = { x: 1 }; rw: Leaf = new Leaf(1); }\nfunction put(ref slot: Leaf, v: Leaf): void { slot = v; }\nfunction fill(out slot: P): void { slot = { x: 2 }; }\n";
 	const refused = [{ call: "put(h.ro, new Leaf(2));", field: "ro" }, { call: "fill(out h.p);", field: "p" }];
