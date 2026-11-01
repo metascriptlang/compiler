@@ -3,8 +3,8 @@
 //
 // @stdout: rsa+tls sign true verify true
 // @exit: 0
-// @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
-// @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
+// @skip-js: the program imports std/crypto/tls, which has only a C backend (index.cms over mbedTLS)
+// @skip-raiser: std/crypto/rsa and std/crypto/tls have only a C backend (index.cms over mbedTLS); no .rms
 
 import { RsaPrivateKey, sign, verify } from "std/crypto/rsa";
 import { tlsConnect } from "std/crypto/tls";

@@ -16,7 +16,6 @@
 // @stdout: chacha 54 true false
 // @stdout: cbc 16 true
 // @exit: 0
-// @skip-js: std/crypto/aes has no JS tier yet
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family; none of these Buffer APIs
 
 import { Buffer } from "std/core/buffer";

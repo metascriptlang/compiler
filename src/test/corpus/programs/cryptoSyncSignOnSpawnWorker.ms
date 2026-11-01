@@ -4,7 +4,7 @@
 // @stdout: ecdsa worker signature verified true
 // @stdout: ed25519 worker signature verified true matches main true
 // @exit: 0
-// @skip-js: std/crypto/ec has no JS tier yet
+// @skip-js: the spawn thunk check rejects module-level values reached from the worker in the JS-tier Sync code (oidEcPublicKey in std/crypto/ec, baseTable in std/crypto/pure/ed25519)
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family and cannot spawn
 
 import { CryptoError, fromHex, toHex } from "std/crypto";
