@@ -67,6 +67,7 @@ import {
 	lspScenarios,
 	lspScenarioByName,
 	lspTranscript,
+	lspComparableAnswer,
 	idKey,
 	hasKey,
 	frames,
@@ -475,7 +476,9 @@ function queryAnswers(s: Session, drain: string[]): string[] {
 		const method = textField(parsed.value, "method");
 		let answer = "no answer";
 		for (const m of s.messages) {
-			if (isQueryAnswer(m) && idKey(m.getDynamicField("id")) == key) answer = stringify(m);
+			if (isQueryAnswer(m) && idKey(m.getDynamicField("id")) == key) {
+				answer = lspComparableAnswer(m, method);
+			}
 		}
 		out.push(`${method} ${key} => ${answer}`);
 	}

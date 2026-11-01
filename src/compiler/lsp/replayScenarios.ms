@@ -4,9 +4,12 @@
 import { lspFormatMessage, lspJsonString, lspPathToUri } from "./protocol";
 import { lspSplitFrames } from "./transport";
 import { parseJson } from "std/serialize/json/parser";
+import { stringify } from "std/serialize/json/stringify";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { getDynamicField, at, asInt32, asString } from "std/serialize/json/accessors";
-import { jsonNull } from "std/serialize/json/builder";
+import {
+	getDynamicField, setDynamicField, at, asInt32, asString,
+} from "std/serialize/json/accessors";
+import { jsonNull, jsonString } from "std/serialize/json/builder";
 import { ensureDir, writeFile } from "std/fs";
 import { dirname } from "std/fs/path";
 
@@ -153,6 +156,132 @@ export function idKey(id: JsonValue): string {
 
 export function hasKey(m: JsonValue, key: string): boolean {
 	return m.kind == JsonKind.Object && m.keys.indexOf(key) >= 0;
+}
+
+export function lspComparableAnswer(
+	message: JsonValue,
+	method: string,
+): string {
+	if (method != "textDocument/completion") return stringify(message);
+	const copy = parseJson(stringify(message));
+	if (!copy.ok) {
+		throw new Error("completion answer cannot be compared: " + copy.error);
+	}
+	const result = copy.value.getDynamicField("result");
+	const items = result.kind == JsonKind.Array ? result :
+		result.getDynamicField("items");
+	if (items.kind == JsonKind.Array) {
+		for (const item of items.items) {
+			if (hasKey(item, "data")) {
+				item.setDynamicField("data", jsonString("opaque"));
+			}
+		}
+	}
+	return stringify(copy.value);
+}
+
+function comparableReplayJson(
+	body: string,
+	method: string = "textDocument/completion",
+): string {
+	const replay = lspTranscript(lspFormatMessage(body), 0, 0);
+	return lspComparableAnswer(replay.messages[0], method);
+}
+
+test "completion array comparison ignores only opaque data contents" {
+	const warm = `{"result":[{"label":"x","data":"warm"}]}`;
+	const fresh = `{"result":[{"label":"x","data":{"source":"fresh"}}]}`;
+	assert comparableReplayJson(warm) == comparableReplayJson(fresh);
+}
+
+test "completion list comparison ignores only opaque data contents" {
+	const warm = `{"result":{"items":[{"label":"x","data":"warm"}]}}`;
+	const fresh = `{"result":{"items":[{"label":"x","data":42}]}}`;
+	assert comparableReplayJson(warm) == comparableReplayJson(fresh);
+}
+
+test "completion comparison preserves data presence even when null" {
+	const absent = `{"result":[{"label":"x"}]}`;
+	const present = `{"result":[{"label":"x","data":null}]}`;
+	assert comparableReplayJson(absent) != comparableReplayJson(present);
+}
+
+test "completion comparison preserves incomplete status" {
+	const complete = `{"result":{"items":[{"data":0}],"isIncomplete":false}}`;
+	const incomplete = `{"result":{"items":[{"data":0}],"isIncomplete":true}}`;
+	assert comparableReplayJson(complete) != comparableReplayJson(incomplete);
+}
+
+test "completion comparison preserves item order" {
+	const first = `{"result":[{"label":"a","data":0},` +
+		`{"label":"b","data":0}]}`;
+	const second = `{"result":[{"label":"b","data":0},` +
+		`{"label":"a","data":0}]}`;
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison preserves details" {
+	const first = `{"result":[{"data":0,"detail":"int32"}]}`;
+	const second = `{"result":[{"data":0,"detail":"string"}]}`;
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison preserves replacement text" {
+	const first = `{"result":[{"data":0,"textEdit":{"newText":"first"}}]}`;
+	const second = `{"result":[{"data":0,"textEdit":{"newText":"second"}}]}`;
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison preserves replacement ranges" {
+	const first = `{"result":[{"data":0,"textEdit":{"newText":"x","range":` +
+		`{"start":{"line":0,"character":1},` +
+		`"end":{"line":0,"character":2}}}}]}`;
+	const second = first.replace(`"character":1`, `"character":0`);
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison preserves additional import edits" {
+	const first = `{"result":[{"data":0,"additionalTextEdits":` +
+		`[{"newText":"import a"}]}]}`;
+	const second = first.replace("import a", "import b");
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison preserves nested documentation data" {
+	const first = `{"result":[{"data":0,"documentation":{"data":"first"}}]}`;
+	const second = `{"result":[{"data":0,"documentation":{"data":"second"}}]}`;
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "non-completion comparison preserves data contents" {
+	const first = `{"result":[{"data":"first"}]}`;
+	const second = `{"result":[{"data":"second"}]}`;
+	assert comparableReplayJson(first, "textDocument/codeAction") !=
+		comparableReplayJson(second, "textDocument/codeAction");
+}
+
+test "completion comparison leaves the original message unchanged" {
+	const body = `{"result":[{"label":"x","data":"original"}]}`;
+	const message = lspTranscript(lspFormatMessage(body), 0, 0).messages[0];
+	const before = stringify(message);
+	lspComparableAnswer(message, "textDocument/completion");
+	assert stringify(message) == before;
+}
+
+test "completion comparison preserves error answers" {
+	const body = `{"error":{"code":-32603,"message":"failure","data":"kept"}}`;
+	assert comparableReplayJson(body) == body;
+}
+
+test "completion comparison preserves response identity" {
+	const first = `{"id":"cp1-1","result":[{"data":0}]}`;
+	const second = `{"id":"cp1-2","result":[{"data":0}]}`;
+	assert comparableReplayJson(first) != comparableReplayJson(second);
+}
+
+test "completion comparison distinguishes null from an empty list" {
+	assert comparableReplayJson(`{"result":null}`) !=
+		comparableReplayJson(`{"result":[]}`);
 }
 
 function render(v: JsonValue): string {
