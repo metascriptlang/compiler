@@ -2441,6 +2441,48 @@ function eventAt(events: string[], from: int32, needle: string): int32 {
 	return -1;
 }
 
+const OWN_OUTPUT_FLOOD = 4000;
+
+function watchOwnOutput(): void {
+	const tag = "hcrWatchOwnOutput";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const dir = freshDir(`${TMP}/watchOwnOutput`);
+	ensureDir(`${dir}/sub`);
+	ensureDir(`${dir}/out/flood`);
+	copy(`${FIXTURES}/watchOwnOutput/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/watchOwnOutput/sub/logic.ms`, `${dir}/sub/logic.ms`);
+	const events = `${dir}/events.jsonl`;
+	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
+	need(tag, started.ok, `cannot start ${MSC}`);
+	if (!started.ok) return;
+	const child = started.value;
+	const seen = [""];
+	const up = readUntil(child, seen, "OWN start 7", 120000);
+	let reloaded = false;
+	if (up) {
+		copy(`${FIXTURES}/watchOwnOutput/logicGrown.txt`, `${dir}/sub/logic.ms`);
+		for (let i = 0; i < OWN_OUTPUT_FLOOD; i += 1) writeFile(`${dir}/out/flood/f${i}.txt`, `${i}`);
+		reloaded = readUntil(child, seen, "OWN reloaded 9", 120000);
+	}
+	child.write("q\n", 5000);
+	const ended = child.wait(30000);
+	readUntil(child, seen, "watch: quit", 2000);
+	child.close();
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	if (!up || !reloaded || !ended.ok) console.log(seen[0]);
+	need(tag, up, "the program did not start on the first build");
+	need(tag, reloaded, "the edit of sub/logic.ms did not reload into the running program");
+	need(tag, ended.ok, "q did not end msc");
+	const starts: string[] = [];
+	for (const line of eventsOf(events)) {
+		if (line.contains("\"event\":\"build.start\"")) starts.push(line);
+	}
+	need(tag, starts.length == 2, `${OWN_OUTPUT_FLOOD} files written under out/ during the edit's build gave ${starts.length} builds, not the first build and the edit's: ${starts.join(" | ")}`);
+	need(tag, starts.length == 2 && starts[1].contains("\"changed\":[\"sub/logic.ms\"]"), `the edit's build does not name sub/logic.ms as changed: ${starts.join(" | ")}`);
+	console.log(`ok   ${tag}`);
+}
+
 function startEvents(tag: string, name: string, events: string): ChildProcess {
 	const dir = freshDir(`${TMP}/${name}`);
 	for (const f of readDir(`${FIXTURES}/runEvents`)) copy(`${FIXTURES}/runEvents/${f}`, `${dir}/${f}`);
@@ -2611,6 +2653,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
 	{ name: "hcrRunEvents", run: runEvents },
+	{ name: "hcrWatchOwnOutput", run: watchOwnOutput },
 	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
