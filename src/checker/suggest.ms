@@ -14,7 +14,7 @@ import { CheckerContext, findModuleExports, findAllExtensionsByName, filterExtsB
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
 import { JSXElementData, JSXAttributeData, JSXSpreadAttributeData, TypeObjectData } from "../ast/node";
-import { peelToStructOrUnion, positionalFieldsOf, hasGenericParams, createUnifyBindings, unifyType, substituteBound } from "./types";
+import { peelToStructOrUnion, positionalFieldsOf, hasGenericParams, createUnifyBindings, unifyType, substituteBound, isOutParam } from "./types";
 import { declaringSymOf, fieldDeclarer, aliasObjectBody } from "./visibility";
 import { nonNullMemberOfNullable } from "./compat";
 import { lineOffset, lineText } from "../utils/sourceLines";
@@ -476,13 +476,16 @@ function sgParamText(t: Type, i: int32, depth: number): string {
 	return t.typeNames[i] + (optional ? "?: " : ": ") + text;
 }
 
+function sgParamMode(param: Type | null): string {
+	if (param == null || param.kind != TypeKind.Var) return "";
+	return isOutParam(param) ? "out " : "ref ";
+}
+
 function sgFormatParamList(t: Type): string {
 	let inline = "(";
 	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 		if (i > 0) inline = inline + ", ";
-		const isOut = t.typeChildren[i] != null && t.typeChildren[i].kind == TypeKind.Var;
-		if (isOut) inline = inline + "out ";
-		inline = inline + sgParamText(t, i, 0);
+		inline = inline + sgParamMode(t.typeChildren[i]) + sgParamText(t, i, 0);
 	}
 	inline = inline + ")";
 	// If short enough, use inline
@@ -491,9 +494,7 @@ function sgFormatParamList(t: Type): string {
 	let result = "(\n";
 	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 		result = result + "  ";
-		const isOut = t.typeChildren[i] != null && t.typeChildren[i].kind == TypeKind.Var;
-		if (isOut) result = result + "out ";
-		result = result + sgParamText(t, i, 0);
+		result = result + sgParamMode(t.typeChildren[i]) + sgParamText(t, i, 0);
 		if (i < t.typeChildren.length - 1) result = result + ",";
 		result = result + "\n";
 	}
@@ -2403,7 +2404,7 @@ function sgBuildSignatureInfo(name: string, fnType: Type): SgSignatureInfo {
 	let label = name + "(";
 	for (let i = 0; i < fnType.typeChildren.length; i = i + 1) {
 		if (i > 0) label = label + ", ";
-		const paramLabel = sgParamText(fnType, i, 0);
+		const paramLabel = sgParamMode(fnType.typeChildren[i]) + sgParamText(fnType, i, 0);
 		paramLabels.push(paramLabel);
 		label = label + paramLabel;
 	}
@@ -3195,7 +3196,7 @@ test "never" { assert sgTypeToString(neverType()) == "never"; }
 
 test "error" { assert sgTypeToString(errorType()) == "error"; }
 
-import { createArray, createFunction, createEnum, createStruct, createResult } from "./types";
+import { createArray, createFunction, createEnum, createStruct, createResult, createVar, createOutVar } from "./types";
 test "array" {
 	const t = createArray(numberType());
 	assert sgTypeToString(t) == "number[]";
@@ -3258,6 +3259,21 @@ test "format function hover" {
 	};
 	const hover = sgFormatHover(suggest);
 	assert hover == "```metascript\nfunction greet(s: string): void\n```";
+}
+
+test "hover and signature help name a ref parameter ref and an out parameter out" {
+	const fnType = createFunction([createVar(numberType()), createOutVar(numberType())], ["a", "b"], voidType());
+	const suggest: SgSuggest = {
+		sym: null, name: "fill", kind: SymbolKind.Function, symType: fnType,
+		location: makeLoc(1, 0), modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, sortText: "", contextFit: false,
+		isExported: false, isMutable: false, usageCount: 0,
+	};
+	const hover = sgFormatHover(suggest);
+	assert hover == "```metascript\nfunction fill(ref a: number, out b: number): void\n```", hover;
+	const info = sgBuildSignatureInfo("fill", fnType);
+	assert info.label == "fill(ref a: number, out b: number): void", info.label;
+	assert info.paramLabels[0] == "ref a: number" && info.paramLabels[1] == "out b: number", info.paramLabels.join(" | ");
 }
 
 test "format interface hover" {

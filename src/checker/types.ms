@@ -2190,7 +2190,7 @@ export function createOutVar(inner: Type): Type {
 	return t;
 }
 
-export function isOutParam(t: Type | null): boolean {
+export function isOutParam(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Var && t.typeFlags.has(TypeFlag.OutParam);
 }
 
@@ -5664,8 +5664,9 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 			return prefix;
 		}
 		if (cur.kind == TypeKind.Var) {
-			if (cur.typeReturn != null) { prefix = prefix + "out "; cur = cur.typeReturn; continue; }
-			return prefix + "out";
+			const mode = isOutParam(cur) ? "out" : "ref";
+			if (cur.typeReturn != null) { prefix = prefix + mode + " "; cur = cur.typeReturn; continue; }
+			return prefix + mode;
 		}
 		if (cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr) {
 			if (cur.typeReturn != null) { cur = cur.typeReturn; continue; }
@@ -5777,7 +5778,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + "[" + String(t.typeValue) + "]";
-	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes);
+	if (t.kind == TypeKind.Var && t.typeReturn != null) return (isOutParam(t) ? "out " : "ref ") + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes);
 	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + " | null";
 	const shape = namelessObjectShape(t, open, shapes);
 	if (shape != "") return shape;
@@ -6599,6 +6600,13 @@ test "createTuple" {
 test "typeNameOf Tuple" {
 	const tup = createTuple([numberType()]);
 	assert typeNameOf(tup) == "Tuple";
+}
+
+test "typeNameOf and typeDisplayName name a ref parameter ref and an out parameter out" {
+	assert typeNameOf(createVar(numberType())) == "ref number";
+	assert typeNameOf(createOutVar(numberType())) == "out number";
+	assert typeDisplayName(createVar(numberType())) == "ref number";
+	assert typeDisplayName(createOutVar(numberType())) == "out number";
 }
 
 test "substituteParams Tuple" {

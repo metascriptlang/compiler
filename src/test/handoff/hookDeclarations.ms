@@ -193,7 +193,8 @@ test "hook declarations: a wrong parameter list is refused for every hook" {
 	expectFault(problems, "onMove alone", "function onMove(this ref x: S): void { }\n", wrong + "onMove' is wrong: it takes the receiver and the source value ('y: T'), 1 parameter declared");
 	expectFault(problems, "onCopy three", "function onCopy(this ref x: S, y: S, z: S): void { }\n", wrong + "onCopy' is wrong: it takes the receiver and the source value ('y: T'), 3 parameters declared");
 	expectFault(problems, "onCopy y: int32", "function onCopy(this ref x: S, y: int32): void { }\n", wrong + "onCopy' is wrong: its second parameter is 'int32', the source value is the receiver's own type ('y: T')");
-	expectFault(problems, "onMove y: Var<S>", "function onMove(this ref x: S, y: Var<S>): void { }\n", wrong + "onMove' is wrong: its second parameter is 'out S'");
+	expectFault(problems, "onMove ref y: S", "function onMove(this ref x: S, ref y: S): void { }\n", wrong + "onMove' is wrong: its second parameter is 'ref S'");
+	expectFault(problems, "onMove out y: S", "function onMove(this ref x: S, out y: S): void { y = x; }\n", wrong + "onMove' is wrong: its second parameter is 'out S'");
 	expectFault(problems, "onCopy y: another struct", "struct Other { id: int32; }\nfunction onCopy(this ref x: S, y: Other): void { }\n", wrong + "onCopy' is wrong: its second parameter is 'Other'");
 	expectFault(problems, "onDestroy method extra", "class T { onDestroy(extra: int32): void { } }\n", wrong + "onDestroy' is wrong: it takes the receiver only, 2 parameters declared");
 	expectAccepted(problems, "onCopy y: S", "function onCopy(this ref x: S, y: S): void { }\n");
