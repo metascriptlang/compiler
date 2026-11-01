@@ -1459,6 +1459,7 @@ export class CheckerContext {
 	stdRoot: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActor: Symbol | null;
+	instantiationSites: string[];
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
@@ -1564,6 +1565,7 @@ export function createContext(): CheckerContext {
 		stdRoot: "",
 		currentFunction: null,
 		currentActor: null,
+		instantiationSites: [],
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,

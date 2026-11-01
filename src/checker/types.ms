@@ -1820,6 +1820,72 @@ export function isValuePointee(pointee: Readonly<Type>): boolean {
 	return pointee.kind != TypeKind.Array && pointee.kind != TypeKind.Function;
 }
 
+export function countedReferenceOf(t: Type | null): Type | null {
+	let peeled = t != null ? peelThrough(t, PEEL_ALL) : null;
+	for (let depth = 0; peeled != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (peeled.kind == TypeKind.Ref) return peeled;
+		const body = distinctBody(peeled);
+		peeled = body != null ? peelThrough(body, PEEL_ALL) : null;
+	}
+	return null;
+}
+
+export function countedReferenceText(ref: Type, shown: string): string {
+	const plain = !isOwnedRef(ref) && !isAtomicRef(ref) && !isReadonlyView(ref);
+	const pointee = ref.typeReturn;
+	const decl = pointee != null && pointee.kind == TypeKind.GenericInstance && pointee.typeExtra != null ? pointee.typeExtra : pointee;
+	const kind = plain && decl != null && decl.sym != null ? decl.sym.symbolKind : SymbolKind.Variable;
+	return match (kind) {
+		SymbolKind.Class => "a class value",
+		SymbolKind.Interface => "an interface value",
+		_ => "'" + shown + "'",
+	};
+}
+
+export function boxedCountedReference(t: Type | null): Type | null {
+	return boxedReferenceIn(t, [], 0);
+}
+
+function boxedReferenceIn(t: Type | null, seen: Cursor<Type>[], depth: int32): Type | null {
+	if (t == null || depth > PEEL_MAX_DEPTH || typeVisitHas(seen, t)) return null;
+	seen.push(t);
+	if (t.kind == TypeKind.Ref && !isAtomicRef(t)) {
+		if (countedReferenceOf(t.typeReturn) != null) return t.typeReturn;
+		return t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance ? boxedReferenceIn(t.typeReturn, seen, depth + 1) : null;
+	}
+	if (t.kind == TypeKind.GenericInstance) {
+		const body = t.typeReturn;
+		if (body == null || body.kind != TypeKind.Struct) return boxedReferenceIn(body, seen, depth + 1);
+		return firstBoxedReference(body.typeChildren, seen, depth);
+	}
+	return match (t.kind) {
+		TypeKind.Union | TypeKind.Tuple => firstBoxedReference(t.typeChildren, seen, depth),
+		TypeKind.Function => firstBoxedReference(t.typeChildren, seen, depth) ?? boxedReferenceIn(t.typeReturn, seen, depth + 1),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Var | TypeKind.Sink | TypeKind.Cursor | TypeKind.Alias => boxedReferenceIn(t.typeReturn, seen, depth + 1),
+		_ => null,
+	};
+}
+
+function firstBoxedReference(parts: Type[], seen: Cursor<Type>[], depth: int32): Type | null {
+	for (const part of parts) {
+		const found = boxedReferenceIn(part, seen, depth + 1);
+		if (found != null) return found;
+	}
+	return null;
+}
+
+export function boundParamName(params: Type[], args: Type[], pointee: Type): string {
+	for (let i = 0; i < params.length && i < args.length; i += 1) {
+		if (args[i] == pointee) return params[i].typeName;
+	}
+	return "";
+}
+
+export function boxedReferenceRefusal(instance: string, binding: string, pointee: Type): string {
+	const shown = typeDisplayName(pointee);
+	return `Ref<T> takes a value type, but ${instance} ${binding != "" ? "binds " + binding + " = '" + shown + "'" : "makes 'Ref<" + shown + ">'"}: ${countedReferenceText(countedReferenceOf(pointee)!, shown)} is already a counted reference`;
+}
+
 // Locked<T> (PARALOCK I22) — the one sanctioned shared-mutable cell. ONE
 // allocation: atomic-rc header + inline ticket lock + typed payload, so the
 // handle IS an atomic Ref and every mechanism Arc already drives (atomic

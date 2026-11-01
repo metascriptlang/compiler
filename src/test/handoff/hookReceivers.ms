@@ -66,7 +66,8 @@ test "hook receivers: a receiver that is not the type's own name is refused at t
 	const problems: string[] = [];
 	for (const hook of hooks) {
 		for (const owner of owners) {
-			expectRefused(problems, hook, "this x: Ref<" + owner + ">", owner, "'Ref<" + owner + ">'");
+			if (owner == "S") expectRefused(problems, hook, "this x: Ref<S>", owner, "'Ref<S>'");
+			else if (errorsOf(hookSource(hook, "this x: Ref<C>", owner)).indexOf("Ref<T> takes a value type, got 'C': a class value is already a counted reference, so write 'C'") < 0) problems.push(hook + "(this x: Ref<C>): the Ref is not refused at the type");
 			expectRefused(problems, hook, "this x: A" + owner, owner, "is not the type's own name");
 			expectRefused(problems, hook, "this x: Cursor<" + owner + ">", owner, "is not a type a hook can belong to");
 			expectRefused(problems, hook, "this x: Borrow<" + owner + ">", owner, "is not a type a hook can belong to");
