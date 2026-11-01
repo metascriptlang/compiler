@@ -11,10 +11,14 @@
 #endif
 #endif
 
-/* The CPUs this process may run on (os.availableParallelism): the affinity mask on Linux,
-   the online count elsewhere. 0 when the host does not say. */
+/* The CPUs this process may run on (os.availableParallelism): the affinity mask on Windows
+   and Linux, the online count elsewhere. 0 when the host does not say. */
 static inline int msAvailableCpus(void) {
 #ifdef _WIN32
+	DWORD_PTR processMask = 0, systemMask = 0;
+	if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) && processMask != 0) {
+		return __builtin_popcountll((unsigned long long)processMask);
+	}
 	SYSTEM_INFO si;
 	GetSystemInfo(&si);
 	return (int)si.dwNumberOfProcessors;
