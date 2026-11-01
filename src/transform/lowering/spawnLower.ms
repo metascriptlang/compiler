@@ -13,7 +13,7 @@ import { walkNode } from "../walker";
 import { custodyReaches } from "../cycles";
 import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl, makeMoveExpr } from "../util";
 
-function needsBoxing(t: Type): boolean {
+export function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
 	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => true,
