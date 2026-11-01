@@ -9,7 +9,7 @@
 // @stdout: md5 900150983cd24fb0d6963f7d28e17f72 true
 // @stdout: digest 11 algorithms, 11 same, 0 failed
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
+// @skip-js: std/crypto on JS has no ripemd160 or sha3 (the program checks digest() over all 11 algorithms); cryptoJsDigestVectors covers the six JS has
 
 import { Buffer } from "std/core/buffer";
 import { CryptoError, HashAlgorithm, digest, digestSync, md5, md5Sync, sha1, sha1Sync, sha256, sha256Sync, sha384, sha384Sync, sha512, sha512Sync, toHex } from "std/crypto";

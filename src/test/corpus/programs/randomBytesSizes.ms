@@ -3,7 +3,6 @@
 //
 // @stdout: size 0 ok true len 0|size 1 ok true len 1|size 255 ok true len 255|size 1048576 ok true len 1048576 distinct true nonzero true|negative ok false
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
 import { randomBytesSync, toHex } from "std/crypto";

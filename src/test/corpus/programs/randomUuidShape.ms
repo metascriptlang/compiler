@@ -3,7 +3,6 @@
 //
 // @stdout: draws 2000 bad 0 duplicates 0
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
 import { randomUUIDSync } from "std/crypto";

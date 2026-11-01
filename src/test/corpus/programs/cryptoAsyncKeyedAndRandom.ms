@@ -8,7 +8,6 @@
 // @stdout: randomInt true
 // @stdout: randomUUID 36 true
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: the raiser std/crypto carries only the hash family; no hmac, random or key derivation
 
 import { Buffer } from "std/core/buffer";

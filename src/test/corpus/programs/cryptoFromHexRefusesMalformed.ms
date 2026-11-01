@@ -8,7 +8,6 @@
 // @stdout: base64 empty true 0
 // @stdout: base64 refused 11 of 11 invalid-encoding true
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: the raiser std/crypto carries only the hash family; no fromHex or fromBase64
 
 import { CryptoErrorKind, fromBase64, fromHex, toHex } from "std/crypto";

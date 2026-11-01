@@ -13,7 +13,6 @@
 // @stdout: bad 2^48: max - min must be less than 2^48
 // @stdout: bad 2^48+1: max - min must be less than 2^48
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
 import { randomIntSync } from "std/crypto";

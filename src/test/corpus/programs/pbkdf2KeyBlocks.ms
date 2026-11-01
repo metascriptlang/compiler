@@ -3,7 +3,7 @@
 //
 // @stdout: pbkdf2 key blocks 30 checked, 0 wrong
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
+// @skip-js: std/crypto on JS has no sha3 (the program checks pbkdf2 over sha3-224/256/384/512); cryptoJsMacKdfVectors covers the JS digests
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
 import { HashAlgorithm, pbkdf2, toHex } from "std/crypto";

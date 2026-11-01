@@ -8,7 +8,6 @@
 // @stdout: small-order false false
 // @stdout: small-order R false
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over mbedTLS and Monocypher); there is no .jms
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family; none of these Buffer APIs
 
 import { Buffer } from "std/core/buffer";

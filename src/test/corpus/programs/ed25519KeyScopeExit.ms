@@ -4,7 +4,6 @@
 //
 // @stdout: scopes 1000 signed 1000 agreed 1000
 // @exit: 0
-// @skip-js: std/crypto has only a C backend (index.cms over mbedTLS and Monocypher); there is no .jms
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family; none of these Buffer APIs
 
 import { Buffer } from "std/core/buffer";
