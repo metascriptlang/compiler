@@ -36,15 +36,19 @@ extern function msEd25519KeyFree(key: int64): void;
 export class Ed25519PublicKey {
 	_h: int64;
 
-	static async import(raw: Bytes): Promise<Result<Ed25519PublicKey, CryptoError>> {
+	static importSync(raw: Bytes): Result<Ed25519PublicKey, CryptoError> {
 		const h = msEd25519PublicFromRaw(rawString(raw));
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PublicKey.import", "public key must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
 
-	async export(): Promise<Result<Buffer, CryptoError>> {
+	static async import(raw: Bytes): Promise<Result<Ed25519PublicKey, CryptoError>> { return Ed25519PublicKey.importSync(raw); }
+
+	exportSync(): Result<Buffer, CryptoError> {
 		return Result.ok(rawBuffer(msEd25519PublicRaw(this._h)));
 	}
+
+	async export(): Promise<Result<Buffer, CryptoError>> { return this.exportSync(); }
 
 	onDestroy(): void {
 		if (this._h != 0) {
@@ -57,21 +61,27 @@ export class Ed25519PublicKey {
 export class Ed25519PrivateKey {
 	_h: int64;
 
-	static async generate(): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+	static generateSync(): Result<Ed25519PrivateKey, CryptoError> {
 		const h = msEd25519KeyGenerate();
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "Ed25519PrivateKey.generate", "key generation failed"));
 		return Result.ok({ _h: h });
 	}
 
-	static async fromSeed(seed: Bytes): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+	static async generate(): Promise<Result<Ed25519PrivateKey, CryptoError>> { return Ed25519PrivateKey.generateSync(); }
+
+	static fromSeedSync(seed: Bytes): Result<Ed25519PrivateKey, CryptoError> {
 		const h = msEd25519KeyFromSeed(rawString(seed));
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
 
-	async exportSeed(): Promise<Result<Buffer, CryptoError>> {
+	static async fromSeed(seed: Bytes): Promise<Result<Ed25519PrivateKey, CryptoError>> { return Ed25519PrivateKey.fromSeedSync(seed); }
+
+	exportSeedSync(): Result<Buffer, CryptoError> {
 		return Result.ok(rawBuffer(msEd25519KeySeed(this._h)));
 	}
+
+	async exportSeed(): Promise<Result<Buffer, CryptoError>> { return this.exportSeedSync(); }
 
 	publicKey(): Ed25519PublicKey {
 		const h = msEd25519PublicFromRaw(msEd25519KeyPublicRaw(this._h));
@@ -87,13 +97,17 @@ export class Ed25519PrivateKey {
 	}
 }
 
-export async function sign(key: Ed25519PrivateKey, message: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function signSync(key: Ed25519PrivateKey, message: Bytes): Result<Buffer, CryptoError> {
 	const sig = msEd25519KeySign(key._h, rawString(message));
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519.sign", "signing failed"));
 	return Result.ok(rawBuffer(sig));
 }
 
+export async function sign(key: Ed25519PrivateKey, message: Bytes): Promise<Result<Buffer, CryptoError>> { return signSync(key, message); }
+
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export async function verify(key: Ed25519PublicKey, signature: Bytes, message: Bytes): Promise<boolean> {
+export function verifySync(key: Ed25519PublicKey, signature: Bytes, message: Bytes): boolean {
 	return msEd25519PublicVerify(key._h, rawString(signature), rawString(message));
 }
+
+export async function verify(key: Ed25519PublicKey, signature: Bytes, message: Bytes): Promise<boolean> { return verifySync(key, signature, message); }

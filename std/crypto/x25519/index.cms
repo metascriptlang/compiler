@@ -27,15 +27,19 @@ extern function msX25519KeyFree(key: int64): void;
 export class X25519PublicKey {
 	_h: int64;
 
-	static async import(raw: Bytes): Promise<Result<X25519PublicKey, CryptoError>> {
+	static importSync(raw: Bytes): Result<X25519PublicKey, CryptoError> {
 		const h = msX25519PublicFromRaw(rawString(raw));
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PublicKey.import", "public key must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
 
-	async export(): Promise<Result<Buffer, CryptoError>> {
+	static async import(raw: Bytes): Promise<Result<X25519PublicKey, CryptoError>> { return X25519PublicKey.importSync(raw); }
+
+	exportSync(): Result<Buffer, CryptoError> {
 		return Result.ok(rawBuffer(msX25519PublicRaw(this._h)));
 	}
+
+	async export(): Promise<Result<Buffer, CryptoError>> { return this.exportSync(); }
 
 	onDestroy(): void {
 		if (this._h != 0) {
@@ -48,17 +52,21 @@ export class X25519PublicKey {
 export class X25519PrivateKey {
 	_h: int64;
 
-	static async generate(): Promise<Result<X25519PrivateKey, CryptoError>> {
+	static generateSync(): Result<X25519PrivateKey, CryptoError> {
 		const h = msX25519KeyGenerate();
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "X25519PrivateKey.generate", "key generation failed"));
 		return Result.ok({ _h: h });
 	}
 
-	static async fromRaw(raw: Bytes): Promise<Result<X25519PrivateKey, CryptoError>> {
+	static async generate(): Promise<Result<X25519PrivateKey, CryptoError>> { return X25519PrivateKey.generateSync(); }
+
+	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
 		const h = msX25519KeyFromRaw(rawString(raw));
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
+
+	static async fromRaw(raw: Bytes): Promise<Result<X25519PrivateKey, CryptoError>> { return X25519PrivateKey.fromRawSync(raw); }
 
 	publicKey(): X25519PublicKey {
 		const h = msX25519PublicFromRaw(msX25519KeyPublicRaw(this._h));
@@ -75,8 +83,10 @@ export class X25519PrivateKey {
 }
 
 // Refuses a low-order public key, whose shared secret would be all zero (RFC 7748 6.1).
-export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Promise<Result<Buffer, CryptoError>> {
+export function sharedSecretSync(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Result<Buffer, CryptoError> {
 	const shared = msX25519SharedSecret(privateKey._h, publicKey._h);
 	if (shared == "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "x25519.sharedSecret", "key agreement failed"));
 	return Result.ok(rawBuffer(shared));
 }
+
+export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Promise<Result<Buffer, CryptoError>> { return sharedSecretSync(privateKey, publicKey); }
