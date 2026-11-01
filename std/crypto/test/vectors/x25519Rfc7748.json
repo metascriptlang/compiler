@@ -1,0 +1,675 @@
+{
+ "algorithm": "XDH",
+ "schema": "xdh_comp_schema_v1.json",
+ "generator": "x25519Rfc7748Gen.py: RFC 7748 section 5 bigint ladder, openssl pkeyutl -derive cross-check",
+ "opensslCrossChecked": 40,
+ "iterated": {
+  "1": "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
+  "1000": "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51"
+ },
+ "numberOfTests": 58,
+ "testGroups": [
+  {
+   "type": "XdhComp",
+   "curve": "curve25519",
+   "tests": [
+    {
+     "tcId": 1,
+     "comment": "RFC 7748 5.2 first vector",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 2,
+     "comment": "RFC 7748 5.2 second vector (point has bit 255 set)",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+     "result": "valid"
+    },
+    {
+     "tcId": 3,
+     "comment": "RFC 7748 6.1 alice public key",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "0900000000000000000000000000000000000000000000000000000000000000",
+     "private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+     "shared": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "result": "valid"
+    },
+    {
+     "tcId": 4,
+     "comment": "RFC 7748 6.1 bob public key",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "0900000000000000000000000000000000000000000000000000000000000000",
+     "private": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+     "shared": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+     "result": "valid"
+    },
+    {
+     "tcId": 5,
+     "comment": "RFC 7748 6.1 shared secret alice side",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+     "private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+     "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+     "result": "valid"
+    },
+    {
+     "tcId": 6,
+     "comment": "RFC 7748 6.1 shared secret bob side",
+     "flags": [
+      "Rfc7748Ktv"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+     "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+     "result": "valid"
+    },
+    {
+     "tcId": 7,
+     "comment": "scalar 0 low three bits set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 8,
+     "comment": "scalar 0 bit 255 set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 9,
+     "comment": "scalar 0 bit 254 cleared",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449a84",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 10,
+     "comment": "scalar 0 all clamp bits perturbed",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a746e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449a84",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 11,
+     "comment": "scalar 1 low three bits set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "4d66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+     "result": "valid"
+    },
+    {
+     "tcId": 12,
+     "comment": "scalar 1 bit 255 set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba8d",
+     "shared": "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+     "result": "valid"
+    },
+    {
+     "tcId": 13,
+     "comment": "scalar 1 bit 254 cleared",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+     "result": "valid"
+    },
+    {
+     "tcId": 14,
+     "comment": "scalar 1 all clamp bits perturbed",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "4f66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba8d",
+     "shared": "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+     "result": "valid"
+    },
+    {
+     "tcId": 15,
+     "comment": "scalar 2 low three bits set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "75076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+     "shared": "6381401e6cdb0d7f21b69a3ca4659c06334519717557654b7b9f42a38e27d124",
+     "result": "valid"
+    },
+    {
+     "tcId": 16,
+     "comment": "scalar 2 bit 255 set",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92caa",
+     "shared": "6381401e6cdb0d7f21b69a3ca4659c06334519717557654b7b9f42a38e27d124",
+     "result": "valid"
+    },
+    {
+     "tcId": 17,
+     "comment": "scalar 2 bit 254 cleared",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+     "shared": "6381401e6cdb0d7f21b69a3ca4659c06334519717557654b7b9f42a38e27d124",
+     "result": "valid"
+    },
+    {
+     "tcId": 18,
+     "comment": "scalar 2 all clamp bits perturbed",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92caa",
+     "shared": "6381401e6cdb0d7f21b69a3ca4659c06334519717557654b7b9f42a38e27d124",
+     "result": "valid"
+    },
+    {
+     "tcId": 19,
+     "comment": "scalar all zero",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "0000000000000000000000000000000000000000000000000000000000000000",
+     "shared": "030d7ba1a76719f96d5c39122f690e7856895ee9d24416279eb9182010287113",
+     "result": "valid"
+    },
+    {
+     "tcId": 20,
+     "comment": "scalar all ones",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "shared": "24431ae83f2d67c7f9ebc3020aa2b343b12b0e37736fad7c9b824b97a4816677",
+     "result": "valid"
+    },
+    {
+     "tcId": 21,
+     "comment": "scalar all ones base point",
+     "flags": [
+      "ScalarClamp"
+     ],
+     "public": "0900000000000000000000000000000000000000000000000000000000000000",
+     "private": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "shared": "847c0d2c375234f365e660955187a3735a0f7613d1609d3a6a4d8c53aeaa5a22",
+     "result": "valid"
+    },
+    {
+     "tcId": 22,
+     "comment": "point 0 with bit 255 flipped on",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1ccc",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 23,
+     "comment": "point 0 with bit 255 cleared",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+     "result": "valid"
+    },
+    {
+     "tcId": 24,
+     "comment": "point 1 with bit 255 flipped on",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "237a83b7833b3e56464df56c4e01d6deebf92cf967358064f39457e8d0ac3c09",
+     "result": "valid"
+    },
+    {
+     "tcId": 25,
+     "comment": "point 1 with bit 255 cleared",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a413",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "237a83b7833b3e56464df56c4e01d6deebf92cf967358064f39457e8d0ac3c09",
+     "result": "valid"
+    },
+    {
+     "tcId": 26,
+     "comment": "point 2 with bit 255 flipped on",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4eea",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "2fb6190b99eb61d7d9b8347649269a1b923d1326d60a01340ba88fa9761bb665",
+     "result": "valid"
+    },
+    {
+     "tcId": 27,
+     "comment": "point 2 with bit 255 cleared",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "2fb6190b99eb61d7d9b8347649269a1b923d1326d60a01340ba88fa9761bb665",
+     "result": "valid"
+    },
+    {
+     "tcId": 28,
+     "comment": "point 3 with bit 255 flipped on",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882bcf",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "709e32d6ae0a5731fea82113324fc01e686dc28cb7781e61487752faf875490c",
+     "result": "valid"
+    },
+    {
+     "tcId": 29,
+     "comment": "point 3 with bit 255 cleared",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "709e32d6ae0a5731fea82113324fc01e686dc28cb7781e61487752faf875490c",
+     "result": "valid"
+    },
+    {
+     "tcId": 30,
+     "comment": "base point with bit 255 set",
+     "flags": [
+      "PointHighBit"
+     ],
+     "public": "0900000000000000000000000000000000000000000000000000000000000080",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "1c9fd88f45606d932a80c71824ae151d15d73e77de38e8e000852e614fae7019",
+     "result": "valid"
+    },
+    {
+     "tcId": 31,
+     "comment": "point p+0",
+     "flags": [
+      "NonCanonicalPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 32,
+     "comment": "point p+0 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 33,
+     "comment": "point p+1",
+     "flags": [
+      "NonCanonicalPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 34,
+     "comment": "point p+1 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 35,
+     "comment": "point p+2",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "71cacba0b65daf53ddf9c21fb434bc58ee5cfa3954d1b642fc5155048f03466f",
+     "result": "valid"
+    },
+    {
+     "tcId": 36,
+     "comment": "point p+2 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "71cacba0b65daf53ddf9c21fb434bc58ee5cfa3954d1b642fc5155048f03466f",
+     "result": "valid"
+    },
+    {
+     "tcId": 37,
+     "comment": "point p+5",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "50e87fe55e186ff59bcfb758e02f341b4f62573826bb2d28ec182949a4e9cf1f",
+     "result": "valid"
+    },
+    {
+     "tcId": 38,
+     "comment": "point p+5 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "50e87fe55e186ff59bcfb758e02f341b4f62573826bb2d28ec182949a4e9cf1f",
+     "result": "valid"
+    },
+    {
+     "tcId": 39,
+     "comment": "point p+9",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "1c9fd88f45606d932a80c71824ae151d15d73e77de38e8e000852e614fae7019",
+     "result": "valid"
+    },
+    {
+     "tcId": 40,
+     "comment": "point p+9 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "1c9fd88f45606d932a80c71824ae151d15d73e77de38e8e000852e614fae7019",
+     "result": "valid"
+    },
+    {
+     "tcId": 41,
+     "comment": "point p+18",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "76b00406ce7e87774c0038dd8d89b188047977f8828ca1dcb8f98bb5d5d0cf48",
+     "result": "valid"
+    },
+    {
+     "tcId": 42,
+     "comment": "point p+18 with bit 255 set",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "76b00406ce7e87774c0038dd8d89b188047977f8828ca1dcb8f98bb5d5d0cf48",
+     "result": "valid"
+    },
+    {
+     "tcId": 43,
+     "comment": "point 2^255-1",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "76b00406ce7e87774c0038dd8d89b188047977f8828ca1dcb8f98bb5d5d0cf48",
+     "result": "valid"
+    },
+    {
+     "tcId": 44,
+     "comment": "point 2^256-1",
+     "flags": [
+      "NonCanonicalPoint"
+     ],
+     "public": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "76b00406ce7e87774c0038dd8d89b188047977f8828ca1dcb8f98bb5d5d0cf48",
+     "result": "valid"
+    },
+    {
+     "tcId": 45,
+     "comment": "low order encoding 0",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "0000000000000000000000000000000000000000000000000000000000000000",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 46,
+     "comment": "low order encoding 0 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "0000000000000000000000000000000000000000000000000000000000000080",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 47,
+     "comment": "low order encoding 1",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "0100000000000000000000000000000000000000000000000000000000000000",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 48,
+     "comment": "low order encoding 1 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "0100000000000000000000000000000000000000000000000000000000000080",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 49,
+     "comment": "low order encoding 2",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 50,
+     "comment": "low order encoding 2 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 51,
+     "comment": "low order encoding 3",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 52,
+     "comment": "low order encoding 3 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 53,
+     "comment": "low order encoding 4",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 54,
+     "comment": "low order encoding 4 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 55,
+     "comment": "low order encoding 5",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 56,
+     "comment": "low order encoding 5 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 57,
+     "comment": "low order encoding 6",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+     "private": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    },
+    {
+     "tcId": 58,
+     "comment": "low order encoding 6 with bit 255 set",
+     "flags": [
+      "LowOrderPoint",
+      "ZeroSharedSecret"
+     ],
+     "public": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "private": "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+     "shared": "0000000000000000000000000000000000000000000000000000000000000000",
+     "result": "acceptable"
+    }
+   ]
+  }
+ ]
+}
