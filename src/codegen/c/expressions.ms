@@ -354,7 +354,12 @@ function isNullExpr(node: Readonly<Node>): boolean {
 
 // Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
 // to handle void* results from ref array macros. Returns true if the node matches.
-function isRefArrayAccessCall(node: Readonly<Node>): boolean {
+function isRefArrayAccessCall(g: CGen, node: Readonly<Node>): boolean {
+	if (node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ObjCheck) && !node.flags.has(NodeFlag.ConvCheck)) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		if (inner == null || inner.nodeType == null || node.nodeType == null) return false;
+		return getTypeDesc(g, inner.nodeType) == getTypeDesc(g, node.nodeType) && isRefArrayAccessCall(g, inner);
+	}
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
 	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess")
@@ -1797,7 +1802,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 
 		// Ref array access returns void* — cast to element type for member access
 		// Reference parity: record field access via dot notation
-		if (d.object.nodeType != null && isRefArrayAccessCall(d.object)) {
+		if (d.object.nodeType != null && isRefArrayAccessCall(g, d.object)) {
 			const elemTypeDesc = getTypeDesc(g, d.object.nodeType);
 			if (elemTypeDesc != "void*" && elemTypeDesc != "void") {
 				let prop = d.property;
@@ -2182,7 +2187,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const hd = node.data as ExprStmtData;
-		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType != null) {
+		if (isRefArrayAccessCall(g, hd.expr) && hd.expr.nodeType != null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
 			if (elemDesc != "void*" && elemDesc != "void") {
 				if (isPointerType(hd.expr.nodeType)) {
