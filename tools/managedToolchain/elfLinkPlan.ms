@@ -1,6 +1,10 @@
 import { basename } from "std/fs";
 
-export enum ElfLinkItemKind { Argument, InputPath, UserObject }
+export enum ElfLinkItemKind {
+	Argument,
+	InputPath,
+	UserObject,
+}
 
 export struct ElfLinkItem {
 	kind: ElfLinkItemKind;
@@ -23,7 +27,9 @@ function place(index: int64): string {
 // InputPath values are unvalidated tokens. The consumer must resolve them
 // against the command's cwd and require regular files in its private cache.
 export function parseElfLinkArguments(
-	tokens: Readonly<Span<string>>, output: string, objectName: string,
+	tokens: Readonly<Span<string>>,
+	output: string,
+	objectName: string,
 ): Result<ElfLinkPlan, string> {
 	if (output == "" || output.indexOf("\0") >= 0) {
 		return Result.err("link output is empty or contains NUL");

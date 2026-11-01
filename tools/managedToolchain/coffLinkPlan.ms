@@ -16,6 +16,9 @@ const IGNORED_FLAGS: string[] = [
 const IGNORED_PREFIXES: string[] = [
 	"-PDB:", "-PDBALTPATH:", "-OUT:", "-IMPLIB:",
 ];
+const STACK_PREFIX: string = "-STACK:";
+const BASE_PREFIX: string = "-BASE:";
+const MACHINE_PREFIX: string = "-MACHINE:";
 const UINT64_LIMIT: uint64 = 18446744073709551615;
 const RADIX: uint64 = 10;
 
@@ -57,7 +60,8 @@ function ignored(token: string): boolean {
 // Input tokens are not file/cache attestations; the consumer must resolve
 // them against cwd and require regular files under its private cache.
 export function parseCoffLinkArguments(
-	tokens: Readonly<Span<string>>, objectName: string,
+	tokens: Readonly<Span<string>>,
+	objectName: string,
 ): Result<CoffLinkPlan, string> {
 	if (objectName == "" || objectName.indexOf("\0") >= 0) {
 		return Result.err("fixture object name is empty or contains NUL");
@@ -79,12 +83,20 @@ export function parseCoffLinkArguments(
 		const token = tokens[index];
 		if (token == "-DLL") {
 			dll = true;
-		} else if (token.startsWith("-STACK:") && decimal(token.substring(7))) {
-			stack = try unsignedValue(token.substring(7), place(index) + "-STACK");
-		} else if (token.startsWith("-BASE:") && decimal(token.substring(6))) {
-			base = try unsignedValue(token.substring(6), place(index) + "-BASE");
-		} else if (token.startsWith("-MACHINE:")) {
-			machine = token.substring(9);
+		} else if (token.startsWith(STACK_PREFIX) &&
+			decimal(token.substring(STACK_PREFIX.length))) {
+			stack = try unsignedValue(
+				token.substring(STACK_PREFIX.length),
+				place(index) + "-STACK",
+			);
+		} else if (token.startsWith(BASE_PREFIX) &&
+			decimal(token.substring(BASE_PREFIX.length))) {
+			base = try unsignedValue(
+				token.substring(BASE_PREFIX.length),
+				place(index) + "-BASE",
+			);
+		} else if (token.startsWith(MACHINE_PREFIX)) {
+			machine = token.substring(MACHINE_PREFIX.length);
 			if (machine == "") {
 				return Result.err(place(index) + "-MACHINE value is empty");
 			}
