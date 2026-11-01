@@ -8,8 +8,7 @@ import {
 } from "../util";
 import { createRef } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { symIn, iterationBodyOf, collectIterationDecls } from "./lambdaLiftingDetect";
-import { findCapturedIdent } from "./lambdaLiftingCaptures";
+import { iterationBodyOf, collectIterationDecls } from "./lambdaLiftingDetect";
 import {
 	UP_FIELD, freshEnvVarSym, envVarRef, envVarDeref, PendingEnvRewrite, LoopEnv, LiftState, typeToEnvStr,
 	makeEnvStruct, envHasField, chainIndexOf, isRoutineSym, routineInfoOf,
@@ -92,24 +91,6 @@ export function innermostLoopHolding(loops: LoopEnv[], syms: SymSet): number {
 		}
 	}
 	return -1;
-}
-
-export function splitLoopCaptures(fullSet: SymSet, idents: Node[], loops: LoopEnv[], splitLocals: Symbol[]): { syms: SymSet, idents: Node[] } {
-	const syms = createSymSet();
-	const held: Node[] = [];
-	if (splitLocals.length == 0) return { syms, idents: held };
-	for (const sym of fullSet.items) {
-		let inLoopEnv = false;
-		for (const l of loops) {
-			if (symSetContains(l.syms, sym)) inLoopEnv = true;
-		}
-		if (inLoopEnv || !symIn(splitLocals, sym)) continue;
-		const ident = findCapturedIdent(sym, idents);
-		if (ident == null) continue;
-		symSetAdd(syms, sym);
-		held.push(ident);
-	}
-	return { syms, idents: held };
 }
 
 export function loopsHoldAll(loops: LoopEnv[], top: number, syms: SymSet): boolean {

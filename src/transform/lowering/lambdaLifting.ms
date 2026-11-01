@@ -55,7 +55,7 @@ import {
 	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly, requireUp,
 } from "./lambdaLiftingEnv";
 import {
-	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, splitLoopCaptures, loopsHoldAll,
+	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, loopsHoldAll,
 	openLoopEnv,
 } from "./lambdaLiftingLoops";
 
@@ -129,7 +129,7 @@ function rewriteRoutineSelfRefs(node: Node, routine: Symbol, closureOf: (ref: No
 }
 
 function collectRoutines(program: Node, state: LiftState): void {
-	state.routines = routineSyms(program, 0, state.splitLoopLocals);
+	state.routines = routineSyms(program, 0);
 }
 
 function envPointerTo(state: LiftState, target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
@@ -1022,12 +1022,11 @@ interface LoopPlan {
 	carrierIdx: number;
 	preSyms: SymSet | null;
 	preIdents: Node[];
-	preParent: Type | null;
 	detached: boolean;
 }
 
 function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol | null, ownCaptures: SymSet, ownCapturedIdents: Node[], ownLocals: SymSet, shared: SharedEnvSnapshot, detached: boolean): LoopPlan {
-	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], preParent: null, detached: false };
+	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], detached: false };
 	const enclosingLoops = shared.loopEnvs;
 	if (!detached && enclosingLoops.length == 0 && state.insideLoop == 0) return plan;
 	const directIdents: Node[] = [];
@@ -1070,13 +1069,6 @@ function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symb
 		if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
 			plan.preSyms = fullSet;
 			plan.preIdents = fullIdents;
-		}
-	} else {
-		const snap = splitLoopCaptures(fullSet, fullIdents, enclosingLoops, state.splitLoopLocals);
-		if (snap.syms.items.length > 0) {
-			plan.preSyms = snap.syms;
-			plan.preIdents = snap.idents;
-			plan.preParent = carrierIdx >= 0 ? enclosingLoops[carrierIdx].envStructType : shared.structType;
 		}
 	}
 	plan.carrierIdx = carrierIdx;
@@ -1200,7 +1192,7 @@ function liftCapturingClosureBody(
 	const plan = planLoopEnv(state, body, state.ss, routine, ownCaptures, ownCapturedIdents, ownLocals, savedShared, node.flags.has(NodeFlag.SendableClosure));
 	const carrierIdx = plan.carrierIdx;
 	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
-	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.preParent, plan.detached);
+	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.detached);
 	let entryChain = plan.detached ? envChainFrom([], -1, "", null as unknown as Type, [], []) : envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
 	if (preEnv != null) {
 		const names: string[] = [preEnv.envName];
@@ -1326,7 +1318,6 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	normalizeArrowBodies(program);
 	// Pass 1: collect per-fn capture info upfront.
 	state.detection = detectPass(program);
-	state.splitLoopLocals = ctx.splitLoopLocals;
 	collectRoutines(program, state);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);

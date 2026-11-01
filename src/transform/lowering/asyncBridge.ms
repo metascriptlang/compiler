@@ -32,8 +32,7 @@ import {
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType, spillAssignedYields, holdClosureEnv } from "./generatorLower";
-import { routineSyms } from "./lambdaLiftingDetect";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType, spillAssignedYields, holdClosureEnv, refuseUnliftedClosure } from "./generatorLower";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { statementCanRaise } from "../../checker/raises";
 import { stmtCountAfter } from "../testUtil";
@@ -535,6 +534,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	const stepperRetType = createClosureType([], [], createPtr(voidType()));  // returns void* (msFutureBase* or NULL)
 	const closureType = stepperRetType;
 
+	refuseUnliftedClosure(body, ctx);
 	spillAssignedYields(body, ctx);
 	holdClosureEnv(body, ctx);
 	// 1. Extract body statements
@@ -548,7 +548,6 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
 	const lifetimeLifted = localsOutlivingSuspension(body, locals, ctx);
-	const routines = routineSyms(body, 1, []);
 
 	const stateSym = mintSym(ctx, SymbolKind.Variable, "$state", numberType());
 	setFlag(stateSym, SymbolFlag.Mutable);
@@ -587,8 +586,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// 6. Convert the declarations of the locals that outlive a state to assignments
 	const spanning = localsSpanningStates(sc, locals);
 	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
-	const hoisted: Node[] = [];
-	const lifted = hoistStateRoutines(routines, sc, locals, spanning, hoisted);
+	const lifted = spanning;
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	const yfs: YieldFuture[] = [];
@@ -619,7 +617,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// 7. Wrap in while(true) + try/catch
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
-	const tryBody = makeBlock([...hoisted, loop], loc);
+	const tryBody = makeBlock([loop], loc);
 	const excSym = makeCatchSym(ctx, "$e");
 	const failCall = makeExprStmt(
 		makeCall(

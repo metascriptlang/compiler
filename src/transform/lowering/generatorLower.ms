@@ -45,7 +45,6 @@ import {
 import { createRef, int32Type, booleanType, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn, stdSymbol } from "../../checker/context";
-import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { closeIterator } from "./forOfLower";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, checkedCtx, checkedStmtCount } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -104,7 +103,6 @@ interface SplitDiag {
 }
 
 let pendingSplitDiags: SplitDiag[] = [];
-let pendingSplitLoopLocals: Symbol[] = [];
 
 const YIELD_IN_EXPR = "a yield or await inside an expression is not supported on the C backend yet; bind it to a variable first (`const v = await p;`)";
 
@@ -112,13 +110,6 @@ function reportUnsplit(node: Node, message: string): void {
 	pendingSplitDiags.push({ message, loc: node.location });
 }
 
-function noteSplitLoopLocals(stmts: Node[]): void {
-	const decls: Node[] = [];
-	for (const s of stmts) collectIterationDecls(s, decls);
-	for (const d of decls) {
-		if (d.resolvedSym != null) pendingSplitLoopLocals.push(d.resolvedSym);
-	}
-}
 
 
 // ===== Helpers =====
@@ -230,46 +221,6 @@ export function localsOutlivingSuspension(body: Node, locals: SymSet, ctx: Trans
 	const live: Symbol[] = [];
 	extendStateLifetimes(body, locals, live, lifted, ctx);
 	return lifted;
-}
-
-function collectLocalRefs(node: Node | null, locals: SymSet, skip: SymSet, out: SymSet): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.Identifier) {
-		const sym = node.resolvedSym;
-		if (sym != null && symSetContains(locals, sym) && !symSetContains(skip, sym)) symSetAdd(out, sym);
-		return;
-	}
-	forEachChild(node, (child: Node): void => { collectLocalRefs(child, locals, skip, out); });
-}
-
-export function hoistStateRoutines(routines: SymSet, sc: StateCollector, locals: SymSet, lifted: SymSet, hoisted: Node[]): SymSet {
-	const moved = createSymSet();
-	for (const sym of routines.items) {
-		if (!symSetContains(lifted, sym)) continue;
-		let first: Node | null = null;
-		for (const st of sc.items) {
-			for (const stmt of st.stmts) {
-				if (first == null && stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym == sym) first = stmt;
-			}
-		}
-		if (first == null || refsAnySym((first.data as VariableDeclData).initializer, pendingSplitLoopLocals)) continue;
-		for (const st of sc.items) {
-			const kept: Node[] = [];
-			for (const stmt of st.stmts) {
-				if (stmt.kind != NodeKind.VariableDecl || stmt.resolvedSym != sym) kept.push(stmt);
-			}
-			st.stmts = kept;
-		}
-		symSetAdd(moved, sym);
-		hoisted.push(first);
-	}
-	if (hoisted.length == 0) return lifted;
-	const result = createSymSet();
-	for (const sym of lifted.items) {
-		if (!symSetContains(moved, sym)) symSetAdd(result, sym);
-	}
-	for (const decl of hoisted) collectLocalRefs((decl.data as VariableDeclData).initializer, locals, routines, result);
-	return result;
 }
 
 function cloneStmts(stmts: Node[]): Node[] {
@@ -533,6 +484,16 @@ function retargetIdent(node: Node | null, from: Symbol, to: Symbol, t: Type): vo
 	forEachChild(node, (child: Node): void => { retargetIdent(child, from, to, t); });
 }
 
+export function refuseUnliftedClosure(body: Node, ctx: TransformContext): void {
+	forEachChild(body, (child: Node): void => {
+		anyDescendant(child, (n: Node): Visit => {
+			if (n.kind != NodeKind.ArrowFunction && n.kind != NodeKind.FunctionExpr && n.kind != NodeKind.FunctionDecl) return Visit.Descend;
+			reportTransformError(ctx, "internal: a routine reached the state split before lambda lifting lifted it", n.location);
+			return Visit.Hit;
+		});
+	});
+}
+
 export function holdClosureEnv(body: Node, ctx: TransformContext): void {
 	const found: Node[] = [];
 	findClosureEnv(body, found);
@@ -794,7 +755,6 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 	);
 
 	const bodyStmts = extractBodyStmts(wd.whileBody);
-	noteSplitLoopLocals(bodyStmts);
 	sc.loopStack.push({ breakState: exitState, continueState: condState, label: wd.whileLabel, isLoop: true });
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 	sc.loopStack.pop();
@@ -808,7 +768,6 @@ function splitDoWhile(node: Node, sc: StateCollector, currentState: number, exit
 	sc.items[currentState].stmts.push(makeStateAssign(bodyStart, loc, sc.stateSym));
 	sc.loopStack.push({ breakState: exitState, continueState: condState, label: dd.dwLabel, isLoop: !dd.dwSwitchWrapper });
 	const bodyStmts = extractBodyStmts(dd.doBody);
-	if (!isOnceLoop(node)) noteSplitLoopLocals(bodyStmts);
 	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 	sc.loopStack.pop();
 	sc.items[condState].stmts.push(
@@ -1376,6 +1335,7 @@ function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Nod
 }
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation, source: Symbol | null = null): Node {
+	refuseUnliftedClosure(body, ctx);
 	spillAssignedYields(body, ctx);
 	holdClosureEnv(body, ctx);
 	// 1. Collect all locals and their types
@@ -1385,7 +1345,6 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const dtTypes: Type[] = [];
 	collectDeclTypes(body, dtSyms, dtTypes);
 	const lifetimeLifted = localsOutlivingSuspension(body, locals, ctx);
-	const routines = routineSyms(body, 1, []);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -1417,8 +1376,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 5. Convert the declarations of the locals that outlive a state to assignments
 	const spanning = localsSpanningStates(sc, locals);
 	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
-	const hoisted: Node[] = [];
-	const lifted = hoistStateRoutines(routines, sc, locals, spanning, hoisted);
+	const lifted = spanning;
 	for (const st of sc.items) {
 		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
@@ -1437,7 +1395,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	// 8. Build the resume body
 	const runSym = newLoweredSym(ctx, SymbolKind.Variable, "$running", booleanType(), true);
-	const guarded = makeTryFinally(makeBlock([...hoisted, loop], loc), makeBlock([makeRunningAssign(runSym, false, loc)], loc), loc);
+	const guarded = makeTryFinally(makeBlock([loop], loc), makeBlock([makeRunningAssign(runSym, false, loc)], loc), loc);
 	const resumeBody = makeBlock([makeRunningCheck(runSym, loc), makeRunningAssign(runSym, true, loc), guarded], loc);
 
 	// 9. Create the FunctionExprs with proper return type (IteratorResult<T>)
@@ -1553,8 +1511,6 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 		reportTransformError(ctx, d.message, d.loc);
 	}
 	pendingSplitDiags = [];
-	for (const s of pendingSplitLoopLocals) ctx.splitLoopLocals.push(s);
-	pendingSplitLoopLocals = [];
 	return program;
 }
 

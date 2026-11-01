@@ -320,12 +320,15 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 		if (runs(result, ctx, fact(ModuleFact.Async), "pass.lowerAsyncBridge")) result = lowerAsyncBridge(result, ctx);
 		flowLap("pass.lowerAsyncBridge");
 	}
-	// lowerAsyncBridge leaves its split diagnostics and loop locals for lowerGenerator to report.
+	// lowerAsyncBridge leaves its split diagnostics for lowerGenerator to report.
 	if (!jsBackend) {
 		if (runs(result, ctx, fact(ModuleFact.Generator).incl(ModuleFact.Async), "pass.lowerGenerator")) result = lowerGenerator(result, ctx);
 		flowLap("pass.lowerGenerator");
 	}
-	if (!jsBackend && runs(result, ctx, fact(ModuleFact.Generator).incl(ModuleFact.Async), "pass.lowerLambda#2")) { result = lowerLambda(result, ctx); flowLap("pass.lowerLambda#2"); }
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Generator).incl(ModuleFact.Async), "pass.lowerLambda#2")) result = lowerLambda(result, ctx);
+		flowLap("pass.lowerLambda#2");
+	}
 	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans
 	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
 	result = lowerUnionConversions(result, ctx);
