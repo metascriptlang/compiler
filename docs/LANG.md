@@ -3294,7 +3294,7 @@ MetaScript has two explicit pointer types for heap-allocated data, following the
 | `Ref<T>` | Heap-allocated, reference-counted | Automatic (DRC) | `T*` with `msRefHeader` |
 | `Ptr<T>` | Heap-allocated, untraced | Manual (no RC) | `T*` (raw) |
 
-- **`Ref<T>`**: A managed heap pointer. The DRC system automatically inserts `=destroy`, `=copy`, and `=sink` operations. This is the safe default for heap objects.
+- **`Ref<T>`**: A managed heap pointer. The DRC system automatically inserts `=destroy`, `=copy`, and `=sink` operations. `T` is a value type (a struct, a number, a string); a class or interface `C` is refused, because its value is already a counted reference: write `C` (§Class = `Ref<Object>`).
 - **`Ptr<T>`**: An unmanaged heap pointer. No reference counting — the programmer is responsible for the lifetime. Use for C FFI, arena-allocated objects, or performance-critical paths where RC overhead is unacceptable.
 
 ```typescript
@@ -3487,7 +3487,7 @@ This means:
 - **`interface`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted (like class)
 - **`class`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted, with methods
 - **`struct`** declares a **value type** — stack-allocated, auto-optimized passing (compiler picks value or pointer based on size + mutation)
-- Users can write `Ref<T>` or `Ptr<T>` explicitly for fine-grained control
+- Users can write `Ref<T>` to box a value type and `Ptr<T>` for memory they manage. `Ref<C>` for a class or interface `C` would box a reference, so the checker refuses it at the type. Measured 2026-11-01 on C and JS (candidate of `wt/fix-ref-of-class` over main `98676df2eb8`): with `class P`, `const r: Ref<P> = a` and a `Ref<P>` parameter give `error: Ref<T> takes a value type, got 'P': a class value is already a counted reference, so write 'P'`; with `interface I`, a `Ref<I>` parameter gives `... got 'I': an interface value is already a counted reference, so write 'I'`. The build before the fix compiled all three, printed `class alias 3 3 same true` on JS and panicked on C (`member access within misaligned address`). A generic that builds such a Ref is refused where it is instantiated, measured the same way: `struct Box<T> { r: Ref<T>; }` used as `Box<P>` gives `Ref<T> takes a value type, but 'Box<P>' binds T = 'P': a class value is already a counted reference` (before: C panicked with `member access within null pointer`, JS printed `gs 3`); `set<P>(a, a)` for `function set<T>(r: Ref<T>, v: T)` gives `... but 'set<P>' binds T = 'P' ...` (before: `gx 0` on both); `new H(new P())` for a class `H<T>` with a `Ref<T> | null` field gives `... but 'H<P>' binds T = 'P' ...`; and `mk(new P())` for `function mk<T>(v: T): T { let r: Ref<T> | null = null; return v; }` gives `... but 'mk<P>' instantiated at 3:13 binds T = 'P' ...` while `mk(1)` and `Box<S>` for a struct `S` still run (`values 1 1 5`). An inferred `set(a, a)` still compiles and prints `gf 0` on both builds: inference binds `T` to the body of `P`, so `Ref<T>` there is `P` itself and no Ref is stacked; writing through it (`r[] = v`) is refused with `this operand is P, which is already a reference: use it without '[]'`.
 
 | Declaration | Internal Type | Allocation | Passed As |
 |-------------|--------------|------------|-----------|
@@ -3499,7 +3499,7 @@ This means:
 #### Nullable Pointers
 
 A bare `Ref<T>` or `Ptr<T>` does not accept `null`; nullability is opted into with `| null`, and
-the result needs no `Maybe<T>` wrapper:
+the result needs no `Maybe<T>` wrapper (here `TreeNode` is a struct, so `Ref<TreeNode>` boxes it):
 
 ```typescript
 const node: Ref<TreeNode> | null = findNode(tree, key);
@@ -3511,7 +3511,7 @@ if (node !== null) {
 
 `Ref<T> | null` and `Ptr<T> | null` are laid out as a bare `T*`, with null as the zero pointer, but
 the checker keeps them apart from the bare types. Measured 2026-09-24 (wt/c-ffi build over main
-`1b21109c`), with `struct P` and `class N`:
+`1b21109c`), with `struct P` and `class N`; the `Ref<N>` column re-measured 2026-11-01 with `struct N`, since a class is refused inside `Ref<T>` (C and JS: `Type 'null' is not assignable to type 'Ref<N>'`, `got null, expected Ref<N>`, and `nullable true true` for both `| null` forms):
 
 | form | bare `Ptr<P>` / `Ref<N>` | `Ptr<P> \| null` / `Ref<N> \| null` |
 |---|---|---|
@@ -3741,9 +3741,9 @@ const name: string | null = node?.name;    // null if node is null, node.name ot
 Pointer types are inherently nullable. The compiler recognizes this and skips the wrapper entirely:
 
 ```typescript
-// All three resolve to bare Ref<TreeNode> — no wrapper struct
-const a: Ref<TreeNode> | null = findNode(tree, key);
-const b: TreeNode | null = findNode(tree, key);   // if TreeNode is a class
+// All three are a bare pointer — no wrapper struct
+const a: Ref<TreeNode> | null = findNode(tree, key);   // struct TreeNode, boxed by Ref
+const b: Node | null = findChild(tree, key);           // class Node: already a counted reference
 let   c: Ptr<Buffer> | null = null;
 
 // Null checks compile to direct pointer comparison
@@ -3755,6 +3755,8 @@ if (a !== null) {       // → if (a != NULL)
 c = null;               // → c = NULL
 c = allocBuffer();      // → c = allocBuffer()  (no wrapping)
 ```
+
+`Ref<Node> | null` for a class `Node` is refused, because `Ref<T>` takes a value type. Measured 2026-11-01 on C and JS (candidate of `wt/fix-ref-of-class` over main `98676df2eb8`): `struct TreeNode` behind `Ref<TreeNode> | null` printed `struct box 20` and `missing true`; `class TreeNode` behind `TreeNode | null` printed `class 20`; the same class behind `Ref<TreeNode> | null` gives `error: Ref<T> takes a value type, got 'TreeNode': a class value is already a counted reference, so write 'TreeNode'`, where the build before the fix panicked on C (`member access within misaligned address`) and printed `class in Ref 20` on JS.
 
 **No `{ value, present }` overhead.** The pointer *is* the option — `NULL` means absent, any other address means present. This follows the same optimization as the standard reference implementation's managed pointers.
 
