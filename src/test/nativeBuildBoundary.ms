@@ -45,8 +45,8 @@ const cacheRootGroups = [
 	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
-	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "byte-order" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, byte-order, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, reproducible-link, test-timing, windows-cross, or all");
 	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
@@ -1419,6 +1419,21 @@ function supportTreeOverDecoy(site: string, decoy: string, program: string, expe
 	record(`a ${site} path reads the support tree beside the compiler, not the cwd's ${decoy}`, expected, code == 0 ? value(dir) : `build exit ${code}`);
 }
 
+function runByteOrder(): void {
+	const dir = `${root}/byte-order`;
+	ensureDir(dir);
+	put(`${dir}/probe.c`, "#include \"runtime/types.h\"\nint probe;\n");
+	const support = exists(`${dirname(compiler)}/runtime/types.h`) ? dirname(compiler) : dirname(dirname(compiler));
+	const byTarget = (target: string): string => {
+		const ran = command(dir, target, "clang", [`--target=${target}`, "-ffreestanding", "-fsyntax-only", `-I${support}`, "probe.c"]);
+		const log = readFile(`${dir}/${target}.log`);
+		const named = log.ok && log.value.indexOf("little-endian CPUs only", 0) >= 0;
+		return ran.code == 0 ? "builds" : named ? "refused" : `exit ${ran.code}`;
+	};
+	record("a big-endian target is refused by the runtime with an error that names the byte order", "refused refused", `${byTarget("s390x-linux-gnu")} ${byTarget("powerpc64-linux-gnu")}`);
+	record("little-endian targets build the runtime header", "builds builds builds", `${byTarget("x86_64-linux-gnu")} ${byTarget("aarch64-linux-gnu")} ${byTarget("wasm32-unknown-unknown")}`);
+}
+
 function runUpcastCast(): void {
 	const dir = `${root}/upcast-cast`;
 	ensureDir(dir);
@@ -2063,6 +2078,7 @@ if (group == "project-cache" || group == "all") {
 }
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
+if (group == "byte-order" || group == "all") runByteOrder();
 if (group == "upcast-cast" || group == "all") {
 	runUpcastCast();
 	runUnionCodecCast();
