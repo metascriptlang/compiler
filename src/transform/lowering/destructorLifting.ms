@@ -938,7 +938,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
 				if (empties) primitiveUnionOp("wasMoved", fieldType, clonePath(xf, loc), clonePath(xf, loc), buf, loc);
-			} else {
+			} else if (walksValue(hook, fieldType, lctx)) {
 				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
 				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 			}
