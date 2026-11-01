@@ -30,6 +30,8 @@ static _Atomic(msActorPollFn) msActorPollHook = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
+static _Atomic(msActorPollFn) msActorReadyHook = NULL;
+void msSetActorReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorReadyHook, hook, memory_order_release); }
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -943,9 +945,16 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 }
 
 /* Standard reference adjustTimeout pattern */
+static bool msLoopReadyIn(msDispatcher* d) {
+	if (d != NULL && msDequeLen(&d->callbacks) > 0) return true;
+	msActorPollFn actorReady = atomic_load_explicit(&msActorReadyHook, memory_order_acquire);
+	return actorReady != NULL && actorReady();
+}
+
+bool msLoopHasReadyWork(void) { return msLoopReadyIn(gDispatcher); }
+
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
-	/* If callbacks pending, no wait */
-	if (msDequeLen(&d->callbacks) > 0) return 0;
+	if (msLoopReadyIn(d)) return 0;
 	/* Cap to actor idle timeout if set (ensures idle scan fires on time) */
 	if (msActorIdleCapMs > 0 && (pollTimeout < 0 || msActorIdleCapMs < pollTimeout)) {
 		pollTimeout = msActorIdleCapMs;
