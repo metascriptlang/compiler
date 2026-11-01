@@ -1242,6 +1242,10 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, arrHeap, handle, "aliasType", d.aliasType);
 			setBool(objHeap, handle, "aliasIsDistinct", d.aliasIsDistinct);
 			setStr(objHeap, arrHeap, handle, "aliasGenericParams", d.aliasGenericParams);
+			setStr(objHeap, arrHeap, handle, "discriminantName", d.discriminantName);
+			setStr(objHeap, arrHeap, handle, "discriminantType", d.discriminantType);
+			setStrs(objHeap, arrHeap, handle, "variantKeys", d.variantKeys);
+			setStrs(objHeap, arrHeap, handle, "variantTypes", d.variantTypes);
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
@@ -1838,7 +1842,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	return fromTemplate(createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc));
 }
 
-const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList;
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList | NodeFlag.ValueUnion;
 
 export interface WireRefusal {
 	message: string;
@@ -2289,8 +2293,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.TypeAliasDecl, {
 				aliasName, aliasType, aliasIsDistinct,
 				aliasGenericParams: readStr(objHeap, arrHeap, h, "aliasGenericParams"),
-				discriminantName: "", discriminantType: "",
-				variantKeys: [], variantTypes: [], nameLocation: loc,
+				discriminantName: readStr(objHeap, arrHeap, h, "discriminantName"),
+				discriminantType: readStr(objHeap, arrHeap, h, "discriminantType"),
+				variantKeys: readStrs(objHeap, arrHeap, h, "variantKeys"),
+				variantTypes: readStrs(objHeap, arrHeap, h, "variantTypes"),
+				nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.EnumDecl => {
@@ -4524,6 +4531,23 @@ test "round-trip TypeAliasDecl keeps aliasGenericParams" {
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as TypeAliasDeclData;
 	assert d.aliasGenericParams == "T";
+}
+
+test "round-trip of a match alias keeps its discriminant, its variants and the struct form" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.TypeAliasDecl, {
+		aliasName: "Shape", aliasType: "| {} | { size: int32 }", aliasIsDistinct: false,
+		aliasGenericParams: "", discriminantName: "kind", discriminantType: "Kind",
+		variantKeys: ["Kind.A", "Kind.B"], variantTypes: ["{}", "{ size: int32 }"], nameLocation: loc,
+	}, synthToken(loc));
+	orig.flags = orig.flags.incl(NodeFlag.ValueUnion);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as TypeAliasDeclData;
+	assert d.discriminantName == "kind" && d.discriminantType == "Kind";
+	assert d.variantKeys.join(",") == "Kind.A,Kind.B" && d.variantTypes.join(",") == "{},{ size: int32 }";
+	assert back.flags.has(NodeFlag.ValueUnion);
 }
 
 test "round-trip WhileStmt keeps whileLabel" {
