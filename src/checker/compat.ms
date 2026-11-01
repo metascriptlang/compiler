@@ -23,6 +23,7 @@ function isUntypedPointer(t: Type): boolean {
 function sameElement(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
 	if (sameType(a, b)) return true;
+	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return false;
 	if (isOpenElement(a) || isOpenElement(b)) return isAssignable(a, b);
 	const aDouble = a.kind == TypeKind.Number || a.kind == TypeKind.Float64;
 	const bDouble = b.kind == TypeKind.Number || b.kind == TypeKind.Float64;
