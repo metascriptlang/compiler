@@ -122,7 +122,7 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		cur = base;
 	}
 	const sym = cur.resolvedSym;
-	if (sym == null || reachesThroughReference(sym)) return { verdict: WriteVerdict.Writable, root: sym };
+	if (sym == null || (reachesThroughReference(sym) && (interior || sym.symbolType.kind == TypeKind.Var))) return { verdict: WriteVerdict.Writable, root: sym };
 	const viewInterior = interior || (asRefArg && isValueAggregateParam(target.nodeType));
 	if (hasFlag(sym, SymbolFlag.ForVar)) return { verdict: viewInterior ? WriteVerdict.ForVarInterior : WriteVerdict.Writable, root: sym };
 	if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) {
