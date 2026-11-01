@@ -5,7 +5,7 @@
 // env field ever reaches the emitters. The checker has already applied the
 // TS-strict refusals by the time this runs.
 
-import { Node, NodeKind, Type, TypeKind, DeclKind, VariableDeclData, BinaryExprData, MemberExprData, HiddenDerefData, HiddenStdConvData, ExprStmtData, BlockStmtData, ProgramData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, Type, TypeKind, DeclKind, VariableDeclData, BinaryExprData, MemberExprData, HiddenDerefData, HiddenStdConvData, ExprStmtData, BlockStmtData, ProgramData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { nullType, createArray, createRef } from "../../checker/types";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkBlockExpanding } from "../walker";
@@ -13,10 +13,32 @@ import { forEachChild, mapChildren } from "../../ast/visitor";
 import { makeNull, makeExprStmt, makeVarDecl, makeIdentResolved, makeBinary } from "../util";
 
 export function lowerVoidBind(program: Node, ctx: TransformContext): Node {
+	eraseVoidParamReads(program);
 	eraseVoidFieldReads(program);
 	expandVoidBinds(program, ctx);
 	restampVoidUse(program);
 	return program;
+}
+
+// A void parameter has no runtime slot, so reading one yields the null carrier and
+// leaves no name for a closure to capture. An assignment keeps its target.
+export function eraseVoidParamReads(node: Node): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.operator == "=" && bd.left.kind == NodeKind.Identifier) {
+			bd.right = eraseVoidParamReads(bd.right);
+			return node;
+		}
+	}
+	if (node.kind == NodeKind.Identifier && isVoidTyped(node) && node.resolvedSym != null
+		&& node.resolvedSym.symbolKind == SymbolKind.Parameter) {
+		const carrier = makeNull(node.location);
+		carrier.nodeType = node.nodeType;
+		return carrier;
+	}
+	mapChildren(node, eraseVoidParamReads);
+	return node;
 }
 
 function isPlainPath(n: Node): boolean {

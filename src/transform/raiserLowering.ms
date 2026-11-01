@@ -18,6 +18,7 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
+import { eraseVoidParamReads } from "./desugar/voidBindLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
@@ -59,7 +60,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext, na
 }
 
 function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolean): Node {
-	let result = planModuleTdz(program, ctx);
+	let result = eraseVoidParamReads(planModuleTdz(program, ctx));
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
