@@ -1,0 +1,188 @@
+/**
+ * Ed25519 on the JavaScript backend, over WebCrypto (`crypto.subtle`, Ed25519 in Node 20+ and current browsers).
+ *
+ * The same async surface as index.cms. WebCrypto has no synchronous API, so the `*Sync` forms
+ * (`signSync`, `verifySync`, `Ed25519PrivateKey.generateSync`, `fromSeedSync`, `exportSeedSync`,
+ * `Ed25519PublicKey.importSync`, `exportSync`) do not exist here: calling one is the compile error
+ * "Module has no export". Code that needs them runs on the C backend. There is no `.ms` fallback for a
+ * WebCrypto without Ed25519; that case returns a `CryptoError`.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { encodeHex } from "../../core/encoding";
+import { bytesOf } from "../pure/bytes";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+@emit(`function msEdSubtle() {
+	const c = globalThis.crypto;
+	return c && c.subtle ? c.subtle : null;
+}
+const msEdNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+function msEdMessage(e) {
+	return String(e && e.message ? e.message : e);
+}
+function msEdUnb64url(text) {
+	const padded = text.replace(/-/g, "+").replace(/_/g, "/");
+	return Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
+}
+const msEdPkcs8Prefix = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+async function msEdFromSeed(seed) {
+	const s = msEdSubtle();
+	if (!s) return { key: null, pub: null, raw: [], error: msEdNoSubtle };
+	try {
+		const key = await s.importKey("pkcs8", Uint8Array.from([...msEdPkcs8Prefix, ...seed]), { name: "Ed25519" }, true, ["sign"]);
+		const raw = msEdUnb64url((await s.exportKey("jwk", key)).x);
+		const pub = await s.importKey("raw", raw, { name: "Ed25519" }, true, ["verify"]);
+		return { key, pub, raw: Array.from(raw), error: "" };
+	} catch (e) {
+		return { key: null, pub: null, raw: [], error: msEdMessage(e) };
+	}
+}
+async function msEdImportPublic(raw) {
+	const s = msEdSubtle();
+	if (!s) return { key: null, pub: null, raw: [], error: msEdNoSubtle };
+	try {
+		const pub = await s.importKey("raw", Uint8Array.from(raw), { name: "Ed25519" }, true, ["verify"]);
+		return { key: null, pub, raw: Array.from(raw), error: "" };
+	} catch (e) {
+		return { key: null, pub: null, raw: [], error: msEdMessage(e) };
+	}
+}
+async function msEdSign(key, message) {
+	const s = msEdSubtle();
+	if (!s) return { value: [], error: msEdNoSubtle };
+	try {
+		return { value: Array.from(new Uint8Array(await s.sign({ name: "Ed25519" }, key, Uint8Array.from(message)))), error: "" };
+	} catch (e) {
+		return { value: [], error: msEdMessage(e) };
+	}
+}
+async function msEdVerify(pub, signature, message) {
+	const s = msEdSubtle();
+	if (!s) return false;
+	try {
+		return await s.verify({ name: "Ed25519" }, pub, Uint8Array.from(signature), Uint8Array.from(message));
+	} catch (e) {
+		return false;
+	}
+}
+function msEdRandom() {
+	const out = new Uint8Array(32);
+	globalThis.crypto.getRandomValues(out);
+	return Array.from(out);
+}`);
+
+interface Imported {
+	key: unknown;
+	pub: unknown;
+	raw: Buffer;
+	error: string;
+}
+
+interface Signed {
+	value: Buffer;
+	error: string;
+}
+
+extern function edFromSeed(seed: Buffer): Promise<Imported> from "msEdFromSeed(#)";
+extern function edImportPublic(raw: Buffer): Promise<Imported> from "msEdImportPublic(#)";
+extern function edSign(key: unknown, message: Buffer): Promise<Signed> from "msEdSign(#, #)";
+extern function edVerify(pub: unknown, signature: Buffer, message: Buffer): Promise<boolean> from "msEdVerify(#, #, #)";
+extern function edRandomSeed(): Buffer from "msEdRandom()";
+
+function invalidKey(operation: string, message: string): CryptoError {
+	return cryptoError(CryptoErrorKind.InvalidKey, operation, message);
+}
+
+export class Ed25519PublicKey {
+	_raw: Buffer;
+	_key: unknown;
+
+	static async import(raw: Bytes): Promise<Result<Ed25519PublicKey, CryptoError>> {
+		const bytes = bytesOf(raw);
+		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
+		const done = await edImportPublic(bytes);
+		if (done.error != "") return Result.err(invalidKey("Ed25519PublicKey.import", done.error));
+		return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
+	}
+
+	async export(): Promise<Result<Buffer, CryptoError>> {
+		return Result.ok(this._raw.slice(0));
+	}
+}
+
+export class Ed25519PrivateKey {
+	_seed: Buffer;
+	_key: unknown;
+	_public: Ed25519PublicKey;
+
+	static async generate(): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+		const made = await Ed25519PrivateKey.fromSeed(edRandomSeed());
+		if (!made.ok) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "Ed25519PrivateKey.generate", made.error.message));
+		return Result.ok(made.value);
+	}
+
+	static async fromSeed(seed: Bytes): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+		const bytes = bytesOf(seed);
+		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
+		const done = await edFromSeed(bytes);
+		if (done.error != "") return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", done.error));
+		return Result.ok({ _seed: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
+	}
+
+	async exportSeed(): Promise<Result<Buffer, CryptoError>> {
+		return Result.ok(this._seed.slice(0));
+	}
+
+	publicKey(): Ed25519PublicKey {
+		return this._public;
+	}
+}
+
+export async function sign(key: Ed25519PrivateKey, message: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const done = await edSign(key._key, bytesOf(message));
+	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519.sign", done.error));
+	return Result.ok(done.value);
+}
+
+// The encodings of the eight small-order points with the sign bit cleared, plus the non-canonical aliases of y = 0 and y = 1
+// that decoders accept; the C backend refuses the same set as public key or R.
+const smallOrder: string[] = [
+	"0000000000000000000000000000000000000000000000000000000000000000",
+	"0100000000000000000000000000000000000000000000000000000000000000",
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+];
+
+function isSmallOrder(encoded: Buffer, from: int32): boolean {
+	const y = encoded.slice(from, from + 32);
+	y[31] = y[31] & 127;
+	return smallOrder.includes(y.encodeHex());
+}
+
+// The group order L, little-endian: a signature whose S is not below it is malleable.
+const orderL: uint8[] = [
+	0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+];
+
+function scalarBelowOrder(signature: Buffer): boolean {
+	for (let i = 31; i >= 0; i--) {
+		const s = signature[32 + i];
+		if (s != orderL[i]) return s < orderL[i];
+	}
+	return false;
+}
+
+// False on any failure: a bad signature, a malformed input, a small-order key or R, or S not below L.
+export async function verify(key: Ed25519PublicKey, signature: Bytes, message: Bytes): Promise<boolean> {
+	const sig = bytesOf(signature);
+	if (sig.length != 64) return false;
+	if (isSmallOrder(key._raw, 0) || isSmallOrder(sig, 0) || !scalarBelowOrder(sig)) return false;
+	return await edVerify(key._key, sig, bytesOf(message));
+}
