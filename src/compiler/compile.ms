@@ -1202,7 +1202,7 @@ function resolveCompileSource(cPath: string, moduleDir: string, includePaths: Ha
 		printError(`@compile cannot find: ${fullPath}`);
 		stopBuild();
 	}
-	return fullPath;
+	return canonicalModulePath(fullPath);
 }
 
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
