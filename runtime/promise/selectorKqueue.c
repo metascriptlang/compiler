@@ -73,8 +73,8 @@ int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
 	 * msSelectorRegister adding on top of stale state. */
 	struct kevent deletes[2];
 	struct kevent errs[2];
-	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
-	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
 	int n = kevent(sel->kqfd, deletes, 2, errs, 2, NULL);
 	if (n > 0) {
 		for (int i = 0; i < n; i++) {
@@ -93,8 +93,8 @@ int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
 int msSelectorUnregister(msSelector* sel, int fd) {
 	struct kevent deletes[2];
 	struct kevent errs[2];
-	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
-	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
 	/* Eventlist absorbs per-change errors. Without it, NULL eventlist makes
 	 * kevent() abort on the first ENOENT and skip the rest — so a one-shot
 	 * recv leaves the WRITE filter live and vice versa. The leaked filter
