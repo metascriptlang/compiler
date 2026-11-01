@@ -1,6 +1,7 @@
 1	main__SsrcZtestZcorpusZprogramsZ400U2DactorU48eapU53trOms_u0
 1	msActorJobAbandon
 1	msActorJobTick
+1	msAwaitGroupCompleteSlot
 1	msChannelDrain
 1	msGetDispatcher
 1	msThreadChannel
@@ -16,7 +17,6 @@
 2	msActorRunJobs
 2	msActorStop
 2	msAwaitGroupFailSlot
-2	msCancelTimer
 2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
@@ -27,12 +27,13 @@
 2	msTimerDelayFrom
 2	msTimerFiresHere
 3	msActorJobRun
+3	msCancelTimer
 3	msPoolCompensate
+3	msPoolRunQueued
 3	msWaitForReady
 4	msActorLendWakeCb
 4	msActorShutdownAtExit
-4	msPoolRunQueued
-4	msProcessTimers
+4	msProcessTimersIn
 5	msActorProcess
 6	msActorSendOrDrop
 6	msActorVisitEnd

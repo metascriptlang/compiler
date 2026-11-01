@@ -1,5 +1,6 @@
 1	msActorJobAbandon
 1	msActorJobTick
+1	msAwaitGroupCompleteSlot
 1	msChannelDrain
 1	msGetDispatcher
 1	msPoolRunQueued
@@ -17,7 +18,6 @@
 2	msActorRunJobs
 2	msActorStop
 2	msAwaitGroupFailSlot
-2	msCancelTimer
 2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
@@ -25,15 +25,16 @@
 2	msPidTableFull
 2	msPoolRunEdge
 2	msRunOnce
+2	msSpawnWorkerSettle
 2	msTimerDelayFrom
 2	msTimerFiresHere
 3	msActorJobRun
+3	msCancelTimer
 3	msPoolCompensate
-3	msSpawnWorkerSettle
 3	msWaitFor
 4	msActorLendWakeCb
 4	msActorShutdownAtExit
-4	msProcessTimers
+4	msProcessTimersIn
 4	run__SsrcZtestZcorpusZprogramsZ409U2DawaitU53tructU41ctorU53pawnOms_u0
 5	msActorProcess
 6	msActorSendOrDrop
