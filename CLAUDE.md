@@ -66,7 +66,7 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 
 All five phases run the self-host build. Parse: recursive descent + Pratt over `NodeKind` / `TokenKind` (`std/meta/node.ms`, `std/meta/token.ms`). TypeCheck: 3-pass (collect, resolve, check), cross-module via ExportRegistry. Transform: one ordered pass list in `src/transform/index.ms`, JS-only passes behind `jsBackend`, the C-only tail in `src/transform/native/index.ms`. Analyzer: DRC injection (`src/analyzer/inject.ms`: cross-scope last-read, branch-aware optimizer). Codegen: C primary, JS secondary.
 
-`generatorLower` runs BEFORE `lambdaLifting` (reversed from the standard reference's order) on purpose: generator creates `$state` + FunctionExpr, lambda lifting then captures `$state` into env, which keeps the two transforms decoupled. Where the order would change the result, the split restores the reference's outcome: a nested routine is rebuilt at each resume instead of stored in the frame (`hoistStateRoutines`).
+`lambdaLifting` runs BEFORE the generator and async state split, as the reference does: every closure is already lifted, so its env (a loop's per-iteration env included) is an ordinary local that the split keeps in the frame like any local living across a suspension. A second `lambdaLifting` after the split lifts the resume routine the split creates, whose env is the frame.
 
 Architecture detail: [`docs/PIPELINE.md`](docs/PIPELINE.md). File tree + patterns: [`docs/PROJECT-STRUCTURE.md`](docs/PROJECT-STRUCTURE.md).
 
