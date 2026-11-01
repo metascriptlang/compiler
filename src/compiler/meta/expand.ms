@@ -1559,7 +1559,7 @@ function tryRewriteMacroError(node: Node): Node {
 		}
 	}
 	if (cd.callee.kind == NodeKind.Identifier && !cd.callee.flags.has(NodeFlag.BoundSym)) {
-		const sym = macroPreludeSym(_metaScope!, (cd.callee.data as IdentifierData).name);
+		const sym = _metaBound.get(cd.callee) ?? macroPreludeSym(_metaScope!, (cd.callee.data as IdentifierData).name);
 		if (sym == null) throw new Error("internal: error() has no std/meta declaration to raise through");
 		cd.callee.resolvedSym = sym;
 		cd.callee.flags = cd.callee.flags.incl(NodeFlag.BoundSym);
