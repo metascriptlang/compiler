@@ -404,7 +404,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<
 			if (!argIsPtr && argNode.resolvedSym != null && argNode.resolvedSym.symbolType != null) {
 				argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
 			}
-			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode)) {
+			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode) && argNode.nodeType.kind != TypeKind.Null) {
 				return safeAddrOf(g, p, arg, argNode, formal);
 			} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 				return `*(${arg})`;
