@@ -1422,11 +1422,16 @@ function registerArrayKernels(): void {
 
 function registerStringCallbacks(): void {
 	registerHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.trim",         _bridgeMsStringTrim, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.trimStart",    _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.trimEnd",      _bridgeMsStringTrimEnd, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.toLowerCase",  bridgeMsStringToLower, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.toUpperCase",  bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("std/core/string.trim",                _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("std/core/string.trimStart",           _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("std/core/string.trimEnd",             _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("std/core/string.toLowerCase",         bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("std/core/string.toUpperCase",         bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("msStringTrim",                        _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("msStringTrimStart",                   _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("msStringTrimEnd",                     _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("msStringToLowerCase",                 bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("msStringToUpperCase",                 bridgeMsStringToUpper, HostCapability.Pure);
 	registerHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
 	registerHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
 	registerHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);
