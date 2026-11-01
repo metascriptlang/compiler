@@ -56,6 +56,11 @@ function inputPath(path, label) {
 	return canonicalPath(path);
 }
 
+export function sourceRootOfOutput(root, file) {
+	if (typeof root !== "string" || typeof file !== "string" || !file.startsWith(`${root}/`)) invalid(`output outside source declaration family: ${file}`);
+	return file.slice(root.length + 1);
+}
+
 function contained(root, file) {
 	const rel = relative(root, file);
 	return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${win32.sep}`) && !rel.startsWith("../");
@@ -84,12 +89,22 @@ function parseJSON(text, label) {
 
 export function buildCompilerGraph(options) {
 	const root = resolve(options.root ?? process.cwd());
-	const entry = inputPath(resolve(root, options.entry), "entry");
+	const requested = Array.isArray(options.entry) ? options.entry : [options.entry];
+	if (requested.length === 0) invalid("at least one entry is required");
+	const entries = [...new Set(requested.map(path => inputPath(typeof path === "string" ? resolve(root, path) : path, "entry")))];
+	const entry = entries[0];
+	let sourceRoot;
+	if (options.sourceRoot !== undefined) {
+		sourceRoot = canonicalPath(resolve(root, options.sourceRoot));
+		if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) invalid("sourceRoot must be an existing directory");
+	}
 	const outDir = resolve(root, options.outDir ?? "node_modules/.metascript");
 	mkdirSync(outDir, { recursive: true });
 	const args = ["build", entry, ...(options.compilerArgs ?? []), "--target=js", "--split", `--output=${outDir}`];
 	if (options.sourcemap !== false) args.push("--sourcemap");
-	if (options.declaration === true) args.push("--declaration");
+	for (const extra of entries.slice(1)) args.push(`--js-entry=${extra}`);
+	if (options.declaration === true || sourceRoot) args.push("--declaration");
+	if (sourceRoot) args.push(`--declaration-source-root=${sourceRoot}`);
 	try {
 		execFileSync(options.msc ?? "msc", args, {
 			stdio: options.quiet === false ? "inherit" : "pipe",
@@ -106,8 +121,11 @@ export function buildCompilerGraph(options) {
 	if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) invalid("expected an object");
 	const manifestEntry = inputPath(manifest.entry, "entry");
 	if (manifestEntry !== entry) invalid("entry does not match the requested entry");
+	if (manifest.entries !== undefined || entries.length > 1) {
+		if (!Array.isArray(manifest.entries) || manifest.entries.length !== entries.length || manifest.entries.some((path, i) => inputPath(path, "entries") !== entries[i])) invalid("entries do not match the requested roots");
+	}
 	if (!Array.isArray(manifest.modules)) invalid("modules must be an array");
-	for (const key of ["instances", "declarations", "dependencies"]) {
+	for (const key of ["instances", "declarations", "dependencies", "sourceDeclarations"]) {
 		if (manifest[key] !== undefined && !Array.isArray(manifest[key])) invalid(`${key} must be an array`);
 	}
 
@@ -153,7 +171,7 @@ export function buildCompilerGraph(options) {
 	};
 	const modules = manifest.modules.map(row => readModule(row, false));
 	const instances = (manifest.instances ?? []).map(row => readModule(row, true));
-	if (!bySource.has(entry)) invalid("entry is not present in modules");
+	for (const source of entries) if (!bySource.has(source)) invalid("entry is not present in modules");
 	const declarations = (manifest.declarations ?? []).map(row => {
 		const source = record(row, "declaration");
 		const path = claim(row.out);
@@ -161,17 +179,46 @@ export function buildCompilerGraph(options) {
 		artifacts.push(declaration);
 		return declaration;
 	});
-	if (options.declaration === true && !declarations.some(output => output.source === entry)) {
-		invalid("entry declaration is required when --declaration is requested");
+	if (options.declaration === true) for (const source of entries) {
+		if (!declarations.some(output => output.source === source)) invalid("entry declaration is required when --declaration is requested");
+	}
+	let sourceDeclarationRoot = null;
+	let sourceDeclarationPackage = null;
+	const sourceDeclarations = [];
+	if (manifest.sourceDeclarations !== undefined || sourceRoot) {
+		if (manifest.sourceDeclarationRoot !== "_source_declarations") invalid("sourceDeclarationRoot must be _source_declarations");
+		sourceDeclarationRoot = manifest.sourceDeclarationRoot;
+		if (manifest.sourceDeclarationPackage !== `${sourceDeclarationRoot}/package.json`) invalid("sourceDeclarationPackage must name the family package.json");
+		const packagePath = claim(manifest.sourceDeclarationPackage);
+		const text = readFileSync(packagePath.file, "utf8");
+		const metadata = parseJSON(text, packagePath.out);
+		if (!metadata || metadata.type !== "module" || Object.keys(metadata).length !== 1) invalid("source declaration package must contain only type: module");
+		sourceDeclarationPackage = { kind: "source-declaration-package", ...packagePath, text };
+		artifacts.push(sourceDeclarationPackage);
+		for (const row of manifest.sourceDeclarations ?? []) {
+			const source = record(row, "source declaration");
+			const path = claim(row.out);
+			const familyOut = sourceRootOfOutput(sourceDeclarationRoot, path.out);
+			if (!(/\.d\.(?:ms|jms)\.ts$/.test(familyOut) || (familyOut.startsWith("_types/") && familyOut.endsWith(".d.ts")))) invalid(`invalid source declaration path: ${path.out}`);
+			const artifact = { kind: "source-declaration", ...path, source, text: readFileSync(path.file, "utf8") };
+			sourceDeclarations.push(artifact);
+			artifacts.push(artifact);
+		}
+		if (sourceRoot) for (const source of entries) {
+			if (!contained(sourceRoot, source)) invalid(`source entry is outside sourceRoot: ${source}`);
+			const expected = `${sourceDeclarationRoot}/${relative(sourceRoot, source).replace(/\\/g, "/").replace(/\.(ms|jms)$/, ".d.$1.ts")}`;
+			if (!sourceDeclarations.some(row => row.source === source && row.out === expected)) invalid(`missing requested source entry declaration: ${source}`);
+		}
 	}
 	const dependencies = [...new Set([
 		...modules.map(m => m.source),
 		...instances.map(m => m.source),
 		...declarations.map(d => d.source),
+		...sourceDeclarations.map(d => d.source),
 		...(manifest.dependencies ?? []).map(path => inputPath(path, "dependency")),
 	])];
 	return freeze({
-		entry, outDir: outputRoot, modules, instances, declarations, dependencies, artifacts,
+		entry, entries, outDir: outputRoot, modules, instances, declarations, sourceDeclarationRoot, sourceDeclarationPackage, sourceDeclarations, dependencies, artifacts,
 		bySource: readonlyIndex(bySource), byInstance: readonlyIndex(byInstance), byOutput: readonlyIndex(byOutput),
 	});
 }

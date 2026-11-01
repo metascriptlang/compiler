@@ -1,11 +1,12 @@
 export interface CompilerOptions {
-	readonly entry: string;
+	readonly entry: string | readonly string[];
 	readonly root?: string;
 	readonly outDir?: string;
 	readonly msc?: string;
 	readonly compilerArgs?: readonly string[];
 	readonly sourcemap?: boolean;
 	readonly declaration?: boolean;
+	readonly sourceRoot?: string;
 	readonly quiet?: boolean;
 }
 
@@ -26,7 +27,7 @@ export interface ModuleOutput {
 }
 
 export interface Artifact {
-	readonly kind: "manifest" | "javascript" | "sourcemap" | "declaration";
+	readonly kind: "manifest" | "javascript" | "sourcemap" | "declaration" | "source-declaration" | "source-declaration-package";
 	readonly file: string;
 	readonly out: string;
 	readonly text: string;
@@ -36,6 +37,16 @@ export interface Artifact {
 
 export interface DeclarationOutput extends Artifact {
 	readonly kind: "declaration";
+	readonly source: string;
+}
+
+export interface SourceDeclarationOptions {
+	readonly outDir: string;
+	readonly rootDir?: string;
+}
+
+export interface SourceDeclarationOutput extends Artifact {
+	readonly kind: "source-declaration";
 	readonly source: string;
 }
 
@@ -50,6 +61,10 @@ export interface LookupIndex<T> extends Iterable<[string, T]> {
 
 export interface CompilerResult {
 	readonly entry: string;
+	readonly entries: readonly string[];
+	readonly sourceDeclarationRoot: string | null;
+	readonly sourceDeclarationPackage: Artifact | null;
+	readonly sourceDeclarations: readonly SourceDeclarationOutput[];
 	readonly outDir: string;
 	readonly modules: readonly ModuleOutput[];
 	readonly instances: readonly ModuleOutput[];
@@ -67,3 +82,5 @@ export function instanceOf(id: string): string;
 export function withInstance(path: string, instance: string): string;
 export function outputOf(result: CompilerResult | null, id: string): string | undefined;
 export function buildCompilerGraph(options: CompilerOptions): CompilerResult;
+
+export function sourceRootOfOutput(root: string, file: string): string;

@@ -264,3 +264,58 @@ describe("fake compiler adapter contract (not compiler acceptance)", () => {
 		assert.throws(() => f.run({ symlinks: { "main.d.ts": external } }), /output escapes root/);
 	});
 });
+
+test("source family requests one shared multi-root graph and immutable compiler-owned artifacts", t => {
+ const f = fixture(t);
+ f.manifest.entries = [f.entry, f.dependency];
+ f.manifest.modules.push({source:f.dependency,out:"types.js"});
+ f.manifest.declarations = [{source:f.entry,out:"main.d.ts"}];
+ f.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}, {source:f.dependency,out:"_source_declarations/types.d.jms.ts"}, {source:f.entry,out:"_source_declarations/_types/main.d.ts"}];
+ const files = {...f.files,"types.js":"export {};", "main.d.ts":"export {};", "_source_declarations/package.json":'{"type":"module"}'};
+ for (const row of f.manifest.sourceDeclarations) files[row.out] = "export {};";
+ const result = f.run({files}, {entry:[f.entry,f.dependency,f.entry],sourceRoot:f.root});
+ assert.deepEqual(result.entries,[f.entry,f.dependency]);
+ assert.equal(result.sourceDeclarations.length,3);
+ assert.equal(Object.isFrozen(result.sourceDeclarations[0]),true);
+ const args = JSON.parse(readFileSync(join(f.root,"args.json"),"utf8"));
+ assert.equal(args.filter(arg => arg === `--js-entry=${f.dependency}`).length,1);
+ assert.ok(args.includes(`--declaration-source-root=${f.root}`));
+ assert.ok(args.includes("--declaration"));
+ f.manifest.entries = [f.entry];
+ assert.throws(() => f.run({files},{entry:[f.entry,f.dependency],sourceRoot:f.root}), /entries/);
+ f.manifest.entries = [f.entry,f.dependency];
+ f.manifest.sourceDeclarations.pop(); f.manifest.sourceDeclarations.pop();
+ assert.throws(() => f.run({files},{entry:[f.entry,f.dependency],sourceRoot:f.root}), /source.*entry|entry.*source/i);
+});
+
+test("source family rejects prefix escapes, duplicate ownership and non-ESM metadata", t => {
+ const f = fixture(t);
+ f.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ const files = {...f.files,"_source_declarations/main.d.ms.ts":"export {};","_source_declarations/package.json":'{"type":"module"}'};
+ f.run({files},{sourceRoot:f.root});
+ f.manifest.sourceDeclarations[0].out = "_source_declarations_evil/main.d.ms.ts";
+ assert.throws(() => f.run({files:{...files,"_source_declarations_evil/main.d.ms.ts":"export {};"}},{sourceRoot:f.root}),/outside.*family/);
+ f.manifest.sourceDeclarations[0].out = "_source_declarations/package.json";
+ assert.throws(() => f.run({files},{sourceRoot:f.root}),/duplicate output/);
+ f.manifest.sourceDeclarations[0].out = "_source_declarations/main.d.ms.ts";
+ for (const text of ['{"type":"commonjs"}','{"type":"module","name":"user-package"}']) {
+  assert.throws(() => f.run({files:{...files,"_source_declarations/package.json":text}},{sourceRoot:f.root}),/only type: module/);
+ }
+});
+
+test("multi-entry packaged declarations require every requested root", t => {
+ const f = fixture(t);
+ f.manifest.entries = [f.entry,f.dependency];
+ f.manifest.modules.push({source:f.dependency,out:"types.js"});
+ f.manifest.declarations = [{source:f.entry,out:"main.d.ts"}];
+ const files = {...f.files,"types.js":"export {};","main.d.ts":"export {};","types.d.ts":"export {};"};
+ const options = {entry:[f.entry,f.dependency],declaration:true};
+ assert.throws(() => f.run({files},options),/entry declaration is required when --declaration is requested/);
+ assert.equal(f.run({files},{...options,declaration:false}).modules.length,2);
+ f.manifest.declarations.push({source:f.dependency,out:"types.d.ts"});
+ assert.equal(f.run({files},options).declarations.length,2);
+});
