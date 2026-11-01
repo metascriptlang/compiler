@@ -3,12 +3,12 @@
 extern function msModuleQueueLock(): void;
 extern function msModuleQueueUnlock(): void;
 extern function msModuleIndexOf(base: Ptr<void>, record: Ptr<void>): int32;
-extern function msModuleStringText(name: string): Ptr<void>;
+extern function msModuleStringText(name: string): Readonly<Ptr<void>>;
 extern function msModuleStringLen(name: string): int64;
-extern function msModuleCStrLen(text: Ptr<void>): int64;
-extern function msModuleNameIs(candidate: Ptr<void>, text: Ptr<void>, len: int64): boolean;
+extern function msModuleCStrLen(text: Readonly<Ptr<void>>): int64;
+extern function msModuleNameIs(candidate: Readonly<Ptr<void>>, text: Readonly<Ptr<void>>, len: int64): boolean;
 extern function msModuleAbort(name: Ptr<void>, what: string): void;
-extern function msModuleAbortNoRecord(text: Ptr<void>, len: int64): void;
+extern function msModuleAbortNoRecord(text: Readonly<Ptr<void>>, len: int64): void;
 extern function msModuleAbortPlain(what: string): void;
 extern function msModuleEvalEnter(): void;
 extern function msModuleEvalLeave(): void;
@@ -99,7 +99,7 @@ function tableRegister(records: Ptr<void>, count: int32): void {
 	for (let i: int32 = 0; i < count; i++) recordAt(i).cycleRoot = i;
 }
 
-function findRecord(text: Ptr<void>, len: int64): Ptr<ModuleRecord> {
+function findRecord(text: Readonly<Ptr<void>>, len: int64): Ptr<ModuleRecord> {
 	for (let i: int32 = 0; i < gRecordCount; i++) {
 		const r = recordAt(i);
 		if (msModuleNameIs(r.name, text, len)) return r;
