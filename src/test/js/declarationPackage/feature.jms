@@ -1,0 +1,6 @@
+import { PackageItem } from "./model";
+export { PackageItem, Label, Envelope } from "./model";
+
+export function featureValue(value: PackageItem): int32 {
+	return value.add(2);
+}
