@@ -1576,7 +1576,7 @@ export function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: s
 	for (const expInfo of modExports.symbols) {
 		const ext = expInfo.ext;
 		const methSym = expInfo.sym;
-		const methName = ext != null && ext.sym != null && ext.sym.name == expInfo.name ? ext.methodName : expInfo.name;
+		const methName = extensionNameOf(expInfo);
 		if (ext != null) {
 			noteImported(ctx, methSym);
 			if (markExported) exportSymAs(ctx, methSym, expInfo.name);
@@ -1593,6 +1593,11 @@ export function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: s
 	}
 }
 
+function extensionNameOf(expInfo: ExportedSymInfo): string {
+	const ext = expInfo.ext;
+	return ext != null && ext.sym != null && ext.sym.name == expInfo.name ? ext.methodName : expInfo.name;
+}
+
 function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: ExportedSymInfo, sourcePath: string, specifier: string, node: Node): void {
 	const sym = expInfo.sym;
 	if (sym == null) return;
@@ -1605,7 +1610,7 @@ function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: Export
 	}
 	if (sym != bound) noteImported(ctx, sym);
 	exportSymAs(ctx, sym, expInfo.name);
-	propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
+	propagateImportedExtensions(ctx, extensionNameOf(expInfo), expInfo, sourcePath, sym);
 }
 
 export function collectExport(ctx: CheckerContext, node: Node): void {
@@ -1651,7 +1656,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 							}
 							const sym = importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node.location, node);
 							exportSymAs(ctx, sym, expInfo.name);
-							propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
+							propagateImportedExtensions(ctx, extensionNameOf(expInfo), expInfo, sourcePath, sym);
 						}
 					} else {
 						const isCirc = ctx.moduleGraph != null
