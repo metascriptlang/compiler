@@ -687,6 +687,10 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (needsFlatten) {
+		const spelled = sourceWithMembers(types, seen);
+		if (spelled != null) return spelled;
+	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
 	if (dropEnumMembersOfPresentEnums(seen) && seen.length == 1) return seen[0];
 	if (dropBrandsOfPresentBases(seen) && seen.length == 1) return seen[0];
@@ -738,6 +742,19 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 	}
 	return t;
+}
+
+function sourceWithMembers(types: Type[], members: Type[]): Type | null {
+	for (const ut of types) {
+		const nested = nestedUnionOf(ut);
+		if (nested == null || nested.typeChildren == null || nested.typeChildren.length != members.length) continue;
+		let all = true;
+		for (const m of members) {
+			if (!nested.typeChildren.includes(m)) { all = false; break; }
+		}
+		if (all) return ut;
+	}
+	return null;
 }
 
 // `Readonly<A> | null` is `Readonly<A | null>`: a view stays a view when null joins it.
