@@ -1002,6 +1002,10 @@ triage_judge() {
   done <"$1"
 }
 
+copy_vendor() {
+  mkdir -p "$2" && (cd "$1" && tar cf - --exclude=.git .) | (cd "$2" && tar xf -)
+}
+
 # root of a candidate built from the merge base, shared by the gates on this host by tree; the caller removes <root>.lock
 triage_main() {
   local mb tree d lock old
@@ -1015,7 +1019,7 @@ triage_main() {
   echo $$ >"$lock/pid"
   if [ ! -x "$d/out/gate/msc" ]; then
     rm -rf "$d"; git worktree prune
-    { git worktree add -q -f --detach "$d" "$mb" && rsync -a --exclude=.git "$TOP/vendor/" "$d/vendor/" && cp -p "$BUILDER" "$d/msc" \
+    { git worktree add -q -f --detach "$d" "$mb" && copy_vendor "$TOP/vendor" "$d/vendor" && cp -p "$BUILDER" "$d/msc" \
       && (cd "$d" && ./msc build src/index.ms --danger $CC_FLAG --output=out/gate/msc); } >&2 || { rm -rf "$lock"; return 1; }
     ls -dt "${d%/*}"/*/ | grep -v '\.lock/$' | tail -n +4 | while read -r old; do [ -d "${old%/}.lock" ] || rm -rf "${old%/}"; done
   fi
@@ -1890,6 +1894,18 @@ runner_self_test() {
   return $bad
 }
 
+copy_vendor_self_test() {
+  local t bad=0
+  t=$(mktemp -d) || return 1
+  mkdir -p "$t/src/lib/sub" "$t/dst/lib"
+  printf 'x\n' >"$t/src/lib/sub/a.h"; printf 'gitdir: elsewhere\n' >"$t/src/lib/.git"; printf 'old\n' >"$t/dst/lib/keep.h"
+  copy_vendor "$t/src" "$t/dst" || { printf 'FAIL copy_vendor: the copy failed\n'; bad=1; }
+  [ "$(cat "$t/dst/lib/sub/a.h" 2>/dev/null)" = x ] && [ ! -e "$t/dst/lib/.git" ] && [ -e "$t/dst/lib/keep.h" ] \
+    || { printf 'FAIL copy_vendor: the copy must carry files, leave .git behind and keep what the checkout holds\n'; bad=1; }
+  rm -rf "$t"
+  return $bad
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -2185,6 +2201,7 @@ CASES
   reread_share_self_test || bad=1
   slow_starts_self_test || bad=1
   runner_self_test || bad=1
+  copy_vendor_self_test || bad=1
   resume_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
