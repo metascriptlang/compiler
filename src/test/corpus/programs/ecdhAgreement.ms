@@ -2,8 +2,7 @@
 //
 // @stdout: p256 agree true other false|p384 agree true other false
 // @exit: 0
-// @skip-js: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.jms
-// @skip-raiser: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.rms
+// @skip-raiser: std/crypto/ec has a C and a JS backend and no ec.rms
 
 import { Buffer } from "std/core/buffer";
 import { EcCurve, EcPrivateKey, ecdh } from "std/crypto/ec";

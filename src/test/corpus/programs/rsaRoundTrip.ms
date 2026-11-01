@@ -4,8 +4,7 @@
 //
 // @stdout: sign true tampered false badsig false pss true pssWrongPadding false oaep true pem true
 // @exit: 0
-// @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
-// @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
+// @skip-raiser: std/crypto/rsa has a C and a JS backend and no rsa.rms
 
 import { Buffer } from "std/core/buffer";
 import { RsaPrivateKey, RsaPublicKey, sign, verify, encrypt, decrypt } from "std/crypto/rsa";
