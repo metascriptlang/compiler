@@ -469,5 +469,16 @@ check "S29 no .done and k not on main" '[ ! -e "$MSC_LAND_QUEUE/k.done" ] && ! o
 check "S29 .red says it stopped before landing" 'grep -q "no landed line" "$MSC_LAND_QUEUE/k.red"'
 check "S29 a real land's .done holds its landed line" 'mkwt g && enqueue g && [ "$(waitfor g)" = 0 ] && grep -q "^landed " "$MSC_LAND_QUEUE/g.done"'
 
+echo "== S30 the worktree that started the runner is retired while it runs: later lands still land"
+setup; mkwt x red; mkwt h hold; mkwt z hold
+echo edited >"$T/ws/.wt/wt-z/base.txt"; git -C "$T/ws/.wt/wt-z" commit -qam "z edits a file main holds"
+enqueue x; enqueue h; enqueue z
+for i in $(seq 1 80); do [ -e "$LQ_TEST/holding.h" ] && break; sleep 0.25; done
+git -C "$R" worktree remove --force "$T/ws/.wt/wt-x"
+touch "$LQ_TEST/release"
+rh=$(waitfor h); rz=$(waitfor z)
+check "S30 the starting worktree is gone" '[ ! -d "$T/ws/.wt/wt-x" ]'
+check "S30 both lands after the retirement landed" '[ "$rh" = 0 ] && [ "$rz" = 0 ] && onmain h.txt && [ "$(git -C "$R" show main:base.txt)" = edited ]'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

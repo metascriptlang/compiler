@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -u
+cd "$(dirname "$0")/.." || exit 1
 Q=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
 WT_TOOL=${MSC_WT_TOOL:-$HOME/nerdtools/claude/tools/wt.sh}
 IDLE=${MSC_LAND_QUEUE_IDLE:-600}
