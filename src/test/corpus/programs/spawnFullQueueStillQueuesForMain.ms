@@ -5,7 +5,7 @@
 // @skip-raiser: the Raiser runs spawn inline
 // @skip-js: JS runs every task on the one thread, so no wait blocks a worker
 // note: every pool worker spins on a flag and one spawned task sits unclaimed at the head of the queue; 300 spawn-and-await rounds then leave claimed slots behind it, which must not count against the queue's capacity. A spawn from the main thread is queued, never run inline on it: the task spawned last awaits a promise that only main resolves, after the spawn returns, so running it inline would block main on its own later code.
-import { cpuCount } from "std/os";
+import { availableParallelism } from "std/os";
 import { lockedUpdate, lockedRead } from "std/core/promise";
 
 struct Flags { release: boolean; started: int32; }
@@ -17,7 +17,7 @@ function hold(): int32 {
 	return 1;
 }
 
-const workers = cpuCount();
+const workers = availableParallelism();
 const holders: Promise<int32>[] = [];
 for (let i = 0; i < workers; i++) holders.push(spawn(() => hold()));
 while (lockedRead(flags, (f: Flags): int32 => f.started) < workers) {}
