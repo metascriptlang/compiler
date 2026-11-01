@@ -115,7 +115,7 @@ function runProgram(name: string): boolean {
 		if (wantsForeign) { problems.push("@foreign-stdout needs a mixed build and @mixed-error expects it to fail"); }
 		ensureDir(dir + "mixed/");
 		for (const col of [["mixed", "build", "--output=" + dir + "mixed/app.js"], ["tree", "run", ""]]) {
-			const b = col[1] == "build" ? execFileResult(MSC, ["build", entry, "--target=js", col[2]]) : execFileResult(MSC, ["run", entry, "--target=js"]);
+			const b = col[1] == "build" ? execFileResult(MSC, ["build", entry, "--target=js", col[2]]) : execFileResult(MSC, ["run", "--target=js", entry]);
 			const text = b.output + b.errorOutput;
 			if (b.exitCode == 0) { problems.push(`[${col[0]}] succeeded, expected an error containing ${JSON.stringify(spec.mixedErrors[0])}`); }
 			else {
@@ -127,7 +127,7 @@ function runProgram(name: string): boolean {
 	} else {
 		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
 		cols.push(mixed);
-		cols.push(runProcess("tree", MSC, ["run", entry, "--target=js"]));
+		cols.push(runProcess("tree", MSC, ["run", "--target=js", entry]));
 		if (mixed.ok && wantsForeign && exists(driver)) {
 			const foreign = runProcess("foreign", "node", [driver, dir + "mixed/app.js"]);
 			if (!foreign.ok) {
