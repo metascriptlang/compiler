@@ -3,8 +3,27 @@ import {
 	fiat_25519_carry_square, fiat_25519_carry_scmul_121666,
 	fiat_25519_from_bytes, fiat_25519_sub, fiat_25519_to_bytes,
 } from "./field";
+import { wipeBytes } from "./wipe";
 
 struct FieldElement { limbs: uint32[10]; }
+
+struct X25519Scratch {
+	secret: uint8[32];
+	coordinate: uint8[32];
+	x1: FieldElement;
+	x2: FieldElement;
+	z2: FieldElement;
+	x3: FieldElement;
+	z3: FieldElement;
+	t0: FieldElement;
+	t1: FieldElement;
+	t0Squared: FieldElement;
+	t1Squared: FieldElement;
+	delta: FieldElement;
+	scaled: FieldElement;
+	result: FieldElement;
+	swap: uint32;
+}
 
 function zero(): FieldElement { return { limbs: [] }; }
 function one(): FieldElement {
@@ -114,55 +133,58 @@ export function x25519ScalarMult(
 	scalar: Ptr<uint8>,
 	point: Ptr<uint8>,
 ): void {
-	let secret: uint8[32] = [];
-	let coordinate: uint8[32] = [];
-	for (let i = 0; i < 32; i++) {
-		secret[i] = scalar[i];
-		coordinate[i] = point[i];
-	}
-	secret[0] &= 248;
-	secret[31] = (secret[31] & 127) | 64;
-	coordinate[31] &= 127;
-	let x1 = zero();
-	fiat_25519_from_bytes(
-		(x1.limbs as Span<uint32> as Ptr<uint32>),
-		(coordinate as Span<uint8> as Ptr<uint8>),
+	let scratch: X25519Scratch = {
+		secret: [], coordinate: [],
+		x1: zero(), x2: one(), z2: zero(), x3: zero(), z3: one(),
+		t0: zero(), t1: zero(), t0Squared: zero(), t1Squared: zero(),
+		delta: zero(), scaled: zero(), result: zero(), swap: 0,
+	};
+	defer wipeBytes(
+		(scratch as Ptr<X25519Scratch> as Ptr<uint8>),
+		sizeof(X25519Scratch) as uint64,
 	);
-	let x2 = one();
-	let z2 = zero();
-	let x3 = x1;
-	let z3 = one();
-	let swap: uint32 = 0;
-	for (let position = 254; position >= 0; position--) {
-		const bit = ((secret[position >> 3] >>
-			((position & 7) as uint8)) & 1) as uint32;
-		swap ^= bit;
-		conditionalSwap(x2, x3, swap);
-		conditionalSwap(z2, z3, swap);
-		swap = bit;
-		const t0 = subtract(x3, z3);
-		const t1 = subtract(x2, z2);
-		x2 = add(x2, z2);
-		z2 = add(x3, z3);
-		z3 = multiply(t0, x2);
-		z2 = multiply(z2, t1);
-		const t0Squared = square(t1);
-		const t1Squared = square(x2);
-		x3 = add(z3, z2);
-		z2 = subtract(z3, z2);
-		x2 = multiply(t1Squared, t0Squared);
-		const delta = subtract(t1Squared, t0Squared);
-		z2 = square(z2);
-		const scaled = multiply121666(delta);
-		x3 = square(x3);
-		z3 = multiply(x1, z2);
-		z2 = multiply(delta, add(t0Squared, scaled));
+	for (let i = 0; i < 32; i++) {
+		scratch.secret[i] = scalar[i];
+		scratch.coordinate[i] = point[i];
 	}
-	conditionalSwap(x2, x3, swap);
-	conditionalSwap(z2, z3, swap);
-	const result = multiply(x2, invert(z2));
+	scratch.secret[0] &= 248;
+	scratch.secret[31] = (scratch.secret[31] & 127) | 64;
+	scratch.coordinate[31] &= 127;
+	fiat_25519_from_bytes(
+		(scratch.x1.limbs as Span<uint32> as Ptr<uint32>),
+		(scratch.coordinate as Span<uint8> as Ptr<uint8>),
+	);
+	scratch.x3 = scratch.x1;
+	for (let position = 254; position >= 0; position--) {
+		const bit = ((scratch.secret[position >> 3] >>
+			((position & 7) as uint8)) & 1) as uint32;
+		scratch.swap ^= bit;
+		conditionalSwap(scratch.x2, scratch.x3, scratch.swap);
+		conditionalSwap(scratch.z2, scratch.z3, scratch.swap);
+		scratch.swap = bit;
+		scratch.t0 = subtract(scratch.x3, scratch.z3);
+		scratch.t1 = subtract(scratch.x2, scratch.z2);
+		scratch.x2 = add(scratch.x2, scratch.z2);
+		scratch.z2 = add(scratch.x3, scratch.z3);
+		scratch.z3 = multiply(scratch.t0, scratch.x2);
+		scratch.z2 = multiply(scratch.z2, scratch.t1);
+		scratch.t0Squared = square(scratch.t1);
+		scratch.t1Squared = square(scratch.x2);
+		scratch.x3 = add(scratch.z3, scratch.z2);
+		scratch.z2 = subtract(scratch.z3, scratch.z2);
+		scratch.x2 = multiply(scratch.t1Squared, scratch.t0Squared);
+		scratch.delta = subtract(scratch.t1Squared, scratch.t0Squared);
+		scratch.z2 = square(scratch.z2);
+		scratch.scaled = multiply121666(scratch.delta);
+		scratch.x3 = square(scratch.x3);
+		scratch.z3 = multiply(scratch.x1, scratch.z2);
+		scratch.z2 = multiply(scratch.delta, add(scratch.t0Squared, scratch.scaled));
+	}
+	conditionalSwap(scratch.x2, scratch.x3, scratch.swap);
+	conditionalSwap(scratch.z2, scratch.z3, scratch.swap);
+	scratch.result = multiply(scratch.x2, invert(scratch.z2));
 	fiat_25519_to_bytes(
 		output,
-		(result.limbs as Span<uint32> as Ptr<uint32>),
+		(scratch.result.limbs as Span<uint32> as Ptr<uint32>),
 	);
 }

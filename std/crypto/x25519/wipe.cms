@@ -1,0 +1,5 @@
+// Native volatile byte stores are the only C operation in this helper.
+export function wipeBytes(data: Ptr<uint8>, length: uint64): void {
+	@emit(`volatile uint8_t *cursor = (volatile uint8_t*)${data};
+for (uint64_t index = 0; index < ${length}; ++index) cursor[index] = 0;`);
+}
