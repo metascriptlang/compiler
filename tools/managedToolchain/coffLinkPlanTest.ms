@@ -3,8 +3,11 @@ import { CoffLinkPlan, parseCoffLinkArguments } from "./coffLinkPlan";
 let cases: int32 = 0;
 
 function expected(
-	base: uint64 = 1, machine: string = "X64", dll: boolean = false,
-	stack: uint64 | null = null, inputs: string[] = [],
+	base: uint64 = 1,
+	machine: string = "X64",
+	dll: boolean = false,
+	stack: uint64 | null = null,
+	inputs: string[] = [],
 	notCarried: string[] = [],
 ): CoffLinkPlan {
 	return { base, machine, dll, stack, inputs, notCarried };
@@ -32,7 +35,9 @@ function accepted(tokens: string[], wanted: CoffLinkPlan): void {
 }
 
 function refused(
-	tokens: string[], fragment: string, objectName: string = "fixture.o",
+	tokens: string[],
+	fragment: string,
+	objectName: string = "fixture.o",
 ): void {
 	const result = parseCoffLinkArguments(tokens, objectName);
 	if (result.ok || result.error.indexOf(fragment) < 0) {

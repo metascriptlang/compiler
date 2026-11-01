@@ -1,5 +1,7 @@
 import {
-	configLine, renderRuntimeConfig, RuntimeConfigInput,
+	configLine,
+	renderRuntimeConfig,
+	RuntimeConfigInput,
 } from "./runtimeConfig";
 import { ElfLinkItemKind } from "./elfLinkPlan";
 
@@ -129,24 +131,48 @@ function run(): void {
 	minimal.items = [];
 	const plain = rendered(minimal);
 	if (plain.indexOf("target-feature") >= 0 || plain.indexOf("\n\n") >= 0 ||
-		!plain.endsWith("\n")) { throw new Error("empty optional groups changed"); }
+		!plain.endsWith("\n")) {
+		throw new Error("empty optional groups changed");
+	}
 	cases += 1;
 	for (const bad of ["has space.o", "x,y.a", "x@y.o", ".", "..", "a\0b.o"]) {
 		let request = baseInput();
 		request.items = [{ kind: ElfLinkItemKind.InputPath, value: bad }];
 		refused(request);
 	}
-	let bad = baseInput(); bad.compile.cpu = "two words"; refused(bad);
-	bad = baseInput(); bad.compile.features = ["+bad feature"]; refused(bad);
-	bad = baseInput(); bad.compile.pic = ["a;b"]; refused(bad);
-	bad = baseInput(); bad.compile.defines = ["-DBAD='x'"]; refused(bad);
-	bad = baseInput(); bad.includeDirectories = ["bad directory"]; refused(bad);
-	bad = baseInput(); bad.engineRelative = "$HOME"; refused(bad);
-	bad = baseInput(); bad.llvmMajor = "2 3"; refused(bad);
-	bad = baseInput(); bad.spec.linker = "ld lld"; refused(bad);
-	bad = baseInput(); bad.spec.clangTarget = "bad target"; refused(bad);
-	bad = baseInput(); bad.spec.driverFlags = ["-Wl;bad"]; refused(bad);
-	bad = baseInput(); bad.directory = "bad directory"; refused(bad);
+	let bad = baseInput();
+	bad.compile.cpu = "two words";
+	refused(bad);
+	bad = baseInput();
+	bad.compile.features = ["+bad feature"];
+	refused(bad);
+	bad = baseInput();
+	bad.compile.pic = ["a;b"];
+	refused(bad);
+	bad = baseInput();
+	bad.compile.defines = ["-DBAD='x'"];
+	refused(bad);
+	bad = baseInput();
+	bad.includeDirectories = ["bad directory"];
+	refused(bad);
+	bad = baseInput();
+	bad.engineRelative = "$HOME";
+	refused(bad);
+	bad = baseInput();
+	bad.llvmMajor = "2 3";
+	refused(bad);
+	bad = baseInput();
+	bad.spec.linker = "ld lld";
+	refused(bad);
+	bad = baseInput();
+	bad.spec.clangTarget = "bad target";
+	refused(bad);
+	bad = baseInput();
+	bad.spec.driverFlags = ["-Wl;bad"];
+	refused(bad);
+	bad = baseInput();
+	bad.directory = "bad directory";
+	refused(bad);
 	console.log("runtime configs: " + String(cases) + " cases OK");
 }
 

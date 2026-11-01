@@ -91,8 +91,9 @@ export function renderRuntimeConfig(
 		lines.push(try configLine([define]));
 	}
 	lines.push("-nostdinc");
-	lines.push(try configLine(["-isystem", engine + "/lib/clang/" +
-		input.llvmMajor + "/include"]));
+	lines.push(try configLine([
+		"-isystem", engine + "/lib/clang/" + input.llvmMajor + "/include",
+	]));
 	for (const include of input.includeDirectories) {
 		lines.push(try configLine([
 			"-isystem", "<CFGDIR>/include/libc/" + include,
@@ -100,15 +101,21 @@ export function renderRuntimeConfig(
 	}
 	for (const flag of spec.driverFlags) { lines.push(try configLine([flag])); }
 	lines.push(try configLine(["--ld-path=" + engine + "/bin/" + spec.linker]));
-	lines.push(try configLine(["-Xlinker", "-L", "-Xlinker",
-		"<CFGDIR>/" + directory]));
+	lines.push(try configLine([
+		"-Xlinker", "-L", "-Xlinker", "<CFGDIR>/" + directory,
+	]));
 	for (const item of input.items) {
-		if (item.kind == ElfLinkItemKind.Argument) {
-			lines.push(try configLine(["-Xlinker", item.value]));
-		} else if (item.kind == ElfLinkItemKind.InputPath) {
-			const name = try plainName(item.value);
-			lines.push(try configLine(["-Xlinker", "<CFGDIR>/" + directory + "/" +
-				name]));
+		match (item.kind) {
+			ElfLinkItemKind.Argument => {
+				lines.push(try configLine(["-Xlinker", item.value]));
+			},
+			ElfLinkItemKind.InputPath => {
+				const name = try plainName(item.value);
+				lines.push(try configLine([
+					"-Xlinker", "<CFGDIR>/" + directory + "/" + name,
+				]));
+			},
+			ElfLinkItemKind.UserObject => {},
 		}
 	}
 	return Result.ok(lines.join("\n") + "\n");

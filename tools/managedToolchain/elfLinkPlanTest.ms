@@ -1,5 +1,7 @@
 import {
-	ElfLinkItem, ElfLinkItemKind, parseElfLinkArguments,
+	ElfLinkItem,
+	ElfLinkItemKind,
+	parseElfLinkArguments,
 } from "./elfLinkPlan";
 
 let cases: int32 = 0;
@@ -17,7 +19,9 @@ function user(): ElfLinkItem {
 }
 
 function accepted(
-	tokens: string[], expected: ElfLinkItem[], output: string = "result",
+	tokens: string[],
+	expected: ElfLinkItem[],
+	output: string = "result",
 ): void {
 	const result = parseElfLinkArguments(tokens, output, "fixture.o");
 	if (!result.ok) { throw new Error(result.error); }
@@ -35,7 +39,9 @@ function accepted(
 }
 
 function refused(
-	tokens: string[], fragment: string, output: string = "result",
+	tokens: string[],
+	fragment: string,
+	output: string = "result",
 	objectName: string = "fixture.o",
 ): void {
 	const result = parseElfLinkArguments(tokens, output, objectName);
