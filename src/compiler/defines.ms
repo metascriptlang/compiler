@@ -174,6 +174,26 @@ export function defineIdentity(t: DefineTable): string {
 	return out;
 }
 
+export function retargetBackend(t: DefineTable, backendName: string): DefineTable {
+	const out: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [...t.seeded] };
+	for (const n of t.names) defineSymbol(out, n, definedValue(t, n));
+	const previous = definedValue(t, "backend");
+	if (previous != "") undefSymbol(out, previous);
+	defineSymbol(out, backendName, "true");
+	defineSymbol(out, "backend", backendName);
+	return out;
+}
+
+test "a retargeted table answers the new backend flag and keeps the other defines" {
+	const t = createDefineTable();
+	initDefines(t, "c", "linux", "amd64", "drc", 0);
+	defineSymbol(t, "user", "7");
+	const raiser = retargetBackend(t, "raiser");
+	assert isDefined(raiser, "raiser") && !isDefined(raiser, "c");
+	assert definedValue(raiser, "backend") == "raiser" && definedValue(raiser, "os") == "linux" && definedValue(raiser, "user") == "7";
+	assert isDefined(t, "c") && !isDefined(t, "raiser");
+}
+
 test "defines given in another order have one identity, and another value has another" {
 	const ab = createDefineTable();
 	defineSymbol(ab, "alpha", "1");
