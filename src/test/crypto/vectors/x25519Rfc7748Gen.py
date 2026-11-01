@@ -186,7 +186,6 @@ nonzero = sum(1 for t in tests if t["shared"] != "00" * 32)
 if checked != nonzero or checked + refused > len(tests) or checked < 40:
 	sys.exit(f"oracle coverage: {checked} cross-checked of {nonzero} non-zero cases, {refused} all-zero refusals")
 
-# RFC 7748 section 5.2 iterated results (also pinned in x25519Assurance.ms)
 k = u = BASE
 iterated = {}
 for i in range(1, 1001):

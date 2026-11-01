@@ -1,4 +1,7 @@
-import { x25519ScalarMult } from "../../../std/crypto/x25519/pilot";
+import { x25519ScalarMult } from "std/crypto/x25519/pilot";
+import {
+	checkRawX25519, loadX25519Cases,
+} from "../crypto/vectors/x25519Cases";
 
 function bytes(hex: string): uint8[32] {
 	let value: uint8[32] = [];
@@ -149,6 +152,45 @@ test "output may alias either input" {
 		(other as Span<uint8> as Ptr<uint8>),
 	);
 	assert matches(other, expected);
+}
+
+test "pilot matches every Wycheproof output without changing inputs" {
+	const cases = loadX25519Cases(
+		"src/test/crypto/vectors/x25519_test.json",
+	);
+	assert cases.ok;
+	if (cases.ok) {
+		const tally = checkRawX25519(cases.value, x25519ScalarMult);
+		assert tally.passed == 518 && tally.failed == 0,
+			tally.failures.join("\n");
+	}
+}
+
+test "pilot matches every RFC and adversarial output" {
+	const cases = loadX25519Cases(
+		"src/test/crypto/vectors/x25519Rfc7748.json",
+	);
+	assert cases.ok;
+	if (cases.ok) {
+		const tally = checkRawX25519(cases.value, x25519ScalarMult);
+		assert tally.passed == 58 && tally.failed == 0,
+			tally.failures.join("\n");
+	}
+}
+
+test "pilot matches RFC 7748 after one thousand iterations" {
+	let scalar: uint8[32] = [];
+	scalar[0] = 9;
+	let point = scalar;
+	for (let i: int32 = 0; i < 1000; i++) {
+		const next = multiply(scalar, point);
+		point = scalar;
+		scalar = next;
+	}
+	assert matches(scalar, bytes(
+		"684cf59ba83309552800ef566f2f4d3c" +
+		"1c3887c49360e3875f2eb94d99532c51",
+	));
 }
 
 test "output and both inputs may share one region" {

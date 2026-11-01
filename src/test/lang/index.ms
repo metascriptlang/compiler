@@ -44,6 +44,8 @@ import "./exportSymbols";
 import "./extensionExportNames";
 import "./fsRemoveAll";
 import "./fsCopyFile";
+import "./cryptoX25519Assurance";
+import "./cryptoX25519Pilot";
 import "./functionCarriers";
 import "./generatorControl";
 import "./genericCallbacks";

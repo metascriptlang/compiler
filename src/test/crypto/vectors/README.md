@@ -1,6 +1,6 @@
 # X25519 test vectors
 
-Pinned inputs of `src/test/crypto/x25519Assurance.ms`. Passing them is not a security proof.
+Pinned inputs of `src/test/lang/cryptoX25519Assurance.ms`. Passing them is not a security proof.
 
 ## Wycheproof `x25519_test.json`
 

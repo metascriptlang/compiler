@@ -14,7 +14,7 @@ import {
 	parseX25519Cases,
 	requireCleanX25519,
 	withWrongExpected,
-} from "./vectors/x25519Cases";
+} from "../crypto/vectors/x25519Cases";
 
 @include("vendor/monocypher/src/monocypher.h");
 extern function crypto_x25519(out: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void;
