@@ -1407,6 +1407,10 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
 				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
+				if (initType != null && ai + 1 < initType.typeChildren.length && hasNoRuntimeRepr(initType.typeChildren[ai + 1])) {
+					dropVoidArg(p, argSnippet, argNode);
+					continue;
+				}
 				if (initType != null && ai + 1 < initType.typeChildren.length) {
 					argSnippet = shimCallArg(g, p, argSnippet, initType.typeChildren[ai + 1], argNode, 0, ai);
 				}
