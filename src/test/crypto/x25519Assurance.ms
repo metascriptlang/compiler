@@ -12,13 +12,13 @@ import {
 	loadX25519Cases,
 	requireCleanX25519,
 	withWrongExpected,
-} from "../../../std/crypto/test/vectors/x25519Cases";
+} from "./vectors/x25519Cases";
 
 @include("vendor/monocypher/src/monocypher.h");
 extern function crypto_x25519(out: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void;
 
-const WYCHEPROOF_PATH = "std/crypto/test/vectors/x25519_test.json";
-const RFC_PATH = "std/crypto/test/vectors/x25519Rfc7748.json";
+const WYCHEPROOF_PATH = "src/test/crypto/vectors/x25519_test.json";
+const RFC_PATH = "src/test/crypto/vectors/x25519Rfc7748.json";
 const BASE_POINT = "0900000000000000000000000000000000000000000000000000000000000000";
 
 function monocypherRaw(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void {
@@ -89,7 +89,7 @@ const rfcCases = must(loadX25519Cases(RFC_PATH));
 
 test "wycheproof files match the sha256 pinned in the vectors README" {
 	assert fileSha256(WYCHEPROOF_PATH) == "35c3f5231cf25cc640b524d403461deee9e49441d5d915a3a25b2c8ff5adbe7d";
-	assert fileSha256("std/crypto/test/vectors/LICENSE-wycheproof") ==
+	assert fileSha256("src/test/crypto/vectors/LICENSE-wycheproof") ==
 		"58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd";
 }
 
