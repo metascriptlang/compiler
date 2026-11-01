@@ -21,7 +21,8 @@ extern function msMemMismatch(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>
 
 // UTF-16 code unit order differs from UTF-8 byte order only where the first differing code points
 // are a supplementary one (lead 0xF0..0xF4, a surrogate pair) against a BMP one at or above U+E000
-// (lead 0xEE/0xEF): the pair sorts below.
+// (lead 0xEE/0xEF), which sorts above the pair, or against a lone surrogate (lead 0xED), which
+// compares with the pair's units.
 @exportName("msStringCompare")
 function stringCompare(a: string, b: string): int32 {
 	const x = a.asBytes();
@@ -32,12 +33,67 @@ function stringCompare(a: string, b: string): int32 {
 		if (i < n) {
 			const p = x[i];
 			const q = y[i];
-			if (p >= 0xF0 && (q == 0xEE || q == 0xEF)) return -1;
-			if (q >= 0xF0 && (p == 0xEE || p == 0xEF)) return 1;
+			if (p >= 0xED && q >= 0xED && (p >= 0xF0) != (q >= 0xF0)) {
+				if (p == 0xED || q == 0xED) return compareUnitsFrom(x, y, i);
+				return p >= 0xF0 ? -1 : 1;
+			}
 			return p < q ? -1 : 1;
 		}
 	}
 	return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
+}
+
+@inline
+function seqLenAt(s: Readonly<Span<uint8>>, at: int64): int64 {
+	const b = s[at];
+	const n = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4;
+	return at + n <= s.length ? n : 1;
+}
+
+function codePointAt(s: Readonly<Span<uint8>>, at: int64, seq: int64): int32 {
+	const b = s[at] as int32;
+	if (seq == 1) return b;
+	if (seq == 2) return ((b & 0x1F) << 6) | ((s[at + 1] as int32) & 0x3F);
+	if (seq == 3) return ((b & 0x0F) << 12) | (((s[at + 1] as int32) & 0x3F) << 6) | ((s[at + 2] as int32) & 0x3F);
+	return ((b & 0x07) << 18) | (((s[at + 1] as int32) & 0x3F) << 12) | (((s[at + 2] as int32) & 0x3F) << 6) | ((s[at + 3] as int32) & 0x3F);
+}
+
+@noinline
+function compareUnitsFrom(x: Readonly<Span<uint8>>, y: Readonly<Span<uint8>>, at: int64): int32 {
+	let i = at;
+	let j = at;
+	let lowX: int32 = 0;
+	let lowY: int32 = 0;
+	while (true) {
+		let u: int32 = -1;
+		if (lowX != 0) {
+			u = lowX;
+			lowX = 0;
+		} else if (i < x.length) {
+			const seq = seqLenAt(x, i);
+			u = codePointAt(x, i, seq);
+			i = i + seq;
+			if (u >= 0x10000) {
+				lowX = 0xDC00 + ((u - 0x10000) & 0x3FF);
+				u = 0xD800 + ((u - 0x10000) >> 10);
+			}
+		}
+		let v: int32 = -1;
+		if (lowY != 0) {
+			v = lowY;
+			lowY = 0;
+		} else if (j < y.length) {
+			const seq = seqLenAt(y, j);
+			v = codePointAt(y, j, seq);
+			j = j + seq;
+			if (v >= 0x10000) {
+				lowY = 0xDC00 + ((v - 0x10000) & 0x3FF);
+				v = 0xD800 + ((v - 0x10000) >> 10);
+			}
+		}
+		if (u != v) return u < v ? -1 : 1;
+		if (u < 0) return x[at] < y[at] ? -1 : 1;
+	}
 }
 
 @exportName("msStringCompareBytes")
