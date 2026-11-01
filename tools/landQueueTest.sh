@@ -455,5 +455,19 @@ for variant in legacy empty verbatim-only space tab space-red; do
   fi
 done
 
+echo "== S29 a land that exits 0 without landing (its tree was killed) is red, not done"
+setup; mkwt k
+cat >"$T/fakebin/killedLand.sh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in land*/wt-k) echo "gate: select 0m01s"; exit 0 ;; esac
+exec bash "$WT" "\$@"
+EOF
+MSC_WT_TOOL=$T/fakebin/killedLand.sh enqueue k
+rk=$(waitfor k)
+check "S29 wait rc 1" '[ "$rk" = 1 ]'
+check "S29 no .done and k not on main" '[ ! -e "$MSC_LAND_QUEUE/k.done" ] && ! onmain k.txt'
+check "S29 .red says it stopped before landing" 'grep -q "no landed line" "$MSC_LAND_QUEUE/k.red"'
+check "S29 a real land's .done holds its landed line" 'mkwt g && enqueue g && [ "$(waitfor g)" = 0 ] && grep -q "^landed " "$MSC_LAND_QUEUE/g.done"'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
