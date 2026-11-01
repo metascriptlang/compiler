@@ -32,4 +32,5 @@ import "./bareReturnLineBreak";
 import "./throwLineBreak";
 import "./stringNative";
 
+import "./declarations";
 import "./declarationSource/emptySource";

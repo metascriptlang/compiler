@@ -70,6 +70,9 @@ export interface CliOptions {
 	emitC: boolean;
 	emitJobs: int32;
 	splitModules: boolean;     // --split: js target emits one ES module per source module instead of a bundle
+	declaration: boolean;
+	jsEntries: string[];
+	declarationSourceRoot: string;
 	sourcemap: boolean;        // --sourcemap: js target writes a .map beside each output and links it
 	fmtCheck: boolean;
 	isHcr: boolean;
@@ -177,6 +180,9 @@ export function newCliOptions(): CliOptions {
 		emitC: false,
 		emitJobs: 0,
 		splitModules: false,
+		declaration: false,
+		jsEntries: [],
+		declarationSourceRoot: "",
 		sourcemap: false,
 		fmtCheck: false,
 		isHcr: false,
@@ -519,6 +525,16 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			}
 		} else if (arg == "--split") {
 			opts.splitModules = true;
+		} else if (arg.startsWith("--js-entry=")) {
+			const path = arg.slice(11, arg.length);
+			if (path == "") return Result.err("--js-entry requires a path");
+			opts.jsEntries.push(path);
+		} else if (arg.startsWith("--declaration-source-root=")) {
+			const path = arg.slice(26, arg.length);
+			if (path == "") return Result.err("--declaration-source-root requires a directory");
+			opts.declarationSourceRoot = path;
+		} else if (arg == "--declaration") {
+			opts.declaration = true;
 		} else if (arg == "--sourcemap") {
 			opts.sourcemap = true;
 		} else if (arg.startsWith("-d:") || arg.startsWith("-d=") || arg.startsWith("--define:") || arg.startsWith("--define=")) {
@@ -1010,4 +1026,20 @@ test "a relative project root still produces absolute manifest cache paths" {
 		assert opts.cacheDir == normalize(join(cwd(), "out/test/cacheProject/local"));
 		assert opts.globalCacheDir == normalize(join(cwd(), "out/test/cacheProject/shared"));
 	});
+}
+
+test "source declaration options retain repeated explicit JS roots" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["build", "main.ms", "--target=js", "--split",
+		"--js-entry=base.jms", "--js-entry=other.ms", "--declaration",
+		"--declaration-source-root=src"], 0).ok;
+	assert opts.jsEntries.length == 2;
+	assert opts.jsEntries[0] == "base.jms";
+	assert opts.jsEntries[1] == "other.ms";
+	assert opts.declarationSourceRoot == "src";
+}
+
+test "source declaration options refuse empty path values" {
+	assert !applyArgs(newCliOptions(), ["--js-entry="], 0).ok;
+	assert !applyArgs(newCliOptions(), ["--declaration-source-root="], 0).ok;
 }

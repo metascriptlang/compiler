@@ -1,0 +1,2 @@
+export type Label<T = string, U = [T]> = U;
+export interface Record<T extends string = string> { value: T; }

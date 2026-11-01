@@ -2,7 +2,7 @@
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, readFile, writeFile, appendFile, remove } from "std/fs";
+import { exists, isDir, readFile, writeFile, appendFile, remove } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
 import { getDynamicField, jsonToStringArray } from "std/serialize/json/accessors";
 import { asString } from "std/serialize/json/types";
@@ -79,6 +79,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
+import { emitDeclarations, DeclarationModule } from "./declarations";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -514,6 +515,9 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
+	for (const path of opts.jsEntries) {
+		loadModule(graph, canonicalModulePath(path), provider, config, 1);
+	}
 	registerModuleNames(buildModuleNameRoots(), graph.loadOrder);
 	if (graphLoadTiming) {
 		const ht = takeHeaderTimings();
@@ -1636,6 +1640,150 @@ function isJsIdentifierName(name: string): boolean {
 	return true;
 }
 
+interface JsDeclarationOutput {
+	sourcePath: string;
+	outRel: string;
+	text: string;
+}
+
+function declarationOutRel(jsPath: string): string {
+	return jsPath.endsWith(".mjs")
+		? jsPath.slice(0, jsPath.length - 4) + ".d.mts"
+		: jsPath.slice(0, jsPath.length - 3) + ".d.ts";
+}
+
+function sourceDeclarationOutRel(sourcePath: string): string {
+	const extension = sourcePath.endsWith(".jms") ? ".jms" : ".ms";
+	return sourcePath.slice(0, sourcePath.length - extension.length) + ".d" + extension + ".ts";
+}
+
+function jsExplicitEntries(primary: string, opts: CliOptions): string[] {
+	const entries = [canonicalModulePath(primary)];
+	for (const path of opts.jsEntries) {
+		const canonical = canonicalModulePath(path);
+		if (!entries.includes(canonical)) entries.push(canonical);
+	}
+	return entries;
+}
+
+function checkedDeclarationSourceRoot(entries: string[], opts: CliOptions): string {
+	if (opts.declarationSourceRoot == "") return "";
+	const root = canonicalModulePath(opts.declarationSourceRoot);
+	if (!isDir(root)) {
+		printDiag(`${error("error")}: --declaration-source-root must be an existing directory: ${root}`);
+		stopBuild();
+	}
+	for (const path of entries) {
+		if (!path.startsWith(root.endsWith("/") ? root : `${root}/`)
+			|| (!path.endsWith(".ms") && !path.endsWith(".jms"))) {
+			printDiag(`${error("error")}: source declaration entry ${path} must be under ${root} and end in .ms or .jms`);
+			stopBuild();
+		}
+	}
+	return root;
+}
+
+function reserveJsTreeOutput(taken: HashMap<string, string>, path: string): void {
+	const key = path.toLowerCase();
+	const previous = taken.get(key) ?? taken.get(`${key}/`);
+	if (previous != null) {
+		printDiag(`${error("error")}: output collision: ${previous} and ${path}`);
+		stopBuild();
+	}
+	let parent = dirname(key);
+	while (parent != "." && parent != "" && parent != "/") {
+		const file = taken.get(parent);
+		if (file != null) {
+			printDiag(`${error("error")}: output collision: ${file} and ${path}`);
+			stopBuild();
+		}
+		taken.set(`${parent}/`, path);
+		parent = dirname(parent);
+	}
+	taken.set(key, path);
+}
+
+function checkJsTreeOutputs(
+	layout: JsTreeLayout, declarations: JsDeclarationOutput[],
+	sourceDeclarations: JsDeclarationOutput[], sourcePackage: string,
+	sourcemap: boolean,
+): void {
+	const taken = new HashMap<string, string>();
+	reserveJsTreeOutput(taken, "_manifest.json");
+	for (const path of layout.outRelOf.values()) {
+		reserveJsTreeOutput(taken, path);
+		if (sourcemap) reserveJsTreeOutput(taken, `${path}.map`);
+	}
+	for (const file of declarations) reserveJsTreeOutput(taken, file.outRel);
+	for (const file of sourceDeclarations) reserveJsTreeOutput(taken, file.outRel);
+	if (sourcePackage != "") reserveJsTreeOutput(taken, sourcePackage);
+}
+
+function snapshotJsDeclarations(
+	graph: ModuleGraph, paths: string[], programs: Node[],
+	ctxs: CheckerContext[], layout: JsTreeLayout, entryPaths: string[],
+	sourceFamily: boolean = false,
+): JsDeclarationOutput[] {
+	const modules: DeclarationModule[] = [];
+	for (let i = 0; i < paths.length; i += 1) {
+		modules.push({ sourcePath: paths[i], program: programs[i], ctx: ctxs[i] });
+	}
+	const result = emitDeclarations(modules,
+		(fromPath: string, toPath: string): string => {
+			const from = layout.outRelOf.get(fromPath);
+			const to = layout.outRelOf.get(toPath);
+			return from != null && to != null ? relSpecBetween(from, to) : "";
+		}, entryPaths);
+	for (const diagnostic of result.diagnostics) {
+		const mod = findModule(graph, diagnostic.sourcePath);
+		renderModuleError(diagnostic.sourcePath, mod != null ? mod.rawSource : "", {
+			message: diagnostic.message, line: diagnostic.line,
+			column: diagnostic.column, severity: ErrorSeverity.Error,
+		});
+	}
+	if (result.diagnostics.length > 0) stopBuild();
+	const outputs: JsDeclarationOutput[] = [];
+	for (const file of result.files) {
+		outputs.push({ sourcePath: file.sourcePath,
+			outRel: sourceFamily && entryPaths.includes(file.sourcePath)
+				? sourceDeclarationOutRel(layout.outRelOf.get(file.sourcePath)!)
+				: declarationOutRel(layout.outRelOf.get(file.sourcePath)!),
+			text: file.text });
+	}
+	return outputs;
+}
+
+function publishJsDeclarations(root: string, files: JsDeclarationOutput[]): void {
+	for (const file of files) {
+		const path = join(root, file.outRel);
+		ensureDir(dirname(path));
+		if (!atomicWriteFile(path, file.text)) {
+			printDiag(`${error("error")}: cannot publish declaration ${path}`);
+			stopBuild();
+		}
+	}
+}
+
+function jsInputDependencies(graph: ModuleGraph, opts: CliOptions): string[] {
+	const paths = new Set<string>();
+	for (const mod of graph.modules) {
+		if (exists(mod.path)) paths.add(canonicalModulePath(mod.path));
+	}
+	const root = opts.projectRoot != "" ? opts.projectRoot : cwd();
+	for (const name of ["build.ms", "msc.lock"]) {
+		const path = join(root, name);
+		if (exists(path)) paths.add(canonicalModulePath(path));
+	}
+	for (const depRoot of fileDepRoots(root).values) {
+		const path = join(depRoot, "build.ms");
+		if (exists(path)) paths.add(canonicalModulePath(path));
+	}
+	const dependencies: string[] = [];
+	for (const path of paths) dependencies.push(path);
+	dependencies.sort();
+	return dependencies;
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1647,7 +1795,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		// The source→output mapping is the compiler's to state: a bundler
 		// plugin that re-derives it has to replicate project-root discovery
 		// exactly, and silently resolves nothing when the two disagree.
-		let manifest = "{\n  \"entry\": \"" + escapeJSString(entryCanon) + "\",\n  \"modules\": [\n";
+		let manifest = `{\n  "entry": "${escapeJSString(entryCanon)}",\n  "entries": [${tree.entries.map((path: string): string => "\"" + escapeJSString(path) + "\"").join(", ")}],\n  "modules": [\n`;
+
 		for (let i = 0; i < tree.modulePaths.length; i += 1) {
 			const sep = i + 1 < tree.modulePaths.length ? "," : "";
 			manifest = `${manifest}    { "source": "${escapeJSString(tree.modulePaths[i])}", "out": "${escapeJSString(tree.moduleOutRels[i])}" }${sep}\n`;
@@ -1657,8 +1806,22 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			const sep = i + 1 < tree.instanceOutRels.length ? "," : "";
 			manifest = `${manifest}    { "source": "${escapeJSString(tree.instanceOwners[i])}", "out": "${escapeJSString(tree.instanceOutRels[i])}" }${sep}\n`;
 		}
-		manifest = `${manifest}  ]\n}\n`;
-		writeOutput(`${splitRoot}/_manifest.json`, manifest);
+		manifest = `${manifest}  ],\n  "declarations": [\n`;
+		for (let i = 0; i < tree.declarations.length; i += 1) {
+			const file = tree.declarations[i];
+			const sep = i + 1 < tree.declarations.length ? "," : "";
+			manifest = `${manifest}    { "source": "${escapeJSString(file.sourcePath)}", "out": "${escapeJSString(file.outRel)}" }${sep}\n`;
+		}
+		if (tree.sourceDeclarationRoot != "") {
+			manifest = `${manifest}  ],\n  "sourceDeclarationRoot": "${tree.sourceDeclarationRoot}",\n  "sourceDeclarationPackage": "${tree.sourceDeclarationPackage}",\n  "sourceDeclarations": [\n`;
+			for (let i = 0; i < tree.sourceDeclarations.length; i += 1) {
+				const file = tree.sourceDeclarations[i];
+				const sep = i + 1 < tree.sourceDeclarations.length ? "," : "";
+				manifest = `${manifest}    { "source": "${escapeJSString(file.sourcePath)}", "out": "${escapeJSString(file.outRel)}" }${sep}\n`;
+			}
+		}
+		manifest = `${manifest}  ],\n  "dependencies": [${tree.dependencies.map((path: string): string => "\"" + escapeJSString(path) + "\"").join(", ")}]\n}\n`;
+		publishJsDeclarations(splitRoot, [{ sourcePath: "", outRel: "_manifest.json", text: manifest }]);
 		if (opts.showTime) printTiming("emitted", t0);
 		printDiag(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
 		return;
@@ -1668,6 +1831,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const config = buildResolverConfig(Target.JS, opts);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
+	const outPath = opts.outputPath != ""
+		? opts.outputPath
+		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 
 	// Collect all external @import entries (from .jms files), dedup by modulePath
 	const extImportKeys: string[] = [];
@@ -1730,6 +1896,22 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
+	let declarations: JsDeclarationOutput[] = [];
+	if (opts.declaration) {
+		const layout = createJsTreeLayout();
+		const entryName = basename(outPath);
+		const supportRoot = entryName.slice(0, entryName.lastIndexOf(".")) + ".types";
+		for (const path of unitPaths) {
+			layout.outRelOf.set(path, path == entryPath ? entryName
+				: `${supportRoot}/${outRelForModule(path, moduleNameProjectRoot(entryPath, opts.projectRoot), config.stdPath)}`);
+		}
+		declarations = snapshotJsDeclarations(graph, unitPaths, unitPrograms,
+			unitCtxs, layout, [entryPath]);
+		const taken = new HashMap<string, string>();
+		reserveJsTreeOutput(taken, entryName);
+		if (opts.sourcemap) reserveJsTreeOutput(taken, `${entryName}.map`);
+		for (const file of declarations) reserveJsTreeOutput(taken, file.outRel);
+	}
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
@@ -1793,9 +1975,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// `--output` wins here exactly as it does for the C binary. Deriving the
 	// name from the entry file alone collides for directory-style programs,
 	// which are all spelled `main.ms`.
-	const outPath = opts.outputPath != ""
-		? opts.outputPath
-		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
 	// The link comment goes after the map is built; it sits past every mapped
 	// line, so it shifts nothing.
@@ -1811,6 +1990,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
+	publishJsDeclarations(dirname(outPath), declarations);
 	printDiag(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
@@ -4542,10 +4722,16 @@ function importSpecsFrom(layout: JsTreeLayout, mod: Module | null, file: string)
 
 export interface JsTreeResult {
 	outRoot: string;
+	entries: string[];
+	sourceDeclarations: JsDeclarationOutput[];
+	sourceDeclarationRoot: string;
+	sourceDeclarationPackage: string;
 	modulePaths: string[];
 	moduleOutRels: string[];
 	instanceOwners: string[];
 	instanceOutRels: string[];
+	declarations: JsDeclarationOutput[];
+	dependencies: string[];
 	testNames: string[][];
 	testFuncs: string[][];
 }
@@ -4598,6 +4784,8 @@ function testRootName(entryPath: string): string {
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, opts);
+	const entries = jsExplicitEntries(filePath, opts);
+	const sourceRoot = checkedDeclarationSourceRoot(entries, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
@@ -4652,6 +4840,24 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		unitCtxs.push(ctx);
 	}
 
+	const declarations = opts.declaration
+		? snapshotJsDeclarations(graph, unitPaths, unitPrograms, unitCtxs,
+			layout, entries) : [];
+	const sourceLayout = createJsTreeLayout();
+	if (sourceRoot != "") {
+		for (const path of unitPaths) {
+			sourceLayout.outRelOf.set(path, entries.includes(path)
+				? `_source_declarations/${relative(sourceRoot, path)}`
+				: `_source_declarations/_types/${layout.outRelOf.get(path)!}`);
+		}
+	}
+	const sourceDeclarations = sourceRoot != ""
+		? snapshotJsDeclarations(graph, unitPaths, unitPrograms, unitCtxs,
+			sourceLayout, entries, true) : [];
+	const sourceDeclarationRoot = sourceRoot != "" ? "_source_declarations" : "";
+	const sourceDeclarationPackage = sourceRoot != "" ? "_source_declarations/package.json" : "";
+	const dependencies = jsInputDependencies(graph, opts);
+
 	// A generic instance belongs to the module that DECLARED the generic, and
 	// its emitted name says so: it is placed and transformed with that module,
 	// same routing as the bundle path. Vite reloads the page when the file of a
@@ -4668,6 +4874,9 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		layout.instanceFileOf.set(inst.name, file);
 		layout.outRelOf.set(file, outRel);
 	}
+
+	checkJsTreeOutputs(layout, declarations, sourceDeclarations,
+		sourceDeclarationPackage, opts.sourcemap);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -4850,7 +5059,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 	const outRels: string[] = [];
 	for (const mp of unitPaths) { outRels.push(layout.outRelOf.get(mp) ?? ""); }
-	return { outRoot, modulePaths: unitPaths, moduleOutRels: outRels, instanceOwners, instanceOutRels, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
+	publishJsDeclarations(outRoot, declarations);
+	publishJsDeclarations(outRoot, sourceDeclarations);
+	if (sourceDeclarationPackage != "") {
+		publishJsDeclarations(outRoot, [{ sourcePath: "", outRel: sourceDeclarationPackage, text: '{"type":"module"}\n' }]);
+	}
+	return { outRoot, entries, sourceDeclarations, sourceDeclarationRoot, sourceDeclarationPackage, modulePaths: unitPaths, moduleOutRels: outRels, instanceOwners, instanceOutRels, declarations, dependencies, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
 }
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
