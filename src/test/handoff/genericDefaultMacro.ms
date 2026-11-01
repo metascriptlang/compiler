@@ -10,8 +10,42 @@ import { defineTypeParams } from "../../checker/resolvePass";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { unknownType, createGenericParam, stringType, peelToRepr } from "../../checker/types";
 import { checkProjectDiagnostics, MapEntry } from "../helpers";
-import { lookupModuleCtx } from "../../checker/instantiate";
+import {
+	lookupModuleCtx, declaringModuleCtx, registerModuleCtx,
+	createModuleCtxRegistry, swapModuleCtxRegistry,
+} from "../../checker/instantiate";
+import { installBodyReadSink } from "../../checker/bodyReads";
 import { canonicalModulePath } from "../../module/loader";
+
+test "genericDefaultMacro: defining scope records exact foreign body-read identity" {
+	const caller = createContext();
+	caller.modulePath = canonicalModulePath("test/defaultCaller.ms");
+	const home = createContext();
+	home.modulePath = canonicalModulePath("test/defaultHome.ms");
+	const original = makeSymbol("Original", SymbolKind.TypeAlias, unknownType(), false);
+	original.modulePath = home.modulePath;
+	const seen: string[] = [];
+	const outerRegistry = swapModuleCtxRegistry(createModuleCtxRegistry());
+	const outerSink = installBodyReadSink((path: string): void => {
+		seen.push(path);
+	});
+	try {
+		registerModuleCtx(home.modulePath, home);
+		assert declaringModuleCtx(caller, original) == home;
+		assert seen.length == 1 && seen[0] == home.modulePath;
+		assert declaringModuleCtx(home, original) == home;
+		assert seen.length == 1;
+		original.modulePath = "";
+		assert declaringModuleCtx(caller, original) == caller;
+		assert seen.length == 1;
+		original.modulePath = canonicalModulePath("test/missingDefaultHome.ms");
+		assert declaringModuleCtx(caller, original) == null;
+		assert seen.length == 2 && seen[1] == original.modulePath;
+	} finally {
+		installBodyReadSink(outerSink);
+		swapModuleCtxRegistry(outerRegistry);
+	}
+}
 
 function declaration(source: string): Node {
 	const parsed = parseSource(source);

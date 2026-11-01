@@ -42,6 +42,7 @@ const SITES: ReaderSite[] = [
 	{ file: "compiler/meta/expand.ms", readers: 5, records: 1 },
 	{ file: "compiler/meta/decorators.ms", readers: 1, records: 0 },
 	{ file: "compiler/meta/stdTags.ms", readers: 1, records: 0 },
+	{ file: "compiler/meta/typeQuery.ms", readers: 1, records: 0 },
 	{ file: "compiler/compile.ms", readers: 3, records: 0 },
 	{ file: "compiler/transam/index.ms", readers: 7, records: 0 },
 	{ file: "compiler/lsp/handlers/lifecycle.ms", readers: 3, records: 0 },
