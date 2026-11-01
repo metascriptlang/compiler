@@ -10,6 +10,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
+  'build,tools|^tools/vite-plugin/|^src/test/js/declarationBundlers/'
   'hcr|^src/test/(hcr|ic)/|^src/compiler/transam/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
@@ -105,7 +106,9 @@ the key for any rev, which tools/wt.sh land compares with msc.key.
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor. The tools lane runs after the build lane and checks
 a changed tools/*.ms with the candidate, the compiler that will run it once this
-change lands, so a changed tools/*.ms also gets build. The tests lane compiles its tiers with the
+change lands, so a changed tools/*.ms also gets build. Native plugin and declaration
+bundler consumer changes also get build and tools, with strict native acceptance
+using MSC set to the gate candidate. The tests lane compiles its tiers with the
 candidate, so a pin there tests the change rather than the previous compiler.
 It runs every tier when the compiler changed (a path under src/ outside
 src/test/, or one select cannot see), else only the tiers whose module graph
@@ -2016,6 +2019,11 @@ src/test/ic/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
 examples/hcrProbe/main.ms|build hcr suite
 tools/gate.sh|tools
+tools/vite-plugin/index.js|build tools
+tools/vite-plugin/package.json|build tools
+tools/vite-plugin/test.mjs|build tools
+src/test/js/declarationBundlers/run.mjs|build suite tests tools
+src/test/js/declarationBundlers/fixtures/primary.ms|build suite tests tools
 tools/managedToolchain/prepareBundle.py|tools
 tools/syncLocalBinary.ms|build tools
 tools/solana/escrow.mjs|solana tools
@@ -2111,9 +2119,9 @@ CASES
   got=$(reds_of fmt "$log" 1 | paste -sd'|' -)
   want="src/test/handoff/x.ms|src/test/lang/a.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
-  printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'ok   tools/x.sh: check' >"$log"
+  printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'FAIL tools/vite-plugin/test.mjs: check' 'ok   tools/x.sh: check' >"$log"
   got=$(reds_of tools "$log" 1 | paste -sd'|' -)
-  want="tools/gate.sh|tools/wt.sh"
+  want="tools/gate.sh|tools/vite-plugin/test.mjs|tools/wt.sh"
   [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL solana escrow-build: exit 1' 'FAIL solana heap-replay: exit 1' \
     'FAIL solana std/solana/test.ms: no test result' >"$log"
@@ -2433,8 +2441,9 @@ run_tool_test() {
 }
 
 run_tools_lane() {
-  local p rc=0 queue=0 py=0 release=0
+  local p rc=0 queue=0 py=0 release=0 native=0
   while IFS=$'\t' read -r _ p; do
+    case "$p" in tools/vite-plugin/* | src/test/js/declarationBundlers/*) native=1 ;; esac
     [ -f "$p" ] || continue
     case "$p" in
       *.sh)
@@ -2454,6 +2463,15 @@ run_tools_lane() {
   if [ "$release" -eq 1 ] && ! bash tools/releaseToolchainTest.sh; then printf 'FAIL %s: self-test\n' tools/releaseToolchainTest.sh; rc=1; fi
   if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
   if [ "$py" -eq 1 ] && ! (cd tools/managedToolchain && python3 -I -m unittest discover -s . -p '*Test.py'); then printf 'FAIL %s: self-test\n' tools/managedToolchain; rc=1; fi
+  if [ "$native" -eq 1 ]; then
+    if ! command -v node >/dev/null 2>&1; then
+      echo 'native-adapters: Node >=24 test tooling is required; provision Node 24+ on PATH before the gate'
+      printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
+    else
+      if ! node --test --test-concurrency=1 tools/vite-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/vite-plugin/test.test.mjs; rc=1; fi
+      if ! MSC="$CAND" node tools/vite-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1; fi
+    fi
+  fi
   return $rc
 }
 
