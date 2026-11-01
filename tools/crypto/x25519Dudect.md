@@ -69,6 +69,8 @@ the owner of the verdict; a shared host with load near 90 (oci-u during the smok
 
 - Evidence for one compiler, one CPU and one input pair (fixed scalar and point) on the machine it ran on; other scalars,
   CPUs and compilers are not covered. A leak smaller than the noise at the sample count stays invisible.
-- `--release` and `--danger` are the two builds the runner times; the pilot is only meaningful once it has a real kernel.
-- AArch64 is checked for compiling and running the host against the C kernel on macOS (Apple M3 Max, 2026-11-01); the
-  staticlib path on arm64 and Linux arm64 are not run here.
+- `--release` and `--danger` are the two builds the runner times. The `pilot` impl is the real `std/crypto/x25519/pilot.cms` and `field.cms` as they stand in the tree the run copies; a later kernel change (for example zeroization) needs a new run.
+- AArch64: the full runner (staticlib, host, shim, four rows per mode) ran on macOS with `pilot` (Apple M3 Max, Apple clang 21.0.0,
+  `msc` v0.4.0 binary da827695fe7, 12 batches x 5000, seed 0x1234abcd5678ef90, host not quiet: load average 23 to 57). That
+  proves the plumbing and the controls on arm64, not constant time. Linux arm64 is not run. On macOS `x25519Build.sh` strips
+  the one leading `_` that Mach-O `nm` puts on C names before it injects `MS_ENTRY_*`, and reads BSD `wc` numerically.
