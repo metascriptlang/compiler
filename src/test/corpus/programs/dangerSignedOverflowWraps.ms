@@ -2,6 +2,7 @@
 // @xfail(c): the default build stops on a signed overflow instead of wrapping
 // @xfail(js): the default JS build stops on a signed overflow instead of wrapping
 // @xfail(esm): the default JS build stops on a signed overflow instead of wrapping
+// @xfail(san): the SAN lane builds in the default mode, which stops on a signed overflow instead of wrapping
 // @skip-raiser: the raiser stops on a signed overflow and writes it to stderr
 // note: --danger drops the overflow check, and int32 wraps as the JS --danger build wraps it, so the loop ends instead of being undefined behaviour the optimiser may turn into a loop that never ends.
 
