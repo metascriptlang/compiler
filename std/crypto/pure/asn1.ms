@@ -7,14 +7,12 @@ export const tagNull: int32 = 0x05;
 export const tagOid: int32 = 0x06;
 export const tagSequence: int32 = 0x30;
 
-/** One element: `body` is the content range, `next` the offset after it. */
 export interface DerItem {
 	tag: int32;
 	body: int32;
 	end: int32;
 }
 
-/** The element at `at` inside `buf[at..limit)`, or null when it is truncated or uses an indefinite or oversize length. */
 export function derItem(buf: Readonly<uint8[]>, at: int32, limit: int32): DerItem | null {
 	if (at + 2 > limit) return null;
 	const tag = buf[at] as int32;
@@ -32,7 +30,6 @@ export function derItem(buf: Readonly<uint8[]>, at: int32, limit: int32): DerIte
 	return { tag, body, end: body + length };
 }
 
-/** The elements of a constructed value, in order, or null when the body is not a clean run of elements. */
 export function derChildren(buf: Readonly<uint8[]>, item: DerItem): DerItem[] | null {
 	const out: DerItem[] = [];
 	let at = item.body;
@@ -45,7 +42,6 @@ export function derChildren(buf: Readonly<uint8[]>, item: DerItem): DerItem[] | 
 	return out;
 }
 
-/** The whole buffer as one element of `tag`, with nothing after it, or null. */
 export function derRoot(buf: Readonly<uint8[]>, tag: int32): DerItem | null {
 	const root = derItem(buf, 0, buf.length as int32);
 	if (root == null || root.tag != tag || root.end != buf.length) return null;
@@ -58,7 +54,6 @@ export function derBody(buf: Readonly<uint8[]>, item: DerItem): uint8[] {
 	return out;
 }
 
-/** An INTEGER body as unsigned big-endian bytes without the sign padding, or null for a negative or empty one. */
 export function derUnsigned(buf: Readonly<uint8[]>, item: DerItem): uint8[] | null {
 	if (item.tag != tagInteger || item.end == item.body) return null;
 	if ((buf[item.body] & 0x80) != 0) return null;
@@ -106,7 +101,6 @@ export function derSequence(parts: Readonly<uint8[]>[]): uint8[] {
 	return derTlv(tagSequence, derJoin(parts));
 }
 
-/** A non-negative INTEGER from unsigned big-endian bytes. */
 export function derUnsignedInteger(value: Readonly<uint8[]>): uint8[] {
 	let from = 0;
 	while (from + 1 < value.length && value[from] == 0) from += 1;
@@ -124,7 +118,6 @@ export function derOctets(value: Readonly<uint8[]>): uint8[] {
 	return derTlv(tagOctetString, value);
 }
 
-/** A BIT STRING with no unused bits. */
 export function derBits(value: Readonly<uint8[]>): uint8[] {
 	return derTlv(tagBitString, derJoin([[0], value]));
 }
@@ -133,7 +126,6 @@ export function derOidOf(encoded: Readonly<uint8[]>): uint8[] {
 	return derTlv(tagOid, encoded);
 }
 
-// Object identifier contents, as they sit inside an OID element.
 export const oidRsaEncryption: uint8[] = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
 export const oidEcPublicKey: uint8[] = [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 export const oidP256: uint8[] = [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];

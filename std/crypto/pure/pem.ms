@@ -1,12 +1,10 @@
 import { Buffer } from "std/core/buffer";
 
-/** One PEM block: its label (`PRIVATE KEY`, `RSA PUBLIC KEY`, ...) and the DER inside. */
 export interface PemBlock {
 	label: string;
 	der: Buffer;
 }
 
-/** The first block of `text`, or null when there is none, it is not closed or its body is not canonical base64. */
 export function pemDecode(text: string): PemBlock | null {
 	const begin = text.indexOf("-----BEGIN ");
 	if (begin < 0) return null;
@@ -25,7 +23,6 @@ export function pemDecode(text: string): PemBlock | null {
 	return { label, der: der as Buffer };
 }
 
-/** The block in the canonical form `mbedtls` writes: 64-column lines and a final newline. */
 export function pemEncode(label: string, der: Readonly<uint8[]>): string {
 	const body = (der as Buffer).encodeBase64();
 	const lines: string[] = [`-----BEGIN ${label}-----`];

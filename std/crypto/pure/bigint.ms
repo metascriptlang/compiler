@@ -8,7 +8,6 @@
 
 extern function pureRandom(size: int32): uint8[] from "msPureRandom(#)";
 
-/** `size` random bytes from the platform generator. */
 export function randomOctets(size: int32): uint8[] {
 	return pureRandom(size);
 }
@@ -19,7 +18,6 @@ export function bigFromBytes(bytes: Readonly<uint8[]>): bigint {
 	return value;
 }
 
-/** The low `size` bytes of `value`, big-endian, zero-padded on the left. */
 export function bigToBytes(value: bigint, size: int32): uint8[] {
 	const out: uint8[] = new Array<uint8>(size);
 	let rest = value;
@@ -45,20 +43,18 @@ export function bitLength(value: bigint): int32 {
 	return bits;
 }
 
-/** `value` reduced into [0, modulus). */
 export function mod(value: bigint, modulus: bigint): bigint {
 	const r = value % modulus;
 	return r < 0n ? r + modulus : r;
 }
 
-/** base^exponent mod modulus, with a 4-bit window. */
 export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
 	const table: bigint[] = [1n];
 	const b = mod(base, modulus);
 	for (let i = 1; i < 16; i++) table.push((table[i - 1] * b) % modulus);
 	const bits = bitLength(exponent);
 	let result = 1n;
-	let at = Math.ceil(bits / 4) * 4;
+	let at: int32 = ((bits + 3) >> 2) << 2;
 	while (at > 0) {
 		at -= 4;
 		for (let i = 0; i < 4; i++) result = (result * result) % modulus;
@@ -68,7 +64,6 @@ export function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint 
 	return result;
 }
 
-/** The inverse of `value` modulo `modulus`, or 0 when they share a factor. */
 export function modInverse(value: bigint, modulus: bigint): bigint {
 	let a = mod(value, modulus);
 	let b = modulus;
@@ -98,7 +93,6 @@ export function gcd(a: bigint, b: bigint): bigint {
 	return x;
 }
 
-/** A uniform integer in [1, limit), by rejection from the bytes of `limit`'s width. */
 export function randomBelow(limit: bigint): bigint {
 	const bits = bitLength(limit);
 	const size: int32 = (bits + 7) >> 3;
