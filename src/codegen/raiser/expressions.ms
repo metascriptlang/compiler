@@ -28,6 +28,7 @@ import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol } from "../../checker/symbol";
+import { isCtorSignature } from "../../checker/ctorRoutine";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
@@ -1688,7 +1689,7 @@ function constructorParamTypes(classSym: Symbol): Type[] | null {
 	const decl = classDeclNodeOf(placedInstanceOf(placedInstances(), classSym));
 	if (decl == null || decl.kind != NodeKind.ClassDecl) return null;
 	for (const member of (decl.data as ClassDeclData).classBody) {
-		if (member.kind != NodeKind.ConstructorDecl) continue;
+		if (member.kind != NodeKind.ConstructorDecl || isCtorSignature(member)) continue;
 		const params = member.paramSyms;
 		if (params == null) throw new Error(`internal: the constructor of '${classSym.name}' reached codegen without parameter symbols`);
 		const types: Type[] = [];
