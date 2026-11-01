@@ -463,16 +463,17 @@ test "js side: a build without argument checks emits no check and no check glue"
 
 test "js side: a checked build carries the check glue once" {
 	const p = bindingsFor(["add64"], true).prelude;
-	for (const name of ["__msbBad", "__msbType", "__msbInt", "__msbList", "__msbSpan", "__msbElems"]) {
+	for (const name of ["__msbBad", "__msbType", "__msbInt", "__msbWide", "__msbList", "__msbSpan", "__msbElems"]) {
 		assert p.includes("function " + name + "(");
 		assert p.indexOf("function " + name + "(") == p.lastIndexOf("function " + name + "(");
 	}
 }
 
 test "js side: a checked scalar parameter is tested for its JS type and range before the call" {
-	const code = bindingsFor(["add64", "isEven", "flip", "wide"], true).modules[0].code;
-	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbInt(a0, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbInt(a1, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
+	const code = bindingsFor(["add64", "isEven", "flip", "wide", "mul64u"], true).modules[0].code;
+	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbWide(a0, true, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbWide(a1, true, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
 	assert code.includes("\t__msbInt(a0, \"number\", 0, 255, \"uint8\", \"isEven\", \"parameter 'x'\");\n");
+	assert code.includes("\t__msbWide(a0, false, \"uint64\", \"mul64u\", \"parameter 'a'\");\n");
 	assert code.includes("\t__msbType(a0, \"boolean\", \"boolean\", \"flip\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_flip((a0 ? 1 : 0)) !== 0;");
 	assert code.includes("\t__msbInt(a0, \"number\", 0, 4294967295, \"uint32\", \"wide\", \"parameter 'x'\");\n");
 }
