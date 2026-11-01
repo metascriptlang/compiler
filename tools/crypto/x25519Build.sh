@@ -32,10 +32,13 @@ mangle() {
 }
 mangled=$(mangle "$stem")
 symbols=$(nm "$lib")
+if [ "$(uname -s)" = Darwin ]; then
+	symbols=$(sed -E 's/^(.{16} [A-Za-z] )_/\1/' <<<"$symbols")
+fi
 findSymbol() {
 	local found
 	found=$(awk -v re="(^|Z)${mangled}__$1\$" '$2 == "T" && $3 ~ re { print $3 }' <<<"$symbols")
-	[ "$(wc -l <<<"$found")" = 1 ] && [ -n "$found" ] || { echo "x25519Build: expected exactly one defined symbol ending ${mangled}__$1 in $lib, found: ${found:-none}" >&2; return 1; }
+	[ "$(($(wc -l <<<"$found")))" = 1 ] && [ -n "$found" ] || { echo "x25519Build: expected exactly one defined symbol ending ${mangled}__$1 in $lib, found: ${found:-none}" >&2; return 1; }
 	printf '%s' "$found"
 }
 datInit=$(findSymbol DatInit000)
