@@ -137,12 +137,12 @@ when (windows) {
 		freeWide(wide);
 		return err;
 	}
-	function mkdirErrno(path: string): int32 {
+	function mkdirExclusiveErrno(path: string): int32 {
 		const wide = widePath(path);
 		if (wide == null) return EINVAL;
 		const err = cMkdir(wide) == 0 ? 0 : errno;
 		freeWide(wide);
-		return err == EEXIST ? 0 : err;
+		return err;
 	}
 	function removeErrno(path: string): int32 {
 		const wide = widePath(path);
@@ -394,10 +394,8 @@ when (windows) {
 	function chmodErrno(path: string, mode: int32): int32 {
 		return cChmod(path as cstring, mode) == 0 ? 0 : errno;
 	}
-	function mkdirErrno(path: string): int32 {
-		if (cMkdir(path as cstring, 493) == 0) return 0;
-		const err = errno;
-		return err == EEXIST ? 0 : err;
+	function mkdirExclusiveErrno(path: string): int32 {
+		return cMkdir(path as cstring, 493) == 0 ? 0 : errno;
 	}
 	function rmdirErrno(path: string): int32 {
 		return cRmdir(path as cstring) == 0 ? 0 : errno;
@@ -572,7 +570,12 @@ export function chmod(path: string, mode: int32): Result<void, IoError> {
 }
 
 export function mkdir(path: string): Result<void, IoError> {
-	return errnoResult(mkdirErrno(path), path, "mkdir failed");
+	const err = mkdirExclusiveErrno(path);
+	return errnoResult(err == EEXIST ? 0 : err, path, "mkdir failed");
+}
+
+export function mkdirExclusive(path: string): Result<void, IoError> {
+	return errnoResult(mkdirExclusiveErrno(path), path, "mkdir failed");
 }
 
 export function rmdir(path: string): Result<void, IoError> {

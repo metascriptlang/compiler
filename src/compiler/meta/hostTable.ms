@@ -61,7 +61,7 @@ import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
 	readFile, readFileBytes, writeFile, writeFileBytes, appendFile, chmod, changeStamp, changedTime,
-	mkdir, rmdir, remove, rename, symlink, readDir,
+	mkdir, mkdirExclusive, rmdir, remove, rename, symlink, readDir,
 	ensureDir, removeAll, readLines, writeLines, copyFile,
 } from "std/fs";
 import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
@@ -212,6 +212,10 @@ function _stdFsMkdir(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(mkdir(unboxString(args[0])));
 }
 
+function _stdFsMkdirExclusive(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(mkdirExclusive(unboxString(args[0])));
+}
+
 function _stdFsEnsureDir(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(ensureDir(unboxString(args[0])));
 }
@@ -353,6 +357,11 @@ function _bridgeMsFsCopyFile(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsMkdir(args: RaiserValue[]): RaiserValue {
 	const r = mkdir(unboxString(args[0]));
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
+function _bridgeMsFsMkdirExclusive(args: RaiserValue[]): RaiserValue {
+	const r = mkdirExclusive(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
@@ -1387,6 +1396,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.copyFile",    _stdFsCopyFile);
 	registerHostFn("std/fs.chmod",       _stdFsChmod);
 	registerHostFn("std/fs.mkdir",       _stdFsMkdir);
+	registerHostFn("std/fs.mkdirExclusive", _stdFsMkdirExclusive);
 	registerHostFn("std/fs.ensureDir",   _stdFsEnsureDir);
 	registerHostFn("std/fs.rmdir",       _stdFsRmdir);
 	registerHostFn("std/fs.remove",      _stdFsRemove);
@@ -1396,6 +1406,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsCopyFile",       _bridgeMsFsCopyFile);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
+	registerHostFn("msFsMkdirExclusive", _bridgeMsFsMkdirExclusive);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
 	registerHostFn("msFsRename",         _bridgeMsFsRename);
