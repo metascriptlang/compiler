@@ -66,21 +66,41 @@ SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
 pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
-void msPrintln(msString s) {
+#if defined(__ANDROID__)
+#define MS_ANDROID5_FLOCKFILE_DEADLOCKS 1
+#else
+#define MS_ANDROID5_FLOCKFILE_DEADLOCKS 0
+#endif
+
+#ifdef _WIN32
+static SRWLOCK msLineLock = SRWLOCK_INIT;
+#define MS_LINE_LOCK(f) AcquireSRWLockExclusive(&msLineLock)
+#define MS_LINE_UNLOCK(f) ReleaseSRWLockExclusive(&msLineLock)
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || MS_ANDROID5_FLOCKFILE_DEADLOCKS
+#define MS_LINE_LOCK(f) ((void)0)
+#define MS_LINE_UNLOCK(f) ((void)0)
+#else
+#define MS_LINE_LOCK(f) flockfile(f)
+#define MS_LINE_UNLOCK(f) funlockfile(f)
+#endif
+
+static void msWriteLine(FILE* f, msString s) {
+	MS_LINE_LOCK(f);
 	if (s.p != NULL && s.len > 0) {
-		fwrite(s.p->data, 1, s.len, stdout);
+		fwrite(s.p->data, 1, s.len, f);
 	}
-	putchar('\n');
-	fflush(stdout);
+	fputc('\n', f);
+	fflush(f);
+	MS_LINE_UNLOCK(f);
+}
+
+void msPrintln(msString s) {
+	msWriteLine(stdout, s);
 }
 
 void msEprintln(msString s) {
 	fflush(stdout);
-	if (s.p != NULL && s.len > 0) {
-		fwrite(s.p->data, 1, s.len, stderr);
-	}
-	fputc('\n', stderr);
-	fflush(stderr);
+	msWriteLine(stderr, s);
 }
 
 void msWarnln(msString s) {
