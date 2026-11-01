@@ -1423,7 +1423,7 @@ function runByteOrder(): void {
 	const dir = `${root}/byte-order`;
 	ensureDir(dir);
 	put(`${dir}/probe.c`, "#include \"runtime/types.h\"\nint probe;\n");
-	const support = exists(`${dirname(compiler)}/runtime/types.h`) ? dirname(compiler) : dirname(dirname(compiler));
+	const support = cwd();
 	const byTarget = (target: string): string => {
 		const ran = command(dir, target, "clang", [`--target=${target}`, "-ffreestanding", "-fsyntax-only", `-I${support}`, "probe.c"]);
 		const log = readFile(`${dir}/${target}.log`);
