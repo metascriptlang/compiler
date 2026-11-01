@@ -29,8 +29,11 @@ export function windowsVariantDirectory(
 	target: WindowsTarget,
 	variant: WindowsVariant,
 ): string {
-	return windowsTargetName(target) +
-		(variant == WindowsVariant.Dll ? ".dll" : "");
+	const suffix = match (variant) {
+		WindowsVariant.Exe => "",
+		WindowsVariant.Dll => ".dll",
+	};
+	return windowsTargetName(target) + suffix;
 }
 
 export function windowsConfigPath(
@@ -54,7 +57,14 @@ export function renderWindowsSourceConfig(
 		WindowsTarget.X64 => "x86_64-w64-windows-gnu",
 		WindowsTarget.Arm64 => "aarch64-w64-windows-gnu",
 	};
-	const cpu = target == WindowsTarget.X64 ? "x86-64" : "generic";
+	const cpu = match (target) {
+		WindowsTarget.X64 => "x86-64",
+		WindowsTarget.Arm64 => "generic",
+	};
+	const imageBase = match (variant) {
+		WindowsVariant.Exe => "0x140000000",
+		WindowsVariant.Dll => "0x180000000",
+	};
 	const lines = [
 		"-target " + triple,
 		"-Xclang -target-cpu -Xclang " + cpu,
@@ -74,8 +84,7 @@ export function renderWindowsSourceConfig(
 	if (variant == WindowsVariant.Exe) {
 		lines.push("-Xlinker --stack=16777216");
 	}
-	lines.push("-Xlinker --image-base=" +
-		(variant == WindowsVariant.Exe ? "0x140000000" : "0x180000000"));
+	lines.push("-Xlinker --image-base=" + imageBase);
 	lines.push("-Xlinker --build-id=none");
 	return Result.ok(lines.join("\n") + "\n");
 }
