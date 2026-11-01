@@ -714,10 +714,13 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext): Type | null {
 	if (returnTypeStr == "") return null;
 	if (paramTypeStrs.length != paramNames.length) return null;
 	const paramTypes: Type[] = [];
+	const mark = ctx.errors.length;
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
-		if (paramTypeStrs[i] == "") return null;
+		if (paramTypeStrs[i] == "") { ctx.errors.shrink(mark); return null; }
 		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, 0, 0));
 	}
+	// The routine's own check resolves each parameter annotation again and reports it at its place.
+	ctx.errors.shrink(mark);
 	const predicate = predicateReturnOf(returnTypeStr, ctx, 0, 0, fn.typeExpr);
 	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : annotatedType(returnTypeStr, fn.typeExpr, ctx, 0, 0));
 	if (predicate != null) closure.typeExtra = predicate.sentinel;
@@ -2775,10 +2778,13 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
 	const fd = d.initializer.data as FunctionExprData;
 	const paramTypes: Type[] = [];
+	const mark = ctx.errors.length;
 	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
-		if (fd.funcExprParamTypes[i] == "") return;
+		if (fd.funcExprParamTypes[i] == "") { ctx.errors.shrink(mark); return; }
 		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, 0, 0));
 	}
+	// The function expression's own check resolves each parameter annotation again and reports it at its place.
+	ctx.errors.shrink(mark);
 	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, 0, 0) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;

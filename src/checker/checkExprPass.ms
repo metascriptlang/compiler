@@ -4290,18 +4290,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturnStmts = savedReturnStmts;
 	ctx.inferredReturnTries = savedReturnTries;
 
-	const types: Type[] = [];
-	let ti = 0;
-	for (const p of params) {
-		let pType = inferredType();
-		if (ti < paramTypes.length && paramTypes[ti] != "") {
-			pType = annotatedType(paramTypes[ti], operandAt(fnNode.typeExprs, ti), ctx, 0, 0);
-		} else if (ctxParamTypes != null && ti < ctxParamTypes.length && ctxParamTypes[ti] != null) {
-			pType = ctxParamTypes[ti];
-		}
-		types.push(pType);
-		ti += 1;
-	}
+	const types: Type[] = paramValueTypes.slice(0, paramValueTypes.length);
 	wrapModifierTypes(fnFlags, types);
 	// Explicit return type annotation takes precedence over inferred (semProcAux parity).
 	// This ensures Result<Node, string> gets concrete types, not GenericParam("T") from
