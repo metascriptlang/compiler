@@ -7,6 +7,10 @@
  * imports a `CryptoKey` per (algorithm, hash) on first use and reuses it. Keys under 2048 bits are refused on
  * import and sha1 signatures are refused, as on the native backend. PSS signs and verifies with a salt as long as
  * the hash, which is what the native backend writes and accepts.
+ *
+ * WebCrypto has no synchronous API, so every `*Sync` form runs the BigInt code in `std/crypto/pure/rsa`. It is
+ * correct against the same vectors but slow (key generation takes seconds, a 2048-bit signature milliseconds) and
+ * not constant-time: use the asynchronous forms for secrets an observer of timing could reach.
  */
 
 import { Buffer } from "std/core/buffer";
@@ -15,7 +19,8 @@ import { bytesOf } from "../pure/bytes";
 import { pemDecode, pemEncode } from "../pure/pem";
 import {
 	RsaPublicData, RsaPrivateData, rsaPublicFromPkcs1, rsaPublicFromSpki, rsaPublicToSpki, rsaPrivateFromPkcs1,
-	rsaPrivateFromPkcs8, rsaPrivateToPkcs1, rsaPrivateToPkcs8, rsaPublicOf,
+	rsaPrivateFromPkcs8, rsaPrivateToPkcs1, rsaPrivateToPkcs8, rsaPublicOf, rsaGenerate, rsaSignPkcs1, rsaSignPss,
+	rsaVerifyPkcs1, rsaVerifyPss, rsaOaepEncrypt, rsaOaepDecrypt,
 } from "../pure/rsa";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
@@ -120,44 +125,61 @@ function privateOfPem(pem: string): RsaPrivateData | null {
 	return null;
 }
 
+function signFailed(hash: string, padding: RsaPadding, reason: string): CryptoError {
+	return cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)${reason}`);
+}
+
 export class RsaPublicKey {
 	_data: RsaPublicData;
 	_cache: unknown;
 
-	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> {
+	static importPemSync(pem: string): Result<RsaPublicKey, CryptoError> {
 		const data = publicOfPem(pem);
 		if (data == null) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.importPem", "failed to parse an RSA public key PEM of at least 2048 bits"));
 		return Result.ok({ _data: data, _cache: newCache() });
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> { return RsaPublicKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
 		return Result.ok(pemEncode("PUBLIC KEY", rsaPublicToSpki(this._data)));
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 }
 
 export class RsaPrivateKey {
 	_data: RsaPrivateData;
 	_cache: unknown;
 
-	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> {
+	static generateSync(bits: int32): Result<RsaPrivateKey, CryptoError> {
 		if (bits != 2048 && bits != 3072 && bits != 4096) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "RsaPrivateKey.generate", "bits must be 2048, 3072, or 4096"));
 		}
+		return Result.ok({ _data: rsaGenerate(bits), _cache: newCache() });
+	}
+
+	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> {
+		if (bits != 2048 && bits != 3072 && bits != 4096) return RsaPrivateKey.generateSync(bits);
 		const done = await wcGenerate(bits);
 		const data = done.error == "" ? rsaPrivateFromPkcs8(done.value) : null;
 		if (data == null) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", done.error == "" ? "RSA key generation failed" : done.error));
 		return Result.ok({ _data: data, _cache: newCache() });
 	}
 
-	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> {
+	static importPemSync(pem: string): Result<RsaPrivateKey, CryptoError> {
 		const data = privateOfPem(pem);
 		if (data == null) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.importPem", "failed to parse an RSA private key PEM of at least 2048 bits"));
 		return Result.ok({ _data: data, _cache: newCache() });
 	}
 
-	async exportPem(): Promise<Result<string, CryptoError>> {
+	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> { return RsaPrivateKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
 		return Result.ok(pemEncode("RSA PRIVATE KEY", rsaPrivateToPkcs1(this._data)));
 	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
 
 	publicKey(): RsaPublicKey {
 		return { _data: rsaPublicOf(this._data), _cache: newCache() };
@@ -165,23 +187,49 @@ export class RsaPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
+export function signSync(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
+	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
+	const message = bytesOf(data);
+	const signature = padding == "pss" ? rsaSignPss(key._data, hash, message) : rsaSignPkcs1(key._data, hash, message);
+	if (signature == null) return Result.err(signFailed(hash, padding, ""));
+	return Result.ok(signature as Buffer);
+}
+
 export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
-	if (hash == "sha1") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)`));
+	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
 	const done = await wcSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, bytesOf(data));
-	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused): ${done.error}`));
+	if (done.error != "") return Result.err(signFailed(hash, padding, `: ${done.error}`));
 	return Result.ok(done.value);
 }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
+export function verifySync(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
+	const message = bytesOf(data);
+	const sig = bytesOf(signature);
+	return padding == "pss" ? rsaVerifyPss(key._data, hash, message, sig) : rsaVerifyPkcs1(key._data, hash, message, sig);
+}
+
 export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
 	return await wcVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, bytesOf(data), bytesOf(signature));
 }
 
 // RSA-OAEP with SHA-256.
+export function encryptSync(key: RsaPublicKey, data: Bytes): Result<Buffer, CryptoError> {
+	const encrypted = rsaOaepEncrypt(key._data, bytesOf(data));
+	if (encrypted == null) return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
+	return Result.ok(encrypted as Buffer);
+}
+
 export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
 	const done = await wcEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, bytesOf(data));
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", `RSA-OAEP encryption failed: ${done.error}`));
 	return Result.ok(done.value);
+}
+
+export function decryptSync(key: RsaPrivateKey, data: Bytes): Result<Buffer, CryptoError> {
+	const decrypted = rsaOaepDecrypt(key._data, bytesOf(data));
+	if (decrypted == null) return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
+	return Result.ok(decrypted as Buffer);
 }
 
 export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
