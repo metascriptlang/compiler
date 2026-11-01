@@ -1,14 +1,17 @@
 import { readFile } from "std/fs";
 import { exit } from "std/process";
 import { Buffer } from "std/core/buffer";
-import { CryptoError, fromHex, sha256, toHex } from "std/crypto";
+import { CryptoError, sha256Sync, toHex } from "std/crypto";
 import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
-import { x25519PublicKey, x25519SharedSecret } from "std/crypto/x25519";
+import {
+	X25519PrivateKey, X25519PublicKey, sharedSecretSync,
+} from "std/crypto/x25519";
 import {
 	X25519Tally,
 	checkRawX25519,
 	checkSharedSecretX25519,
 	countFlag,
+	decodeX25519Hex as fromHex,
 	describeX25519Tally,
 	loadX25519Cases,
 	parseX25519Cases,
@@ -47,8 +50,22 @@ function rawAsSharedSecret(scalar: Buffer, point: Buffer): Result<Buffer, Crypto
 	return Result.ok(output);
 }
 
-function apiSharedSecret(scalar: Buffer, point: Buffer): Result<Buffer, CryptoError> {
-	return x25519SharedSecret(scalar, point);
+function apiSharedSecret(
+	scalar: Buffer,
+	point: Buffer,
+): Result<Buffer, CryptoError> {
+	const privateKey = X25519PrivateKey.fromRawSync(scalar);
+	if (!privateKey.ok) return Result.err(privateKey.error);
+	const publicKey = X25519PublicKey.importSync(point);
+	if (!publicKey.ok) return Result.err(publicKey.error);
+	return sharedSecretSync(privateKey.value, publicKey.value);
+}
+
+function apiPublicKey(scalar: Buffer): Result<Buffer, CryptoError> {
+	const key = X25519PrivateKey.fromRawSync(scalar);
+	if (!key.ok) return Result.err(key.error);
+	const publicKey = key.value.publicKey();
+	return publicKey.exportSync();
 }
 
 function must<T>(result: Result<T, string>): T {
@@ -93,7 +110,7 @@ function smallPoint(value: int32, highBit: boolean): string {
 function fileSha256(path: string): string {
 	const text = readFile(path);
 	if (!text.ok) throw new Error(`cannot read ${path}`);
-	return mustApi(sha256(text.value));
+	return toHex(mustApi(sha256Sync(text.value)));
 }
 
 const wycheproof = must(loadX25519Cases(WYCHEPROOF_PATH));
@@ -163,7 +180,7 @@ test "api public key is the raw product with the base point" {
 	let checked = 0;
 	for (const item of [...wycheproof, ...rfcCases]) {
 		if (item.point != BASE_POINT) continue;
-		assert toHex(mustApi(x25519PublicKey(fromHex(item.scalar)))) == item.shared;
+		assert toHex(mustApi(apiPublicKey(fromHex(item.scalar)))) == item.shared;
 		checked++;
 	}
 	assert checked >= 3;
@@ -172,13 +189,13 @@ test "api public key is the raw product with the base point" {
 test "rfc 7748 section 6.1 key agreement" {
 	const alice = fromHex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
 	const bob = fromHex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
-	const alicePublic = mustApi(x25519PublicKey(alice));
-	const bobPublic = mustApi(x25519PublicKey(bob));
+	const alicePublic = mustApi(apiPublicKey(alice));
+	const bobPublic = mustApi(apiPublicKey(bob));
 	assert toHex(alicePublic) == "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
 	assert toHex(bobPublic) == "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
 	const expected = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
-	assert toHex(mustApi(x25519SharedSecret(alice, bobPublic))) == expected;
-	assert toHex(mustApi(x25519SharedSecret(bob, alicePublic))) == expected;
+	assert toHex(mustApi(apiSharedSecret(alice, bobPublic))) == expected;
+	assert toHex(mustApi(apiSharedSecret(bob, alicePublic))) == expected;
 }
 
 test "rfc 7748 section 5.2 iterated raw multiplication" {
@@ -237,7 +254,7 @@ test "raw scalar multiplication of a low-order point is all-zero and the api ref
 	];
 	for (const point of lowOrder) {
 		assert raw(scalar, point) == "00".repeat(32);
-		assert !x25519SharedSecret(fromHex(scalar), fromHex(point)).ok;
+		assert !apiSharedSecret(fromHex(scalar), fromHex(point)).ok;
 	}
 }
 

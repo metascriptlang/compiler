@@ -46,6 +46,7 @@ import "./fsRemoveAll";
 import "./fsCopyFile";
 import "./cryptoX25519Assurance";
 import "./cryptoX25519Pilot";
+import "./cryptoX25519Wipe";
 import "./functionCarriers";
 import "./generatorControl";
 import "./genericCallbacks";

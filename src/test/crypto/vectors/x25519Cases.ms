@@ -6,6 +6,12 @@ import { JsonKind, JsonValue, getDynamicField, asString, asInt32, at, length, pa
 
 const ZERO_SHARED = "0".repeat(64);
 
+export function decodeX25519Hex(hex: string): Buffer {
+	const decoded = fromHex(hex);
+	if (!decoded.ok) throw new Error("X25519 fixture hex was refused");
+	return decoded.value;
+}
+
 export type X25519Raw = (output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>) => void;
 export type X25519SharedSecret = (scalar: Buffer, point: Buffer) => Result<Buffer, CryptoError>;
 
@@ -139,8 +145,8 @@ export function checkRawX25519(cases: X25519Case[], scalarMult: X25519Raw): X255
 	const tally = new X25519Tally();
 	for (const item of cases) {
 		classify(item, tally);
-		const scalar = fromHex(item.scalar);
-		const point = fromHex(item.point);
+		const scalar = decodeX25519Hex(item.scalar);
+		const point = decodeX25519Hex(item.point);
 		const output = newOutputBuffer(32);
 		scalarMult(outputBytes(output), outputBytes(scalar), outputBytes(point));
 		const got = toHex(output);
@@ -164,7 +170,10 @@ export function checkSharedSecretX25519(
 	const tally = new X25519Tally();
 	for (const item of cases) {
 		classify(item, tally);
-		const result = sharedSecret(fromHex(item.scalar), fromHex(item.point));
+		const result = sharedSecret(
+			decodeX25519Hex(item.scalar),
+			decodeX25519Hex(item.point),
+		);
 		if (item.shared != ZERO_SHARED) {
 			record(tally, item, result.ok ? toHex(result.value) : "refused");
 		} else if (result.ok) {
