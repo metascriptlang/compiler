@@ -6,7 +6,12 @@
 // @stdout: 2
 // @stdout: true,true,false
 // @stdout: 13
+// @foreign-stdout: overlap: Error: countAfter: parameter 'all' is a Vec copied when the call starts and parameter 'part' writes elements it holds, so the copy would miss the write: declare parameter 'all' as a Readonly<Span>, which sees it
+// @foreign-stdout: apart: ok 1
+// @foreign-stdout: empty: ok 1
+// @foreign-stdout: unchanged: true,false,false
 import { copyUp, stamp, pairHead, chain, flipAfter, smear } from "./spanOverlapWasm";
+export { countAfter } from "./spanOverlapWasm";
 
 let k = 1;
 let xs: Vec<int32> = [1, 2, 3, 4, 5];
@@ -28,7 +33,7 @@ chain(cs[0..2], cs[k..4], cs[3..5]);
 console.log(cs.join(","));
 
 let bs: Vec<boolean> = [true, false, false];
-console.log(`${flipAfter(bs, bs[k..3])}`);
+console.log(`${flipAfter(bs[0..3], bs[k..3])}`);
 console.log(bs.join(","));
 
 console.log(`${smear((dst: Span<float64>, src: Readonly<Span<float64>>): void => {
