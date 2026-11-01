@@ -2119,7 +2119,7 @@ test "cms extern closure: declared externs are bridged, intercepted, or listed u
 		"&msNumberArrayConcat", "&msStringArrayConcat",
 		"&msNumberArrayFill", "&msStringArrayFill",
 		"&msNumberArrayReverse", "&msStringArrayReverse",
-		"&msNumberArraySlice", "&msStringArraySlice",
+		"&msNumberArraySlice", "&msStringArraySlice", "msBytesSlice",
 		"&msNumberArraySort", "&msStringArraySort",
 		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
 		"&msRefArraySplice3", "&msUint8ArraySplice3",
