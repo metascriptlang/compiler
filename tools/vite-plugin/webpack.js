@@ -49,12 +49,16 @@ export default class MetaScriptPlugin {
 		const outputs = options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, options.outDir);
 		if (outputs) compiler.hooks.afterEnvironment?.tap(name, () => {
 			const native = compiler.watchFileSystem;
+			let previousWatchOptions, enrichedWatchOptions;
 			compiler.watchFileSystem = {
 				watch(files, directories, missing, startTime, watchOptions, callback, callbackUndelayed) {
-					const previous = watchOptions.ignored;
-					// Preserve native glob/regexp normalization and the options passed to watch().
-					const ignored = [...(previous === undefined ? [] : Array.isArray(previous) ? previous : [previous]), outputs];
-					return native.watch(files, directories, missing, startTime, { ...watchOptions, ignored }, callback, (file, time) => {
+					if (watchOptions !== previousWatchOptions) {
+						const previous = watchOptions.ignored;
+						const ignored = [...(previous === undefined ? [] : Array.isArray(previous) ? previous : [previous]), outputs];
+						enrichedWatchOptions = { ...watchOptions, ignored };
+						previousWatchOptions = watchOptions;
+					}
+					return native.watch(files, directories, missing, startTime, enrichedWatchOptions, callback, (file, time) => {
 						invalidateSource(file);
 						callbackUndelayed?.(file, time);
 					});

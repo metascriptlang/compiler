@@ -464,6 +464,48 @@ test("source watch wrapper preserves runtime ignored options and observes callba
  compiler.hooks.shutdown.call();
 });
 
+test("source watch wrapper preserves native option identity and isolates compilers", t => {
+ const f = fixture(t), plugin = new MetaScriptPlugin(sourceSettings(f));
+ const ignored = Object.freeze([/keep-this/i, "**/keep-this/**"]);
+ const options = Object.freeze({aggregateTimeout:17,ignored});
+ const files = [f.entry], directories = [f.root], missing = [];
+ const callback = () => {};
+ let forwarded;
+ const undelayed = (file,time) => { forwarded = [file,time]; };
+ const setup = () => {
+  const compiler = fakeCompiler(f.root,plugin,{afterEnvironment:new Hook()});
+  let args;
+  const handle = {close() {},pause() {},getInfo() { return {}; }};
+  const native = {watch(...values) { assert.equal(this,native); args = values; return handle; }};
+  compiler.watchFileSystem = native;
+  compiler.hooks.afterEnvironment.call();
+  return runtime => {
+   assert.equal(compiler.watchFileSystem.watch(files,directories,missing,123,runtime,callback,undelayed),handle);
+   assert.equal(args[0],files); assert.equal(args[1],directories); assert.equal(args[2],missing);
+   assert.equal(args[3],123); assert.equal(args[5],callback);
+   args[6](f.entry,456); assert.deepEqual(forwarded,[f.entry,456]);
+   return args[4];
+  };
+ };
+ const watch = setup();
+ const first = watch(options);
+ assert.notEqual(first,options);
+ assert.equal(watch(options),first,"same native watch options must retain enriched identity");
+ assert.equal(first.aggregateTimeout,17);
+ assert.deepEqual(first.ignored.slice(0,-1),ignored);
+ assert.equal(first.ignored[0],ignored[0]);
+ assert.ok(first.ignored.at(-1).test(join(f.root,"editor-types")));
+ assert.equal(first.ignored.at(-1).test(f.entry),false);
+ assert.deepEqual(options,{aggregateTimeout:17,ignored:[/keep-this/i,"**/keep-this/**"]});
+ const nextOptions = Object.freeze({aggregateTimeout:23,ignored:"**/other/**"});
+ const next = watch(nextOptions);
+ assert.notEqual(next,first); assert.equal(watch(nextOptions),next);
+ assert.equal(next.aggregateTimeout,23); assert.equal(next.ignored[0],nextOptions.ignored);
+ const otherWatch = setup();
+ const other = otherWatch(options);
+ assert.notEqual(other,first); assert.equal(otherWatch(options),other);
+});
+
 test("directory-only aggregates validate source bytes after failures and reuse unrelated or output-only snapshots", t => {
  const f = fixture(t), settings = sourceSettings(f);
  f.state.fail = true; f.save();
