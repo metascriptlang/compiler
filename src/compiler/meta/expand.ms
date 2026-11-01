@@ -53,7 +53,7 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames, macroPreludeSym } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
@@ -1519,10 +1519,6 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	}, node.location);
 }
 
-// Compile-time diagnostics: `error("msg")` halts expansion and surfaces as
-// checker error; `warning("msg")` surfaces as checker warning but continues.
-// Rewritten to return statements with sentinel objects that expandMacroInvocation
-// detects before calling valueToNode.
 // Builds a MemberExpr: `obj.prop`
 function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
@@ -1538,38 +1534,51 @@ function consoleIdent(loc: SourceLocation): Node {
 	return id;
 }
 
-function tryRewriteCompileError(node: Node): Node {
+let _raisingCalls: HashSet<Node> = new HashSet<Node>();
+
+// `error(msg)` / `error(msg, node)` in any position becomes `error(payload)`, which the host bridge raises
+// as the "__MACRO_ERROR__:msg[\tline\tcolumn\tendLine\tendColumn]" text the VM reads back as the diagnostic.
+function tryRewriteMacroError(node: Node): Node {
+	if (node.kind != NodeKind.CallExpr || _raisingCalls.has(node)) return node;
+	const cd = node.data as CallExprData;
+	if (cd.callee == null || metaKind(cd.callee) != "MetaError") return node;
+	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
+	const loc = node.location;
+	let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
+		operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: cd.arguments[0],
+	}, loc);
+	if (cd.arguments.length == 2) {
+		const fields: string[] = ["line", "column", "endLine", "endColumn"];
+		for (const f of fields) {
+			payload = createNodeAt(NodeKind.BinaryExpr, {
+				operator: "+", left: payload, right: mkString("\t", loc),
+			}, loc);
+			payload = createNodeAt(NodeKind.BinaryExpr, {
+				operator: "+", left: payload, right: mkMember(cd.arguments[1], f, loc),
+			}, loc);
+		}
+	}
+	if (cd.callee.kind == NodeKind.Identifier && !cd.callee.flags.has(NodeFlag.BoundSym)) {
+		const sym = macroPreludeSym(_metaScope!, (cd.callee.data as IdentifierData).name);
+		if (sym == null) throw new Error("internal: error() has no std/meta declaration to raise through");
+		cd.callee.resolvedSym = sym;
+		cd.callee.flags = cd.callee.flags.incl(NodeFlag.BoundSym);
+	}
+	cd.arguments = [payload];
+	_raisingCalls.add(node);
+	return node;
+}
+
+function tryRewriteCompileWarning(node: Node): Node {
 	if (node == null || node.kind != NodeKind.ExprStmt) return node;
 	const ed = node.data as ExprStmtData;
 	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return node;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null) return node;
-	const intrinsic = metaKind(cd.callee);
-	if (intrinsic != "MetaError" && intrinsic != "MetaWarning") return node;
+	if (cd.callee == null || metaKind(cd.callee) != "MetaWarning") return node;
 	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
 	const loc = node.location;
 	const msgArg = cd.arguments[0];
-	// 2-arg form: error("msg", astNode) — location from the input AST node.
-	// astNode.line and astNode.column carry the original source position.
-	const hasLoc = cd.arguments.length == 2;
-	const locNode = hasLoc ? cd.arguments[1] : null;
-	if (intrinsic == "MetaError") {
-		let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
-			operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: msgArg,
-		}, loc);
-		if (locNode != null) {
-			const fields: string[] = ["line", "column", "endLine", "endColumn"];
-			for (const f of fields) {
-				payload = createNodeAt(NodeKind.BinaryExpr, {
-					operator: "+", left: payload, right: mkString("\t", loc),
-				}, loc);
-				payload = createNodeAt(NodeKind.BinaryExpr, {
-					operator: "+", left: payload, right: mkMember(locNode, f, loc),
-				}, loc);
-			}
-		}
-		return createNodeAt(NodeKind.ThrowStmt, { throwArg: payload }, loc);
-	}
+	const locNode = cd.arguments.length == 2 ? cd.arguments[1] : null;
 	// warning("msg") / warning("msg", node) → console.log with encoded location.
 	// Non-halting — macro continues after the warning.
 	// Format: "__MACRO_WARN__:msg" or "__MACRO_WARN__:msg\tline\tcol"
@@ -1611,11 +1620,9 @@ function applyPreprocessRewrites(node: Node): Node {
 		return lowerQuoteExpr(node);
 	}
 
-	// Compile-time error/warning: rewrite `error("msg")` and `warning("msg")`
-	// in ExprStmt position to return statements with sentinel values.
-	// error → halts macro (returns sentinel), warning → stores msg + continues.
-	const errorRewrite = tryRewriteCompileError(node);
-	if (errorRewrite != node) return errorRewrite;
+	tryRewriteMacroError(node);
+	const warningRewrite = tryRewriteCompileWarning(node);
+	if (warningRewrite != node) return warningRewrite;
 
 	const callRewrite = tryRewriteCreateNodeAt(node);
 	if (callRewrite != node) return callRewrite;

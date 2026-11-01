@@ -1100,7 +1100,10 @@ function vmExceptionText(vm: RaiserVM, thrown: RaiserValue): string {
 }
 
 function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
-	const text = vmExceptionText(vm, thrown);
+	return vmTakeMacroErrorText(vm, vmExceptionText(vm, thrown));
+}
+
+function vmTakeMacroErrorText(vm: RaiserVM, text: string): boolean {
 	if (!text.startsWith(MACRO_ERROR_PREFIX)) return false;
 	const payload = text.slice(MACRO_ERROR_PREFIX.length, text.length);
 	const parts = payload.split("\t");
@@ -3958,6 +3961,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			vmError(vm, raised);
 			return;
 		}
+		if (vmTakeMacroErrorText(vm, raised)) return;
 		const error = heapAllocObject(vm.objectHeap);
 		const name = heapAllocString(vm.arrayHeap, "Error");
 		const message = heapAllocString(vm.arrayHeap, raised);

@@ -309,6 +309,11 @@ function hostReadFile(args: RaiserValue[]): RaiserValue {
 	return boxString(read.value);
 }
 
+function hostMacroError(args: RaiserValue[]): RaiserValue {
+	raiseFromHost(unboxString(args[0]), false);
+	return raiserNil();
+}
+
 function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null) return boxString("");
@@ -317,6 +322,7 @@ function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 
 export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaDefine", hostDefine, HostCapability.Pure);
+	registerHostFn("error", hostMacroError, HostCapability.Pure);
 	registerHostFn("msMetaExpansionFile", hostExpansionFile, HostCapability.Pure);
 	registerHostFn("msMetaReadFile", hostReadFile, HostCapability.FileRead);
 	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);
