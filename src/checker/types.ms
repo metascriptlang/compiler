@@ -4385,7 +4385,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 		return false;
 	}
 	let structElem = elem;
-	if (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && elem.typeExtra.kind == TypeKind.Struct) {
+	if (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && (elem.typeExtra.kind == TypeKind.Struct || elem.typeExtra.kind == TypeKind.Union)) {
 		structElem = elem.typeExtra;
 	}
 	if ((structElem.kind == TypeKind.Struct || structElem.kind == TypeKind.Union) && structElem.typeName != "") {
