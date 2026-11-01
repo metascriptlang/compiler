@@ -1053,7 +1053,7 @@ triage_side() {
         lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
         tests|suite)
           [ "$lane" = tests ] || cmp=$bld
-          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
+          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR MSC="$cmp" "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
       esac
     ) >"$log" 2>&1; rc=$?
     (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
