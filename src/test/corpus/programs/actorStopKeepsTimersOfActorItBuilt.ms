@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: child ticks after parent stop: true
 // note: Parent builds Child inside one of its methods, and Child's constructor arms an
 // interval. That interval is Child's, so stopping Parent leaves it ticking (ULTRALOCK A4).

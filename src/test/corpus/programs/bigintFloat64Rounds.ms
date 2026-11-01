@@ -1,5 +1,4 @@
 // @stdout: num 9007199254740992 9007199254740992 9007199254740994 9007199254740996 18014398509481984 18014398509481990 18014398509481988 -9007199254740992 -9007199254740996 8.98846567431158e+307 Infinity Infinity 1.7976931348623157e+308 1.7976931348623157e+308 -Infinity Infinity 0 1 -1 18446744073709552000 1.2676506002282297e+30
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: Number() of a bigint rounds half to even at the 2^53 boundary and overflows to Infinity at or past the midpoint between the largest float64 and 2^1024, as TS does.
 
 function p(n: bigint): bigint { return 1n << n; }

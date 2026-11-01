@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors and no threads, which this program pins
 // @skip-js: the program sends closures from spawned threads to actors, which the JS backend does not have
 // @stdout: totals 5000 5000 5000 5000
 // @serial

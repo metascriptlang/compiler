@@ -1,5 +1,4 @@
 // @stdout: radix 3 7 10 13 17 20 32 36 digest 133288 zeros 0 0 -1 z -z 10 -10
-// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: bigint toString(radix) above 16 agrees digit for digit across sizes, around radix powers and for negatives; the digest folds the text of every value.
 
 function digestOf(text: string, seed: number): number {
