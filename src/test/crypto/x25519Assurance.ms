@@ -1,4 +1,5 @@
 import { readFile } from "std/fs";
+import { exit } from "std/process";
 import { Buffer } from "std/core/buffer";
 import { CryptoError, fromHex, sha256, toHex } from "std/crypto";
 import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
@@ -10,6 +11,7 @@ import {
 	countFlag,
 	describeX25519Tally,
 	loadX25519Cases,
+	parseX25519Cases,
 	requireCleanX25519,
 	withWrongExpected,
 } from "./vectors/x25519Cases";
@@ -27,6 +29,16 @@ function monocypherRaw(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>
 
 function copyScalarKernel(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void {
 	for (let i = 0; i < 32; i++) output[i] = scalar[i];
+}
+
+function scalarFlippingKernel(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void {
+	crypto_x25519(output, scalar, point);
+	scalar[0] = scalar[0] ^ 1;
+}
+
+function pointMaskingKernel(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void {
+	crypto_x25519(output, scalar, point);
+	point[31] = point[31] & 127;
 }
 
 function rawAsSharedSecret(scalar: Buffer, point: Buffer): Result<Buffer, CryptoError> {
@@ -249,6 +261,18 @@ test "control: a kernel that skips the multiplication fails the vectors" {
 	assert checkRawX25519(rfcCases, copyScalarKernel).failed > 50;
 }
 
+test "control: a kernel that modifies its scalar input fails every case" {
+	const tally = checkRawX25519(wycheproof, scalarFlippingKernel);
+	assert tally.failed == 518;
+	assert tally.failures[0].includes("kernel modified the scalar input");
+}
+
+test "control: a kernel that masks its point input fails exactly the high-bit points" {
+	const tally = checkRawX25519(wycheproof, pointMaskingKernel);
+	assert tally.failed == 21;
+	assert tally.failures[0].includes("kernel modified the point input");
+}
+
 test "control: an api that returns all-zero secrets fails exactly the all-zero cases" {
 	const wycheproofTally = checkSharedSecretX25519(wycheproof, rawAsSharedSecret);
 	assert wycheproofTally.failed == 31;
@@ -257,14 +281,57 @@ test "control: an api that returns all-zero secrets fails exactly the all-zero c
 	assert rfcTally.failed == 18;
 }
 
-function report(name: string, tally: X25519Tally): void {
+const HEX = "00".repeat(32);
+
+function oneCase(count: string, extra: string): string {
+	return `{"numberOfTests":${count},"testGroups":[{"tests":[{"tcId":1,"comment":"c","flags":["F"],` +
+		`"public":"${HEX}","private":"${HEX}","shared":"${HEX}","result":"valid"${extra}}]}]}`;
+}
+
+test "loader accepts a well-formed single case file" {
+	const parsed = parseX25519Cases(oneCase("1", ""), "inline");
+	assert parsed.ok;
+	assert parsed.value.length == 1;
+}
+
+test "loader refuses a file whose numberOfTests is wrong, missing or not an integer" {
+	assert !parseX25519Cases(oneCase("2", ""), "inline").ok;
+	assert !parseX25519Cases(oneCase("\"1\"", ""), "inline").ok;
+	const missing = oneCase("1", "").replace("\"numberOfTests\":1,", "");
+	assert !parseX25519Cases(missing, "inline").ok;
+}
+
+test "loader refuses empty, missing and mistyped groups and tests" {
+	assert !parseX25519Cases("{\"numberOfTests\":0,\"testGroups\":[]}", "inline").ok;
+	assert !parseX25519Cases("{\"numberOfTests\":0}", "inline").ok;
+	assert !parseX25519Cases("{\"numberOfTests\":0,\"testGroups\":{}}", "inline").ok;
+	assert !parseX25519Cases("{\"numberOfTests\":0,\"testGroups\":[{\"tests\":[]}]}", "inline").ok;
+	assert !parseX25519Cases("{\"numberOfTests\":1,\"testGroups\":[{\"tests\":{}}]}", "inline").ok;
+	assert !parseX25519Cases("[]", "inline").ok;
+	assert !parseX25519Cases("not json", "inline").ok;
+}
+
+test "loader refuses a case with a missing field, bad hex or unknown result" {
+	assert !parseX25519Cases(oneCase("1", "").replace("\"flags\":[\"F\"],", ""), "inline").ok;
+	assert !parseX25519Cases(oneCase("1", "").replace("\"tcId\":1,", ""), "inline").ok;
+	assert !parseX25519Cases(oneCase("1", "").replace(HEX + "\",\"private", "zz\",\"private"), "inline").ok;
+	assert !parseX25519Cases(oneCase("1", "").replace("\"valid\"", "\"invalid\""), "inline").ok;
+}
+
+function report(name: string, tally: X25519Tally): int32 {
 	console.log(describeX25519Tally(name, tally));
 	for (const failure of tally.failures) console.log(`  FAIL ${failure}`);
+	return tally.failed;
 }
 
 when (!testBuild) {
-	report("wycheproof raw", checkRawX25519(wycheproof, monocypherRaw));
-	report("rfc raw", checkRawX25519(rfcCases, monocypherRaw));
-	report("wycheproof api", checkSharedSecretX25519(wycheproof, apiSharedSecret));
-	report("rfc api", checkSharedSecretX25519(rfcCases, apiSharedSecret));
+	let failed: int32 = 0;
+	failed += report("wycheproof raw", checkRawX25519(wycheproof, monocypherRaw));
+	failed += report("rfc raw", checkRawX25519(rfcCases, monocypherRaw));
+	failed += report("wycheproof api", checkSharedSecretX25519(wycheproof, apiSharedSecret));
+	failed += report("rfc api", checkSharedSecretX25519(rfcCases, apiSharedSecret));
+	if (failed > 0) {
+		console.log(`x25519 assurance: ${failed} mismatches`);
+		exit(1);
+	}
 }

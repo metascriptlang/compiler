@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Generates x25519Rfc7748.json: raw X25519 cases from a bigint reference ladder (RFC 7748 section 5).
-# Each output is cross-checked with `openssl pkeyutl -derive` whenever OpenSSL accepts the case
-# (OpenSSL refuses the all-zero outputs). Usage: python3 -I x25519Rfc7748Gen.py > x25519Rfc7748.json
+# Every non-zero output must equal `openssl pkeyutl -derive`; an all-zero output must be refused
+# by OpenSSL or derived as zeros. Any other OpenSSL refusal or mismatch aborts the generation.
+# Usage: python3 -I x25519Rfc7748Gen.py > x25519Rfc7748.json
 import json
 import subprocess
 import sys
@@ -63,12 +64,11 @@ def openssl_derive(scalar, point):
 			f.write(bytes.fromhex("302e020100300506032b656e04220420") + scalar)
 		with open(pub, "wb") as f:
 			f.write(bytes.fromhex("302a300506032b656e032100") + point)
-		r = subprocess.run(
+		return subprocess.run(
 			["openssl", "pkeyutl", "-derive", "-inkey", priv, "-keyform", "DER",
 			 "-peerkey", pub, "-peerform", "DER"],
 			capture_output=True,
 		)
-		return r.stdout if r.returncode == 0 else None
 
 
 def le(n, bits=256):
@@ -156,14 +156,22 @@ for i, u in enumerate(LOW):
 
 tests = []
 checked = 0
+refused = 0
 for n, (group, comment, scalar, point) in enumerate(cases, 1):
 	out = x25519(scalar, point)
-	ref = openssl_derive(scalar, point)
-	if ref is not None:
-		if ref != out:
-			sys.exit(f"openssl disagrees on case {n} ({comment}): {ref.hex()} vs {out.hex()}")
-		checked += 1
 	zero = out == bytes(32)
+	r = openssl_derive(scalar, point)
+	if zero:
+		if r.returncode == 0 and r.stdout != out:
+			sys.exit(f"case {n} ({comment}): openssl derived {r.stdout.hex()}, reference is all-zero")
+		if r.returncode != 0:
+			refused += 1
+	else:
+		if r.returncode != 0:
+			sys.exit(f"case {n} ({comment}): openssl refused a non-zero case: {r.stderr.decode()}")
+		if r.stdout != out:
+			sys.exit(f"case {n} ({comment}): openssl {r.stdout.hex()} vs reference {out.hex()}")
+		checked += 1
 	tests.append({
 		"tcId": n,
 		"comment": comment,
@@ -173,6 +181,10 @@ for n, (group, comment, scalar, point) in enumerate(cases, 1):
 		"shared": out.hex(),
 		"result": "acceptable" if zero else "valid",
 	})
+
+nonzero = sum(1 for t in tests if t["shared"] != "00" * 32)
+if checked != nonzero or checked + refused > len(tests) or checked < 40:
+	sys.exit(f"oracle coverage: {checked} cross-checked of {nonzero} non-zero cases, {refused} all-zero refusals")
 
 # RFC 7748 section 5.2 iterated results (also pinned in x25519Assurance.ms)
 k = u = BASE
@@ -187,6 +199,7 @@ print(json.dumps({
 	"schema": "xdh_comp_schema_v1.json",
 	"generator": "x25519Rfc7748Gen.py: RFC 7748 section 5 bigint ladder, openssl pkeyutl -derive cross-check",
 	"opensslCrossChecked": checked,
+	"opensslRefusedAllZero": refused,
 	"iterated": {str(i): v for i, v in iterated.items()},
 	"numberOfTests": len(tests),
 	"testGroups": [{"type": "XdhComp", "curve": "curve25519", "tests": tests}],

@@ -3,6 +3,7 @@
  "schema": "xdh_comp_schema_v1.json",
  "generator": "x25519Rfc7748Gen.py: RFC 7748 section 5 bigint ladder, openssl pkeyutl -derive cross-check",
  "opensslCrossChecked": 40,
+ "opensslRefusedAllZero": 18,
  "iterated": {
   "1": "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
   "1000": "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51"
