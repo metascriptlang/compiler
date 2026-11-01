@@ -107,10 +107,18 @@ function u32At(
 	return Result.ok(b0 + b1 * BYTE_1 + b2 * BYTE_2 + b3 * BYTE_3);
 }
 
+function fileBackedSize(this section: Section): int64 {
+	return section.virtualSize < section.rawSize ?
+		section.virtualSize : section.rawSize;
+}
+
 // Both address spaces must meet: a virtual tail or a raw file gap ends the
 // readable range, even when the other address space remains contiguous.
 function contiguousEnd(
-	sections: Section[], first: Section, backedSize: int64, length: int64,
+	sections: Section[],
+	first: Section,
+	backedSize: int64,
+	length: int64,
 ): int64 {
 	let end = first.rawPointer + backedSize;
 	if (backedSize != first.virtualSize) { return end; }
@@ -122,8 +130,7 @@ function contiguousEnd(
 			if (next.virtualAddress != virtualEnd || next.rawPointer != end) {
 				continue;
 			}
-			const size = next.virtualSize < next.rawSize ?
-				next.virtualSize : next.rawSize;
+			const size = next.fileBackedSize();
 			if (size == 0) { continue; }
 			if (!fits(next.rawPointer, size, length)) { return end; }
 			end += size;
@@ -147,9 +154,7 @@ function mapRva(
 		const section = sections[i];
 		const start = section.virtualAddress;
 		if (rva < start || rva >= start + section.virtualSize) { continue; }
-		const backedSize = section.virtualSize < section.rawSize ?
-			section.virtualSize :
-			section.rawSize;
+		const backedSize = section.fileBackedSize();
 		if (rva - start >= backedSize) {
 			return Result.err(
 				`${what}: RVA ${rva} is in section ${i} but past its ` +
@@ -311,7 +316,7 @@ function readThunks(
 			}
 			const text: Backed = { at: entry.at + HINT_BYTES, end: entry.end };
 			const name = try asciiAt(data, text, label);
-			symbols.push({ kind: PeSymbolKind.Name, name: name, ordinal: 0 });
+			symbols.push({ kind: PeSymbolKind.Name, name, ordinal: 0 });
 		}
 		cursor += THUNK_BYTES;
 	}
@@ -356,7 +361,7 @@ function readImports(
 		const dll = try asciiAt(data, nameAt, nameLabel);
 		const thunkRva = lookup != 0 ? lookup : address;
 		const symbols = try readThunks(data, sections, thunkRva as int64, dll);
-		found.push({ dll: dll, symbols: symbols });
+		found.push({ dll, symbols });
 		cursor += IMPORT_DESCRIPTOR_BYTES;
 		index += 1;
 	}
@@ -470,9 +475,9 @@ export function parsePe(data: Readonly<Span<uint8>>): Result<PeInfo, string> {
 	const exported = try readExports(data, sections, exportDirectory);
 	const imported = try readImports(data, sections, importDirectory);
 	const info: PeInfo = {
-		machine: machine,
-		subsystem: subsystem,
-		characteristics: characteristics,
+		machine,
+		subsystem,
+		characteristics,
 		imports: imported,
 		exports: exported,
 	};
