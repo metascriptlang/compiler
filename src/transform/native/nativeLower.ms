@@ -32,7 +32,7 @@ import { versionReductions } from "./blockReduce";
 // codegen emits `(*arr)`. A receiver already dereferenced by the checker is a value Array
 // here, so this is a no-op for it (guards against double-deref).
 function unwrapRefArrayRecv(recv: Node): Node {
-	const t = recv.nodeType != null ? peelTransparentInstance(recv.nodeType) : null;
+	const t = recv.nodeType != null ? brandPeeled(peelTransparentInstance(recv.nodeType)) : null;
 	if (t != null && t.kind == TypeKind.Ref && t.typeReturn != null
 			&& t.typeReturn.kind == TypeKind.Array) {
 		const deref = createNode(NodeKind.HiddenDeref, { expr: recv }, syntheticToken(recv.location));
@@ -297,7 +297,7 @@ function rewriteArrayEvictCall(node: Node, ctx: TransformContext): Node {
 function rewriteMemberExpr(node: Node): Node {
 	const d = node.data as MemberExprData;
 	d.object = unwrapRefArrayRecv(d.object);
-	const objType = d.object.nodeType;
+	const objType = brandPeeled(d.object.nodeType);
 	if (objType == null) return node;
 
 	// .length on CString → strlen(s) (C standard library)
