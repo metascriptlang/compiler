@@ -336,18 +336,19 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
 		}
 	};
-	const encodeView = (name: string, view: string, absent: string): void => {
+	const encodeView = (name: string, view: string, absent: string, role: string, label: string): void => {
 		if (!shared) {
 			encode(name, view, "__msbCopyIn", false, absent);
 			return;
 		}
 		encoded.push(name);
 		sharedNames.push(name);
+		const entry = `${view}, ${quoted(role)}, ${quoted(label)}`;
 		if (absent == "") {
-			sharedViews.push(`[${view}]`);
+			sharedViews.push(`[${entry}]`);
 			argList.push(`${name}[0], ${name}[1]`);
 		} else {
-			sharedViews.push(`${absent} ? null : [${view}]`);
+			sharedViews.push(`${absent} ? null : [${entry}]`);
 			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
 		}
 	};
@@ -377,11 +378,11 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 				else argList.push(`${absent} ? ${zeroWire(leaf.kind)} : ${toWire(leaf.kind, expr)}`);
 			}
 		} else if (p.kind == BoundaryKind.Vec) {
-			encodeView(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, own);
+			encodeView(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, own, "copy", `parameter '${p.name}'`);
 		} else if (p.kind == BoundaryKind.Span) {
 			const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
 			if (p.mode == BoundaryMode.Shared) copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
-			encodeView(`e${i}`, view, "");
+			encodeView(`e${i}`, view, "", p.mode == BoundaryMode.Shared ? "write" : "read", `parameter '${p.name}'`);
 		} else if (p.nullable) {
 			argList.push(`${own} ? ${zeroWire(p.kind)} : ${toWire(p.kind, `a${i}`)}`);
 		} else {
@@ -390,7 +391,7 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	}
 	if (shared) {
 		lines.push("	const hb = [];");
-		encodes.push(`		[${sharedNames.join(", ")}] = __msbCopyInViews([${sharedViews.join(", ")}], hb);`);
+		encodes.push(`		[${sharedNames.join(", ")}] = __msbCopyInViews([${sharedViews.join(", ")}], hb, ${quoted(f.name)});`);
 		cleanup.push("for (const q of hb) __msbFree(q);");
 	}
 	const sig = sigs.join(", ");
@@ -588,8 +589,13 @@ const VIEW_GROUPS = [
 ];
 
 const VIEWS_IN = [
-	"function __msbCopyInViews(vs, blocks) {",
+	"function __msbCopyInViews(vs, blocks, f) {",
 	"\tfor (const v of vs) if (v !== null) __msbInRange(v[0], v[1], v[2]);",
+	"\tfor (const a of vs) for (const b of vs) {",
+	"\t\tif (a !== null && b !== null && a[4] === \"copy\" && b[4] === \"write\" && a[0] === b[0] && a[2] > 0 && b[2] > 0 && a[1] < b[1] + b[2] && b[1] < a[1] + a[2]) {",
+	"\t\t\tthrow new Error(f + \": \" + a[5] + \" is a Vec copied when the call starts and \" + b[5] + \" writes elements it holds, so the copy would miss the write: declare \" + a[5] + \" as a Readonly<Span>, which sees it\");",
+	"\t\t}",
+	"\t}",
 	"\tconst r = new Array(vs.length).fill(null);",
 	"\tfor (const m of __msbGroups(vs)) {",
 	"\t\tif (vs[m[0]] === null) continue;",
