@@ -954,15 +954,7 @@ function returnTypeOf(fn: Readonly<Type | null>): Readonly<Type | null> {
 }
 
 export function getCalleeReturnType(callNode: Readonly<Node>): Readonly<Type | null> {
-	if (overloadWinnerFuncType(callNode) != null) return returnTypeOf(overloadWinnerFuncType(callNode));
-	const cd = callNode.data as CallExprData;
-	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		return (callNode.data as CallExprData).callee.nodeType.typeReturn;
-	}
-	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null && callNode.resolvedSym.symbolType.kind == TypeKind.Function) {
-		return callNode.resolvedSym.symbolType.typeReturn;
-	}
-	return returnTypeOf(closurePairFuncType((callNode.data as CallExprData).callee));
+	return returnTypeOf(getCalleeFuncType(callNode));
 }
 
 export function getCalleeFuncType(callNode: Readonly<Node>): Readonly<Type | null> {
