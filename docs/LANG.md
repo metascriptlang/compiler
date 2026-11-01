@@ -3570,18 +3570,18 @@ interface is held by reference, so it is never copied, moved or cloned by value:
 `onMove`, `onMoved` and `onClone` on one are refused (`'C' is a class, its values are shared by
 reference …`), and `onDestroy` and `onTrace` are the hooks it takes. A distinct type follows the
 struct column (`distinct int32` and `distinct string` with `onDestroy`; `onCopy`, `onMove` and
-`onMoved` through `this x: Var<Fd>`; `onClone` through `this x: Fd`).
+`onMoved` through `this ref x: Fd`; `onClone` through `this x: Fd`).
 
 | receiver | on a struct or distinct type | on a class or interface |
 |---|---|---|
 | `this x: S` | `onDestroy`, `onClone` | `onDestroy`, `onTrace` |
-| `this ref x: S`, `this x: Var<S>` | every hook but `onClone` | refused |
+| `this ref x: S` | every hook but `onClone` | refused |
 | `this x: Readonly<T>` | `onDestroy`, `onClone` | `onDestroy` |
 | `Ptr<T>`, `Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, `T \| null`, a primitive, an enum, an alias of the type | refused | refused |
 
 A bare generic parameter is refused too. A hook that writes its receiver (`onCopy`, `onMove`,
 `onMoved`, `onTrace`) takes a struct by reference, because `this x: S` would be a copy of the
-destination; a class receiver already is the reference, so `this ref x: C` and `Var<C>` would point
+destination; a class receiver already is the reference, so `this ref x: C` would point
 at that reference (`onDestroy` read its own parameter through a misaligned address and crashed at
 scope exit, measured before the check, `--gc=drc`).
 
@@ -3611,8 +3611,10 @@ once per element: `slice<T>` (`std/core/array`) does, where the reference's slic
 type without `onClone` still gets a generated `<T>Dup` that nothing calls (`emitDup`,
 `destructorLifting.ms`).
 
-On C, corpus `hookReceiverSpellings` counts `onCopy` once, `onMove` twice and `onMoved` three times
-for a struct, whether the receiver is `this ref x: S` or `Var<S>`.
+On C, corpus `hookReceiverSpellings` counts `onCopy`, `onMove` and `onMoved` once each for a struct
+with a `this ref x: S` receiver (`ref copy=1 move=1 moved=1`, 2026-11-01; the installed build
+`97e4f6ca592` prints the same). `Var<T>` is no longer a spelling: `this x: Var<S>` is refused with
+`'Var<S>' was removed: write 'ref name: S' on the parameter`.
 
 Limits, measured on the same tree:
 
