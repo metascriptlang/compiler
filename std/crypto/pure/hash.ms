@@ -129,16 +129,6 @@ export function hashOf(kind: int32, data: Readonly<uint8[]>): uint8[] {
 	return finishHash(h);
 }
 
-const oneShotStates: HashState[] = [];
-
-export function hashOfReusing(kind: int32, data: Readonly<uint8[]>): uint8[] {
-	while (oneShotStates.length <= kind) oneShotStates.push(newHash(oneShotStates.length));
-	const h = oneShotStates[kind];
-	resetHash(h);
-	updateHash(h, data);
-	return finishHash(h);
-}
-
 function hex(kind: int32, text: string): string {
 	return hashOf(kind, text.asBytes().slice(0)).encodeHex();
 }

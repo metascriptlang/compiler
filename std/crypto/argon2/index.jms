@@ -36,11 +36,11 @@ export interface Argon2Limits {
 	parallelism: int32;
 }
 
-export const defaultArgon2Limits: Argon2Limits = {
-	memoryCost: DEFAULT_MEMORY_COST * 4,
-	timeCost: DEFAULT_TIME_COST * 4,
-	parallelism: DEFAULT_PARALLELISM * 4,
-};
+function freshDefaultLimits(): Argon2Limits {
+	return { memoryCost: DEFAULT_MEMORY_COST * 4, timeCost: DEFAULT_TIME_COST * 4, parallelism: DEFAULT_PARALLELISM * 4 };
+}
+
+export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
 
 /** The raw hash, or null when the platform could not allocate the memory the parameters ask for. */
 function hashRaw(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): Buffer | null {
@@ -132,7 +132,7 @@ function withinLimits(encoded: string, limits: Argon2Limits): boolean {
  * malformed, or asks for more than `limits` allows. A plain boolean, so `if (await argon2Verify(...))`
  * can never accept a hash that was refused.
  */
-export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): boolean {
+export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon2Limits = freshDefaultLimits()): boolean {
 	if (!withinLimits(encoded, limits)) return false;
 	const fields = decodeArgon2id(encoded);
 	if (fields == null || fields.version > 2147483647) return false;
@@ -140,4 +140,4 @@ export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon
 	return hash != null && timingSafeEqual(hash, fields.hash as Buffer);
 }
 
-export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): Promise<boolean> { return argon2VerifySync(encoded, password, limits); }
+export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = freshDefaultLimits()): Promise<boolean> { return argon2VerifySync(encoded, password, limits); }

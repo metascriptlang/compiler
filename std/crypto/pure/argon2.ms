@@ -1,6 +1,6 @@
 import { newBlake2b, updateBlake2b, finishBlake2bInto } from "./blake2b";
 
-const noKey: uint8[] = [];
+const noKey: Readonly<uint8[]> = [];
 const syncPoints = 4;
 
 /** Scratch for one Argon2 run: the block under compression, the address blocks and the byte forms the hashes read. */

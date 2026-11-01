@@ -13,7 +13,7 @@ import { Bytes } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { pemDecode, pemEncode } from "../pure/pem";
 import {
-	Curve, EcPublicData, EcPrivateData, ecPublicFromSpki, ecPublicToSpki, ecPrivateFromSec1, ecPrivateFromPkcs8,
+	Curve, ownCurve, EcPublicData, EcPrivateData, ecPublicFromSpki, ecPublicToSpki, ecPrivateFromSec1, ecPrivateFromPkcs8,
 	ecPrivateToSec1, ecPrivateToPkcs8, ecdsaDerToRaw, ecdsaRawToDer, ecdsaSignRaw, ecdsaVerifyRaw, ecdhShared, ecPointValid,
 	ecPublicPoint, ecRandomScalar,
 } from "../pure/weierstrass";
@@ -133,23 +133,25 @@ extern function wcDerive(cache: unknown, pkcs8: Buffer, web: string, peerCache: 
 
 export type EcCurve = "p256" | "p384";
 
-const curves: Curve[] = [p256, p384];
+function curves(): Curve[] {
+	return [ownCurve(p256), ownCurve(p384)];
+}
 
 function curveNamed(curve: EcCurve): Curve {
-	return curve == "p384" ? p384 : p256;
+	return ownCurve(curve == "p384" ? p384 : p256);
 }
 
 function publicOfPem(pem: string): EcPublicData | null {
 	const block = pemDecode(pem);
 	if (block == null || block.label != "PUBLIC KEY") return null;
-	return ecPublicFromSpki(block.der, curves);
+	return ecPublicFromSpki(block.der, curves());
 }
 
 function privateOfPem(pem: string): EcPrivateData | null {
 	const block = pemDecode(pem);
 	if (block == null) return null;
-	if (block.label == "PRIVATE KEY") return ecPrivateFromPkcs8(block.der, curves);
-	if (block.label == "EC PRIVATE KEY") return ecPrivateFromSec1(block.der, curves);
+	if (block.label == "PRIVATE KEY") return ecPrivateFromPkcs8(block.der, curves());
+	if (block.label == "EC PRIVATE KEY") return ecPrivateFromSec1(block.der, curves());
 	return null;
 }
 
@@ -278,7 +280,7 @@ export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Byte
 // The two keys must be on the same curve.
 export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Result<Buffer, CryptoError> {
 	const curve = privateKey._data.curve;
-	if (publicKey._data.curve != curve) return Result.err(agreementFailed(""));
+	if (publicKey._data.curve.name != curve.name) return Result.err(agreementFailed(""));
 	const shared = ecdhShared(curve, privateKey._data.d, publicKey._data.point);
 	if (shared == null) return Result.err(agreementFailed(""));
 	return Result.ok(shared as Buffer);
@@ -286,7 +288,7 @@ export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Resu
 
 export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> {
 	const curve = privateKey._data.curve;
-	if (publicKey._data.curve != curve) return Result.err(agreementFailed(""));
+	if (publicKey._data.curve.name != curve.name) return Result.err(agreementFailed(""));
 	const done = await wcDerive(privateKey._cache, ecPrivateToPkcs8(privateKey._data) as Buffer, curve.webName, publicKey._cache, publicKey._data.point as Buffer, curve.size * 8);
 	if (done.error != "") return Result.err(agreementFailed(`: ${done.error}`));
 	return Result.ok(done.value);

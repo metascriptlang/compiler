@@ -2,7 +2,7 @@ import { encodeHex, decodeHex } from "../../core/encoding";
 import { add, sub, mul, sqr, inv, bigFromBytes, bigToBytes } from "./field25519";
 
 const a24 = 121665n;
-const swapMasks: bigint[] = [0n, (1n << 256n) - 1n];
+const swapMasks: Readonly<bigint[]> = [0n, (1n << 256n) - 1n];
 
 /** The RFC 7748 Montgomery ladder: 255 steps that swap by mask, never by branch. An all-zero result means a low-order input. */
 export function x25519(scalar: Readonly<uint8[]>, u: Readonly<uint8[]>): uint8[] {

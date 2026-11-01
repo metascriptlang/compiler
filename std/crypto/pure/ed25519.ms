@@ -27,7 +27,7 @@ function basePoint(): Point {
 }
 
 /** add-2008-hwcd-3, complete for this curve, so the identity and doubling need no special case. */
-function addPoints(p: Point, q: Point): Point {
+function addPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
 	const a = mul(sub(p.y, p.x), sub(q.y, q.x));
 	const b = mul(add(p.y, p.x), add(q.y, q.x));
 	const c = mul(mul(p.t, curveD2), q.t);
@@ -40,7 +40,7 @@ function addPoints(p: Point, q: Point): Point {
 }
 
 /** dbl-2008-hwcd with a = -1. */
-function doublePoint(p: Point): Point {
+function doublePoint(p: Readonly<Point>): Point {
 	const a = sqr(p.x);
 	const b = sqr(p.y);
 	const c = mul(2n, sqr(p.z));
@@ -51,14 +51,12 @@ function doublePoint(p: Point): Point {
 	return { x: mul(e, f), y: mul(g, h), z: mul(f, g), t: mul(e, h) };
 }
 
-function negatePoint(p: Point): Point {
+function negatePoint(p: Readonly<Point>): Point {
 	return { x: mod(P - p.x), y: p.y, z: p.z, t: mod(P - p.t) };
 }
 
-// 64 windows of 4 bits; entry i * 16 + d holds d * 16^i * B, built on first use.
-let baseTable: Point[] = [];
-
-function buildBaseTable(): void {
+// 64 windows of 4 bits; entry i * 16 + d holds d * 16^i * B, built once at module init.
+function buildBaseTable(): Point[] {
 	const table: Point[] = [];
 	let windowBase = basePoint();
 	for (let i = 0; i < 64; i++) {
@@ -69,8 +67,10 @@ function buildBaseTable(): void {
 		}
 		windowBase = doublePoint(doublePoint(doublePoint(doublePoint(windowBase))));
 	}
-	baseTable = table;
+	return table;
 }
+
+const baseTable: Readonly<Point[]> = buildBaseTable();
 
 function nibble(scalar: Readonly<uint8[]>, index: int32): int32 {
 	return ((scalar[index >> 1] as int32) >> ((index & 1) * 4)) & 15;
@@ -78,7 +78,6 @@ function nibble(scalar: Readonly<uint8[]>, index: int32): int32 {
 
 /** [scalar]B for a 32-byte little-endian scalar: every window adds one table entry, whatever its value, so no branch reads the scalar. */
 function mulBase(scalar: Readonly<uint8[]>): Point {
-	if (baseTable.length == 0) buildBaseTable();
 	let sum = identity();
 	for (let i = 0; i < 64; i++) sum = addPoints(sum, baseTable[i * 16 + nibble(scalar, i)]);
 	return sum;
@@ -127,7 +126,7 @@ function decodePoint(bytes: Readonly<uint8[]>): Point | null {
 
 // The eight small-order points with the sign bit cleared, plus the non-canonical aliases of y = 0 and y = 1:
 // a public key or R from this set verifies a forged signature, so both are refused.
-const smallOrder: string[] = [
+const smallOrder: Readonly<string[]> = [
 	"0000000000000000000000000000000000000000000000000000000000000000",
 	"0100000000000000000000000000000000000000000000000000000000000000",
 	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
@@ -141,7 +140,11 @@ function isSmallOrder(encoded: Readonly<uint8[]>, from: int32): boolean {
 	const y = new Array<uint8>(32);
 	for (let i = 0; i < 32; i++) y[i] = encoded[from + i];
 	y[31] = y[31] & 127;
-	return smallOrder.includes(y.encodeHex());
+	const text = y.encodeHex();
+	for (const known of smallOrder) {
+		if (known == text) return true;
+	}
+	return false;
 }
 
 /** The signature shape every backend refuses before any curve work: wrong sizes, small-order key or R, S not below L. */

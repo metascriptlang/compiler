@@ -16,7 +16,7 @@ import { Bytes } from "std/core/buffer/bytes";
 import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "../core/encoding";
 import { bytesOf } from "./pure/bytes";
 import { HashState } from "./pure/state";
-import { hashKind, newHash, updateHash, finishHash, hashOfReusing } from "./pure/hash";
+import { hashKind, newHash, updateHash, finishHash, hashOf } from "./pure/hash";
 import { HmacState, newHmac, updateHmac, finishHmac, hmacOf, pbkdf2Of, hkdfOf } from "./pure/hmac";
 import { CryptoError, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidAlgorithm, invalidInput, invalidEncoding } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
@@ -109,7 +109,7 @@ export function cleanup(): void {}
 export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hashOfReusing(kind, bytesOf(data)) as Buffer);
+	return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
 }
 
 export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {

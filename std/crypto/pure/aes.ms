@@ -65,10 +65,11 @@ function buildTables(box: Readonly<uint8[]>, decode: boolean): uint32[] {
 	return tables;
 }
 
-const sbox = buildSbox();
-const invSbox = buildInverse(sbox);
-const encTables = buildTables(sbox, false);
-const decTables = buildTables(invSbox, true);
+// Each is built from a fresh table, never from another const, so each stays a const the spawn rule accepts.
+const sbox: Readonly<uint8[]> = buildSbox();
+const invSbox: Readonly<uint8[]> = buildInverse(buildSbox());
+const encTables: Readonly<uint32[]> = buildTables(buildSbox(), false);
+const decTables: Readonly<uint32[]> = buildTables(buildInverse(buildSbox()), true);
 
 function subWord(n: uint32): uint32 {
 	return (sbox[n & 0xff] as uint32) | ((sbox[(n >> 8) & 0xff] as uint32) << 8) | ((sbox[(n >> 16) & 0xff] as uint32) << 16) | ((sbox[n >> 24] as uint32) << 24);

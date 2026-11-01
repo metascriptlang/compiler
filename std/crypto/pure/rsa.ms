@@ -60,7 +60,7 @@ function isRsaAlgorithm(buf: Readonly<uint8[]>, algorithm: DerItem): boolean {
 	if (algorithm.tag != tagSequence) return false;
 	const parts = derChildren(buf, algorithm);
 	if (parts == null || parts.length != 2) return false;
-	return parts[0].tag == tagOid && derSame(buf, parts[0], oidRsaEncryption) && parts[1].tag == tagNull && parts[1].end == parts[1].body;
+	return parts[0].tag == tagOid && derSame(buf, parts[0], oidRsaEncryption()) && parts[1].tag == tagNull && parts[1].end == parts[1].body;
 }
 
 export function rsaPublicFromSpki(der: Readonly<uint8[]>): RsaPublicData | null {
@@ -76,7 +76,7 @@ export function rsaPublicFromSpki(der: Readonly<uint8[]>): RsaPublicData | null 
 }
 
 function rsaAlgorithm(): uint8[] {
-	return derSequence([derOidOf(oidRsaEncryption), derTlv(tagNull, [])]);
+	return derSequence([derOidOf(oidRsaEncryption()), derTlv(tagNull, [])]);
 }
 
 function unsignedOf(value: bigint): uint8[] {
@@ -141,12 +141,12 @@ export function rsaPublicOf(key: RsaPrivateData): RsaPublicData {
 	return { n: key.n, e: key.e };
 }
 
-const digestPrefixSha1: uint8[] = [0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14];
-const digestPrefixSha256: uint8[] = [0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20];
-const digestPrefixSha384: uint8[] = [0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30];
-const digestPrefixSha512: uint8[] = [0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40];
+const digestPrefixSha1: Readonly<uint8[]> = [0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14];
+const digestPrefixSha256: Readonly<uint8[]> = [0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20];
+const digestPrefixSha384: Readonly<uint8[]> = [0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30];
+const digestPrefixSha512: Readonly<uint8[]> = [0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40];
 
-function digestPrefix(hash: string): uint8[] | null {
+function digestPrefix(hash: string): Readonly<uint8[]> | null {
 	if (hash == "sha1") return digestPrefixSha1;
 	if (hash == "sha256") return digestPrefixSha256;
 	if (hash == "sha384") return digestPrefixSha384;
@@ -314,24 +314,23 @@ export function rsaOaepDecrypt(key: RsaPrivateData, ciphertext: Readonly<uint8[]
 	return slice(block, at + 1, block.length as int32);
 }
 
-const smallPrimes: int32[] = [];
-
-function smallPrimeList(): int32[] {
-	if (smallPrimes.length == 0) {
-		for (let candidate = 3; candidate < 2000; candidate += 2) {
-			let prime = true;
-			for (const known of smallPrimes) {
-				if (known * known > candidate) break;
-				if (candidate % known == 0) {
-					prime = false;
-					break;
-				}
+function oddPrimesBelow2000(): int32[] {
+	const primes: int32[] = [];
+	for (let candidate = 3; candidate < 2000; candidate += 2) {
+		let prime = true;
+		for (const known of primes) {
+			if (known * known > candidate) break;
+			if (candidate % known == 0) {
+				prime = false;
+				break;
 			}
-			if (prime) smallPrimes.push(candidate);
 		}
+		if (prime) primes.push(candidate);
 	}
-	return smallPrimes;
+	return primes;
 }
+
+const smallPrimes: Readonly<int32[]> = oddPrimesBelow2000();
 
 function millerRabin(n: bigint, rounds: int32): boolean {
 	let odd = n - 1n;
@@ -358,7 +357,7 @@ function millerRabin(n: bigint, rounds: int32): boolean {
 }
 
 function randomPrime(bits: int32, e: bigint): bigint {
-	const small = smallPrimeList();
+	const small = smallPrimes;
 	while (true) {
 		const bytes = randomOctets(bits >> 3);
 		bytes[0] = (bytes[0] | 0xc0) as uint8;

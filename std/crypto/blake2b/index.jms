@@ -10,7 +10,6 @@ import { Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, blake2bOf } fro
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-const noKey: uint8[] = [];
 
 function badHashSize(hashSize: int32, op: string): CryptoError | null {
 	if (hashSize < 1 || hashSize > 64) {
@@ -24,7 +23,7 @@ function badHashSize(hashSize: int32, op: string): CryptoError | null {
 export function blake2bSync(data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, noKey, bytesOf(data)) as Buffer);
+	return Result.ok(blake2bOf(hashSize, [], bytesOf(data)) as Buffer);
 }
 
 export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
@@ -66,5 +65,5 @@ export class Blake2b {
 export function createBlake2b(hashSize: int32 = 32): Result<Blake2b, CryptoError> {
 	const bad = badHashSize(hashSize, "createBlake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok({ _state: newBlake2b(hashSize, noKey) });
+	return Result.ok({ _state: newBlake2b(hashSize, []) });
 }

@@ -91,7 +91,9 @@ function invalidKey(operation: string, message: string): CryptoError {
 	return cryptoError(CryptoErrorKind.InvalidKey, operation, message);
 }
 
-const basePoint: uint8[] = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+function basePointBytes(): uint8[] {
+	return [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
 
 export class X25519PublicKey {
 	_raw: Buffer;
@@ -138,7 +140,7 @@ export class X25519PrivateKey {
 	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
-		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePoint) as Buffer, _key: xNone() } });
+		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
 	}
 
 	static async fromRaw(raw: Bytes): Promise<Result<X25519PrivateKey, CryptoError>> {

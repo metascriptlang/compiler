@@ -48,11 +48,11 @@ export interface Argon2Limits {
 	parallelism: int32;
 }
 
-export const defaultArgon2Limits: Argon2Limits = {
-	memoryCost: DEFAULT_MEMORY_COST * 4,
-	timeCost: DEFAULT_TIME_COST * 4,
-	parallelism: DEFAULT_PARALLELISM * 4,
-};
+function freshDefaultLimits(): Argon2Limits {
+	return { memoryCost: DEFAULT_MEMORY_COST * 4, timeCost: DEFAULT_TIME_COST * 4, parallelism: DEFAULT_PARALLELISM * 4 };
+}
+
+export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
 
 // ===== Argon2id Password Hashing =====
 // Every function completes inline on C: the hash runs on the calling thread for its full cost
@@ -135,8 +135,8 @@ function withinLimits(encoded: string, limits: Argon2Limits): boolean {
  * malformed, or asks for more than `limits` allows. A plain boolean, so `if (await argon2Verify(...))`
  * can never accept a hash that was refused.
  */
-export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): boolean {
+export function argon2VerifySync(encoded: string, password: Bytes, limits: Argon2Limits = freshDefaultLimits()): boolean {
 	return withinLimits(encoded, limits) && msCryptoArgon2Verify(encoded, rawString(password));
 }
 
-export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = defaultArgon2Limits): Promise<boolean> { return argon2VerifySync(encoded, password, limits); }
+export async function argon2Verify(encoded: string, password: Bytes, limits: Argon2Limits = freshDefaultLimits()): Promise<boolean> { return argon2VerifySync(encoded, password, limits); }
