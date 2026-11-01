@@ -1675,7 +1675,26 @@ function rebindRedeclaredLocals(params: Symbol[], body: Node): void {
 function collectWireDeclared(node: Node, into: Symbol[]): void {
 	const sym = _wireDeclared.get(node);
 	if (sym != null) into.push(sym);
+	if (node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern) collectPatternBindings(node, into);
 	forEachChild(node, (child: Node): void => { if (child != null) collectWireDeclared(child, into); });
+}
+
+function collectPatternBindings(pattern: Node, into: Symbol[]): void {
+	const names: Node[] = [];
+	if (pattern.kind == NodeKind.ArrayPattern) {
+		for (const elem of (pattern.data as ArrayPatternData).patternElements) {
+			if (elem != null) names.push(elem.kind == NodeKind.SpreadExpr ? (elem.data as SpreadExprData).spreadArg : elem);
+		}
+	} else {
+		for (const prop of (pattern.data as ObjectPatternData).patternProps) {
+			if (prop == null) continue;
+			names.push(prop.kind == NodeKind.SpreadExpr ? (prop.data as SpreadExprData).spreadArg
+				: prop.kind == NodeKind.ObjectPatternProp ? (prop.data as ObjectPatternPropData).propAlias : prop);
+		}
+	}
+	for (const n of names) {
+		if (n != null && n.kind == NodeKind.Identifier && n.resolvedSym != null) into.push(n.resolvedSym);
+	}
 }
 
 function unbindDeclared(body: Node, declared: Symbol[]): void {
