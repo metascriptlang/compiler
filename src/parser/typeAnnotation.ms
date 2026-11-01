@@ -10,7 +10,7 @@
 
 import { Token, TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, createNode, createNodeAt, makeLoc, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData, TypeArrayData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, finishNode, finishToken } from "./cursor";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError, finishNode, finishToken, markState, restoreTokenCursor } from "./cursor";
 import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
 
@@ -102,9 +102,10 @@ export function captureType(state: ParserState, leavesQuestion: boolean = false)
 	skipTypeAnnotation(state, leavesQuestion);
 	const end = state.position;
 	const text = collectTokenText(state, start, end);
+	const endMark = markState(state);
 	state.position = start;
 	const expr = parseTypeExpr(state, leavesQuestion);
-	state.position = end;
+	restoreTokenCursor(state, endMark);
 	finishNode(state, expr);
 	return { text, expr };
 }
@@ -1159,4 +1160,88 @@ test "a tuple type takes an array suffix" {
 	assert skipsType("[string, string | null][]");
 	assert skipsType("readonly [string, string][]");
 	assert skipsType("([string, number] | null)[]");
+}
+
+
+test "positioned capture restores nested callback endpoints and spans" {
+	for (const annotation of [
+		"(value: Array<Array<int32>>) => void",
+		"(value: Array<Array<Array<int32>>>) => void",
+	]) {
+		const tokens = lex(annotation + " = value");
+		assert tokens.ok;
+		const state = createState(tokens.value);
+		const captured = captureType(state);
+		assert captured.text == annotation;
+		assert current(state).kind == TokenKind.Assign;
+		assert state.errors.length == 0;
+		assert captured.expr.kind == NodeKind.TypeFunction;
+		assert captured.expr.location.column == 1;
+		assert captured.expr.location.endColumn == annotation.byteLength + 1;
+		const parameter = (captured.expr.data as TypeFunctionData).typExprParams[0];
+		assert parameter.kind == NodeKind.TypeGeneric;
+		assert parameter.location.column == 9;
+		assert parameter.location.endColumn == annotation.indexOf(")") + 1;
+	}
+}
+
+test "positioned capture restores parenthesized array endpoints and spans" {
+	for (const annotation of [
+		"(Box<Box<string>>)[]",
+		"(Box<Box<Box<string>>>)[]",
+	]) {
+		const tokens = lex(annotation + "; const after = 1;");
+		assert tokens.ok;
+		const state = createState(tokens.value);
+		const captured = captureType(state);
+		assert current(state).kind == TokenKind.Semicolon;
+		assert state.errors.length == 0;
+		assert captured.expr.kind == NodeKind.TypeArray;
+		assert captured.expr.location.endColumn == annotation.byteLength + 1;
+		const element = (captured.expr.data as TypeArrayData).typExprElement;
+		assert element.kind == NodeKind.TypeGeneric;
+		assert element.location.column == 2;
+		assert element.location.endColumn == annotation.indexOf(")") + 1;
+		advance(state);
+		assert current(state).kind == TokenKind.Const;
+	}
+}
+
+test "positioned capture preserves splits made by its first scan" {
+	const source = "Pair<Array<int32>, (x: Box<Box<int32>>) => void> = value";
+	const scannedTokens = lex(source);
+	const capturedTokens = lex(source);
+	assert scannedTokens.ok && capturedTokens.ok;
+	const scanned = createState(scannedTokens.value);
+	skipTypeAnnotation(scanned);
+	assert scanned.splits.length > 0;
+	const state = createState(capturedTokens.value);
+	captureType(state);
+	assert current(state).kind == TokenKind.Assign;
+	assert state.splits.length == scanned.splits.length;
+	assert state.tokens.length == scanned.tokens.length;
+	for (let i = 0; i < state.tokens.length; i += 1) {
+		assert state.tokens[i].kind == scanned.tokens[i].kind;
+		assert state.tokens[i].value == scanned.tokens[i].value;
+		assert state.tokens[i].column == scanned.tokens[i].column;
+	}
+}
+
+test "positioned capture retains committed diagnostics and recovery state" {
+	const source = "(first?: Box<Box<int32>>, second: int32) => void = value";
+	for (const leavesQuestion of [false, true]) {
+		const directTokens = lex(source);
+		const capturedTokens = lex(source);
+		assert directTokens.ok && capturedTokens.ok;
+		const direct = createState(directTokens.value);
+		parseTypeExpr(direct, leavesQuestion);
+		assert direct.errors.length == 1;
+		assert direct.panicMode;
+		const state = createState(capturedTokens.value);
+		captureType(state, leavesQuestion);
+		assert state.errors.length == direct.errors.length;
+		assert state.errors[0] == direct.errors[0];
+		assert state.panicMode == direct.panicMode;
+		assert current(state).kind == TokenKind.Assign;
+	}
 }

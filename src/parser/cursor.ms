@@ -59,13 +59,17 @@ export function markState(state: ParserState): ParserMark {
 }
 
 export function rewindState(state: ParserState, mark: ParserMark): void {
-	state.position = mark.position;
+	restoreTokenCursor(state, mark);
 	while (state.errors.length > mark.errorCount) state.errors.pop();
 	state.panicMode = mark.panicMode;
 	state.pendingTypeArg = mark.pendingTypeArg;
 	state.noBareArrow = mark.noBareArrow;
 	state.noArrowReturnType = mark.noArrowReturnType;
 	while (state.trailingDecls.length > mark.trailingDeclCount) state.trailingDecls.pop();
+}
+
+export function restoreTokenCursor(state: ParserState, mark: ParserMark): void {
+	state.position = mark.position;
 	while (state.splits.length > mark.splitCount) {
 		const split = state.splits.pop()!;
 		state.tokens.splice(split.position, 2, split.original);

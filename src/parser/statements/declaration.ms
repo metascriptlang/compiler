@@ -2,11 +2,11 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ConstructorDeclData, BlockStmtData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, TypeFunctionData, TypeGenericData, IdentifierData, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, MethodDeclData, ConstructorDeclData, BlockStmtData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, finishNode, finishOnce, finishAfter, finishToken } from "../cursor";
 import { skipGenericParams, captureGenericParams, captureDeclarationTypeParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
-import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
+import { skipTypeAnnotation, parseTypeExpr, captureType } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, isDeclaredMemberName, liftParamModifiers } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
@@ -636,16 +636,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	const typeStart = state.position;
-	skipTypeAnnotation(state);
-	const typeEnd = state.position;
-	const aliasType = collectTokenText(state, typeStart, typeEnd);
-	// Build positioned TypeExpr by re-parsing the same range
-	const savedPos = state.position;
-	state.position = typeStart;
-	const aliasTypeExpr = parseTypeExpr(state);
-	state.position = savedPos;
-	finishNode(state, aliasTypeExpr);
+	const captured = captureType(state);
+	const aliasType = captured.text;
+	const aliasTypeExpr = captured.expr;
 	consumeSemicolon(state);
 
 	const aliasNode = createNode(NodeKind.TypeAliasDecl, {
@@ -2991,4 +2984,69 @@ test "quoted declaration bindings retain their annotation carrier" {
 	const node = stmtAt(source, 0);
 	assert (node.data as DestructuringDeclData).destrType != "";
 	assert node.typeExpr != null;
+}
+
+
+test "type alias replay preserves nested callbacks and a following declaration" {
+	for (const annotation of [
+		"(p: Array<Array<int32>>) => void",
+		"(p: Array<Array<Array<int32>>>) => void",
+		"{ cb: (p: Array<Array<int32>>) => void; }",
+		"{ cb: (p: Array<Array<Array<int32>>>) => void; }",
+	]) {
+		for (const separator of ["; ", "\n"]) {
+			const prefix = "type Callback = distinct ";
+			const source = prefix + annotation + separator + "const after = 1;";
+			const parsed = parseSource(source);
+			assert parsed.ok, parsed.ok ? "" : parsed.error;
+			const statements = (parsed.value.data as ProgramData).programStmts;
+			assert statements.length == 2;
+			const alias = statements[0];
+			assert (alias.data as TypeAliasDeclData).aliasIsDistinct;
+			assert alias.typeExpr != null;
+			assert alias.typeExpr!.location.column == prefix.byteLength + 1;
+			assert alias.typeExpr!.location.endColumn
+				== prefix.byteLength + annotation.byteLength + 1;
+			assert statements[1].kind == NodeKind.VariableDecl;
+			assert (statements[1].data as VariableDeclData).declName == "after";
+		}
+	}
+}
+
+test "type alias replay retains committed nested callback errors" {
+	for (const annotation of [
+		"(first?: Box<Box<int32>>, second: int32) => void",
+		"{ cb: (first?: Box<Box<int32>>, second: int32) => void; }",
+	]) {
+		const error = parseError("type Bad = " + annotation + "; const after = 1;");
+		assert error.contains(
+			"A required parameter cannot follow an optional parameter",
+		);
+	}
+}
+
+test "nested callback defaults retain positioned earlier parameter references" {
+	const source = "type Callback<T, U = (p: Array<Array<T>>) => T> = U;"
+		+ " const after = 1;";
+	const parsed = parseSource(source);
+	assert parsed.ok, parsed.ok ? "" : parsed.error;
+	const statements = (parsed.value.data as ProgramData).programStmts;
+	assert statements.length == 2;
+	const defaults = statements[0].genericDefaults;
+	assert defaults != null && defaults.length == 2;
+	assert defaults![0] == null;
+	const annotation = defaults![1];
+	assert annotation != null && annotation.kind == NodeKind.TypeAnnotation;
+	assert annotation!.typeExpr != null;
+	const callback = annotation!.typeExpr!;
+	assert callback.kind == NodeKind.TypeFunction;
+	const signature = callback.data as TypeFunctionData;
+	const outer = signature.typExprParams[0].data as TypeGenericData;
+	const inner = outer.typExprArgs[0].data as TypeGenericData;
+	const reference = inner.typExprArgs[0];
+	assert reference.kind == NodeKind.Identifier;
+	assert (reference.data as IdentifierData).name == "T";
+	assert (signature.typExprReturn.data as IdentifierData).name == "T";
+	assert reference.location.column > callback.location.column;
+	assert (statements[1].data as VariableDeclData).declName == "after";
 }
