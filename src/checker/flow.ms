@@ -271,6 +271,66 @@ function endsInNeverCall(flow: FlowNode | null): boolean {
 	return false;
 }
 
+interface PostSuperQuery {
+	reduceLabels: FlowReduceLabelData[];
+	shared: FlowNode[];
+	sharedPostSuper: boolean[];
+}
+
+// True when every path that reaches `flow` from the start of its routine passes a `super(...)` call.
+export function isPostSuperFlowNode(flow: FlowNode): boolean {
+	return postSuperAt({ reduceLabels: [], shared: [], sharedPostSuper: [] }, flow, false);
+}
+
+function postSuperAt(query: PostSuperQuery, start: FlowNode, cached: boolean): boolean {
+	let flow: FlowNode | null = start;
+	let noCacheCheck = cached;
+	while (flow != null) {
+		const flags = flow.flags;
+		if (flags.has(FlowFlag.Shared)) {
+			if (!noCacheCheck) {
+				const at = query.shared.indexOf(flow);
+				if (at >= 0) return query.sharedPostSuper[at];
+				const postSuper = postSuperAt(query, flow, true);
+				query.shared.push(flow);
+				query.sharedPostSuper.push(postSuper);
+				return postSuper;
+			}
+			noCacheCheck = false;
+		}
+		if (flags.has(FlowFlag.Assignment) || flags.has(FlowFlag.TrueCondition) || flags.has(FlowFlag.FalseCondition)
+				|| flags.has(FlowFlag.ArrayMutation) || flags.has(FlowFlag.SwitchClause)) {
+			flow = flow.antecedent;
+		} else if (flags.has(FlowFlag.Call)) {
+			if (isSuperCall(flow.node)) return true;
+			flow = flow.antecedent;
+		} else if (flags.has(FlowFlag.BranchLabel)) {
+			let list = branchLabelAntecedents(query.reduceLabels, flow);
+			while (list != null) {
+				if (!postSuperAt(query, list.flow, false)) return false;
+				list = list.next;
+			}
+			return true;
+		} else if (flags.has(FlowFlag.LoopLabel)) {
+			flow = flow.antecedents != null ? flow.antecedents.flow : null;
+		} else if (flags.has(FlowFlag.ReduceLabel)) {
+			query.reduceLabels.push(flow.reduceLabelData!);
+			const result = postSuperAt(query, flow.antecedent!, false);
+			query.reduceLabels.pop();
+			return result;
+		} else {
+			return flags.has(FlowFlag.Unreachable);
+		}
+	}
+	return false;
+}
+
+function isSuperCall(node: Node | null): boolean {
+	if (node == null || node.kind != NodeKind.CallExpr) return false;
+	const callee = (node.data as CallExprData).callee;
+	return callee != null && callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super";
+}
+
 // Phase 4: Ref<T> nullability query for --strict-nil. Walks the flow graph
 // looking for a dominating TrueCondition `ref !== null` (or FalseCondition
 // `ref === null`). Returns true if at least one such check exists on every
