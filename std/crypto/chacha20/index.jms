@@ -1,0 +1,78 @@
+/**
+ * XChaCha20-Poly1305 on the JavaScript backend: the same surface and sealed layout as index.cms
+ * (nonce(24) || cipherText || mac(16)). WebCrypto has no ChaCha20, so every form runs the portable
+ * code in `std/crypto/pure`, and the async forms call the `*Sync` forms.
+ *
+ * A `ChaChaKey` holds its key words for as long as it is referenced; JavaScript runs no destructor, so
+ * nothing wipes them.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { bytesOf } from "../pure/bytes";
+import { keyWords, xchachaSealInto, xchachaOpenInto } from "../pure/chacha";
+import { randomBytesSync } from "../index";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+/** An XChaCha20-Poly1305 key (32 bytes). */
+export class ChaChaKey {
+	_raw: Buffer;
+	_words: uint32[];
+
+	/** From exactly 32 raw bytes. */
+	static import(raw: Bytes): Result<ChaChaKey, CryptoError> {
+		const bytes = bytesOf(raw);
+		if (bytes.length != 32) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ChaChaKey.import", "key must be 32 bytes"));
+		}
+		const key: ChaChaKey = { _raw: bytes.slice(0), _words: [0, 0, 0, 0, 0, 0, 0, 0] };
+		keyWords(key._raw, key._words);
+		return Result.ok(key);
+	}
+
+	/** A random key from the platform source. */
+	static generate(): Result<ChaChaKey, CryptoError> {
+		const drawn = randomBytesSync(32);
+		if (!drawn.ok) {
+			return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "ChaChaKey.generate", "the platform random source failed"));
+		}
+		return ChaChaKey.import(drawn.value);
+	}
+
+	/** A copy of the raw key bytes, for the caller that must store it. */
+	exportRaw(): Buffer {
+		return this._raw.slice(0);
+	}
+}
+
+// ===== AEAD Encryption =====
+
+/** Encrypt with XChaCha20-Poly1305. Returns nonce(24) || cipherText || mac(16) as one Buffer. */
+export function sealSync(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
+	const nonce = randomBytesSync(24);
+	if (!nonce.ok) {
+		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "the platform random source failed"));
+	}
+	const text = bytesOf(plainText);
+	const sealed = Buffer.alloc(24 + text.length + 16);
+	for (let i = 0; i < 24; i++) sealed[i] = nonce.value[i];
+	xchachaSealInto(key._words, bytesOf(aad), text, sealed);
+	return Result.ok(sealed);
+}
+
+export async function seal(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return sealSync(key, plainText, aad); }
+
+export function openSync(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
+	const sealed = bytesOf(sealedBytes);
+	if (sealed.length < 40) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
+	}
+	const plain = Buffer.alloc(sealed.length - 40);
+	if (!xchachaOpenInto(key._words, bytesOf(aad), sealed, plain)) {
+		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
+	}
+	return Result.ok(plain);
+}
+
+export async function open(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return openSync(key, sealedBytes, aad); }
