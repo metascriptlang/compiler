@@ -1,2 +1,3 @@
 /** Exchanges the values held at `a` and `b`: each place is evaluated once, and the bytes trade places with no copy, count or destroy. */
+@builtin("Swap")
 export extern function swap<T>(ref a: T, ref b: T): void from "msSwap";

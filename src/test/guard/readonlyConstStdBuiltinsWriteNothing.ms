@@ -84,6 +84,13 @@ const cases: Case[] = [
 			+ `function read(): int32 { let n: int32 = 0; for (const k of [${FARM_KEYS}]) n += M.readonlyGet(k) ?? 0; return n; }\n` + RUN,
 	},
 	{
+		name: "a Set<int32> read of the const (Swap in its compaction)",
+		refused: false,
+		targets: ["c"],
+		text: "const S: Readonly<Set<int32>> = new Set<int32>([1, 2, 3]);\n"
+			+ "function read(): int32 { return S.has(2) ? 1 : 0; }\n" + RUN,
+	},
+	{
 		name: "the bytes of a string field of the const, sliced (AsBytes)",
 		refused: false,
 		targets: ["c", "js"],
