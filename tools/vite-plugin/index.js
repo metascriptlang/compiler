@@ -40,9 +40,14 @@ export default function metascript(options = {}) {
 	let watchFiles = new Set(entry ? [entry] : []);
 	let stopWatching = null;
 
+	function exactWatchFiles() {
+		return [...watchFiles, ...configFiles, ...(options.msc ? [canon(resolve(options.msc))] : [])];
+	}
+
 	function registerWatchFiles(context) {
-		for (const file of watchFiles) context?.addWatchFile(file);
-		if (server) server.watcher.add([...watchFiles, ...(options.sourceDeclarations ? sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]) : [])]);
+		const files = exactWatchFiles();
+		for (const file of files) context?.addWatchFile(file);
+		if (server) server.watcher.add([...files, ...(options.sourceDeclarations ? sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]) : [])]);
 	}
 
 	function requireCurrentGeneration() {
@@ -55,8 +60,6 @@ export default function metascript(options = {}) {
 		dirty = true;
 		if (entries.length === 0) entries = [entry];
 		for (const file of entries) watchFiles.add(file);
-		for (const file of configFiles) watchFiles.add(file);
-		if (options.msc) watchFiles.add(canon(resolve(options.msc)));
 		registerWatchFiles(context);
 		if (options.sourceDeclarations) {
 			publisher ??= createSourceDeclarationPublisher(options.sourceDeclarations, root);
@@ -69,7 +72,7 @@ export default function metascript(options = {}) {
 		} catch (error) { publisher?.invalidate(); throw error; }
 		emitted = next;
 		dirty = false;
-		watchFiles = new Set([...next.dependencies, ...configFiles, ...(options.msc ? [canon(resolve(options.msc))] : [])]);
+		watchFiles = new Set(next.dependencies);
 		registerWatchFiles(context);
 	}
 
@@ -77,7 +80,7 @@ export default function metascript(options = {}) {
 		const source = canon(ctx.file);
 		if (emitted?.byOutput.has(source)) return [];
 		if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, outDir).test(source)) return [];
-		if (!watchFiles.has(source) && !(options.sourceDeclarations && /\.(ms|jms)$/.test(source) && sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]).some(path => source.startsWith(`${path}/`)))) return;
+		if (!exactWatchFiles().includes(source) && !(options.sourceDeclarations && /\.(ms|jms)$/.test(source) && sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]).some(path => source.startsWith(`${path}/`)))) return;
 		const previous = emitted;
 		try {
 			emit(context);
@@ -134,7 +137,7 @@ export default function metascript(options = {}) {
 		},
 
 		watchChange(id) {
-			if (watchFiles.has(canon(stripQuery(id)))) { dirty = true; publisher?.invalidate(); }
+			if (exactWatchFiles().includes(canon(stripQuery(id)))) { dirty = true; publisher?.invalidate(); }
 		},
 
 		configureServer(s) {

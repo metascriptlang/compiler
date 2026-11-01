@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -413,6 +413,7 @@ test("source-only Vite publication invalidates dirty and failed types, recovers 
  assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
 });
 
+
 test("Vite sourcemap handoffs are mutable independent copies of the frozen graph", t => {
  const f = fixture(t);
  f.state.files["main.js.map"] = JSON.stringify({version:3,sources:["../../main.ms"],sourcesContent:["original source"],names:[],mappings:"AAAA",x_metadata:{labels:["original"]}});
@@ -428,4 +429,57 @@ test("Vite sourcemap handoffs are mutable independent copies of the frozen graph
  second.map.sourcesContent[0] = "another consumer";
  assert.deepEqual(f.plugin.load.call(f.context,f.entry).map,original);
  assert.equal(f.calls().length,1);
+});
+
+test("Vite bounds source roots separately from exact compiler and config watches across failures and restart", t => {
+ const f = fixture(t);
+ const root = join(f.root,"project/src");
+ const configDir = join(f.root,"control");
+ const dataDir = join(f.root,"data");
+ for (const dir of [root,configDir,dataDir]) mkdirSync(dir,{recursive:true});
+ const entry = join(root,"main.ms");
+ const config = join(configDir,"vite.config.mjs");
+ const data = join(dataDir,"schema.json");
+ writeFileSync(entry,"source"); writeFileSync(config,"export default {};"); writeFileSync(data,"{}");
+ f.state.manifest.entry = entry;
+ f.state.manifest.modules = [{source:entry,out:"main.js"}];
+ f.state.manifest.dependencies = [data];
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}';
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ const msc = join(f.root,"fake-msc.cjs");
+ const plugin = metascript({msc,entry,outDir:join(f.root,"generated"),sourceDeclarations:{outDir:join(f.root,"editor-types")}});
+ plugin.configResolved({root,configFile:config,configFileDependencies:[config]});
+ let server = devServer(); plugin.configureServer(server);
+ t.after(() => plugin.closeBundle());
+ const build = () => plugin.buildStart.call(f.context);
+ const sidecar = join(f.root,"editor-types/main.d.ms.ts");
+ const bounds = external => {
+  for (const file of [entry,msc,config,root,...(external ? [data,dataDir] : [])]) assert.ok(server.watched.has(file),`missing watch ${file}`);
+  for (const dir of [f.root,configDir]) assert.equal(server.watched.has(dir),false,`control parent became source root: ${dir}`);
+  assert.ok(f.watched.has(msc)); assert.ok(f.watched.has(config));
+ };
+ f.state.fail = true; f.save(); assert.throws(build,/diagnostic/); bounds(false);
+ f.state.fail = false; f.save(); build(); bounds(true); assert.ok(existsSync(sidecar));
+ const calls = f.calls().length;
+ for (const file of [join(f.root,"output-feedback.ms"),join(configDir,"unrelated.ms")]) {
+  assert.equal(plugin.handleHotUpdate.call(f.context,{file,server}),undefined);
+ }
+ assert.equal(f.calls().length,calls);
+ assert.deepEqual(plugin.handleHotUpdate.call(f.context,{file:join(dataDir,"new.ms"),server}),[]);
+ assert.equal(f.calls().length,calls+1);
+ for (const file of [msc,config,data]) {
+  plugin.watchChange(file); assert.equal(existsSync(sidecar),false);
+  f.state.fail = true; f.save(); server.watched.clear();
+  assert.deepEqual(plugin.handleHotUpdate.call(f.context,{file,server}),[]);
+  bounds(true); assert.equal(existsSync(sidecar),false); assert.match(server.sent.at(-1).err.message,/diagnostic/);
+  f.state.fail = false; f.save();
+  assert.deepEqual(plugin.handleHotUpdate.call(f.context,{file,server}),[]);
+  assert.ok(existsSync(sidecar)); bounds(true);
+ }
+ plugin.closeBundle();
+ server = devServer(); plugin.configureServer(server); build(); bounds(true);
+ assert.ok(existsSync(sidecar));
 });

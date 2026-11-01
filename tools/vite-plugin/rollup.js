@@ -32,6 +32,7 @@ export default function metascript(options = {}) {
 	function registerWatches(context) {
 		if (options.sourceDeclarations && context.meta?.watchMode) for (const path of sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canonicalPath(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles])) context.addWatchFile(path);
 		for (const file of watchFiles) context.addWatchFile(file);
+		if (options.msc) context.addWatchFile(canonicalPath(resolve(options.msc)));
 	}
 
 	function current(context) {
@@ -40,7 +41,6 @@ export default function metascript(options = {}) {
 		if (!attempted && entry) {
 			attempted = true;
 			for (const file of entry) watchFiles.add(file);
-			if (options.msc) watchFiles.add(canonicalPath(resolve(options.msc)));
 			registerWatches(context);
 			try {
 				if (options.sourceDeclarations) {
@@ -49,7 +49,7 @@ export default function metascript(options = {}) {
 				}
 				snapshot = buildCompilerGraph({ ...options, root, entry, sourceRoot: publisher?.sourceRoot });
 				publisher?.publish(snapshot);
-				watchFiles = new Set([...snapshot.dependencies, ...(options.msc ? [canonicalPath(resolve(options.msc))] : [])]);
+				watchFiles = new Set(snapshot.dependencies);
 			} catch (error) {
 				failure = error;
 				publisher?.invalidate();
@@ -88,7 +88,7 @@ export default function metascript(options = {}) {
 		watchChange(id) {
 			const file = canonicalPath(stripQuery(id));
 			if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, options.outDir).test(file)) return;
-			if (watchFiles.has(file) || (options.sourceDeclarations && MS_RE.test(file))) { invalidated = true; publisher?.invalidate(); }
+			if (watchFiles.has(file) || (options.msc && file === canonicalPath(resolve(options.msc))) || (options.sourceDeclarations && MS_RE.test(file))) { invalidated = true; publisher?.invalidate(); }
 		},
 
 		closeWatcher() {

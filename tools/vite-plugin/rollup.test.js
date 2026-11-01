@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -392,4 +392,144 @@ test("real Rollup watch restart recompiles offline edits and reacquires source l
  const nextOwner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
  assert.equal(nextOwner.pid,process.pid); assert.notEqual(nextOwner.token,owner.token);
  await stop(); assert.equal(existsSync(lease),false); assert.equal(queue.pending,0);
+});
+
+
+function boundedSourceFixture(t) {
+ const f = fixture(t,{declaration:false});
+ const root = join(f.root,"project/src");
+ const dataDir = join(f.root,"data");
+ for (const dir of [root,dataDir]) mkdirSync(dir,{recursive:true});
+ const entry = join(root,"main.ms");
+ const data = join(dataDir,"schema.json");
+ writeFileSync(entry,"source"); writeFileSync(data,"{}");
+ f.state.manifest.entry = entry;
+ f.state.manifest.modules = [{source:entry,out:"nested/main.js"}];
+ f.state.manifest.declarations = [];
+ f.state.manifest.dependencies = [data];
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}';
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.save();
+ const plugin = metascript({root,entry,msc:f.settings.msc,declaration:false,outDir:join(f.root,"generated"),sourceDeclarations:{outDir:join(f.root,"editor-types")}});
+ return {...f,root,entry,data,dataDir,plugin,container:f.root,sidecar:join(f.root,"editor-types/main.d.ms.ts")};
+}
+
+test("Rollup bounds source roots separately from exact compiler watches across failures and restart", t => {
+ const f = boundedSourceFixture(t);
+ f.context.meta = {watchMode:true};
+ t.after(() => f.plugin.closeWatcher());
+ const build = () => f.plugin.buildStart.call(f.context,{input:f.entry});
+ const bounds = external => {
+  for (const file of [f.root,f.entry,f.settings.msc,...(external ? [f.data,f.dataDir] : [])]) assert.ok(f.watched.has(file),`missing watch ${file}`);
+  assert.equal(f.watched.has(f.container),false,"compiler parent became source root");
+ };
+ f.state.fail = true; f.save(); assert.throws(build,/diagnostic/); bounds(false);
+ f.state.fail = false; f.save(); f.plugin.watchChange(f.entry); build(); bounds(true);
+ for (const file of [f.settings.msc,f.data]) {
+  f.plugin.watchChange(file); assert.equal(existsSync(f.sidecar),false);
+  f.state.fail = true; f.save(); f.watched.clear(); assert.throws(build,/diagnostic/); bounds(true);
+  assert.equal(existsSync(f.sidecar),false);
+  f.state.fail = false; f.save(); f.plugin.watchChange(file); build(); bounds(true); assert.ok(existsSync(f.sidecar));
+ }
+ f.plugin.closeWatcher(); f.watched.clear(); build(); bounds(true); assert.ok(existsSync(f.sidecar));
+});
+
+test("real Rollup watches bounded source roots and exact external compiler through errors and restart", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = boundedSourceFixture(t);
+ const queue = watchTestQueue();
+ const events = [];
+ const changes = [];
+ let phase = "initial build";
+ t.after(() => t.diagnostic(JSON.stringify({phase,events,changes,calls:f.calls()})));
+ let watcher;
+ const stop = async () => { if (watcher) { await watcher.close(); watcher = null; } };
+ t.after(stop);
+ const start = () => {
+  watcher = realRollup.watch({input:f.entry,plugins:[f.plugin,{name:"bounded-watch-observer",watchChange(id){changes.push(id);}}],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true}});
+  watcher.on("event",event => { events.push({code:event.code,phase,calls:f.calls()}); if (event.code === "ERROR" || event.code === "BUNDLE_END") queue.push(event); });
+ };
+ const bundled = async () => {
+  const event = await queue.next();
+  assert.equal(event.code,"BUNDLE_END",event.error?.message);
+  try {
+   for (const file of [f.root,f.entry,f.data,f.dataDir,f.settings.msc]) assert.ok(event.result.watchFiles.includes(file),`missing native watch ${file}`);
+   assert.equal(event.result.watchFiles.includes(f.container),false,"native compiler parent became source root");
+   assert.ok(existsSync(f.sidecar));
+  } finally { await event.result.close(); }
+ };
+ start(); await bundled(); assert.equal(f.calls(),1);
+ phase = "external JSON error";
+ f.state.fail = true; f.save();
+ writeFileSync(f.data,'{"changed":true}');
+ assert.equal((await queue.next()).code,"ERROR"); assert.equal(existsSync(f.sidecar),false);
+ phase = "exact compiler recovery";
+ f.state.fail = false; f.save();
+ writeFileSync(f.settings.msc,readFileSync(f.settings.msc,"utf8")+"\n// compiler changed\n");
+ await bundled(); assert.equal(f.calls(),3);
+ phase = "restart";
+ await stop(); start(); await bundled(); assert.equal(f.calls(),4);
+ await stop(); assert.equal(queue.pending,0);
+});
+
+test("stock Rollup observes immediate external JSON updates after initial BUNDLE_END", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = boundedSourceFixture(t);
+ writeFileSync(f.entry,"export const value = 1;");
+ const queue = watchTestQueue();
+ const events = [];
+ const changes = [];
+ let builds = 0;
+ const inputs = [f.root,f.entry,f.data,f.dataDir,f.settings.msc];
+ const watcher = realRollup.watch({input:f.entry,plugins:[{
+  name:"stock-external-json-control",
+  buildStart(){builds++; for (const file of inputs) this.addWatchFile(file);},
+  watchChange(id){changes.push(id);},
+ }],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true}});
+ watcher.on("event",event => { events.push({code:event.code,builds}); if (event.code === "ERROR" || event.code === "BUNDLE_END") queue.push(event); });
+ t.after(() => t.diagnostic(JSON.stringify({events,changes,builds})));
+ t.after(() => watcher.close());
+ const first = await queue.next();
+ assert.equal(first.code,"BUNDLE_END",first.error?.message);
+ try { for (const file of inputs) assert.ok(first.result.watchFiles.includes(file)); }
+ finally { await first.result.close(); }
+ writeFileSync(f.data,'{"changed":true}');
+ const second = await queue.next();
+ assert.equal(second.code,"BUNDLE_END",second.error?.message);
+ await second.result.close();
+ assert.equal(builds,2); assert.ok(changes.includes(f.data));
+});
+
+test("real Rollup keeps compiler parents out of native source roots across restart", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = boundedSourceFixture(t);
+ const queue = watchTestQueue();
+ let watcher;
+ const stop = async () => { if (watcher) { await watcher.close(); watcher = null; } };
+ t.after(stop);
+ const start = () => {
+  watcher = realRollup.watch({input:f.entry,plugins:[f.plugin],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true}});
+  watcher.on("event",event => { if (event.code === "ERROR" || event.code === "BUNDLE_END") queue.push(event); });
+ };
+ const boundary = async () => {
+  const event = await queue.next();
+  assert.equal(event.code,"BUNDLE_END",event.error?.message);
+  try {
+   for (const file of [f.root,f.entry,f.data,f.dataDir,f.settings.msc]) assert.ok(event.result.watchFiles.includes(file),`missing native watch ${file}`);
+   assert.equal(event.result.watchFiles.includes(f.container),false,"native compiler parent became source root");
+   assert.ok(existsSync(f.sidecar));
+  } finally { await event.result.close(); }
+ };
+ start(); await boundary(); assert.equal(f.calls(),1);
+ const lease = join(f.container,"editor-types/.msc-source-lease");
+ const owner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
+ await stop(); assert.equal(existsSync(lease),false);
+ f.state.files["nested/main.js"] = "export const value = 2;"; f.save();
+ writeFileSync(f.data,'{"offline":true}');
+ start(); await boundary(); assert.equal(f.calls(),2);
+ assert.notEqual(JSON.parse(readFileSync(join(lease,"owner.json"),"utf8")).token,owner.token);
+ await stop(); assert.equal(queue.pending,0); assert.equal(existsSync(lease),false);
 });
