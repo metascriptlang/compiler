@@ -1,15 +1,27 @@
 // std/crypto — Raiser tier. Hash family only (the surface the compiler
 // itself reaches): kernels are host bridges over the same runtime/crypto/
-// hash.c + mbedtls TUs index.cms @compiles into this binary. HMAC, key
+// hash.c + mbedtls TUs index.cms @compiles into this binary. HMAC, random, key
 // derivation and the cipher/AEAD submodules are NOT carried on this tier
 // yet — nothing in the compiler imports them.
+//
+// The names and result types are index.cms's. Raiser runs an async function's body inline
+// (card raiser-async-call-runs-inline), which changes nothing for a body that cannot throw
+// after a suspension, and these bodies never suspend.
 
+import { Buffer } from "std/core/buffer";
+import { Bytes, rawString } from "std/core/buffer/bytes";
+import { encodeHex, encodeBase64 } from "../core/encoding";
 import { CryptoError, CryptoErrorKind, hashFailed } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 extern function msCryptoInit(): boolean from "msCryptoInit";
 extern function msCryptoCleanup(): void from "msCryptoCleanup";
 extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string from "msCryptoHashString";
+
+export type HashAlgorithm =
+	| "sha256" | "sha512" | "sha384" | "sha224"
+	| "sha1" | "md5" | "ripemd160"
+	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
 
 export function init(): boolean {
 	return msCryptoInit();
@@ -19,16 +31,36 @@ export function cleanup(): void {
 	msCryptoCleanup();
 }
 
-export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
-	const result = msCryptoHashString(algorithm, data, encoding);
-	if (result == "") {
+export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
+	const hex = msCryptoHashString(algorithm, rawString(data), "hex");
+	if (hex == "") {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
-	return Result.ok(result);
+	return Result.ok(Buffer.fromString(hex, "hex"));
 }
 
-export function sha256(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha256", data, encoding); }
-export function sha512(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha512", data, encoding); }
-export function sha384(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha384", data, encoding); }
-export function sha1(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha1", data, encoding); }
-export function md5(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("md5", data, encoding); }
+export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync(algorithm, data);
+}
+
+export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+
+export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha256", data); }
+export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha384", data); }
+export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha512", data); }
+export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha1", data); }
+export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("md5", data); }
+
+export function toHex(data: Bytes): string {
+	if (typeof data == "string") return data.asBytes().encodeHex();
+	return data.encodeHex();
+}
+
+export function toBase64(data: Bytes): string {
+	if (typeof data == "string") return data.asBytes().encodeBase64();
+	return data.encodeBase64();
+}

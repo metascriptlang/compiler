@@ -1060,7 +1060,7 @@ function coreGroup(): void {
 	const extras = [
 		"",
 		'import { hash } from "std/hash";\nconsole.log(hash("extra"));\n',
-		'import { sha256 } from "std/crypto";\nconsole.log(sha256("extra").ok);\n',
+		'import { sha256Sync } from "std/crypto";\nconsole.log(sha256Sync("extra").ok);\n',
 		'import { CborKind } from "std/serialize/cbor";\nconsole.log(CborKind.Int.toString());\n',
 	];
 	let baseline = "";

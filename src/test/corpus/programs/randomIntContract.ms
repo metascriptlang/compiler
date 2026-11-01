@@ -16,11 +16,11 @@
 // @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
-import { randomInt } from "std/crypto";
+import { randomIntSync } from "std/crypto";
 
 let minusOne = 0;
 for (let i = 0; i < 200; i++) {
-	const r = randomInt(-1, 0);
+	const r = randomIntSync(-1, 0);
 	if (r.ok && r.value == -1) minusOne++;
 }
 console.log(`minus one 200 all ${minusOne == 200}`);
@@ -29,7 +29,7 @@ const seen = new Set<number>();
 let errors = 0;
 let inRange = true;
 for (let i = 0; i < 2000; i++) {
-	const r = randomInt(-3, 3);
+	const r = randomIntSync(-3, 3);
 	if (!r.ok) {
 		errors++;
 		continue;
@@ -39,11 +39,11 @@ for (let i = 0; i < 2000; i++) {
 }
 console.log(`-3..3 errors ${errors} seen ${seen.size} inRange ${inRange}`);
 
-const wide = randomInt(0, 281474976710655);
+const wide = randomIntSync(0, 281474976710655);
 console.log(`2^48-1 span ok ${wide.ok && wide.value >= 0 && wide.value < 281474976710655}`);
 
 function bad(label: string, min: number, max: number): void {
-	const r = randomInt(min, max);
+	const r = randomIntSync(min, max);
 	console.log(r.ok ? `bad ${label}: ok ${r.value}` : `bad ${label}: ${r.error.message}`);
 }
 

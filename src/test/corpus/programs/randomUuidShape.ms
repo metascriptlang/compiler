@@ -1,4 +1,4 @@
-// randomUUID() is RFC 4122 version 4 on every draw: 36 chars, dashes at 8/13/18/23, version digit 4,
+// randomUUIDSync() is RFC 4122 version 4 on every draw: 36 chars, dashes at 8/13/18/23, version digit 4,
 // variant digit in 8..b, lowercase hex elsewhere; and 2000 draws hold no duplicate.
 //
 // @stdout: draws 2000 bad 0 duplicates 0
@@ -6,14 +6,14 @@
 // @skip-js: std/crypto has only a C backend (index.cms over runtime/crypto); there is no index.jms
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
-import { randomUUID } from "std/crypto";
+import { randomUUIDSync } from "std/crypto";
 
 const hex = "0123456789abcdef";
 const seen = new Set<string>();
 let bad = 0;
 let duplicates = 0;
 for (let i = 0; i < 2000; i++) {
-	const r = randomUUID();
+	const r = randomUUIDSync();
 	if (!r.ok) {
 		bad++;
 		continue;

@@ -20,7 +20,7 @@
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family; none of these Buffer APIs
 
 import { Buffer } from "std/core/buffer";
-import { CryptoError, hashBuffer, hmacBuffer, pbkdf2, hkdf, createHash, randomBytes, fromHex, fromBase64, toBase64, toHex } from "std/crypto";
+import { CryptoError, digestSync, hmacSync, pbkdf2, hkdf, createHash, randomBytesSync, fromHex, fromBase64, toBase64, toHex } from "std/crypto";
 import { blake2b } from "std/crypto/blake2b";
 import { ed25519FromSeed, ed25519PublicKey, ed25519ToSeed, ed25519Sign, ed25519Verify } from "std/crypto/ed25519";
 import { x25519PublicKey, x25519SharedSecret } from "std/crypto/x25519";
@@ -32,60 +32,60 @@ function must<T>(result: Result<T, CryptoError>): T {
 	return result.value;
 }
 
-const digest: Buffer = must(hashBuffer("sha256", "abc"));
+const digest: Buffer = must(digestSync("sha256", "abc"));
 console.log("sha256", toHex(digest), digest.length);
 
-const mac: Buffer = must(hmacBuffer("sha256", "key", "The quick brown fox jumps over the lazy dog"));
+const mac: Buffer = must(hmacSync("sha256", "key", "The quick brown fox jumps over the lazy dog"));
 console.log("hmac", toHex(mac));
 
-const derived: Buffer = must(pbkdf2("password", "salt", 1, 32, "sha256"));
+const derived: Buffer = must(await pbkdf2("password", "salt", 1, 32, "sha256"));
 console.log("pbkdf2", toHex(derived));
 
-const ikm = fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
-const salt = fromHex("000102030405060708090a0b0c");
-const info = fromHex("f0f1f2f3f4f5f6f7f8f9");
-console.log("hkdf", toHex(must(hkdf("sha256", ikm, salt, info, 42))));
+const ikm = must(fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"));
+const salt = must(fromHex("000102030405060708090a0b0c"));
+const info = must(fromHex("f0f1f2f3f4f5f6f7f8f9"));
+console.log("hkdf", toHex(must(await hkdf("sha256", ikm, salt, info, 42))));
 
 const hasher = createHash("sha256");
 hasher.update("a");
-hasher.update(fromHex("6263"));
-const streamed: Buffer = hasher.digestBuffer();
+hasher.update(must(fromHex("6263")));
+const streamed: Buffer = hasher.digest();
 console.log("streaming", toHex(streamed), streamed.length);
 
-const random: Buffer = must(randomBytes(16));
-console.log("random", random.length, Buffer.compare(random, must(randomBytes(16))) != 0);
+const random: Buffer = must(randomBytesSync(16));
+console.log("random", random.length, Buffer.compare(random, must(randomBytesSync(16))) != 0);
 
-const binary = fromHex("ff00fe");
+const binary = must(fromHex("ff00fe"));
 console.log("hex", binary.length, toHex(binary), toBase64(binary));
-console.log("hex", fromBase64("/wD+").length);
+console.log("hex", must(fromBase64("/wD+")).length);
 
 const blake: Buffer = blake2b("abc", 32);
 console.log("blake2b", toHex(blake), blake.length);
 
-const seed = fromHex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+const seed = must(fromHex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"));
 const secret: Buffer = must(ed25519FromSeed(seed));
 const pub: Buffer = must(ed25519PublicKey(secret));
 const sig: Buffer = must(ed25519Sign(secret, ""));
 console.log("ed25519", toHex(pub), secret.length, toHex(sig), ed25519Verify(sig, pub, ""), Buffer.compare(must(ed25519ToSeed(secret)), seed) == 0);
 
-const alicePrivate = fromHex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
-const bobPrivate = fromHex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+const alicePrivate = must(fromHex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"));
+const bobPrivate = must(fromHex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb"));
 const alicePublic = must(x25519PublicKey(alicePrivate));
 const bobPublic = must(x25519PublicKey(bobPrivate));
 console.log("x25519", toHex(alicePublic), Buffer.compare(must(x25519SharedSecret(alicePrivate, bobPublic)), must(x25519SharedSecret(bobPrivate, alicePublic))) == 0);
 
-const key16 = fromHex("000102030405060708090a0b0c0d0e0f");
+const key16 = must(fromHex("000102030405060708090a0b0c0d0e0f"));
 const sealed: Buffer = must(seal(key16, "attack at dawn", "hdr"));
 const opened: Buffer = must(open(key16, sealed, "hdr"));
-const forged = open(key16, fromHex("00".repeat(sealed.length)), "hdr");
+const forged = open(key16, must(fromHex("00".repeat(sealed.length))), "hdr");
 console.log("aes", sealed.length, opened.asString() == "attack at dawn", forged.ok);
 
-const key32 = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+const key32 = must(fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"));
 const chacha: Buffer = must(chacha20Seal(key32, "attack at dawn", "hdr"));
 const chachaOpened: Buffer = must(chacha20Open(key32, chacha, "hdr"));
 const chachaForged = chacha20Open(key32, chacha, "other");
 console.log("chacha", chacha.length, chachaOpened.asString() == "attack at dawn", chachaForged.ok);
 
-const iv = fromHex("101112131415161718191a1b1c1d1e1f");
+const iv = must(fromHex("101112131415161718191a1b1c1d1e1f"));
 const cbc: Buffer = must(cbcEncrypt(key16, "attack at dawn", iv));
 console.log("cbc", cbc.length, must(cbcDecrypt(key16, cbc, iv)).asString() == "attack at dawn");
