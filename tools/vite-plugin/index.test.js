@@ -412,3 +412,20 @@ test("source-only Vite publication invalidates dirty and failed types, recovers 
  assert.ok(existsSync(file)); f.plugin.closeBundle();
  assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
 });
+
+test("Vite sourcemap handoffs are mutable independent copies of the frozen graph", t => {
+ const f = fixture(t);
+ f.state.files["main.js.map"] = JSON.stringify({version:3,sources:["../../main.ms"],sourcesContent:["original source"],names:[],mappings:"AAAA",x_metadata:{labels:["original"]}});
+ f.save(); f.plugin.buildStart.call(f.context);
+ const first = f.plugin.load.call(f.context,f.entry);
+ const original = JSON.parse(JSON.stringify(first.map));
+ first.map.sourcesContent = ["Vite injected content"];
+ first.map.sources[0] = "mutated source";
+ first.map.x_metadata.labels.push("consumer mutation");
+ const second = f.plugin.load.call(f.context,f.entry);
+ assert.deepEqual(second.map,original);
+ assert.notEqual(second.map,first.map);
+ second.map.sourcesContent[0] = "another consumer";
+ assert.deepEqual(f.plugin.load.call(f.context,f.entry).map,original);
+ assert.equal(f.calls().length,1);
+});

@@ -191,7 +191,7 @@ export default function metascript(options = {}) {
 				throw new Error(`MetaScript source and instance do not match: ${id}`);
 			}
 			if (module) registerWatchFiles(this);
-			return module ? { code: module.code, map: module.map } : null;
+			return module ? { code: module.code, map: module.map ? JSON.parse(JSON.stringify(module.map)) : null } : null;
 		},
 
 		transform(code, id) {
