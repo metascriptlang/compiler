@@ -9,7 +9,7 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
-import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
+import { callCheckStmt, callReadonlyFieldWrite, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
@@ -3110,6 +3110,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
 						: writeRefusal(lvArg, WriteSite.RefArg);
 					if (refusal != null) addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
+					else if (lvArg.kind == NodeKind.MemberExpr) callReadonlyFieldWrite(ctx, lvArg);
 					const written = paramType.typeReturn;
 					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {
 						addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": an out parameter of type " + typeDisplayName(written)

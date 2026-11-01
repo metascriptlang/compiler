@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
@@ -4572,6 +4572,7 @@ function createSyntheticToken(loc: SourceLocation): Token {
 
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
+registerReadonlyFieldWrite(reportReadonlyField);
 
 
 function checkedDistinctBase(srcType: Type, targetType: Type): Type | null {
