@@ -165,11 +165,24 @@ function anyOf(a: string, b: string): string {
 	return a == "" ? b : b == "" ? a : `${a} || ${b}`;
 }
 
+function callbackSharesViews(cb: BoundaryCallback): boolean {
+	let spans = 0;
+	let written = false;
+	for (let i = 0; i < cb.params.length; i += 1) {
+		if (cb.params[i] != BoundaryKind.Span) continue;
+		spans += 1;
+		if (cb.modes[i] == BoundaryMode.Shared) written = true;
+	}
+	return spans >= 2 && written;
+}
+
 function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null): string {
 	let names = "";
 	let args = "";
 	let views = "";
 	let writesBack = "";
+	const shared = callbackSharesViews(cb);
+	const ranges: string[] = [];
 	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
 		if (i > 0) args += ", ";
@@ -186,10 +199,19 @@ function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null
 			w += 2;
 		} else if (cb.params[i] == BoundaryKind.Span) {
 			const t = typedArrayOf(cb.elements[i]);
+			const bool = cb.elements[i] == BoundaryKind.Bool;
+			const written = cb.modes[i] == BoundaryMode.Shared;
 			names += `x${w}, x${w + 1}`;
-			views += `const s${i} = { base: __msbVecOut(x${w} >>> 0, x${w + 1}, ${t}, ${cb.elements[i] == BoundaryKind.Bool}), off: 0, len: x${w + 1} }; `;
-			if (cb.modes[i] == BoundaryMode.Shared) writesBack += `__msbCopyTo(x${w} >>> 0, s${i}.base, 0, x${w + 1}, ${t}); `;
-			args += `s${i}`;
+			if (shared) {
+				const v = `vs[${ranges.length}]`;
+				ranges.push(`[x${w} >>> 0, x${w + 1}, ${t}, ${bool}]`);
+				if (written) writesBack += `__msbCopyTo(x${w} >>> 0, ${v}.base, ${v}.off, x${w + 1}, ${t}); `;
+				args += v;
+			} else {
+				views += `const s${i} = { base: __msbVecOut(x${w} >>> 0, x${w + 1}, ${t}, ${bool}), off: 0, len: x${w + 1} }; `;
+				if (written) writesBack += `__msbCopyTo(x${w} >>> 0, s${i}.base, 0, x${w + 1}, ${t}); `;
+				args += `s${i}`;
+			}
 			w += 2;
 		} else {
 			names += `x${w}`;
@@ -197,6 +219,7 @@ function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null
 			w += 1;
 		}
 	}
+	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); `;
 	let call = `${target}(${args})`;
 	if (resultAt != null && cb.result != BoundaryKind.Void) call = valueCheck(cb.result, call, resultAt);
 	const body =cb.result == BoundaryKind.Void ? `${call};` : `return ${toWire(cb.result, call)};`;
@@ -278,6 +301,16 @@ function afterCall(body: string[], afters: string[]): string[] {
 	return out;
 }
 
+function functionSharesViews(f: BoundaryFunction): boolean {
+	let views = 0;
+	let written = false;
+	for (const p of f.params) {
+		if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) views += 1;
+		if (p.kind == BoundaryKind.Span && p.mode == BoundaryMode.Shared) written = true;
+	}
+	return views >= 2 && written;
+}
+
 function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindingOptions): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
@@ -287,6 +320,9 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	const sigs: string[] = [];
 	const argList: string[] = [];
 	let wasmOwns = false;
+	const shared = functionSharesViews(f);
+	const sharedNames: string[] = [];
+	const sharedViews: string[] = [];
 	const encode = (name: string, expr: string, fn: string, adopted: boolean, absent: string): void => {
 		if (adopted) wasmOwns = true;
 		encoded.push(name);
@@ -296,6 +332,21 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 			argList.push(`${name}[0], ${name}[1]`);
 		} else {
 			encodes.push(`		${name} = ${absent} ? null : ${fn}(${expr});`);
+			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
+		}
+	};
+	const encodeView = (name: string, view: string, absent: string): void => {
+		if (!shared) {
+			encode(name, view, "__msbCopyIn", false, absent);
+			return;
+		}
+		encoded.push(name);
+		sharedNames.push(name);
+		if (absent == "") {
+			sharedViews.push(`[${view}]`);
+			argList.push(`${name}[0], ${name}[1]`);
+		} else {
+			sharedViews.push(`${absent} ? null : [${view}]`);
 			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
 		}
 	};
@@ -325,16 +376,21 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 				else argList.push(`${absent} ? ${zeroWire(leaf.kind)} : ${toWire(leaf.kind, expr)}`);
 			}
 		} else if (p.kind == BoundaryKind.Vec) {
-			encode(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, "__msbCopyIn", false, own);
+			encodeView(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, own);
 		} else if (p.kind == BoundaryKind.Span) {
 			const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
 			if (p.mode == BoundaryMode.Shared) copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
-			encode(`e${i}`, view, "__msbCopyIn", false, "");
+			encodeView(`e${i}`, view, "");
 		} else if (p.nullable) {
 			argList.push(`${own} ? ${zeroWire(p.kind)} : ${toWire(p.kind, `a${i}`)}`);
 		} else {
 			argList.push(toWire(p.kind, `a${i}`));
 		}
+	}
+	if (shared) {
+		lines.push("	const hb = [];");
+		encodes.push(`		[${sharedNames.join(", ")}] = __msbCopyInViews([${sharedViews.join(", ")}], hb);`);
+		cleanup.push("for (const q of hb) __msbFree(q);");
 	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
@@ -508,6 +564,63 @@ const GLUE = [
 	"}",
 ];
 
+const VIEW_GROUPS = [
+	"function __msbGroups(vs) {",
+	"\tconst g = vs.map((v, i) => i);",
+	"\tfor (let i = 1; i < vs.length; i++) {",
+	"\t\tfor (let j = 0; j < i; j++) {",
+	"\t\t\tconst a = vs[i], b = vs[j];",
+	"\t\t\tif (a !== null && b !== null && a[2] > 0 && b[2] > 0 && a[0] === b[0] && a[1] < b[1] + b[2] && b[1] < a[1] + a[2] && g[i] !== g[j]) {",
+	"\t\t\t\tconst from = g[i];",
+	"\t\t\t\tfor (let k = 0; k < g.length; k++) if (g[k] === from) g[k] = g[j];",
+	"\t\t\t}",
+	"\t\t}",
+	"\t}",
+	"\tconst groups = [];",
+	"\tfor (let c = 0; c < vs.length; c++) {",
+	"\t\tconst m = [];",
+	"\t\tfor (let k = 0; k < vs.length; k++) if (g[k] === c) m.push(k);",
+	"\t\tif (m.length > 0) groups.push(m);",
+	"\t}",
+	"\treturn groups;",
+	"}",
+];
+
+const VIEWS_IN = [
+	"function __msbCopyInViews(vs, blocks) {",
+	"\tfor (const v of vs) if (v !== null) __msbInRange(v[0], v[1], v[2]);",
+	"\tconst r = new Array(vs.length).fill(null);",
+	"\tfor (const m of __msbGroups(vs)) {",
+	"\t\tif (vs[m[0]] === null) continue;",
+	"\t\tconst T = vs[m[0]][3];",
+	"\t\tfor (const k of m) if (vs[k][3] !== T) throw new Error(\"internal: views of one array differ in element type\");",
+	"\t\tconst lo = Math.min(...m.map((k) => vs[k][1]));",
+	"\t\tconst hi = Math.max(...m.map((k) => vs[k][1] + vs[k][2]));",
+	"\t\tconst p = __msbAlloc((hi - lo) * T.BYTES_PER_ELEMENT || 1);",
+	"\t\tblocks.push(p);",
+	"\t\t__msbCopyTo(p, vs[m[0]][0], lo, hi - lo, T);",
+	"\t\tfor (const k of m) r[k] = [p + (vs[k][1] - lo) * T.BYTES_PER_ELEMENT, vs[k][2]];",
+	"\t}",
+	"\treturn r;",
+	"}",
+];
+
+const VIEWS_OUT = [
+	"function __msbVecViews(rs) {",
+	"\tconst out = new Array(rs.length);",
+	"\tfor (const m of __msbGroups(rs.map((r) => [0, r[0], r[1] * r[2].BYTES_PER_ELEMENT]))) {",
+	"\t\tconst T = rs[m[0]][2];",
+	"\t\tfor (const k of m) if (rs[k][2] !== T) throw new Error(\"internal: views of one memory range differ in element type\");",
+	"\t\tconst B = T.BYTES_PER_ELEMENT;",
+	"\t\tconst lo = Math.min(...m.map((k) => rs[k][0]));",
+	"\t\tconst hi = Math.max(...m.map((k) => rs[k][0] + rs[k][1] * B));",
+	"\t\tconst base = __msbVecOut(lo, (hi - lo) / B, T, rs[m[0]][3]);",
+	"\t\tfor (const k of m) out[k] = { base, off: (rs[k][0] - lo) / B, len: rs[k][1] };",
+	"\t}",
+	"\treturn out;",
+	"}",
+];
+
 const CHECK_GLUE = [
 	"function __msbBad(f, p, t, v) {",
 	"\treturn new TypeError(f + \": \" + p + \" expected \" + t + \", found \" + (v === null ? \"null\" : Array.isArray(v) ? \"array\" : typeof v));",
@@ -560,7 +673,7 @@ const SLOT_CAP: int32 = 1 << SLOT_BITS;
 const SLOT_MASK: int32 = SLOT_CAP - 1;
 const GEN_MASK: int32 = (1 << (31 - SLOT_BITS)) - 1;
 
-function preludeFor(wasmModuleUrl: string, options: JsBindingOptions, scratch: boolean): string {
+function preludeFor(wasmModuleUrl: string, options: JsBindingOptions, scratch: boolean, views: string[]): string {
 	return [
 		"const __msb = (() => {",
 		"\tconst vals = [];",
@@ -597,7 +710,7 @@ function preludeFor(wasmModuleUrl: string, options: JsBindingOptions, scratch: b
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t};",
 		"})();",
-		(options.checked ? GLUE.concat(CHECK_GLUE) : GLUE).join("\n"),
+		(options.checked ? GLUE.concat(views).concat(CHECK_GLUE) : GLUE.concat(views)).join("\n"),
 		`const __msbMod = await (await import(${quoted(wasmModuleUrl)})).default({ msb: __msb });`,
 		"__msbMod._MsMain();",
 		...scratchLines(scratch),
@@ -609,8 +722,14 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 	const modules: JsModuleBindings[] = [];
 	const lines: string[][] = [];
 	let scratch = false;
+	let viewsIn = false;
+	let viewsOut = false;
 	for (const f of m.functions) {
 		if (copiesArgsIn(f)) scratch = true;
+		if (functionSharesViews(f)) viewsIn = true;
+		for (const p of f.params) {
+			if (p.kind == BoundaryKind.Callback && callbackSharesViews(p.callback!)) viewsOut = true;
+		}
 		let at = -1;
 		for (let i = 0; i < modules.length; i += 1) {
 			if (modules[i].modulePath == f.modulePath) at = i;
@@ -623,5 +742,9 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 		for (const l of wrapperLines(f, bundleNameOf(f), options)) lines[at].push(l);
 	}
 	for (let i = 0; i < modules.length; i += 1) modules[i].code = lines[i].join("\n") + "\n";
-	return { prelude: preludeFor(wasmModuleUrl, options, scratch), modules };
+	const views: string[] = [];
+	if (viewsIn || viewsOut) for (const l of VIEW_GROUPS) views.push(l);
+	if (viewsIn) for (const l of VIEWS_IN) views.push(l);
+	if (viewsOut) for (const l of VIEWS_OUT) views.push(l);
+	return { prelude: preludeFor(wasmModuleUrl, options, scratch, views), modules };
 }

@@ -36,6 +36,11 @@ export function patch(cb: (xs: Span<int32>) => int32): int32 { return 0; }
 export function stamp(s: string, xs: Span<int32>): int32 { return 0; }
 export function cut(xs: Span<int32>): Vec<int32> { const out: Vec<int32> = []; return out; }
 export function swap(a: Span<int32>, b: Span<int32>): void {}
+export function overlay(dst: Span<int32>, src: Readonly<Span<int32>>): void {}
+export function peekBoth(a: Readonly<Span<int32>>, b: Readonly<Span<int32>>): int32 { return 0; }
+export function flipAll(all: Vec<boolean>, part: Span<boolean>): int32 { return 0; }
+export function smearBy(cb: (dst: Span<float64>, src: Readonly<Span<float64>>) => void): void {}
+export function lookBoth(cb: (a: Readonly<Span<int32>>, b: Readonly<Span<int32>>) => void): void {}
 export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
 `;
@@ -50,6 +55,7 @@ export function halve(x: float64): float64 | null { return x; }
 export function parity(n: uint8): boolean | null { return null; }
 export function greet(s: string | null): string | null { return s; }
 export function headOr(xs: Vec<int32> | null): int32 { return 0; }
+export function headBoth(xs: Vec<int32> | null, ys: Span<int32>): int32 { return 0; }
 export function upTo(n: int32): Vec<float32> | null { return null; }
 export function bump(i: Item | null): Item | null { return i; }
 export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
@@ -182,7 +188,7 @@ test "js side: a wrapper takes a scratch mark exactly when its function copies a
 		const js = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
 		const code = js.modules[0].code;
 		assert code.includes("const mark = __msbTop;") == wants;
-		assert code.includes("__msbFree(") == code.includes("__msbCopyIn(");
+		assert code.includes("__msbFree(") == (code.includes("__msbCopyIn(") || code.includes("__msbCopyInViews("));
 		assert code.includes("__msbMod._free(") == code.includes("__msbEncOwned(");
 		assert js.prelude.includes("__msbMod._malloc(16384)") == wants;
 		if (wants) {
@@ -398,7 +404,7 @@ test "js side: a Vec result with a writable Span copies back inside the call's f
 
 test "js side: each writable Span has its own copy-back, so one that throws cannot skip the next, and the frees still run last" {
 	const code = bindingsFor(["swap"]).modules[0].code;
-	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0) __msbFree(e0[0]);\n\t\tif (e1) __msbFree(e1[0]);");
+	assert code.includes("\t\ttry {\n\t\t\ttry {\n\t\t\t\t__msbMod._msb_calc_swap(e0[0], e0[1], e1[0], e1[1]);\n\t\t\t} finally {\n\t\t\t\t__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\t\t}\n\t\t} finally {\n\t\t\t__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\t}\n\t} finally {\n\t\t__msbTop = mark;\n\t\tfor (const q of hb) __msbFree(q);");
 }
 
 function glueBody(prelude: string, name: string): string {
@@ -578,4 +584,56 @@ test "js side: a nullable callback parameter arrives as a flag and a value, is p
 	assert code.includes("const id0 = __msb.push((x0, x1, x2, x3, x4) => { a0(x0 !== 0 ? x1 : null, x2 !== 0 ? __msbDec(x3, x4) : null); });");
 	assert code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { a0(x0 !== 0 ? x1 !== 0 : null, x2 !== 0 ? x3 : null); });");
 	assert !code.includes("__msb.push(a0)");
+}
+
+test "js side: two views of which one is written are copied in as one shared copy and every copy is freed in finally" {
+	const code = bindingsFor(["overlay"]).modules[0].code;
+	assert code.includes("\tconst hb = [];\n\tlet e0, e1;\n\tconst mark = __msbTop;\n\ttry {\n\t\t[e0, e1] = __msbCopyInViews([[a0.base, a0.off, a0.len, Int32Array], [a1.base, a1.off, a1.len, Int32Array]], hb);\n");
+	assert code.includes("__msbMod._msb_calc_overlay(e0[0], e0[1], e1[0], e1[1]);");
+	assert code.includes("\t\t__msbTop = mark;\n\t\tfor (const q of hb) __msbFree(q);\n");
+	assert !code.includes("__msbCopyIn(");
+	assert !code.includes("if (e0) __msbFree");
+	assert code.split("__msbCopyBack(").length == 2;
+	assert code.includes("__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);");
+}
+
+test "js side: a Vec joins the shared copy as a reader and is never copied back" {
+	const code = bindingsFor(["flipAll"]).modules[0].code;
+	assert code.includes("[e0, e1] = __msbCopyInViews([[a0, 0, a0.length, Uint8Array], [a1.base, a1.off, a1.len, Uint8Array]], hb);");
+	assert code.split("__msbCopyBack(").length == 2;
+	assert code.includes("__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Uint8Array, true);");
+}
+
+test "js side: an absent nullable Vec stays absent in the shared copy and passes pointer 0" {
+	const code = nullableBindings(["headBoth"]).modules[0].code;
+	assert code.includes("[e0, e1] = __msbCopyInViews([a0 == null ? null : [a0, 0, a0.length, Int32Array], [a1.base, a1.off, a1.len, Int32Array]], hb);");
+	assert code.includes("__msbMod._msb_calc_headBoth(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0, e1[0], e1[1]);");
+}
+
+test "js side: without two views and a writer a call keeps one copy per argument and the prelude carries no view glue" {
+	const p = bindingsFor(["peekBoth", "total", "fill", "lookBoth", "scale", "stamp"]);
+	assert !p.modules[0].code.includes("const hb = []");
+	assert !p.modules[0].code.includes("__msbCopyInViews");
+	assert !p.modules[0].code.includes("__msbVecViews");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Int32Array, false), off: 0, len: x1 }; const s1 = { base: __msbVecOut(x2 >>> 0, x3, Int32Array, false), off: 0, len: x3 }; a0(s0, s1); });");
+	assert !p.prelude.includes("__msbGroups");
+	assert !p.prelude.includes("__msbCopyInViews");
+}
+
+test "js side: the shared copy is range-checked and recorded before it is filled, so a throw leaves nothing to leak" {
+	const p = bindingsFor(["overlay"]).prelude;
+	const body = glueBody(p, "__msbCopyInViews");
+	assert body.indexOf("__msbInRange(") < body.indexOf("__msbAlloc(");
+	assert body.indexOf("__msbAlloc(") < body.indexOf("blocks.push(p)");
+	assert body.indexOf("blocks.push(p)") < body.indexOf("__msbCopyTo(");
+	assert p.includes("function __msbGroups(vs) {");
+	assert !p.includes("__msbVecViews");
+}
+
+test "js side: two views handed to a callback of which one is written share one snapshot of wasm memory and are written back by range" {
+	const p = bindingsFor(["smearBy"]);
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { const vs = __msbVecViews([[x0 >>> 0, x1, Float64Array, false], [x2 >>> 0, x3, Float64Array, false]]); try { a0(vs[0], vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Float64Array); } });");
+	assert p.prelude.includes("function __msbVecViews(rs) {");
+	assert p.prelude.includes("function __msbGroups(vs) {");
+	assert !p.prelude.includes("__msbCopyInViews");
 }
