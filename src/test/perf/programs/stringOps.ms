@@ -22,7 +22,7 @@ function bench(op: string, label: string, n: int32, per: int32, body: (n: int32)
 	let best = 1e30;
 	for (let r = 0; r < RUNS; r++) {
 		const t0 = performance.now();
-		sink += body(n);
+		sink ^= body(n);
 		const dt = (performance.now() - t0) * 1e6;
 		best = Math.min(best, dt / (n * per));
 	}
@@ -93,7 +93,7 @@ function cell(size: int32, uni: boolean): void {
 	});
 	bench("hashString", label, n, 1, (n: int32): int64 => {
 		let acc: int64 = 0;
-		for (let i: int32 = 0; i < n; i++) acc += hashString(pa[i & 7]);
+		for (let i: int32 = 0; i < n; i++) acc ^= hashString(pa[i & 7]);
 		return acc;
 	});
 	bench("concat", label, n, 1, (n: int32): int64 => {
