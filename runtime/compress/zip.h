@@ -32,6 +32,9 @@ int64_t msZipReaderEntrySize(int64_t handle, int32_t index);
 /* 1 if entry is a directory, 0 if regular file, -1 on bad index. */
 int32_t msZipReaderEntryIsDir(int64_t handle, int32_t index);
 
+/* Index of the entry named `name` (exact, case-sensitive; first match), -1 if none. */
+int32_t msZipReaderFind(int64_t handle, msString name);
+
 /* Decompress entry into a fresh msString. MS_EMPTY_STRING on error. */
 msString msZipReaderExtract(int64_t handle, int32_t index);
 

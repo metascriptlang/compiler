@@ -1,0 +1,465 @@
+@include("runtime/promise/moduleEvalMs.h");
+
+extern function msModuleQueueLock(): void;
+extern function msModuleQueueUnlock(): void;
+extern function msModuleIndexOf(base: Ptr<void>, record: Ptr<void>): int32;
+extern function msModuleStringText(name: string): Readonly<Ptr<void>>;
+extern function msModuleStringLen(name: string): int64;
+extern function msModuleCStrLen(text: Readonly<Ptr<void>>): int64;
+extern function msModuleNameIs(candidate: Readonly<Ptr<void>>, text: Readonly<Ptr<void>>, len: int64): boolean;
+extern function msModuleAbort(name: Ptr<void>, what: string): void;
+extern function msModuleAbortNoRecord(text: Readonly<Ptr<void>>, len: int64): void;
+extern function msModuleAbortPlain(what: string): void;
+extern function msModuleEvalEnter(): void;
+extern function msModuleEvalLeave(): void;
+extern function msModuleEvaluatingBody(): boolean;
+extern function msModuleCall(record: Ptr<void>, fn: Ptr<void>): void;
+extern function msModuleRaised(): boolean;
+extern function msModuleTakeError(): Ptr<void>;
+extern function msModuleHold(p: Ptr<void>): void;
+extern function msModuleRelease(p: Ptr<void>): void;
+extern function msModuleDestroyFuture(fut: Ptr<void>): void;
+extern function msModuleFutureRejected(fut: Ptr<void>): boolean;
+extern function msModuleFutureTakeError(fut: Ptr<void>): Ptr<void>;
+extern function msModuleSettle(fut: Ptr<void>, error: Ptr<void>): void;
+extern function msModuleImportFuture(): Ptr<void>;
+extern function msModuleWatch(fut: Ptr<void>, env: Ptr<void>): void;
+extern function msModuleArmTask(): void;
+extern function msMemAlloc(size: uint64): Ptr<void>;
+extern function msMemAllocN0(count: uint64, size: uint64): Ptr<void>;
+extern function msRealloc(old: Ptr<void>, oldSize: uint64, newSize: uint64): Ptr<void>;
+extern function free(p: Ptr<void>): void;
+
+const PENDING: int32 = 0;
+const EVALUATING: int32 = 1;
+const EVALUATING_ASYNC: int32 = 2;
+const EVALUATED: int32 = 3;
+
+struct ModuleRecord {
+	name: Ptr<void>;
+	init: Ptr<void>;
+	deinit: Ptr<void>;
+	requested: Ptr<int32>;
+	requestedCount: int32;
+	status: int32;
+	hasTLA: boolean;
+	dfsIndex: int32;
+	dfsAncestorIndex: int32;
+	error: Ptr<void>;
+	asyncEvaluation: boolean;
+	asyncOrdinal: int32;
+	pendingAsyncDeps: int32;
+	asyncParents: Ptr<int32>;
+	asyncParentCount: int32;
+	cycleRoot: int32;
+	waiters: Ptr<Waiter>;
+}
+
+struct Waiter {
+	record: Ptr<ModuleRecord>;
+	fut: Ptr<void>;
+	next: Ptr<Waiter>;
+}
+
+struct AsyncRun {
+	at: int32;
+	fut: Ptr<void>;
+}
+
+let nil: Ptr<void>;
+let gRecords: Ptr<ModuleRecord>;
+let gRecordCount: int32 = 0;
+let gRanOrder: Ptr<int32>;
+let gRanCount: int32 = 0;
+let gAsyncOrdinal: int32 = 0;
+let gAsyncBody: Ptr<void>;
+let gPendingHead: Ptr<Waiter>;
+let gPendingTail: Ptr<Waiter>;
+let gTaskArmed: boolean = false;
+let gStack: Ptr<int32>;
+let gDepth: int32 = 0;
+let gError: Ptr<void>;
+let gThrown: boolean = false;
+let gGather: Ptr<int32>;
+let gGatherCount: int32 = 0;
+
+function recordAt(at: int32): Ptr<ModuleRecord> {
+	return gRecords[at] as Ptr<ModuleRecord>;
+}
+
+function indexOf(m: Ptr<ModuleRecord>): int32 {
+	return msModuleIndexOf(gRecords as Ptr<void>, m as Ptr<void>);
+}
+
+@exportName("msModuleTableRegister")
+function tableRegister(records: Ptr<void>, count: int32): void {
+	gRecords = records as Ptr<ModuleRecord>;
+	gRecordCount = count;
+	gRanOrder = msMemAllocN0(count as uint64, 4) as Ptr<int32>;
+	for (let i: int32 = 0; i < count; i++) recordAt(i).cycleRoot = i;
+}
+
+function findRecord(text: Readonly<Ptr<void>>, len: int64): Ptr<ModuleRecord> {
+	for (let i: int32 = 0; i < gRecordCount; i++) {
+		const r = recordAt(i);
+		if (msModuleNameIs(r.name, text, len)) return r;
+	}
+	msModuleAbortNoRecord(text, len);
+	return nil as Ptr<ModuleRecord>;
+}
+
+@exportName("msModuleBind")
+function bind(name: Ptr<void>, init: Ptr<void>, deinit: Ptr<void>): Ptr<void> {
+	const r = findRecord(name, msModuleCStrLen(name));
+	r.init = init;
+	r.deinit = deinit;
+	return r as Ptr<void>;
+}
+
+function runBody(m: Ptr<ModuleRecord>): Ptr<void> {
+	gRanOrder[gRanCount] = indexOf(m);
+	gRanCount += 1;
+	if (m.init == null) return nil;
+	msModuleEvalEnter();
+	msModuleCall(m as Ptr<void>, m.init);
+	msModuleEvalLeave();
+	if (!msModuleRaised()) return nil;
+	return msModuleTakeError();
+}
+
+function settleWaiters(r: Ptr<ModuleRecord>): void {
+	let reversed = r.waiters;
+	r.waiters = nil as Ptr<Waiter>;
+	let w: Ptr<Waiter> = nil as Ptr<Waiter>;
+	while (reversed != null) {
+		const next = reversed.next;
+		reversed.next = w;
+		w = reversed;
+		reversed = next;
+	}
+	while (w != null) {
+		const next = w.next;
+		msModuleSettle(w.fut, r.error);
+		free(w as Ptr<void>);
+		w = next;
+	}
+}
+
+function recordError(m: Ptr<ModuleRecord>, error: Ptr<void>): void {
+	msModuleHold(error);
+	m.error = error;
+	m.status = EVALUATED;
+	m.asyncEvaluation = false;
+}
+
+function addAsyncParent(r: Ptr<ModuleRecord>, parent: int32): void {
+	const old = r.asyncParentCount as uint64;
+	r.asyncParents = msRealloc(r.asyncParents as Ptr<void>, old * 4, (old + 1) * 4) as Ptr<int32>;
+	r.asyncParents[r.asyncParentCount] = parent;
+	r.asyncParentCount += 1;
+}
+
+function asyncRejected(m: Ptr<ModuleRecord>, error: Ptr<void>): void {
+	if (m.status == EVALUATED && m.error != null) return;
+	if (m.status != EVALUATING_ASYNC || !m.asyncEvaluation) msModuleAbort(m.name, "rejected while it is not evaluating asynchronously");
+	recordError(m, error);
+	for (let k: int32 = 0; k < m.asyncParentCount; k++) asyncRejected(recordAt(m.asyncParents[k]), error);
+	settleWaiters(m);
+}
+
+function listed(at: int32): boolean {
+	for (let k: int32 = 0; k < gGatherCount; k++) if (gGather[k] == at) return true;
+	return false;
+}
+
+function gatherAvailableAncestors(m: Ptr<ModuleRecord>): void {
+	for (let k: int32 = 0; k < m.asyncParentCount; k++) {
+		const at = m.asyncParents[k];
+		const p = recordAt(at);
+		if (recordAt(p.cycleRoot).error != null || listed(at)) continue;
+		if (p.status != EVALUATING_ASYNC || !p.asyncEvaluation || p.pendingAsyncDeps <= 0) {
+			msModuleAbort(p.name, "waits on a dependency in an inconsistent async state");
+		}
+		p.pendingAsyncDeps -= 1;
+		if (p.pendingAsyncDeps == 0) {
+			gGather[gGatherCount] = at;
+			gGatherCount += 1;
+			if (!p.hasTLA) gatherAvailableAncestors(p);
+		}
+	}
+}
+
+function sortGatheredByOrdinal(list: Ptr<int32>, count: int32): void {
+	let from = list;
+	let to = msMemAlloc((count as uint64) * 4) as Ptr<int32>;
+	const scratch = to;
+	let width: int32 = 1;
+	while (width < count) {
+		let lo: int32 = 0;
+		while (lo < count) {
+			const mid = lo + width < count ? lo + width : count;
+			const hi = lo + 2 * width < count ? lo + 2 * width : count;
+			let i = lo;
+			let j = mid;
+			let k = lo;
+			while (i < mid && j < hi) {
+				if (recordAt(from[j]).asyncOrdinal < recordAt(from[i]).asyncOrdinal) {
+					to[k] = from[j];
+					j += 1;
+				} else {
+					to[k] = from[i];
+					i += 1;
+				}
+				k += 1;
+			}
+			while (i < mid) {
+				to[k] = from[i];
+				i += 1;
+				k += 1;
+			}
+			while (j < hi) {
+				to[k] = from[j];
+				j += 1;
+				k += 1;
+			}
+			lo = hi;
+		}
+		const swap = from;
+		from = to;
+		to = swap;
+		width *= 2;
+	}
+	if (from != list) for (let k: int32 = 0; k < count; k++) list[k] = from[k];
+	free(scratch as Ptr<void>);
+}
+
+function asyncFulfilled(m: Ptr<ModuleRecord>): void {
+	if (m.status == EVALUATED && m.error != null) return;
+	if (m.status != EVALUATING_ASYNC || !m.asyncEvaluation) msModuleAbort(m.name, "finished while it is not evaluating asynchronously");
+	m.asyncEvaluation = false;
+	m.status = EVALUATED;
+	settleWaiters(m);
+	const list = msMemAlloc((gRecordCount as uint64) * 4) as Ptr<int32>;
+	gGather = list;
+	gGatherCount = 0;
+	gatherAvailableAncestors(m);
+	const count = gGatherCount;
+	sortGatheredByOrdinal(list, count);
+	for (let k: int32 = 0; k < count; k++) {
+		const p = recordAt(list[k]);
+		if (p.status == EVALUATED && p.error != null) continue;
+		if (p.hasTLA) {
+			executeAsync(p);
+			continue;
+		}
+		const error = runBody(p);
+		if (error != null) {
+			asyncRejected(p, error);
+			msModuleRelease(error);
+			continue;
+		}
+		p.asyncEvaluation = false;
+		p.status = EVALUATED;
+		settleWaiters(p);
+	}
+	free(list as Ptr<void>);
+}
+
+@exportName("msModuleAsyncSettled")
+function asyncSettled(env: Ptr<void>): void {
+	const run = env as Ptr<AsyncRun>;
+	const m = recordAt(run.at);
+	if (msModuleFutureRejected(run.fut)) {
+		const error = msModuleFutureTakeError(run.fut);
+		asyncRejected(m, error);
+		msModuleRelease(error);
+	} else {
+		asyncFulfilled(m);
+	}
+	msModuleDestroyFuture(run.fut);
+	free(env);
+}
+
+function executeAsync(m: Ptr<ModuleRecord>): void {
+	gAsyncBody = nil;
+	const error = runBody(m);
+	const fut = gAsyncBody;
+	gAsyncBody = nil;
+	if (error != null) {
+		if (fut != null) msModuleDestroyFuture(fut);
+		asyncRejected(m, error);
+		msModuleRelease(error);
+		return;
+	}
+	if (fut == null) msModuleAbort(m.name, "has a top-level await but its body started no async routine");
+	const run = msMemAlloc(sizeof AsyncRun) as Ptr<AsyncRun>;
+	run.at = indexOf(m);
+	run.fut = fut;
+	msModuleWatch(fut, run as Ptr<void>);
+}
+
+@exportName("msModuleAsyncBody")
+function asyncBody(fut: Ptr<void>): void {
+	if (gAsyncBody != null) msModuleAbortPlain("a module body started a second async routine");
+	msModuleHold(fut);
+	gAsyncBody = fut;
+}
+
+function innerEvaluate(at: int32, index: int32): int32 {
+	const m = recordAt(at);
+	if (m.status == EVALUATING_ASYNC || m.status == EVALUATED) {
+		if (m.error != null) {
+			gError = m.error;
+			return -1;
+		}
+		return index;
+	}
+	if (m.status == EVALUATING) return index;
+	m.status = EVALUATING;
+	m.dfsIndex = index;
+	m.dfsAncestorIndex = index;
+	m.pendingAsyncDeps = 0;
+	index += 1;
+	gStack[gDepth] = at;
+	gDepth += 1;
+	for (let k: int32 = 0; k < m.requestedCount; k++) {
+		const req = m.requested[k];
+		index = innerEvaluate(req, index);
+		if (index < 0) return -1;
+		let r = recordAt(req);
+		if (r.status == EVALUATING) {
+			if (r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex;
+		} else {
+			r = recordAt(r.cycleRoot);
+			if (r.error != null) {
+				gError = r.error;
+				return -1;
+			}
+		}
+		if (r.asyncEvaluation) {
+			m.pendingAsyncDeps += 1;
+			addAsyncParent(r, at);
+		}
+	}
+	if (m.pendingAsyncDeps > 0 || m.hasTLA) {
+		m.asyncEvaluation = true;
+		m.asyncOrdinal = gAsyncOrdinal;
+		gAsyncOrdinal += 1;
+		if (m.pendingAsyncDeps == 0) executeAsync(m);
+	} else {
+		const error = runBody(m);
+		if (error != null) {
+			gError = error;
+			gThrown = true;
+			return -1;
+		}
+	}
+	if (m.dfsAncestorIndex == m.dfsIndex) {
+		let popped: int32 = 0;
+		do {
+			gDepth -= 1;
+			popped = gStack[gDepth];
+			const p = recordAt(popped);
+			p.cycleRoot = at;
+			p.status = p.asyncEvaluation ? EVALUATING_ASYNC : EVALUATED;
+		} while (popped != at);
+	}
+	return index;
+}
+
+function evaluate(w: Ptr<Waiter>): void {
+	let r = w.record;
+	if (r.status == EVALUATING_ASYNC || r.status == EVALUATED) r = recordAt(r.cycleRoot);
+	if (r.status == PENDING) {
+		gStack = msMemAlloc((gRecordCount as uint64) * 4) as Ptr<int32>;
+		gDepth = 0;
+		gError = nil;
+		gThrown = false;
+		const failed = innerEvaluate(indexOf(r), 0) < 0;
+		if (failed) {
+			for (let k: int32 = 0; k < gDepth; k++) recordError(recordAt(gStack[k]), gError);
+		}
+		free(gStack as Ptr<void>);
+		if (failed) {
+			const error = gError;
+			msModuleSettle(w.fut, error);
+			if (gThrown) msModuleRelease(error);
+			free(w as Ptr<void>);
+			return;
+		}
+	}
+	if (r.status == EVALUATING_ASYNC && r.error == null) {
+		w.next = r.waiters;
+		r.waiters = w;
+		return;
+	}
+	if (r.status != EVALUATED) msModuleAbort(r.name, "import() settled while its evaluation is unfinished");
+	msModuleSettle(w.fut, r.error);
+	free(w as Ptr<void>);
+}
+
+@exportName("msModuleRunPending")
+function runPending(env: Ptr<void>): void {
+	if (msModuleEvaluatingBody()) {
+		msModuleArmTask();
+		return;
+	}
+	msModuleQueueLock();
+	let w = gPendingHead;
+	gPendingHead = nil as Ptr<Waiter>;
+	gPendingTail = nil as Ptr<Waiter>;
+	gTaskArmed = false;
+	msModuleQueueUnlock();
+	while (w != null) {
+		const next = w.next;
+		w.next = nil as Ptr<Waiter>;
+		evaluate(w);
+		w = next;
+	}
+}
+
+@exportName("msModuleImport")
+function moduleImport(name: string): Ptr<void> {
+	const r = findRecord(msModuleStringText(name), msModuleStringLen(name));
+	const fut = msModuleImportFuture();
+	const w = msMemAlloc(sizeof Waiter) as Ptr<Waiter>;
+	w.record = r;
+	w.fut = fut;
+	w.next = nil as Ptr<Waiter>;
+	msModuleQueueLock();
+	if (gPendingTail == null) gPendingHead = w;
+	else gPendingTail.next = w;
+	gPendingTail = w;
+	const arm = !gTaskArmed;
+	gTaskArmed = true;
+	msModuleQueueUnlock();
+	if (arm) msModuleArmTask();
+	return fut;
+}
+
+@exportName("msModuleDeinitLazy")
+function deinitLazy(): void {
+	for (let k: int32 = gRanCount - 1; k >= 0; k--) {
+		const r = recordAt(gRanOrder[k]);
+		if (r.deinit != null) msModuleCall(r as Ptr<void>, r.deinit);
+	}
+	for (let i: int32 = 0; i < gRecordCount; i++) {
+		const r = recordAt(i);
+		if (r.error != null) msModuleRelease(r.error);
+		r.error = nil;
+		free(r.asyncParents as Ptr<void>);
+		r.asyncParents = nil as Ptr<int32>;
+		r.asyncParentCount = 0;
+		let w = r.waiters;
+		r.waiters = nil as Ptr<Waiter>;
+		while (w != null) {
+			const next = w.next;
+			msModuleDestroyFuture(w.fut);
+			free(w as Ptr<void>);
+			w = next;
+		}
+	}
+	free(gRanOrder as Ptr<void>);
+	gRanOrder = nil as Ptr<int32>;
+	gRanCount = 0;
+}

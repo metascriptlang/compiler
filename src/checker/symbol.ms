@@ -94,7 +94,6 @@ export enum RoutineFlag {
 	Overload,
 	Template,
 	Generic,
-	ReadonlyParams,
 	Override,
 }
 
@@ -125,7 +124,6 @@ export function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 			"override" => { set = set.incl(RoutineFlag.Override); }
 			"template" => { set = set.incl(RoutineFlag.Template); }
 			"gen:" => { set = set.incl(RoutineFlag.Generic); }
-			"rdonly:" => { set = set.incl(RoutineFlag.ReadonlyParams); }
 			"ext:" | "sext:" | "out:" | "ref:" | "sink:" => {}
 			_ => {
 				if (!inTypeText) throw new Error(`internal: unknown function flag '${word}'`);

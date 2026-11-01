@@ -11,7 +11,7 @@
 /* ===== One-shot API ===== */
 
 msString msBlake2b(msString data, int32_t hashSize) {
-	if (hashSize < 1 || hashSize > 64) hashSize = 32;
+	if (hashSize < 1 || hashSize > 64) return MS_EMPTY_STRING;
 
 	uint8_t hash[64];
 	crypto_blake2b(hash, (size_t)hashSize,
@@ -22,7 +22,7 @@ msString msBlake2b(msString data, int32_t hashSize) {
 }
 
 msString msBlake2bKeyed(msString key, msString data, int32_t hashSize) {
-	if (hashSize < 1 || hashSize > 64) hashSize = 32;
+	if (hashSize < 1 || hashSize > 64) return MS_EMPTY_STRING;
 	if (key.len < 1 || key.len > 64 || !key.p) return MS_EMPTY_STRING;
 
 	uint8_t hash[64];
@@ -45,7 +45,7 @@ typedef struct {
 #define B2B_FROM_HANDLE(h) ((msBlake2bCtx*)(uintptr_t)(h))
 
 int64_t msBlake2bInit(int32_t hashSize) {
-	if (hashSize < 1 || hashSize > 64) hashSize = 32;
+	if (hashSize < 1 || hashSize > 64) return 0;
 
 	msBlake2bCtx *c = (msBlake2bCtx *)msMemAlloc0(sizeof(msBlake2bCtx));
 

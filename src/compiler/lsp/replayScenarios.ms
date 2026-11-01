@@ -5,7 +5,7 @@ import { lspFormatMessage, lspJsonString, lspPathToUri } from "./protocol";
 import { lspSplitFrames } from "./transport";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { getDynamicField, at, asInt32 } from "std/serialize/json/accessors";
+import { getDynamicField, at, asInt32, asString } from "std/serialize/json/accessors";
 import { jsonNull } from "std/serialize/json/builder";
 import { ensureDir, writeFile } from "std/fs";
 import { dirname } from "std/fs/path";
@@ -126,6 +126,12 @@ export function changeParams(uri: string, version: int32, text: string): string 
 
 export function positionParams(uri: string, line: int32, character: int32): string {
 	return `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`;
+}
+
+export function referenceParams(uri: string, line: int32, character: int32, includeDeclaration: boolean): string {
+	const at = positionParams(uri, line, character);
+	return at.byteSlice(0, at.byteLength - 1)
+		+ `,"context":{"includeDeclaration":${includeDeclaration ? "true" : "false"}}}`;
 }
 
 const BAD_VALUE = "export const value: int32 = \"wrong\";";
@@ -1581,6 +1587,86 @@ function referenceRows(r: LspReplay, key: string): string {
 	return rows.join("; ");
 }
 
+function outlineTracksSourceRenameAndUndo(): LspScenario {
+	const uri = "file:///lspwire/source-identity.ms";
+	const original = "export const Az = 1;\n";
+	return {
+		name: "outline observes a source rename and undo without stale declarations",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, original))]),
+			frames([request("10", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, "export const BY = 1;\n"))]),
+			frames([request("11", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 3, original))]),
+			frames([request("12", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+		],
+		check: (r: LspReplay) => {
+			const ids = [10, 11, 12];
+			const expected = ["Az", "BY", "Az"];
+			for (let i = 0; i < ids.length; i++) {
+				let found = false;
+				for (const message of r.messages) {
+					if (message.getDynamicField("id").asInt32() != ids[i]) continue;
+					found = true;
+					const result = message.getDynamicField("result");
+					if (result.kind != JsonKind.Array || result.items.length != 1) {
+						return `outline ${ids[i]} requires one declaration`;
+					}
+					const name = result.items[0].getDynamicField("name").asString();
+					if (name != expected[i]) return `outline ${ids[i]} expected ${expected[i]}, got ${name}`;
+				}
+				if (!found) return `missing outline ${ids[i]}`;
+			}
+			return "";
+		},
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+function referencesHonorDeclarationContext(): LspScenario {
+	const uri = "file:///lspwire/refs/flag.ms";
+	const text = "const value = 1;\nconst result = value;\n";
+	const all = `${uri} 0:6-0:11; ${uri} 1:15-1:20`;
+	const uses = `${uri} 1:15-1:20`;
+	const at = positionParams(uri, 0, 6);
+	const fields = at.byteSlice(0, at.byteLength - 1);
+	return {
+		name: "references honor declaration context and reject missing or nonboolean flags",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+			frames([
+				request("10", "textDocument/references", referenceParams(uri, 0, 6, true)),
+				request("11", "textDocument/references", referenceParams(uri, 0, 6, false)),
+				request("12", "textDocument/references", referenceParams(uri, 1, 15, true)),
+				request("13", "textDocument/references", referenceParams(uri, 1, 15, false)),
+				request("20", "textDocument/references", at),
+				request("21", "textDocument/references", fields + ",\"context\":{}}"),
+				request("22", "textDocument/references", fields + ",\"context\":{\"includeDeclaration\":\"false\"}}"),
+				request("23", "textDocument/references", fields + ",\"context\":null}"),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("declaration with true", all, referenceRows(r, "n:10")),
+			sameText("declaration with false", uses, referenceRows(r, "n:11")),
+			sameText("use with true", all, referenceRows(r, "n:12")),
+			sameText("use with false", uses, referenceRows(r, "n:13")),
+			sameText("missing context", "-32602", answerField(r, "n:20", "error.code")),
+			sameText("missing flag", "-32602", answerField(r, "n:21", "error.code")),
+			sameText("nonboolean flag", "-32602", answerField(r, "n:22", "error.code")),
+			sameText("null context", "-32602", answerField(r, "n:23", "error.code")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 function referencesFollowTheImportedSymbol(): LspScenario {
 	const dep = "file:///lspwire/refs/b.ms";
 	const user = "file:///lspwire/refs/a.ms";
@@ -1593,7 +1679,7 @@ function referencesFollowTheImportedSymbol(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
 			frames([notification("textDocument/didOpen", openParams(user, userText))]),
-			frames([request("10", "textDocument/references", positionParams(dep, 0, 16))]),
+			frames([request("10", "textDocument/references", referenceParams(dep, 0, 16, true))]),
 		],
 		check: (r: LspReplay) => firstFailure([
 			containsText("the declaration", dep + " 0:16-0:17", referenceRows(r, "n:10")),
@@ -1665,6 +1751,151 @@ function renameEditsEachCallOnce(): LspScenario {
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
+	};
+}
+
+function sortedUnique(items: string[]): string {
+	const kept: string[] = [];
+	for (const item of items) {
+		if (kept.indexOf(item) < 0) kept.push(item);
+	}
+	kept.sort();
+	return kept.join("; ");
+}
+
+function referenceFiles(r: LspReplay, key: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	const uris: string[] = [];
+	for (const location of result.items) uris.push(scalarText(location.getDynamicField("uri")));
+	return sortedUnique(uris);
+}
+
+function referenceRowsIn(r: LspReplay, key: string, uri: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	const rows: string[] = [];
+	for (const location of result.items) {
+		if (scalarText(location.getDynamicField("uri")) == uri) rows.push(spanOf(location));
+	}
+	return rows.join("; ");
+}
+
+function renameFiles(r: LspReplay, key: string): string {
+	const changes = answerResult(r, key).getDynamicField("changes");
+	return changes.kind == JsonKind.Object ? sortedUnique(changes.keys) : "no changes: " + render(changes);
+}
+
+const NAV_LIB = PROJECT_URI + "lib.ms";
+const NAV_ALIAS = PROJECT_URI + "alias.ms";
+const NAV_PLAIN = PROJECT_URI + "plain.ms";
+const NAV_BARREL = PROJECT_URI + "barrel.ms";
+const NAV_VIA = PROJECT_URI + "via.ms";
+const NAV_APP = PROJECT_URI + "app.ms";
+
+const NAV_BUILD = "const config = { entry: \"./app\" };\nexport default config;\n";
+const NAV_LIB_TEXT = "export function f(): int32 { return 1; }\n";
+const NAV_ALIAS_TEXT = "import { f as g } from \"./lib\";\nexport const t = g();\n";
+const NAV_PLAIN_TEXT = "import { f } from \"./lib\";\nexport const v = f();\nfunction shadow(): int32 {\n\tconst f = 2;\n\treturn f;\n}\n";
+const NAV_BARREL_TEXT = "export { f } from \"./lib\";\n";
+const NAV_VIA_TEXT = "import { f } from \"./barrel\";\nexport const w = f();\n";
+const NAV_OTHER_TEXT = "export function f(): int32 { return 2; }\n";
+const NAV_ORPHAN_TEXT = "import { f } from \"./lib\";\nexport const o = f();\n";
+const NAV_APP_TEXT = "import { t } from \"./alias\";\nimport { v } from \"./plain\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, v, w, other());\n";
+const NAV_APP_WITHOUT_PLAIN = "import { t } from \"./alias\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, w, other());\n";
+
+const NAV_ALIAS_ROWS = "0:9-0:10; 0:14-0:15; 1:17-1:18";
+const NAV_PLAIN_ROWS = "0:9-0:10; 1:17-1:18";
+
+function navProject(): LspProjectFile[] {
+	return [
+		{ path: "build.ms", text: NAV_BUILD },
+		{ path: "lib.ms", text: NAV_LIB_TEXT },
+		{ path: "alias.ms", text: NAV_ALIAS_TEXT },
+		{ path: "plain.ms", text: NAV_PLAIN_TEXT },
+		{ path: "barrel.ms", text: NAV_BARREL_TEXT },
+		{ path: "via.ms", text: NAV_VIA_TEXT },
+		{ path: "other.ms", text: NAV_OTHER_TEXT },
+		{ path: "orphan.ms", text: NAV_ORPHAN_TEXT },
+		{ path: "app.ms", text: NAV_APP_TEXT },
+	];
+}
+
+function navRequests(base: int32): string[] {
+	return frames([
+		request("" + base, "textDocument/references", referenceParams(NAV_LIB, 0, 16, true)),
+		request("" + (base + 1), "textDocument/references", referenceParams(NAV_LIB, 0, 16, false)),
+		request("" + (base + 2), "textDocument/rename", renameParams(NAV_LIB, 0, 16, "h")),
+	]);
+}
+
+function navAnswers(r: LspReplay, phase: string, base: int32, plainReached: boolean): string {
+	const kept: string[] = [NAV_LIB, NAV_ALIAS, NAV_BARREL, NAV_VIA];
+	if (plainReached) kept.push(NAV_PLAIN);
+	const withDecl = "n:" + base;
+	const withoutDecl = "n:" + (base + 1);
+	const renamed = "n:" + (base + 2);
+	const plainRows = plainReached ? NAV_PLAIN_ROWS : "";
+	const plainEdits = plainReached ? "0:9-0:10 h; 1:17-1:18 h" : "none";
+	return firstFailure([
+		sameText(phase + ": files with the declaration", sortedUnique(kept), referenceFiles(r, withDecl)),
+		sameText(phase + ": the declaration", "0:16-0:17", referenceRowsIn(r, withDecl, NAV_LIB)),
+		sameText(phase + ": the alias importer", NAV_ALIAS_ROWS, referenceRowsIn(r, withDecl, NAV_ALIAS)),
+		sameText(phase + ": the plain importer, its shadowing local left out", plainRows, referenceRowsIn(r, withDecl, NAV_PLAIN)),
+		sameText(phase + ": the declaration left out", "", referenceRowsIn(r, withoutDecl, NAV_LIB)),
+		sameText(phase + ": the alias importer without the declaration", NAV_ALIAS_ROWS, referenceRowsIn(r, withoutDecl, NAV_ALIAS)),
+		sameText(phase + ": the plain importer without the declaration", plainRows, referenceRowsIn(r, withoutDecl, NAV_PLAIN)),
+		sameText(phase + ": the re-exporting importer without the declaration", referenceRowsIn(r, withDecl, NAV_VIA), referenceRowsIn(r, withoutDecl, NAV_VIA)),
+		sameText(phase + ": files of rename", sortedUnique(kept), renameFiles(r, renamed)),
+		sameText(phase + ": rename at the declaration", "0:16-0:17 h", renameRows(r, renamed, NAV_LIB)),
+		sameText(phase + ": rename keeps the alias", "0:9-0:10 h", renameRows(r, renamed, NAV_ALIAS)),
+		sameText(phase + ": rename of the plain importer", plainEdits, renameRows(r, renamed, NAV_PLAIN)),
+	]);
+}
+
+function configuredEntryFixesTheNavigationUniverse(): LspScenario {
+	return {
+		name: "references and rename follow the configured entry's closure whichever importer is open",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			navRequests(10),
+			frames([notification("textDocument/didOpen", openParams(NAV_ALIAS, NAV_ALIAS_TEXT))]),
+			navRequests(20),
+		],
+		check: (r: LspReplay) => firstFailure([
+			navAnswers(r, "only the library open", 10, true),
+			navAnswers(r, "an importer open too", 20, true),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: navProject(),
+	};
+}
+
+function entryEditsMoveTheNavigationUniverse(): LspScenario {
+	return {
+		name: "an entry edit that drops an unopened importer drops it from references and rename, and undo restores it",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			navRequests(10),
+			frames([notification("textDocument/didOpen", openParams(NAV_APP, NAV_APP_TEXT))]),
+			frames([notification("textDocument/didChange", changeParams(NAV_APP, 2, NAV_APP_WITHOUT_PLAIN))]),
+			navRequests(20),
+			frames([notification("textDocument/didChange", changeParams(NAV_APP, 3, NAV_APP_TEXT))]),
+			navRequests(30),
+		],
+		check: (r: LspReplay) => firstFailure([
+			navAnswers(r, "before the edit", 10, true),
+			navAnswers(r, "with the importer disconnected", 20, false),
+			navAnswers(r, "after the undo", 30, true),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: navProject(),
 	};
 }
 
@@ -2166,10 +2397,14 @@ export function lspScenarios(): LspScenario[] {
 		hoverDocFollowsTheSymbol(),
 		signatureHelpFollowsTheCalleeSymbol(),
 		referencesFollowTheImportedSymbol(),
+		referencesHonorDeclarationContext(),
 		renameEditsEachCallOnce(),
+		configuredEntryFixesTheNavigationUniverse(),
+		entryEditsMoveTheNavigationUniverse(),
 		enumMemberDefinitionIsTheMembersDeclaration(),
 		renameFollowsTheBindingOfAnImport(),
 		insignificantEditsKeepAnswers(),
+		outlineTracksSourceRenameAndUndo(),
 		semanticTokensClassifyReadsAndDeclarations(),
 		rewiredImportsFollowEdits(),
 		closingAnOverlayRestoresDisk(),

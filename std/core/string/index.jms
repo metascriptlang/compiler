@@ -46,12 +46,13 @@ export function fromCharCode(this typeof String, ...codes: int32[]): string {
 
 @compilerFunc
 export function charAt(this s: string, idx: int32): string {
-	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
+	@emit(`return ${s}.charAt(${idx});`);
 	unreachable;
 }
 
 export function charCodeAt(this s: string, idx: int32): int32 {
-	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? -1 : ${s}.charCodeAt(${idx});`);
+	@emit(`var c = ${s}.charCodeAt(${idx});
+	return c >= 0 ? c : -1;`);
 	unreachable;
 }
 
@@ -125,9 +126,8 @@ export function at(this s: string, idx: int32): string | null {
 }
 
 export function substring(this s: string, start: int32, end: int32 = 2147483647): string {
-	const a = clampIndex(start, s.length);
-	const b = clampIndex(end, s.length);
-	return a <= b ? s.slice(a, b) : s.slice(b, a);
+	@emit(`return ${s}.substring(${start}, ${end});`);
+	unreachable;
 }
 
 export function padStart(this s: string, targetLen: int32, pad: string): string {
@@ -155,7 +155,20 @@ return neg ? -v : v;`);
 	unreachable;
 }
 
+function nativeParseInt(s: string): number {
+	@emit(`var n = Number.parseInt(${s});
+	return n !== n ? 0 : n;`);
+	unreachable;
+}
+
+function safeIntegerToBigInt(n: number): int64 {
+	@emit(`return BigInt(${n});`);
+	unreachable;
+}
+
 export function parseInt(this s: string): int64 {
+	const n = nativeParseInt(s);
+	if (n >= -9007199254740991.0 && n <= 9007199254740991.0) return safeIntegerToBigInt(n);
 	const text = intPrefix(s);
 	if (text == "") return 0;
 	const v = intPrefixValue(text);
@@ -288,5 +301,29 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-import { clampIndex } from "./shared";
-export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { repeat, reverse, equalsIgnoreCase } from "./shared";
+
+export function trim(this s: string): string {
+	@emit(`return ${s}.trim();`);
+	unreachable;
+}
+
+export function trimStart(this s: string): string {
+	@emit(`return ${s}.trimStart();`);
+	unreachable;
+}
+
+export function trimEnd(this s: string): string {
+	@emit(`return ${s}.trimEnd();`);
+	unreachable;
+}
+
+export function toLowerCase(this s: string): string {
+	@emit(`return ${s}.toLowerCase();`);
+	unreachable;
+}
+
+export function toUpperCase(this s: string): string {
+	@emit(`return ${s}.toUpperCase();`);
+	unreachable;
+}

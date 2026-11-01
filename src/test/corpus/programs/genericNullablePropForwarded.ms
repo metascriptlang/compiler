@@ -1,4 +1,5 @@
-// @stdout: true|Ada|true|x|ok|ok
+// @stdout: true|Ada|true|x|ok|ok|ok|ok
+interface Named { name: string; }
 struct Payload { name: string; }
 function take<P>(value: P | null): P | null { return value; }
 function forward<P>(props: { value?: P | null }): P | null {
@@ -13,6 +14,13 @@ class Nav<P> {
 			if (params !== null) { this.last = params; }
 		});
 	}
+	goDeep(params: P | null): void {
+		this.run((): void => {
+			this.run((): void => {
+				if (params !== null) { this.last = params; }
+			});
+		});
+	}
 }
 
 const absent = forward<Payload>({});
@@ -23,6 +31,10 @@ const n = new Nav<string>();
 n.go("x");
 const m = new Nav<int32>();
 m.go(3);
+const q = new Nav<Named>();
+q.go({ name: "q" });
+const d = new Nav<string>();
+d.goDeep("y");
 console.log([
 	absent === null,
 	present !== null ? present.name : "none",
@@ -30,4 +42,6 @@ console.log([
 	presentStr,
 	n.last === null ? "bad" : "ok",
 	m.last === null ? "bad" : "ok",
+	q.last === null ? "bad" : "ok",
+	d.last === null ? "bad" : "ok",
 ].join("|"));

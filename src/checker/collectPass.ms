@@ -372,6 +372,8 @@ function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): vo
 	if (problem != "") {
 		const dec = borrowDecorator(ctx, dd.decorators);
 		addError(ctx, problem, dec.location.line, dec.location.column);
+		const decl = declOfStatement(dd.decoratedNode);
+		decl.flags = decl.flags.incl(NodeFlag.DecoratorRefused);
 		return;
 	}
 	setFlag(sym, SymbolFlag.Borrow);
@@ -864,25 +866,25 @@ function methodDeclOfMember(member: Node): Node | null {
 	return null;
 }
 
-function methodDefinesRoutine(md: MethodDeclData): boolean {
-	if (md.methodBody == null) return false;
-	if (routineFlagSet(md.methodFlags).has(RoutineFlag.Overload)) return false;
-	if (md.nativeName != null && md.nativeName != "") return false;
-	if (md.methodBody.kind != NodeKind.BlockStmt) return true;
-	return (md.methodBody.data as BlockStmtData).statements.length > 0;
+// An abstract or extern member has no body to run; an empty body written `{}` is one.
+function methodDefinesRoutine(method: Node, md: MethodDeclData, inExternClass: boolean): boolean {
+	if (md.methodBody == null || inExternClass || method.flags.has(NodeFlag.Abstract)) return false;
+	const routine = routineFlagSet(md.methodFlags);
+	if (routine.has(RoutineFlag.Overload) || routine.has(RoutineFlag.Extern)) return false;
+	return md.nativeName == null || md.nativeName == "";
 }
 
-function joinsOverloadSet(md: MethodDeclData): boolean {
-	return methodDefinesRoutine(md) || routineFlagSet(md.methodFlags).has(RoutineFlag.Overload);
+function joinsOverloadSet(method: Node, md: MethodDeclData, inExternClass: boolean): boolean {
+	return methodDefinesRoutine(method, md, inExternClass) || routineFlagSet(md.methodFlags).has(RoutineFlag.Overload);
 }
 
-function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): Symbol | null {
+function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string, inExternClass: boolean): Symbol | null {
 	for (let i = 0; i < upTo; i += 1) {
 		const priorNode = methodDeclOfMember(body[i]);
 		if (priorNode == null) continue;
 		const pd = priorNode.data as MethodDeclData;
 		if (pd.methodName != methodName) continue;
-		if (!joinsOverloadSet(pd)) continue;
+		if (!joinsOverloadSet(priorNode, pd, inExternClass)) continue;
 		if (priorNode.resolvedSym != null) return priorNode.resolvedSym;
 	}
 	return null;
@@ -1014,8 +1016,8 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	methodSym.declNode = methodNode;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
-	if (joinsOverloadSet(md)) {
-		const primarySym = methodOverloadPrimary(body, memberIdx, md.methodName);
+	if (joinsOverloadSet(methodNode, md, isExternClass)) {
+		const primarySym = methodOverloadPrimary(body, memberIdx, md.methodName, isExternClass);
 		if (primarySym != null) {
 			primarySym.overloads.push(methodSym);
 			methodSym.overloadIdx = primarySym.overloads.length;

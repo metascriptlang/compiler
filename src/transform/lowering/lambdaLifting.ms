@@ -41,7 +41,7 @@ import {
 } from "./lambdaLiftingDetect";
 import {
 	ScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary, pushLoopBoundary, popLoopBoundary,
-	defineVar, defineLocalRoutines, defineParams, isModuleLevelVar, isDirectParentVar,
+	defineVar, defineLocalRoutines, defineParams, withReceiver, isModuleLevelVar, isDirectParentVar,
 } from "./lambdaLiftingScope";
 import {
 	isCaptureLastUse, computeLastUseCaptures, detectCaptures, findCapturedIdent,
@@ -758,7 +758,7 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			walkLiftMember(node, d.ctorParams, d.ctorParamTypes, d.ctorBody, state);
+			walkLiftMember(node, withReceiver(d.ctorParams), withReceiver(d.ctorParamTypes), d.ctorBody, state);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;

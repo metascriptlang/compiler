@@ -52,6 +52,10 @@ export function invalidInput(operation: string, reason: string): CryptoError {
 	return cryptoError(CryptoErrorKind.InvalidInput, operation, reason);
 }
 
+export function invalidEncoding(operation: string, reason: string): CryptoError {
+	return cryptoError(CryptoErrorKind.InvalidEncoding, operation, reason);
+}
+
 export function keyDerivationFailed(algorithm: string, reason: string): CryptoError {
 	return cryptoError(CryptoErrorKind.KeyDerivationFailed, `kdf:${algorithm}`, reason);
 }

@@ -3,6 +3,8 @@
 // @serial
 // @stdout: recv: length 256 exact=true
 // @stdout: recvNonBlock: length 256 exact=true
+// @stdout: recv into a 64 KiB window: length 256 exact=true
+// @stdout: recv of 20000 bytes through a 64 KiB window: length 20000 exact=true
 // @stdout: text: 6162c3a9
 // @stdout: ws binary reply: length 256 exact=true
 // @stdout: ws binary request: length 256 exact=true
@@ -42,25 +44,37 @@ function describe(name: string, bytes: Buffer): void {
 	console.log(`${name}: length ${bytes.length} exact=${exact(bytes)}`);
 }
 
-function readAll(fd: int32, want: int32, nonBlocking: boolean): Buffer {
+function patterned(length: int32): Buffer {
+	const bytes = Buffer.alloc(length);
+	for (let i = 0; i < length; i++) bytes.set(i, (i * 7) % 256);
+	return bytes;
+}
+
+function exactPattern(bytes: Buffer, length: int32): boolean {
+	if (bytes.length != length) return false;
+	for (let i = 0; i < length; i++) if (bytes.byteAt(i) != (i * 7) % 256) return false;
+	return true;
+}
+
+function readAll(fd: int32, want: int32, nonBlocking: boolean, window: int32): Buffer {
 	const got = Buffer.alloc(0);
 	const t0 = Date.now();
 	while (got.length < want && Date.now() - t0 < 5000) {
-		const part = nonBlocking ? recvNonBlock(fd, 8192) : recv(fd, 8192);
+		const part = nonBlocking ? recvNonBlock(fd, window) : recv(fd, window);
 		if (part.length == 0 && !nonBlocking) break;
 		appendBytes(got, part);
 	}
 	return got;
 }
 
-function loopback(data: Buffer | string, want: int32, nonBlocking: boolean): Buffer {
+function loopback(data: Buffer | string, want: int32, nonBlocking: boolean, window: int32 = 8192): Buffer {
 	const lp = listenOnFreePort();
 	const client = createSocket();
 	connect(client, "127.0.0.1", lp[1]);
 	const peer = accept(lp[0]);
 	send(client, data);
 	if (nonBlocking) setNonBlocking(peer);
-	const got = readAll(peer, want, nonBlocking);
+	const got = readAll(peer, want, nonBlocking, window);
 	close(client);
 	close(peer);
 	close(lp[0]);
@@ -113,5 +127,8 @@ function websocket(): void {
 
 describe("recv", loopback(allByteValues(), 256, false));
 describe("recvNonBlock", loopback(allByteValues(), 256, true));
+describe("recv into a 64 KiB window", loopback(allByteValues(), 256, false, 65536));
+const large = loopback(patterned(20000), 20000, false, 65536);
+console.log(`recv of 20000 bytes through a 64 KiB window: length ${large.length} exact=${exactPattern(large, 20000)}`);
 console.log(`text: ${loopback("abé", 4, false).toHex()}`);
 websocket();

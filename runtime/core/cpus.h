@@ -29,7 +29,8 @@ static inline int msAvailableCpus(void) {
 	}
 #endif
 #ifdef _SC_NPROCESSORS_ONLN
-	return (int)sysconf(_SC_NPROCESSORS_ONLN);
+	long online = sysconf(_SC_NPROCESSORS_ONLN);
+	return online > 0 ? (int)online : 0;
 #else
 	return 0;
 #endif

@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
 import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
@@ -11,9 +11,9 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, ExtensionRegistry, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, resolveUserOperator, stdSymbol, assignTemp, boundRead, hoistedTemp } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, ExtensionRegistry, resolveUserOperator } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
-import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
+import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, cstringIntoStringHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -26,12 +26,12 @@ import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isMetaNodeSym } from "../compiler/meta/nodeSym";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createBorrow, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred } from "./types";
+import { boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow } from "./types";
 import { receiverOf } from "./effects";
-import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
+import { locBefore, checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, isCurrentActorRef, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
@@ -193,11 +193,14 @@ function resolveGenericNewExpr(ctx: CheckerContext, newNode: Node, callee: Node,
 	const instType = createGenericInstance(baseType, concreteTypes);
 	const refused = refuseUnhashableKey(ctx, instType, callee);
 	instantiateGenericBody(instType, genericParams);
+	const constructed = isRefBase ? createRef(instType) : instType;
+	const boxed = boxedCountedReference(constructed);
+	if (boxed != null) addError(ctx, boxedReferenceRefusal("'" + typeDisplayName(constructed) + "'", boundParamName(declared, concreteTypes, boxed), boxed), callee.location.line, callee.location.column);
 	let instance: Symbol | null = null;
 	if (!refused && (baseSym.symbolKind == SymbolKind.Class || hasFlag(baseSym, SymbolFlag.HasConstructor))) {
 		instance = instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx, newNode.location);
 	}
-	return { type: isRefBase ? createRef(instType) : instType, instance };
+	return { type: constructed, instance };
 }
 
 // Inherit modulePath + location from the type that declares the field, walking up from the
@@ -1060,6 +1063,13 @@ function newNamesExpected(ctx: CheckerContext, newSym: Symbol | null, expected: 
 	return bound == wanted || (bound.modulePath == wanted.modulePath && bound.name == wanted.name && bound.disamb == wanted.disamb);
 }
 
+function refuseAbstractConstruction(ctx: CheckerContext, node: Node, classSym: Symbol | null): void {
+	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return;
+	const decl = classDeclNodeOf(classSym);
+	if (decl == null || !decl.flags.has(NodeFlag.Abstract)) return;
+	addError(ctx, `Cannot create an instance of the abstract class '${(decl.data as ClassDeclData).className}'`, node.location.line, node.location.column);
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -1210,6 +1220,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			if (!noExplicit) checkExplicitTypeArgArity(ctx, node, extractGenericNames("gen:" + genericParams2), calleeName2);
 		}
 	}
+	refuseAbstractConstruction(ctx, node, d.newCallee.resolvedSym);
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.GenericInstance)
 			&& d.newCallee.resolvedSym != null && !hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
 		const built = checkStructConstruction(ctx, node, resolvedType);
@@ -1654,7 +1665,7 @@ function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[
 // A `new` ranks the constructor signatures and runs the implementation. The implementation is
 // never a candidate itself, as in a call to an overloaded function.
 function pickCtorSignature(ctx: CheckerContext, node: Node, args: Node[], className: string, impl: Symbol, sigs: Symbol[], expected: Type | null): Symbol | null {
-	if (!validateOverloadSigs(ctx, impl, impl, node, 1)) return null;
+	if (!validateOverloadSigs(ctx, overloadMembers(impl), impl, 1)) return null;
 	if (hasSpreadArg(args)) {
 		addError(ctx, "a spread argument cannot call an overloaded constructor", node.location.line, node.location.column);
 		return null;
@@ -3104,7 +3115,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							const calleeName = getCalleeName(d.callee);
 							const variantRefusal = variantIntoObjectRefusal(args[pi], argTypes[pi], paramType);
 							const pointerRefusal = closureIntoCPointerRefusal(calleeName, calleeType, pi, argTypes[pi], paramType);
-							addError(ctx, variantRefusal != "" ? variantRefusal : pointerRefusal != "" ? pointerRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							addError(ctx, variantRefusal != "" ? variantRefusal : pointerRefusal != "" ? pointerRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType) + cstringIntoStringHint(argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -3291,7 +3302,7 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		if (formal != null && restWithoutElements(formal)) continue;
 		if (formal == null || hasGenericParams(formal)) continue;
 		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal) && !wrapsIntoMaybe(arg.nodeType, formal)) {
-			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal),
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal) + cstringIntoStringHint(arg.nodeType, formal),
 				arg.location.line, arg.location.column);
 			continue;
 		}
@@ -3460,7 +3471,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 						&& !(fi < (callNode.data as CallExprData).arguments.length && literalShortOfSlot((callNode.data as CallExprData).arguments[fi], fFormal))) {
 					const mcd = callNode.data as CallExprData;
 					const argLoc = fi < mcd.arguments.length && mcd.arguments[fi] != null ? mcd.arguments[fi].location : callNode.location;
-					const hint = fi < mcd.arguments.length && mcd.arguments[fi] != null ? refDerefHint(mcd.arguments[fi], argTypes[fi], fFormal) : "";
+					const hint = fi < mcd.arguments.length && mcd.arguments[fi] != null ? refDerefHint(mcd.arguments[fi], argTypes[fi], fFormal) + cstringIntoStringHint(argTypes[fi], fFormal) : "";
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(mcd.callee) + "' arg " + String(fi)
 						+ ": got " + typeDisplayName(argTypes[fi]) + ", expected " + typeDisplayName(fFormal) + hint, argLoc.line, argLoc.column);
 					return errorType();
@@ -4102,7 +4113,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		if (isAssignable(checkedT, formalT)) continue;
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
-			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + returnReprRefusal(checkedT, formalT, wrappedFnText(cd.arguments[ai])) + explainStructuralPrefix(checkedT, formalT) + refDerefHint(cd.arguments[ai], checkedT, formalT),
+			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + returnReprRefusal(checkedT, formalT, wrappedFnText(cd.arguments[ai])) + explainStructuralPrefix(checkedT, formalT) + refDerefHint(cd.arguments[ai], checkedT, formalT) + cstringIntoStringHint(checkedT, formalT),
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
@@ -4151,13 +4162,12 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node, na
 	}
 	const impl = set != null ? findOverloadImpl(set) : null;
 	if (set == null || impl == null) {
-		addError(ctx, `Overloaded function '${winner.name}' has no implementation — at least one definition must have a body`,
-			callNode.location.line, callNode.location.column);
+		refuseMissingImplementation(ctx, set != null ? overloadMembers(set) : [winner], callNode);
 		return winner;
 	}
 	const declared = named.find((e: ExtensionMethod): boolean => e.sym == set);
 	const hiddenThis = declared != null && !declared.isStatic && set.declNode != null && set.declNode.kind == NodeKind.MethodDecl;
-	return validateOverloadSigs(ctx, set, impl, callNode, hiddenThis ? 1 : 0) ? impl : winner;
+	return validateOverloadSigs(ctx, overloadMembers(set), impl, hiddenThis ? 1 : 0) ? impl : winner;
 }
 
 function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symbol, takesReceiver: boolean): void {
@@ -4178,36 +4188,45 @@ function fitCallToImplementation(ctx: CheckerContext, callNode: Node, impl: Symb
 	}
 }
 
-// Validate every overload sig against the implementation. Runs once per
-// overload set (flagged by `SymbolFlag.OverloadValidated` on the impl).
+// Validate every overload sig against the implementation, once per set, whether the
+// declaration check or a call reaches it first; the verdict stays on the impl
+// (`OverloadValidated`, `OverloadRejected`) and the error sits on the signature.
+// A set declared in another module is left to that module's check.
 // Rules:
 //   1. sig arity lies between the impl's required count and its arity
 //   2. each sig param type must be assignable to the impl's corresponding param
 //   3. sig return type must be assignable to impl return type
 // Emits errors and returns false if any rule is violated.
-function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, callNode: Node, receiver: int32): boolean {
-	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return true;
+function validateOverloadSigs(ctx: CheckerContext, members: Symbol[], impl: Symbol, receiver: int32): boolean {
+	if (hasFlag(impl, SymbolFlag.OverloadValidated)) return !hasFlag(impl, SymbolFlag.OverloadRejected);
+	if (impl.modulePath != ctx.modulePath) return true;
 	setFlag(impl, SymbolFlag.OverloadValidated);
+	if (overloadSigsHold(ctx, members, impl, receiver)) return true;
+	setFlag(impl, SymbolFlag.OverloadRejected);
+	return false;
+}
+
+function overloadSigsHold(ctx: CheckerContext, members: Symbol[], impl: Symbol, receiver: int32): boolean {
 	const implFnType = impl.symbolType;
 	if (implFnType == null || implFnType.kind != TypeKind.Function) return true;
 	const implRet = implFnType.typeReturn;
 	const implParams = implFnType.typeChildren;
-	const allSyms: Symbol[] = [sym];
-	for (const o of sym.overloads) allSyms.push(o);
-	for (const s of allSyms) {
+	const sym = members[0];
+	for (const s of members) {
 		if (s == impl) continue;
 		if (!hasFlag(s, SymbolFlag.OverloadSig)) continue;
 		const sigType = s.symbolType;
 		if (sigType == null || sigType.kind != TypeKind.Function) continue;
+		const at = declaredAt(s);
 		if (sigType.typeChildren.length > implParams.length) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation has ${implParams.length - receiver}`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const implRequired = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], impl.defaultParams) + receiver : getMinArity(implFnType);
 		if (sigType.typeChildren.length < implRequired) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation requires ${implRequired - receiver}`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		let paramMismatch = -1;
@@ -4219,23 +4238,170 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 		}
 		if (paramMismatch >= 0) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' param ${paramMismatch + 1 - receiver} type '${typeDisplayName(sigType.typeChildren[paramMismatch])}' not assignable to implementation param type '${typeDisplayName(implParams[paramMismatch])}'`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const sRet = sigType.typeReturn;
 		if (sRet != null && implRet != null && sRet.kind != TypeKind.Void && !returnHeldBy(sRet, implRet) && !returnHeldBy(implRet, sRet)) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has return type '${typeDisplayName(sRet)}' incompatible with implementation return type '${typeDisplayName(implRet)}'`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 		const viewParam = sRet != null && implRet != null && dropsReadonlyView(implRet, sRet) ? firstViewParam(sigType.typeChildren) : -1;
 		if (viewParam >= 0) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' returns the mutable '${typeDisplayName(sRet)}' while its param ${viewParam + 1} is the read-only '${typeDisplayName(sigType.typeChildren[viewParam])}': the implementation returns '${typeDisplayName(implRet)}', which may be that view (PARALOCK E24)`,
-				callNode.location.line, callNode.location.column);
+				at.line, at.column);
 			return false;
 		}
 	}
 	return true;
+}
+
+function overloadMembers(set: Symbol): Symbol[] {
+	const members: Symbol[] = [set];
+	for (const o of set.overloads) members.push(o);
+	return members;
+}
+
+function rejectOverloadSet(members: Symbol[]): void {
+	for (const m of members) {
+		setFlag(m, SymbolFlag.OverloadValidated);
+		setFlag(m, SymbolFlag.OverloadRejected);
+	}
+}
+
+// A set declared in another module and not yet refused there is refused at the call instead.
+function refuseMissingImplementation(ctx: CheckerContext, members: Symbol[], call: Node | null): void {
+	const last = members[members.length - 1];
+	if (hasFlag(last, SymbolFlag.OverloadRejected)) return;
+	const elsewhere = last.modulePath != ctx.modulePath;
+	if (elsewhere && call == null) return;
+	if (!elsewhere) rejectOverloadSet(members);
+	const at = elsewhere ? call!.location : declaredAt(last);
+	addError(ctx, `Overloaded function '${writtenName(last)}' has no implementation — at least one definition must have a body`, at.line, at.column);
+}
+
+function refuseSecondImplementation(ctx: CheckerContext, members: Symbol[], second: Symbol): void {
+	rejectOverloadSet(members);
+	const at = declaredAt(second);
+	addError(ctx, `Overloaded function '${writtenName(second)}' has more than one implementation: only one definition may have a body`, at.line, at.column);
+}
+
+// Checks each signature set of a module or class body at its declarations, so a set no call
+// reaches is checked too.
+export function checkOverloadSets(ctx: CheckerContext, stmts: Node[]): void {
+	if (!stmts.some((s: Node): boolean => declaresSignature(unwrapDecl(s)))) return;
+	const keys: string[] = [];
+	const groups = new HashMap<string, Symbol[]>();
+	const written = new HashMap<string, Node[]>();
+	for (const stmt of stmts) {
+		const decl = unwrapDecl(stmt)!;
+		const key = overloadGroupKey(decl);
+		if (key == "" || decl.resolvedSym == null || hasFlag(decl.resolvedSym, SymbolFlag.ImportC) || refusedSignature(decl)) continue;
+		if (!groups.has(key)) {
+			keys.push(key);
+			groups.set(key, []);
+			written.set(key, []);
+		}
+		groups.get(key)!.push(decl.resolvedSym);
+		written.get(key)!.push(stmt);
+	}
+	for (const key of keys) {
+		const members = groups.get(key)!;
+		if (!members.some((m: Symbol): boolean => hasFlag(m, SymbolFlag.OverloadSig))) continue;
+		const impls = members.filter((m: Symbol): boolean => !hasFlag(m, SymbolFlag.OverloadSig));
+		if (refuseDisagreeingOverload(ctx, members, impls.length == 1 ? impls[0] : members[0])) continue;
+		const isCtor = key == "constructor";
+		if (refuseScatteredDeclaration(ctx, members, written.get(key)!, stmts, isCtor, impls.length > 0)) continue;
+		if (impls.length == 0 && !isCtor) refuseMissingImplementation(ctx, members, null);
+		if (impls.length > 1 && !isCtor) refuseSecondImplementation(ctx, members, impls[1]);
+		if (impls.length != 1) continue;
+		const instanceMethod = impls[0].declNode.kind == NodeKind.MethodDecl && !(impls[0].declNode.data as MethodDeclData).methodIsStatic;
+		validateOverloadSigs(ctx, members, impls[0], isCtor || instanceMethod ? 1 : 0);
+	}
+}
+
+// Every declaration of a set shares the implementation's export, staticness and visibility,
+// because a call reaches the implementation through any of them.
+function refuseDisagreeingOverload(ctx: CheckerContext, members: Symbol[], canonical: Symbol): boolean {
+	for (const m of members) {
+		const differs = hasFlag(m, SymbolFlag.Exported) != hasFlag(canonical, SymbolFlag.Exported) ? "exported or non-exported"
+			: methodIsStatic(m) != methodIsStatic(canonical) ? "static or non-static"
+			: methodVisibility(m) != methodVisibility(canonical) ? "public, private or protected"
+			: "";
+		if (differs == "") continue;
+		rejectOverloadSet(members);
+		const at = declaredAt(m);
+		addError(ctx, `Overload signatures of '${writtenName(m)}' must all be ${differs}`, at.line, at.column);
+		return true;
+	}
+	return false;
+}
+
+// The declarations of a set are written one after another, with the implementation last,
+// because a reader takes the body that follows the signatures as theirs.
+function refuseScatteredDeclaration(ctx: CheckerContext, members: Symbol[], written: Node[], stmts: Node[], isCtor: boolean, implemented: boolean): boolean {
+	let bodySeen = false;
+	for (let i = 0; i < members.length; i += 1) {
+		const body = !hasFlag(members[i], SymbolFlag.OverloadSig);
+		if (i > 0 && !(body && bodySeen) && writtenBetween(stmts, written[i - 1], written[i])) {
+			refuseUnfollowedDeclaration(ctx, members, members[i - 1], isCtor);
+			return true;
+		}
+		if (body) bodySeen = true;
+	}
+	const last = members[members.length - 1];
+	if (!implemented || !hasFlag(last, SymbolFlag.OverloadSig) || last.declNode.flags.has(NodeFlag.Abstract)) return false;
+	refuseUnfollowedDeclaration(ctx, members, last, isCtor);
+	return true;
+}
+
+function writtenBetween(stmts: Node[], before: Node, after: Node): boolean {
+	return stmts.some((s: Node): boolean => locBefore(before.location, s.location) && locBefore(s.location, after.location));
+}
+
+function refuseUnfollowedDeclaration(ctx: CheckerContext, members: Symbol[], declared: Symbol, isCtor: boolean): void {
+	rejectOverloadSet(members);
+	const at = declaredAt(declared);
+	const message = declared.declNode.flags.has(NodeFlag.Abstract) ? `All declarations of the abstract method '${writtenName(declared)}' must be consecutive`
+		: isCtor ? "Constructor implementation is missing or not immediately following the declaration"
+		: `Function implementation of '${writtenName(declared)}' is missing or not immediately following the declaration`;
+	addError(ctx, message, at.line, at.column);
+}
+
+function methodIsStatic(sym: Symbol): boolean {
+	return sym.declNode.kind == NodeKind.MethodDecl && (sym.declNode.data as MethodDeclData).methodIsStatic;
+}
+
+function methodVisibility(sym: Symbol): string {
+	if (sym.declNode.kind != NodeKind.MethodDecl) return "";
+	const written = (sym.declNode.data as MethodDeclData).methodVisibility;
+	return written == "public" ? "" : written;
+}
+
+function refusedSignature(decl: Node): boolean {
+	return decl.flags.has(NodeFlag.DecoratorRefused) && hasFlag(decl.resolvedSym!, SymbolFlag.OverloadSig);
+}
+
+function declaresSignature(decl: Node | null): boolean {
+	return decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.OverloadSig);
+}
+
+function overloadGroupKey(decl: Node): string {
+	if (decl.kind == NodeKind.FunctionDecl) {
+		const d = decl.data as FunctionDeclData;
+		return isStaticExtensionFlag(d.fnFlags) ? `${getExtTypeName(d.fnFlags)}.${d.fnName}` : d.fnName;
+	}
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodName;
+	if (decl.kind == NodeKind.ConstructorDecl) return "constructor";
+	return "";
+}
+
+function declaredAt(sym: Symbol): SourceLocation {
+	const decl = sym.declNode;
+	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).nameLocation;
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).nameLocation;
+	return decl.location;
 }
 
 function returnHeldBy(from: Type, to: Type): boolean {
@@ -4627,11 +4793,10 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let sym = primary;
 	let impl = findOverloadImpl(sym);
 	if (impl == null) {
-		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
-			callNode.location.line, callNode.location.column);
+		refuseMissingImplementation(ctx, overloadMembers(sym), callNode);
 		return getReturnType(sym.symbolType);
 	}
-	if (!validateOverloadSigs(ctx, sym, impl, callNode, 0)) {
+	if (!validateOverloadSigs(ctx, overloadMembers(sym), impl, 0)) {
 		return getReturnType(sym.symbolType);
 	}
 
@@ -5865,9 +6030,21 @@ export function carriesLength(t: Type): boolean {
 	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || isStringLike(t) || t.kind == TypeKind.CString;
 }
 
+// `super.m()` runs the parent's `m` on `this`: the receiver carries the method's `this` at the
+// parent's type, so the member resolves as an instance member of the parent.
+function bindSuperReceiver(ctx: CheckerContext, receiver: Node): boolean {
+	if (receiver.resolvedSym == null || receiver.resolvedSym.symbolKind != SymbolKind.Class) return false;
+	const thisSym = lookupSymbol(ctx.table, "this");
+	if (thisSym == null) return false;
+	receiver.resolvedSym = thisSym;
+	return true;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
+	const superReceiver = isSuperReceiver(d.object) && bindSuperReceiver(ctx, d.object);
+	if (superReceiver) node.flags = node.flags.incl(NodeFlag.NoDispatch);
 	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
 	if (declaredUnion != null && unionVariantHasProperty(declaredUnion, d.property)
 			&& !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
@@ -6027,6 +6204,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = uint8[]`.
 	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object, d.property);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
+	const abstractOwner = superReceiver ? abstractMethodOwnerName(resolvedObjType, d.property) : "";
+	const superRefusal = !superReceiver ? ""
+		: !isUnresolvedType(propType) ? `Class field '${d.property}' defined by the parent class is not accessible in the child class via super`
+		: abstractOwner != "" ? `Abstract method '${d.property}' in class '${abstractOwner}' cannot be accessed via super expression`
+		: "";
+	if (superRefusal != "") {
+		addError(ctx, superRefusal, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	if (!isStaticClassAccess && isUnresolvedType(propType) && fieldOwnerSym != null) {
 		callDemandField(ctx, fieldOwnerSym, d.property, false, node);
 		propType = getProperty(resolvedObjType, d.property);

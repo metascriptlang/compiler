@@ -11,7 +11,7 @@
 import { exists, writeFileBytes, ensureDir, chmod, rename, removeAll } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { createHeaders } from "std/http/headers";
-import { sha256 } from "std/crypto";
+import { sha256Sync, toBase64 } from "std/crypto";
 import { Buffer } from "std/core/buffer";
 import { openZip, zipEntries, zipExtract, zipFindByName, closeZip, ZipReader, newZipWriter, zipAdd, zipFinalize, closeZipWriter } from "std/compress/zip";
 import { tmpDir } from "../../utils/path";
@@ -42,9 +42,9 @@ export function packageErrorMessage(e: PackageError): string {
 
 function verifyIntegrity(archiveBytes: Buffer, expectedIntegrity: string): Result<void, PackageError> {
 	if (expectedIntegrity == "") return Result.err(PackageError.Integrity);
-	const hash = sha256(archiveBytes, "base64");
+	const hash = sha256Sync(archiveBytes);
 	if (!hash.ok) return Result.err(PackageError.Integrity);
-	if ("sha256-" + hash.value != expectedIntegrity) return Result.err(PackageError.Integrity);
+	if ("sha256-" + toBase64(hash.value) != expectedIntegrity) return Result.err(PackageError.Integrity);
 	return Result.ok(null);
 }
 
@@ -189,9 +189,9 @@ test "bytes that are not a zip are refused" {
 
 test "integrity must be present and match" {
 	const bytes = testArchive(["package/a.ms"]);
-	const good = sha256(bytes, "base64");
+	const good = sha256Sync(bytes);
 	assert good.ok;
-	if (good.ok) assert verifyIntegrity(bytes, "sha256-" + good.value).ok;
+	if (good.ok) assert verifyIntegrity(bytes, "sha256-" + toBase64(good.value)).ok;
 	assert !verifyIntegrity(bytes, "").ok;
 	assert !verifyIntegrity(bytes, "sha256-AAAA").ok;
 }

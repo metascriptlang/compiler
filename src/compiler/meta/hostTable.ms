@@ -717,6 +717,7 @@ extern function msZipReaderCount(handle: int64): int32;
 extern function msZipReaderEntryName(handle: int64, index: int32): string;
 extern function msZipReaderEntrySize(handle: int64, index: int32): int64;
 extern function msZipReaderEntryIsDir(handle: int64, index: int32): int32;
+extern function msZipReaderFind(handle: int64, name: string): int32;
 extern function msZipReaderExtract(handle: int64, index: int32): string;
 extern function msZipReaderClose(handle: int64): void;
 extern function msZipWriterNew(): int64;
@@ -742,6 +743,10 @@ function _bridgeMsZipReaderEntrySize(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsZipReaderEntryIsDir(args: RaiserValue[]): RaiserValue {
 	return boxInt(msZipReaderEntryIsDir(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsZipReaderFind(args: RaiserValue[]): RaiserValue {
+	return boxInt(msZipReaderFind(unboxInt(args[0]) as int64, unboxString(args[1])));
 }
 
 function _bridgeMsZipReaderExtract(args: RaiserValue[]): RaiserValue {
@@ -1465,6 +1470,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msZipReaderEntryName",  _bridgeMsZipReaderEntryName);
 	registerHostFn("msZipReaderEntrySize",  _bridgeMsZipReaderEntrySize);
 	registerHostFn("msZipReaderEntryIsDir", _bridgeMsZipReaderEntryIsDir);
+	registerHostFn("msZipReaderFind",       _bridgeMsZipReaderFind);
 	registerHostFn("msZipReaderExtract",    _bridgeMsZipReaderExtract);
 	registerHostFn("msZipReaderClose",      _bridgeMsZipReaderClose);
 	registerHostFn("msZipWriterNew",        _bridgeMsZipWriterNew);

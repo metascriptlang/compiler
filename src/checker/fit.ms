@@ -1696,6 +1696,14 @@ function bigIntEqualityHint(a: Type | null, b: Type | null): string {
 	return " — convert one side first: `b == BigInt(x)` or `Number(b) == x`";
 }
 
+function charStringEqualityHint(a: Type | null, b: Type | null): string {
+	const sa = a == null ? null : operandShape(a);
+	const sb = b == null ? null : operandShape(b);
+	if (sa == null || sb == null) return "";
+	const charAgainstText = (sa.kind == TypeKind.Char && isStringLike(sb)) || (sb.kind == TypeKind.Char && isStringLike(sa));
+	return charAgainstText ? " — a char is a byte, not a one-character string: compare with its code, `c == \"a\".code`" : "";
+}
+
 function binaryPointerish(k: TypeKind): boolean {
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Cursor
 		|| k == TypeKind.Borrow || k == TypeKind.Function || k == TypeKind.Array
@@ -1751,7 +1759,10 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 	if (isNumeric(widenNumberLiteralType(a)) && isNumeric(widenNumberLiteralType(b))) return true;
 	if (a.kind == TypeKind.StringLiteral && b.kind == TypeKind.StringLiteral) return a.typeName == b.typeName;
 	if (isStringLike(a) && isStringLike(b)) return true;
-	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
+	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) {
+		const other = a.kind == TypeKind.Char ? b : a;
+		return other.kind == TypeKind.Char || isNumeric(widenNumberLiteralType(other));
+	}
 	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
@@ -1978,7 +1989,8 @@ export function refuseDisjointStrings(ctx: CheckerContext, op: string, left: Nod
 
 export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
 	if (!binaryOperandsFail(ctx, op, leftType, rightType)) return false;
-	const bigIntHint = binaryOperandClass(op) == "eq" ? bigIntEqualityHint(leftType, rightType) : "";
+	const eqClass = binaryOperandClass(op) == "eq";
+	const bigIntHint = eqClass ? bigIntEqualityHint(leftType, rightType) + charStringEqualityHint(leftType, rightType) : "";
 	if (bigIntHint != "") {
 		addError(ctx, "This comparison appears to be unintentional because the types '" + typeDisplayName(leftType) + "' and '"
 			+ typeDisplayName(rightType) + "' have no overlap" + bigIntHint, node.location.line, node.location.column);
@@ -3732,10 +3744,9 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
 		return expr;
 	}
-	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
-		|| ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
-			&& formal.kind == TypeKind.CString)) {
-		if (formal.kind == TypeKind.CString) refuseDanglingCString(ctx, expr, false);
+	if ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
+		&& formal.kind == TypeKind.CString) {
+		refuseDanglingCString(ctx, expr, false);
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
@@ -3844,7 +3855,12 @@ function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, fo
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to " + pointer, expr.location.line, expr.location.column);
 		return;
 	}
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal) + cstringIntoStringHint(exprType, formal), expr.location.line, expr.location.column);
+}
+
+export function cstringIntoStringHint(exprType: Type | null, formal: Type | null): string {
+	if (exprType == null || formal == null || exprType.kind != TypeKind.CString || formal.kind != TypeKind.String) return "";
+	return " — a cstring is a pointer the C side may overwrite or free, so it becomes a string only where you copy it: write 'as string'";
 }
 
 export function wrappedFnText(fn: Node): string {

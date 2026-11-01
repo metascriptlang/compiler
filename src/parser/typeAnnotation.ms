@@ -48,6 +48,33 @@ function skipReturnPredicateHead(state: ParserState): void {
 	}
 }
 
+function isFunctionTypeParenAhead(state: ParserState): boolean {
+	const first = peek(state, 1).kind;
+	if (first == TokenKind.RParen || first == TokenKind.DotDotDot) return true;
+	let i = 1;
+	const isModifierKind = first == TokenKind.Out || first == TokenKind.Ref || first == TokenKind.Readonly || isIdentLikeKind(first);
+	if (isModifierKind && isIdentLikeKind(peek(state, 2).kind)) i = 2;
+	const head = peek(state, i).kind;
+	if (head == TokenKind.LBrace || head == TokenKind.LBracket) {
+		let depth = 0;
+		while (true) {
+			const kind = peek(state, i).kind;
+			if (kind == TokenKind.Eof) return false;
+			if (kind == TokenKind.LBrace || kind == TokenKind.LBracket) depth += 1;
+			if (kind == TokenKind.RBrace || kind == TokenKind.RBracket) depth -= 1;
+			i += 1;
+			if (depth == 0) break;
+		}
+	} else if (isIdentLikeKind(head) || head == TokenKind.This) {
+		i += 1;
+	} else {
+		return false;
+	}
+	const after = peek(state, i).kind;
+	if (after == TokenKind.Colon || after == TokenKind.Comma || after == TokenKind.Question || after == TokenKind.Assign) return true;
+	return after == TokenKind.RParen && peek(state, i + 1).kind == TokenKind.Arrow;
+}
+
 export function skipTypeAnnotation(state: ParserState, leavesQuestion: boolean = false): void {
 	skipUnionType(state, leavesQuestion);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
@@ -308,6 +335,7 @@ function parseGenericTypeArgs(state: ParserState): Node[] {
 
 function parseTypeFunctionOrParen(state: ParserState, leavesQuestion: boolean = false): Node {
 	const parenToken = current(state);
+	const startsFunctionType = isFunctionTypeParenAhead(state);
 	advance(state); // consume (
 
 	// Collect params: name: Type pairs
@@ -350,16 +378,16 @@ function parseTypeFunctionOrParen(state: ParserState, leavesQuestion: boolean = 
 	if (!isAtEnd(state) && current(state).kind == TokenKind.RParen) {
 		advance(state);
 	}
-	return finishFunctionOrParenType(state, parenToken, paramNames, paramTypes, leavesQuestion);
+	return finishFunctionOrParenType(state, parenToken, paramNames, paramTypes, startsFunctionType, leavesQuestion);
 }
 
 function reportRequiredAfterOptional(state: ParserState, nameToken: Token): void {
 	addError(state, `A required parameter cannot follow an optional parameter ('${nameToken.value}' at line ${nameToken.line})`);
 }
 
-function finishFunctionOrParenType(state: ParserState, parenToken: Token, paramNames: string[], paramTypes: Node[], leavesQuestion: boolean = false): Node {
+function finishFunctionOrParenType(state: ParserState, parenToken: Token, paramNames: string[], paramTypes: Node[], startsFunctionType: boolean, leavesQuestion: boolean = false): Node {
 	// Arrow => return type
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
+	if (startsFunctionType && !isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 		advance(state);
 		skipReturnPredicateHead(state);
 		const returnType = parseTypeAtom(state, leavesQuestion);
@@ -441,7 +469,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			continue;
 		}
 
-		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
+		if ((isIdentLikeKind(current(state).kind) || current(state).kind == TokenKind.String) && !hasIndexSig) {
 			const fieldName = current(state).value;
 			fieldNames.push(fieldName);
 			fieldLocations.push(makeLoc(current(state).line, current(state).column));
@@ -514,8 +542,9 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		return;
 	}
 	if (token.kind == TokenKind.LParen) {
+		const startsFunctionType = isFunctionTypeParenAhead(state);
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
-		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
+		if (startsFunctionType && !isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
 			skipReturnPredicateHead(state);
 			skipTypeAtomNoOptional(state);
@@ -597,9 +626,10 @@ function skipTypeAtom(state: ParserState): void {
 
 	// Parenthesized type or function type: (a: T) => R
 	if (token.kind == TokenKind.LParen) {
+		const startsFunctionType = isFunctionTypeParenAhead(state);
 		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 		// Arrow function type: (...) => R
-		if (!isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
+		if (startsFunctionType && !isAtEnd(state) && current(state).kind == TokenKind.Arrow) {
 			advance(state);
 			skipReturnPredicateHead(state);
 			skipTypeAtom(state);
@@ -986,6 +1016,14 @@ function parseIndexSig(typeStr: string): Node {
 	return parseTypeExpr(state);
 }
 
+test "a quoted member of an object type is a field named by its value" {
+	const d = parseIndexSig("{ \"data-id\": string; \"a\"?: number }").data as TypeObjectData;
+	assert d.typExprFieldNames.length == 2;
+	assert d.typExprFieldNames[0] == "data-id";
+	assert d.typExprFieldNames[1] == "a";
+	assert d.typExprOptionalFields.length == 1;
+}
+
 test "index signature produces TypeObject" {
 	const node = parseIndexSig("{ [key: string]: number }");
 	assert node != null;
@@ -1082,7 +1120,7 @@ test "ordinary capture retains optional markers and unnamed function parameters"
 	const optionalState = createState(optional.value);
 	assert captureType(optionalState).text == "int32?";
 	assert current(optionalState).kind == TokenKind.Assign;
-	const routine = lex("((x: int32) => int32) => int32 = value");
+	const routine = lex("(f: (x: int32) => int32) => int32 = value");
 	assert routine.ok;
 	const routineState = createState(routine.value);
 	const captured = captureType(routineState);
@@ -1099,4 +1137,26 @@ test "conditional-delimited capture reports its original type errors" {
 	assert state.errors.length == 1;
 	assert state.errors[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
 	assert current(state).kind == TokenKind.Assign;
+}
+
+test "a parenthesized function type before => is a type, the arrow is the caller's" {
+	assert skipsTo("((x: number) => number) => x", TokenKind.Arrow);
+	assert skipsTo("(() => number) => x", TokenKind.Arrow);
+	assert skipsTo("(A | B) => x", TokenKind.Arrow);
+}
+
+test "a function type still takes its own => after a name, a rest or an empty list" {
+	assert skipsType("(x: number) => number");
+	assert skipsType("(number) => number");
+	assert skipsType("(...xs: number[]) => number");
+	assert skipsType("() => number");
+	assert skipsType("({ a }: Foo) => number");
+	assert skipsType("(sink v: string) => number");
+}
+
+test "a tuple type takes an array suffix" {
+	assert skipsType("[string, string][]");
+	assert skipsType("[string, string | null][]");
+	assert skipsType("readonly [string, string][]");
+	assert skipsType("([string, number] | null)[]");
 }

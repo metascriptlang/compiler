@@ -4,12 +4,12 @@
 import { Node, NodeKind, NodeFlag, ExprStmtData, ConditionalExprData, BinaryExprData, CallExprData, VariableDeclData, DestructuringDeclData, ArrayLiteralData, MemberExprData, ArrayAccessData, ReturnStmtData, ThrowStmtData } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
 import { FormatOptions } from "../options";
-import { Doc, docNil } from "../doc";
+import { Doc } from "../doc";
 
 export type NodePrinterFn = (node: Node, options: FormatOptions) => Doc;
 
 let nodePrinterFn: NodePrinterFn = (node: Node, options: FormatOptions): Doc => {
-	return docNil();
+	throw new Error("internal: fmt printed a node before a printer was registered");
 };
 
 export function registerNodePrinter(fn: NodePrinterFn): void {
@@ -38,7 +38,7 @@ export function popPrinted(): void {
 }
 
 export function callPrintNode(node: Node, options: FormatOptions): Doc {
-	if (node == null) return nodePrinterFn(node, options);
+	if (node == null) throw new Error("internal: fmt asked to print a null node");
 	if (node.kind == NodeKind.ExprStmt) statementExpression = (node.data as ExprStmtData).expr;
 	printing.push(node);
 	const doc = nodePrinterFn(node, options);

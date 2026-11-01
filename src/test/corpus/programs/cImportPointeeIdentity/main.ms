@@ -22,7 +22,7 @@ let count: size_t = 0;
 const len = pointeeNames(names, count);
 let node: Ptr<Pointee0Node>;
 pointeeNode(node);
-console.log(`${used},${cap},${text as cstring}|${count},${len}|${pointeeNodeValue(node)}`);
+console.log(`${used},${cap},${text as cstring as string}|${count},${len}|${pointeeNodeValue(node)}`);
 pointeeNodeFree(node);
 
 const digits = "42abc";

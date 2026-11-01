@@ -3,6 +3,7 @@
 @compile("runtime/promise/combinator.c");
 when (drc && !bare && !solana) {
 	import "./combinator";
+	import "./moduleEval";
 
 	@compilerFunc
 	extern function msPromiseAll(futures: Ptr<void>): Ptr<void> from "msPromiseAll";
@@ -80,6 +81,7 @@ export class Promise<T> {
 	// Static constructors
 	@builtin("PromiseResolve")
 	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
+	static async resolve(): Promise<void> {}
 	@builtin("PromiseReject")
 	static extern reject(error: Error): Promise<never> from "msPromiseReject";
 }

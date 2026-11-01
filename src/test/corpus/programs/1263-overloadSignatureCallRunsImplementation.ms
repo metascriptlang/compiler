@@ -4,6 +4,7 @@
 // @stdout: s:q:0 n:4:5
 // @stdout: s:q:2 n:4:1.5
 // @stdout: 3
+// @stdout: quiet
 // A call through an overload signature runs the implementation: a rest parameter the signature
 // leaves out still arrives empty, an omitted argument takes the implementation's default before
 // the signature's optional mark, a constructor signature's optional parameter may be omitted, and a
@@ -67,3 +68,10 @@ class Held {
 	get(): int32 { return this.x; }
 }
 console.log(new Held(3).get());
+
+class Quiet {
+	ping(a: string): void;
+	ping(a: string | int32): void {}
+}
+new Quiet().ping("x");
+console.log("quiet");

@@ -16,7 +16,8 @@
 extern function msNetSocket(): int32;
 extern function msNetConnect(fd: int32, host: string, port: int32): int32;
 extern function msNetSend(fd: int32, data: string): int32;
-extern function msNetRecv(fd: int32, maxBytes: int32): string;
+extern function msNetSendBytes(fd: int32, data: Readonly<Span<uint8>>): int32;
+extern function msNetRecvBytes(fd: int32, maxBytes: int32): Buffer;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 
@@ -34,7 +35,7 @@ import {
 } from "./headers";
 import { parseResponse, parseUrl, decodeChunked } from "./parser";
 import { utf8String } from "../string/bytes";
-import { Bytes, rawString, rawBuffer } from "../buffer/bytes";
+import { Bytes } from "../buffer/bytes";
 
 // ===== Constants =====
 
@@ -328,8 +329,11 @@ function doRequestPlain(options: RequestOptions): Result<HttpResponse, HttpError
 
 	return doRequestOver(
 		options,
-		(data: Bytes) => msNetSend(fd, rawString(data)),
-		(maxBytes: int32) => rawBuffer(msNetRecv(fd, maxBytes)),
+		(data: Bytes): int32 => {
+			if (typeof data == "string") return msNetSend(fd, data);
+			return msNetSendBytes(fd, data);
+		},
+		(maxBytes: int32) => msNetRecvBytes(fd, maxBytes),
 		() => msNetClose(fd),
 	);
 }

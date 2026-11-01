@@ -164,14 +164,25 @@ msString msBigIntToDebugString(const msBigInt* a) {
 
 msBigInt* msBigIntFromFloat64(double v) {
 	if (!isfinite(v) || trunc(v) != v) bigFail("the number cannot be converted to a BigInt because it is not an integer");
-	char buf[352];
-	snprintf(buf, sizeof buf, "%.0f", v);
-	return msBigIntFromString(buf, strlen(buf));
+	int e;
+	uint64_t m = (uint64_t)ldexp(frexp(fabs(v), &e), 53);
+	e -= 53;
+	if (e < 0) { m >>= -e; e = 0; }
+	msBigInt* r = msBigIntFromUint64(m);
+	if (e > 0) CHK(mbedtls_mpi_shift_l(&r->v, (size_t)e));
+	if (v < 0) {
+		mbedtls_mpi zero;
+		mbedtls_mpi_init(&zero);
+		CHK(mbedtls_mpi_lset(&zero, 0));
+		CHK(mbedtls_mpi_sub_mpi(&r->v, &zero, &r->v));
+		mbedtls_mpi_free(&zero);
+	}
+	return r;
 }
 
 char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 	if (radix < 2 || radix > 36) bigFail("toString() radix must be between 2 and 36");
-	if (radix <= 16) {
+	if (radix == 2 || radix == 4 || radix == 8 || radix == 16) {
 		size_t olen = 0;
 		mbedtls_mpi_write_string(&a->v, radix, NULL, 0, &olen);
 		char* buf = (char*)malloc(olen);
@@ -185,28 +196,35 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 		}
 		return buf;
 	}
-	/* mbedtls_mpi_write_string caps at radix 16; peel digits by division */
+	/* mbedtls_mpi_write_string divides once per digit and caps at radix 16 */
 	static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	mbedtls_mpi_sint chunk = radix;
+	int k = 1;
+	while (chunk <= INT64_MAX / radix) { chunk *= radix; k++; }
 	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
 	mbedtls_mpi m, zero, q, r;
 	mbedtls_mpi_init(&m); mbedtls_mpi_init(&zero); mbedtls_mpi_init(&q); mbedtls_mpi_init(&r);
 	CHK(mbedtls_mpi_lset(&zero, 0));
 	if (neg) CHK(mbedtls_mpi_sub_mpi(&m, &zero, &a->v));
 	else CHK(mbedtls_mpi_copy(&m, &a->v));
-	size_t cap = mbedtls_mpi_bitlen(&m) / 4 + 4;
+	size_t cap = mbedtls_mpi_bitlen(&m) + (size_t)k + 2;
 	char* tmp = (char*)malloc(cap);
 	if (tmp == NULL) bigFail("out of memory");
 	size_t n = 0;
-	if (mbedtls_mpi_cmp_int(&m, 0) == 0) tmp[n++] = '0';
 	while (mbedtls_mpi_cmp_int(&m, 0) > 0) {
-		CHK(mbedtls_mpi_div_int(&q, &r, &m, radix));
-		size_t olen = 0;
-		char dbuf[8];
-		CHK(mbedtls_mpi_write_string(&r, 16, dbuf, sizeof dbuf, &olen));
-		long d = strtol(dbuf, NULL, 16);
-		tmp[n++] = digits[d];
-		CHK(mbedtls_mpi_copy(&m, &q));
+		CHK(mbedtls_mpi_div_int(&q, &r, &m, chunk));
+		mbedtls_mpi_swap(&m, &q);
+		uint8_t rb[8];
+		CHK(mbedtls_mpi_write_binary(&r, rb, sizeof rb));
+		uint64_t rem = 0;
+		for (int i = 0; i < 8; i++) rem = (rem << 8) | rb[i];
+		int more = mbedtls_mpi_cmp_int(&m, 0) > 0;
+		for (int i = 0; i < k && (more || rem > 0); i++) {
+			tmp[n++] = digits[rem % (uint64_t)radix];
+			rem /= (uint64_t)radix;
+		}
 	}
+	if (n == 0) tmp[n++] = '0';
 	char* out = (char*)malloc(n + 2);
 	if (out == NULL) bigFail("out of memory");
 	size_t w = 0;
@@ -219,10 +237,17 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 }
 
 double msBigIntToFloat64(const msBigInt* a) {
-	char* s = msBigIntToCString(a, 10);
-	double d = strtod(s, NULL);
-	free(s);
-	return d;
+	size_t n = mbedtls_mpi_bitlen(&a->v);
+	if (n <= 53) return (double)msBigIntToInt64(a);
+	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
+	size_t shift = n - 53;
+	uint64_t m = 0;
+	for (size_t i = n; i-- > shift;) m = (m << 1) | (uint64_t)mbedtls_mpi_get_bit(&a->v, i);
+	int half = mbedtls_mpi_get_bit(&a->v, shift - 1);
+	int sticky = mbedtls_mpi_lsb(&a->v) < shift - 1;
+	if (half && (sticky || (m & 1u) != 0)) m++;
+	double r = shift > 1024 ? INFINITY : ldexp((double)m, (int)shift);
+	return neg ? -r : r;
 }
 
 int64_t msBigIntToInt64(const msBigInt* a) {

@@ -4,11 +4,12 @@
 
 import {
 	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram,
-	getFileId, getFilePath, getTransitiveDependents, dbGetFileCount, dbGetFilePathByIndex
+	getFileId, getFilePath, getTransitiveDependents, dbGetFileCount, dbGetFilePathByIndex,
+	createTransAmDb, dbSetFileText, recordModuleImport
 } from "../../transam/index";
 import {
-	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
-	lspUriToPath, lspPathToUri, lspResponse
+	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField, lspGetArrayItems,
+	lspUriToPath, lspPathToUri, lspResponse, lspErrorResponse
 } from "../protocol";
 import {
 	lspFmtLocation, lspFmtTextEdit,
@@ -26,6 +27,9 @@ import {
 	SgSymbolRef,
 	SgInlayHintKind,
 } from "../../../checker/suggest";
+import { parseJson } from "std/serialize/json/parser";
+import { JsonKind } from "std/serialize/json/types";
+import { getDynamicField, asBoolean } from "std/serialize/json/accessors";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
 import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
@@ -305,8 +309,23 @@ function lspRefKey(ref: SgSymbolRef): int64 {
 	return ((ref.line as int64) << 32) | (ref.col as int64);
 }
 
-function pushUniqueLocations(items: string[], uri: string, source: string, refs: SgSymbolRef[]): void {
+function referenceIncludesDeclaration(params: string): Result<boolean, string> {
+	const parsed = parseJson(params);
+	if (!parsed.ok || parsed.value.kind != JsonKind.Object) return Result.err("References params must be a JSON object");
+	const context = parsed.value.getDynamicField("context");
+	if (context.kind != JsonKind.Object) return Result.err("References params require an object context");
+	const flag = context.getDynamicField("includeDeclaration");
+	if (flag.kind != JsonKind.Bool) return Result.err("References context requires a boolean includeDeclaration");
+	return Result.ok(flag.asBoolean());
+}
+
+function pushUniqueLocations(items: string[], uri: string, source: string, refs: SgSymbolRef[], includeDeclaration: boolean): void {
 	const seen: HashSet<int64> = new HashSet<int64>();
+	if (!includeDeclaration) {
+		for (const ref of refs) {
+			if (ref.isDecl) seen.add(lspRefKey(ref));
+		}
+	}
 	const lines = LineIndex.build(source);
 	const clientLines = LineIndex.buildLsp(source);
 	for (const ref of refs) {
@@ -319,7 +338,25 @@ function pushUniqueLocations(items: string[], uri: string, source: string, refs:
 	}
 }
 
-export function handleReferences(id: string, params: string, db: TransAmDb): string {
+function dependentPaths(db: TransAmDb, path: string): string[] {
+	const targetFileId = getFileId(db.fileInput, path);
+	const paths: string[] = [];
+	if (targetFileId < 0) return paths;
+	for (const depId of getTransitiveDependents(db.moduleDeps, targetFileId)) paths.push(getFilePath(db.fileInput, depId));
+	return paths;
+}
+
+function loadedPaths(db: TransAmDb): string[] {
+	const paths: string[] = [];
+	const fileCount = dbGetFileCount(db);
+	for (let fi: int32 = 0; fi < fileCount; fi++) paths.push(dbGetFilePathByIndex(db, fi));
+	return paths;
+}
+
+export function handleReferences(id: string, params: string, db: TransAmDb, candidates: string[] | null = null): string {
+	const flag = referenceIncludesDeclaration(params);
+	if (!flag.ok) return lspErrorResponse(id, -32602, flag.error);
+	const includeDeclaration = flag.value;
 	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
@@ -332,22 +369,15 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const items: string[] = [];
 
 	// Search current file via symbol identity (no false positives from shadowing)
-	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym));
+	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym), includeDeclaration);
 
-	// Search transitive dependents only (files that could import this symbol)
-	const targetFileId = getFileId(db.fileInput, path);
-	let depIds: int32[] = [];
-	if (targetFileId >= 0) {
-		depIds = getTransitiveDependents(db.moduleDeps, targetFileId);
-	}
-	for (const depId of depIds) {
-		const otherPath = getFilePath(db.fileInput, depId);
+	for (const otherPath of candidates != null ? candidates : dependentPaths(db, path)) {
 		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
 		pushUniqueLocations(
 			items, lspPathToUri(otherPath), dbGetSource(db, otherPath),
-			sgQueryBySym(otherCtx, suggest.sym),
+			sgQueryBySym(otherCtx, suggest.sym), includeDeclaration,
 		);
 	}
 
@@ -436,7 +466,7 @@ function renameImportAlias(db: TransAmDb, path: string, ctx: CheckerContext, sym
 	return buildTextEdits(refs, newName, source);
 }
 
-export function handleRename(id: string, params: string, db: TransAmDb): string {
+export function handleRename(id: string, params: string, db: TransAmDb, candidates: string[] | null = null): string {
 	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
@@ -463,10 +493,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		changes.push(lspJsonString(pos.uri) + ":" + curEdits);
 	}
 
-	// Other open files in workspace
-	const fileCount = dbGetFileCount(db);
-	for (let fi: int32 = 0; fi < fileCount; fi++) {
-		const otherPath = dbGetFilePathByIndex(db, fi);
+	for (const otherPath of candidates != null ? candidates : loadedPaths(db)) {
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
@@ -481,3 +508,102 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	return lspResponse(id, "{\"changes\":{" + changes.join(",") + "}}");
 }
 
+function referencesRows(db: TransAmDb, uri: string, line: int32, character: int32, context: string): string {
+	const params = `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}${context}}`;
+	const rows: string[] = [];
+	for (const item of lspGetArrayItems(lspGetObjectField(handleReferences("1", params, db), "result"))) {
+		const start = lspGetObjectField(lspGetObjectField(item, "range"), "start");
+		rows.push(`${lspGetField(item, "uri")} ${lspGetNumberField(start, "line")}:${lspGetNumberField(start, "character")}`);
+	}
+	return rows.join(", ");
+}
+
+const INCLUDE = ",\"context\":{\"includeDeclaration\":true}";
+const EXCLUDE = ",\"context\":{\"includeDeclaration\":false}";
+
+function declarationFlagDb(): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/incl/main.ms", "const value = 1;\nconst result = value;\nfunction shadow() { const value = 2; return value; }\nconst again = value;");
+	return db;
+}
+
+test "references leave out the declaration only when includeDeclaration is false" {
+	const db = declarationFlagDb();
+	const uri = "file:///incl/main.ms";
+	const everything = `${uri} 0:6, ${uri} 1:15, ${uri} 3:14`;
+	const uses = `${uri} 1:15, ${uri} 3:14`;
+	assert referencesRows(db, uri, 0, 6, INCLUDE) == everything, referencesRows(db, uri, 0, 6, INCLUDE);
+	assert referencesRows(db, uri, 0, 6, EXCLUDE) == uses, referencesRows(db, uri, 0, 6, EXCLUDE);
+	assert referencesRows(db, uri, 1, 15, INCLUDE) == everything, referencesRows(db, uri, 1, 15, INCLUDE);
+	assert referencesRows(db, uri, 1, 15, EXCLUDE) == uses, referencesRows(db, uri, 1, 15, EXCLUDE);
+}
+
+test "references refuse a request without a boolean includeDeclaration" {
+	const db = declarationFlagDb();
+	const bodies = [
+		"",
+		",\"context\":{}",
+		",\"context\":null",
+		",\"context\":true",
+		",\"context\":{\"includeDeclaration\":null}",
+		",\"context\":{\"includeDeclaration\":\"false\"}",
+		",\"context\":{\"includeDeclaration\":0}",
+	];
+	for (const context of bodies) {
+		const params = `{"textDocument":{"uri":"file:///incl/main.ms"},"position":{"line":0,"character":6}${context}}`;
+		const response = handleReferences("7", params, db);
+		assert lspGetNumberField(response, "id") == 7, context;
+		assert lspGetNumberField(lspGetObjectField(response, "error"), "code") == -32602, context;
+		assert lspGetField(lspGetObjectField(response, "error"), "message").indexOf("includeDeclaration") >= 0
+			|| lspGetField(lspGetObjectField(response, "error"), "message").indexOf("context") >= 0, context;
+		assert lspGetObjectField(response, "result") == "", context;
+	}
+}
+
+test "references of a shadowing local drop only its own declaration" {
+	const db = declarationFlagDb();
+	const uri = "file:///incl/main.ms";
+	assert referencesRows(db, uri, 2, 29, EXCLUDE) == `${uri} 2:44`, referencesRows(db, uri, 2, 29, EXCLUDE);
+	assert referencesRows(db, uri, 2, 29, INCLUDE) == `${uri} 2:26, ${uri} 2:44`, referencesRows(db, uri, 2, 29, INCLUDE);
+}
+
+function declarationFlagImportDb(): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/incl/dep.ms", "export function f(): int32 { return 1; }");
+	dbSetFileText(db, "/incl/user.ms", "import { f as g } from \"./dep\";\nexport const t = g();");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/incl/user.ms"), getFileId(db.fileInput, "/incl/dep.ms"));
+	return db;
+}
+
+test "an import alias and its uses stay references when the exporter's declaration is left out" {
+	const db = declarationFlagImportDb();
+	const dep = "file:///incl/dep.ms";
+	const user = "file:///incl/user.ms";
+	const imports = `${user} 0:9, ${user} 0:14, ${user} 1:17`;
+	assert referencesRows(db, dep, 0, 16, INCLUDE) == `${dep} 0:16, ${imports}`, referencesRows(db, dep, 0, 16, INCLUDE);
+	assert referencesRows(db, dep, 0, 16, EXCLUDE) == imports, referencesRows(db, dep, 0, 16, EXCLUDE);
+	assert referencesRows(db, user, 1, 17, EXCLUDE) == imports, referencesRows(db, user, 1, 17, EXCLUDE);
+}
+
+function candidateDb(): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/cand/lib.ms", "export function f(): int32 { return 1; }");
+	for (const name of ["kept", "dropped"]) {
+		dbSetFileText(db, `/cand/${name}.ms`, `import { f } from "./lib";\nexport const ${name} = f();`);
+		recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `/cand/${name}.ms`), getFileId(db.fileInput, "/cand/lib.ms"));
+	}
+	return db;
+}
+
+test "references and rename cover the candidates they are given instead of the dependents the db holds" {
+	const db = candidateDb();
+	const lib = "file:///cand/lib.ms";
+	const params = `{"textDocument":{"uri":"${lib}"},"position":{"line":0,"character":16},"context":{"includeDeclaration":true},"newName":"g"}`;
+	const held = handleReferences("1", params, db) + handleRename("2", params, db);
+	assert held.indexOf("kept.ms") >= 0 && held.indexOf("dropped.ms") >= 0, held;
+	const scoped = handleReferences("1", params, db, ["/cand/kept.ms"]) + handleRename("2", params, db, ["/cand/kept.ms"]);
+	assert scoped.indexOf("kept.ms") >= 0, scoped;
+	assert scoped.indexOf("dropped.ms") < 0, scoped;
+	const none = handleReferences("1", params, db, []) + handleRename("2", params, db, []);
+	assert none.indexOf("kept.ms") < 0 && none.indexOf("lib.ms") >= 0, none;
+}

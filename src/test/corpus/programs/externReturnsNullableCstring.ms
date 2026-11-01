@@ -20,14 +20,14 @@ struct Holder {
 
 function describe(v: cstring | null): string {
 	if (v == null) return "param none";
-	const s: string = v;
+	const s: string = v as string;
 	return "param " + s;
 }
 
 function lookup(name: cstring): string {
 	const v = getenv(name);
 	if (v == null) return "unset";
-	const s: string = v;
+	const s: string = v as string;
 	return "set " + s;
 }
 
@@ -36,8 +36,10 @@ setenv("XC_PRESENT", "xc-value", 1);
 console.log(lookup("XC_ABSENT"));
 console.log(lookup("XC_PRESENT"));
 
-const fallback: string = getenv("XC_ABSENT") ?? "fallback";
-const present: string = getenv("XC_PRESENT") ?? "fallback";
+const absentRaw = getenv("XC_ABSENT");
+const presentRaw = getenv("XC_PRESENT");
+const fallback: string = absentRaw == null ? "fallback" : absentRaw as string;
+const present: string = presentRaw == null ? "fallback" : presentRaw as string;
 console.log(fallback);
 console.log(present);
 
@@ -46,7 +48,7 @@ const presentHolder: Holder = { value: getenv("XC_PRESENT") };
 console.log(absentHolder.value == null ? "field unset" : "field set");
 const heldValue = presentHolder.value;
 if (heldValue != null) {
-	const s: string = heldValue;
+	const s: string = heldValue as string;
 	console.log("field " + s);
 }
 

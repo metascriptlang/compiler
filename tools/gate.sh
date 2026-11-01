@@ -1855,6 +1855,12 @@ runner_path() {
   src=$(runner_src "$1")
   printf '%s/%s-runner%s' "$OUT" "$(basename "$(dirname "$src")")" "$EXE_SUFFIX"
 }
+runner_compiler() {
+  case "$1" in
+    fmt) printf '%s' "$CAND" ;;
+    *) printf '%s' "$BUILDER" ;;
+  esac
+}
 build_runner() {
   local src out
   src=$(runner_src "$1")
@@ -1863,7 +1869,7 @@ build_runner() {
   runners_built="$runners_built $src"
   out=$(runner_path "$1")
   rm -f "$out"
-  env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build "$src" --output="$out" >"${out%"$EXE_SUFFIX"}.log" 2>&1 \
+  env -u NO_COLOR -u FORCE_COLOR "$(runner_compiler "$1")" build "$src" --output="$out" >"${out%"$EXE_SUFFIX"}.log" 2>&1 \
     || say "gate: FAIL could not build $src to $out, see ${out%"$EXE_SUFFIX"}.log"
 }
 
@@ -1886,6 +1892,8 @@ runner_self_test() {
     cmd=$(lane_cmd "$lane")
     case "$cmd" in *" run src/"*) printf 'FAIL %s links the shared out/debug runner beside other lanes: %s\n' "$lane" "$cmd"; bad=1 ;; esac
   done
+  [ "$(runner_compiler fmt)" = "$CAND" ] && [ "$(runner_compiler corpus)" = "$BUILDER" ] \
+    || { printf 'FAIL runner compiler: the fmt runner is the formatter under test, so the candidate builds it; fmt %s corpus %s\n' "$(runner_compiler fmt)" "$(runner_compiler corpus)"; bad=1; }
   [ "$(runner_path corpus)" = "$(runner_path san)" ] && [ "$(runner_path corpus)" != "$(runner_path fmt)" ] \
     || { printf 'FAIL runner paths: corpus %s san %s fmt %s\n' "$(runner_path corpus)" "$(runner_path san)" "$(runner_path fmt)"; bad=1; }
   return $bad
@@ -2276,6 +2284,10 @@ if printf '%s\n' $chosen | grep -x tsan >/dev/null && ! printf '%s\n' $chosen | 
   printf 'san\t%s\n' "tsan reads the program list the san run writes" >>"$OUT/why"
 fi
 chosen=$(printf '%s\n' $chosen | tsan_pulls_san)
+if [ -z "$lanes_arg" ] && printf '%s\n' $chosen | grep -vx 'tools\|build' | grep -q . && ! printf '%s\n' $chosen | grep -qx build; then
+  printf 'build\t%s\n' "the other lanes test the candidate; out/gate holds an earlier gate's" >>"$OUT/why"
+  chosen=$(printf '%s\n' $chosen build)
+fi
 
 lanes=""
 for l in $ORDER; do

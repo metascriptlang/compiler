@@ -21,7 +21,7 @@ const C_PASSES = [
 	"spanLower", "lowerConditionalExpr", "spanLower#2", "spanParamExpand", "lowerNewExpr#2", "lowerUpdateExpr",
 	"lowerNullable", "projectNarrowedUnions", "lowerBitSet", "lowerDCE", "liftDestructors",
 	"markClosureCalls", "native.lowerNumberBitwiseOperands", "injectRangeChecks", "injectIntChecks",
-	"coerceOptionals", "native.lowerBuiltins", "native.lowerStringOps", "native.lowerEnumToString",
+	"coerceOptionals", "native.lowerEnumToString",
 	"lowerDownConversions", "insertVarParamDerefs", "lowerInductionPointers",
 ];
 

@@ -30,6 +30,7 @@ extern function msZipReaderCount(handle: int64): int32;
 extern function msZipReaderEntryName(handle: int64, index: int32): string;
 extern function msZipReaderEntrySize(handle: int64, index: int32): int64;
 extern function msZipReaderEntryIsDir(handle: int64, index: int32): int32;
+extern function msZipReaderFind(handle: int64, name: string): int32;
 extern function msZipReaderExtract(handle: int64, index: int32): string;
 extern function msZipReaderClose(handle: int64): void;
 
@@ -109,13 +110,7 @@ export function zipExtract(r: ZipReader, index: int32): Result<Buffer, CompressE
 
 // Find an entry by name. Returns -1 if not present.
 export function zipFindByName(r: ZipReader, name: string): int32 {
-	const n = msZipReaderCount(r.handle);
-	let i: int32 = 0;
-	while (i < n) {
-		if (msZipReaderEntryName(r.handle, i) == name) return i;
-		i = i + 1;
-	}
-	return -1;
+	return msZipReaderFind(r.handle, name);
 }
 
 // Extract by name — convenience wrapper over zipFindByName + zipExtract.

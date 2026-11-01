@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { annotatedType, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes } from "./resolvePass";
+import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -33,7 +33,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { brandArrayBase, widenArrayBrand, refuseOwnedCast, storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthClosureThunk, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedOperands, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall, boundCallOf } from "./fit";
+import { brandArrayBase, widenArrayBrand, refuseOwnedCast, storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, cstringIntoStringHint, synthMaybeWrap, synthClosureThunk, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedOperands, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall, boundCallOf } from "./fit";
 import { resolveRuntimeDir } from "../utils/path";
 import { sgTypeToString } from "./suggest";
 
@@ -1807,12 +1807,10 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 	if (d.operator == "+" && effLeft != null && effRight != null) {
 		if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
-			d.left = wrapInConv(d.left, stringType());
-			effLeft = stringType();
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effLeft, stringType()), d.left.location.line, d.left.location.column);
 		}
 		if (effRight.kind == TypeKind.CString && isStringLike(effLeft)) {
-			d.right = wrapInConv(d.right, stringType());
-			effRight = stringType();
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effRight, stringType()), d.right.location.line, d.right.location.column);
 		}
 	}
 	if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
@@ -4108,6 +4106,10 @@ export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Nod
 	addError(ctx, "'" + name + "' lacks an ending return statement: its return type '" + typeDisplayName(ret) + "' needs a value on every path", at.line, at.column);
 }
 
+function writtenAt(typeExpr: Node | null, fallback: SourceLocation): SourceLocation {
+	return typeExpr != null && typeExpr.location.line > 0 ? typeExpr.location : fallback;
+}
+
 export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string, expectedType: Type | null, fnFlags: string, fnNode: Node): Type {
 	const routine = routineFlagSet(fnFlags);
 	const isAsync = routine.has(RoutineFlag.Async);
@@ -4145,7 +4147,8 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (predicate != null) {
 		explicitReturnType = predicate.returnType;
 	} else if (returnTypeAnnotation != "" && returnTypeAnnotation != "void") {
-		explicitReturnType = annotatedType(returnTypeAnnotation, fnNode.typeExpr, ctx, 0, 0);
+		const at = writtenAt(fnNode.typeExpr, fnNode.location);
+		explicitReturnType = resolveReturnAnnotation(returnTypeAnnotation, ctx, at.line, at.column, fnNode.typeExpr);
 	}
 	// Source 2: Bug G — contextual return-type fallback. When the user writes
 	// neither an explicit annotation nor `: void`, and the call site
@@ -4210,7 +4213,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	for (const p of params) {
 		let pType = inferredType();
 		if (pi < paramTypes.length && paramTypes[pi] != "") {
-			pType = annotatedType(paramTypes[pi], operandAt(fnNode.typeExprs, pi), ctx, 0, 0);
+			const operand = operandAt(fnNode.typeExprs, pi);
+			const at = writtenAt(operand, paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null ? paramLocs[pi] : fnNode.location);
+			pType = annotatedType(paramTypes[pi], operand, ctx, at.line, at.column);
 		} else if (ctxParamTypes != null && pi < ctxParamTypes.length && ctxParamTypes[pi] != null) {
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];

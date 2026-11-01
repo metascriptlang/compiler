@@ -286,6 +286,7 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) { msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1); freeRequest(e, req); return fut; }
 	sqe->opcode = IORING_OP_SEND;
+	sqe->msg_flags = MSG_NOSIGNAL;
 	sqe->fd = fd;
 	sqe->addr = (uint64_t)(uintptr_t)data;
 	sqe->len = (uint32_t)len;
@@ -314,6 +315,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 		return fut;
 	}
 	sqe->opcode = IORING_OP_SEND;
+	sqe->msg_flags = MSG_NOSIGNAL;
 	sqe->fd = fd;
 	sqe->addr = (uint64_t)(uintptr_t)req->buf;
 	sqe->len = (uint32_t)req->len;
@@ -714,7 +716,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 				int flag = 1;
 				setsockopt(res, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 			}
-			msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)res);
+			msFutureCompleteT((msFuture_int32*)req->fut, res < 0 ? -1 : (int32_t)res);
 			break;
 		}
 		case MS_IO_SEND: {
@@ -723,6 +725,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 				if (sqe != NULL) {
 					req->offset += res;
 					sqe->opcode = IORING_OP_SEND;
+					sqe->msg_flags = MSG_NOSIGNAL;
 					sqe->fd = req->fd;
 					sqe->addr = (uint64_t)(uintptr_t)(req->buf + req->offset);
 					sqe->len = (uint32_t)(req->len - req->offset);
@@ -735,7 +738,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 			}
 			if (req->strRef.p) msStringDecref(req->strRef);
 			req->strRef = MS_EMPTY_STRING;
-			msFutureCompleteT((msFuture_int32*)req->fut, res < 0 ? res : req->len);
+			msFutureCompleteT((msFuture_int32*)req->fut, res < 0 ? -1 : req->len);
 			break;
 		}
 		case MS_IO_CLOSE: {

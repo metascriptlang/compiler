@@ -1,4 +1,4 @@
-// @stdout: counts 7 0 0 tuple! ar!ray! generic! ref!
+// @stdout: counts 6 0 0 tuple! ar!ray! generic! ref!
 
 struct Tracked { id: int32; text: string; }
 struct Box<T> { value: T; }
@@ -12,7 +12,6 @@ class CountedRef {
 }
 function heap(text: string): string { return text + "!"; }
 function value(p: Tracked): int32 { return p.id; }
-function readonlyValue(readonly p: Tracked): int32 { return p.id; }
 function refValue(ref p: Tracked): int32 { return p.id; }
 function pointer(p: Ptr<Tracked>): int32 { return p.id; }
 function borrowed(p: Borrow<Tracked>): int32 { return p.id; }
@@ -40,13 +39,13 @@ when (c) {
 function run(): void {
 	let p: Tracked = { id: 1, text: "value!" };
 	const r = new CountedRef("ref!");
-	const read = value(p) + readonlyValue(p) + refValue(p) + pointer(p as Ptr<Tracked>)
+	const read = value(p) + refValue(p) + pointer(p as Ptr<Tracked>)
 		+ borrowed(p as Borrow<Tracked>) + cursor(p as Cursor<Tracked>) + readonlyPointer(p as Ptr<Tracked>);
 	const tuples = collect<[string, int32]>([heap("tuple"), 2]);
 	const fixed: string[2] = [heap("ar"), heap("ray")];
 	const boxes = collect<Box<string>>({ value: heap("generic") });
 	const refs = collect<CountedRef>(r);
-	if (read != 7 || destroyed != 0 || refDestroyed != 0) throw new Error("formal reads changed ownership");
+	if (read != 6 || destroyed != 0 || refDestroyed != 0) throw new Error("formal reads changed ownership");
 	if (tuples[0][0] != "tuple!" || tuples[0][1] != 2) throw new Error("tuple sink lost its payload");
 	if (sized(fixed) != "ar!ray!") throw new Error("fixed-array formal changed its payload");
 	if (boxes[0].value != "generic!") throw new Error("generic sink lost its payload");

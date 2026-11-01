@@ -1709,7 +1709,7 @@ class Gen {
 		const X = this.ownHelpers(t);
 		const T = tyName(t);
 		this.useHelper("viewO" + X, "function peekO" + X + "(o: Readonly<Own" + X + ">): " + T + " { return o.v; }\n" +
-			"function rdO" + X + "(readonly o: Own" + X + "): " + T + " { return o.v; }\n");
+			"function rdO" + X + "(o: Own" + X + "): " + T + " { return o.v; }\n");
 		return X;
 	}
 
@@ -5923,11 +5923,11 @@ class Gen {
 		if (name == "swapQ") { return this.useHelper(name, "function swapQ<T>(ref a: T, ref b: T): void { const t = a; a = b; b = t; }\n"); }
 		if (name == "fillQ") { return this.useHelper(name, "function fillQ<T>(out o: T, v: T): void { o = v; }\n"); }
 		if (name == "takeQ") { return this.useHelper(name, "function takeQ<T>(x: T): T { return x; }\n"); }
-		if (name == "roQ") { return this.useHelper(name, "function roQ<T>(readonly x: T): T { return x; }\n"); }
-		if (name == "headQ") { return this.useHelper(name, "function headQ<T>(readonly v: Vec<T>, d: T): T { return v.length > 0 ? v[0] : d; }\n"); }
+		if (name == "roQ") { return this.useHelper(name, "function roQ<T>(x: T): T { return x; }\n"); }
+		if (name == "headQ") { return this.useHelper(name, "function headQ<T>(v: Readonly<Vec<T>>, d: T): T { return v.length > 0 ? v[0] : d; }\n"); }
 		if (name == "pushQ") { return this.useHelper(name, "function pushQ<T>(ref v: Vec<T>, x: T): void { v.push(x); }\n"); }
 		if (name == "readG") { return this.useHelper(name, "function readG<T>(b: Borrow<T>, d: T): T { return b; }\n"); }
-		if (name == "firstQ") { return this.useHelper(name, "function firstQ<A, B>(readonly t: [A, B]): A { return t[0]; }\n"); }
+		if (name == "firstQ") { return this.useHelper(name, "function firstQ<A, B>(t: [A, B]): A { return t[0]; }\n"); }
 		if (name == "swapT") { return this.useHelper(name, "function swapT<A, B>(t: [A, B]): [B, A] { return [t[1], t[0]]; }\n"); }
 		if (name == "pairT") { return this.useHelper(name, "function pairT<A, B>(a: A, b: B): [A, B] { return [a, b]; }\n"); }
 		if (name == "idQ") { return this.useHelper(name, "function idQ<T>(x: T): T { return x; }\n"); }

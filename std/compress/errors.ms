@@ -17,6 +17,9 @@ export enum CompressErrorKind {
 	OutOfMemory,
 	CompressionFailed,
 	ZipError,
+	ChecksumMismatch,
+	LengthMismatch,
+	TrailingGarbage,
 }
 
 export interface CompressError {

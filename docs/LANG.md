@@ -770,6 +770,34 @@ Before, C and the Raiser filled the fields positionally and skipped the parent's
 backends (corpus `overrideDispatchThroughBase`); `instanceof` and a checked `as` answer the same on the
 Raiser since 2026-10-06 (corpus `classIdentityEveryLane`, `732-dynamicDispatch`).
 
+`super.m(args)` runs the parent's `m` on `this` and never the override that is running: from an
+override or any other method, through levels where the parent only inherits `m`, and from a subclass
+of a generic instance. A parent's field read through `super` is refused (`Class field 'n' defined by
+the parent class is not accessible in the child class via super`), as TS refuses it. Measured
+2026-10-31 on a candidate of this tree: corpus `1266-superMethodCall` prints `5`, `11 21
+base+mid+top`, `A.m via grand`, `7 got` on C, JS and the Raiser, and runs clean under SAN. Before, the
+checker refused `super.m()` with `Property 'm' does not exist on type 'P'`.
+
+**Abstract classes.** An `abstract` method declares its signature without a body and is answered by
+each concrete subclass, so a call through the base always reaches a body:
+
+```typescript
+abstract class Shape { abstract area(): number; describe(): string { return "shape"; } }
+class Square extends Shape { area(): number { return 4; } }
+const s: Shape = new Square();                      // s.area() == 4
+```
+
+`new Shape()` is refused (`Cannot create an instance of the abstract class 'Shape'`), and so is a
+concrete class that leaves an inherited abstract method unanswered (`Non-abstract class 'Sq' does
+not implement inherited abstract member 'name' from class 'Shape'`), an abstract method in a class
+that is not abstract, a `static` or bodied abstract method, and `super.area()` on an abstract
+method. Measured 2026-10-31 on a candidate of this tree: corpus `1265-abstractMethodReturnsValue`
+(directly and through an abstract class extending another) prints the same on C, JS and the
+Raiser; the refusals are pinned by checker3pass `abstractMembers`. Before, `abstract area(): number;`
+was refused as a body that falls off its end, and an unanswered `abstract name(): void` ran an empty
+body. Not covered: an `abstract` property, since a subclass cannot redeclare an inherited field
+(`field 'x' redefines inherited field`).
+
 ### Interfaces
 
 Interfaces are **reference types** — heap-allocated, reference-counted via DRC. They work identically across JS and C backends. Interfaces can have both fields and method signatures.
@@ -893,13 +921,12 @@ function shifted(v: Vec2): float64 {
 }
 ```
 
-Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v': value parameters are read-only views; copy it locally first`, and in a `readonly` parameter `cannot mutate readonly parameter 'v'`. Measured 2026-10-30 with installed msc 73e18a165a: the example above prints `5`, `10 3`, `0 0` on C and with `--target=js`.
+Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v': value parameters are read-only views; copy it locally first`. Measured 2026-10-30 with installed msc 73e18a165a: the example above prints `5`, `10 3`, `0 0` on C and with `--target=js`.
 
 | Parameter | C output (measured on the same build) |
 |------|----------|
 | `v: Vec2` (16 B) | `double f(Vec2 v)`: value, registers |
 | `v: BigData` (32 B) | `double f(const BigData* v)`: zero copy |
-| `readonly v: Vec2` | `double f(Vec2 v)` |
 | `ref v: Vec2` | `void f(Vec2* v)`: the write reaches the caller |
 
 #### Parameter Modifiers
@@ -907,9 +934,10 @@ Writing `v.x = 0` in a plain parameter is `cannot mutate value-type parameter 'v
 | Modifier | Syntax | Purpose |
 |---|---|---|
 | *(default)* | `f(v: Struct)` | Read-only view; the compiler picks the ABI |
-| `readonly` | `f(readonly v: Struct)` | Read-only; a write is refused |
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+There is no `readonly` parameter modifier: `function f(readonly v: Vec2)` is the parse error ``the `readonly` parameter modifier was removed: a scalar or struct parameter never writes back to the caller; write `Readonly<T>` for a read-only array, Vec or class handle``. A constructor parameter keeps it: `constructor(readonly x: int32)` declares a read-only field, and `p.x = 5` is `cannot assign to 'x' because it is a read-only property`. Measured 2026-11-01 on a candidate of this tree with `msc run` on C and `--target=js` for a function, a method and an arrow; the handoff pin `src/test/handoff/paramProperty.ms` adds a function expression and a static extension.
 
 An `out` parameter must be written on every path before the routine returns (measured 2026-10-14 on a candidate of this tree, handoff `outParameterWrites`): the end of the body, every `return`, and a `try` that returns its error each give `'x' is not assigned on every path: it is an out parameter and must be written before …`, so `function f(out x: int32, c: boolean): void { if (c) { x = 1; } }` and an early `return` before the write are errors. A branch that leaves, a `throw` and a call `g(out x)` to another out parameter count as writes or exits; writing `x[i]` or `x.f` does not count. A `throw` leaves the parameter unwritten, and the caller's variable is not assigned across a `catch`. A local that reuses an out parameter's name in the same function is an error, because the check goes by name. An `out` argument assigns the caller's variable and is written only for an out parameter (`out a` to a plain or `ref` parameter is an error); passing the variable without `out` to an out parameter assigns it too. A body-less `extern` declaration is the trust boundary and is not checked. A class method takes `out` and `ref` parameters the same way (measured on C and JS, corpus `methodOutParameter`, a generic class instance included); a constructor parameter cannot be `out` or `ref` and says so. Not covered: an out parameter on an actor method or a function expression (the parameter name keeps its `out:` prefix and the body reads `Undefined variable 'x'`), and a read of an out parameter before its first write, which the checker's identifier read path does not yet treat as a read of an unassigned local.
 
@@ -1738,12 +1766,19 @@ f(K.B);  // matches sig 2
 f(K.C);  // matches impl (fallback)
 ```
 
-Rules:
-- Implementation must come LAST after all overload signatures
-- All sigs must have the same arity as the implementation
+Rules, checked at the declarations whether or not a call reaches the set; each error sits
+on the signature or definition that breaks it:
+- A sig's arity lies between the impl's required parameter count and its arity
 - Each sig's param types must be assignable to the impl's corresponding params
-- Each sig's return type must be assignable to the impl's return type
-- At least one non-sig definition (the implementation) must exist
+- A sig's return type and the impl's must be assignable one way or the other, or the sig returns `void`
+- Exactly one non-sig definition (the implementation) must exist: none gives
+  `Overloaded function 'g' has no implementation`, a second gives
+  `Overloaded function 'd' has more than one implementation`
+- Every declaration of a set agrees with the implementation on `export`, `static` and
+  `private`/`protected` (`Overload signatures of 'e' must all be exported or non-exported`)
+- A method implementation written with an empty body `{}` implements its signatures
+- Not checked yet: the implementation's position. An implementation before its
+  signatures, or a statement between them, still compiles
 - Same-name definitions with the same named parameter types cannot differ only
   in their annotated return type. The second declaration is rejected even when
   there is no call; the diagnostic names the function and previous declaration.
@@ -1751,6 +1786,12 @@ Rules:
 Measured on C and JS, 2026-10-03: the conflicting `pick(int32)` definitions error
 at line 2; overloads distinguished by `int32` versus `string` still print `7 s`.
 Contract: `src/test/c/functions.ms`.
+Measured 2026-10-31 on a candidate of this tree: a set with a 3-parameter sig over a
+1-parameter impl and no call errors at the sig's line (`Overload signature for 'f' has 3
+parameter(s) but implementation has 1`, line 2); a sig `private m` over a public `m` errors at
+line 2 and `static s` over an instance `s` at line 4; a sig over a method `ping(…): void {}`
+prints `quiet` on C, JS and Raiser (corpus `1263`). Contract:
+`src/test/checker3pass/scenarios/overloadSignatureReturn.ms`.
 
 **Known limitation — literal args**: Overload resolution currently scores each
 argument against each candidate's param type *without* per-candidate contextual
@@ -1910,7 +1951,7 @@ type Box<T> = { value: T };
 Partial<T>           // Every property optional: `{ [P in keyof T]?: T[P] }`
 Required<T>          // Every property required: `{ [P in keyof T]-?: T[P] }`
 Readonly<T>          // Read-only view of T — deep, never converts back to T; `readonly T[]` for arrays.
-                     // Not the `readonly` parameter modifier above (that one is an explicit copy). See Spawn.
+                     // See Spawn.
 Record<K, V>         // Literal keys K give an object type; `string` or `number` keys give Map<K, V>
 Pick<T, K>           // The properties of T named by K; K must be a subset of keyof T
 Omit<T, K>           // The properties of T not named by K
@@ -3256,7 +3297,7 @@ MetaScript has two explicit pointer types for heap-allocated data, following the
 | `Ref<T>` | Heap-allocated, reference-counted | Automatic (DRC) | `T*` with `msRefHeader` |
 | `Ptr<T>` | Heap-allocated, untraced | Manual (no RC) | `T*` (raw) |
 
-- **`Ref<T>`**: A managed heap pointer. The DRC system automatically inserts `=destroy`, `=copy`, and `=sink` operations. This is the safe default for heap objects.
+- **`Ref<T>`**: A managed heap pointer. The DRC system automatically inserts `=destroy`, `=copy`, and `=sink` operations. `T` is a value type (a struct, a number, a string); a class or interface `C` is refused, because its value is already a counted reference: write `C` (§Class = `Ref<Object>`).
 - **`Ptr<T>`**: An unmanaged heap pointer. No reference counting — the programmer is responsible for the lifetime. Use for C FFI, arena-allocated objects, or performance-critical paths where RC overhead is unacceptable.
 
 ```typescript
@@ -3449,7 +3490,7 @@ This means:
 - **`interface`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted (like class)
 - **`class`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted, with methods
 - **`struct`** declares a **value type** — stack-allocated, auto-optimized passing (compiler picks value or pointer based on size + mutation)
-- Users can write `Ref<T>` or `Ptr<T>` explicitly for fine-grained control
+- Users can write `Ref<T>` to box a value type and `Ptr<T>` for memory they manage. `Ref<C>` for a class or interface `C` would box a reference, so the checker refuses it at the type. Measured 2026-11-01 on C and JS (candidate of `wt/fix-ref-of-class` over main `98676df2eb8`): with `class P`, `const r: Ref<P> = a` and a `Ref<P>` parameter give `error: Ref<T> takes a value type, got 'P': a class value is already a counted reference, so write 'P'`; with `interface I`, a `Ref<I>` parameter gives `... got 'I': an interface value is already a counted reference, so write 'I'`. The build before the fix compiled all three, printed `class alias 3 3 same true` on JS and panicked on C (`member access within misaligned address`). A generic that builds such a Ref is refused where it is instantiated, measured the same way: `struct Box<T> { r: Ref<T>; }` used as `Box<P>` gives `Ref<T> takes a value type, but 'Box<P>' binds T = 'P': a class value is already a counted reference` (before: C panicked with `member access within null pointer`, JS printed `gs 3`); `set<P>(a, a)` for `function set<T>(r: Ref<T>, v: T)` gives `... but 'set<P>' binds T = 'P' ...` (before: `gx 0` on both); `new H(new P())` for a class `H<T>` with a `Ref<T> | null` field gives `... but 'H<P>' binds T = 'P' ...`; and `mk(new P())` for `function mk<T>(v: T): T { let r: Ref<T> | null = null; return v; }` gives `... but 'mk<P>' instantiated at 3:13 binds T = 'P' ...` while `mk(1)` and `Box<S>` for a struct `S` still run (`values 1 1 5`). An inferred `set(a, a)` still compiles and prints `gf 0` on both builds: inference binds `T` to the body of `P`, so `Ref<T>` there is `P` itself and no Ref is stacked; writing through it (`r[] = v`) is refused with `this operand is P, which is already a reference: use it without '[]'`.
 
 | Declaration | Internal Type | Allocation | Passed As |
 |-------------|--------------|------------|-----------|
@@ -3461,7 +3502,7 @@ This means:
 #### Nullable Pointers
 
 A bare `Ref<T>` or `Ptr<T>` does not accept `null`; nullability is opted into with `| null`, and
-the result needs no `Maybe<T>` wrapper:
+the result needs no `Maybe<T>` wrapper (here `TreeNode` is a struct, so `Ref<TreeNode>` boxes it):
 
 ```typescript
 const node: Ref<TreeNode> | null = findNode(tree, key);
@@ -3473,7 +3514,7 @@ if (node !== null) {
 
 `Ref<T> | null` and `Ptr<T> | null` are laid out as a bare `T*`, with null as the zero pointer, but
 the checker keeps them apart from the bare types. Measured 2026-09-24 (wt/c-ffi build over main
-`1b21109c`), with `struct P` and `class N`:
+`1b21109c`), with `struct P` and `class N`; the `Ref<N>` column re-measured 2026-11-01 with `struct N`, since a class is refused inside `Ref<T>` (C and JS: `Type 'null' is not assignable to type 'Ref<N>'`, `got null, expected Ref<N>`, and `nullable true true` for both `| null` forms):
 
 | form | bare `Ptr<P>` / `Ref<N>` | `Ptr<P> \| null` / `Ref<N> \| null` |
 |---|---|---|
@@ -3703,9 +3744,9 @@ const name: string | null = node?.name;    // null if node is null, node.name ot
 Pointer types are inherently nullable. The compiler recognizes this and skips the wrapper entirely:
 
 ```typescript
-// All three resolve to bare Ref<TreeNode> — no wrapper struct
-const a: Ref<TreeNode> | null = findNode(tree, key);
-const b: TreeNode | null = findNode(tree, key);   // if TreeNode is a class
+// All three are a bare pointer — no wrapper struct
+const a: Ref<TreeNode> | null = findNode(tree, key);   // struct TreeNode, boxed by Ref
+const b: Node | null = findChild(tree, key);           // class Node: already a counted reference
 let   c: Ptr<Buffer> | null = null;
 
 // Null checks compile to direct pointer comparison
@@ -3717,6 +3758,8 @@ if (a !== null) {       // → if (a != NULL)
 c = null;               // → c = NULL
 c = allocBuffer();      // → c = allocBuffer()  (no wrapping)
 ```
+
+`Ref<Node> | null` for a class `Node` is refused, because `Ref<T>` takes a value type. Measured 2026-11-01 on C and JS (candidate of `wt/fix-ref-of-class` over main `98676df2eb8`): `struct TreeNode` behind `Ref<TreeNode> | null` printed `struct box 20` and `missing true`; `class TreeNode` behind `TreeNode | null` printed `class 20`; the same class behind `Ref<TreeNode> | null` gives `error: Ref<T> takes a value type, got 'TreeNode': a class value is already a counted reference, so write 'TreeNode'`, where the build before the fix panicked on C (`member access within misaligned address`) and printed `class in Ref 20` on JS.
 
 **No `{ value, present }` overhead.** The pointer *is* the option — `NULL` means absent, any other address means present. This follows the same optimization as the standard reference implementation's managed pointers.
 

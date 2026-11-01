@@ -1137,6 +1137,17 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 	}
 }
 
+export function sgFilterUnprefixedCandidates(candidates: SgSuggest[], prefix: string): SgSuggest[] {
+	if (prefix == "") return candidates;
+	const result: SgSuggest[] = [];
+	for (const candidate of candidates) {
+		const prefixScore = sgPrefixMatch(prefix, candidate.name);
+		if (prefixScore > 0) result.push({ ...candidate, prefixScore });
+	}
+	sgSortSuggestions(result);
+	return result;
+}
+
 // ===== AST-Based Completion Context Detection =====
 // Walks the parsed AST to determine completion context by node kind.
 // Aligned with reference (MemberExpr/ObjectLiteral and classify_name_ref patterns).

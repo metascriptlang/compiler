@@ -1,7 +1,7 @@
 // Expression Printers — binary, unary, call, member, literals (object/array), etc.
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, SourceLocation,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, TypeAssertionData,
@@ -10,9 +10,9 @@ import {
 	IdentifierData, NewExprData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
 import { isAssignOp } from "../../../ast/operators";
-import { SourceComment } from "../comments";
-import { withComments, danglingOf, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { SourceComment, CommentKind } from "../comments";
+import { withComments, danglingOf, danglingBlock, boxed, hasCommentsOutside, commentLeadingBefore, commentLeading, commentTrailing, commentsOfRun } from "./commentDocs";
+import { FormatOptions } from "../options";
 import {
 	Doc, docText, docSourceText, docGroup, docGroupBreak, docIndent,
 	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
@@ -21,7 +21,7 @@ import {
 import { callPrintNode, printedAncestor } from "./callbacks";
 import { AssignmentShape, printAssignmentLike, isShortKey } from "./assignment";
 export { printConditionalExpr } from "./conditional";
-import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
+import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt, isBeforeKeyColon } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, isParamPatternDecl, headerAsWritten, typedAsWritten, printCollapsibleBody, modeNames } from "./statements";
 import { printTypeAnnotation } from "./types";
 
@@ -316,9 +316,9 @@ export function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions
 	return raw != "" ? raw : "<" + node.typeArg + ">";
 }
 
-export function listBody(items: Doc[], trailing: boolean, endComments: SourceComment[]): Doc[] {
+export function listBody(items: Doc[], endComments: SourceComment[]): Doc[] {
 	if (items.length == 0 && endComments.length == 0) return [];
-	const body = docCommaSepList(items, trailing);
+	const body = docCommaSepList(items);
 	for (const c of endComments) {
 		body.push(docHardLine());
 		body.push(docSourceText(c.text));
@@ -406,9 +406,24 @@ function needsQuote(key: string): boolean {
 	return false;
 }
 
+function commentsBeforeColon(prop: Node, key: SourceLocation, options: FormatOptions): Doc[] {
+	const out: Doc[] = [];
+	for (const c of commentsOfRun().leading(prop)) {
+		if (c.formatted || !isBeforeKeyColon(options.source, key, c.line, c.column)) continue;
+		out.push(docText(" "));
+		out.push(docSourceText(c.text));
+		if (c.kind == CommentKind.Line) out.push(docHardLine());
+		c.markFormatted();
+	}
+	return out;
+}
+
 export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectLiteralData;
-	if (d.keys.length == 0) return docText("{}");
+	if (d.keys.length == 0) {
+		const orphans = danglingOf(node);
+		return orphans.length == 0 ? docText("{}") : boxed("{", [danglingBlock(orphans)], "}");
+	}
 
 	let forceBreak = d.keyLocations.length > 0 && d.keyLocations[0].line > node.location.line;
 	for (const prop of d.properties) {
@@ -424,11 +439,12 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
 		const leadingComments: Doc[] = prop != null && keyLoc != null ? commentLeadingBefore(prop, keyLoc) : [];
 		let entryDoc: Doc;
+		const keyComments: Doc[] = prop != null && keyLoc != null ? commentsBeforeColon(prop, keyLoc, options) : [];
 		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column, options.singleQuote) : "";
 		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
-			entryDoc = prop != null ? objectProperty([docText(writtenKey)], writtenKey.length, prop, options) : docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
+			entryDoc = prop != null ? objectProperty([docText(writtenKey), ...keyComments], writtenKey.length, prop, options) : docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
 		} else if (d.keys[i] != "") {
 			// Detect shorthand: key === identifier name → emit just the key
 			const keyLoc = i < d.keyLocations.length ? d.keyLocations[i] : null;
@@ -439,7 +455,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 				entryDoc = docText(d.keys[i]);
 			} else {
 				const keyStr = needsQuote(d.keys[i]) ? "\"" + d.keys[i] + "\"" : d.keys[i];
-				entryDoc = prop != null ? objectProperty([docText(keyStr)], keyStr.length, prop, options) : docGroup([docText(keyStr + ": "), callPrintNode(prop, options)]);
+				entryDoc = prop != null ? objectProperty([docText(keyStr), ...keyComments], keyStr.length, prop, options) : docGroup([docText(keyStr + ": "), callPrintNode(prop, options)]);
 			}
 		} else {
 			entryDoc = callPrintNode(prop, options);
@@ -469,9 +485,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		}
 		indentChildren.push(entries[i]);
 	}
-	if (wantsTrailingComma(options, CommaContext.Collection)) {
-		indentChildren.push(docIfBreak(docText(","), docNil()));
-	}
+	indentChildren.push(docIfBreak(docText(","), docNil()));
 	// Append trailing comments after entries (on their own lines)
 	for (const tc of trailingComments) {
 		indentChildren.push(docLine());
@@ -499,7 +513,7 @@ export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 		elems.push(callPrintNode(el, options));
 	}
 	const parts: Doc[] = [docText("[")];
-	for (const p of listBody(elems, wantsTrailingComma(options, CommaContext.Collection), endComments)) parts.push(p);
+	for (const p of listBody(elems, endComments)) parts.push(p);
 	parts.push(docText("]"));
 	return docGroup(parts);
 }
@@ -600,7 +614,7 @@ export function assembleArrow(p: FunctionPieces, hug: ArgHug, options: FormatOpt
 	inner.push(p.body);
 	if (p.conditionalBody) inner.push(docIfBreak(docNil(), docText(")")));
 	const parts: Doc[] = [docIndent(inner)];
-	if (lastArg && wantsTrailingComma(options, CommaContext.Params)) parts.push(docIfBreak(docText(","), docNil()));
+	if (lastArg) parts.push(docIfBreak(docText(","), docNil()));
 	if (lastArg && !p.hasComments) parts.push(docSoftLine());
 	return docGroup([...head, docText(" =>"), docGroup(parts)]);
 }
@@ -718,6 +732,11 @@ export function printSizeofExpr(node: Node): Doc {
 	return docText("sizeof " + d.sizeofType);
 }
 
+function isArrayHole(el: Node, options: FormatOptions): boolean {
+	return el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
+		&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
+}
+
 export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrayPatternData;
 	if (d.patternElements.length == 0) return docText("[]");
@@ -725,14 +744,13 @@ export function printArrayPattern(node: Node, options: FormatOptions): Doc {
 	for (let i = 0; i < d.patternElements.length; i += 1) {
 		if (i > 0) elements.push(docText(", "));
 		const el = d.patternElements[i];
-		const hole = el.kind == NodeKind.Identifier && (el.data as IdentifierData).name == "_"
-			&& sourceByteAt(options.source, el.location.line, el.location.column) == ",".code;
-		if (!hole) elements.push(callPrintNode(el, options));
+		if (!isArrayHole(el, options)) elements.push(callPrintNode(el, options));
 		if (i < d.patternDefaults.length && d.patternDefaults[i] != null) {
 			elements.push(docText(" = "));
 			elements.push(callPrintNode(d.patternDefaults[i], options));
 		}
 	}
+	if (isArrayHole(d.patternElements[d.patternElements.length - 1], options)) elements.push(docText(","));
 	return docGroup([docText("["), docGroup(elements), docText("]")]);
 }
 
@@ -756,13 +774,20 @@ export function objectPatternContent(node: Node, options: FormatOptions): Doc[] 
 		}
 		inner.push(callPrintNode(d.patternProps[i], options));
 	}
-	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) inner.push(docIfBreak(docText(","), docNil()));
+	if (!d.hasRestProp) inner.push(docIfBreak(docText(","), docNil()));
 	return [docText("{"), docIndent(inner), docLine(), docText("}")];
 }
 
 export function printObjectPattern(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ObjectPatternData;
-	if (d.patternProps.length == 0) return docText("{}");
+	if (d.patternProps.length == 0) {
+		const orphans = danglingOf(node);
+		if (orphans.length == 0) return docText("{}");
+		for (const c of orphans) {
+			if (c.kind == CommentKind.Line) return boxed("{", [danglingBlock(orphans)], "}");
+		}
+		return docGroup([docText("{"), docIndent([docSoftLine(), danglingBlock(orphans)]), docSoftLine(), docText("}")]);
+	}
 	const parts = objectPatternContent(node, options);
 	return breaksPatternProperties(d) ? docGroupBreak(parts) : docGroup(parts);
 }

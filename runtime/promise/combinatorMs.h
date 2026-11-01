@@ -17,7 +17,7 @@ static inline void* msPromiseArrayAt(void* arr, int32_t i) {
 }
 
 static inline void msPromiseHold(void* p) { msIncref(p); }
-static inline void msPromiseRelease(void* p) { msDecrefAny(p); }
+static inline __attribute__((always_inline)) void msPromiseRelease(void* p) { msDecrefAny(p); }
 
 static inline void** msPromiseSlots(int32_t count) {
 	return (void**)msMemAlloc((size_t)count * sizeof(void*));

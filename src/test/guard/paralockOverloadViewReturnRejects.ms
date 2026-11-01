@@ -14,7 +14,7 @@
 
 class T { n: int32 = 0; }
 
-function pick(a: T, b: Readonly<T>): T;
+function pick(a: T, b: Readonly<T>): T; // GUARD-REFUSED
 function pick(a: Readonly<T>, b: Readonly<T>): Readonly<T> {
 	return b;
 }
@@ -22,7 +22,7 @@ function pick(a: Readonly<T>, b: Readonly<T>): Readonly<T> {
 const shared = new T();
 const f = spawn(() => {
 	const mine = new T();
-	const leaked = pick(mine, shared); // GUARD-REFUSED
+	const leaked = pick(mine, shared);
 	leaked.n = 99;
 	return 0;
 });

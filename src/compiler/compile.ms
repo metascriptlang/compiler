@@ -1202,7 +1202,7 @@ function resolveCompileSource(cPath: string, moduleDir: string, includePaths: Ha
 		printError(`@compile cannot find: ${fullPath}`);
 		stopBuild();
 	}
-	return fullPath;
+	return canonicalModulePath(fullPath);
 }
 
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
@@ -1882,7 +1882,6 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	rtFiles = rtFiles + "\n" + (opts.targetOs == "windows" ? "runtime/fs/windows.c" : "runtime/fs/posix.c");
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
-	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
 	if (opts.isHcr) {
 		rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 		rtFiles = rtFiles + "\n" + sharedDirectives;
@@ -5016,9 +5015,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const mod = findModule(graph, unitPaths[i]);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const txCtx = createTransformContextWithChecker(modCtx);
-		txCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const transformed = transformForRaiser(comptimeResolved, modCtx, true);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, true, opts.mode != MODE_DANGER);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };

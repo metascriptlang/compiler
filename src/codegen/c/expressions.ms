@@ -354,7 +354,12 @@ function isNullExpr(node: Readonly<Node>): boolean {
 
 // Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
 // to handle void* results from ref array macros. Returns true if the node matches.
-function isRefArrayAccessCall(node: Readonly<Node>): boolean {
+function isRefArrayAccessCall(g: CGen, node: Readonly<Node>): boolean {
+	if (node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ObjCheck) && !node.flags.has(NodeFlag.ConvCheck)) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		if (inner == null || inner.nodeType == null || node.nodeType == null) return false;
+		return getTypeDesc(g, inner.nodeType) == getTypeDesc(g, node.nodeType) && isRefArrayAccessCall(g, inner);
+	}
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
 	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess")
@@ -1797,7 +1802,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 
 		// Ref array access returns void* — cast to element type for member access
 		// Reference parity: record field access via dot notation
-		if (d.object.nodeType != null && isRefArrayAccessCall(d.object)) {
+		if (d.object.nodeType != null && isRefArrayAccessCall(g, d.object)) {
 			const elemTypeDesc = getTypeDesc(g, d.object.nodeType);
 			if (elemTypeDesc != "void*" && elemTypeDesc != "void") {
 				let prop = d.property;
@@ -2187,7 +2192,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 			ctx.results.push(inner);
 			return;
 		}
-		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType != null) {
+		if (isRefArrayAccessCall(g, hd.expr) && hd.expr.nodeType != null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
 			if (elemDesc != "void*" && elemDesc != "void") {
 				if (isPointerType(hd.expr.nodeType)) {
@@ -3295,15 +3300,20 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
 
-const constBlobMinElements = 64;
-
-function isNumericLiteralList(node: Readonly<Node>, d: Readonly<ArrayLiteralData>): boolean {
-	const t = node.nodeType;
-	if (t == null || !isNumeric(t.typeReturn)) return false;
-	for (const e of d.elements) {
-		if (e.kind != NodeKind.NumberLiteral) return false;
+function genConstInit(g: CGen, p: CProc, node: Readonly<Node>): string {
+	if (node.kind == NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		const items: string[] = [];
+		for (let i = 0; i < d.keys.length; i += 1) items.push(`.${mangleFieldName(d.keys[i])} = ${genConstInit(g, p, d.properties[i])}`);
+		return `{ ${items.join(", ")} }`;
 	}
-	return true;
+	if (node.kind == NodeKind.ArrayLiteral) {
+		const d = node.data as ArrayLiteralData;
+		const items: string[] = [];
+		for (let i = 0; i < d.elements.length; i += 1) items.push(`._${i} = ${genConstInit(g, p, d.elements[i])}`);
+		return `{ ${items.join(", ")} }`;
+	}
+	return genExpr(g, p, node);
 }
 
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
@@ -3350,10 +3360,10 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
 	}
 	const slots = isSizedArray ? `${tmpName}.data` : `${tmpName}.p->data`;
-	if (d.elements.length >= constBlobMinElements && isNumericLiteralList(node, d)) {
-		const items: string[] = [];
-		for (const e of d.elements) items.push(genExpr(g, p, e));
-		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${items.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
+	if (node.flags.has(NodeFlag.ConstData)) {
+		const blobItems: string[] = [];
+		for (const e of d.elements) blobItems.push(genConstInit(g, p, e));
+		emitStmtsLine(p, `{ static const __typeof__(${slots}[0]) blob[] = { ${blobItems.join(", ")} }; memcpy(${slots}, blob, sizeof(blob)); }`);
 		return tmpName;
 	}
 	let i = 0;

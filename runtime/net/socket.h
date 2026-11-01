@@ -70,6 +70,7 @@
   #include <arpa/inet.h>
   #include <netdb.h>
   #include <fcntl.h>
+  #include <poll.h>
   typedef socklen_t ms_socklen_t;
   typedef ssize_t ms_ssize_t;
   #define ms_close_socket(fd)  close(fd)
@@ -156,18 +157,21 @@ static inline int32_t msNetListen(int32_t fd, int32_t backlog) {
 	return (int32_t)listen(fd, backlog);
 }
 
+static inline void msNetNoDelayIfTcp(int32_t fd, const struct sockaddr_storage* peer) {
+	if (peer->ss_family != AF_INET && peer->ss_family != AF_INET6) return;
+	int flag = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
+}
+
 /**
- * Accept a connection. Sets TCP_NODELAY on accepted socket for low latency.
+ * Accept a connection. Sets TCP_NODELAY on an accepted TCP socket for low latency.
  * Returns client fd on success, -1 on error.
  */
 static inline int32_t msNetAccept(int32_t fd) {
-	struct sockaddr_in client_addr;
-	ms_socklen_t client_len = sizeof(client_addr);
-	int client_fd = accept(fd, (struct sockaddr*)&client_addr, &client_len);
-	if (MS_LIKELY(client_fd >= 0)) {
-		int flag = 1;
-		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
-	}
+	struct sockaddr_storage peer;
+	ms_socklen_t peerLen = sizeof(peer);
+	int client_fd = accept(fd, (struct sockaddr*)&peer, &peerLen);
+	if (MS_LIKELY(client_fd >= 0)) msNetNoDelayIfTcp(client_fd, &peer);
 	return (int32_t)client_fd;
 }
 
@@ -175,9 +179,30 @@ static inline int32_t msNetAccept(int32_t fd) {
 
 /**
  * Connect to host:port. Uses getaddrinfo for DNS resolution (supports
- * hostnames, not just IPs). Retries on EINTR, iterates address list.
+ * hostnames, not just IPs). Iterates the address list.
  * Returns 0 on success, -1 on error.
  */
+#ifndef _WIN32
+/* After EINTR the connection proceeds asynchronously and a second connect() would report
+ * EALREADY or EISCONN: wait for writability, then read the outcome from SO_ERROR (connect(3p)). */
+static inline int msNetConnectResume(int fd) {
+	struct pollfd p = { fd, POLLOUT, 0 };
+	int r;
+	do {
+		r = poll(&p, 1, -1);
+	} while (r < 0 && errno == EINTR);
+	if (r < 0) return -1;
+	int err = 0;
+	socklen_t len = sizeof(err);
+	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) return -1;
+	if (err != 0) {
+		errno = err;
+		return -1;
+	}
+	return 0;
+}
+#endif
+
 static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 	const char* host_str = msStringToCString(host);
 	char port_str[8];
@@ -192,9 +217,10 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 
 	int ret = -1;
 	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		do {
-			ret = connect(fd, rp->ai_addr, (ms_socklen_t)rp->ai_addrlen);
-		} while (ret < 0 && ms_errno() == MS_EINTR);
+		ret = connect(fd, rp->ai_addr, (ms_socklen_t)rp->ai_addrlen);
+#ifndef _WIN32
+		if (ret < 0 && errno == EINTR) ret = msNetConnectResume(fd);
+#endif
 		if (ret == 0) break;
 	}
 
@@ -203,11 +229,12 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 }
 
 #ifndef _WIN32
-/* A path that holds a NUL byte, or does not fit sun_path with its terminator, is refused: the kernel
- * would read it only up to the first NUL and bind or reach another file. */
+/* An empty path, a path holding a NUL byte, or one that does not fit sun_path with its terminator is
+ * refused: Linux binds an empty or NUL-led path in its abstract namespace, and every kernel reads a
+ * pathname only up to the first NUL, so each would bind or reach another socket. */
 static inline int32_t msNetUnixAddr(msString path, struct sockaddr_un* sa, ms_socklen_t* len) {
 	const char* bytes = msStringToCString(path);
-	if (path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
+	if (path.len == 0 || path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
 	memset(sa, 0, sizeof(*sa));
 	sa->sun_family = AF_UNIX;
 	memcpy(sa->sun_path, bytes, (size_t)path.len);
@@ -244,22 +271,19 @@ static inline int32_t msNetConnectUnix(int32_t fd, msString path) {
 	struct sockaddr_un sa;
 	ms_socklen_t len;
 	if (msNetUnixAddr(path, &sa, &len) != 0) return -1;
-	return (int32_t)connect(fd, (struct sockaddr*)&sa, len);
+	int ret = connect(fd, (struct sockaddr*)&sa, len);
+	if (ret < 0 && errno == EINTR) ret = msNetConnectResume(fd);
+	return (int32_t)ret;
 #endif
 }
 
 /* ===== Data Transfer ===== */
 
-/**
- * Send all data on socket. Handles short writes and EINTR.
- * Returns total bytes sent on success, -1 on error.
- */
-static inline int32_t msNetSend(int32_t fd, msString data) {
-	const char* buf = msStringToCString(data);
+static inline int32_t msNetSendBytes(int32_t fd, const uint8_t* data, int64_t len) {
+	if (MS_UNLIKELY(len > INT32_MAX)) return -1;
 	int32_t total = 0;
-	int32_t len = (int32_t)data.len;
-	while (total < len) {
-		ms_ssize_t n = send(fd, buf + total, (size_t)(len - total), MS_SEND_FLAGS);
+	while (total < (int32_t)len) {
+		ms_ssize_t n = send(fd, (const char*)data + total, (size_t)((int32_t)len - total), MS_SEND_FLAGS);
 		if (MS_UNLIKELY(n < 0 && ms_errno() == MS_EINTR)) continue;
 		if (MS_UNLIKELY(n <= 0)) return -1;
 		total += (int32_t)n;
@@ -267,39 +291,70 @@ static inline int32_t msNetSend(int32_t fd, msString data) {
 	return total;
 }
 
-/**
- * Receive up to maxBytes from socket.
- * Returns received data, or MS_EMPTY_STRING on error/connection close.
- */
+static inline int32_t msNetSend(int32_t fd, msString data) {
+	return msNetSendBytes(fd, (const uint8_t*)msStringToCString(data), data.len);
+}
+
 static _Thread_local int32_t _msNetRecvTimedOut = 0;
+static _Thread_local char _msRecvTlBuf[8192];
 
 static inline int32_t msNetLastRecvTimedOut(void) {
 	return _msNetRecvTimedOut;
 }
 
-static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
-	_msNetRecvTimedOut = 0;
-	if (maxBytes <= 0) return MS_EMPTY_STRING;
-	if (maxBytes > 16777216) maxBytes = 16777216; /* 16 MiB cap */
+static inline int32_t msNetRecvLimit(int32_t maxBytes) {
+	return maxBytes > 16777216 ? 16777216 : maxBytes;
+}
 
-	char* buf = (char*)msMemAlloc((size_t)maxBytes + 1);
-
+static inline ms_ssize_t msNetRecvRaw(int32_t fd, char* buf, int32_t maxBytes) {
 	ms_ssize_t received;
 	do {
 		received = recv(fd, buf, (size_t)maxBytes, 0);
 	} while (received < 0 && ms_errno() == MS_EINTR);
-
-	if (received <= 0) {
-		int err = received < 0 ? ms_errno() : 0;
+	if (received < 0) {
+		int err = ms_errno();
 		_msNetRecvTimedOut = err == MS_EWOULDBLOCK || err == MS_ETIMEDOUT;
-		free(buf);
-		return MS_EMPTY_STRING;
 	}
+	return received;
+}
 
-	buf[received] = '\0';
-	msString result = msStringNew(buf, (int64_t)received);
+static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
+	_msNetRecvTimedOut = 0;
+	if (maxBytes <= 0) return MS_EMPTY_STRING;
+	maxBytes = msNetRecvLimit(maxBytes);
+	if (maxBytes <= (int32_t)sizeof(_msRecvTlBuf)) {
+		ms_ssize_t n = msNetRecvRaw(fd, _msRecvTlBuf, maxBytes);
+		return n > 0 ? msStringNew(_msRecvTlBuf, (int64_t)n) : MS_EMPTY_STRING;
+	}
+	char* buf = (char*)msMemAlloc((size_t)maxBytes);
+	ms_ssize_t n = msNetRecvRaw(fd, buf, maxBytes);
+	msString result = n > 0 ? msStringNew(buf, (int64_t)n) : MS_EMPTY_STRING;
 	free(buf);
 	return result;
+}
+
+static inline msUint8Array msNetRecvBytes(int32_t fd, int32_t maxBytes) {
+	_msNetRecvTimedOut = 0;
+	if (maxBytes <= 0) return MS_EMPTY_UINT8_ARRAY;
+	maxBytes = msNetRecvLimit(maxBytes);
+	int32_t scratch = (int32_t)sizeof(_msRecvTlBuf);
+	ms_ssize_t first = msNetRecvRaw(fd, _msRecvTlBuf, maxBytes < scratch ? maxBytes : scratch);
+	if (first <= 0) return MS_EMPTY_UINT8_ARRAY;
+	if (first < scratch || maxBytes == scratch) return msBufferFrom((const uint8_t*)_msRecvTlBuf, (int64_t)first);
+	size_t header = offsetof(msUint8Payload, data);
+	msUint8Payload* p = (msUint8Payload*)msMemAlloc(header + (size_t)maxBytes);
+	memcpy(p->data, _msRecvTlBuf, (size_t)first);
+	int64_t n = first;
+#ifdef MSG_DONTWAIT
+	ms_ssize_t more;
+	do {
+		more = recv(fd, (char*)p->data + first, (size_t)(maxBytes - first), MSG_DONTWAIT);
+	} while (more < 0 && ms_errno() == MS_EINTR);
+	if (more > 0) n += more;
+#endif
+	if (n < maxBytes) p = (msUint8Payload*)msRealloc(p, header + (size_t)maxBytes, header + (size_t)n);
+	p->cap = n;
+	return (msUint8Array){n, p};
 }
 
 /* ===== Socket Lifecycle ===== */
@@ -356,13 +411,10 @@ static inline int32_t msNetSetBlocking(int32_t fd) {
  * Sets TCP_NODELAY on accepted socket.
  */
 static inline int32_t msNetAcceptNonBlock(int32_t fd) {
-	struct sockaddr_in ca;
-	ms_socklen_t cl = sizeof(ca);
-	int cfd = accept(fd, (struct sockaddr*)&ca, &cl);
-	if (cfd >= 0) {
-		int f = 1;
-		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &f, sizeof(f));
-	}
+	struct sockaddr_storage peer;
+	ms_socklen_t peerLen = sizeof(peer);
+	int cfd = accept(fd, (struct sockaddr*)&peer, &peerLen);
+	if (cfd >= 0) msNetNoDelayIfTcp(cfd, &peer);
 	return (int32_t)cfd;
 }
 
@@ -370,68 +422,45 @@ static inline int32_t msNetAcceptNonBlock(int32_t fd) {
  * Non-blocking recv. Returns received data, or empty string on EAGAIN/close/error.
  * Uses thread-local buffer to avoid per-recv malloc+free.
  */
-static _Thread_local char _msRecvTlBuf[8192];
-
 static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
 	if (maxBytes > 8192) maxBytes = 8192;
-	ms_ssize_t r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
+	ms_ssize_t r;
+	do {
+		r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
+	} while (r < 0 && ms_errno() == MS_EINTR);
 	if (r <= 0) return MS_EMPTY_STRING;
 	return msStringNew(_msRecvTlBuf, (int64_t)r);
 }
 
-/**
- * Non-blocking recv directly into an msString buffer — true zero-copy recv.
- * Appends received data to dest, growing if needed. Returns bytes received, 0 on EAGAIN, -1 on close/error.
- * Eliminates ALL allocations after the first request on a connection (buffer grows once, reused).
- */
-static inline int32_t msNetRecvInto(int32_t fd, msString* dest, int32_t maxBytes) {
-	extern void msStringPrepareAdd(msString* s, int64_t addLen);
-	if (maxBytes <= 0) return 0;
-	if (maxBytes > 8192) maxBytes = 8192;
-	int64_t oldLen = dest->len;
-	msStringPrepareAdd(dest, (int64_t)maxBytes);
-	ms_ssize_t r = recv(fd, dest->p->data + oldLen, (size_t)maxBytes, 0);
-	if (r <= 0) {
-		dest->p->data[oldLen] = '\0';
-		dest->len = oldLen;
-		if (r == 0) return -1;  /* connection closed */
-		if (ms_errno() == MS_EWOULDBLOCK) return 0;
-		return -1;
-	}
-	dest->len = oldLen + (int64_t)r;
-	dest->p->data[dest->len] = '\0';
-	return (int32_t)r;
-}
-
-/**
- * Recv all available data into buffer until EAGAIN. Zero-alloc after warmup.
- * Returns total bytes read, 0 on pure EAGAIN, -1 on close/error.
- * Composes msNetRecvInto in a drain loop — replaces the MetaScript recv+append pattern.
- */
-static inline int32_t msNetRecvAll(msString* dest, int32_t fd) {
-	int total = 0;
-	while (1) {
-		int32_t n = msNetRecvInto(fd, dest, 4096);
-		if (n < 0) return total > 0 ? total : -1;  /* closed or error */
-		if (n == 0) return total > 0 ? total : 0;   /* EAGAIN */
-		total += n;
-		if (n < 4096) return total;  /* short read = no more data ready */
-	}
+static inline msUint8Array msNetRecvNonBlockBytes(int32_t fd, int32_t maxBytes) {
+	if (maxBytes <= 0) return MS_EMPTY_UINT8_ARRAY;
+	if (maxBytes > (int32_t)sizeof(_msRecvTlBuf)) maxBytes = (int32_t)sizeof(_msRecvTlBuf);
+	ms_ssize_t r;
+	do {
+		r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
+	} while (r < 0 && ms_errno() == MS_EINTR);
+	if (r <= 0) return MS_EMPTY_UINT8_ARRAY;
+	return msBufferFrom((const uint8_t*)_msRecvTlBuf, (int64_t)r);
 }
 
 /**
  * Non-blocking send with offset. Returns bytes sent, 0 on EAGAIN, -1 on error.
  * Allows incremental sending from a sendQueue.
  */
-static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offset) {
-	if (!data.p || offset >= (int32_t)data.len) return 0;
-	const char* buf = data.p->data + offset;
-	int32_t remaining = (int32_t)data.len - offset;
-	ms_ssize_t n = send(fd, buf, (size_t)remaining, MS_SEND_FLAGS);
+static inline int32_t msNetSendNonBlockBytes(int32_t fd, const uint8_t* data, int64_t len, int32_t offset) {
+	if (offset < 0 || offset >= len) return 0;
+	ms_ssize_t n;
+	do {
+		n = send(fd, (const char*)data + offset, (size_t)(len - offset), MS_SEND_FLAGS);
+	} while (n < 0 && ms_errno() == MS_EINTR);
 	if (n < 0 && ms_errno() == MS_EWOULDBLOCK) return 0;
 	if (n < 0) return -1;
 	return (int32_t)n;
+}
+
+static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offset) {
+	return msNetSendNonBlockBytes(fd, (const uint8_t*)msStringToCString(data), data.len, offset);
 }
 
 /**

@@ -24,7 +24,7 @@ export function significantTokens(tokens: Token[]): Token[] {
 	return significantTokensWithGaps(tokens, gaps);
 }
 
-// `gaps[k]` is true when a dropped semicolon directly precedes token `k` of the result.
+// `gaps[k]` is true when a dropped semicolon or trailing comma directly precedes token `k` of the result.
 function significantTokensWithGaps(tokens: Token[], gaps: boolean[]): Token[] {
 	const out: Token[] = [];
 	const open: TokenKind[] = [];
@@ -37,7 +37,7 @@ function significantTokensWithGaps(tokens: Token[], gaps: boolean[]): Token[] {
 			if (out.length > before) {
 				gaps.push(semicolonDropped);
 				semicolonDropped = false;
-			} else if (t.kind == TokenKind.Semicolon) {
+			} else if (t.kind == TokenKind.Semicolon || t.kind == TokenKind.Comma) {
 				semicolonDropped = true;
 			}
 		}
@@ -198,7 +198,23 @@ function isParen(kind: TokenKind): boolean {
 	return kind == TokenKind.LParen || kind == TokenKind.RParen;
 }
 
-let shapeText: string[] = [];
+// One node's fields in written order: an entry is a child node when shapeBatchNode holds one, else its text.
+let shapeBatchText: string[] = [];
+let shapeBatchNode: (Node | null)[] = [];
+
+function shapePut(text: string): void {
+	shapeBatchText.push(text);
+	shapeBatchNode.push(null);
+}
+
+function shapePutNode(n: Node | null): void {
+	if (n == null) {
+		shapePut("null");
+		return;
+	}
+	shapeBatchText.push("");
+	shapeBatchNode.push(n);
+}
 
 function writtenTypeSeparatorsFree(text: string): string {
 	let out = "";
@@ -219,26 +235,26 @@ function textField(name: string, s: string): string {
 }
 
 const shapeSink: FieldSink = {
-	node: (name: string, n: Node | null): void => { shapeNode(n); },
+	node: (name: string, n: Node | null): void => { shapePutNode(n); },
 	nodes: (name: string, a: Node[] | null): void => { shapeNodes(a); },
 	nodesNested: (name: string, a: Node[][] | null): void => {
-		if (a != null) for (const row of a) { shapeText.push("["); shapeNodes(row); shapeText.push("]"); }
+		if (a != null) for (const row of a) { shapePut("["); shapeNodes(row); shapePut("]"); }
 	},
 	typ: (name: string, t: Type | null): void => {},
-	str: (name: string, s: string): void => { if (name != "assertSource") shapeText.push(textField(name, s)); },
-	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapeText.push(textField(name, v)); },
-	integer: (name: string, v: int64): void => { shapeText.push(name + "=" + v.toString()); },
-	float: (name: string, v: float64): void => { shapeText.push(name + "=" + v.toString()); },
-	bool: (name: string, b: boolean): void => { shapeText.push(name + (b ? "+" : "-")); },
+	str: (name: string, s: string): void => { if (name != "assertSource") shapePut(textField(name, s)); },
+	strArr: (name: string, a: string[] | null): void => { if (a != null) for (const v of a) shapePut(textField(name, v)); },
+	integer: (name: string, v: int64): void => { shapePut(name + "=" + v.toString()); },
+	float: (name: string, v: float64): void => { shapePut(name + "=" + v.toString()); },
+	bool: (name: string, b: boolean): void => { shapePut(name + (b ? "+" : "-")); },
 	loc: (name: string, l: SourceLocation | null): void => {},
 	locs: (name: string, l: SourceLocation[] | null): void => {},
-	floats: (name: string, a: number[] | null): void => { if (a != null) for (const v of a) shapeText.push(v.toString()); },
+	floats: (name: string, a: number[] | null): void => { if (a != null) for (const v of a) shapePut(v.toString()); },
 };
 
 function shapeNodes(a: Node[] | null): void {
-	shapeText.push("(");
-	if (a != null) for (const n of a) shapeNode(n);
-	shapeText.push(")");
+	shapePut("(");
+	if (a != null) for (const n of a) shapePutNode(n);
+	shapePut(")");
 }
 
 function groupsOptionalChain(n: Node): boolean {
@@ -255,34 +271,59 @@ function groupsOptionalChain(n: Node): boolean {
 	}
 }
 
-function shapeNode(n: Node | null): void {
-	if (n == null) {
-		shapeText.push("null");
-		return;
-	}
+function shapeOpening(n: Node): string {
 	let flags = n.flags as uint32;
 	if (n.flags.has(NodeFlag.CommaWritten)) flags -= 1 << (NodeFlag.CommaWritten as uint32);
+	let text = "";
 	if (n.flags.has(NodeFlag.Parenthesized)) {
 		flags -= 1 << (NodeFlag.Parenthesized as uint32);
-		if (groupsOptionalChain(n)) shapeText.push("(optional chain)");
+		if (groupsOptionalChain(n)) text = "(optional chain)";
 	}
-	shapeText.push("k" + (n.kind as int32).toString() + "f" + flags.toString() + textField("typeArg", n.typeArg) + "{");
-	nodeFields(n, shapeSink);
-	shapeText.push("}");
+	return text + "k" + (n.kind as int32).toString() + "f" + flags.toString() + textField("typeArg", n.typeArg) + "{";
 }
 
+// Walks with an explicit stack: a recursive walk costs one `nodeFields` frame per tree level, and that frame
+// is large enough in an unoptimised build to overflow the main stack on a long else-if chain.
 function treeShape(root: Node): string {
-	shapeText = [];
-	shapeNode(root);
-	return shapeText.join("");
+	const out: string[] = [];
+	const pendingText: string[] = [];
+	const pendingNode: (Node | null)[] = [];
+	pendingText.push("");
+	pendingNode.push(root);
+	while (pendingText.length > 0) {
+		const top = pendingText.length - 1;
+		const text = pendingText[top];
+		const node = pendingNode[top];
+		pendingText.pop();
+		pendingNode.pop();
+		if (node == null) {
+			out.push(text);
+			continue;
+		}
+		out.push(shapeOpening(node));
+		shapeBatchText = [];
+		shapeBatchNode = [];
+		nodeFields(node, shapeSink);
+		pendingText.push("}");
+		pendingNode.push(null);
+		for (let k = shapeBatchText.length - 1; k >= 0; k -= 1) {
+			pendingText.push(shapeBatchText[k]);
+			pendingNode.push(shapeBatchNode[k]);
+		}
+	}
+	return out.join("");
 }
 
-function sameTreesIgnoringParens(source: string, formatted: string, first: string): Result<void, string> {
+function sameTrees(source: string, formatted: string, first: string): Result<void, string> {
 	const x = parseSource(source);
 	const y = parseSource(formatted);
-	if (!x.ok || !y.ok) return Result.err("fmt changes parentheses, " + first + ", and the source or the output does not parse");
-	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of parentheses, " + first);
+	if (!x.ok || !y.ok) return Result.err("fmt rewrites tokens, " + first + ", and the source or the output does not parse");
+	if (treeShape(x.value) != treeShape(y.value)) return Result.err("fmt changes the meaning of the program, " + first);
 	return Result.ok(null);
+}
+
+function firstRewrite(first: string, t: Token): string {
+	return first != "" ? first : describe(t, false);
 }
 
 export function checkLossless(source: string, formatted: string): Result<void, string> {
@@ -290,7 +331,10 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
 	const after = lex(formatted);
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
-	const a = greaterUnits(significantTokens(before.value));
+	const aGaps: boolean[] = [];
+	const aRaw = significantTokensWithGaps(before.value, aGaps);
+	const a = greaterUnits(aRaw);
+	const semicolonBeforeA = gapsAfterSplit(aRaw, aGaps);
 	const bGaps: boolean[] = [];
 	const bRaw = significantTokensWithGaps(after.value, bGaps);
 	const b = greaterUnits(bRaw);
@@ -298,7 +342,7 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	let i = 0;
 	let j = 0;
 	const addedClosers: int32[] = [];
-	let firstParen = "";
+	let rewrite = "";
 	while (i < a.length && j < b.length) {
 		if (addedClosers.length > 0 && addedClosers[addedClosers.length - 1] == j) {
 			addedClosers.pop();
@@ -307,34 +351,40 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 		}
 		const close = addedBodyCloserAt(a, i, b, j);
 		if (close >= 0) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			addedClosers.push(close);
 			j += 1;
 			continue;
 		}
 		if (addsArrowParens(a, i, b, j)) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			i += 1;
 			j += 3;
 			continue;
 		}
 		if (unquotesKey(a, i, b, j)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			j += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && a[i].kind == TokenKind.Comma && semicolonBefore[j] && i + 1 < a.length && sameToken(a[i + 1], b[j]) && inTypeLiteral(a, i)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && addsLeadingSeparator(b, j)) {
+			rewrite = firstRewrite(rewrite, b[j]);
 			j += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && dropsLeadingSeparator(a, i)) {
+			rewrite = firstRewrite(rewrite, a[i]);
 			i += 1;
 			continue;
 		}
 		if (!sameToken(a[i], b[j]) && (isParen(a[i].kind) || isParen(b[j].kind))) {
-			if (firstParen == "") firstParen = describe(isParen(a[i].kind) ? a[i] : b[j], false);
+			rewrite = firstRewrite(rewrite, isParen(a[i].kind) ? a[i] : b[j]);
 			if (isParen(a[i].kind)) i += 1;
 			else j += 1;
 			continue;
@@ -343,20 +393,21 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 			const kind = a[i].value == b[j].value;
 			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
 		}
+		if (semicolonBeforeA[i] != semicolonBefore[j]) rewrite = firstRewrite(rewrite, b[j]);
 		i += 1;
 		j += 1;
 	}
 	while (i < a.length && isParen(a[i].kind)) {
-		if (firstParen == "") firstParen = describe(a[i], false);
+		rewrite = firstRewrite(rewrite, a[i]);
 		i += 1;
 	}
 	while (j < b.length && isParen(b[j].kind)) {
-		if (firstParen == "") firstParen = describe(b[j], false);
+		rewrite = firstRewrite(rewrite, b[j]);
 		j += 1;
 	}
 	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
 	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
-	if (firstParen != "") return sameTreesIgnoringParens(source, formatted, firstParen);
+	if (rewrite != "") return sameTrees(source, formatted, rewrite);
 	return Result.ok(null);
 }
 
@@ -510,4 +561,34 @@ test "lossless: a dropped parenthesis may share a file with the other accepted r
 test "lossless: parentheses in a type annotation stay part of the type" {
 	assert !checkLossless("let x: (A | B)[];", "let x: A | B[];\n").ok;
 	assert !checkLossless("type T = (A | B) & C;", "type T = A | B & C;\n").ok;
+}
+
+test "lossless: a comma in an object literal never becomes a semicolon" {
+	assert !checkLossless("f({a, b});", "f({ a; b });\n").ok;
+	assert !checkLossless("const o = [1, {a, b}];", "const o = [1, { a; b }];\n").ok;
+}
+
+test "lossless: a dropped semicolon is caught when the trees differ or the output no longer parses" {
+	assert !checkLossless("const a = 1; const b = 2;", "const a = 1 const b = 2;\n").ok;
+	assert !checkLossless("const x = a;\n(b);", "const x = a\n(b);\n").ok;
+	assert checkLossless("const a = 1\nconst b = 2", "const a = 1;\nconst b = 2;\n").ok;
+}
+
+test "lossless: parentheses added around an arrow body stay refused when they cut the body short" {
+	assert !checkLossless("const f = x => a ? b\n: c;", "const f = (x) => (a ? b)\n: c;\n").ok;
+	assert !checkLossless("f(x => a ? b\n: c);", "f((x) => (a ? b)\n: c);\n").ok;
+}
+
+test "lossless: a rewrite is compared on a tree too deep to walk with one stack frame per level" {
+	let chain = "function g(a: int32): int32 {\n\tif (a == 0) return 0;\n";
+	let ternary = "const t = a == 0 ? 0";
+	for (let k = 1; k < 150; k += 1) {
+		chain += "\telse if (a == " + k.toString() + ") return " + k.toString() + ";\n";
+		ternary += " : a == " + k.toString() + " ? " + k.toString();
+	}
+	chain += "}\n";
+	ternary += " : -1;\n";
+	assert checkLossless(chain + "const f = x => x;\n", chain + "const f = (x) => x;\n").ok;
+	assert checkLossless(ternary + "const f = x => x;\n", ternary + "const f = (x) => x;\n").ok;
+	assert !checkLossless(chain + "const f = x => x;\n", chain + "const f = (y) => x;\n").ok;
 }

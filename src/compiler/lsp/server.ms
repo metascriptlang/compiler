@@ -13,15 +13,16 @@ import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolve
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
-import { ensureDir, mkdir, realpath, writeFile } from "std/fs";
+import { ensureDir, mkdir, realpath, writeFile, removeAll } from "std/fs";
 import { normalize } from "std/fs/path";
 import { registrySrcPath } from "../package/cache";
 import { env } from "std/process";
 import { newCliOptions, applyProjectConfig } from "../options";
 import { buildResolverConfig } from "../compile";
 import { resetCancel } from "../transam/cancel";
-import { CompletionCache, createCompletionCache, markDependentsStale } from "./handlers/shared";
+import { CompletionCache, createCompletionCache, clearCompletionCache, markDependentsStale } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
+import { projectUniverse } from "./projectUniverse";
 
 import {
 	lspDispatch, publishPendingDiagnostics,
@@ -55,6 +56,7 @@ export class LspServerState {
 	db: TransAmDb;
 	root: string;
 	dbs: Map<string, TransAmDb>;
+	entries: Map<string, Result<string, string>>;
 	registries: Map<string, ModuleCtxRegistry>;
 	completionCache: CompletionCache;
 	inputPending: (() => boolean) | null;
@@ -70,6 +72,7 @@ export function createServerState(): LspServerState {
 		db: createTransAmDb(512),
 		root: "",
 		dbs: new Map<string, TransAmDb>(),
+		entries: new Map<string, Result<string, string>>(),
 		registries: new Map<string, ModuleCtxRegistry>(),
 		completionCache: createCompletionCache(),
 		inputPending: null,
@@ -87,6 +90,7 @@ function selectProject(state: LspServerState, root: string): string {
 	opts.command = "lsp";
 	const applied = applyProjectConfig(opts, root);
 	if (!applied.ok) lspLog("build.ms: " + applied.error);
+	state.entries.set(root, applied.ok ? Result.ok(applied.value.entry) : Result.err("build.ms: " + applied.error));
 	const next = state.registries.get(root);
 	state.registries.set(state.root, swapModuleCtxRegistry(next != null ? next : createModuleCtxRegistry()));
 	let db = state.dbs.get(root);
@@ -209,6 +213,7 @@ const PARSE_ERROR: int32 = -32700;
 const INVALID_REQUEST: int32 = -32600;
 const INTERNAL_ERROR: int32 = -32603;
 const SERVER_NOT_INITIALIZED: int32 = -32002;
+const REQUEST_FAILED: int32 = -32803;
 
 function answerError(io: LspTransport, id: string, code: int32, message: string): void {
 	if (id != "") io.write(lspFormatMessage(lspErrorResponse(id, code, message)));
@@ -358,6 +363,16 @@ export function processMessage(msg: string, state: LspServerState): string {
 	return processQueued(parseQueuedMessage(msg), state);
 }
 
+function navigationScope(state: LspServerState, method: string): Result<string[] | null, string> {
+	if (method != "textDocument/references" && method != "textDocument/rename") return Result.ok(null);
+	const config = state.entries.get(state.root);
+	if (config == null) return Result.ok(null);
+	if (!config.ok) return Result.err(config.error);
+	if (config.value == "") return Result.ok(null);
+	const universe = projectUniverse(state.db, state.root, config.value);
+	return universe.ok ? Result.ok(universe.value) : Result.err(universe.error);
+}
+
 function processQueued(qm: QueuedMessage, state: LspServerState): string {
 	if (qm.malformed) return lspFormatMessage(lspErrorResponse("null", PARSE_ERROR, "ParseError"));
 	const method = qm.method;
@@ -376,12 +391,6 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 		return state.watchFilesThroughClient ? lspFormatMessage(watchedFilesRegistration()) : "";
 	}
 
-	// Invalidate completion cache when new content arrives
-	if (method == DID_CHANGE || method == "textDocument/didOpen") {
-		state.completionCache.uri = "";
-		state.completionCache.line = -1;
-	}
-
 	let flushed = qm.fileUri != "" ? selectProject(state, findProjectRoot(lspUriToPath(qm.fileUri))) : "";
 
 	const isCompletion = method == "textDocument/completion";
@@ -390,7 +399,12 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 	const t0 = performance.now();
 	try {
 		if (method == "workspace/didChangeWatchedFiles") flushed += refreshEveryProject(state, params);
-		else json = lspDispatch(method, idStr, params, state.db, state.completionCache);
+		else {
+			const scope = navigationScope(state, method);
+			json = scope.ok
+				? lspDispatch(method, idStr, params, state.db, state.completionCache, scope.value)
+				: lspErrorResponse(idStr, REQUEST_FAILED, scope.error);
+		}
 	} catch (e) {
 		const errMsg = e != null ? "" + e : "unknown error";
 		writeStderr("LSP handler crash: " + method + " — " + errMsg + "\n");
@@ -402,8 +416,7 @@ function processQueued(qm: QueuedMessage, state: LspServerState): string {
 	resetCancel(state.db.cancelCtx);
 	if (stopped) {
 		state.yieldToInput = true;
-		state.completionCache.uri = "";
-		state.completionCache.line = -1;
+		clearCompletionCache(state.completionCache);
 		if (idStr != "") return flushed;
 	}
 
@@ -855,6 +868,14 @@ test "replay: a didChange with several content changes takes the last text" {
 	assert runMemoryScenario("a didChange with several content changes takes the last text") == "";
 }
 
+test "replay: configured entry navigation ignores open history" {
+	assert runMemoryScenario("references and rename follow the configured entry's closure whichever importer is open") == "";
+}
+
+test "replay: entry edits remove unopened navigation targets and undo restores them" {
+	assert runMemoryScenario("an entry edit that drops an unopened importer drops it from references and rename, and undo restores it") == "";
+}
+
 test "replay: signature help counts the commas before the cursor, and none after the closing parenthesis" {
 	assert runMemoryScenario("signature help counts the commas before the cursor, and none after the closing parenthesis") == "";
 }
@@ -1159,6 +1180,79 @@ test "dependents stopped while checked are published after the next batch, uncha
 	assert r.exitCode == 0;
 	assert publishesOf(r, userUri) == "[]";
 	assert publishesOf(r, depUri) == "[] [] []";
+}
+
+test "navigation reports a broken project config instead of treating it as inferred" {
+	const state = createServerState();
+	state.root = "/broken-project";
+	state.entries.set(state.root, Result.err("build.ms: broken project config"));
+	for (const method of ["textDocument/references", "textDocument/rename"]) {
+		const scope = navigationScope(state, method);
+		assert !scope.ok;
+		assert scope.error == "build.ms: broken project config";
+	}
+	state.entries.set(state.root, Result.ok(""));
+	const inferred = navigationScope(state, "textDocument/references");
+	assert inferred.ok && inferred.value == null;
+}
+
+const IDENTITY_SHAPES = "export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\nexport function takeBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const IDENTITY_MAKERS = "import { Box, Holder } from \"./shapes\";\nexport function mkBox(): Box {\n\treturn new Box(4);\n}\nexport function mkHolder(): Holder<Box> {\n\treturn new Holder<Box>(new Box(5));\n}\nexport function readBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const IDENTITY_USER = "import { Box, Holder, takeBox } from \"./shapes\";\nconst b: Box = mkBox();\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(b) + readBox(new Box(7)) + h.item.v);\n";
+
+function identityProject(name: string): string {
+	const dir = `${tmpDir()}/mscLspIdentity/${name}-${Date.now()}-${Math.random()}`;
+	if (!ensureDir(dir).ok) throw new Error("cannot create identity fixture " + dir);
+	const root = realpath(dir).replaceAll("\\", "/");
+	const files = [
+		["build.ms", "const config = { globalImports: [\"./makers\"] };\nexport default config;\n"],
+		["makers.ms", IDENTITY_MAKERS],
+		["shapes.ms", IDENTITY_SHAPES],
+	];
+	for (const file of files) {
+		if (!writeFile(root + "/" + file[0], file[1]).ok) throw new Error("cannot write identity fixture " + file[0]);
+	}
+	return root;
+}
+
+test "completion then rename leaves the class a build.ms global import returns the class its importer names" {
+	const dir = identityProject("completionThenRename");
+	const use = projectUri(dir) + "use.ms";
+	const at = positionParams(use, 1, 16);
+	try {
+		const r = replay([
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(use, IDENTITY_USER))]),
+			frames([
+				request("\"q1\"", "textDocument/completion", at),
+				request("\"q2\"", "textDocument/rename", at.byteSlice(0, at.byteLength - 1) + ",\"newName\":\"renamed\"}"),
+			]),
+			frames([notification("textDocument/didChange", changeParams(use, 2, IDENTITY_USER + "// edited\n"))]),
+		]);
+		assert r.exitCode == 0;
+		assert publishesOf(r, use) == "[] []";
+	} finally {
+		removeAll(dir);
+	}
+}
+
+test "opening the module a global import bound but never checked, after an edit, keeps the class its importer names" {
+	const dir = identityProject("editThenOpenDependency");
+	const base = projectUri(dir);
+	const use = base + "use.ms";
+	try {
+		const r = replay([
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(use, IDENTITY_USER))]),
+			frames([notification("textDocument/didChange", changeParams(use, 2, IDENTITY_USER + "// edited\n"))]),
+			frames([notification("textDocument/didOpen", openParams(base + "shapes.ms", IDENTITY_SHAPES))]),
+			frames([notification("textDocument/didChange", changeParams(use, 3, IDENTITY_USER + "// edited twice\n"))]),
+		]);
+		assert r.exitCode == 0;
+		assert publishesOf(r, use) == "[] [] []";
+	} finally {
+		removeAll(dir);
+	}
 }
 
 test "a stream that ends on anything but a clean close exits 1" {

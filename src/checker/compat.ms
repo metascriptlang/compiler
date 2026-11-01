@@ -668,9 +668,6 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (source.kind == TypeKind.String && target.kind == TypeKind.CString) {
 		return true;
 	}
-	if (source.kind == TypeKind.CString && target.kind == TypeKind.String) {
-		return true;
-	}
 
 	// StringLiteral → String (subtype: "north" assignable to string)
 	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.String) {
@@ -814,7 +811,6 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
 	if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.kind == TypeKind.CString) return true;
-	if (source.kind == TypeKind.CString && target.kind == TypeKind.String) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
 	if (target.kind == TypeKind.Borrow && target.typeReturn != null) {
 		if (source.kind != TypeKind.Borrow && source.kind != TypeKind.Null) return true;
@@ -939,20 +935,21 @@ export function returnReprRefusal(source: Type | null, target: Type | null, fnTe
 	if (held == null || slot == null) return "";
 	const reprOnly = fnSlotReprMismatch(held, slot);
 	if (isAssignable(held, slot) && !reprOnly) return "";
-	const wraps = slot.kind == TypeKind.Void
+	const copiesCString = held.kind == TypeKind.CString && slot.kind == TypeKind.String;
+	const wraps = slot.kind == TypeKind.Void || copiesCString
 		|| (isMaybeType(slot) && slot.typeReturn != null && isAssignable(held, slot.typeReturn))
 		|| (reprOnly && isAssignable(held, slot));
 	if (!wraps) return "";
 	const dropped = slot.kind == TypeKind.Void;
 	const why = " — a function returning '" + typeDisplayName(held) + "' cannot fill a slot returning '" + typeDisplayName(slot)
-		+ (dropped ? "': its result would have to be dropped. " : "': the result would need a conversion. ");
-	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : "Leave out the lambda's return type, or declare it as the union");
-	if (fnText == "") return why + "Pass a lambda that calls it";
+		+ (dropped ? "': its result would have to be dropped. " : copiesCString ? "': the C buffer has to be copied where the call returns. " : "': the result would need a conversion. ");
+	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : copiesCString ? "Write 'as string' on the lambda's result" : "Leave out the lambda's return type, or declare it as the union");
+	if (fnText == "") return why + (copiesCString ? "Pass a lambda that calls it and writes 'as string' on the result" : "Pass a lambda that calls it");
 	const names: string[] = [];
 	for (let i = 0; i < source.typeChildren.length; i += 1) names.push("a" + String(i));
 	const params = names.join(", ");
-	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + "))";
-	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
+	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + ")" + (copiesCString ? " as string" : "") + ")";
+	return why + lambda + (dropped || copiesCString ? "" : " or declare " + fnText + "'s return type as the union");
 }
 
 export function closureIntoCPointerReason(source: Type | null, target: Type | null): string {
@@ -1108,6 +1105,10 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		if (paramModeDiffers(taken, passed)) {
 			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassing(taken) + ", but the expected '"
 				+ signatureText(target) + "' passes it " + paramPassing(passed) + "; declare '" + name + "' the same way in both";
+		}
+		if (fnSlotReprMismatch(taken, passed) && isAssignable(passed, taken)) {
+			return " — parameter '" + name + "' takes " + signatureText(taken) + ", but the expected function passes it " + signatureText(passed)
+				+ ", and a function value's parameters are never converted; declare the parameter " + signatureText(passed) + " or leave it unannotated";
 		}
 		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
 			if (!isAssignable(passed, taken)) {
@@ -2042,7 +2043,7 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 			for (let oj = oi + 1; oj < order.length; oj += 1) {
 				const cj = order[oj];
 				if (candParams[cj] != param || skip[cj] || outranked(fromMapped, cj, ci)) continue;
-				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
+				if (acceptsAtValueSite(candTypes[cj], bound) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
 		out.names.push(param.typeName);
@@ -2069,7 +2070,12 @@ function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
 }
 
 function candidateFits(candidate: Type, fromLiteral: boolean, bound: Type): boolean {
-	return fromLiteral ? literalShapeFits(candidate, bound) : isAssignable(candidate, bound);
+	return fromLiteral ? literalShapeFits(candidate, bound) : acceptsAtValueSite(bound, candidate);
+}
+
+function acceptsAtValueSite(target: Type, source: Type): boolean {
+	if (isAssignable(source, target)) return true;
+	return source.kind != TypeKind.Null && widensIntoMaybe(target, source) && isAssignable(source, target.typeReturn);
 }
 
 // An object literal's own type against a declared type: the literal is retyped by the

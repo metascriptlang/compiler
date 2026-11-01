@@ -1060,7 +1060,7 @@ function coreGroup(): void {
 	const extras = [
 		"",
 		'import { hash } from "std/hash";\nconsole.log(hash("extra"));\n',
-		'import { sha256 } from "std/crypto";\nconsole.log(sha256("extra").ok);\n',
+		'import { sha256Sync } from "std/crypto";\nconsole.log(sha256Sync("extra").ok);\n',
 		'import { CborKind } from "std/serialize/cbor";\nconsole.log(CborKind.Int.toString());\n',
 	];
 	let baseline = "";
@@ -1078,8 +1078,9 @@ function coreGroup(): void {
 		need(tag, group.includes("core/number/digits.ms"), "the module defining msNumberToString, which core/system declares extern, is not in hcr-core");
 		need(tag, group.includes("core/array/shared.ms"), "the module that the engine's splice instance calls is not in hcr-core");
 		need(tag, group.includes("core/promise/combinator.cms"), "the module defining msPromiseAllTyped, which emitted Promise.all code calls by name, is not in hcr-core");
+		need(tag, group.includes("core/promise/moduleEval.cms"), "the module defining msModuleTableRegister, which every emitted module table calls by name, is not in hcr-core");
 		for (const member of group) {
-			if (member == "core/promise/combinator.cms") continue;
+			if (member == "core/promise/combinator.cms" || member == "core/promise/moduleEval.cms") continue;
 			for (const excluded of ["core/promise/", "actor/", "crypto/", "core/fetch/",
 				"core/websocket/", "net/"]) {
 				need(tag, !member.startsWith(excluded), `hcr-core includes '${member}'`);

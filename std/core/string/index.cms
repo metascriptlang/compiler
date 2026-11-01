@@ -4,6 +4,7 @@
 
 @include("runtime/core/string.h");
 @compile("runtime/core/string.c");
+@compile("runtime/core/stringCase.c");
 
 // ===== Operators =====
 // Primitive operators (C runtime)
@@ -166,7 +167,13 @@ export extern function String<T>(val: T): string;
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
-export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { repeat, reverse, equalsIgnoreCase } from "./shared";
+
+export extern function trim(this s: string): string from "msStringTrim";
+export extern function trimStart(this s: string): string from "msStringTrimStart";
+export extern function trimEnd(this s: string): string from "msStringTrimEnd";
+export extern function toLowerCase(this s: string): string from "msStringToLowerCase";
+export extern function toUpperCase(this s: string): string from "msStringToUpperCase";
 export { indexOf, lastIndexOf, startsWith, endsWith, includes, contains, count } from "./search";
 import "./utf16";
 export { replace, replaceAll, padStart, padEnd, split } from "./editNative";

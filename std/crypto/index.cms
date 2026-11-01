@@ -2,7 +2,9 @@
 
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
-import { encodedHash, encodedHmac, encodedHashFinal, encodedHmacFinal } from "./encodingNative";
+import { newOutputBuffer, outputBytes } from "./outputBuffer";
+// The Raiser host table and the websocket handshake call msCryptoHashString, which this import carries.
+import "./encodingNative";
 
 // mbedTLS include paths + minimal config
 @passC("-Iruntime/crypto");
@@ -11,6 +13,10 @@ import { encodedHash, encodedHmac, encodedHashFinal, encodedHmacFinal } from "./
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+// Hardware SHA-2 where the CPU has it, detected at run time; the vendor build_info reads
+// psa/crypto_config.h, not mbedtlsConfig.h, so these two are set on the command line.
+@passC("-DMBEDTLS_SHA256_USE_ARMV8_A_CRYPTO_IF_PRESENT");
+@passC("-DMBEDTLS_SHA512_USE_A64_CRYPTO_IF_PRESENT");
 
 // Our crypto implementation
 @compile("runtime/crypto/hash.c");
@@ -48,14 +54,14 @@ extern function msCryptoInit(): boolean;
 extern function msCryptoCleanup(): void;
 
 // Hashing
-extern function msCryptoHashBuffer(algorithm: string, data: string): string;
+extern function msCryptoHashInto(algorithm: string, data: string, output: Ptr<uint8>, capacity: int64): int64;
 
 // HMAC
-extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string): string;
+extern function msCryptoHmacInto(algorithm: string, key: string, data: string, output: Ptr<uint8>, capacity: int64): int64;
 
 // Random
 extern function msCryptoRandomBytes(size: number): string;
-extern function msCryptoRandomInt(min: number, max: number): number;
+extern function msCryptoRandomIntInto(min: number, max: number, ref out: int64[1]): int32;
 extern function msCryptoRandomUuid(): string;
 
 // Timing-safe comparison
@@ -75,6 +81,7 @@ extern function msCryptoHmacFreeHandle(ctx: int64): void;
 
 // Utility
 extern function msCryptoIsHashSupported(algorithm: string): boolean;
+extern function msCryptoHashSize(algorithm: string): number;
 
 // Key Derivation
 extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
@@ -87,9 +94,7 @@ export type HashAlgorithm =
 	| "sha1" | "md5" | "ripemd160"
 	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
 
-export type HashEncoding = "hex" | "base64";
-
-import { CryptoError, CryptoErrorKind, hashFailed, hmacFailed, randomFailed, keyDerivationFailed } from "./errors";
+import { CryptoError, CryptoErrorKind, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidInput, invalidEncoding } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 // ===== Initialization =====
@@ -104,71 +109,92 @@ export function cleanup(): void {
 
 // ===== Hash Functions =====
 
-export function hash(algorithm: string, data: Bytes, encoding: string = "hex"): Result<string, CryptoError> {
-	const result = encodedHash(algorithm, rawString(data), encoding);
-	if (result == "") return Result.err(hashFailed(algorithm, "Hash computation failed"));
-	return Result.ok(result);
-}
-
-export function sha256(data: Bytes, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha256", data, encoding); }
-export function sha512(data: Bytes, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha512", data, encoding); }
-export function sha384(data: Bytes, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha384", data, encoding); }
-export function sha1(data: Bytes, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha1", data, encoding); }
-export function md5(data: Bytes, encoding: string = "hex"): Result<string, CryptoError> { return hash("md5", data, encoding); }
-
-export function hashBuffer(algorithm: string, data: Bytes): Result<Buffer, CryptoError> {
-	const result = msCryptoHashBuffer(algorithm, rawString(data));
-	if (result == "") {
+export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
+	const size = msCryptoHashSize(algorithm) as int64;
+	const out = newOutputBuffer(size);
+	if (size == 0 || msCryptoHashInto(algorithm, rawString(data), outputBytes(out), size) != size) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
-	return Result.ok(rawBuffer(result));
+	return Result.ok(out);
 }
+
+export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync(algorithm, data);
+}
+
+export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+
+export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha256", data); }
+export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha384", data); }
+export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha512", data); }
+export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha1", data); }
+export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("md5", data); }
 
 // ===== HMAC Functions =====
 
-export function hmac(
-	algorithm: string,
-	key: Bytes,
-	data: Bytes,
-	encoding: string = "hex"
-): Result<string, CryptoError> {
-	const result = encodedHmac(algorithm, rawString(key), rawString(data), encoding);
-	if (result == "") return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
-	return Result.ok(result);
-}
-
-export function hmacBuffer(algorithm: string, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
-	const result = msCryptoHmacBuffer(algorithm, rawString(key), rawString(data));
-	if (result == "") {
+export function hmacSync(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
+	const size = msCryptoHashSize(algorithm) as int64;
+	const out = newOutputBuffer(size);
+	if (size == 0 || msCryptoHmacInto(algorithm, rawString(key), rawString(data), outputBytes(out), size) != size) {
 		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
 	}
-	return Result.ok(rawBuffer(result));
+	return Result.ok(out);
+}
+
+export async function hmac(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return hmacSync(algorithm, key, data);
 }
 
 // ===== Random Functions =====
 
-export function randomBytes(size: number): Result<Buffer, CryptoError> {
+export function randomBytesSync(size: number): Result<Buffer, CryptoError> {
 	const result = msCryptoRandomBytes(size);
-	if (result == "") {
+	if (result == "" && size != 0) {
 		return Result.err(randomFailed("Random byte generation failed"));
 	}
 	return Result.ok(rawBuffer(result));
 }
 
-export function randomInt(min: number, max: number): Result<number, CryptoError> {
-	const result = msCryptoRandomInt(min, max);
-	if (result == -1) {
-		return Result.err(randomFailed("Random integer generation failed"));
-	}
-	return Result.ok(result);
+export async function randomBytes(size: number): Promise<Result<Buffer, CryptoError>> {
+	return randomBytesSync(size);
 }
 
-export function randomUUID(): Result<string, CryptoError> {
+const RANDOM_INT_BAD_MIN = 1;
+const RANDOM_INT_BAD_MAX = 2;
+const RANDOM_INT_EMPTY_RANGE = 3;
+const RANDOM_INT_RANGE_TOO_WIDE = 4;
+const RANDOM_INT_SOURCE_FAILED = 5;
+
+export function randomIntSync(min: number, max: number): Result<number, CryptoError> {
+	let drawn: int64[1] = [0];
+	const status = msCryptoRandomIntInto(min, max, drawn);
+	if (status == 0) return Result.ok(drawn[0] as number);
+	if (status == RANDOM_INT_BAD_MIN) return Result.err(invalidInput("random", "min must be a safe integer"));
+	if (status == RANDOM_INT_BAD_MAX) return Result.err(invalidInput("random", "max must be a safe integer"));
+	if (status == RANDOM_INT_EMPTY_RANGE) return Result.err(invalidInput("random", "max must be greater than min"));
+	if (status == RANDOM_INT_RANGE_TOO_WIDE) return Result.err(invalidInput("random", "max - min must be less than 2^48"));
+	if (status == RANDOM_INT_SOURCE_FAILED) return Result.err(randomFailed("Random integer generation failed"));
+	throw new Error(`randomInt: unhandled status ${status}`);
+}
+
+export async function randomInt(min: number, max: number): Promise<Result<number, CryptoError>> {
+	return randomIntSync(min, max);
+}
+
+export function randomUUIDSync(): Result<string, CryptoError> {
 	const result = msCryptoRandomUuid();
 	if (result == "") {
 		return Result.err(randomFailed("UUID generation failed"));
 	}
 	return Result.ok(result);
+}
+
+export async function randomUUID(): Promise<Result<string, CryptoError>> {
+	return randomUUIDSync();
 }
 
 // ===== Timing-Safe Comparison =====
@@ -182,8 +208,9 @@ export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
 export class Hasher {
 	_ctx: int64;
 
-	static create(algorithm: string): Hasher {
+	static create(algorithm: HashAlgorithm): Hasher {
 		const ctx = msCryptoHashInitHandle(algorithm);
+		if (ctx == 0) throw new Error(`createHash: could not start "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
@@ -194,16 +221,7 @@ export class Hasher {
 		return this;
 	}
 
-	digest(encoding: string = "hex"): string {
-		if (this._ctx == 0) {
-			return "";
-		}
-		const ctx = this._ctx;
-		this._ctx = 0;
-		return encodedHashFinal(ctx, encoding);
-	}
-
-	digestBuffer(): Buffer {
+	digest(): Buffer {
 		if (this._ctx == 0) {
 			return rawBuffer("");
 		}
@@ -225,8 +243,9 @@ export class Hasher {
 export class Hmac {
 	_ctx: int64;
 
-	static create(algorithm: string, key: Bytes): Hmac {
+	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
 		const ctx = msCryptoHmacInitHandle(algorithm, rawString(key));
+		if (ctx == 0) throw new Error(`createHmac: could not start "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
@@ -237,16 +256,7 @@ export class Hmac {
 		return this;
 	}
 
-	digest(encoding: string = "hex"): string {
-		if (this._ctx == 0) {
-			return "";
-		}
-		const ctx = this._ctx;
-		this._ctx = 0;
-		return encodedHmacFinal(ctx, encoding);
-	}
-
-	digestBuffer(): Buffer {
+	digest(): Buffer {
 		if (this._ctx == 0) {
 			return rawBuffer("");
 		}
@@ -265,17 +275,17 @@ export class Hmac {
 
 // ===== Factory Functions =====
 
-export function createHash(algorithm: string): Hasher {
+export function createHash(algorithm: HashAlgorithm): Hasher {
 	return Hasher.create(algorithm);
 }
 
-export function createHmac(algorithm: string, key: Bytes): Hmac {
+export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
 	return Hmac.create(algorithm, key);
 }
 
 // ===== Utility =====
 
-export function getHashes(): string[] {
+export function getHashes(): HashAlgorithm[] {
 	return ["sha256", "sha512", "sha384", "sha224", "sha1", "md5", "ripemd160",
 		"sha3-256", "sha3-384", "sha3-512", "sha3-224"];
 }
@@ -293,9 +303,11 @@ export function toHex(data: Bytes): string {
 	return data.encodeHex();
 }
 
-export function fromHex(hex: string): Buffer {
-	if (hex.asBytes().length == 0) return rawBuffer("");
-	return rawBuffer(hex.decodeHexString());
+export function fromHex(hex: string): Result<Buffer, CryptoError> {
+	if (hex.asBytes().length == 0) return Result.ok(rawBuffer(""));
+	const raw = hex.decodeHexString();
+	if (raw.asBytes().length == 0) return Result.err(invalidEncoding("fromHex", "not an even-length hexadecimal string"));
+	return Result.ok(rawBuffer(raw));
 }
 
 export function toBase64(data: Bytes): string {
@@ -303,33 +315,32 @@ export function toBase64(data: Bytes): string {
 	return data.encodeBase64();
 }
 
-export function fromBase64(b64: string): Buffer {
-	if (b64.asBytes().length == 0) return rawBuffer("");
-	return rawBuffer(b64.decodeBase64String());
+export function fromBase64(b64: string): Result<Buffer, CryptoError> {
+	if (b64.asBytes().length == 0) return Result.ok(rawBuffer(""));
+	const raw = b64.decodeBase64String();
+	if (raw.asBytes().length == 0) return Result.err(invalidEncoding("fromBase64", "not canonical padded base64"));
+	return Result.ok(rawBuffer(raw));
 }
 
 // ===== Key Derivation =====
 
-export function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: string): Result<Buffer, CryptoError> {
-	if (digest == "") digest = "sha256";
+export function pbkdf2Sync(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
+	if (iterations < 1) return Result.err(invalidInput("pbkdf2", "iterations must be at least 1"));
+	if (keyLength < 1 || keyLength > 1048576) return Result.err(invalidInput("pbkdf2", "keyLength must be between 1 and 1048576"));
 	const result = msCryptoPbkdf2(rawString(password), rawString(salt), iterations, keyLength, digest);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
 }
 
-export function hkdf(algorithm: string, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
-	if (algorithm == "") algorithm = "sha256";
+export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> { return pbkdf2Sync(password, salt, iterations, keyLength, digest); }
+
+export function hkdfSync(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
+	if (length < 1) return Result.err(invalidInput("hkdf", "length must be at least 1"));
+	const maxLength = 255 * msCryptoHashSize(algorithm);
+	if (length > maxLength) return Result.err(invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`));
 	const result = msCryptoHkdf(algorithm, rawString(ikm), rawString(salt), rawString(info), length);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
 }
 
-// ===== Async Versions (spawn to worker thread for heavy operations) =====
-
-export async function pbkdf2Async(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): Promise<Result<Buffer, CryptoError>> {
-	return await spawn(() => { return pbkdf2(password, salt, iterations, keyLength, digest); });
-}
-
-export async function hashAsync(algorithm: string, data: string, encoding: string): Promise<Result<string, CryptoError>> {
-	return await spawn(() => { return hash(algorithm, data, encoding); });
-}
+export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> { return hkdfSync(algorithm, ikm, salt, info, length); }

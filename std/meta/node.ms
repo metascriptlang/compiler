@@ -218,6 +218,7 @@ export enum SymbolFlag {
 	Consumed, // PARALOCK Phase 1: affine-Promise binding (spawn-origin) has been awaited (affine consumption)
 	OverloadSig, // Tier 1: body-less overload signature — typecheck-only, codegen skips emission
 	OverloadValidated, // Tier 1: overload set already validated (return-type compatibility check)
+	OverloadRejected, // that validation failed: the error is already on the signature
 	SinkTemp, // DRC sink-arg temp synthesized by passCopyToSink — always single-use by construction, always last-read
 	ComptimeNodeAlias, // `const x = <jsx>` — x binds a compile-time Node, folded into the consuming macro; emits no runtime decl
 	StaticLocal, // `static` decl inside a body: carries Global (module storage) but is named per-site, since a body can hold several and a module may hold several bodies
@@ -344,7 +345,7 @@ export enum NodeFlag {
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 	Optional,      // parser: this class field was written `name?`
 	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
-	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
+	NoDispatch,    // transform: this identifier, or the member of a `super.m` call, calls the routine it names, never the dispatcher of its overrides (reference: procCall)
 	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 	OptionalLink,  // parser: this call or index was written `?.(` or `?.[`, so its callee or array starts an optional chain
 	Abstract,      // parser: this class or member was written `abstract` — fmt prints it back
@@ -353,6 +354,8 @@ export enum NodeFlag {
 	DefaultAwaitsInstance, // checker: a filled default whose formal is still generic; the instantiation fits it to the instance's type
 	ParamProperty, // checker: this class field was declared by a constructor parameter written with `public`, `private`, `protected` or `readonly`
 	SendableClosure, // checker: this closure is converted to Sendable<F>, so lambda lifting gives it an env of its own that holds copies of its captures
+	ConstData,     // transform: every element of this array literal is deep-constant data, so codegen copies one static initializer
+	DecoratorRefused, // checker: a decorator on this declaration was refused, so a check that would only follow from it skips the declaration
 }
 
 // ===== Node Kind Enum =====

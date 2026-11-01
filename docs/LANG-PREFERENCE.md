@@ -198,8 +198,11 @@ by an implementation. Return-type-only overloads are ambiguous. Prefer a generic
 expresses the operation; annotate literal/callback inputs when contextual overload ranking needs
 help rather than relying on accidental declaration order.
 
-Parameter modes are contracts: ordinary parameters borrow, `readonly` forbids mutation, `ref`
-mutates a caller location, `out` initializes it, and `sink` takes ownership (§6). Modes affect
+Parameter modes are contracts: ordinary parameters borrow, `ref` mutates a caller location,
+`out` initializes it, and `sink` takes ownership (§6). A scalar or struct parameter never writes
+back to the caller: reassigning it stays local and a struct field write is refused. Write
+`Readonly<T>` for a read-only array, Vec or class handle; there is no `readonly` parameter
+modifier outside a constructor's parameter property. Modes affect
 function compatibility and overrides. Destructuring does not waive lifetime or mutation rules.
 
 ## 3. Numbers, domain types and conversions
@@ -413,8 +416,8 @@ const counter = new OffsetCounter(6);
 console.log(readCounter(counter), counter.current);
 ```
 
-The override dispatches through a base-typed reference (`7 6`). Do not extrapolate constructor
-`super(...)` to `super.method()` (§19). Native interface views/`implements` are layout-sensitive:
+The override dispatches through a base-typed reference (`7 6`), and `super.method()` runs the
+parent's method (§19). Native interface views/`implements` are layout-sensitive:
 field order and required storage matter; a method/getter does not fill a function-typed field.
 Neither structural spelling nor a cast manufactures arbitrary width-subtyping or compatible ABI.
 
@@ -457,8 +460,8 @@ example();
   do not reuse the moved-from source. `move` is an expression, not a parameter modifier:
   `read(move pending)` does not make an ordinary borrowing parameter consume it.
   Last-use transfer is already optimized where legal; do not scatter `move` everywhere.
-- A `readonly` parameter prohibits mutation; it does not request an owning local copy.
-  For scratch value storage, write `let local = parameter`; reference fields still alias.
+- A parameter never requests an owning local copy. For scratch value storage, write
+  `let local = parameter`; reference fields still alias.
 
 A `sink` parameter receives ownership: passing a still-live value copies as required; an explicit
 `move` can transfer an eligible value. This differs from `move` in a borrowing call. Do not use
@@ -2110,8 +2113,8 @@ requirements, not a claim that every combination was executed.
 
 | Surface | Current disposition |
 |---|---|
-| `super(...)` / `super.method()` | Constructor chaining/override example runs; tested `super.read()` fails on C and JS. |
-| `abstract` | An empty abstract class could still be constructed on C and JS; do not rely on abstractness enforcement. |
+| `super(...)` / `super.method()` | Constructor chaining and `super.m()` run on C, JS and the Raiser (`super.m()` since 2026-10-31, corpus `1266-superMethodCall`); a parent's field through `super` is refused, as in TS. |
+| `abstract` | `new` on an abstract class and an unanswered abstract method are refused (since 2026-10-31, checker3pass `abstractMembers`); an `abstract` property cannot be implemented yet. |
 | Predicate / assertion function | Check boolean predicates separately. The tested `asserts value is Message` followed by a read emitted an invalid native void-pointer member read; JS ran. |
 | Type-position `typeof local` | Refused with the namespace-import-only diagnostic; special static receiver syntax is not a general type query. |
 | Template-literal types | The tested literal-union template type was rejected. Runtime string templates are a different feature. |

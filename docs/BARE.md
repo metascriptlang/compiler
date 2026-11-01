@@ -811,7 +811,6 @@ runtime/
   drc.h / .c              ← RC + cycle collector (--mm=drc; the collector is compiled out under MSGC_MANUAL)
   manual.h                ← no RC, defines MSGC_MANUAL; MSOS_BARE=arena, else=malloc (--mm=manual)
   types.h                 ← msRefHeader, msTypeInfo (shared by both)
-  arena.h                 ← arena allocator implementation
   fs.h, process.h, os.h  ← single-file modules (flat, no subdirs)
   hcr.h / hcrHost.c      ← HCR Phase 1/2 POSIX prototype; architecture: docs/HCR.md
   core/                   ← core types every program needs

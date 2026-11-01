@@ -22,9 +22,8 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { bindsSignatureTypes } from "../monomorphize/clone";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
@@ -40,7 +39,7 @@ import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength, checkOverloadSets } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
@@ -211,18 +210,17 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 		}
 		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
 	}
-	if (bindsSignatureTypes(node)) {
-		fnExpr.typeExpr = node.typeExpr;
-		fnExpr.typeExprs = node.typeExprs;
-		node.typeExpr = null;
-		node.typeExprs = null;
-		const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx, node.location) : null;
-		if (annotation != null) {
-			const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
-			operand.nodeType = annotation;
-			operand.flags = operand.flags.incl(NodeFlag.BoundSym);
-			node.typeExpr = operand;
-		}
+	fnExpr.typeExpr = node.typeExpr;
+	fnExpr.typeExprs = node.typeExprs;
+	fnExpr.paramLocations = node.paramLocations;
+	node.typeExpr = null;
+	node.typeExprs = null;
+	const annotation = fnAnnot != "" ? signatureTypeOf(fnExpr, ctx) : null;
+	if (annotation != null) {
+		const operand = createNodeAt(NodeKind.Identifier, { name: fnAnnot } as IdentifierData, node.location);
+		operand.nodeType = annotation;
+		operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+		node.typeExpr = operand;
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -698,7 +696,7 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 
 // ===== Statement Helpers =====
 
-function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Type | null {
+function signatureTypeOf(fn: Node, ctx: CheckerContext): Type | null {
 	let paramNames: string[] = [];
 	let paramTypeStrs: string[] = [];
 	let returnTypeStr = "";
@@ -718,10 +716,10 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
 		if (paramTypeStrs[i] == "") return null;
-		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, loc.line, loc.column));
+		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, 0, 0));
 	}
-	const predicate = predicateReturnOf(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr);
-	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : resolveReturnAnnotation(returnTypeStr, ctx, loc.line, loc.column, fn.typeExpr));
+	const predicate = predicateReturnOf(returnTypeStr, ctx, 0, 0, fn.typeExpr);
+	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : annotatedType(returnTypeStr, fn.typeExpr, ctx, 0, 0));
 	if (predicate != null) closure.typeExtra = predicate.sentinel;
 	return closure;
 }
@@ -778,7 +776,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr)) {
-		const selfRefType = declType != null ? declType : signatureTypeOf(d.initializer, ctx, d.nameLocation);
+		const selfRefType = declType != null ? declType : signatureTypeOf(d.initializer, ctx);
 		const hoisted = lookupLocal(ctx.table, d.declName);
 		if (selfRefType != null && hoisted == null) {
 			preRegisteredSelfRefSym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, selfRefType, d.declKind != DeclKind.Const);
@@ -1565,6 +1563,14 @@ export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): void {
 	demandFunctionBody(ctx, decl, sym);
 }
 
+function settleInheritedFields(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	const own = unwrapRef(sym.symbolType);
+	for (let i = 0; i < own.typeNames.length; i += 1) {
+		const name = own.typeNames[i];
+		if (isUnresolvedFieldType(own.typeChildren[i]) && inferredFieldDecl(node, name, false) == null) demandFieldType(ctx, sym, name, false, node);
+	}
+}
+
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = node.resolvedSym;
@@ -1577,6 +1583,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	if (sym.state == SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
 	instantiateParentClass(classParentOf(sym.symbolType), ctx);
+	settleInheritedFields(ctx, node, sym);
 
 	openScope(ctx.table, ScopeKind.Class);
 	ctx.table.current.privateAccess = sym;
@@ -1602,6 +1609,8 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 		ctx.ctorExitsNext = null;
 	}
 	refuseUnassignedFields(ctx, d.classBody, ctorExits);
+	checkOverloadSets(ctx, d.classBody);
+	refuseAbstractMisuse(ctx, node, sym);
 	for (const written of d.classImplements) {
 		refuseUnimplemented(ctx, node, sym.symbolType, written);
 	}
@@ -1612,6 +1621,53 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+// An abstract method lives only in an abstract class and has no body, and a concrete class
+// answers every abstract method it inherits, so a call through the base always finds a body.
+function refuseAbstractMisuse(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	const d = node.data as ClassDeclData;
+	const abstractClass = node.flags.has(NodeFlag.Abstract);
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (!member.flags.has(NodeFlag.Abstract) || member.kind != NodeKind.MethodDecl) continue;
+		const md = member.data as MethodDeclData;
+		const at = md.nameLocation;
+		if (!abstractClass) addError(ctx, `Abstract methods can only appear within an abstract class: '${md.methodName}' is in the class '${d.className}'`, at.line, at.column);
+		else if (md.methodIsStatic) addError(ctx, `'static' modifier cannot be used with 'abstract' modifier: '${md.methodName}'`, at.line, at.column);
+		else if (md.methodBody.kind == NodeKind.BlockStmt && (md.methodBody.data as BlockStmtData).statements.length > 0) {
+			addError(ctx, `Method '${md.methodName}' cannot have an implementation because it is marked abstract`, at.line, at.column);
+		}
+	}
+	if (abstractClass) return;
+	const answered = new HashSet<string>();
+	addConcreteMethodNames(d.classBody, answered);
+	let parent = parentClassSymOf(sym);
+	while (parent != null) {
+		const pd = classDeclNodeOf(parent);
+		if (pd == null || pd.kind != NodeKind.ClassDecl) return;
+		const parentData = pd.data as ClassDeclData;
+		for (const raw of parentData.classBody) {
+			const member = classMemberDecl(raw);
+			if (!member.flags.has(NodeFlag.Abstract) || member.kind != NodeKind.MethodDecl) continue;
+			const name = (member.data as MethodDeclData).methodName;
+			if (answered.has(name)) continue;
+			answered.add(name);
+			addError(ctx, `Non-abstract class '${d.className}' does not implement inherited abstract member '${name}' from class '${parentData.className}'`,
+				d.nameLocation.line, d.nameLocation.column);
+		}
+		addConcreteMethodNames(parentData.classBody, answered);
+		parent = parentClassSymOf(parent);
+	}
+}
+
+function addConcreteMethodNames(body: Node[], names: HashSet<string>): void {
+	for (const raw of body) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.MethodDecl || member.flags.has(NodeFlag.Abstract)) continue;
+		const md = member.data as MethodDeclData;
+		if (!md.methodIsStatic) names.add(md.methodName);
+	}
 }
 
 function refuseUnimplemented(ctx: CheckerContext, node: Node, classType: Type, written: string): void {
@@ -2019,6 +2075,8 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				if (pd.propIsStatic) {
 					ctx.staticInitBoundary = ctx.table.current;
 					openStaticReceiverScope(ctx, classType.sym);
+				} else {
+					openInstanceReceiverScope(ctx, node, classType);
 				}
 				const hoistMark = ctx.pendingHoisted.length;
 				const inferring = pd.propType == "";
@@ -2032,7 +2090,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
 					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
 				}
-				if (pd.propIsStatic) closeScope(ctx.table);
+				closeScope(ctx.table);
 				ctx.staticInitBoundary = savedBoundary;
 				if (pd.propType == "") settleInferredField(node, pd, classType);
 			}
@@ -2102,6 +2160,14 @@ function checkMethodBody(ctx: CheckerContext, node: Node, sym: Symbol, classType
 function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): void {
 	openScope(ctx.table, ScopeKind.Block);
 	if (owner != null) ctx.table.current.symbols.set(getIdentId(ctx.table.identCache, "this"), owner!);
+}
+
+function openInstanceReceiverScope(ctx: CheckerContext, field: Node, classType: Type): void {
+	openScope(ctx.table, ScopeKind.Block);
+	const thisSym = makeSymbol("this", SymbolKind.Parameter, classType, false);
+	stampOwner(ctx, thisSym);
+	field.paramSyms = [thisSym];
+	defineSymbol(ctx.table, thisSym);
 }
 
 function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[] {
@@ -2711,9 +2777,9 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	const paramTypes: Type[] = [];
 	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
 		if (fd.funcExprParamTypes[i] == "") return;
-		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, d.nameLocation.line, d.nameLocation.column));
+		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, 0, 0));
 	}
-	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, 0, 0) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
@@ -2819,7 +2885,8 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// compares Null against expected, which is the real safety question.
 	if (d.argument.kind == NodeKind.NullLiteral) {
 		const fnType = ctx.currentFunction != null ? ctx.currentFunction.symbolType : null;
-		const declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		const declaredReturn = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		const declared = declaredReturn != null && !isUnresolvedType(declaredReturn) && returnsFromAsyncBody(ctx) ? asyncBodyType(declaredReturn) : declaredReturn;
 		if (declared != null) {
 			d.argument.nodeType = nullType();
 			if (isUnresolvedType(declared)) {
@@ -3148,7 +3215,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, defaults: Node[], at: int
 	const source = cloneNodeForCheck(def);
 	checkExpr(ctx, def, paramType);
 	const checked = def.nodeType != null ? fitNode(ctx, def, paramType, def.nodeType) : def;
-	if (ctx.pendingHoisted.length > hoistMark) noteDefaultSource(checked, source);
+	noteDefaultSource(checked, source);
 	ctx.pendingHoisted.shrink(hoistMark);
 	noteDefaultCheckedAtDeclaration(def);
 	noteDefaultCheckedAtDeclaration(checked);
@@ -3263,9 +3330,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 }
 
 function declaredWithoutBody(sym: Symbol | null): boolean {
-	if (sym == null || hasFlag(sym, SymbolFlag.ImportC)) return true;
+	if (sym == null || hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.NativeMethod)) return true;
 	let decl = sym.declNode;
 	while (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl != null && decl.flags.has(NodeFlag.Abstract)) return true;
 	let flags = "";
 	let native = "";
 	if (decl != null && decl.kind == NodeKind.FunctionDecl) {
@@ -3346,6 +3414,7 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 		checkStmt(ctx, stmts.programStmts[i]);
 		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
 	}
+	checkOverloadSets(ctx, stmts.programStmts);
 	if (ctx.pendingLocalTypeDecls.length > 0) {
 		// Front, not back: C claims TypeInfo ownership when the declaration is
 		// emitted (declaredThings), so a decl landing after its use site emits an

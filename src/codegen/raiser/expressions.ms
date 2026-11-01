@@ -1849,10 +1849,23 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
-			const dest = callBlock(s, node.nodeType, d.arguments, calleeParamTypes(calleeSym));
-			emitCallArgs(s, dest, d.arguments);
-			const pastBase = d.arguments.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym)) : [];
-			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
+			const declaredParams = calleeParamTypes(calleeSym);
+			const runtimeArgs: Node[] = [];
+			const runtimeParams: Type[] = [];
+			for (let i = 0; i < d.arguments.length; i = i + 1) {
+				const arg = d.arguments[i];
+				const slotType = declaredParams != null && i < declaredParams.length ? declaredParams[i] : arg.nodeType;
+				if (slotType != null && slotType.kind == TypeKind.Void) {
+					if (arg.kind != NodeKind.Identifier) compileExpr(s, arg);
+					continue;
+				}
+				runtimeArgs.push(arg);
+				if (declaredParams != null && i < declaredParams.length) runtimeParams.push(declaredParams[i]);
+			}
+			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null);
+			emitCallArgs(s, dest, runtimeArgs);
+			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym), runtimeArgs.length) : [];
+			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, runtimeArgs.length));
 			patchJumpsTo(s, pastBase, codeLen(s));
 			return dest;
 		}
@@ -1907,8 +1920,7 @@ function dispatchOverrides(sym: Symbol | null): Symbol[] {
 
 // The receiver's class picks the override, deepest class first, as the C
 // backend's dispatcher does; the base call the caller emits next is the fallthrough.
-function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, overrides: Symbol[]): int32[] {
-	const argCount = (node.data as CallExprData).arguments.length;
+function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, overrides: Symbol[], argCount: int32): int32[] {
 	const ends: int32[] = [];
 	for (const ov of overrides) {
 		const ft = ov.symbolType;

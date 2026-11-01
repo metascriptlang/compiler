@@ -8,27 +8,37 @@
 // mbedtls) into the alive-set. The @compile chain via std/crypto/tls fires
 // only when one of this module's exports is reachable.
 
-import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
+import { tlsConnect, tlsConnectTimeoutOperation, read, write, close } from "std/crypto/tls";
 
 import { HttpResponse, RequestOptions } from "./types";
-import { HttpError, connectionFailed } from "./errors";
+import { HttpError, connectionFailed, connectionReset, timeout } from "./errors";
 import { Bytes } from "../buffer/bytes";
 import { doRequestOver, requestWithRedirectsOver } from "./client";
 
 // ===== TLS transport =====
 
 function doRequestTls(options: RequestOptions): Result<HttpResponse, HttpError> {
-	const ctx = tlsConnect(options.hostname, options.port, "");
-	if (!ctx.ok) {
-		return Result.err(connectionFailed(`TLS handshake to ${options.hostname}:${options.port} failed`));
+	const opened = tlsConnect(options.hostname, options.port, { timeoutMs: options.timeout > 0 ? options.timeout : 0 });
+	if (!opened.ok) {
+		const message = `TLS to ${options.hostname}:${options.port} failed: ${opened.error.message}`;
+		return Result.err(opened.error.operation == tlsConnectTimeoutOperation ? timeout(message) : connectionFailed(message));
 	}
-	const tlsCtx = ctx.value;
-	return doRequestOver(
+	const conn = opened.value;
+	const faults: HttpError[] = [];
+	const response = doRequestOver(
 		options,
-		(data: Bytes) => tlsWrite(tlsCtx, data),
-		(maxBytes: int32) => tlsRead(tlsCtx, maxBytes),
-		() => tlsClose(tlsCtx),
+		(data: Bytes) => conn.write(data),
+		(maxBytes: int32) => {
+			const chunk = conn.read(maxBytes);
+			if (chunk.length == 0 && conn.lastError != "") {
+				faults.push(conn.timedOut ? timeout(conn.lastError) : connectionReset(conn.lastError));
+			}
+			return chunk;
+		},
+		() => conn.close(),
 	);
+	if (faults.length > 0) return Result.err(faults[0]);
+	return response;
 }
 
 // ===== Public API =====

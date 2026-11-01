@@ -32,6 +32,14 @@ function feedBytes(handle: int64, chunk: Bytes, isLast: int32): int32 {
 	return msInflateFeed(handle, chunk, isLast);
 }
 
+function inflateFailure(status: int32, invalid: string): CompressError {
+	if (status == -2) return compressError(CompressErrorKind.Truncated, "unexpected end of file");
+	if (status == -3) return compressError(CompressErrorKind.ChecksumMismatch, "incorrect data check");
+	if (status == -4) return compressError(CompressErrorKind.LengthMismatch, "incorrect length check");
+	if (status == -5) return compressError(CompressErrorKind.TrailingGarbage, "trailing garbage after the last gzip member");
+	return compressError(CompressErrorKind.InvalidInput, invalid);
+}
+
 function isEmpty(data: Bytes): boolean {
 	if (typeof data == "string") return data.length == 0;
 	return data.length == 0;
@@ -45,9 +53,10 @@ function oneShot(data: Bytes, format: int32, failure: string): Result<Buffer, Co
 	if (handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
-	if (feedBytes(handle, data, 1) < 0) {
+	const status = feedBytes(handle, data, 1);
+	if (status < 0) {
 		msInflateFree(handle);
-		return Result.err(compressError(CompressErrorKind.InvalidInput, failure));
+		return Result.err(inflateFailure(status, failure));
 	}
 	const out = msInflateDrain(handle, 0);
 	msInflateFree(handle);
@@ -72,15 +81,18 @@ export function createInflate(format: CompressFormat = CompressFormat.Gzip): Inf
 // Feed a chunk of compressed input. Returns any bytes decoded so far
 // (may be empty if more input is needed before any output is produced).
 export function inflateFeed(s: InflateStream, chunk: Bytes): Result<Buffer, CompressError> {
-	if (s.handle == 0) {
-		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
-	}
 	if (s.finished) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "feed after finish"));
 	}
+	if (s.handle == 0) {
+		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
+	}
 	const st = feedBytes(s.handle, chunk, 0);
 	if (st < 0) {
-		return Result.err(compressError(CompressErrorKind.InvalidInput, "decompression failed"));
+		msInflateFree(s.handle);
+		s.handle = 0;
+		s.finished = true;
+		return Result.err(inflateFailure(st, "decompression failed"));
 	}
 	return Result.ok(msInflateDrain(s.handle, 0));
 }
@@ -88,16 +100,16 @@ export function inflateFeed(s: InflateStream, chunk: Bytes): Result<Buffer, Comp
 // Signal end of input, drain remaining output, and release the context.
 // The InflateStream must not be used after this call.
 export function inflateFinish(s: InflateStream): Result<Buffer, CompressError> {
+	if (s.finished) return Result.ok(Buffer.alloc(0));
 	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "inflate context allocation failed"));
 	}
-	if (s.finished) return Result.ok(Buffer.alloc(0));
 	s.finished = true;
 	const st = msInflateFeed(s.handle, "".asBytes(), 1);
 	if (st < 0) {
 		msInflateFree(s.handle);
 		s.handle = 0;
-		return Result.err(compressError(CompressErrorKind.Truncated, "stream ended before final block"));
+		return Result.err(inflateFailure(st, "decompression failed"));
 	}
 	const tail = msInflateDrain(s.handle, 0);
 	msInflateFree(s.handle);

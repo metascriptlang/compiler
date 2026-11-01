@@ -17,6 +17,7 @@
 #define MINIZ_NO_STDIO
 #define MINIZ_NO_TIME
 #include "vendor/miniz/miniz.h"
+#include "runtime/compress/crc32.h"
 
 /* ===== Internal Constants ===== */
 
@@ -34,6 +35,8 @@
 #define GZ_FEXTRA   0x04
 #define GZ_FNAME    0x08
 #define GZ_FCOMMENT 0x10
+
+typedef enum { GZ_STAGE_FIXED = 0, GZ_STAGE_XLEN, GZ_STAGE_EXTRA, GZ_STAGE_NAME, GZ_STAGE_COMMENT, GZ_STAGE_HCRC, GZ_STAGE_END } gzStage;
 
 /* ===== Context ===== */
 
@@ -58,15 +61,21 @@ struct msInflateCtx {
 
     /* gzip parser state */
     gzState gzState;
+    gzStage gzStage;
     uint32_t gzHdrBytesSeen;    /* bytes consumed of the fixed 10-byte gzip header */
     uint8_t  gzFlg;
+    uint32_t gzXlenSeen;
     uint32_t gzExtraRemain;     /* bytes left in FEXTRA (if present) */
-    int      gzSkipNameTerm;    /* true while eating FNAME bytes until 0x00 */
-    int      gzSkipCommentTerm;
-    uint32_t gzHcrcRemain;      /* 2 bytes if FHCRC set */
+    uint32_t gzHcrcSeen;
+    uint32_t gzHcrcGot;
+    int      gzHcrcBad;
+    uint32_t gzHdrCrc;
+    uint32_t gzCrc;             /* CRC32 of the current member's output */
+    uint64_t gzOutSize;
+    uint8_t  gzTrailer[8];
     uint32_t gzTrailerBytesSeen;
-
-    int streamEnded;
+    uint32_t gzMembers;         /* members fully decoded */
+    int      gzPadded;          /* a zero byte followed the last member: the rest is padding */
 };
 
 /* ===== Queue helpers ===== */
@@ -112,177 +121,194 @@ void msInflateFree(int64_t handle) {
     free(c);
 }
 
-/* Parse incoming bytes against the gzip header state machine.
- * Returns the number of bytes consumed; sets c->gzState to GZ_STATE_BODY
- * once the full header is past, or GZ_STATE_ERROR on invalid header. */
+static int gzStageWanted(const struct msInflateCtx* c, gzStage s) {
+    switch (s) {
+        case GZ_STAGE_XLEN: return (c->gzFlg & GZ_FEXTRA) != 0;
+        case GZ_STAGE_EXTRA: return (c->gzFlg & GZ_FEXTRA) != 0 && c->gzExtraRemain > 0;
+        case GZ_STAGE_NAME: return (c->gzFlg & GZ_FNAME) != 0;
+        case GZ_STAGE_COMMENT: return (c->gzFlg & GZ_FCOMMENT) != 0;
+        case GZ_STAGE_HCRC: return (c->gzFlg & GZ_FHCRC) != 0;
+        default: return 1;
+    }
+}
+
+static void gzAdvanceStage(struct msInflateCtx* c) {
+    do c->gzStage = (gzStage)(c->gzStage + 1); while (!gzStageWanted(c, c->gzStage));
+    if (c->gzStage == GZ_STAGE_END) c->gzState = GZ_STATE_BODY;
+}
+
+static void gzBeginMember(struct msInflateCtx* c) {
+    tinfl_init(&c->tinfl);
+    c->outNext = 0;
+    c->gzState = GZ_STATE_HEADER;
+    c->gzStage = GZ_STAGE_FIXED;
+    c->gzHdrBytesSeen = 0;
+    c->gzFlg = 0;
+    c->gzXlenSeen = 0;
+    c->gzExtraRemain = 0;
+    c->gzHcrcSeen = 0;
+    c->gzHcrcGot = 0;
+    c->gzHcrcBad = 0;
+    c->gzHdrCrc = 0;
+    c->gzCrc = 0;
+    c->gzOutSize = 0;
+    c->gzTrailerBytesSeen = 0;
+}
+
+static int32_t gzHeaderError(const struct msInflateCtx* c) {
+    return c->gzMembers > 0 ? MS_INFLATE_ERR_TRAILING : MS_INFLATE_ERR_INVALID;
+}
+
 static size_t gzConsumeHeader(struct msInflateCtx* c, const uint8_t* in, size_t inLen) {
     size_t i = 0;
     while (i < inLen && c->gzState == GZ_STATE_HEADER) {
-        uint8_t b = in[i];
+        uint8_t b = in[i++];
+        if (c->gzStage != GZ_STAGE_HCRC) c->gzHdrCrc = msCrc32Update(c->gzHdrCrc, &b, 1);
 
-        if (c->gzHdrBytesSeen < 10) {
-            /* Fixed 10-byte header:
-             * [0] = 0x1F, [1] = 0x8B, [2] = CM=8, [3] = FLG, [4..7] = MTIME, [8] = XFL, [9] = OS */
-            switch (c->gzHdrBytesSeen) {
-                case 0: if (b != 0x1F) { c->gzState = GZ_STATE_ERROR; return i; } break;
-                case 1: if (b != 0x8B) { c->gzState = GZ_STATE_ERROR; return i; } break;
-                case 2: if (b != 0x08) { c->gzState = GZ_STATE_ERROR; return i; } break; /* CM must be DEFLATE */
-                case 3: c->gzFlg = b; break;
-                default: break; /* MTIME/XFL/OS — ignored */
-            }
-            c->gzHdrBytesSeen++;
-            i++;
-
-            /* After finishing the fixed header, set up the optional extras state. */
-            if (c->gzHdrBytesSeen == 10) {
-                if (c->gzFlg & GZ_FEXTRA) c->gzExtraRemain = (uint32_t)-1; /* -1 = need XLEN */
-                if (c->gzFlg & GZ_FNAME) c->gzSkipNameTerm = 1;
-                if (c->gzFlg & GZ_FCOMMENT) c->gzSkipCommentTerm = 1;
-                if (c->gzFlg & GZ_FHCRC) c->gzHcrcRemain = 2;
-            }
-            continue;
+        switch (c->gzStage) {
+            case GZ_STAGE_FIXED:
+                if (c->gzHdrBytesSeen == 0 && b != 0x1F) { c->gzState = GZ_STATE_ERROR; return i; }
+                if (c->gzHdrBytesSeen == 1 && b != 0x8B) { c->gzState = GZ_STATE_ERROR; return i; }
+                if (c->gzHdrBytesSeen == 2 && b != 0x08) { c->gzState = GZ_STATE_ERROR; return i; }
+                if (c->gzHdrBytesSeen == 3) {
+                    c->gzFlg = b;
+                    if (b & 0xE0) { c->gzState = GZ_STATE_ERROR; return i; }
+                }
+                if (++c->gzHdrBytesSeen == 10) gzAdvanceStage(c);
+                break;
+            case GZ_STAGE_XLEN:
+                c->gzExtraRemain |= (uint32_t)b << (8 * c->gzXlenSeen);
+                if (++c->gzXlenSeen == 2) gzAdvanceStage(c);
+                break;
+            case GZ_STAGE_EXTRA:
+                if (--c->gzExtraRemain == 0) gzAdvanceStage(c);
+                break;
+            case GZ_STAGE_NAME:
+                if (b == 0) gzAdvanceStage(c);
+                break;
+            case GZ_STAGE_COMMENT:
+                if (b == 0) gzAdvanceStage(c);
+                break;
+            case GZ_STAGE_HCRC:
+                c->gzHcrcGot |= (uint32_t)b << (8 * c->gzHcrcSeen);
+                if (++c->gzHcrcSeen == 2) {
+                    if (c->gzHcrcGot != (c->gzHdrCrc & 0xFFFF)) { c->gzState = GZ_STATE_ERROR; c->gzHcrcBad = 1; return i; }
+                    gzAdvanceStage(c);
+                }
+                break;
+            case GZ_STAGE_END:
+                break;
         }
-
-        /* FEXTRA: first 2 bytes are little-endian XLEN, then XLEN bytes of data. */
-        if (c->gzFlg & GZ_FEXTRA) {
-            if (c->gzExtraRemain == (uint32_t)-1) {
-                c->gzExtraRemain = b;  /* low byte of XLEN */
-                c->gzFlg &= ~GZ_FEXTRA;
-                c->gzFlg |= 0x80;      /* reuse high bit as "XLEN low seen, need high" */
-                i++;
-                continue;
-            }
-            if (c->gzFlg & 0x80) {
-                c->gzExtraRemain |= ((uint32_t)b) << 8;
-                c->gzFlg &= ~0x80;
-                i++;
-                continue;
-            }
-            i++;
-            c->gzExtraRemain--;
-            if (c->gzExtraRemain == 0) c->gzFlg &= ~GZ_FEXTRA; /* done */
-            continue;
-        }
-
-        if (c->gzSkipNameTerm) {
-            i++;
-            if (b == 0x00) c->gzSkipNameTerm = 0;
-            continue;
-        }
-        if (c->gzSkipCommentTerm) {
-            i++;
-            if (b == 0x00) c->gzSkipCommentTerm = 0;
-            continue;
-        }
-        if (c->gzHcrcRemain) {
-            i++;
-            c->gzHcrcRemain--;
-            continue;
-        }
-
-        /* Header fully consumed — enter body. */
-        c->gzState = GZ_STATE_BODY;
-    }
-
-    /* If we reach here with exactly 10 header bytes and no optional fields needed,
-     * transition immediately to body. */
-    if (c->gzState == GZ_STATE_HEADER && c->gzHdrBytesSeen >= 10
-        && !(c->gzFlg & (GZ_FEXTRA | 0x80))
-        && !c->gzSkipNameTerm && !c->gzSkipCommentTerm && !c->gzHcrcRemain) {
-        c->gzState = GZ_STATE_BODY;
     }
     return i;
 }
 
-/* Consume the 8-byte gzip trailer (CRC32 + ISIZE). We don't verify — the
- * deflate stream's own integrity is checked by miniz, and the tarball sha256
- * provides end-to-end integrity. */
-static size_t gzConsumeTrailer(struct msInflateCtx* c, size_t inLen) {
-    size_t want = 8 - c->gzTrailerBytesSeen;
-    size_t take = inLen < want ? inLen : want;
-    c->gzTrailerBytesSeen += (uint32_t)take;
-    if (c->gzTrailerBytesSeen >= 8) c->gzState = GZ_STATE_DONE;
-    return take;
+static uint32_t le32(const uint8_t* p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-int32_t msInflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int32_t isLast) {
-    struct msInflateCtx* c = handleToCtx(handle);
-    if (!c) return -1;
-    if (c->gzState == GZ_STATE_ERROR) return -1;
+static int32_t gzConsumeTrailer(struct msInflateCtx* c, const uint8_t* in, size_t inLen, size_t* used) {
+    size_t want = 8 - c->gzTrailerBytesSeen;
+    size_t take = inLen < want ? inLen : want;
+    if (take > 0) memcpy(c->gzTrailer + c->gzTrailerBytesSeen, in, take);
+    c->gzTrailerBytesSeen += (uint32_t)take;
+    *used = take;
+    if (c->gzTrailerBytesSeen < 8) return 0;
+    if (le32(c->gzTrailer) != c->gzCrc) { c->gzState = GZ_STATE_ERROR; return MS_INFLATE_ERR_CHECKSUM; }
+    if (le32(c->gzTrailer + 4) != (uint32_t)c->gzOutSize) { c->gzState = GZ_STATE_ERROR; return MS_INFLATE_ERR_LENGTH; }
+    c->gzMembers++;
+    c->gzState = GZ_STATE_DONE;
+    return 0;
+}
 
-    if (inLenBytes <= 0) in = NULL;
-    size_t inLen = in ? (size_t)inLenBytes : 0;
-    size_t inPos = 0;
+static int32_t tinflError(tinfl_status st) {
+    if (st == TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS) return MS_INFLATE_ERR_TRUNCATED;
+    if (st == TINFL_STATUS_ADLER32_MISMATCH) return MS_INFLATE_ERR_CHECKSUM;
+    return MS_INFLATE_ERR_INVALID;
+}
 
-    /* 1. Eat gzip header bytes (only if format=gzip). */
-    if (c->gzState == GZ_STATE_HEADER) {
-        size_t consumed = gzConsumeHeader(c, in, inLen);
-        inPos += consumed;
-        if (c->gzState == GZ_STATE_ERROR) return -1;
-        if (c->gzState == GZ_STATE_HEADER) {
-            /* Still waiting for more header bytes. */
-            return isLast ? -1 : 0;
-        }
-    }
-
-    /* 2. Feed body bytes to tinfl until it's satisfied. */
-    uint32_t decompFlags = 0;
-    if (c->format == MS_COMPRESS_FORMAT_ZLIB) decompFlags |= TINFL_FLAG_PARSE_ZLIB_HEADER;
-    /* For gzip and raw deflate, no zlib header. */
-
-    while (c->gzState == GZ_STATE_BODY && (inPos < inLen || isLast)) {
-        size_t inBytes = inLen - inPos;
+static int32_t inflateBody(struct msInflateCtx* c, const uint8_t* in, size_t inLen, size_t* inPos, int32_t isLast) {
+    uint32_t decompFlags = c->format == MS_COMPRESS_FORMAT_ZLIB ? TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_COMPUTE_ADLER32 : 0;
+    while (c->gzState == GZ_STATE_BODY && (*inPos < inLen || isLast)) {
+        size_t inBytes = inLen - *inPos;
         size_t outBytes = MS_INFLATE_OUT_BUF_SIZE - c->outNext;
-
         uint32_t flags = decompFlags;
-        if (!isLast || inPos + inBytes < inLen) flags |= TINFL_FLAG_HAS_MORE_INPUT;
+        if (!isLast) flags |= TINFL_FLAG_HAS_MORE_INPUT;
 
         tinfl_status st = tinfl_decompress(
             &c->tinfl,
-            in ? in + inPos : NULL, &inBytes,
+            in ? in + *inPos : NULL, &inBytes,
             c->outBuf, c->outBuf + c->outNext, &outBytes,
             flags);
 
-        inPos += inBytes;
+        *inPos += inBytes;
         if (outBytes > 0) {
+            if (c->format == MS_COMPRESS_FORMAT_GZIP) {
+                c->gzCrc = msCrc32Update(c->gzCrc, c->outBuf + c->outNext, outBytes);
+                c->gzOutSize += outBytes;
+            }
             if (queuePush(c, c->outBuf + c->outNext, outBytes) < 0) {
                 c->gzState = GZ_STATE_ERROR;
-                return -1;
+                return MS_INFLATE_ERR_INVALID;
             }
             c->outNext = (c->outNext + outBytes) & (MS_INFLATE_OUT_BUF_SIZE - 1);
         }
 
         if (st < 0) {
             c->gzState = GZ_STATE_ERROR;
-            return -1;
+            return tinflError(st);
         }
         if (st == TINFL_STATUS_DONE) {
-            c->gzState = (c->format == MS_COMPRESS_FORMAT_GZIP) ? GZ_STATE_TRAILER : GZ_STATE_DONE;
-            break;
-        }
-        if (st == TINFL_STATUS_NEEDS_MORE_INPUT) {
-            if (isLast && inPos >= inLen) {
+            c->gzState = c->format == MS_COMPRESS_FORMAT_GZIP ? GZ_STATE_TRAILER : GZ_STATE_DONE;
+        } else if (st == TINFL_STATUS_NEEDS_MORE_INPUT) {
+            if (isLast && *inPos >= inLen) {
                 c->gzState = GZ_STATE_ERROR;
-                return -1;
+                return MS_INFLATE_ERR_TRUNCATED;
             }
             break;
         }
-        /* TINFL_STATUS_HAS_MORE_OUTPUT: loop and give tinfl another pass. */
+    }
+    return 0;
+}
+
+int32_t msInflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int32_t isLast) {
+    struct msInflateCtx* c = handleToCtx(handle);
+    if (!c) return MS_INFLATE_ERR_INVALID;
+    if (c->gzState == GZ_STATE_ERROR) return MS_INFLATE_ERR_INVALID;
+
+    if (inLenBytes <= 0) in = NULL;
+    size_t inLen = in ? (size_t)inLenBytes : 0;
+    size_t inPos = 0;
+
+    for (;;) {
+        int32_t err = 0;
+        if (c->gzState == GZ_STATE_DONE) {
+            if (c->format != MS_COMPRESS_FORMAT_GZIP || c->gzPadded || inPos >= inLen) break;
+            if (in[inPos] == 0) { c->gzPadded = 1; break; }
+            gzBeginMember(c);
+        } else if (c->gzState == GZ_STATE_HEADER) {
+            inPos += gzConsumeHeader(c, in ? in + inPos : NULL, inLen - inPos);
+            if (c->gzState == GZ_STATE_ERROR) return c->gzHcrcBad && c->gzMembers == 0 ? MS_INFLATE_ERR_CHECKSUM : gzHeaderError(c);
+            if (c->gzState == GZ_STATE_HEADER) break;
+        } else if (c->gzState == GZ_STATE_BODY) {
+            err = inflateBody(c, in, inLen, &inPos, isLast);
+            if (err < 0) return err;
+            if (c->gzState == GZ_STATE_BODY) break;
+        } else if (c->gzState == GZ_STATE_TRAILER) {
+            size_t used = 0;
+            err = gzConsumeTrailer(c, in ? in + inPos : NULL, inLen - inPos, &used);
+            inPos += used;
+            if (err < 0) return err;
+            if (c->gzState == GZ_STATE_TRAILER) break;
+        } else {
+            break;
+        }
     }
 
-    /* 3. Eat gzip trailer if applicable. */
-    if (c->gzState == GZ_STATE_TRAILER) {
-        size_t consumed = gzConsumeTrailer(c, inLen - inPos);
-        inPos += consumed;
-    }
-
-    if (c->gzState == GZ_STATE_DONE) {
-        c->streamEnded = 1;
-        return 1;
-    }
+    if (c->gzState == GZ_STATE_DONE) return 1;
     if (isLast) {
         c->gzState = GZ_STATE_ERROR;
-        return -1;
+        return MS_INFLATE_ERR_TRUNCATED;
     }
     return 0;
 }

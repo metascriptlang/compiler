@@ -35,8 +35,9 @@ typedef struct msModuleRecord {
 extern int32_t msModuleEvalDepth;
 extern void (*msModuleGuard)(msModuleRecord* record, void (*fn)(void));
 
-void msModuleTableRegister(msModuleRecord* records, int32_t count);
-msModuleRecord* msModuleBind(const char* name, void (*init)(void), void (*deinit)(void));
+/* Defined in std/core/promise/moduleEval.cms. */
+void msModuleTableRegister(void* records, int32_t count);
+void* msModuleBind(void* name, void* init, void* deinit);
 void* msModuleImport(msString name);
 void msModuleAsyncBody(void* fut);
 void msModuleDeinitLazy(void);

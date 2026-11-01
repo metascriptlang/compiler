@@ -1,9 +1,9 @@
 /*
  * MetaScript Ed25519 Runtime — Monocypher wrapper
  *
- * EdDSA signatures on Edwards25519 curve.
- * Key pair: 32-byte seed → 64-byte secret key + 32-byte public key.
- * Signature: 64 bytes, deterministic (no random nonce needed).
+ * EdDSA signatures on Edwards25519 curve. A key is an opaque handle to a native block that the
+ * owning class frees with msEd25519KeyFree (it wipes the block first). Signatures are 64 bytes and
+ * deterministic.
  */
 
 #ifndef MS_CRYPTO_ED25519_H
@@ -12,24 +12,19 @@
 #include "runtime/core/string.h"
 #include <stdint.h>
 
-/* Generate Ed25519 key pair from random seed.
- * Returns 64-byte secret key as binary string, or empty on failure.
- * Public key is derived from secret key via ed25519PublicKey(). */
-msString msEd25519Generate(void);
+/* Private keys. A handle is 0 on failure. The public half is derived from the seed once, here. */
+int64_t msEd25519KeyGenerate(void);
+int64_t msEd25519KeyFromSeed(msString seed);
+msString msEd25519KeySeed(int64_t key);
+msString msEd25519KeyPublicRaw(int64_t key);
+msString msEd25519KeySign(int64_t key, msString message);
 
-/* Extract 32-byte public key from 64-byte secret key. */
-msString msEd25519PublicKey(msString secretKey);
+/* Public keys: 32 raw bytes. Verify is strict. */
+int64_t msEd25519PublicFromRaw(msString raw);
+msString msEd25519PublicRaw(int64_t key);
+int32_t msEd25519PublicVerify(int64_t key, msString signature, msString message);
 
-/* Sign message with secret key. Returns 64-byte signature. */
-msString msEd25519Sign(msString secretKey, msString message);
-
-/* Verify signature against public key and message. */
-int32_t msEd25519Verify(msString signature, msString publicKey, msString message);
-
-/* Import secret key from 32-byte seed (expand to 64-byte internal format). */
-msString msEd25519FromSeed(msString seed);
-
-/* Export 32-byte seed from 64-byte secret key (first 32 bytes). */
-msString msEd25519ToSeed(msString secretKey);
+/* Wipes and frees a private or public key. */
+void msEd25519KeyFree(int64_t key);
 
 #endif /* MS_CRYPTO_ED25519_H */

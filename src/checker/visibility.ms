@@ -1,10 +1,10 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
-function unwrapDecl(node: Node | null): Node | null {
+export function unwrapDecl(node: Node | null): Node | null {
 	let n = node;
 	while (n != null) {
 		if (n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
@@ -381,6 +381,21 @@ export function refuseHookCall(ctx: CheckerContext, call: Node): void {
 	const why = viaSuper ? "the base class hook runs on its own after this one"
 		: "a call by hand would run it again — to end a value early, pass it with 'move' to a function that takes it";
 	addError(ctx, `'${hook}' ${HOOK_RUNS_ONCE}: ${why}`, call.location.line, call.location.column);
+}
+
+// The class at or above `objType` that declares `name` as an abstract method, or "".
+export function abstractMethodOwnerName(objType: Type, name: string): string {
+	let cls = declaringSymOf(objType);
+	while (cls != null && isClassLike(cls)) {
+		const decl = classDeclNodeOf(cls);
+		if (decl == null || decl.kind != NodeKind.ClassDecl) return "";
+		for (const member of (decl.data as ClassDeclData).classBody) {
+			const m = unwrapDecl(member);
+			if (m != null && m.kind == NodeKind.MethodDecl && (m.data as MethodDeclData).methodName == name) return m.flags.has(NodeFlag.Abstract) ? (decl.data as ClassDeclData).className : "";
+		}
+		cls = parentClassSymOf(cls);
+	}
+	return "";
 }
 
 export function refuseHookValue(ctx: CheckerContext, node: Node): void {

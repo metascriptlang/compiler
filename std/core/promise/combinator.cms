@@ -211,9 +211,9 @@ struct FirstEnv {
 	input: Ptr<void>;
 }
 
-function firstClaim(s: Ptr<FirstState>, fulfilled: boolean): boolean {
+@inline function firstClaim(s: Ptr<FirstState>, fulfilled: boolean): boolean {
 	const settled = (s.settled as Ptr<Word32>) as Ptr<void>;
-	if (fulfilled || s.any == 0) return msPromiseExchangeAcqRel(settled, 1) == 0;
+	if (fulfilled || s.any == 0) return msPromiseLoadAcquire(settled) == 0 && msPromiseExchangeAcqRel(settled, 1) == 0;
 	const rejected = msPromiseFetchAddAcqRel((s.rejected as Ptr<Word32>) as Ptr<void>, 1) + 1;
 	if (rejected == s.count && msPromiseExchangeAcqRel(settled, 1) == 0) msFutureFail(s.result, msPromiseAllRejectedError());
 	return false;
@@ -301,7 +301,7 @@ struct ThenEnv {
 	run: Ptr<void>;
 }
 
-function settleFromHandler(output: Ptr<void>): void {
+@inline function settleFromHandler(output: Ptr<void>): void {
 	if (msPromiseThrown()) msFutureFail(output, msPromiseTakeThrown());
 	else msPromiseCompleteEmpty(output);
 }
@@ -331,14 +331,14 @@ function thenCallback(raw: Ptr<void>): void {
 		const rejectedFn = e.rejectedFn;
 		if (rejectedFn == null) {
 			msFutureFailShared(e.output, msPromiseInputError(e.input));
-		} else {
-			msPromiseCallError(rejectedFn, e.rejectedEnv, msPromiseInputError(e.input));
-			settleFromHandler(e.output);
+			msPromiseEnvFree(raw);
+			return;
 		}
+		msPromiseCallError(rejectedFn, e.rejectedEnv, msPromiseInputError(e.input));
 	} else {
 		msPromiseInvokeRun(e.run, raw);
-		settleFromHandler(e.output);
 	}
+	settleFromHandler(e.output);
 	msPromiseEnvFree(raw);
 }
 

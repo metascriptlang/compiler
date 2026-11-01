@@ -46,8 +46,15 @@ int64_t msCryptoHmacInto(msString algorithm, msString key, msString data, void* 
  * Returns empty string on error. */
 msString msCryptoRandomBytes(int64_t size);
 
-/* Generate random integer in [min, max). Returns -1 on error. */
-double msCryptoRandomInt(double min, double max);
+/* Draw an integer in [min, max) into *out by rejection sampling. Returns 0, or a
+ * MS_RANDOM_INT_* code naming why nothing was drawn; the result never shares the
+ * status channel. Bounds are safe integers and max - min <= 2^48. */
+#define MS_RANDOM_INT_BAD_MIN 1
+#define MS_RANDOM_INT_BAD_MAX 2
+#define MS_RANDOM_INT_EMPTY_RANGE 3
+#define MS_RANDOM_INT_RANGE_TOO_WIDE 4
+#define MS_RANDOM_INT_SOURCE_FAILED 5
+int32_t msCryptoRandomIntInto(double min, double max, int64_t* out);
 
 /* Generate random UUID v4. Returns empty string on error. */
 msString msCryptoRandomUuid(void);
@@ -138,12 +145,17 @@ static inline void msCryptoHmacFreeHandle(int64_t ctx) {
 /* Check if a hash algorithm is supported. Returns 1/0. */
 double msCryptoIsHashSupported(msString algorithm);
 
+/* Digest size in bytes of a supported algorithm, 0 when unsupported. */
+double msCryptoHashSize(msString algorithm);
+
 /* ===== Encoding ===== */
 
 msString msCryptoToBase64(msString data);
 
 /* ===== Key Derivation ===== */
 
+/* An empty result means refused: iterations < 1, keyLength outside [1, cap], an unknown digest or an md failure. */
+#define MS_PBKDF2_MAX_KEY_LENGTH (1 << 20)
 msString msCryptoPbkdf2(msString password, msString salt,
                         int32_t iterations, int32_t keyLength, msString digest);
 msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,

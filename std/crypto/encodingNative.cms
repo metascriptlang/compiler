@@ -8,6 +8,10 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+// Hardware SHA-2 where the CPU has it, detected at run time; the vendor build_info reads
+// psa/crypto_config.h, not mbedtlsConfig.h, so these two are set on the command line.
+@passC("-DMBEDTLS_SHA256_USE_ARMV8_A_CRYPTO_IF_PRESENT");
+@passC("-DMBEDTLS_SHA512_USE_A64_CRYPTO_IF_PRESENT");
 @compile("runtime/crypto/hash.c");
 @compile("runtime/crypto/psaMdStubs.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
@@ -25,11 +29,6 @@ import { encodeHex, encodeBase64 } from "./encoding";
 extern function msCryptoHashInto(
 	algorithm: string, data: string, ref output: uint8[64], capacity: int64,
 ): int64;
-extern function msCryptoHmacInto(
-	algorithm: string, key: string, data: string, ref output: uint8[64], capacity: int64,
-): int64;
-extern function msCryptoHashFinalIntoHandle(ctx: int64, ref output: uint8[64], capacity: int64): int64;
-extern function msCryptoHmacFinalIntoHandle(ctx: int64, ref output: uint8[64], capacity: int64): int64;
 
 function encodeDigest(data: Readonly<Span<uint8>>, encoding: string): string {
 	return encoding == "base64" ? data.encodeBase64() : data.encodeHex();
@@ -44,42 +43,6 @@ export function encodedHash(algorithm: string, data: string, encoding: string): 
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	];
 	const length = msCryptoHashInto(algorithm, data, digest, 64);
-	if (length == 0) return "";
-	return encodeDigest(digest[0..length], encoding);
-}
-
-export function encodedHmac(algorithm: string, key: string, data: string, encoding: string): string {
-	let digest: uint8[64] = [
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	];
-	const length = msCryptoHmacInto(algorithm, key, data, digest, 64);
-	if (length == 0) return "";
-	return encodeDigest(digest[0..length], encoding);
-}
-
-export function encodedHashFinal(ctx: int64, encoding: string): string {
-	let digest: uint8[64] = [
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	];
-	const length = msCryptoHashFinalIntoHandle(ctx, digest, 64);
-	if (length == 0) return "";
-	return encodeDigest(digest[0..length], encoding);
-}
-
-export function encodedHmacFinal(ctx: int64, encoding: string): string {
-	let digest: uint8[64] = [
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	];
-	const length = msCryptoHmacFinalIntoHandle(ctx, digest, 64);
 	if (length == 0) return "";
 	return encodeDigest(digest[0..length], encoding);
 }

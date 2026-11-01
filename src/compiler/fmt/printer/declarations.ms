@@ -8,7 +8,7 @@ import {
 	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData, makeLoc,
 	VariableDeclData, DestructuringDeclData, DeclKind, ObjectPatternData,
 } from "../../../ast/node";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
 	docLine, docHardLine, docIfBreak, docNil, docJoin,
@@ -18,7 +18,7 @@ import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin,
 import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
@@ -62,13 +62,11 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 		if (options.singleQuote) q = "'";
 		const alias = d.importAliases[0];
 		const head = "import " + typeModifier(node) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
-		const tail = options.semi ? ";" : "";
-		return docGroup([docText(head + q + d.importSource + q + tail)]);
+		return docGroup([docText(head + q + d.importSource + q + ";")]);
 	}
 	const parts: Doc[] = [docText("import " + typeModifier(node))];
 	if (d.importNames.length > 0) {
 		const names = specifierDocs(d);
-		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
 		const commented = commentedSpecifiers(names, d.nameLocations, node);
 		if (commented != null) {
 			parts.push(commented);
@@ -88,9 +86,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 					nameParts.push(docGroup([names[i], docText(",")]));
 				} else {
 					nameParts.push(names[i]);
-					if (wantsTrailingComma(options, CommaContext.Collection)) {
-						nameParts.push(docIfBreak(docText(","), docNil()));
-					}
+					nameParts.push(docIfBreak(docText(","), docNil()));
 				}
 			}
 			parts.push(docGroup([
@@ -105,9 +101,7 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	let q = "\"";
 	if (options.singleQuote) { q = "'"; }
 	parts.push(docText(q + d.importSource + q));
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -133,8 +127,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	if (id.importNames.length == 1 && id.importNames[0] == "*") {
 		const alias = id.importAliases[0];
 		const head = "export " + typeModifier(inner) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
-		const tail = options.semi ? ";" : "";
-		return docGroup([docText(head + q + id.importSource + q + tail)]);
+		return docGroup([docText(head + q + id.importSource + q + ";")]);
 	}
 	const parts: Doc[] = [docText("export " + typeModifier(inner))];
 	if (id.importNames.length > 0) {
@@ -154,9 +147,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 					nameParts.push(docGroup([names[i], docText(",")]));
 				} else {
 					nameParts.push(names[i]);
-					if (wantsTrailingComma(options, CommaContext.Collection)) {
-						nameParts.push(docIfBreak(docText(","), docNil()));
-					}
+					nameParts.push(docIfBreak(docText(","), docNil()));
 				}
 			}
 			parts.push(docGroup([docText("{"), docIndent(nameParts), docLine(), docText("}")]));
@@ -164,7 +155,7 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 		parts.push(docText(" from "));
 	}
 	parts.push(docText(q + id.importSource + q));
-	if (options.semi) parts.push(docText(";"));
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -215,13 +206,11 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 			docHardLine(),
 			docText("}"),
 		];
-		if (options.semi) parts.push(docText(";"));
+		parts.push(docText(";"));
 		return docGroup(parts);
 	}
 	const parts: Doc[] = [typeAliasAssignment(head, distinct, d, node.typeExpr, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -269,9 +258,9 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			starts.push(accessors[accessorIdx].location.line);
 			accessorIdx = accessorIdx + 1;
 		}
-		let field = d.interfaceFields[i];
-		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field);
-		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, field, d.interfaceFieldTypes[i]);
+		let field = i < fieldLocs.length ? writtenMemberName(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i], options.singleQuote) : d.interfaceFields[i];
+		const optional = i < fieldLocs.length && writtenOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i]);
+		const keptType = optional && writtenTypeAfterOptional(options.source, fieldLocs[i].line, fieldLocs[i].column, d.interfaceFields[i], d.interfaceFieldTypes[i]);
 		if (optional) field = field + "?";
 		const fieldTypeText = d.interfaceFieldTypes[i] != "" ? (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]) : "";
 		if (d.interfaceFieldTypes[i] != "") field = field + ": ";
@@ -410,9 +399,7 @@ export function printExternDecl(node: Node, options: FormatOptions): Doc {
 	if (d.nativeName != "") {
 		parts.push(docText(nativeFrom(d.nativeName)));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -499,7 +486,8 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (node.flags.has(NodeFlag.AutoAccessor)) parts.push(docText("accessor "));
 	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
 	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
-	parts.push(docText(optional ? d.propName + "?" : d.propName));
+	const written = writtenMemberName(options.source, node.location.line, node.location.column, d.propName, options.singleQuote);
+	parts.push(docText(optional ? written + "?" : written));
 	if (d.propType != "") {
 		parts.push(docText(": "));
 		parts.push(printTypeAnnotation(node.typeExpr, optional && !keptType ? unoptionalized(d.propType) : d.propType, options));
@@ -629,7 +617,7 @@ function declarationList(keyword: string, node: Node, options: FormatOptions): D
 		}
 		parts.push(docIndent(list));
 	}
-	if (options.semi) parts.push(docText(";"));
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 

@@ -7,7 +7,7 @@ import { ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBal
 import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, liftParamModifiers } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, getLastParamProps, prependParamPatterns, isIdentLike, isPropertyName, isDeclaredMemberName, liftParamModifiers } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
 
@@ -911,19 +911,19 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		let visibility = "";
 		const modifier = current(state);
 		if ((modifier.kind == TokenKind.Private || modifier.kind == TokenKind.Public || modifier.kind == TokenKind.Protected)
-				&& isPropertyName(peek(state, 1))) {
+				&& isDeclaredMemberName(peek(state, 1))) {
 			if (modifier.kind != TokenKind.Private || nodeKind != NodeKind.StructDecl) {
 				return Result.err(`'${modifier.value}' cannot modify a field of ${keyword} at line ${modifier.line}: a ${keyword} field is visible wherever its type is${nodeKind == NodeKind.StructDecl ? ", unless it is marked 'private'" : ""}`);
 			}
 			visibility = "private";
 			advance(state);
 		}
-		if (current(state).kind == TokenKind.Readonly && isPropertyName(peek(state, 1))) {
+		if (current(state).kind == TokenKind.Readonly && isDeclaredMemberName(peek(state, 1))) {
 			visibility = visibility == "" ? "readonly" : `${visibility} readonly`;
 			advance(state);
 		}
 		const field = current(state);
-		if (!isPropertyName(field)) {
+		if (!isDeclaredMemberName(field)) {
 			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
 		}
 		fieldVisibility.push(visibility);
@@ -1325,7 +1325,7 @@ function parseClassMember(state: ParserState, isExtern: boolean = false): NodeRe
 
 	// Regular member: name followed by ( for method, or : / = / ; for property
 	const nameToken = current(state);
-	if (!isPropertyName(nameToken)) {
+	if (!isDeclaredMemberName(nameToken)) {
 		return Result.err(`Expected member name in class at line ${nameToken.line}`);
 	}
 	advance(state);
@@ -2242,6 +2242,12 @@ test "enum" { assert programOk("enum Color { Red, Green, Blue }"); }
 
 test "enum with values" { assert programOk("enum Status { Active = 1, Inactive = 0 }"); }
 // Interface — distinct paths: simple, optional, extends
+test "a quoted member name parses in an interface, a struct and a class" {
+	assert programOk("interface P { \"data-id\": string; readonly \"aria-label\"?: string; }");
+	assert programOk("struct K { \"http-equiv\": string; }");
+	assert programOk("class C { \"data-probe\": string = \"p\"; static \"s-t\": int32 = 1; }");
+}
+
 test "interface" { assert programOk("interface Point { x: number; y: number; }"); }
 
 test "interface optional" { assert programOk("interface Opt { value?: number; }"); }

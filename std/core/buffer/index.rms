@@ -63,6 +63,11 @@ export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 	return buf;
 }
 
+export function slice(this buf: Buffer, start: number = 0, end: number = 9007199254740991): Buffer {
+	const bytes: Readonly<Span<uint8>> = buf;
+	return bytes.slice(start, end) as Buffer;
+}
+
 export function copy(this typeof Buffer, value: Buffer): Buffer {
 	return copyOf(value);
 }

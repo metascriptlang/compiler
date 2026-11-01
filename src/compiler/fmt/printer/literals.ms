@@ -143,7 +143,6 @@ function normalizeKeyToken(raw: string, singleQuote: boolean): string {
 }
 
 // Extract the raw string token from source text using node position.
-// Prettier pattern: work from raw source, never re-escape parsed values.
 // Returns the full token including quotes (e.g., `"hello \"world\""`), or "" if unavailable.
 //
 // Defensive: bails out for synthetic StringLiteral nodes whose position
@@ -152,7 +151,7 @@ function normalizeKeyToken(raw: string, singleQuote: boolean): string {
 // would scoop up the rest of the source. Heuristic: a real string-token
 // boundary is preceded by whitespace, punctuation, or start-of-file.
 // If the preceding character is `}` (close of `${...}` interpolation) or
-// `\`` itself, we're inside a template — fall through to re-escape.
+// `\`` itself, we're inside a template.
 function extractRawStringToken(source: string, line: int32, col: int32): string {
 	const pos = sourceOffset(source, line, col);
 	if (pos < 0) return "";
@@ -334,17 +333,28 @@ export function unoptionalized(type: string): string {
 	return type;
 }
 
+function writtenNameEnd(source: string, start: int32, name: string): int32 {
+	const ch = source.byteAt(start);
+	return ch == "\"".code || ch == "'".code ? skipQuoted(source, start) : start + name.byteLength;
+}
+
+// A declared member name as written: a quoted name keeps its quotes unless it is a plain identifier.
+export function writtenMemberName(source: string, line: int32, column: int32, name: string, singleQuote: boolean): string {
+	const key = rawObjectKeyAt(source, line, column, singleQuote);
+	return key == "" ? name : key;
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
-	const pos = skipBlanks(source, start + name.byteLength);
+	const pos = skipBlanks(source, writtenNameEnd(source, start, name));
 	return pos < source.byteLength && source.byteAt(pos) == "?".code;
 }
 
 export function writtenTypeAfterOptional(source: string, line: int32, column: int32, name: string, type: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
-	let pos = skipBlanks(source, start + name.byteLength);
+	let pos = skipBlanks(source, writtenNameEnd(source, start, name));
 	if (pos >= source.byteLength || source.byteAt(pos) != "?".code) return false;
 	pos = skipBlanks(source, pos + 1);
 	if (pos >= source.byteLength || source.byteAt(pos) != ":".code) return false;
@@ -369,6 +379,44 @@ function writtenSpacingAside(source: string, from: int32, text: string): boolean
 		i = i + 1;
 	}
 	return true;
+}
+
+export function codeByteAfter(line: int32, column: int32): int32 {
+	let pos = sourceOffset(indexed, line, column - 1);
+	if (pos < 0) return -1;
+	while (pos < indexed.byteLength) {
+		const ch = indexed.byteAt(pos);
+		const next = pos + 1 < indexed.byteLength ? indexed.byteAt(pos + 1) : 0;
+		if (ch == " ".code || ch == "\t".code || ch == "\r".code || ch == "\n".code) pos = pos + 1;
+		else if (ch == "/".code && next == "/".code) {
+			while (pos < indexed.byteLength && indexed.byteAt(pos) != "\n".code) pos = pos + 1;
+		} else if (ch == "/".code && next == "*".code) {
+			pos = pos + 2;
+			while (pos + 1 < indexed.byteLength && !(indexed.byteAt(pos) == "*".code && indexed.byteAt(pos + 1) == "/".code)) pos = pos + 1;
+			pos = pos + 2;
+		} else return ch;
+	}
+	return -1;
+}
+
+export function isBeforeKeyColon(source: string, key: SourceLocation, line: int32, column: int32): boolean {
+	let pos = sourceOffset(source, key.line, key.column - 1);
+	const at = sourceOffset(source, line, column - 1);
+	if (pos < 0 || at <= pos) return false;
+	while (pos < source.byteLength) {
+		const ch = source.byteAt(pos);
+		const next = pos + 1 < source.byteLength ? source.byteAt(pos + 1) : 0;
+		if (ch == ":".code) return pos > at;
+		if (ch == "\"".code || ch == "'".code) pos = skipQuoted(source, pos);
+		else if (ch == "/".code && next == "/".code) {
+			while (pos < source.byteLength && source.byteAt(pos) != "\n".code) pos = pos + 1;
+		} else if (ch == "/".code && next == "*".code) {
+			pos = pos + 2;
+			while (pos + 1 < source.byteLength && !(source.byteAt(pos) == "*".code && source.byteAt(pos + 1) == "/".code)) pos = pos + 1;
+			pos = pos + 2;
+		} else pos = pos + 1;
+	}
+	return false;
 }
 
 export function rawObjectKeyAt(source: string, line: int32, column: int32, singleQuote: boolean = false): string {
@@ -407,15 +455,11 @@ export function printStringLiteral(node: Node, options: FormatOptions): Doc {
 	const d = node.data as StringLiteralData;
 	const template = rawTemplateAt(node, options);
 	if (template != "") return docText(template);
-	let q = "\"";
-	if (options.singleQuote) { q = "'"; }
-	// Prettier pattern: extract raw token from source (preserves original escapes exactly).
-	// Only works for real parsed nodes with valid source positions, not synthetic nodes.
 	if (options.source != "" && node.location.line > 0) {
 		const raw = extractRawStringToken(options.source, node.location.line, node.location.column - 1);
 		if (raw != "") return docText(normalizeStringToken(raw, options.singleQuote));
 	}
-	// Fall back to re-escaping (synthetic nodes from transforms, template desugaring)
+	const q = options.singleQuote ? "'" : "\"";
 	return docText(q + escapeString(d.value, q.byteAt(0)) + q);
 }
 

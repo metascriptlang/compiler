@@ -1,0 +1,1 @@
+int alloiumAliasValue(void);

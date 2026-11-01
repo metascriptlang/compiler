@@ -6,12 +6,12 @@ import {
 	Node, NodeKind, IdentifierData, MemberExprData, TypeUnionData, TypeIntersectionData, TypeArrayData,
 	TypeGenericData, TypeFunctionData, TypeObjectData, makeLoc,
 } from "../../../ast/node";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import {
 	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docBreakParent, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
 } from "../doc";
 import { commentsWithin } from "./commentDocs";
-import { sourceSpan, sourceByteAt, blankLineBefore, normalizeStringToken } from "./literals";
+import { sourceSpan, sourceByteAt, blankLineBefore, normalizeStringToken, writtenMemberName } from "./literals";
 
 enum TypeParent {
 	Annotation,
@@ -183,7 +183,7 @@ function printFunction(node: Node, options: FormatOptions): Doc {
 		items.push(d.typExprParamNames[i] == "" ? type : docGroup([docText(d.typExprParamNames[i] + ": "), type]));
 	}
 	return docGroup([
-		printList(items, "(", ")", wantsTrailingComma(options, CommaContext.Params)),
+		printList(items, "(", ")", true),
 		docText(" => "),
 		printType(d.typExprReturn, TypeParent.Annotation, options),
 	]);
@@ -217,7 +217,7 @@ function printObject(node: Node, options: FormatOptions): Doc {
 			if (i < locs.length && blankLineBefore(locs[i].line)) body.push(docSoftLine());
 		}
 		const optional = d.typExprOptionalFields.includes(d.typExprFieldNames[i]) ? "?" : "";
-		const field = docGroup([docText(d.typExprFieldNames[i] + optional + ": "), printType(d.typExprFieldTypes[i], TypeParent.Annotation, options)]);
+		const field = docGroup([docText((i < locs.length ? writtenMemberName(options.source, locs[i].line, locs[i].column, d.typExprFieldNames[i], options.singleQuote) : d.typExprFieldNames[i]) + optional + ": "), printType(d.typExprFieldTypes[i], TypeParent.Annotation, options)]);
 		body.push(field);
 		body.push(i < count - 1 ? docText(";") : docIfBreak(docText(";"), docNil()));
 	}

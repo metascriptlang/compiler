@@ -76,6 +76,17 @@ export function find<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T |
 	return null;
 }
 
+@inline
+export function findLast<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T | null {
+	for (let i = arr.length - 1; i >= 0; i -= 1) {
+		if (i < arr.length) {
+			const x = arr[i];
+			if (fn(x, i)) return x;
+		}
+	}
+	return null;
+}
+
 export function spliceStart(start: number, n: int64): int64 {
 	if (start != start || start <= -(n as number)) return 0;
 	if (start >= (n as number)) return n;

@@ -269,6 +269,7 @@ static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
 	st->len = len;
 	st->off = 0;
 	sqe->opcode = IORING_OP_SEND;
+	sqe->msg_flags = MSG_NOSIGNAL;
 	sqe->fd = fd;
 	sqe->addr = (uint64_t)(uintptr_t)st->p;
 	sqe->len = (uint32_t)len;
@@ -333,6 +334,7 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 				if (sqe) {
 					st->off += res;
 					sqe->opcode = IORING_OP_SEND;
+					sqe->msg_flags = MSG_NOSIGNAL;
 					sqe->fd = _uringEvtBuf[count].fd;
 					sqe->addr = (uint64_t)(uintptr_t)(st->p + st->off);
 					sqe->len = (uint32_t)(st->len - st->off);

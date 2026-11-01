@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
+import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
 import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -1060,6 +1060,9 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 
 	const instType = sym.symbolType != null ? substituteBound(sym.symbolType, dedup) : sym.symbolType;
 	cloned.nodeType = instType;
+	const instancePhrase = "'" + sym.name + displayTypeArgs(dedup.types) + "'";
+	const boxed = boxedCountedReference(instType);
+	if (boxed != null) addError(ctx, boxedReferenceRefusal(instancePhrase, boundParamName(dedup.params, dedup.types, boxed), boxed), callLoc.line, callLoc.column);
 
 	// Create and register symbol in root scope.
 	// Instance is OWNED by the generic's defining module (reference parity:
@@ -1105,6 +1108,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		}
 		const extPreCount = injectCallerExtensions(bodyCtx, ctx);
 		const errBefore = bodyCtx.errors.length;
+		bodyCtx.instantiationSites.push(instancePhrase + " instantiated at " + callLoc.line.toString() + ":" + callLoc.column.toString());
 		// Strip stale HiddenDeref/resolvedSym from the clone so re-check regenerates them
 		// against concrete types — a class-method body already checked once (this: Class<T>
 		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
@@ -1149,6 +1153,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		}
 		bodyCtx.inferredReturn = savedReturn;
 		bodyCtx.inferredReturnStmts = savedReturnStmts;
+		bodyCtx.instantiationSites.pop();
 		if (bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + sym.name + displayTypeArgs(dedup.types) + "': " + bodyCtx.errors[errBefore].message, callLoc.line, callLoc.column);
 			while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();

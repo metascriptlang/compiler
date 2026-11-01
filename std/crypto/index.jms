@@ -1,0 +1,361 @@
+/**
+ * Crypto, JavaScript backend: the same surface as index.cms.
+ *
+ * Asynchronous digests, HMAC, PBKDF2 and HKDF run on `globalThis.crypto.subtle` (browsers on secure contexts,
+ * Node 19 and later); a missing `crypto.subtle` is a `CryptoError`, never a throw. The `*Sync` forms, the
+ * streaming `createHash`/`createHmac` and md5 and sha224 (which WebCrypto lacks) run the portable code in
+ * `std/crypto/pure`. Random bytes come from `crypto.getRandomValues`.
+ *
+ * Absent on this backend: ripemd160 and the sha3 family (`digestSync` and `digest` return an
+ * `InvalidAlgorithm` error for them), `init`/`cleanup` do nothing, and no module besides
+ * `std/crypto`, `std/crypto/ed25519` and `std/crypto/x25519` has a JS tier yet.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "../core/encoding";
+import { bytesOf } from "./pure/bytes";
+import { HashState } from "./pure/state";
+import { hashKind, newHash, updateHash, finishHash, hashOfReusing } from "./pure/hash";
+import { HmacState, newHmac, updateHmac, finishHmac, hmacOf, pbkdf2Of, hkdfOf } from "./pure/hmac";
+import { CryptoError, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidAlgorithm, invalidInput, invalidEncoding } from "./errors";
+export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
+
+export type HashAlgorithm =
+	| "sha256" | "sha512" | "sha384" | "sha224"
+	| "sha1" | "md5" | "ripemd160"
+	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
+
+@emit(`const msWcNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+function msWcSubtle() {
+	const c = globalThis.crypto;
+	return c && c.subtle ? c.subtle : null;
+}
+async function msWcRun(job) {
+	const subtle = msWcSubtle();
+	if (!subtle) return { value: [], error: msWcNoSubtle };
+	try {
+		return { value: Array.from(new Uint8Array(await job(subtle))), error: "" };
+	} catch (e) {
+		return { value: [], error: String(e && e.message ? e.message : e) };
+	}
+}
+function msWcDigest(name, data) {
+	return msWcRun((s) => s.digest(name, Uint8Array.from(data)));
+}
+function msWcHmac(name, key, data) {
+	return msWcRun(async (s) => {
+		const k = await s.importKey("raw", Uint8Array.from(key), { name: "HMAC", hash: name }, false, ["sign"]);
+		return s.sign("HMAC", k, Uint8Array.from(data));
+	});
+}
+function msWcPbkdf2(name, password, salt, iterations, length) {
+	return msWcRun(async (s) => {
+		const k = await s.importKey("raw", Uint8Array.from(password), "PBKDF2", false, ["deriveBits"]);
+		return s.deriveBits({ name: "PBKDF2", hash: name, salt: Uint8Array.from(salt), iterations }, k, length * 8);
+	});
+}
+function msWcHkdf(name, ikm, salt, info, length) {
+	return msWcRun(async (s) => {
+		const k = await s.importKey("raw", Uint8Array.from(ikm), "HKDF", false, ["deriveBits"]);
+		return s.deriveBits({ name: "HKDF", hash: name, salt: Uint8Array.from(salt), info: Uint8Array.from(info) }, k, length * 8);
+	});
+}
+function msWcRandom(size) {
+	const c = globalThis.crypto;
+	if (!c || typeof c.getRandomValues !== "function") return { value: [], error: "crypto.getRandomValues is unavailable" };
+	const out = new Uint8Array(size);
+	for (let at = 0; at < size; at += 65536) c.getRandomValues(out.subarray(at, Math.min(at + 65536, size)));
+	return { value: Array.from(out), error: "" };
+}
+function msWcUuid() {
+	const c = globalThis.crypto;
+	return c && typeof c.randomUUID === "function" ? c.randomUUID() : "";
+}`);
+
+interface Settled {
+	value: Buffer;
+	error: string;
+}
+
+extern function wcDigest(name: string, data: Buffer): Promise<Settled> from "msWcDigest(#, #)";
+extern function wcHmac(name: string, key: Buffer, data: Buffer): Promise<Settled> from "msWcHmac(#, #, #)";
+extern function wcPbkdf2(name: string, password: Buffer, salt: Buffer, iterations: number, length: number): Promise<Settled> from "msWcPbkdf2(#, #, #, #, #)";
+extern function wcHkdf(name: string, ikm: Buffer, salt: Buffer, info: Buffer, length: number): Promise<Settled> from "msWcHkdf(#, #, #, #, #)";
+extern function wcRandom(size: number): Settled from "msWcRandom(#)";
+extern function wcUuid(): string from "msWcUuid()";
+
+/** The WebCrypto name of a hash it implements, or "" for the ones the portable code runs (md5, sha224). */
+function subtleName(algorithm: string): string {
+	if (algorithm == "sha256") return "SHA-256";
+	if (algorithm == "sha384") return "SHA-384";
+	if (algorithm == "sha512") return "SHA-512";
+	if (algorithm == "sha1") return "SHA-1";
+	return "";
+}
+
+function hashSize(kind: int32): int32 {
+	return newHash(kind).outputSize;
+}
+
+export function init(): boolean {
+	return true;
+}
+
+export function cleanup(): void {}
+
+// ===== Hash Functions =====
+
+export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
+	const kind = hashKind(algorithm);
+	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
+	return Result.ok(hashOfReusing(kind, bytesOf(data)) as Buffer);
+}
+
+export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const name = subtleName(algorithm);
+	if (name == "") return digestSync(algorithm, data);
+	const done = await wcDigest(name, bytesOf(data));
+	if (done.error != "") return Result.err(hashFailed(algorithm, done.error));
+	return Result.ok(done.value);
+}
+
+export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+
+export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha256", data); }
+export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha384", data); }
+export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha512", data); }
+export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha1", data); }
+export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("md5", data); }
+
+// ===== HMAC Functions =====
+
+export function hmacSync(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
+	const kind = hashKind(algorithm);
+	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
+	return Result.ok(hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer);
+}
+
+export async function hmac(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	const name = subtleName(algorithm);
+	const keyBytes = bytesOf(key);
+	// WebCrypto refuses an empty HMAC key, which HMAC itself allows.
+	if (name == "" || keyBytes.length == 0) return hmacSync(algorithm, key, data);
+	const done = await wcHmac(name, keyBytes, bytesOf(data));
+	if (done.error != "") return Result.err(hmacFailed(algorithm, done.error));
+	return Result.ok(done.value);
+}
+
+// ===== Random Functions =====
+
+export function randomBytesSync(size: number): Result<Buffer, CryptoError> {
+	if (!(size >= 0) || Math.floor(size) != size) return Result.err(randomFailed("Random byte generation failed"));
+	const drawn = wcRandom(size);
+	if (drawn.error != "") return Result.err(randomFailed(drawn.error));
+	return Result.ok(drawn.value);
+}
+
+export async function randomBytes(size: number): Promise<Result<Buffer, CryptoError>> {
+	return randomBytesSync(size);
+}
+
+function isSafeInteger(value: number): boolean {
+	return Math.floor(value) == value && Math.abs(value) <= 9007199254740991;
+}
+
+export function randomIntSync(min: number, max: number): Result<number, CryptoError> {
+	if (!isSafeInteger(min)) return Result.err(invalidInput("random", "min must be a safe integer"));
+	if (!isSafeInteger(max)) return Result.err(invalidInput("random", "max must be a safe integer"));
+	if (!(max > min)) return Result.err(invalidInput("random", "max must be greater than min"));
+	const range = max - min;
+	if (range >= 281474976710656) return Result.err(invalidInput("random", "max - min must be less than 2^48"));
+	// Node's rejection sampling: 48 random bits, redrawn above the largest multiple of range.
+	const limit = 281474976710656 - (281474976710656 % range);
+	while (true) {
+		const drawn = randomBytesSync(6);
+		if (!drawn.ok) return Result.err(drawn.error);
+		let x: number = 0;
+		for (let i = 0; i < 6; i++) x = x * 256 + (drawn.value[i] as number);
+		if (x < limit) return Result.ok(min + (x % range));
+	}
+}
+
+export async function randomInt(min: number, max: number): Promise<Result<number, CryptoError>> {
+	return randomIntSync(min, max);
+}
+
+export function randomUUIDSync(): Result<string, CryptoError> {
+	const native = wcUuid();
+	if (native != "") return Result.ok(native);
+	const drawn = randomBytesSync(16);
+	if (!drawn.ok) return Result.err(drawn.error);
+	const b = drawn.value;
+	b[6] = (b[6] & 15) | 64;
+	b[8] = (b[8] & 63) | 128;
+	const hex = encodeHex(b);
+	return Result.ok(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
+}
+
+export async function randomUUID(): Promise<Result<string, CryptoError>> {
+	return randomUUIDSync();
+}
+
+// ===== Timing-Safe Comparison =====
+
+export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
+	const x = bytesOf(a);
+	const y = bytesOf(b);
+	if (x.length != y.length) return false;
+	let diff: uint8 = 0;
+	for (let i = 0; i < x.length; i++) diff = diff | (x[i] ^ y[i]);
+	return diff == 0;
+}
+
+// ===== Streaming Hash =====
+
+export class Hasher {
+	_state: HashState;
+
+	static create(algorithm: HashAlgorithm): Hasher {
+		const kind = hashKind(algorithm);
+		if (kind < 0) throw new Error(`createHash: could not start "${algorithm}"`);
+		return { _state: newHash(kind) };
+	}
+
+	update(data: Bytes): Hasher {
+		if (!this._state.finished) updateHash(this._state, bytesOf(data));
+		return this;
+	}
+
+	digest(): Buffer {
+		if (this._state.finished) return new Array<uint8>(0) as Buffer;
+		return finishHash(this._state) as Buffer;
+	}
+}
+
+// ===== Streaming HMAC =====
+
+export class Hmac {
+	_state: HmacState;
+	_done: boolean;
+
+	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
+		const kind = hashKind(algorithm);
+		if (kind < 0) throw new Error(`createHmac: could not start "${algorithm}"`);
+		return { _state: newHmac(kind, bytesOf(key)), _done: false };
+	}
+
+	update(data: Bytes): Hmac {
+		if (!this._done) updateHmac(this._state, bytesOf(data));
+		return this;
+	}
+
+	digest(): Buffer {
+		if (this._done) return new Array<uint8>(0) as Buffer;
+		this._done = true;
+		return finishHmac(this._state) as Buffer;
+	}
+}
+
+// ===== Factory Functions =====
+
+export function createHash(algorithm: HashAlgorithm): Hasher {
+	return Hasher.create(algorithm);
+}
+
+export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
+	return Hmac.create(algorithm, key);
+}
+
+// ===== Utility =====
+
+export function getHashes(): HashAlgorithm[] {
+	return ["sha256", "sha512", "sha384", "sha224", "sha1", "md5"];
+}
+
+export function isHashSupported(algorithm: string): boolean {
+	return hashKind(algorithm) >= 0;
+}
+
+// ===== Encoding =====
+
+export function toHex(data: Bytes): string {
+	if (typeof data == "string") return data.asBytes().encodeHex();
+	return data.encodeHex();
+}
+
+export function fromHex(hex: string): Result<Buffer, CryptoError> {
+	if (hex.byteLength == 0) return Result.ok(new Array<uint8>(0) as Buffer);
+	const raw = hex.decodeHex();
+	if (raw.length == 0) return Result.err(invalidEncoding("fromHex", "not an even-length hexadecimal string"));
+	return Result.ok(raw as Buffer);
+}
+
+export function toBase64(data: Bytes): string {
+	if (typeof data == "string") return data.asBytes().encodeBase64();
+	return data.encodeBase64();
+}
+
+export function fromBase64(b64: string): Result<Buffer, CryptoError> {
+	if (b64.byteLength == 0) return Result.ok(new Array<uint8>(0) as Buffer);
+	const raw = b64.decodeBase64();
+	if (raw.length == 0) return Result.err(invalidEncoding("fromBase64", "not canonical padded base64"));
+	return Result.ok(raw as Buffer);
+}
+
+// ===== Key Derivation =====
+
+function pbkdf2Invalid(iterations: int32, keyLength: int32): CryptoError | null {
+	if (iterations < 1) return invalidInput("pbkdf2", "iterations must be at least 1");
+	if (keyLength < 1 || keyLength > 1048576) return invalidInput("pbkdf2", "keyLength must be between 1 and 1048576");
+	return null;
+}
+
+export function pbkdf2Sync(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
+	const invalid = pbkdf2Invalid(iterations, keyLength);
+	if (invalid != null) return Result.err(invalid);
+	const kind = hashKind(digest);
+	if (kind < 0) return Result.err(invalidAlgorithm(digest));
+	return Result.ok(pbkdf2Of(kind, bytesOf(password), bytesOf(salt), iterations, keyLength) as Buffer);
+}
+
+export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
+	const name = subtleName(digest);
+	if (name == "") return pbkdf2Sync(password, salt, iterations, keyLength, digest);
+	const invalid = pbkdf2Invalid(iterations, keyLength);
+	if (invalid != null) return Result.err(invalid);
+	const done = await wcPbkdf2(name, bytesOf(password), bytesOf(salt), iterations, keyLength);
+	if (done.error != "") return Result.err(keyDerivationFailed("pbkdf2", done.error));
+	return Result.ok(done.value);
+}
+
+function hkdfInvalid(algorithm: HashAlgorithm, length: int32): CryptoError | null {
+	if (length < 1) return invalidInput("hkdf", "length must be at least 1");
+	const kind = hashKind(algorithm);
+	if (kind < 0) return invalidAlgorithm(algorithm);
+	const maxLength = 255 * hashSize(kind);
+	if (length > maxLength) return invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`);
+	return null;
+}
+
+export function hkdfSync(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
+	const invalid = hkdfInvalid(algorithm, length);
+	if (invalid != null) return Result.err(invalid);
+	return Result.ok(hkdfOf(hashKind(algorithm), bytesOf(ikm), bytesOf(salt), bytesOf(info), length) as Buffer);
+}
+
+export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> {
+	const name = subtleName(algorithm);
+	const ikmBytes = bytesOf(ikm);
+	// WebCrypto refuses empty HKDF input keying material, which RFC 5869 allows.
+	if (name == "" || ikmBytes.length == 0) return hkdfSync(algorithm, ikm, salt, info, length);
+	const invalid = hkdfInvalid(algorithm, length);
+	if (invalid != null) return Result.err(invalid);
+	const done = await wcHkdf(name, ikmBytes, bytesOf(salt), bytesOf(info), length);
+	if (done.error != "") return Result.err(keyDerivationFailed("hkdf", done.error));
+	return Result.ok(done.value);
+}

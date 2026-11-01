@@ -296,7 +296,7 @@ export function handleDidSave(params: string): string {
 
 export const METHOD_NOT_FOUND: int32 = -32601;
 
-export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
+export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache, candidates: string[] | null = null): string {
 	return match (method) {
 		"initialize" => handleInitialize(id),
 		"shutdown" => handleShutdown(id),
@@ -312,9 +312,9 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/documentSymbol" => handleDocumentSymbol(id, params, db),
 		"textDocument/signatureHelp" => handleSignatureHelp(id, params, db),
 		"textDocument/inlayHint" => handleInlayHint(id, params, db),
-		"textDocument/references" => handleReferences(id, params, db),
+		"textDocument/references" => handleReferences(id, params, db, candidates),
 		"textDocument/documentHighlight" => handleDocumentHighlight(id, params, db),
-		"textDocument/rename" => handleRename(id, params, db),
+		"textDocument/rename" => handleRename(id, params, db, candidates),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
 		"textDocument/rangeFormatting" => handleRangeFormatting(id, params, db),
@@ -465,16 +465,23 @@ test "unknown doc returns empty" {
 	assert lspGetNumberField(r, "id") == 6;
 }
 
-test "completion cache hit on prefix extend" {
+test "completion cache reuses scope candidates on prefix extend" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const cache = testCache();
 	const params1 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":2}}";
+	handleCompletion("9", params1, db, cache);
 	const r1 = handleCompletion("10", params1, db, cache);
 	assert cache.items.length > 0;
 	assert cache.uri == "file:///test.ms";
+	const snapshot = cache.snapshot;
+	assert snapshot != null && cache.scopeCandidates.length > 0;
+	const firstCandidate = cache.scopeCandidates[0];
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r2 = handleCompletion("11", params2, db, cache);
 	assert r2.length > 0;
+	assert cache.snapshot != null;
+	assert cache.snapshot.check == snapshot.check && cache.snapshot.revision == snapshot.revision;
+	assert cache.scopeCandidates[0] == firstCandidate;
 }
 
 test "completion cache miss on different line" {
@@ -796,7 +803,7 @@ test "completion among JSX attributes with no JSX namespace anywhere offers noth
 test "find references from a JSX tag finds the other usages" {
 	const src = "function Counter(): number { return 0; }\nconst a = <Counter/>;\nconst b = <Counter/>;";
 	const db = testDb("file:///test.ms", src);
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":12},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("66", params, db);
 	assert r.indexOf("\"line\":2") >= 0;
 	assert r.indexOf("\"line\":0") >= 0;
@@ -1235,24 +1242,26 @@ test "try-expr in var-decl produces no duplicate hints (real pipeline)" {
 
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("50", params, db);
 	assert lspGetNumberField(r, "id") == 50;
-	assert r.length > 60;
+	assert lspGetArrayItems(lspGetObjectField(r, "result")).length == 2;
 }
 
 test "unknown doc returns empty refs" {
 	const db = createTransAmDb(100);
-	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"context\":{\"includeDeclaration\":true}}";
 	const r = handleReferences("51", params, db);
 	assert lspGetNumberField(r, "id") == 51;
+	assert lspGetObjectField(r, "result") == "[]";
 }
 
 test "dispatch routes refs" {
 	const db = testDb("file:///test.ms", "const x = 1;");
-	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"context\":{\"includeDeclaration\":true}}";
 	const r = lspDispatch("textDocument/references", "52", params, db, testCache());
 	assert lspGetNumberField(r, "id") == 52;
+	assert lspGetArrayItems(lspGetObjectField(r, "result")).length == 1;
 }
 
 test "renames variable occurrences" {
@@ -1578,7 +1587,7 @@ test "queries read and answer UTF-16 positions after non-ASCII text" {
 		const label = "utf16 case " + i;
 		assert utf16SpansMatch(label + " definition", lspGetArrayItems(lspGetObjectField(handleDefinition("80", params + "}", db), "result")), [decl]);
 		assert utf16SpansMatch(label + " hover", [lspGetObjectField(handleHover("81", params + "}", db), "result")], [use]);
-		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + "}", db), "result")), [decl, use]);
+		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + ",\"context\":{\"includeDeclaration\":true}}", db), "result")), [decl, use]);
 		assert utf16SpansMatch(label + " highlight", lspGetArrayItems(lspGetObjectField(handleDocumentHighlight("83", params + "}", db), "result")), [decl, use]);
 		const rename = handleRename("84", params + ",\"newName\":\"v\"}", db);
 		const edits = lspGetArrayItems(lspGetObjectField(lspGetObjectField(lspGetObjectField(rename, "result"), "changes"), uri));
@@ -1846,6 +1855,13 @@ function syncWatchedParams(path: string, changeType: int32): string {
 	return "{\"changes\":[{\"uri\":" + lspJsonString(lspPathToUri(path)) + ",\"type\":" + changeType + "}]}";
 }
 
+function syncMemberParams(path: string): string {
+	const col = USE_PERCENT.split("\n")[1].indexOf("dice.percent") + 5;
+	const document = syncDocumentParams(path);
+	return document.byteSlice(0, document.byteLength - 1) +
+		`,"position":{"line":1,"character":${col}}}`;
+}
+
 function syncReportsMissingPercent(db: TransAmDb, path: string): boolean {
 	return buildDiagnosticsJson(lspPathToUri(path), db, path).indexOf("'percent'") >= 0;
 }
@@ -1863,10 +1879,19 @@ test "a dependency changed on disk re-checks an open importer" {
 	const db = createTransAmDb(100);
 	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
 	assert syncReportsMissingPercent(db, usePath);
+	const cache = createCompletionCache();
+	const params = syncMemberParams(usePath);
+	handleCompletion("1", params, db, cache);
+	const before = handleCompletion("2", params, db, cache);
+	assert cache.snapshot != null;
+	assert before.includes("\"label\":\"pct\"");
 	writeFile(depPath, DEP_WITH_PERCENT);
 	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
 	publishPendingDiagnostics(db);
 	assert !syncReportsMissingPercent(db, usePath);
+	const after = handleCompletion("3", params, db, cache);
+	assert after.includes("\"label\":\"percent\"");
+	assert !after.includes("\"label\":\"pct\"");
 	markDocumentClosed(usePath);
 }
 
@@ -1906,10 +1931,19 @@ test "closing a document falls back to disk and re-checks its importers" {
 	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
 	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
 	assert !syncReportsMissingPercent(db, usePath);
+	const cache = createCompletionCache();
+	const params = syncMemberParams(usePath);
+	handleCompletion("1", params, db, cache);
+	const before = handleCompletion("2", params, db, cache);
+	assert cache.snapshot != null;
+	assert before.includes("\"label\":\"percent\"");
 	handleDidClose(syncDocumentParams(depPath), db);
 	assert dbGetSource(db, depPath) == DEP_WITH_PCT;
 	assert publishPendingDiagnostics(db).indexOf("'percent'") >= 0;
 	assert syncReportsMissingPercent(db, usePath);
+	const after = handleCompletion("3", params, db, cache);
+	assert after.includes("\"label\":\"pct\"");
+	assert !after.includes("\"label\":\"percent\"");
 	markDocumentClosed(usePath);
 }
 

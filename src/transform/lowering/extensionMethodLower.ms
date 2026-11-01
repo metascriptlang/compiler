@@ -8,7 +8,8 @@
 import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
-import { makeTypedIdentResolved, makeCall, makeMember } from "../util";
+import { makeTypedIdentResolved, makeCall, makeMember, makeHiddenSubConv } from "../util";
+import { isSuperReceiver } from "../../checker/visibility";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { inferredType, createFunction } from "../../checker/types";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -58,14 +59,27 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	}
 
 	// Instance extension: s.trim() → trim(s) — prepend receiver
+	const viaSuper = call.callee.flags.has(NodeFlag.NoDispatch);
 	const newArgs: Node[] = [];
-	newArgs.push(member.object);
+	newArgs.push(viaSuper && isSuperReceiver(member.object) ? thisAsParent(member.object, target, loc) : member.object);
 	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
 	}
-	const newCall = makeCall(makeTypedIdentResolved(target, null, loc), newArgs, loc);
+	const callee = makeTypedIdentResolved(target, null, loc);
+	if (viaSuper) callee.flags = callee.flags.incl(NodeFlag.NoDispatch);
+	const newCall = makeCall(callee, newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;
+}
+
+// `super.m(args)` calls the parent's `m` itself on `this` converted to the parent, never the
+// dispatcher of its overrides (reference: procCall); a receiver the checker already converted
+// to the method's class keeps that conversion.
+function thisAsParent(receiver: Node, method: Symbol, loc: SourceLocation): Node {
+	const thisSym = receiver.resolvedSym;
+	const formals = method.symbolType != null ? method.symbolType.typeChildren : [];
+	if (thisSym == null || formals.length == 0) throw new Error(`internal: 'super.${method.name}' reached lowering without the method's 'this'`);
+	return makeHiddenSubConv(makeTypedIdentResolved(thisSym, null, loc), formals[0], loc);
 }
 
 function namespaceOf(receiver: Node): Node | null {

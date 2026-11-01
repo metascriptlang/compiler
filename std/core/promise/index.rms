@@ -27,6 +27,7 @@ export class Promise<T> {
 
 	@builtin("PromiseResolve")
 	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
+	static async resolve(): Promise<void> {}
 	@builtin("PromiseReject")
 	static extern reject(error: Error): Promise<never> from "msPromiseReject";
 }

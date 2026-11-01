@@ -17,6 +17,7 @@
 #define MINIZ_NO_STDIO
 #define MINIZ_NO_TIME
 #include "vendor/miniz/miniz.h"
+#include "runtime/compress/crc32.h"
 
 /* ===== Constants ===== */
 
@@ -145,7 +146,7 @@ int32_t msDeflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int
 
     /* For gzip, update CRC32 + total input length over all feed() calls. */
     if (c->format == MS_COMPRESS_FORMAT_GZIP && in && inLen > 0) {
-        c->crc32 = mz_crc32(c->crc32, in, inLen);
+        c->crc32 = msCrc32Update(c->crc32, in, inLen);
         c->inputBytes += inLen;
     }
 

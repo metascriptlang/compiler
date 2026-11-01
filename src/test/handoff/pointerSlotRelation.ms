@@ -1,5 +1,6 @@
-import { strictErrorCount, hasError } from "./helpers";
-import { compileToC, compileToCWithStd } from "../helpers";
+import { strictErrorCount, hasError, checkSource } from "./helpers";
+import { Severity } from "../../checker/context";
+import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
 
 test "pointerSlotRelation: cursor nullability does not make ordinary references nullable" {
 	const cases = [
@@ -209,6 +210,80 @@ test "pointerSlotRelation: a struct value into a Ref slot is refused and the ref
 	assert hasError(pre + "const n = show(mk());", "got P, expected Ref<P>");
 	assert hasError(pre + "const c: Ref<int32> = one();", "type 'Ref<int32>'");
 	assert strictErrorCount(pre + "const r: Ref<P> = { ...mk() };\nconst h: H = { r: { n: 2, s: \"y\" } };") == 0;
+}
+
+function refusalsOf(source: string): string[] {
+	return checkSource(source).errors.filter((e) => e.severity == Severity.Error).map((e) => e.message);
+}
+
+function refusedOnlyBy(source: string, starts: string, ends: string): string {
+	const errors = refusalsOf(source);
+	if (errors.length > 0 && !errors.some((e) => !e.startsWith(starts) || !e.endsWith(ends))) return "";
+	return source + " gave [" + errors.join(" | ") + "], wanted only '" + starts + "..." + ends + "'";
+}
+
+test "pointerSlotRelation: a Ref of a reference type is refused at the type and names it as written" {
+	const pre = "class P { x: int32 = 0; }\nclass G<T> { v: T; constructor(v: T) { this.v = v; } }\ninterface I { n: int32; }\ntype AP = P;\ntype D = distinct P;\nstruct S { n: int32; }\n";
+	const cases = [
+		{ body: "function run(): void { const a = new P(); const r: Ref<P> = a; r.x = 3; }", written: "P", what: "a class value" },
+		{ body: "function set(r: Ref<P>): void { r.x = 3; }\nset(new P());", written: "P", what: "a class value" },
+		{ body: "const g = new G<int32>(1);\nconst r: Ref<G<int32>> = g;", written: "G<int32>", what: "a class value" },
+		{ body: "const r: Ref<AP> = new P();", written: "AP", what: "a class value" },
+		{ body: "function f(r: Ref<D>): void { }", written: "D", what: "a class value" },
+		{ body: "function f(r: Ref<(P)>): void { }", written: "P", what: "a class value" },
+		{ body: "const i: I = { n: 1 };\nconst r: Ref<I> = i;", written: "I", what: "an interface value" },
+		{ body: "function read(r: Ref<I>): int32 { return r.n; }\nconst n = read({ n: 1 });", written: "I", what: "an interface value" },
+		{ body: "const r: Ref<Ref<S>> = { n: 1 };", written: "Ref<S>", what: "'Ref<S>'" },
+		{ body: "function f(r: Ref<Owned<P>>): void { }", written: "Owned<P>", what: "'Owned<P>'" },
+		{ body: "function f(r: Ref<Arc<S>>): void { }", written: "Arc<S>", what: "'Arc<S>'" },
+		{ body: "function f(r: Ref<Locked<S>>): void { }", written: "Locked<S>", what: "'Locked<S>'" },
+		{ body: "function f(r: Ref<int32[]>): void { }", written: "int32[]", what: "'int32[]'" },
+		{ body: "function f(r: Ref<Map<string, int32>>): void { }", written: "Map<string, int32>", what: "" },
+		{ body: "function f(r: Ref<{ x: int32 }>): void { }", written: "{ x: int32 }", what: "" },
+	];
+	const problems: string[] = [];
+	for (const item of cases) {
+		const starts = "Ref<T> takes a value type, got '" + item.written + "': " + item.what;
+		const problem = refusedOnlyBy(pre + item.body, starts, " is already a counted reference, so write '" + item.written + "'");
+		if (problem != "") problems.push(problem);
+	}
+	assert problems.length == 0, problems.join("\n");
+	assert strictErrorCount(pre + "const r: Ref<S> = { n: 1 };\nconst k: Ref<int32> | null = null;\nconst t: Ref<string> | null = null;\nfunction g(r: Ref<Vec<int32>>): void { }") == 0;
+}
+
+test "pointerSlotRelation: a Ref that an instantiation fills with a reference type is refused at the instantiation on C and JS" {
+	const pre = "class P { x: int32 = 0; }\ninterface I { n: int32; }\nstruct S { n: int32; }\nstruct Box<T> { r: Ref<T>; }\n";
+	const cases = [
+		{ body: "function run(): void { const a = new P(); const b: Box<P> = { r: a }; b.r.x = 3; console.log(\"gs \" + a.x.toString()); }\nrun();",
+			starts: "Ref<T> takes a value type, but 'Box<P>' binds T = 'P': a class value" },
+		{ body: "function run(): void { const i: I = { n: 1 }; const b: Box<I> = { r: i }; b.r.n = 3; console.log(\"gi \" + i.n.toString()); }\nrun();",
+			starts: "Ref<T> takes a value type, but 'Box<I>' binds T = 'I': an interface value" },
+		{ body: "function set<T>(r: Ref<T>, v: T): void { }\nfunction run(): void { const a = new P(); set<P>(a, a); console.log(\"gf \" + a.x.toString()); }\nrun();",
+			starts: "Ref<T> takes a value type, but 'set<P>' binds T = 'P': a class value" },
+		{ body: "class H<T> { v: T; r: Ref<T> | null = null; constructor(v: T) { this.v = v; } }\nconst h = new H(new P());\nconsole.log(\"gc \" + h.v.x.toString());",
+			starts: "Ref<T> takes a value type, but 'H<P>' binds T = 'P': a class value" },
+		{ body: "function mk<T>(v: T): T { let r: Ref<T> | null = null; return v; }\nconst q = mk(new P());\nconst n = mk(1);\nconsole.log(\"gb \" + n.toString());",
+			starts: "Ref<T> takes a value type, but 'mk<P>' instantiated at " },
+		{ body: "function f(r: Ref<Owned<P>>): void { }\nf(new P());", starts: "Ref<T> takes a value type, got 'Owned<P>': 'Owned<P>'" },
+		{ body: "function f(r: Ref<(P)>): void { }\nf(new P());", starts: "Ref<T> takes a value type, got 'P': a class value" },
+		{ body: "function run(): void { const xs: int32[] = [1]; const r: Ref<int32[]> = xs; r.push(2); console.log(\"arr \" + xs.length.toString()); }\nrun();",
+			starts: "Ref<T> takes a value type, got 'int32[]': 'int32[]'" },
+	];
+	const problems: string[] = [];
+	for (const item of cases) {
+		const c = compileToC(pre + item.body);
+		const js = compileToJS(pre + item.body);
+		if (c.ok || c.error.indexOf(item.starts) < 0) problems.push("C: " + item.body + " gave " + (c.ok ? "a program" : c.error));
+		if (js.ok || js.error.indexOf(item.starts) < 0) problems.push("JS: " + item.body + " gave " + (js.ok ? "a program" : js.error));
+	}
+	assert problems.length == 0, problems.join("\n");
+	const bodyRefusal = compileToC(pre + cases[4].body);
+	assert !bodyRefusal.ok && bodyRefusal.error.indexOf("binds T = 'P': a class value is already a counted reference") >= 0 && bodyRefusal.error.indexOf("mk<int32>") < 0, bodyRefusal.ok ? "" : bodyRefusal.error;
+	const values = "function mk<T>(v: T): T { let r: Ref<T> | null = null; return v; }\nconst n = mk(1);\nconst s = mk<S>({ n: 1 });\nconst b: Box<S> = { r: { n: 2 } };\nconsole.log(\"v \" + n.toString() + \" \" + b.r.n.toString());";
+	const cValues = compileToC(pre + values);
+	const jsValues = compileToJS(pre + values);
+	assert cValues.ok, cValues.ok ? "" : cValues.error;
+	assert jsValues.ok, jsValues.ok ? "" : jsValues.error;
 }
 
 test "pointerSlotRelation: a class or interface value keeps its plain name in a refusal" {

@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Buffer'
 // @stdout: héllo|a�b|hélloa�b
 // @stdout: {"b":{"type":"Buffer","data":[97,255,98]}}
 // @stdout: <Buffer 61 ff 62>

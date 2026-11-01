@@ -4,18 +4,18 @@
 // @stdout: md5 ae92cf51adf91130130aefc2b39a7595 true
 // @stdout: long key d46761768ee3c864fc76c08b3d73c8092853ae3fefa01b990963dfa2d56e7334
 // @stdout: empty key 948f7c5caa500c31d7d4a0f52f3e3da7e33c8a9fe6ef528b8a9ac3e4adc4e24d908e6f40b737510e82354759dc5e9f06
-// @skip-js: std/crypto has no streaming Hmac on the JS backend
 // @xfail(raiser): the raiser std/crypto has no createHmac, so the program stops at the checker
-import { createHmac, hmac } from "std/crypto";
+import { HashAlgorithm, createHmac, hmacSync, toHex } from "std/crypto";
 
-for (const algorithm of ["sha256", "sha512", "sha1", "md5"]) {
+const algorithms: HashAlgorithm[] = ["sha256", "sha512", "sha1", "md5"];
+for (const algorithm of algorithms) {
 	const h = createHmac(algorithm, "key");
 	h.update("hello");
 	h.update("");
 	h.update(" world");
-	const digest = h.digest("hex");
-	const oneShot = hmac(algorithm, "key", "hello world");
-	console.log(algorithm, digest, oneShot.ok && digest == oneShot.value);
+	const digest = toHex(h.digest());
+	const oneShot = hmacSync(algorithm, "key", "hello world");
+	console.log(algorithm, digest, oneShot.ok && digest == toHex(oneShot.value));
 }
 
 const longKey = h100();
@@ -25,7 +25,7 @@ function h100(): string {
 	return parts.join("");
 }
 const long = createHmac("sha256", longKey);
-console.log("long key", long.digest("hex"));
+console.log("long key", toHex(long.digest()));
 const empty = createHmac("sha384", "");
 empty.update("abc");
-console.log("empty key", empty.digest("hex"));
+console.log("empty key", toHex(empty.digest()));

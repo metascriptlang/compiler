@@ -17,6 +17,12 @@
 #include <netinet/tcp.h>
 #include <errno.h>
 
+#ifdef MSG_NOSIGNAL
+#define MS_IO_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define MS_IO_SEND_FLAGS 0
+#endif
+
 #define ENGINE_INIT_FDMAP 1024
 #define ENGINE_INIT_POOL  64
 
@@ -236,7 +242,7 @@ static void completeRecv(msIoRequest* req) {
 }
 
 static int completeAccept(msIoEngine* e, msIoRequest* req) {
-	struct sockaddr_in addr;
+	struct sockaddr_storage addr;
 	socklen_t addrLen = sizeof(addr);
 	int cfd;
 	do {
@@ -248,7 +254,7 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 		msSelectorRegister(e->selector, req->fd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
 		return 1;
 	}
-	if (cfd >= 0) {
+	if (cfd >= 0 && (addr.ss_family == AF_INET || addr.ss_family == AF_INET6)) {
 		int flag = 1;
 		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	}
@@ -259,7 +265,7 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 static int completeSend(msIoEngine* e, msIoRequest* req) {
 	ssize_t bytesSent;
 	do {
-		bytesSent = send(req->fd, req->buf + req->offset, (size_t)(req->len - req->offset), 0);
+		bytesSent = send(req->fd, req->buf + req->offset, (size_t)(req->len - req->offset), MS_IO_SEND_FLAGS);
 	} while (bytesSent < 0 && errno == EINTR);
 
 	if (bytesSent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {

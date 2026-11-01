@@ -45,11 +45,12 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, namesEnums: boolean = false): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
+		ctx.rangeChecks = rangeChecks;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx, namesEnums);
 	} finally {
@@ -134,4 +135,17 @@ test "the raiser lowering names runtime procs from its own std, not from the las
 	assert checks.length > 0;
 	for (const check of checks) assert check != jsHelper;
 	assert restored == jsHelper;
+}
+
+test "the raiser lowering keeps the enum range check by default and drops it when the driver passes the danger mode" {
+	const parsed = parseInput("enum Color { Red, Green, Blue }\nfunction raw(): int32 { return 9; }\nconst c = raw() as Color;");
+	assert parsed.ok;
+	const checkerCtx = checkProgram(parsed.value);
+	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false);
+	let checks = 0;
+	walkNode(lowered, (n: Node): Node => {
+		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks += 1;
+		return n;
+	});
+	assert checks == 0;
 }

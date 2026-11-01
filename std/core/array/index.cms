@@ -3,6 +3,7 @@
 // Loaded automatically via globalImports() -> "std/core/array"
 
 @include("runtime/core/array.h");
+@include("runtime/core/bytesAlloc.h");
 @compile("runtime/core/array.c");
 
 // ===== Array<T> — Generic array type =====
@@ -394,6 +395,8 @@ export function join<T>(this arr: Vec<T>, sep: string): string {
 	return out;
 }
 
+extern function sliceBytes(src: Readonly<Span<uint8>>, lo: int64, hi: int64): uint8[] from "msBytesSlice";
+
 /**
  * Returns a copy of a section of an array.
  * Generic over element type — monomorphized per T, element-wise copy. The
@@ -408,10 +411,14 @@ export function slice<T>(this arr: Vec<T>, start: number = 0, end: number = 9007
 	if (lo < 0) { lo = 0; }
 	if (hi > n) { hi = n; }
 	const out: T[] = [];
-	let i = lo;
-	while (i < hi) {
-		out.push(arr[i]);
-		i = i + 1;
+	if (lo >= hi) return out;
+	const count = (hi - lo) as int64;
+	const from = lo as int64;
+	out.growEmpty(count);
+	let k: int64 = 0;
+	while (k < count) {
+		out[k] = arr[from + k];
+		k = k + 1;
 	}
 	return out;
 }
@@ -423,13 +430,7 @@ export function slice(this view: Readonly<Span<uint8>>, start: number = 0, end: 
 	let hi = end < 0 ? n + end : end;
 	if (lo < 0) { lo = 0; }
 	if (hi > n) { hi = n; }
-	const out: uint8[] = [];
-	let i = lo;
-	while (i < hi) {
-		out.push(view[i]);
-		i = i + 1;
-	}
-	return out;
+	return sliceBytes(view, lo as int64, (lo < hi ? hi : lo) as int64);
 }
 
 @compilerFunc
@@ -459,7 +460,7 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
-export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, every, reduce, values, keys, entries, flatMap } from "./shared";
+export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, values, keys, entries, flatMap } from "./shared";
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {

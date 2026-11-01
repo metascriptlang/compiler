@@ -7,14 +7,14 @@ import {
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 	DestructuringDeclData, ObjectPatternData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData, PropertyDeclData, makeLoc,
 } from "../../../ast/node";
-import { WhenChain, SourceComment, chainsIn, leading, trailing } from "../comments";
+import { WhenChain, SourceComment, CommentKind, chainsIn, leading, trailing } from "../comments";
 import { commentsOfRun, leadingDocs, trailingDocs, danglingOf, danglingBlock, commentsWithin, markWithin, interleave, boxed, withComments, startLineOf, joinKeepingBlankLines } from "./commentDocs";
-import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
+import { FormatOptions } from "../options";
 import { Doc, docText, docSourceText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docLine, docCommaSepList, docIfBreak, docNil, docWillBreak } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { isAssignOp } from "../../../ast/operators";
 import { printTypeAnnotation, isObjectTypeAnnotation, inlineObjectType } from "./types";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, codeByteAfter, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized, nativeFrom } from "./literals";
 
 class ListItem {
 	line: int32;
@@ -186,9 +186,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 export function printExprStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExprStmtData;
 	const parts: Doc[] = [callPrintNode(d.expr, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -213,9 +211,7 @@ export function printReturnStmt(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" "));
 		parts.push(returnedArgument(d.argument, options));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -358,9 +354,7 @@ export function printDoWhileStmt(node: Node, options: FormatOptions): Doc {
 		docText(" while "),
 		...parenthesizedHeader(callPrintNode(d.doCondition, options)),
 	];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -417,9 +411,6 @@ export function printMatchStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchStmtData;
 	const cases: Doc[] = [];
 	for (const c of d.matchStmtCases) {
-		// Reuses printMatchCase from expressions.ms via callback if needed, 
-		// but since it's same structure we can just implement here or export it.
-		// For now, assume we'll use callPrintNode for the cases too.
 		cases.push(callPrintNode(c, options));
 	}
 	return docGroup([
@@ -435,9 +426,7 @@ export function printMatchStmt(node: Node, options: FormatOptions): Doc {
 export function printThrowStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ThrowStmtData;
 	const parts: Doc[] = [docText("throw "), returnedArgument(d.throwArg, options)];
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
+	parts.push(docText(";"));
 	return docGroup(parts);
 }
 
@@ -463,7 +452,7 @@ export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 export function printDeferStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DeferStmtData;
 	const parts: Doc[] = [docText("defer "), callPrintNode(d.deferExpr, options)];
-	if (options.semi && d.deferExpr.kind != NodeKind.BlockStmt) {
+	if (d.deferExpr.kind != NodeKind.BlockStmt) {
 		parts.push(docText(";"));
 	}
 	return docGroup(parts);
@@ -502,7 +491,7 @@ function inlineObjectPattern(pattern: Node, options: FormatOptions): Doc[] {
 		}
 		body.push(callPrintNode(d.patternProps[i], options));
 	}
-	if (!d.hasRestProp && wantsTrailingComma(options, CommaContext.Collection)) body.push(docIfBreak(docText(","), docNil()));
+	if (!d.hasRestProp) body.push(docIfBreak(docText(","), docNil()));
 	return [docText("{"), docIndent(body), docLine(), docText("}")];
 }
 
@@ -557,7 +546,7 @@ export function paramListInParens(params: Doc[], options: FormatOptions, hug: bo
 	if (hug && params.length == 1) {
 		parts.push(params[0]);
 	} else if (params.length > 0) {
-		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
+		const paramParts = docCommaSepList(params);
 		const list: Doc[] = [docIndent(paramParts), docSoftLine()];
 		if (grouped) parts.push(docGroup(list));
 		else for (const x of list) parts.push(x);
@@ -626,7 +615,7 @@ function spellParamModifiers(name: string): string {
 	let more = true;
 	while (more) {
 		more = false;
-		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["rdonly:", "readonly "], ["sink:", "sink "]]) {
+		for (const [code, word] of [["out:", "out "], ["ref:", "ref "], ["sink:", "sink "]]) {
 			if (rest.startsWith(code) && rest.byteLength > code.byteLength) {
 				spelled = spelled + word;
 				rest = rest.byteSlice(code.byteLength, rest.byteLength);
@@ -637,14 +626,35 @@ function spellParamModifiers(name: string): string {
 	return spelled + rest;
 }
 
+function itemBefore(locs: SourceLocation[], items: int32, c: SourceComment): int32 {
+	let owner = -1;
+	for (let i = 0; i < locs.length && i < items; i += 1) {
+		if (locs[i].line == c.line && locs[i].column < c.column) owner = i;
+	}
+	return owner;
+}
+
 export function commentedList(items: Doc[], locs: SourceLocation[], inner: SourceComment[], open: string, close: string): Doc {
 	const lines: int32[] = [];
-	const entries: Doc[] = [];
+	const beforeComma: Doc[][] = [];
 	for (let i = 0; i < items.length; i += 1) {
 		lines.push(i < locs.length ? locs[i].line : 0);
-		entries.push(docGroup([items[i], docText(",")]));
+		beforeComma.push([]);
 	}
-	return boxed(open, interleave(entries, lines, lines, inner), close);
+	const rest: SourceComment[] = [];
+	for (const c of inner) {
+		const owner = c.kind == CommentKind.Line || codeByteAfter(c.endLine, c.endColumn) != ",".code ? -1 : itemBefore(locs, items.length, c);
+		if (owner < 0) {
+			rest.push(c);
+			continue;
+		}
+		beforeComma[owner].push(docText(" "));
+		beforeComma[owner].push(docSourceText(c.text));
+		c.markFormatted();
+	}
+	const entries: Doc[] = [];
+	for (let i = 0; i < items.length; i += 1) entries.push(docGroup([items[i], ...beforeComma[i], docText(",")]));
+	return boxed(open, interleave(entries, lines, lines, rest), close);
 }
 
 function pushPlaced(holder: Node, out: SourceComment[]): void {
@@ -721,7 +731,6 @@ export function modeNames(names: string[], flags: string): string[] {
 	const spelled: string[] = [];
 	for (const n of names) spelled.push(n);
 	prefixAt(spelled, flagGet(flags, "sink"), "sink ");
-	prefixAt(spelled, flagGet(flags, "rdonly"), "readonly ");
 	prefixAt(spelled, flagGet(flags, "ref"), "ref ");
 	prefixAt(spelled, flagGet(flags, "out"), "out ");
 	return spelled;

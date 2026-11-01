@@ -83,15 +83,6 @@ export function lspFmtCompletionItem(
 	return jEnd(b);
 }
 
-export function lspFmtLeanCompletionItem(label: string, kind: number, sortText: string, data: string = ""): string {
-	const b = jsonObj();
-	jStr(b, "label", label);
-	jNum(b, "kind", kind);
-	jStr(b, "sortText", sortText);
-	jStrIf(b, "data", data);
-	return jEnd(b);
-}
-
 export function lspFmtQuickFix(title: string, changesJson: string): string {
 	const edit = jsonObj();
 	jRaw(edit, "changes", changesJson);
@@ -338,10 +329,6 @@ test "signature help" {
 	const sig = lspFmtSignature("foo(a: number)", "[" + p + "]");
 	const help = lspFmtSignatureHelp("[" + sig + "]", 0, 0);
 	assert help.length > 40;
-}
-
-test "a lean completion item is its label, kind and sort text" {
-	assert lspFmtLeanCompletionItem("if", 14, "16") == "{\"label\":\"if\",\"kind\":14,\"sortText\":\"16\"}";
 }
 
 test "a quick fix carries its edits under edit.changes" {

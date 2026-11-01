@@ -52,6 +52,26 @@ test "an explicit type arg the arguments contradict is still rejected" {
 	assert hasError(CLASSES + "const c = pair<Dog>(dog, animal);", "Argument type mismatch in 'pair' arg 1: got Animal, expected Dog");
 }
 
+const NULLABLE_BOX = "class Box<T> { value: T; constructor(value: T) { this.value = value; } }\nstruct Ev { url: string; }\nfunction put<T>(box: Box<T>, value: T): void { box.value = value; }\nconst box = new Box<Ev | null>(null);\n";
+
+test "a struct argument after T was bound to the struct or null is accepted" {
+	assert strictErrorCount(NULLABLE_BOX + "const ev: Ev = { url: \"/a\" };\nput(box, ev);") == 0;
+}
+
+test "a string argument after T was bound to string or null is accepted" {
+	const src = "class Box<T> { value: T; constructor(value: T) { this.value = value; } }\nfunction put<T>(box: Box<T>, value: T): void { box.value = value; }\nconst box = new Box<string | null>(null);\nput(box, \"a\");";
+	assert strictErrorCount(src) == 0;
+}
+
+test "an argument outside a nullable binding is still rejected" {
+	assert hasError(NULLABLE_BOX + "put(box, 3);", "Argument type mismatch in 'put' arg 1: got int32, expected Ev | null");
+}
+
+test "a function returning X is still refused where T was bound through a function returning X | null" {
+	const src = "struct Ev { url: string; }\nfunction f<T>(a: () => T, b: () => T): void {}\nconst x = (): Ev => ({ url: \"a\" });\nconst y = (): Ev | null => null;\nf(x, y);";
+	assert strictErrorCount(src) > 0;
+}
+
 function errorOnC(source: string): string {
 	const c = compileToC(source);
 	return c.ok ? "" : c.error;
