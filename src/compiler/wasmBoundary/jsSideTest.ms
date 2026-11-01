@@ -582,7 +582,7 @@ test "js side: a nullable callback parameter arrives as a flag and a value, is p
 
 test "js side: two views of which one is written are copied in as one shared copy and every copy is freed in finally" {
 	const code = bindingsFor(["overlay"]).modules[0].code;
-	assert code.includes("\tconst hb = [];\n\tlet e0, e1;\n\tconst mark = __msbTop;\n\ttry {\n\t\t[e0, e1] = __msbCopyInViews([[a0.base, a0.off, a0.len, Int32Array], [a1.base, a1.off, a1.len, Int32Array]], hb);\n");
+	assert code.includes("\tconst hb = [];\n\tlet e0, e1;\n\tconst mark = __msbTop;\n\ttry {\n\t\t[e0, e1] = __msbCopyInViews([[a0.base, a0.off, a0.len, Int32Array, \"write\", \"parameter 'dst'\"], [a1.base, a1.off, a1.len, Int32Array, \"read\", \"parameter 'src'\"]], hb, \"overlay\");\n");
 	assert code.includes("__msbMod._msb_calc_overlay(e0[0], e0[1], e1[0], e1[1]);");
 	assert code.includes("\t\t__msbTop = mark;\n\t\tfor (const q of hb) __msbFree(q);\n");
 	assert !code.includes("__msbCopyIn(");
@@ -591,16 +591,16 @@ test "js side: two views of which one is written are copied in as one shared cop
 	assert code.includes("__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);");
 }
 
-test "js side: a Vec joins the shared copy as a reader and is never copied back" {
+test "js side: a Vec joins the shared copy as a copy the wasm side takes at entry and is never copied back" {
 	const code = bindingsFor(["flipAll"]).modules[0].code;
-	assert code.includes("[e0, e1] = __msbCopyInViews([[a0, 0, a0.length, Uint8Array], [a1.base, a1.off, a1.len, Uint8Array]], hb);");
+	assert code.includes("[e0, e1] = __msbCopyInViews([[a0, 0, a0.length, Uint8Array, \"copy\", \"parameter 'all'\"], [a1.base, a1.off, a1.len, Uint8Array, \"write\", \"parameter 'part'\"]], hb, \"flipAll\");");
 	assert code.split("__msbCopyBack(").length == 2;
 	assert code.includes("__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Uint8Array, true);");
 }
 
 test "js side: an absent nullable Vec stays absent in the shared copy and passes pointer 0" {
 	const code = nullableBindings(["headBoth"]).modules[0].code;
-	assert code.includes("[e0, e1] = __msbCopyInViews([a0 == null ? null : [a0, 0, a0.length, Int32Array], [a1.base, a1.off, a1.len, Int32Array]], hb);");
+	assert code.includes("[e0, e1] = __msbCopyInViews([a0 == null ? null : [a0, 0, a0.length, Int32Array, \"copy\", \"parameter 'xs'\"], [a1.base, a1.off, a1.len, Int32Array, \"write\", \"parameter 'ys'\"]], hb, \"headBoth\");");
 	assert code.includes("__msbMod._msb_calc_headBoth(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0, e1[0], e1[1]);");
 }
 
@@ -618,6 +618,8 @@ test "js side: the shared copy is range-checked and recorded before it is filled
 	const p = bindingsFor(["overlay"]).prelude;
 	const body = glueBody(p, "__msbCopyInViews");
 	assert body.indexOf("__msbInRange(") < body.indexOf("__msbAlloc(");
+	assert body.indexOf("a[4] === \"copy\" && b[4] === \"write\"") > 0;
+	assert body.indexOf("a[4] === \"copy\" && b[4] === \"write\"") < body.indexOf("__msbAlloc(");
 	assert body.indexOf("__msbAlloc(") < body.indexOf("blocks.push(p)");
 	assert body.indexOf("blocks.push(p)") < body.indexOf("__msbCopyTo(");
 	assert p.includes("function __msbGroups(vs) {");
