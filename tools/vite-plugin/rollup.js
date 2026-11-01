@@ -1,33 +1,36 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import { buildCompilerGraph, canonicalPath, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, sourceDeclarationOutputPattern } from "./sourceDeclarations.js";
+
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
 
-function singleInput(input) {
+function compilerInputs(input) {
 	if (input !== undefined && (input === null || (typeof input !== "string" && typeof input !== "object"))) {
 		throw new Error("MetaScript requires a string Rollup input");
 	}
 	const inputs = input === undefined ? [] : typeof input === "string" ? [input] : Array.isArray(input) ? input : Object.values(input);
-	if (inputs.length > 1) throw new Error("MetaScript supports one compiler root; multiple Rollup inputs are not supported");
 	if (inputs.some(value => typeof value !== "string")) throw new Error("MetaScript requires a string Rollup input");
-	return inputs[0];
+	return inputs;
 }
 
 export default function metascript(options = {}) {
-	if (options.entry !== undefined && (typeof options.entry !== "string" || !MS_RE.test(options.entry))) {
-		throw new Error("MetaScript entry must be one .ms or .jms source path");
+	if (options.entry !== undefined && (!(Array.isArray(options.entry) ? options.entry : [options.entry]).length || (Array.isArray(options.entry) ? options.entry : [options.entry]).some(file => typeof file !== "string" || !MS_RE.test(file)))) {
+		throw new Error("MetaScript entry must contain .ms or .jms source paths");
 	}
 	const root = resolve(options.root ?? process.cwd());
-	const explicitEntry = options.entry ? canonicalPath(resolve(root, stripQuery(options.entry))) : null;
+	const explicitEntry = options.entry ? (Array.isArray(options.entry) ? options.entry : [options.entry]).map(file => canonicalPath(resolve(root, stripQuery(file)))) : null;
+	let publisher = null;
 	let entry = explicitEntry;
 	let snapshot = null;
 	let failure = null;
 	let attempted = false;
 	let invalidated = false;
-	let watchFiles = new Set(entry ? [entry] : []);
+	let watchFiles = new Set(entry ?? []);
 	let previousSources = new Set();
 
 	function registerWatches(context) {
+		if (options.sourceDeclarations && context.meta?.watchMode) for (const path of sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canonicalPath(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles])) context.addWatchFile(path);
 		for (const file of watchFiles) context.addWatchFile(file);
 	}
 
@@ -36,13 +39,20 @@ export default function metascript(options = {}) {
 		if (invalidated) throw new Error("MetaScript build snapshot was invalidated; start a new build generation");
 		if (!attempted && entry) {
 			attempted = true;
-			watchFiles.add(entry);
+			for (const file of entry) watchFiles.add(file);
+			if (options.msc) watchFiles.add(canonicalPath(resolve(options.msc)));
 			registerWatches(context);
 			try {
-				snapshot = buildCompilerGraph({ ...options, root, entry });
-				watchFiles = new Set(snapshot.dependencies);
+				if (options.sourceDeclarations) {
+					publisher ??= createSourceDeclarationPublisher(options.sourceDeclarations, root);
+					publisher.invalidate();
+				}
+				snapshot = buildCompilerGraph({ ...options, root, entry, sourceRoot: publisher?.sourceRoot });
+				publisher?.publish(snapshot);
+				watchFiles = new Set([...snapshot.dependencies, ...(options.msc ? [canonicalPath(resolve(options.msc))] : [])]);
 			} catch (error) {
 				failure = error;
+				publisher?.invalidate();
 				throw error;
 			}
 		}
@@ -57,15 +67,17 @@ export default function metascript(options = {}) {
 	return {
 		name: "rollup-plugin-metascript",
 
+
 		buildStart(inputOptions) {
+			if (options.sourceDeclarations && this.meta?.watchMode && attempted && !invalidated) { registerWatches(this); if (failure) throw failure; return; }
 			if (snapshot) previousSources = new Set(snapshot.modules.concat(snapshot.instances).map(module => module.source));
 			snapshot = null;
 			failure = null;
 			attempted = false;
 			invalidated = false;
 			try {
-				const input = singleInput(inputOptions.input);
-				if (!explicitEntry && input && MS_RE.test(input)) entry = canonicalPath(resolve(root, stripQuery(input)));
+				const inputs = compilerInputs(inputOptions.input);
+				if (!explicitEntry && inputs.length && inputs.every(input => MS_RE.test(input))) entry = inputs.map(input => canonicalPath(resolve(root, stripQuery(input))));
 				current(this);
 			} catch (error) {
 				failure = error;
@@ -74,8 +86,18 @@ export default function metascript(options = {}) {
 		},
 
 		watchChange(id) {
-			if (watchFiles.has(canonicalPath(stripQuery(id)))) invalidated = true;
+			const file = canonicalPath(stripQuery(id));
+			if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, options.outDir).test(file)) return;
+			if (watchFiles.has(file) || (options.sourceDeclarations && MS_RE.test(file))) { invalidated = true; publisher?.invalidate(); }
 		},
+
+		closeWatcher() {
+			publisher?.close(); publisher = null;
+			attempted = false;
+			invalidated = true;
+		},
+
+		closeBundle() { if (!this.meta?.watchMode) { publisher?.close(); publisher = null; } },
 
 		shouldTransformCachedModule({ id }) {
 			const source = canonicalPath(stripQuery(id));
@@ -92,9 +114,9 @@ export default function metascript(options = {}) {
 			if (!MS_RE.test(source)) return null;
 			const base = importer ? dirname(stripQuery(importer)) : root;
 			const file = canonicalPath(isAbsolute(stripQuery(source)) ? stripQuery(source) : resolve(base, stripQuery(source)));
-			if (!entry) entry = file;
+			if (!entry) entry = [file];
 			const graph = current(this);
-			if (!graph.bySource.has(file)) throw new Error(`MetaScript source is outside the compiled graph: ${file}; configure one entry that imports every required source`);
+			if (!graph.bySource.has(file)) throw new Error(`MetaScript source is outside the compiled graph: ${file}; configure entry roots that include every required source`);
 			const instance = instanceOf(source);
 			const output = graph.byOutput.get(outputOf(graph, withInstance(file, instance)));
 			if (!output || output.source !== file) throw new Error(`MetaScript instance is not in the compiled graph: ${source}`);

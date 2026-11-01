@@ -1,8 +1,10 @@
 import type { Plugin } from "vite";
+import type { SourceDeclarationOptions } from "./compilerCore.js";
 
 export interface MetaScriptOptions {
 	readonly msc?: string;
-	readonly entry?: string;
+	readonly entry?: string | readonly string[];
+	readonly sourceDeclarations?: SourceDeclarationOptions;
 	readonly outDir?: string;
 	readonly compilerArgs?: readonly string[];
 	readonly quiet?: boolean;

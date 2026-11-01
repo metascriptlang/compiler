@@ -27,7 +27,7 @@ function fixture(t) {
 const fs = require("node:fs"), path = require("node:path");
 const state = JSON.parse(fs.readFileSync(path.join(__dirname, "state.json"), "utf8"));
 fs.appendFileSync(path.join(__dirname, "calls"), "call\\n");
-if (state.fail) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
+if (state.fail || (state.required && !fs.existsSync(state.required))) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
 const out = process.argv.find(arg => arg.startsWith("--output=")).slice(9);
 for (const [name, text] of Object.entries(state.files)) {
  const file = path.join(out, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text);
@@ -50,10 +50,10 @@ fs.writeFileSync(path.join(out, "_manifest.json"), JSON.stringify(state.manifest
 	return { root, entry, dependency, state, save, settings, calls };
 }
 
-function fakeCompiler(root, plugin) {
+function fakeCompiler(root, plugin, hooks = {}) {
 	const compiler = {
 		context: root,
-		hooks: { thisCompilation: new Hook() },
+		hooks: { thisCompilation: new Hook(), ...hooks },
 		webpack: {
 			version: "5.0.0",
 			Compilation: { PROCESS_ASSETS_STAGE_ADDITIONAL: -2000 },
@@ -209,7 +209,7 @@ test("declarations are opt-in and loader requires companion plugin and webpack 5
 	metascriptLoader.call({ async: () => value => { error = value; }, cacheable() {} });
 	assert.match(error.message, /requires MetaScriptPlugin/);
 	assert.throws(() => new MetaScriptPlugin(), /explicit/);
-	assert.throws(() => new MetaScriptPlugin({ entry: ["main.ms"] }), /explicit/);
+	assert.throws(() => new MetaScriptPlugin({ entry: [] }), /explicit/);
 	assert.throws(() => new MetaScriptPlugin(f.settings).apply({ webpack: { version: "4.0.0" } }), /webpack 5/);
 });
 
@@ -372,11 +372,18 @@ test("verified TS oracle checks strict NodeNext webpack options and adapter decl
 	t.after(() => rmSync(file, { force: true }));
 	writeFileSync(file, `import MetaScriptPlugin, { loader } from "vite-plugin-metascript/webpack";
 import type { Configuration } from "webpack";
+import metascript from "vite-plugin-metascript";
+import rollupMetascript from "vite-plugin-metascript/rollup";
+import { buildCompilerGraph } from "vite-plugin-metascript/core";
+metascript({entry:["a.ms","b.jms"] as const, sourceDeclarations:{outDir:"editor-types"}});
+rollupMetascript({entry:["a.ms","b.jms"] as const, sourceDeclarations:{outDir:"editor-types"}});
+buildCompilerGraph({entry:["a.ms","b.jms"] as const, sourceRoot:"src"}).entries satisfies readonly string[];
 const config: Configuration = { plugins: [new MetaScriptPlugin({ entry: "src/main.ms", declaration: true })], module: { rules: [{ test: /\\.(ms|jms)$/, use: [{ loader }] }] } };
 // @ts-expect-error entry is required
 new MetaScriptPlugin({});
 // @ts-expect-error entry must be a path string
 new MetaScriptPlugin({ entry: 123 });
+new MetaScriptPlugin({ entry: ["a.ms", "b.jms"] as const, sourceDeclarations: {outDir:"editor-types", rootDir:"src"} });
 // @ts-expect-error declarations must be boolean
 new MetaScriptPlugin({ entry: "main.ms", declaration: "yes" });
 `);
@@ -396,4 +403,152 @@ test("relative compiler paths track the executable used by the shared core", t =
 	assert.deepEqual(g.compilation.errors, []);
 	assert.ok(g.compilation.buildDependencies.has(f.settings.msc));
 	assert.equal(f.calls(), 1);
+});
+
+test("webpack source-only publishing invalidates immediately and recovers in the same compiler", t => {
+ const f = fixture(t);
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const plugin = new MetaScriptPlugin({...f.settings,declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ const compiler = {context:f.root, hooks:{thisCompilation:new Hook(),invalid:new Hook(),shutdown:new Hook(),watchClose:new Hook()},webpack:fakeCompiler(f.root,new MetaScriptPlugin(f.settings)).webpack};
+ plugin.apply(compiler);
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ let g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.ok(existsSync(file));
+ g.compilation.hooks.processAssets.call(); assert.equal(g.assets.size,0);
+ compiler.hooks.invalid.call(f.dependency); assert.equal(existsSync(file),false);
+ f.state.fail = true; f.save(); g = generation(compiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(existsSync(file),false);
+ f.state.fail = false; f.save(); g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.ok(existsSync(file));
+ compiler.hooks.shutdown.call(); assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
+});
+
+function sourceSettings(f) {
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ return {...f.settings,declaration:false,sourceDeclarations:{outDir:"editor-types"}};
+}
+
+test("source watch wrapper preserves runtime ignored options and observes callbacks before invalid coalescing", t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ const compiler = fakeCompiler(f.root, new MetaScriptPlugin(settings), {afterEnvironment:new Hook(),shutdown:new Hook()});
+ compiler.watchMode = true;
+ t.after(() => compiler.hooks.shutdown.call());
+ let args;
+ const nativeWatcher = {close() {},pause() {},getInfo() { return {}; }};
+ compiler.watchFileSystem = {watch(...values) { args = values; return nativeWatcher; }};
+ compiler.hooks.afterEnvironment.call();
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ generation(compiler); assert.ok(existsSync(file));
+ for (const ignored of [/keep-this/i, ["**/keep-this/**"], "**/keep-this/**", undefined]) {
+  const runtime = {aggregateTimeout:17,ignored};
+  let forwarded;
+  const callback = () => {};
+  const result = compiler.watchFileSystem.watch([f.entry],[f.root],[],123,runtime,callback,(path,time) => {
+   forwarded = [path,time];
+   if (path === f.entry) assert.equal(existsSync(file),false);
+  });
+  assert.equal(result,nativeWatcher); assert.equal(args[3],123); assert.equal(args[4].aggregateTimeout,17); assert.equal(args[5],callback);
+  assert.equal(runtime.ignored,ignored);
+  assert.deepEqual(args[4].ignored.slice(0,-1), ignored === undefined ? [] : Array.isArray(ignored) ? ignored : [ignored]);
+  const outputs = args[4].ignored.at(-1);
+  assert.ok(outputs.test(join(f.root,"editor-types"))); assert.ok(outputs.test(join(f.root,"node_modules/.metascript/webpack-private"))); assert.equal(outputs.test(f.entry),false);
+  args[6](join(f.root,"calls"),1); assert.ok(existsSync(file));
+  args[6](f.entry,2); assert.deepEqual(forwarded,[f.entry,2]);
+  generation(compiler); assert.ok(existsSync(file));
+ }
+ compiler.hooks.shutdown.call();
+});
+
+test("directory-only aggregates validate source bytes after failures and reuse unrelated or output-only snapshots", t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ f.state.fail = true; f.save();
+ const pluginCompiler = fakeCompiler(f.root, new MetaScriptPlugin(settings), {shutdown:new Hook()});
+ pluginCompiler.watchMode = true;
+ t.after(() => pluginCompiler.hooks.shutdown.call());
+ let g = generation(pluginCompiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),1);
+ const unknown = join(f.root,"not-yet-in-manifest.jms");
+ writeFileSync(unknown,"first bytes");
+ pluginCompiler.modifiedFiles = new Set([f.root]);
+ g = generation(pluginCompiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),2);
+ writeFileSync(unknown,"other bytes");
+ g = generation(pluginCompiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),3);
+ writeFileSync(join(f.root,"unrelated.txt"),"not a source");
+ g = generation(pluginCompiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),3);
+ f.state.fail = false; f.save(); writeFileSync(unknown,"valid bytes");
+ g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),4);
+ writeFileSync(join(f.root,"editor-types/ignored.jms"),"owned output");
+ g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),4);
+ assert.ok(existsSync(join(f.root,"editor-types/main.d.ms.ts")));
+ rmSync(unknown);
+ g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),5);
+});
+
+test("real webpack watch recovers missing new imports, deletion and restoration without output feedback", {skip:unavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t);
+ const missing = join(f.root,"new.jms"); f.state.required = missing; f.state.manifest.dependencies.push(missing);
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const plugin = new MetaScriptPlugin({...f.settings,declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ const compiler = webpack(nativeConfig(f,plugin));
+ memoryOutput(compiler);
+ const queue = watchTestQueue(); const invalid = [];
+ compiler.hooks.invalid.tap("test-observer",file => invalid.push(file));
+ const events = [];
+ const watching = compiler.watch({aggregateTimeout:10,ignored:/do-not-watch/},(error,stats) => { events.push({calls:f.calls(),invalid:[...invalid],modified:[...(compiler.modifiedFiles ?? [])],missing:existsSync(missing),types:existsSync(join(f.root,"editor-types/main.d.ms.ts")),errors:stats?.toString({all:false,errors:true})}); queue.push({error,stats}); });
+ t.after(() => t.diagnostic(JSON.stringify(events)));
+ t.after(() => close(compiler));
+ let result = await queue.next(); assert.equal(result.error,null); assert.equal(result.stats.hasErrors(),true);
+ const file = join(f.root,"editor-types/main.d.ms.ts"); assert.equal(existsSync(file),false);
+ writeFileSync(missing,"new type"); result = await queue.next(); assert.equal(result.error,null); assert.equal(result.stats.hasErrors(),false); assert.ok(existsSync(file));
+ rmSync(missing); result = await queue.next(); assert.equal(result.stats.hasErrors(),true); assert.equal(existsSync(file),false);
+ writeFileSync(missing,"restored type"); result = await queue.next(); assert.equal(result.stats.hasErrors(),false); assert.ok(existsSync(file));
+ await new Promise((resolve,reject) => watching.close(error => error ? reject(error) : resolve()));
+ await close(compiler);
+ assert.equal(f.calls(),4); assert.equal(queue.pending,0);
+ assert.equal(invalid.some(file => file.includes("editor-types") || file.includes(".metascript")),false);
+ assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
+});
+
+test("real webpack watch restart reacquires source lease on the same compiler", {skip:unavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t), settings = sourceSettings(f);
+ const compiler = webpack(nativeConfig(f,new MetaScriptPlugin(settings)));
+ memoryOutput(compiler);
+ const queue = watchTestQueue();
+ let watching;
+ const stop = async () => {
+  if (!watching) return;
+  await new Promise((resolve,reject) => watching.close(error => error ? reject(error) : resolve()));
+  watching = null;
+ };
+ t.after(async () => { await stop(); await close(compiler); });
+ const start = () => { watching = compiler.watch({aggregateTimeout:10,ignored:/do-not-watch/},(error,stats) => queue.push({error,stats})); };
+ const successful = async () => {
+  const {error,stats} = await queue.next();
+  assert.ifError(error);
+  assert.equal(stats.hasErrors(),false,stats.toString({all:false,errors:true}));
+  assert.equal(stats.compilation.getAssets().some(asset => asset.name.endsWith(".d.ts")),false);
+ };
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ const lease = join(f.root,"editor-types/.msc-source-lease");
+ start(); await successful();
+ const owner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
+ assert.ok(existsSync(file)); assert.equal(f.calls(),1);
+ await stop();
+ assert.equal(existsSync(lease),false); assert.ok(existsSync(file));
+ start(); await successful();
+ const nextOwner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
+ assert.equal(nextOwner.pid,process.pid); assert.notEqual(nextOwner.token,owner.token);
+ assert.ok(existsSync(file)); assert.equal(f.calls(),2);
+ await stop();
+ assert.equal(existsSync(lease),false); assert.equal(queue.pending,0);
 });

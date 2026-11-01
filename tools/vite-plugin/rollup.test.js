@@ -21,7 +21,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const state = JSON.parse(fs.readFileSync(path.join(__dirname, "state.json"), "utf8"));
 fs.appendFileSync(path.join(__dirname, "calls.jsonl"), "call\\n");
-if (state.fail) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
+if (state.fail || (state.required && !fs.existsSync(state.required))) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
 const out = process.argv.find(arg => arg.startsWith("--output=")).slice(9);
 for (const [name, text] of Object.entries(state.files)) {
  const file = path.join(out, name);
@@ -70,7 +70,7 @@ test("Rollup subpath ships native types and leaves the Vite default unchanged", 
 test("one compiler snapshot supplies every Rollup output and watches type-only dependencies", t => {
 	const f = fixture(t);
 	f.plugin.buildStart.call(f.context, { input: f.entry });
-	assert.deepEqual([...f.watched].sort(), [f.entry, f.dependency].sort());
+	assert.deepEqual([...f.watched].sort(), [f.entry, f.dependency, f.settings.msc].sort());
 	assert.equal(f.plugin.resolveId.call(f.context, f.entry), f.entry);
 	const loaded = f.plugin.load.call(f.context, f.entry);
 	assert.equal(loaded.code, "export const value = 1;\n");
@@ -107,13 +107,17 @@ test("lazy source imports choose one graph root and refuse uncompiled roots or i
 	assert.throws(() => f.plugin.resolveId.call(f.context, `${f.entry}?instance=missing`), /instance/);
 });
 
-test("multi-entry inputs fail instead of silently selecting one compiler root", t => {
-	for (const input of [["main.ms", "other.ms"], { main: "main.ms", other: "other.ms" }]) {
-		const f = fixture(t);
-		assert.throws(() => f.plugin.buildStart.call(f.context, { input }), /single.*root|one.*root/);
-		assert.equal(f.calls(), 0);
+test("multi-entry inputs use the explicit shared compiler roots", t => {
+	for (const input of [["main.ms", "types.jms"], {main:"main.ms", types:"types.jms"}]) {
+		const f = fixture(t, {entry:["main.ms", "types.jms"], declaration:false});
+		f.state.manifest.entries = [f.entry, f.dependency];
+		f.state.manifest.modules.push({source:f.dependency,out:"types.js"});
+		f.state.files["types.js"] = "export {};";
+		f.save();
+		f.plugin.buildStart.call(f.context, {input});
+		assert.equal(f.calls(),1);
+		assert.equal(f.plugin.resolveId.call(f.context, f.dependency), f.dependency);
 	}
-	assert.throws(() => metascript({ entry: ["a.ms", "b.ms"] }), /entry/);
 });
 
 test("relative emitted imports, reexports and dynamic imports resolve through manifest identities", t => {
@@ -277,4 +281,115 @@ test("real Rollup cache generations refresh type-only edits, drop assets and rec
 	output = (await bundle.generate({ format: "es" })).output;
 	assert.deepEqual(output.filter(item => item.type === "asset").map(item => item.fileName), ["renamed.d.ts"]);
 	assert.equal(f.calls(), 4);
+});
+
+test("Rollup source publisher keeps a watch lifetime lease across failed generations", t => {
+ const f = fixture(t, {declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ f.plugin.buildStart.call(f.context,{input:f.entry}); assert.ok(existsSync(file));
+ f.plugin.generateBundle.call(f.context); assert.deepEqual(f.assets,[]);
+ f.plugin.closeBundle.call({meta:{watchMode:true}});
+ assert.ok(existsSync(join(f.root,"editor-types/.msc-source-lease")));
+ f.plugin.watchChange(f.dependency); assert.equal(existsSync(file),false);
+ f.state.fail = true; f.save(); assert.throws(() => f.plugin.buildStart.call(f.context,{input:f.entry}),/diagnostic/);
+ assert.equal(existsSync(file),false);
+ f.state.fail = false; f.save(); f.plugin.buildStart.call(f.context,{input:f.entry}); assert.ok(existsSync(file));
+ f.plugin.closeWatcher(); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false); assert.ok(existsSync(file));
+});
+
+test("Rollup output-only watch generations reuse successful snapshots and retain failed diagnostics", t => {
+ const f = fixture(t, {declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ f.context.meta = {watchMode:true};
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ t.after(() => f.plugin.closeWatcher());
+ const build = () => f.plugin.buildStart.call(f.context,{input:f.entry});
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ build(); assert.equal(f.calls(),1); assert.ok(existsSync(file));
+ for (const output of [file,join(f.root,"node_modules/.metascript/private.js"),join(f.root,"unrelated.txt")]) {
+  f.plugin.watchChange(output); build(); assert.equal(f.calls(),1); assert.ok(existsSync(file));
+ }
+ f.plugin.watchChange(f.dependency); assert.equal(existsSync(file),false);
+ f.state.fail = true; f.save(); assert.throws(build,/diagnostic/); assert.equal(f.calls(),2);
+ f.plugin.watchChange(file); assert.throws(build,/diagnostic/); assert.equal(f.calls(),2); assert.equal(existsSync(file),false);
+ f.state.fail = false; f.save(); f.plugin.watchChange(f.dependency); build(); assert.equal(f.calls(),3); assert.ok(existsSync(file));
+});
+
+test("real Rollup watch discovers a missing new import, deletion and restoration without output feedback", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t,{declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ const missing = join(f.root,"new.jms");
+ f.state.required = missing; f.state.manifest.dependencies.push(missing);
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const queue = watchTestQueue();
+ const changes = [];
+ const watcher = realRollup.watch({input:f.entry, plugins:[f.plugin,{name:"watch-observer",watchChange(id){changes.push(id);}}], output:{dir:join(f.root,"dist"),format:"es"}, watch:{skipWrite:true}});
+ const events = [];
+ watcher.on("event", event => { events.push({code:event.code, calls:f.calls(), watchFiles:event.error?.watchFiles}); if(event.code === "ERROR") queue.push(event); if(event.code === "BUNDLE_END") { event.result.close(); queue.push(event); } });
+ t.after(() => t.diagnostic(JSON.stringify({events,changes})));
+ t.after(() => watcher.close());
+ assert.equal((await queue.next()).code,"ERROR");
+ const file = join(f.root,"editor-types/main.d.ms.ts"); assert.equal(existsSync(file),false);
+ writeFileSync(missing,"new type"); assert.equal((await queue.next()).code,"BUNDLE_END"); assert.ok(existsSync(file));
+ rmSync(missing); assert.equal((await queue.next()).code,"ERROR"); assert.equal(existsSync(file),false);
+ writeFileSync(missing,"restored type"); assert.equal((await queue.next()).code,"BUNDLE_END"); assert.ok(existsSync(file));
+ await watcher.close();
+ assert.equal(f.calls(),4); assert.equal(queue.pending,0);
+ assert.ok(changes.includes(missing));
+ assert.equal(changes.some(file => file.includes("editor-types") || file.includes(".metascript")),false);
+ assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
+});
+
+test("real Rollup watch restart recompiles offline edits and reacquires source lease", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t,{declaration:false,sourceDeclarations:{outDir:"editor-types"}});
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: 1;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const queue = watchTestQueue();
+ let watcher;
+ const stop = async () => { if (watcher) { await watcher.close(); watcher = null; } };
+ t.after(stop);
+ const start = () => {
+  watcher = realRollup.watch({input:f.entry,plugins:[f.plugin],output:{dir:join(f.root,"dist"),format:"es"},watch:{skipWrite:true}});
+  watcher.on("event",event => { if (event.code === "ERROR" || event.code === "BUNDLE_END") queue.push(event); });
+ };
+ const runtime = async () => {
+  const event = await queue.next();
+  assert.equal(event.code,"BUNDLE_END",event.error?.message);
+  try {
+   const {output} = await event.result.generate({format:"es"});
+   assert.equal(output.some(item => item.type === "asset"),false);
+   const chunk = output.find(item => item.type === "chunk" && item.isEntry);
+   return await import(`data:text/javascript;base64,${Buffer.from(chunk.code).toString("base64")}`);
+  } finally { await event.result.close(); }
+ };
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ const lease = join(f.root,"editor-types/.msc-source-lease");
+ start(); assert.equal((await runtime()).value,1);
+ const owner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
+ assert.equal(readFileSync(file,"utf8"),"export declare const value: 1;"); assert.equal(f.calls(),1);
+ await stop(); assert.equal(existsSync(lease),false);
+ f.state.files["nested/main.js"] = "export const value = 2;";
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: 2;"; f.save();
+ writeFileSync(f.entry,"offline source edit");
+ start(); assert.equal((await runtime()).value,2);
+ assert.equal(readFileSync(file,"utf8"),"export declare const value: 2;"); assert.equal(f.calls(),2);
+ const nextOwner = JSON.parse(readFileSync(join(lease,"owner.json"),"utf8"));
+ assert.equal(nextOwner.pid,process.pid); assert.notEqual(nextOwner.token,owner.token);
+ await stop(); assert.equal(existsSync(lease),false); assert.equal(queue.pending,0);
 });

@@ -3,6 +3,8 @@ import { join, resolve, dirname, relative } from "node:path";
 import MagicString from "magic-string";
 import { buildCompilerGraph, canonicalPath as canon, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, sourceDeclarationOutputPattern } from "./sourceDeclarations.js";
+
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
 
 function relativeSpecifiers(program) {
@@ -27,7 +29,10 @@ export default function metascript(options = {}) {
 	// Default inside the project: Vite serves files under root directly, while
 	// a tmpdir has to go through /@fs and dies under a stricter server.fs.allow.
 	let outDir = options.outDir ? resolve(options.outDir) : join(root, "node_modules/.metascript");
-	let entry = options.entry ? canon(resolve(options.entry)) : null;
+	let entry = null;
+	let entries = [];
+	let publisher = null;
+	let configFiles = [];
 	let emitted = null;
 	let server = null;
 	let compileFailed = false;
@@ -37,7 +42,7 @@ export default function metascript(options = {}) {
 
 	function registerWatchFiles(context) {
 		for (const file of watchFiles) context?.addWatchFile(file);
-		if (server) server.watcher.add([...watchFiles]);
+		if (server) server.watcher.add([...watchFiles, ...(options.sourceDeclarations ? sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]) : [])]);
 	}
 
 	function requireCurrentGeneration() {
@@ -48,19 +53,31 @@ export default function metascript(options = {}) {
 
 	function emit(context) {
 		dirty = true;
-		watchFiles.add(entry);
+		if (entries.length === 0) entries = [entry];
+		for (const file of entries) watchFiles.add(file);
+		for (const file of configFiles) watchFiles.add(file);
+		if (options.msc) watchFiles.add(canon(resolve(options.msc)));
 		registerWatchFiles(context);
-		const next = buildCompilerGraph({ ...options, root, entry, outDir });
+		if (options.sourceDeclarations) {
+			publisher ??= createSourceDeclarationPublisher(options.sourceDeclarations, root);
+			publisher.invalidate();
+		}
+		let next;
+		try {
+			next = buildCompilerGraph({ ...options, root, entry: entries, outDir, sourceRoot: publisher?.sourceRoot });
+			publisher?.publish(next);
+		} catch (error) { publisher?.invalidate(); throw error; }
 		emitted = next;
 		dirty = false;
-		watchFiles = new Set(next.dependencies);
+		watchFiles = new Set([...next.dependencies, ...configFiles, ...(options.msc ? [canon(resolve(options.msc))] : [])]);
 		registerWatchFiles(context);
 	}
 
 	function hotUpdate(ctx, context) {
 		const source = canon(ctx.file);
 		if (emitted?.byOutput.has(source)) return [];
-		if (!watchFiles.has(source)) return;
+		if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, outDir).test(source)) return [];
+		if (!watchFiles.has(source) && !(options.sourceDeclarations && /\.(ms|jms)$/.test(source) && sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]).some(path => source.startsWith(`${path}/`)))) return;
 		const previous = emitted;
 		try {
 			emit(context);
@@ -104,7 +121,11 @@ export default function metascript(options = {}) {
 		configResolved(config) {
 			root = config.root;
 			if (!options.outDir) outDir = join(root, "node_modules/.metascript");
-			if (entry === null && options.entry) entry = canon(resolve(root, options.entry));
+			configFiles = [...(config.configFileDependencies ?? []), ...(config.configFile ? [config.configFile] : [])].map(file => canon(resolve(file)));
+			if (options.entry) {
+				entries = (Array.isArray(options.entry) ? options.entry : [options.entry]).map(file => canon(resolve(root, file)));
+				entry = entries[0];
+			}
 		},
 
 		buildStart() {
@@ -113,7 +134,7 @@ export default function metascript(options = {}) {
 		},
 
 		watchChange(id) {
-			if (watchFiles.has(canon(stripQuery(id)))) dirty = true;
+			if (watchFiles.has(canon(stripQuery(id)))) { dirty = true; publisher?.invalidate(); }
 		},
 
 		configureServer(s) {
@@ -128,6 +149,7 @@ export default function metascript(options = {}) {
 			};
 			s.watcher.on("add", refresh);
 			s.watcher.on("unlink", refresh);
+			registerWatchFiles();
 			stopWatching = () => {
 				s.watcher.off("add", refresh);
 				s.watcher.off("unlink", refresh);
@@ -138,6 +160,8 @@ export default function metascript(options = {}) {
 			stopWatching?.();
 			stopWatching = null;
 			server = null;
+			publisher?.close();
+			publisher = null;
 		},
 
 		handleHotUpdate(ctx) {

@@ -29,6 +29,7 @@
     "index.d.ts",
     "compilerCore.js",
     "compilerCore.d.ts",
+    "sourceDeclarations.js",
     "rollup.js",
     "rollup.d.ts",
     "webpack.js",

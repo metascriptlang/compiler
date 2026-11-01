@@ -134,7 +134,7 @@ describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", 
 	test("buildStart watches compiler inputs even when no runtime resolve requests them", t => {
 		const f = fixture(t);
 		f.plugin.buildStart.call(f.context);
-		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput].sort());
+		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput, join(f.root,"fake-msc.cjs")].sort());
 		assert.equal(f.plugin.resolveId.call(f.context, "./main.ms?v=1"), f.entry);
 		assert.equal(f.calls().length, 1);
 	});
@@ -144,10 +144,10 @@ describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", 
 		f.plugin.buildStart.call(f.context);
 		f.watched.clear();
 		const loaded = f.plugin.load.call(f.context, f.entry);
-		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput].sort());
+		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput, join(f.root,"fake-msc.cjs")].sort());
 		f.watched.clear();
 		f.plugin.transform.call({ ...f.context, parse: () => ({ type: "Program", body: [] }) }, loaded.code, f.entry);
-		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput].sort());
+		assert.deepEqual([...f.watched].sort(), [f.entry, f.typeInput, join(f.root,"fake-msc.cjs")].sort());
 	});
 
 	test("an omitted entry still compiles lazily on the first source import", t => {
@@ -392,4 +392,23 @@ describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", 
 		assert.deepEqual(hot(f, server), []);
 		assert.equal(f.plugin.load.call(f.context, f.entry).code, "export const value = 1;\n");
 	});
+});
+
+test("source-only Vite publication invalidates dirty and failed types, recovers same lease, closes offline", t => {
+ const f = fixture(t, {sourceDeclarations:{outDir:"editor-types"}});
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;";
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}'; f.save();
+ const server = devServer(); f.plugin.configureServer(server);
+ f.plugin.buildStart.call(f.context);
+ const file = join(f.root,"editor-types/main.d.ms.ts");
+ assert.ok(existsSync(file)); f.plugin.generateBundle.call(f.context); assert.deepEqual(f.assets,[]);
+ f.plugin.watchChange(f.typeInput); assert.equal(existsSync(file),false);
+ f.state.fail = true; f.save(); f.plugin.handleHotUpdate.call(f.context,{file:f.typeInput,server});
+ assert.equal(existsSync(file),false); assert.match(server.sent.at(-1).err.message,/diagnostic/);
+ f.state.fail = false; f.save(); f.plugin.handleHotUpdate.call(f.context,{file:f.typeInput,server});
+ assert.ok(existsSync(file)); f.plugin.closeBundle();
+ assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
 });
