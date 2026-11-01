@@ -23,6 +23,19 @@ test "exportStarIdentity: a name the hub imported still goes out through export 
 	assert d == "", d;
 }
 
+test "exportStarIdentity: an extern class keeps its extern methods through export *, inherited ones included" {
+	const classes = "export extern class Probe {\n\twidth: number;\n\textern size(): number;\n}\nexport extern class Wide extends Probe {\n\textern depth(): number;\n}\n";
+	const use = `import { Probe, Wide } from "./hub";\nfunction total(p: Probe, w: Wide): number { return p.width + p.size() + w.size() + w.depth(); }\n`;
+	for (const hub of ["export * from \"./classes\";\n", "export { Probe, Wide } from \"./classes\";\n"]) {
+		const files: MapEntry[] = [
+			{ entryPath: "src/classes.ms", entrySource: classes },
+			{ entryPath: "src/hub.ms", entrySource: hub },
+		];
+		const d = diagnostics680(files, use);
+		assert d == "", hub + d;
+	}
+}
+
 test "exportStarIdentity: an import does not shadow a star export of the same name" {
 	const files: MapEntry[] = [
 		{ entryPath: "src/x.ms", entrySource: "export struct A { v: int32; }\n" },
