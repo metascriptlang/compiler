@@ -1,17 +1,31 @@
-// @stdout: ed25519 64 distinct true x25519 32 distinct true
+// @stdout: ed25519 32 distinct true x25519 32 distinct true
 // @exit: 0
 // @skip-js: std/crypto has only a C backend; there is no .jms
 // @skip-raiser: the raiser std/crypto carries only the string-encoded hash family
 import { Buffer } from "std/core/buffer";
-import { ed25519Generate } from "std/crypto/ed25519";
-import { x25519Generate } from "std/crypto/x25519";
+import { Ed25519PrivateKey } from "std/crypto/ed25519";
+import { X25519PrivateKey } from "std/crypto/x25519";
 
-const signA = ed25519Generate();
-const signB = ed25519Generate();
-const dhA = x25519Generate();
-const dhB = x25519Generate();
-const signLength = signA.ok ? signA.value.length : -1;
-const dhLength = dhA.ok ? dhA.value.length : -1;
-const signDistinct = signA.ok && signB.ok && Buffer.compare(signA.value, signB.value) != 0;
-const dhDistinct = dhA.ok && dhB.ok && Buffer.compare(dhA.value, dhB.value) != 0;
+function signSeed(): Buffer | null {
+	const key = Ed25519PrivateKey.generateSync();
+	if (!key.ok) return null;
+	const seed = key.value.exportSeedSync();
+	return seed.ok ? seed.value : null;
+}
+
+function dhPublic(): Buffer | null {
+	const key = X25519PrivateKey.generateSync();
+	if (!key.ok) return null;
+	const raw = key.value.publicKey().exportSync();
+	return raw.ok ? raw.value : null;
+}
+
+const signA = signSeed();
+const signB = signSeed();
+const dhA = dhPublic();
+const dhB = dhPublic();
+const signLength = signA != null ? signA.length : -1;
+const dhLength = dhA != null ? dhA.length : -1;
+const signDistinct = signA != null && signB != null && Buffer.compare(signA, signB) != 0;
+const dhDistinct = dhA != null && dhB != null && Buffer.compare(dhA, dhB) != 0;
 console.log(`ed25519 ${signLength} distinct ${signDistinct} x25519 ${dhLength} distinct ${dhDistinct}`);
