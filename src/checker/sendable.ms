@@ -1388,7 +1388,57 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements", at.location.line, at.location.column);
 		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
-		addError(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
+		addError(ctx, runs + ", but it " + c.text + MODULE_STATE_RULE, at.location.line, at.location.column);
+	});
+}
+
+const MODULE_STATE_RULE = "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>";
+
+export function checkActorStoredClosures(actorName: string, body: Node[]): void {
+	for (const raw of body) {
+		const m = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (m == null) continue;
+		if (m.kind == NodeKind.PropertyDecl) {
+			const pd = m.data as PropertyDeclData;
+			if (!pd.propIsStatic && pd.propInitializer != null) refuseStoredClosureReach(actorName, pd.propName, pd.propInitializer!);
+		} else if (m.kind == NodeKind.ConstructorDecl) {
+			collectThisStores(actorName, (m.data as ConstructorDeclData).ctorBody);
+		}
+	}
+}
+
+function collectThisStores(actorName: string, node: Node | null): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr && isThisIdent((d.left.data as MemberExprData).object)) {
+			refuseStoredClosureReach(actorName, (d.left.data as MemberExprData).property, d.right);
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectThisStores(actorName, child); });
+}
+
+function refuseStoredClosureReach(actorName: string, field: string, value: Node): void {
+	const v = peelHidden(value);
+	const closure = v.kind == NodeKind.ArrowFunction || v.kind == NodeKind.FunctionExpr ? v
+		: v.kind == NodeKind.Identifier ? boundRoutine(v.resolvedSym) : null;
+	if (closure == null) return;
+	deferEffectCheck(closure, "actorModuleState", (ctx: CheckerContext): void => {
+		const c = walkEffect(closure, Effect.ActorReach);
+		if (c == null) return;
+		addError(ctx, "actor '" + actorName + "' runs the closure stored in '" + field + "' on whichever thread takes its message, but it " + c.text + MODULE_STATE_RULE, closure.location.line, closure.location.column);
+	});
+}
+
+export function checkActorMethodModuleState(actorName: string, raw: Node): void {
+	const method = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+	if (method == null || method.kind != NodeKind.MethodDecl) return;
+	const md = method.data as MethodDeclData;
+	if (md.methodIsStatic) return;
+	deferEffectCheck(method, "actorModuleState", (ctx: CheckerContext): void => {
+		const c = walkEffect(method, Effect.ActorReach);
+		if (c == null) return;
+		addError(ctx, "actor '" + actorName + "' runs '" + md.methodName + "' on whichever thread takes its message, but it " + c.text + MODULE_STATE_RULE, method.location.line, method.location.column);
 	});
 }
 

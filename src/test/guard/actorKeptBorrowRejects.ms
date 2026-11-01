@@ -48,9 +48,9 @@ actor Keeper {
 	cb: (() => int32) | null = null;
 	take(s: State): int32 { this.keep = s; return s.count; }
 	file(s: State): int32 { this.byName.set("k", s); return s.count; }
-	note(s: State): int32 { last = s; return s.count; }
+	note(s: State): int32 { last = s; return s.count; } // GUARD-REFUSED
 	alias(s: State): int32 { const held = s; this.keep = held; return s.count; }
-	relay(s: State): int32 { park(s); return s.count; }
+	relay(s: State): int32 { park(s); return s.count; } // GUARD-REFUSED
 	hook(s: State): int32 { this.cb = () => s.count; return s.count; }
 	stack(s: State): int32 { const xs = this.list; xs.push(s); return s.count; }
 	pick(s: State): int32 { this.keep = nextOf(s); return s.count; }
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
 	const w = new Keeper();
 	const st = new State();
 	st.count = 3;
-	const t = await w.take(st) + await w.file(st) + await w.note(st) + await w.alias(st) + await w.relay(st) + await w.hook(st) + await w.stack(st) + await w.pick(st) + await w.pickLocal(st) + await w.pickField(st);
+	const t = await w.take(st) + await w.file(st) + await w.note(st) + await w.alias(st) + await w.relay(st) + await w.hook(st) + await w.stack(st) + await w.pick(st) + await w.pickLocal(st) + await w.pickField(st); // GUARD-REFUSED
 	stop(w.pid, ExitReason.Normal);
 	console.log(`t=${t}`);
 }
