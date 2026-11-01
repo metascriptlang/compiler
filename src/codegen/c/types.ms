@@ -12,7 +12,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly, isCTagSpelling } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName } from "./names";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName, rootedModuleKey } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
@@ -66,9 +66,20 @@ export interface KeyedOp {
 	canon: boolean;
 }
 
-let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
-let _opKeyOfSym: HashMap<Symbol, string> = new HashMap<Symbol, string>();
-let _opOrder: KeyedOp[] = [];
+class OpTable {
+	syms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+	keyOfSym: HashMap<Symbol, string> = new HashMap<Symbol, string>();
+	order: KeyedOp[] = [];
+}
+
+let _opShared = new OpTable();
+let _opTables: HashMap<string, OpTable> = new HashMap<string, OpTable>();
+let _opModule = "";
+let _opWriting = _opShared;
+let _opView: OpTable[] = [];
+let _opRanked: string[] = [];
+let _opRank: HashMap<string, int32> = new HashMap<string, int32>();
+let _opMerged: HashMap<string, Symbol> | null = null;
 let _reusedOps: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 
 export function sealHookSyms(sealed: boolean): void {
@@ -76,10 +87,89 @@ export function sealHookSyms(sealed: boolean): void {
 }
 
 export function resetHookSyms(): void {
-	_opSyms = new HashMap<string, Symbol>();
-	_opKeyOfSym = new HashMap<Symbol, string>();
-	_opOrder = [];
+	_opShared = new OpTable();
+	_opTables = new HashMap<string, OpTable>();
+	_opModule = "";
+	_opWriting = _opShared;
+	_opView = [];
+	_opRanked = [];
+	_opRank = new HashMap<string, int32>();
+	_opMerged = null;
 	_reusedOps = new HashMap<string, Symbol>();
+}
+
+export function rankOpModules(paths: Readonly<string[]>, images: Readonly<string[]>): void {
+	const roots = buildModuleNameRoots();
+	const keyed: string[] = [];
+	for (const path of paths) keyed.push(`${images.includes(path) ? "1" : "0"}${rootedModuleKey(roots, path)}\t${path}`);
+	keyed.sort();
+	_opRanked = [];
+	_opRank = new HashMap<string, int32>();
+	for (const entry of keyed) {
+		const path = entry.substring(entry.indexOf("\t") + 1);
+		_opRank.set(path, _opRanked.length as int32);
+		_opRanked.push(path);
+	}
+	_opMerged = null;
+}
+
+function opRankOf(modulePath: string): int32 {
+	const rank = _opRank.get(modulePath);
+	if (rank == null) throw new Error(`internal: module ${modulePath} lifts operations but was never ranked for their ownership`);
+	return rank;
+}
+
+function opTableOf(modulePath: string): OpTable {
+	const held = _opTables.get(modulePath);
+	if (held != null) return held;
+	const table = new OpTable();
+	_opTables.set(modulePath, table);
+	return table;
+}
+
+export function enterModuleOps(modulePath: string, closure: Readonly<HashSet<string>>): void {
+	_opModule = modulePath;
+	_opWriting = opTableOf(modulePath);
+	_opView = [_opWriting];
+	for (const path of _opRanked) {
+		if (path != modulePath && closure.has(path)) _opView.push(opTableOf(path));
+	}
+	_opView.push(_opShared);
+}
+
+export function leaveModuleOps(): void {
+	_opModule = "";
+	_opWriting = _opShared;
+	_opView = [];
+	_reusedOps = new HashMap<string, Symbol>();
+}
+
+function mergedOps(): HashMap<string, Symbol> {
+	if (_opMerged != null) return _opMerged!;
+	const merged = new HashMap<string, Symbol>();
+	const winners = new HashMap<string, string>();
+	for (const key of _opShared.syms.keys()) merged.set(key, _opShared.syms.get(key)!);
+	for (const path of _opTables.keys()) {
+		const table = _opTables.get(path)!;
+		for (const key of table.syms.keys()) {
+			if (merged.has(key) && !winners.has(key)) continue;
+			const held = winners.get(key);
+			if (held != null && opRankOf(path) > opRankOf(held)) continue;
+			merged.set(key, table.syms.get(key)!);
+			winners.set(key, path);
+		}
+	}
+	_opMerged = merged;
+	return merged;
+}
+
+function viewedOp(key: string): Symbol | null {
+	if (_opModule == "") return _opTables.size == 0 ? _opShared.syms.get(key) : mergedOps().get(key);
+	for (const table of _opView) {
+		const sym = table.syms.get(key);
+		if (sym != null) return sym;
+	}
+	return null;
 }
 
 export function reuseOps(ops: KeyedOp[]): void {
@@ -139,21 +229,23 @@ export function opKey(t: Readonly<Type>, op: AttachedOp): string {
 }
 
 function recordOp(key: string, sym: Symbol, canon: boolean): void {
-	const held = _opSyms.get(key);
+	const table = _opWriting;
+	const held = table.syms.get(key);
 	if (held != null && held != sym) {
 		throw new Error(`internal: type-bound op ${key} is both '${held.name}' and '${sym.name}'`);
 	}
 	if (canon) {
-		const heldKey = _opKeyOfSym.get(sym);
+		const heldKey = table.keyOfSym.get(sym);
 		if (heldKey != null && heldKey != key) {
 			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
 		}
-		if (heldKey == null) _opKeyOfSym.set(sym, key);
+		if (heldKey == null) table.keyOfSym.set(sym, key);
 		setFlag(sym, SymbolFlag.TypeBoundOp);
 	}
 	if (held == sym) return;
-	_opSyms.set(key, sym);
-	_opOrder.push({ key, sym, canon });
+	table.syms.set(key, sym);
+	table.order.push({ key, sym, canon });
+	_opMerged = null;
 }
 
 export function setOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
@@ -169,17 +261,16 @@ export function isTypeBoundOp(sym: Readonly<Symbol>): boolean {
 }
 
 export function hasLiftedOp(t: Type, op: AttachedOp): boolean {
-	const sym = _opSyms.get(opKey(t, op));
+	const sym = viewedOp(opKey(t, op));
 	return sym != null && sym.state == SymbolState.Checked;
 }
 
 export function getOpByKey(t: Readonly<Type>, op: AttachedOp): Symbol | null {
-	return _opSyms.get(opKey(t, op));
+	return viewedOp(opKey(t, op));
 }
 
-// The lifted-op table, handed to emission through its facts.
 export function hookOps(): HashMap<string, Symbol> {
-	return _opSyms;
+	return mergedOps();
 }
 
 export function getOpByKeyIn(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, t: Type, op: AttachedOp): Symbol | null;
@@ -190,14 +281,14 @@ export function getOpByKeyIn(ops: Readonly<HashMap<string, Symbol>>, roots: Read
 
 export function requireOpByKey(t: Type, op: AttachedOp): Symbol {
 	const key = opKey(t, op);
-	const sym = _opSyms.get(key);
+	const sym = viewedOp(key);
 	if (sym == null) throw new Error(`internal: type-bound op ${key} is used before it was lifted`);
 	return sym;
 }
 
 export function opPrototype(t: Type, op: AttachedOp, name: string, ctx: CheckerContext): Symbol {
 	const key = opKey(t, op);
-	const existing = _opSyms.get(key);
+	const existing = viewedOp(key);
 	if (existing != null) return existing;
 	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
 	const sym = newSym(ctx, SymbolKind.Function, name, null);
@@ -209,17 +300,18 @@ export function opPrototype(t: Type, op: AttachedOp, name: string, ctx: CheckerC
 }
 
 export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
-	const sym = _opSyms.get(opKey(canon, op));
+	const sym = viewedOp(opKey(canon, op));
 	if (sym != null) recordOp(opKey(orig, op), sym, false);
 }
 
 export function opMark(): int32 {
-	return _opOrder.length as int32;
+	return _opWriting.order.length as int32;
 }
 
 export function opsFrom(mark: int32): KeyedOp[] {
 	const taken: KeyedOp[] = [];
-	for (let i = mark; i < _opOrder.length; i += 1) taken.push(_opOrder[i]);
+	const order = _opWriting.order;
+	for (let i = mark; i < order.length; i += 1) taken.push(order[i]);
 	return taken;
 }
 
@@ -229,10 +321,10 @@ export function replayOps(ops: KeyedOp[]): void {
 
 export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | null): Symbol {
 	const key = opKey(t, op);
-	const held = _opSyms.get(key);
+	const held = viewedOp(key);
 	if (held != null) {
 		if (held.name != name) throw new Error(`internal: type-bound op ${key} is '${held.name}', requested as '${name}'`);
-		if (fnType != null) held.symbolType = fnType;
+		if (fnType != null && (_opModule == "" || _opWriting.keyOfSym.has(held))) held.symbolType = fnType;
 		return held;
 	}
 	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
@@ -1147,7 +1239,7 @@ export function refArrayCellKey(arrT: Readonly<Type>): string {
 }
 
 export function refArrayCellOp(arrT: Readonly<Type>, op: AttachedOp): Symbol | null {
-	return _opSyms.get(attachedOpName(op) + "|" + refArrayCellKey(arrT));
+	return viewedOp(attachedOpName(op) + "|" + refArrayCellKey(arrT));
 }
 
 export function refArrayCellOpIn(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, arrT: Type, op: AttachedOp): Symbol | null;

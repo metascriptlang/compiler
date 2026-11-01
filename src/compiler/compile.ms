@@ -47,7 +47,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
-import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps } from "../codegen/c/types";
+import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps, rankOpModules, enterModuleOps, leaveModuleOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -711,6 +711,7 @@ interface A2Job {
 	errBase: int32;
 	nativeCtx: TransformContext | null;
 	transformOps: KeyedOp[];
+	opClosure: HashSet<string>;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -741,6 +742,24 @@ function coreBeforeImages(paths: string[], imagePaths: string[]): int32[] {
 	return order;
 }
 
+function importClosure(graph: ModuleGraph, modulePath: string): HashSet<string> {
+	const seen = new HashSet<string>();
+	const start = findModule(graph, modulePath);
+	const pending: string[] = [];
+	if (start != null && !start.stdPrelude && !start.extraPrelude) {
+		for (const mod of graph.modules) if (mod.stdPrelude || mod.extraPrelude) pending.push(mod.path);
+	}
+	if (start != null) for (const entry of start.imports) pending.push(entry.sourcePath);
+	while (pending.length > 0) {
+		const path = pending.pop()!;
+		if (path == modulePath || seen.has(path)) continue;
+		seen.add(path);
+		const mod = findModule(graph, path);
+		if (mod != null) for (const entry of mod.imports) pending.push(entry.sourcePath);
+	}
+	return seen;
+}
+
 function programWithInstances(program: Node, instances: Node[] | null): Node {
 	if (instances == null || instances.length == 0) return program;
 	const stmts: Node[] = [];
@@ -751,6 +770,7 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 
 function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
+	enterModuleOps(job.modPath, job.opClosure);
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -813,10 +833,12 @@ function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node
 	job.errBase = errBase;
 	job.nativeCtx = nativeCtx;
 	job.transformOps = opsFrom(keyedOpMark);
+	leaveModuleOps();
 	return hcrLifted;
 }
 
 function analyzeModuleA2(hcrLifted: Node, ctx: CheckerContext, job: A2Job): Node {
+	enterModuleOps(job.modPath, job.opClosure);
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -845,6 +867,7 @@ function analyzeModuleA2(hcrLifted: Node, ctx: CheckerContext, job: A2Job): Node
 	truncateErrors(ctx, job.errBase);
 	const ops = job.transformOps;
 	for (const op of opsFrom(keyedOpMark)) ops.push(op);
+	leaveModuleOps();
 	job.claims = { ops, contracts: contractClaims(job.writeTables) };
 	return nativeLowered;
 }
@@ -3179,9 +3202,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	}
 	requirePreparedToolchain();
 
-// Reference parity: global hook ownership registry shared across all modules.
-// First module to need a type's DRC hooks generates them; others get extern protos.
-// Before the graph check: enum toString ops register during checking, and this resets the op table.
+// Before the graph check: enum toString ops register during checking, and this resets the op tables.
 resetLiftedOps();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
@@ -3321,6 +3342,7 @@ resetLiftedOps();
 	const checkedPaths: string[] = [];
 	for (const cm of checkedMods) checkedPaths.push(cm.modPath);
 	const lowerOrder = coreBeforeImages(checkedPaths, reloadable);
+	rankOpModules(checkedPaths, reloadable);
 	const lazyPlan = planDynamicModules(graph, entryPath, checkedPaths, config.stdPath);
 	const asyncBodies = new HashSet<string>();
 	for (const cm of checkedMods) if (lazyPlan.lazy.has(cm.modPath) && hasTopLevelAwait(cm.program)) asyncBodies.add(cm.modPath);
@@ -3382,8 +3404,10 @@ resetLiftedOps();
 			errBase: 0,
 			nativeCtx: null,
 			transformOps: [],
+			opClosure: importClosure(graph, modPath),
 		};
 		if (session.keep) {
+			enterModuleOps(modPath, job.opClosure);
 			const earlier = session.lowerClaims.get(modPath);
 			if (earlier != null) {
 				reuseClones(writeTables, earlier.contracts);
@@ -3404,6 +3428,7 @@ resetLiftedOps();
 				loweredByPath.set(modPath, tree);
 				noteUnitDecls(liftTables, modPath, tree);
 			}
+			leaveModuleOps();
 		} else {
 			const tree = transformModuleA2(program, ctx, job);
 			staged.push({ at, job, tree });
