@@ -18,8 +18,8 @@ function hexadecimal(text: string): int32 {
 	let code: int32 = 0;
 	for (let i: int32 = 0; i < text.length; i += 1) {
 		const c = text.charCodeAt(i);
-		const digit = c >= 48 && c <= 57 ? c - 48 :
-			(c >= 65 && c <= 70 ? c - 65 + 10 : -1);
+		const digit = c >= "0".code && c <= "9".code ? c - "0".code :
+			(c >= "A".code && c <= "F".code ? c - "A".code + 10 : -1);
 		if (digit < 0 || code > (MAX_SCALAR - digit) / 16) {
 			throw new Error("invalid casefold scalar: " + text);
 		}
@@ -84,27 +84,28 @@ function table(name: string, data: int32[]): string {
 	return text + "];\n";
 }
 
-function generate(input: string): string {
-	const read = readUtf8File(input);
-	if (!read.ok) { throw new Error(read.error); }
-	const digest = sha256(read.value);
-	if (!digest.ok) { throw new Error(digest.error.message); }
+function generate(input: string): Result<string, string> {
+	const source = try readUtf8File(input);
+	const digest = sha256(source);
+	if (!digest.ok) { return Result.err(digest.error.message); }
 	if (digest.value != DATA_SHA256) {
-		throw new Error("casefold data cohort mismatch");
+		return Result.err("casefold data cohort mismatch");
 	}
-	const rows = mappings(read.value);
+	const rows = mappings(source);
 	let text = "export const CASE_FOLD_VERSION = \"17.0.0\";\n";
 	text += "export const CASE_FOLD_DATA_SHA256 =\n\t\"" + DATA_SHA256 +
 		"\";\n\n";
 	text += table("FOLD_CODES", rows.codes) + "\n";
 	text += table("FOLD_OFFSETS", rows.offsets) + "\n";
 	text += table("FOLD_VALUES", rows.values);
-	return text;
+	return Result.ok(text);
 }
 
 when (!testBuild) {
 	if (argv.length != 2) {
 		throw new Error("usage: generateFileCaseFold.ms input");
 	}
-	writeStdout(generate(argv[1]));
+	const generated = generate(argv[1]);
+	if (!generated.ok) { throw new Error(generated.error); }
+	writeStdout(generated.value);
 }
