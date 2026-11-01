@@ -471,22 +471,15 @@ test "js side: a checked build carries the check glue once" {
 
 test "js side: a checked scalar parameter is tested for its JS type and range before the call" {
 	const code = bindingsFor(["add64", "isEven", "flip", "wide"], true).modules[0].code;
-	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbInt(a0, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbInt(a1, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();
-	return __msbMod._msb_calc_add64(a0, a1);\n}");
+	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbInt(a0, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbInt(a1, \"bigint\", -9223372036854775808n, 9223372036854775807n, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
 	assert code.includes("\t__msbInt(a0, \"number\", 0, 255, \"uint8\", \"isEven\", \"parameter 'x'\");\n");
-	assert code.includes("\t__msbType(a0, \"boolean\", \"boolean\", \"flip\", \"parameter 'b'\");\n\t__msb.enter();
-	return __msbMod._msb_calc_flip((a0 ? 1 : 0)) !== 0;");
+	assert code.includes("\t__msbType(a0, \"boolean\", \"boolean\", \"flip\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_flip((a0 ? 1 : 0)) !== 0;");
 	assert code.includes("\t__msbInt(a0, \"number\", 0, 4294967295, \"uint32\", \"wide\", \"parameter 'x'\");\n");
 }
 
 test "js side: a checked string parameter is tested before anything is allocated" {
 	const code = bindingsFor(["twice"], true).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();
-	let r;
-	const d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;
-	let e0, sent = false;
-	const mark = __msbTop;
-	try {");
+	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0, sent = false;\n\tconst mark = __msbTop;\n\ttry {");
 }
 
 test "js side: a checked struct is tested object by object, then field by field, in leaf order, before its taker is pushed" {
