@@ -243,7 +243,7 @@ function prepare(tally: Tally, layout: Layout): boolean {
 
 	expectOk(tally, copyFile(execPath, layout.childPath), "copy self");
 	if (platform != "windows") {
-		expectOk(tally, chmod(layout.childPath, 493), "chmod copy 0755");
+		expectOk(tally, chmod(layout.childPath, 0o755), "chmod copy 0755");
 	}
 	expectTrue(tally, isExecutable(layout.childPath), "copy is executable");
 	expectTrue(
