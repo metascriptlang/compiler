@@ -151,6 +151,9 @@ typedef struct msAwaitGroup {
 	void** results;               /* size-length array of void* result values */
 	bool timedOut;                /* Phase 3: set when blocking returns due to timeout */
 	_Atomic(void*) doneFut;       /* Phase 4: msFuture_void* completed when all slots done (NULL = blocking path) */
+	int64_t doneAtMs;             /* monotonic time the last slot finished, written before doneFut completes */
+	int64_t deadlineMs;           /* an async timed wait's deadline, 0 when untimed */
+	int64_t deadlineTimer;        /* the timer that cancels the group at deadlineMs */
 
 #ifdef _WIN32
 	CRITICAL_SECTION cs;
@@ -217,6 +220,8 @@ void msAwaitGroupBlocking(msAwaitGroup* g);
  * Sets g->timedOut = true and g->cancelled = true if deadline expires before
  * all slots complete. Workers check cancelled at safe points to early-return. */
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs);
+void msAwaitGroupArmDeadline(msAwaitGroup* g, int64_t timeoutMs);
+void msAwaitGroupDisarmDeadline(msAwaitGroup* g);
 
 /* ===== Queries (non-blocking, for advanced use) ===== */
 

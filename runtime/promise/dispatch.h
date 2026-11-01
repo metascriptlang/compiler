@@ -39,12 +39,14 @@ typedef struct msTimer {
 	int64_t periodMs;      /* > 0 → interval: re-armed after each fire */
 	bool cancelled;        /* clearTimeout/clearInterval marks, the loop skips */
 	bool actorJob;         /* cb.env is an actor job record (actor.h): posted, never run here */
+	struct msAwaitGroup* group; /* a timed await's deadline: expires the group, under the timer lock */
 } msTimer;
 
 typedef struct msTimerHeap {
 	msTimer* data;
 	int len;
 	int cap;
+	int live;              /* entries not cancelled: only these keep a loop from idling */
 } msTimerHeap;
 
 /* ===== Cross-Thread Completion ===== */

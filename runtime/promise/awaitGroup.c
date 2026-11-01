@@ -103,6 +103,7 @@ void msAwaitGroupFree(msAwaitGroup* g) {
 static void finishSlot(msAwaitGroup* g) {
 	int32_t prev = atomic_fetch_sub_explicit(&g->pending, 1, memory_order_acq_rel);
 	if (prev <= 1) {
+		g->doneAtMs = msMonoTimeMs();
 		/* We were the last — wake any waiter. */
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
@@ -244,6 +245,26 @@ static bool msAwaitGroupExpired(msAwaitGroup* g, int64_t deadlineMs) {
 	atomic_store_explicit(&g->cancelled, true, memory_order_release);
 	return true;
 }
+
+void msAwaitGroupExpire(msAwaitGroup* g) {
+	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) return;
+	atomic_store_explicit(&g->cancelled, true, memory_order_release);
+}
+
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM)
+extern int64_t msArmGroupTimer(msAwaitGroup* g, int64_t finishAtMs);  /* dispatchFull.c */
+extern void msTimerCancelId(int64_t id);
+
+void msAwaitGroupArmDeadline(msAwaitGroup* g, int64_t timeoutMs) {
+	g->deadlineMs = msMonoTimeMs() + (timeoutMs > 0 ? timeoutMs : 0);
+	g->deadlineTimer = msArmGroupTimer(g, g->deadlineMs);
+}
+
+void msAwaitGroupDisarmDeadline(msAwaitGroup* g) {
+	msTimerCancelId(g->deadlineTimer);
+	g->timedOut = atomic_load_explicit(&g->cancelled, memory_order_acquire) || g->doneAtMs >= g->deadlineMs;
+}
+#endif
 
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	/* Fast path: already done. */

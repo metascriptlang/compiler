@@ -1263,6 +1263,12 @@ when (mscDeclaresRuntime) {
 	extern function msAwaitGroupBlockingWithDeadline(g: Ptr<void>, deadlineMs: int64): void;
 
 	@compilerFunc
+	extern function msAwaitGroupArmDeadline(g: Ptr<void>, timeoutMs: int64): void;
+
+	@compilerFunc
+	extern function msAwaitGroupDisarmDeadline(g: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msAwaitGroupResult(g: Ptr<void>, slot: int32): Ptr<void>;
 
 	@compilerFunc

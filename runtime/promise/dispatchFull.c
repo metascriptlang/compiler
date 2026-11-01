@@ -200,6 +200,8 @@ void msIoOpsAdd(int32_t delta) {
 extern _Thread_local int msPoolWorkerSchedId;
 extern void msPoolWakeWorker(int schedulerID);
 extern void msPoolPendingAdd(int32_t delta);
+extern void msAwaitGroupExpire(struct msAwaitGroup* g);  /* awaitGroup.c */
+static int msProcessTimersIn(msDispatcher* d, msTimerHeap* heap, bool* didWork);
 
 /* Work a worker took out of its channel or timer heap stays pending until the
  * callbacks it queued have run, so the exit drain never sees an idle pool while
@@ -745,6 +747,7 @@ bool msCompletionQueueDrainAll(void) {
     bool didWork = msCompletionQueueDrain();
     for (msLoopChannel* c = atomic_load_explicit(&gWorkerChannels, memory_order_acquire); c != NULL; c = c->nextWorker) {
         if (msChannelDrain(c)) didWork = true;
+        if (c->timers.live == 0 && c->timers.len > 0) (void)msProcessTimersIn(gDispatcher, &c->timers, &didWork);
     }
     return didWork;
 }
@@ -871,10 +874,9 @@ static msTimer msTimerPop(msTimerHeap* h) {
 /* Standard reference processTimers pattern
  * Pop expired timers, complete their futures.
  * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
-static int msTimerDelayFrom(int64_t now) {
-	msTimerHeap* heap = msThreadTimers();
+static int msTimerDelayFrom(msTimerHeap* heap, int64_t now) {
 	msTimerLock();
-	int64_t nextAt = heap->len > 0 ? heap->data[0].finishAtMs : -1;
+	int64_t nextAt = heap->live > 0 ? heap->data[0].finishAtMs : -1;
 	msTimerUnlock();
 	if (nextAt >= 0) {
 		int64_t diff = nextAt - now;
@@ -883,14 +885,11 @@ static int msTimerDelayFrom(int64_t now) {
 	return -1; /* no timers */
 }
 
-int msProcessTimers(msDispatcher* d, bool* didWork) {
-	/* the calling thread's heap — see gTimers; `d` is the caller's
-	 * callback queue, drained after every fired timer */
+static int msProcessTimersIn(msDispatcher* d, msTimerHeap* heap, bool* didWork) {
 	int64_t now = msMonoTimeMs();
-	msTimerHeap* heap = msThreadTimers();
 	for (;;) {
 		msTimerLock();
-		if (heap->len == 0 || heap->data[0].finishAtMs > now) {
+		if (heap->len == 0 || (heap->data[0].finishAtMs > now && heap->live > 0)) {
 			msTimerUnlock();
 			break;
 		}
@@ -903,8 +902,10 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 			msTimer next = t;
 			next.finishAtMs = now + t.periodMs;
 			msTimerPush(heap, next);
-		} else if (heap != &gTimers) {
-			gWorkerTakenWork++;
+		} else if (!t.cancelled) {
+			heap->live--;
+			if (heap != &gTimers) gWorkerTakenWork++;
+			if (t.group != NULL) msAwaitGroupExpire(t.group);
 		}
 		msTimerUnlock();
 		*didWork = true;
@@ -925,13 +926,17 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 			/* An interval's env rides its re-armed entry; only a one-shot releases. */
 			if (t.periodMs == 0) msReleaseEnvOnLoop(t.cb.env);
 		}
-		msProcessCallbacks(d, didWork);
+		if (d != NULL) msProcessCallbacks(d, didWork);
 	}
-	return msTimerDelayFrom(now);
+	return msTimerDelayFrom(heap, now);
+}
+
+int msProcessTimers(msDispatcher* d, bool* didWork) {
+	return msProcessTimersIn(d, msThreadTimers(), didWork);
 }
 
 int msNextTimerDelayMs(void) {
-	return msTimerDelayFrom(msMonoTimeMs());
+	return msTimerDelayFrom(msThreadTimers(), msMonoTimeMs());
 }
 
 /* Standard reference processPendingCallbacks pattern
@@ -1140,7 +1145,7 @@ static bool msMainLoopIdle(void) {
 	msDispatcher* d = msGetDispatcher();
 	if (msDequeLen(&d->callbacks) != 0 || msMainIoOps != 0) return false;
 	msTimerLock();
-	bool timers = gTimers.len != 0;
+	bool timers = gTimers.live != 0;
 	msTimerUnlock();
 	if (timers) return false;
 	msActorPollFn actorIdle = atomic_load_explicit(&msActorIdleHook, memory_order_acquire);
@@ -1278,6 +1283,7 @@ static void msTimerArm(msTimer t) {
 	if (heap != &gTimers) msPoolPendingAdd(1);
 	msTimerLock();
 	msTimerPush(heap, t);
+	heap->live++;
 	msTimerUnlock();
 	if (worker && heap == &gTimers) msActorWakeEventLoop();
 }
@@ -1316,7 +1322,8 @@ msFuture_void* msSleepAsync(int ms) {
  * The callback outlives the call that scheduled it, so the closure's env is
  * retained here and released once the timer can no longer fire. Cancellation is
  * lazy: the entry stays on the heap and is skipped (and its env released) when
- * it comes due — cheaper than an O(n) heap removal for a rare operation. */
+ * it comes due or its heap holds no live entry — cheaper than an O(n) heap
+ * removal for a rare operation. Only live entries keep a loop from idling. */
 static _Atomic(int64_t) gTimerSeq = 0;
 
 MS_ACTOR_JOB_PATH static void msTimerStampActor(msTimer* t) {
@@ -1348,14 +1355,24 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 
 static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
 	for (int i = 0; i < heap->len; i += 1) {
-		if (heap->data[i].id == id) {
+		if (heap->data[i].id == id && heap->data[i].fut == NULL) {
+			if (heap->data[i].cancelled) return true;
 			heap->data[i].cancelled = true;
 			heap->data[i].periodMs = 0;
+			heap->live--;
+			if (heap != &gTimers) msPoolPendingAdd(-1);
 			if (__builtin_expect(heap->data[i].actorJob, 0)) msActorJobCancelMark(heap->data[i].cb.env);
 			return true;
 		}
 	}
 	return false;
+}
+
+int64_t msArmGroupTimer(struct msAwaitGroup* g, int64_t finishAtMs) {
+	int64_t id = (int64_t)atomic_fetch_add_explicit(&gTimerSeq, 1, memory_order_relaxed) + 1;
+	msTimer t = { .finishAtMs = finishAtMs, .id = id, .group = g };
+	msTimerArm(t);
+	return id;
 }
 
 static void msCancelTimer(int64_t id) {
@@ -1527,6 +1544,7 @@ void msDestroyDispatcher(void) {
 	free(gTimers.data);
 	gTimers.data = NULL;
 	gTimers.cap = 0;
+	gTimers.live = 0;
 	msTimerUnlock();
 	/* Drain remaining callbacks (execute them) */
 	while (msDequeLen(&d->callbacks) > 0) {
