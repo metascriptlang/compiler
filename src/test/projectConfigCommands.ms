@@ -1,7 +1,7 @@
 // Project-config boundary test: every command takes the project's build.ms from the project root of the
 // entry file, so it must run the real `msc` over a project whose build.ms is not in the working directory.
 // Run: msc run --target=raiser src/test/projectConfigCommands.ms <msc>
-import { argv, cwd, execFileCapture, exit } from "std/process";
+import { argv, cwd, execFileCapture, exit, platform } from "std/process";
 import { ensureDir, exists, readFile, removeAll, writeFile } from "std/fs";
 
 interface CaseResult {
@@ -95,6 +95,27 @@ function indentAfterFmt(cwdDir: string, file: string): string {
 
 record("fmt takes fmt from the project's build.ms in the working directory", "   const a = 1;", indentAfterFmt(formatted, "a.ms"));
 record("fmt takes fmt from the file's project when the working directory is elsewhere", "   const a = 1;", indentAfterFmt(root, "formatted/a.ms"));
+
+function checkThroughLinkedDir(): void {
+	if (platform == "win32") return;
+	const dir = `${root}/linked`;
+	ensureDir(`${dir}/libreal/sub`);
+	ensureDir(`${dir}/app`);
+	put(`${dir}/libreal/sub/types.ms`, "export struct P { x: int32; }\n");
+	put(`${dir}/libreal/sub/x.h`, "int linkedValue(void);\n");
+	if (!execFileCapture("ln", ["-s", `${dir}/libreal`, `${dir}/lib`], dir).ok) {
+		console.log(`project-config: cannot link ${dir}/lib`);
+		exit(1);
+	}
+	put(`${dir}/app/one.ms`, "export const one: int32 = 1;\n");
+	put(`${dir}/app/viaModule.ms`, "import { P } from \"../lib/sub/types\";\nexport const z: int32 = 0;\n");
+	put(`${dir}/app/viaHeader.ms`, "import { linkedValue } from \"../lib/sub/x.h\";\nexport const z: int32 = 0;\n");
+	for (const via of ["viaModule", "viaHeader"]) {
+		put(`${dir}/app/${via}Main.ms`, `import { one } from "./one";\nimport * as linked from "./${via}";\nconsole.log(one);\n`);
+		record(`check reaches a ${via == "viaModule" ? "module" : "header"} through a linked directory after another import`, "OK", run(`${dir}/app`, ["check", `${via}Main.ms`, "--colors=off"]).split(" ")[0]);
+	}
+}
+checkThroughLinkedDir();
 
 let failures = 0;
 console.log(`root ${root}`);
