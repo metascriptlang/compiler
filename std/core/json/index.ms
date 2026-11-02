@@ -222,23 +222,23 @@ export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: s
 }
 
 
-export function _jsonToStringMap(jv: JsonValue): Map<string, string> {
-	const out = new Map<string, string>();
+export function _jsonToStringMap<V>(jv: JsonValue, witness: V | null): Map<string, V> {
+	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], asString(jv.values[i]));
+		out.set(jv.keys[i], asString(jv.values[i]) as V);
 		i = i + 1;
 	}
 	return out;
 }
 
-export function _jsonToBooleanMap(jv: JsonValue): Map<string, boolean> {
-	const out = new Map<string, boolean>();
+export function _jsonToBooleanMap<V>(jv: JsonValue, witness: V | null): Map<string, V> {
+	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], asBoolean(jv.values[i]));
+		out.set(jv.keys[i], asBoolean(jv.values[i]) as V);
 		i = i + 1;
 	}
 	return out;
@@ -277,23 +277,23 @@ export function _jsonToStructMap<V>(jv: JsonValue, witness: V | null): Map<strin
 	return out;
 }
 
-export function _jsonToStringMapE(jv: JsonValue, errs: string[], mapPath: string): Map<string, string> {
-	const out = new Map<string, string>();
+export function _jsonToStringMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
+	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqString(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs));
+		out.set(jv.keys[i], reqString(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
 }
 
-export function _jsonToBooleanMapE(jv: JsonValue, errs: string[], mapPath: string): Map<string, boolean> {
-	const out = new Map<string, boolean>();
+export function _jsonToBooleanMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
+	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqBoolean(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs));
+		out.set(jv.keys[i], reqBoolean(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
