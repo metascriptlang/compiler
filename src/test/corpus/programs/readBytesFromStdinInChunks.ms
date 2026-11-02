@@ -29,7 +29,7 @@ if (argv.length > 2 && argv[1] == "child") {
 	exit(0);
 }
 
-const path = `readBytesFromStdin-${argv[0].split("/").slice(-2).join("-")}.txt`;
+const path = `readBytesFromStdin-${argv[0].replaceAll("\\", "/").split("/").slice(-2).join("-")}.txt`;
 const self = argv[0].endsWith("js") ? `${execPath} ${argv[0]}` : argv[0];
 writeFile(path, "abcdefghij");
 const chunks = exec(`${self} child chunks < ${path}`);
