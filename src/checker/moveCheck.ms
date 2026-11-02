@@ -12,7 +12,7 @@ import { hasFlag, SymbolFlag } from "./symbol";
 import { ownedEdgeOf, isSinkTypeForParam, typeDisplayName } from "./types";
 import { calledRoutineType } from "./effects";
 
-interface MoveEvent {
+export interface MoveEvent {
 	at: Node;
 	sym: Symbol;
 	owner: boolean;
@@ -28,7 +28,7 @@ interface RootFault {
 	why: string;
 }
 
-class MoveScan {
+export class MoveScan {
 	moves: MoveEvent[] = [];
 	faults: RootFault[] = [];
 	deferScopes = new HashMap<Node, Node>();
@@ -188,7 +188,7 @@ function stamp(node: Node, scan: MoveScan): void {
 	scan.next += 1;
 }
 
-function numberNodes(node: Node | null, scan: MoveScan): void {
+export function numberNodes(node: Node | null, scan: MoveScan): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator)) {
 		const d = node.data as BinaryExprData;
@@ -266,13 +266,13 @@ function takenAfter(scan: MoveScan, events: MoveEvent[] | null, anchor: Node | n
 	return null;
 }
 
-// The move event of `sym` that can have run before `read` with no write of the name between them, or
+// The move event in `events` that can have run before `read` with no flow node between them that `refills`, or
 // null: a backward walk over the flow graph from the read, as narrowing walks it. A read inside a
 // closure is not followed out of it, because moving a captured variable is refused on its own (NIM-REF AN-8). Two nodes on one flow
 // node share a straight-line stretch, so evaluation order decides between them. A defer body runs when its
 // block exits, so every move in that block outside the body reaches it, even one refilled later. `clean` holds the flow
-// nodes an earlier walk for the same name left without finding an event.
-function maybeMoved(scan: MoveScan, read: Node, sym: Symbol, events: HashMap<FlowNode, MoveEvent[]>, clean: HashSet<FlowNode>): MoveEvent | null {
+// nodes an earlier walk over the same events and refills left without finding an event.
+export function reachingMove(scan: MoveScan, read: Node, events: HashMap<FlowNode, MoveEvent[]>, clean: HashSet<FlowNode>, refills: (flow: FlowNode) => boolean): MoveEvent | null {
 	const todo: Pending[] = [{ flow: read.flowNode, anchor: read }];
 	const seen = new HashSet<FlowNode>();
 	const visited: FlowNode[] = [];
@@ -301,8 +301,7 @@ function maybeMoved(scan: MoveScan, read: Node, sym: Symbol, events: HashMap<Flo
 			}
 			continue;
 		}
-		if (flags.has(FlowFlag.Assignment) && declaresSym(flow.node, sym)) continue;
-		if (flags.has(FlowFlag.Call) && writesOut(flow.node, sym)) continue;
+		if (refills(flow)) continue;
 		const from = flow.node != null && scan.order.has(flow.node) ? flow.node : null;
 		if (flow.antecedent != null) todo.push({ flow: flow.antecedent, anchor: from });
 		let list: FlowList | null = flow.antecedents;
@@ -363,7 +362,8 @@ export function checkMovesIn(ctx: CheckerContext, root: Node | null): void {
 		const clean = new HashSet<FlowNode>();
 		for (const read of reads) {
 			if (read.flowNode == null) continue;
-			const taker = maybeMoved(scan, read, sym, events, clean);
+			const taker = reachingMove(scan, read, events, clean, (flow: FlowNode): boolean =>
+				(flow.flags.has(FlowFlag.Assignment) && declaresSym(flow.node, sym)) || (flow.flags.has(FlowFlag.Call) && writesOut(flow.node, sym)));
 			if (taker == null || reported.has(taker.at)) continue;
 			reported.add(taker.at);
 			report(ctx, taker, read);

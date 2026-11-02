@@ -462,6 +462,11 @@ function calleeSummary(call: Node): ResizeSummary {
 	return summaryOf(sym);
 }
 
+export function calleeMayWrite(call: Node): boolean {
+	const s = calleeSummary(call);
+	return s.unknown || s.writes || s.keys.length > 0;
+}
+
 function constructorOf(newNode: Node): Node | null {
 	const sym = newNode.resolvedSym;
 	if (sym == null || sym.declNode == null || sym.declNode.kind != NodeKind.ClassDecl) return null;
@@ -1110,7 +1115,7 @@ function changeEscaped(u: BorrowUnit, site: Node, summary: ResizeSummary, runsCl
 	for (const sym of u.captured) { changeSym(u, sym, true, summary, site); }
 }
 
-function formalAt(fnType: Type | null, i: int32): Type | null {
+export function formalAt(fnType: Type | null, i: int32): Type | null {
 	if (fnType == null || fnType.kind != TypeKind.Function) return null;
 	const n = fnType.typeChildren.length;
 	if (n == 0) return null;
