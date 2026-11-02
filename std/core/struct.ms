@@ -303,7 +303,6 @@ export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: Readonly<unknown>): int64 { return hashPointer(u as Readonly<Ptr<void>>); }
 
 function sameKey<T>(a: T, b: T): boolean { return a == b; }
-function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
 
