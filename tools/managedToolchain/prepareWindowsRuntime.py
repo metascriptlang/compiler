@@ -80,9 +80,9 @@ TARGETS = {
 }
 # A variant's directory is `<target><suffix>` and its config `<target><suffix>.cfg`.
 VARIANTS = {
-    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj", "driverFlags": [], "suffix": ""},
+    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj", "driverFlags": ["-nostdlib"], "suffix": ""},
     "dll": {"fixture": "runtimeWindowsDll.c", "zigArgs": ["-shared"], "startup": "dllcrt2.obj",
-            "driverFlags": ["-shared"], "suffix": ".dll"},
+            "driverFlags": ["-nostdlib", "-shared"], "suffix": ".dll"},
 }
 SPEC = {"clangTarget": None, "linker": "ld.lld",
         "notices": {"zig": ["../LICENSE"], "mingw-w64": ["libc/mingw/COPYING"]}}
