@@ -103,8 +103,8 @@ static inline double msStdinHasData(void) {
  * Flush required for LSP (client reads Content-Length framed messages).
  */
 static inline void msWriteStdout(msString s) {
-	if (s.len > 0) {
-		fwrite(msStringToCString(s), 1, s.len, stdout);
+	if (msStrLen(s) > 0) {
+		fwrite(msStringToCString(s), 1, msStrLen(s), stdout);
 		fflush(stdout);
 	}
 }
@@ -113,8 +113,8 @@ static inline void msWriteStdout(msString s) {
  * Write string to stderr, flushing immediately.
  */
 static inline void msWriteStderr(msString s) {
-	if (s.len > 0) {
-		fwrite(msStringToCString(s), 1, s.len, stderr);
+	if (msStrLen(s) > 0) {
+		fwrite(msStringToCString(s), 1, msStrLen(s), stderr);
 		fflush(stderr);
 	}
 }

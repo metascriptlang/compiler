@@ -51,17 +51,8 @@ static int ms_crypto_initialized = 0;
 
 /* Wrap raw hash bytes into an msString (binary buffer) */
 static msString raw_to_buffer(const uint8_t* data, size_t len) {
-	if (len == 0) return MS_EMPTY_STRING;
-
-	msStrPayload* p = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + len + 1);
-
-	p->cap = (int64_t)len;
-	memcpy(p->data, data, len);
-	p->data[len] = '\0';
-
-	msString result;
-	result.len = (int64_t)len;
-	result.p = p;
+	msString result = msStringNewUninit((int64_t)len);
+	if (len > 0) memcpy(msStrWritable(&result), data, len);
 	return result;
 }
 
@@ -104,13 +95,13 @@ void msCryptoCleanup(void) {
 /* ===== Hashing ===== */
 
 int64_t msCryptoHashInto(msString algorithm, msString data, void* output, int64_t capacity) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	if (!md_info || !output || capacity < 0) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
 	if (hashLen > 64 || hashLen > (uint64_t)capacity) return 0;
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	int ret = mbedtls_md(md_info, input, (size_t)data.len, output);
+	const unsigned char* input = (const unsigned char*)msStrData(&data);
+	int ret = mbedtls_md(md_info, input, (size_t)msStrLen(data), output);
 	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
@@ -124,14 +115,14 @@ msString msCryptoHashBuffer(msString algorithm, msString data) {
 
 int64_t msCryptoHmacInto(msString algorithm, msString key, msString data,
                        void* output, int64_t capacity) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	if (!md_info || !output || capacity < 0) return 0;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
 	if (hashLen > 64 || hashLen > (uint64_t)capacity) return 0;
-	const unsigned char* keyData = (const unsigned char*)(key.p ? key.p->data : "");
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	int ret = mbedtls_md_hmac(md_info, keyData, (size_t)key.len, input, (size_t)data.len, output);
+	const unsigned char* keyData = (const unsigned char*)msStrData(&key);
+	const unsigned char* input = (const unsigned char*)msStrData(&data);
+	int ret = mbedtls_md_hmac(md_info, keyData, (size_t)msStrLen(key), input, (size_t)msStrLen(data), output);
 	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
@@ -145,20 +136,11 @@ msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
 
 msString msCryptoRandomBytes(int64_t size) {
 	if (size <= 0) return MS_EMPTY_STRING;
-	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
-
-	msStrPayload* p = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + size + 1);
-
-	p->cap = size;
-	if (ms_random_fill((uint8_t*)p->data, (size_t)size) != 0) {
-		free(p);
+	msString result = msStringNewUninit(size);
+	if (ms_random_fill((uint8_t*)msStrWritable(&result), (size_t)size) != 0) {
+		msStringDestroy(result);
 		return MS_EMPTY_STRING;
 	}
-	p->data[size] = '\0';
-
-	msString result;
-	result.len = size;
-	result.p = p;
 	return result;
 }
 
@@ -211,14 +193,14 @@ msString msCryptoRandomUuid(void) {
 /* ===== Timing-Safe Comparison ===== */
 
 double msCryptoTimingSafeEqual(msString a, msString b) {
-	if (a.len != b.len) return 0.0;
-	if (a.len == 0) return 1.0;
+	if (msStrLen(a) != msStrLen(b)) return 0.0;
+	if (msStrLen(a) == 0) return 1.0;
 
-	const unsigned char* pa = (const unsigned char*)(a.p ? a.p->data : "");
-	const unsigned char* pb = (const unsigned char*)(b.p ? b.p->data : "");
+	const unsigned char* pa = (const unsigned char*)msStrData(&a);
+	const unsigned char* pb = (const unsigned char*)msStrData(&b);
 
 	volatile unsigned char diff = 0;
-	for (int64_t i = 0; i < a.len; i++) {
+	for (int64_t i = 0; i < msStrLen(a); i++) {
 		diff |= pa[i] ^ pb[i];
 	}
 	return (diff == 0) ? 1.0 : 0.0;
@@ -233,7 +215,7 @@ struct msCryptoHashCtx {
 };
 
 msCryptoHashCtx* msCryptoHashInit(msString algorithm) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	if (!md_info) return NULL;
 
 	msCryptoHashCtx* ctx = (msCryptoHashCtx*)msMemAlloc0(sizeof(msCryptoHashCtx));
@@ -256,8 +238,8 @@ msCryptoHashCtx* msCryptoHashInit(msString algorithm) {
 
 void msCryptoHashUpdate(msCryptoHashCtx* ctx, msString data) {
 	if (!ctx || !ctx->valid) return;
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	mbedtls_md_update(&ctx->ctx, input, (size_t)data.len);
+	const unsigned char* input = (const unsigned char*)msStrData(&data);
+	mbedtls_md_update(&ctx->ctx, input, (size_t)msStrLen(data));
 }
 
 int64_t msCryptoHashFinalInto(msCryptoHashCtx* ctx, void* output, int64_t capacity) {
@@ -298,7 +280,7 @@ struct msCryptoHmacCtx {
 };
 
 msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	if (!md_info) return NULL;
 
 	msCryptoHmacCtx* ctx = (msCryptoHmacCtx*)msMemAlloc0(sizeof(msCryptoHmacCtx));
@@ -310,8 +292,8 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
 		return NULL;
 	}
 
-	const unsigned char* keyData = (const unsigned char*)(key.p ? key.p->data : "");
-	if (mbedtls_md_hmac_starts(&ctx->ctx, keyData, (size_t)key.len) != 0) {
+	const unsigned char* keyData = (const unsigned char*)msStrData(&key);
+	if (mbedtls_md_hmac_starts(&ctx->ctx, keyData, (size_t)msStrLen(key)) != 0) {
 		mbedtls_md_free(&ctx->ctx);
 		free(ctx);
 		return NULL;
@@ -324,8 +306,8 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
 
 void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, msString data) {
 	if (!ctx || !ctx->valid) return;
-	const unsigned char* input = (const unsigned char*)(data.p ? data.p->data : "");
-	mbedtls_md_hmac_update(&ctx->ctx, input, (size_t)data.len);
+	const unsigned char* input = (const unsigned char*)msStrData(&data);
+	mbedtls_md_hmac_update(&ctx->ctx, input, (size_t)msStrLen(data));
 }
 
 int64_t msCryptoHmacFinalInto(msCryptoHmacCtx* ctx, void* output, int64_t capacity) {
@@ -360,12 +342,12 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
 /* ===== Utility ===== */
 
 double msCryptoIsHashSupported(msString algorithm) {
-	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	return info ? 1.0 : 0.0;
 }
 
 double msCryptoHashSize(msString algorithm) {
-	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	return info ? (double)mbedtls_md_get_size(info) : 0.0;
 }
 
@@ -477,12 +459,12 @@ static int pbkdf2_hmac(
 
 msString msCryptoPbkdf2(msString password, msString salt,
                         int32_t iterations, int32_t keyLength, msString digest) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(digest), digest.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(digest), msStrLen(digest));
 	if (md_info == NULL || iterations < 1 || keyLength < 1 || keyLength > MS_PBKDF2_MAX_KEY_LENGTH) return MS_EMPTY_STRING;
 	uint8_t* output = (uint8_t*)msMemAlloc((size_t)keyLength);
 	int ret = pbkdf2_hmac(md_info,
-		(const uint8_t*)msStringToCString(password), (size_t)password.len,
-		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
+		(const uint8_t*)msStringToCString(password), (size_t)msStrLen(password),
+		(const uint8_t*)msStringToCString(salt), (size_t)msStrLen(salt),
 		(uint32_t)iterations, output, (size_t)keyLength);
 	msString result = ret == 0 ? msStringNew((const char*)output, (int64_t)keyLength) : MS_EMPTY_STRING;
 	mbedtls_platform_zeroize(output, (size_t)keyLength);
@@ -540,18 +522,18 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 
 msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,
                       msString info, int32_t length) {
-	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), msStrLen(algorithm));
 	if (md_info == NULL || length <= 0) return MS_EMPTY_STRING;
 	uint8_t prk[64];
 	if (hkdf_extract(md_info,
-		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
-		(const uint8_t*)msStringToCString(ikm), (size_t)ikm.len, prk) != 0) {
+		(const uint8_t*)msStringToCString(salt), (size_t)msStrLen(salt),
+		(const uint8_t*)msStringToCString(ikm), (size_t)msStrLen(ikm), prk) != 0) {
 		mbedtls_platform_zeroize(prk, sizeof(prk));
 		return MS_EMPTY_STRING;
 	}
 	msString result = hkdf_expand(md_info,
 		prk, mbedtls_md_get_size(md_info),
-		(const uint8_t*)msStringToCString(info), (size_t)info.len, (size_t)length);
+		(const uint8_t*)msStringToCString(info), (size_t)msStrLen(info), (size_t)length);
 	mbedtls_platform_zeroize(prk, sizeof(prk));
 	return result;
 }

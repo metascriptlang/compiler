@@ -49,8 +49,8 @@ int64_t msEd25519KeyGenerate(void) {
 }
 
 int64_t msEd25519KeyFromSeed(msString seed) {
-	if (seed.len != 32 || !seed.p) return 0;
-	return keyFromSeedBytes((const uint8_t *)seed.p->data);
+	if (msStrLen(seed) != 32) return 0;
+	return keyFromSeedBytes((const uint8_t *)msStrData(&seed));
 }
 
 msString msEd25519KeySeed(int64_t key) {
@@ -62,8 +62,8 @@ msString msEd25519KeyPublicRaw(int64_t key) {
 }
 
 int64_t msEd25519PublicFromRaw(msString raw) {
-	if (raw.len != 32 || !raw.p) return 0;
-	return newBlock((const uint8_t *)raw.p->data, 32);
+	if (msStrLen(raw) != 32) return 0;
+	return newBlock((const uint8_t *)msStrData(&raw), 32);
 }
 
 msString msEd25519PublicRaw(int64_t key) {
@@ -82,8 +82,8 @@ void msEd25519KeyFree(int64_t key) {
 msString msEd25519KeySign(int64_t key, msString message) {
 	uint8_t sig[64];
 	crypto_ed25519_sign(sig, blockOf(key),
-		message.p ? (const uint8_t *)message.p->data : (const uint8_t *)"",
-		message.len);
+		(const uint8_t *)msStrData(&message),
+		msStrLen(message));
 	return msStringNew((const char *)sig, 64);
 }
 
@@ -117,16 +117,16 @@ static int isSmallOrderPoint(const uint8_t enc[32]) {
  * refusal of small-order A or R, which Monocypher documents it allows and which
  * lets an identity key accept every message. */
 int32_t msEd25519PublicVerify(int64_t key, msString signature, msString message) {
-	if (signature.len != 64 || !signature.p) return 0;
+	if (msStrLen(signature) != 64) return 0;
 	const uint8_t *publicKey = blockOf(key);
 	if (isSmallOrderPoint(publicKey)) return 0;
-	if (isSmallOrderPoint((const uint8_t *)signature.p->data)) return 0;
+	if (isSmallOrderPoint((const uint8_t *)msStrData(&signature))) return 0;
 
 	int r = crypto_ed25519_check(
-		(const uint8_t *)signature.p->data,
+		(const uint8_t *)msStrData(&signature),
 		publicKey,
-		message.p ? (const uint8_t *)message.p->data : (const uint8_t *)"",
-		message.len);
+		(const uint8_t *)msStrData(&message),
+		msStrLen(message));
 
 	return r == 0 ? 1 : 0;
 }

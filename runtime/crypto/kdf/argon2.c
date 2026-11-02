@@ -30,14 +30,14 @@ msString msCryptoArgon2Hash(msString password, msString salt,
                             int32_t parallelism, int32_t hashLen) {
 	size_t encodedLen = argon2_encodedlen(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,
-		(uint32_t)salt.len, (uint32_t)hashLen, Argon2_id);
+		(uint32_t)msStrLen(salt), (uint32_t)hashLen, Argon2_id);
 	char* encoded = (char*)malloc(encodedLen + 1);
 	if (encoded == NULL) return MS_EMPTY_STRING;
 
 	int ret = argon2id_hash_encoded(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,
-		msStringToCString(password), (size_t)password.len,
-		msStringToCString(salt), (size_t)salt.len,
+		msStringToCString(password), (size_t)msStrLen(password),
+		msStringToCString(salt), (size_t)msStrLen(salt),
 		(size_t)hashLen, encoded, encodedLen + 1);
 
 	if (ret != ARGON2_OK) { free(encoded); return MS_EMPTY_STRING; }
@@ -49,7 +49,7 @@ msString msCryptoArgon2Hash(msString password, msString salt,
 double msCryptoArgon2Verify(msString encoded, msString password) {
 	int ret = argon2id_verify(
 		msStringToCString(encoded),
-		msStringToCString(password), (size_t)password.len);
+		msStringToCString(password), (size_t)msStrLen(password));
 	return (ret == ARGON2_OK) ? 1.0 : 0.0;
 }
 
@@ -61,8 +61,8 @@ msString msCryptoArgon2HashRaw(msString password, msString salt,
 
 	int ret = argon2id_hash_raw(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,
-		msStringToCString(password), (size_t)password.len,
-		msStringToCString(salt), (size_t)salt.len,
+		msStringToCString(password), (size_t)msStrLen(password),
+		msStringToCString(salt), (size_t)msStrLen(salt),
 		hash, (size_t)hashLen);
 
 	if (ret != ARGON2_OK) { free(hash); return MS_EMPTY_STRING; }

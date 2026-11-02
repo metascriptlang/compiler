@@ -44,8 +44,8 @@ static inline int32_t msModuleIndexOf(void* base, void* record) {
 	return (int32_t)((msModuleRecord*)record - (msModuleRecord*)base);
 }
 
-static inline const void* msModuleStringText(msString name) { return name.p != NULL ? name.p->data : ""; }
-static inline int64_t msModuleStringLen(msString name) { return name.len; }
+static inline const void* msModuleStringText(msString name) { return msStrData(&name); }
+static inline int64_t msModuleStringLen(msString name) { return msStrLen(name); }
 static inline int64_t msModuleCStrLen(const void* text) { return (int64_t)strlen((const char*)text); }
 
 static inline bool msModuleNameIs(const void* candidate, const void* text, int64_t len) {
@@ -53,7 +53,7 @@ static inline bool msModuleNameIs(const void* candidate, const void* text, int64
 }
 
 static inline void msModuleAbort(const void* name, msString what) {
-	fprintf(stderr, "internal: module '%s' %.*s\n", (const char*)name, (int)what.len, what.p != NULL ? what.p->data : "");
+	fprintf(stderr, "internal: module '%s' %.*s\n", (const char*)name, (int)msStrLen(what), msStrData(&what));
 	abort();
 }
 
@@ -63,7 +63,7 @@ static inline void msModuleAbortNoRecord(const void* text, int64_t len) {
 }
 
 static inline void msModuleAbortPlain(msString what) {
-	fprintf(stderr, "internal: %.*s\n", (int)what.len, what.p != NULL ? what.p->data : "");
+	fprintf(stderr, "internal: %.*s\n", (int)msStrLen(what), msStrData(&what));
 	abort();
 }
 

@@ -457,11 +457,11 @@ static __attribute__((noinline)) uint64_t msSolInvokeMetas(uint64_t program, uin
 }
 
 static inline uint64_t msSolStringAddress(msString text) {
-    return text.p == (msStrPayload*)0 ? 0 : (uint64_t)text.p->data;
+    return msStrIsEmpty(text) ? 0 : (uint64_t)msStrData(&text);
 }
 
 static inline uint64_t msSolStringLength(msString text) {
-    return (uint64_t)text.len;
+    return (uint64_t)msStrLen(text);
 }
 
 static inline uint64_t msSolSpanAddress(const void* data, int64_t length) {

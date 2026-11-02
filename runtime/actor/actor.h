@@ -1701,7 +1701,7 @@ static inline void msNameRegistryRemoveSlot(uint32_t slot) {
 /* Register name → pid. Returns 1.0 (true) on success, 0.0 if name taken or pid already named. */
 static inline double msActorRegisterName(int64_t pid, msString name) {
     msActor* a = msActorFromPid(pid);
-    if (a == NULL || name.len == 0) {
+    if (a == NULL || msStrLen(name) == 0) {
         if (a != NULL) msHazardClear(a);
         return 0.0;
     }
@@ -1732,7 +1732,7 @@ static inline double msActorRegisterName(int64_t pid, msString name) {
     for (int i = 0; i < msNameRegistryCap; i++) {
         uint32_t s = (h + i) & (msNameRegistryCap - 1);
         if (msNameRegistry[s].pid == 0) {
-            msNameRegistry[s].name = msStringNew(name.p->data, name.len);
+            msNameRegistry[s].name = msStringNew(msStrData(&name), msStrLen(name));
             msNameRegistry[s].pid = pid;
             msNameRegistryCount++;
             pthread_mutex_unlock(&msNameRegistryLock);
@@ -1745,7 +1745,7 @@ static inline double msActorRegisterName(int64_t pid, msString name) {
 
 /* Look up pid by name. Returns pid (int64) or 0 if not found. */
 static inline int64_t msActorWhereis(msString name) {
-    if (name.len == 0 || msNameRegistry == NULL) return 0;
+    if (msStrLen(name) == 0 || msNameRegistry == NULL) return 0;
     pthread_mutex_lock(&msNameRegistryLock);
     uint32_t h = (uint32_t)msStringHash(name) & (msNameRegistryCap - 1);
     for (int i = 0; i < msNameRegistryCap; i++) {
@@ -1763,7 +1763,7 @@ static inline int64_t msActorWhereis(msString name) {
 
 /* Unregister a name. No-op if not registered. */
 static inline void msActorUnregisterName(msString name) {
-    if (name.len == 0 || msNameRegistry == NULL) return;
+    if (msStrLen(name) == 0 || msNameRegistry == NULL) return;
     pthread_mutex_lock(&msNameRegistryLock);
     uint32_t h = (uint32_t)msStringHash(name) & (msNameRegistryCap - 1);
     for (int i = 0; i < msNameRegistryCap; i++) {

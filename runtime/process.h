@@ -1171,7 +1171,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	posix_spawn_file_actions_adddup2(&fa, errPipe[1], STDERR_FILENO);
 	posix_spawn_file_actions_addclose(&fa, outPipe[1]);
 	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
-	int spawnErr = cwd.len > 0 ? posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd)) : 0;
+	int spawnErr = msStrLen(cwd) > 0 ? posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd)) : 0;
 	pid_t pid = 0;
 	if (spawnErr == 0) {
 		pthread_mutex_lock(&_msSpawnCreateLock);
@@ -1772,7 +1772,7 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		posix_spawn_file_actions_addclose(&fa, outPipe[1]);
 		if (!mergeStderr) posix_spawn_file_actions_addclose(&fa, errPipe[1]);
 		char* cwdCopy = NULL;
-		if (cwd.len > 0) {
+		if (msStrLen(cwd) > 0) {
 			cwdCopy = strdup(msStringToCString(cwd));
 			if (!cwdCopy) failed = ENOMEM;
 			else failed = posix_spawn_file_actions_addchdir_np(&fa, cwdCopy);
@@ -1825,8 +1825,8 @@ static inline int32_t msProcChildWrite(int64_t h, msString data, int64_t timeout
 	msProcChild* c = _msProcChildOf(h);
 	c->written = 0;
 	if (c->closed || c->inFd < 0) return MS_PROC_CHILD_PIPE_CLOSED;
-	const char* bytes = data.len > 0 ? data.p->data : "";
-	size_t len = (size_t)data.len;
+	const char* bytes = msStrData(&data);
+	size_t len = (size_t)msStrLen(data);
 	size_t done = 0;
 	double deadline = _msProcChildNowMs() + (double)timeoutMs;
 	c->lastErrno = 0;
@@ -1982,7 +1982,7 @@ static inline double msProcessWriteFile(msString path, msString content) {
 	FILE* f = fopen(cpath, "wb");
 	if (!f) return 0.0;
 	const char* data = msStringToCString(content);
-	size_t len = content.len;
+	size_t len = msStrLen(content);
 	size_t written = fwrite(data, 1, len, f);
 	fclose(f);
 	return (written == len) ? 1.0 : 0.0;

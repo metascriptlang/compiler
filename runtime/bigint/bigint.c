@@ -81,7 +81,7 @@ msBigInt* msBigIntFromString(const char* s, size_t len) {
 }
 
 msBigInt* msBigIntFromLit(msString s) {
-	return msBigIntFromString(s.p != NULL ? s.p->data : "", (size_t)s.len);
+	return msBigIntFromString(msStrData(&s), (size_t)msStrLen(s));
 }
 
 static int digitIn(char c, int radix) {
@@ -90,8 +90,8 @@ static int digitIn(char c, int radix) {
 }
 
 static int bigSyntax(msString str, const char** body, size_t* bodyLen, int* radix, int* neg) {
-	const char* s = str.p != NULL ? str.p->data : "";
-	size_t len = (size_t)str.len;
+	const char* s = msStrData(&str);
+	size_t len = (size_t)msStrLen(str);
 	while (len > 0 && isspace((unsigned char)s[0])) { s++; len--; }
 	while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
 	*neg = 0;

@@ -48,7 +48,7 @@ int32_t msSolHostCompare(uint64_t left, uint64_t right, uint64_t length) {
 
 void msSolHostRaise(uint64_t code, msString text) {
     char line[256];
-    snprintf(line, sizeof(line), "%.*s", (int)text.len, text.p == NULL ? "" : (const char*)text.p->data);
+    snprintf(line, sizeof(line), "%.*s", (int)msStrLen(text), msStrData(&text));
     msSolHostFault(code, line);
 }
 

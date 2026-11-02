@@ -766,7 +766,7 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 	} else {
 		msString message = msCurrException != NULL ? ((msError*)msCurrException)->message : MS_EMPTY_STRING;
 		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "an uncaught exception: %.*s",
-		         (int)(message.len < 400 ? message.len : 400), message.p != NULL ? message.p->data : "");
+		         (int)(msStrLen(message) < 400 ? msStrLen(message) : 400), msStrData(&message));
 	}
 	if (msCurrException != NULL) msDecrefAny((void*)msCurrException);
 	msCurrException = NULL;

@@ -297,19 +297,19 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 }
 
 void* msIoSendString(msIoEngine* e, int fd, msString data) {
-	if (data.p) msStringIncref(data);
+	msStringIncref(data);
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_SEND;
 	req->fd = fd;
-	req->buf = data.p ? data.p->data : "";
-	req->len = (int32_t)data.len;
+	req->buf = (char*)msStrData(&data);
+	req->len = (int32_t)msStrLen(data);
 	req->strRef = data;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) {
-		if (data.p) msStringDecref(data);
+		msStringDecref(data);
 		msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1);
 		freeRequest(e, req);
 		return fut;
@@ -443,9 +443,9 @@ static void fsWatchRelease(msFsWatcher* w) {
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	(void)e;
 	_msFsWatchLastError = 0;
-	char* root = (char*)msMemAlloc((size_t)path.len + 1);
-	memcpy(root, path.p ? path.p->data : "", (size_t)path.len);
-	root[path.len] = 0;
+	char* root = (char*)msMemAlloc((size_t)msStrLen(path) + 1);
+	memcpy(root, msStrData(&path), (size_t)msStrLen(path));
+	root[msStrLen(path)] = 0;
 	struct stat info;
 	if (stat(root, &info) != 0 || !S_ISDIR(info.st_mode)) {
 		_msFsWatchLastError = fsWatchErrorCode(stat(root, &info) != 0 ? errno : ENOTDIR);
@@ -522,9 +522,9 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 }
 
 int32_t msFsWriteSettled(msString path) {
-	char* name = (char*)msMemAlloc((size_t)path.len + 1);
-	if (path.len > 0) memcpy(name, path.p->data, (size_t)path.len);
-	name[path.len] = 0;
+	char* name = (char*)msMemAlloc((size_t)msStrLen(path) + 1);
+	if (msStrLen(path) > 0) memcpy(name, msStrData(&path), (size_t)msStrLen(path));
+	name[msStrLen(path)] = 0;
 	int absent = access(name, F_OK) != 0;
 	free(name);
 	return absent ? 1 : 0;
@@ -736,7 +736,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 				}
 				res = -1;
 			}
-			if (req->strRef.p) msStringDecref(req->strRef);
+			msStringDecref(req->strRef);
 			req->strRef = MS_EMPTY_STRING;
 			msFutureCompleteT((msFuture_int32*)req->fut, res < 0 ? -1 : req->len);
 			break;

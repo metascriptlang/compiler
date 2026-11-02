@@ -27,7 +27,7 @@
 
 static inline mbedtls_md_type_t pkMdType(msString algorithm) {
 	const char* algo = msStringToCString(algorithm);
-	size_t len = (size_t)algorithm.len;
+	size_t len = (size_t)msStrLen(algorithm);
 	if (len == 6 && memcmp(algo, "sha256", 6) == 0) return MBEDTLS_MD_SHA256;
 	if (len == 6 && memcmp(algo, "sha384", 6) == 0) return MBEDTLS_MD_SHA384;
 	if (len == 6 && memcmp(algo, "sha512", 6) == 0) return MBEDTLS_MD_SHA512;
@@ -42,7 +42,7 @@ static inline int pkHash(msString algorithm, int forSigning, msString data, mbed
 	if (*mdType == MBEDTLS_MD_NONE || (forSigning && *mdType == MBEDTLS_MD_SHA1)) return 0;
 	const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(*mdType);
 	if (!mdInfo) return 0;
-	if (mbedtls_md(mdInfo, (const unsigned char*)msStringToCString(data), data.len, hash) != 0) return 0;
+	if (mbedtls_md(mdInfo, (const unsigned char*)msStringToCString(data), msStrLen(data), hash) != 0) return 0;
 	return mbedtls_md_get_size(mdInfo);
 }
 

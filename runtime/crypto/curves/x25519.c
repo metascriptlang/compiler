@@ -35,8 +35,8 @@ int64_t msX25519KeyGenerate(void) {
 }
 
 int64_t msX25519KeyFromRaw(msString raw) {
-	if (raw.len != 32 || !raw.p) return 0;
-	return newPrivate((const uint8_t *)raw.p->data);
+	if (msStrLen(raw) != 32) return 0;
+	return newPrivate((const uint8_t *)msStrData(&raw));
 }
 
 msString msX25519KeyPublicRaw(int64_t key) {
@@ -44,10 +44,10 @@ msString msX25519KeyPublicRaw(int64_t key) {
 }
 
 int64_t msX25519PublicFromRaw(msString raw) {
-	if (raw.len != 32 || !raw.p) return 0;
+	if (msStrLen(raw) != 32) return 0;
 	uint8_t *block = (uint8_t *)calloc(1, KEY_BLOCK);
 	if (!block) return 0;
-	memcpy(block, raw.p->data, 32);
+	memcpy(block, msStrData(&raw), 32);
 	return (int64_t)(intptr_t)block;
 }
 

@@ -191,7 +191,7 @@ static void __uringThreadRelease(void) {
 	}
 	for (int i = 0; i < _uringFdCap; i++) {
 		free(_uringRecvBufs[i]);
-		if (_uringRespBufs[i].p) msStringDecref(_uringRespBufs[i]);
+		msStringDecref(_uringRespBufs[i]);
 	}
 	free(_uringRecvBufs);
 	_uringRecvBufs = NULL;
@@ -265,7 +265,7 @@ static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
 	struct io_uring_sqe* sqe = __uringGetSqe();
 	if (!sqe) return;
 	msUringSendState* st = &_uringSends[fd];
-	st->p = data.p ? data.p->data : NULL;
+	st->p = msStrIsEmpty(data) ? NULL : msStrData(&data);
 	st->len = len;
 	st->off = 0;
 	sqe->opcode = IORING_OP_SEND;

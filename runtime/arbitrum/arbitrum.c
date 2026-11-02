@@ -91,7 +91,7 @@ void msArbMsgValue(uint32_t destination) {
 }
 
 void msPrintln(msString value) {
-    if (value.len < 0 || (uint64_t)value.len > UINT32_MAX) __builtin_trap();
-    const uint8_t* bytes = value.len == 0 ? (const uint8_t*)"" : (const uint8_t*)value.p->data;
-    msArbEmitLog(bytes, (uint32_t)value.len, 0);
+    if (msStrLen(value) < 0 || (uint64_t)msStrLen(value) > UINT32_MAX) __builtin_trap();
+    const uint8_t* bytes = (const uint8_t*)msStrData(&value);
+    msArbEmitLog(bytes, (uint32_t)msStrLen(value), 0);
 }

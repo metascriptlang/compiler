@@ -15,21 +15,21 @@ msString msBlake2b(msString data, int32_t hashSize) {
 
 	uint8_t hash[64];
 	crypto_blake2b(hash, (size_t)hashSize,
-		data.p ? (const uint8_t *)data.p->data : (const uint8_t *)"",
-		data.len);
+		(const uint8_t *)msStrData(&data),
+		msStrLen(data));
 
 	return msStringNew((const char *)hash, (int64_t)hashSize);
 }
 
 msString msBlake2bKeyed(msString key, msString data, int32_t hashSize) {
 	if (hashSize < 1 || hashSize > 64) return MS_EMPTY_STRING;
-	if (key.len < 1 || key.len > 64 || !key.p) return MS_EMPTY_STRING;
+	if (msStrLen(key) < 1 || msStrLen(key) > 64) return MS_EMPTY_STRING;
 
 	uint8_t hash[64];
 	crypto_blake2b_keyed(hash, (size_t)hashSize,
-		(const uint8_t *)key.p->data, key.len,
-		data.p ? (const uint8_t *)data.p->data : (const uint8_t *)"",
-		data.len);
+		(const uint8_t *)msStrData(&key), msStrLen(key),
+		(const uint8_t *)msStrData(&data),
+		msStrLen(data));
 
 	return msStringNew((const char *)hash, (int64_t)hashSize);
 }
@@ -57,9 +57,9 @@ int64_t msBlake2bInit(int32_t hashSize) {
 void msBlake2bUpdate(int64_t handle, msString data) {
 	msBlake2bCtx *c = B2B_FROM_HANDLE(handle);
 	if (!c) return;
-	if (data.p && data.len > 0) {
+	if (msStrLen(data) > 0) {
 		crypto_blake2b_update(&c->ctx,
-			(const uint8_t *)data.p->data, data.len);
+			(const uint8_t *)msStrData(&data), msStrLen(data));
 	}
 }
 

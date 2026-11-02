@@ -234,11 +234,11 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
  * pathname only up to the first NUL, so each would bind or reach another socket. */
 static inline int32_t msNetUnixAddr(msString path, struct sockaddr_un* sa, ms_socklen_t* len) {
 	const char* bytes = msStringToCString(path);
-	if (path.len == 0 || path.len >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)path.len) != NULL) return -1;
+	if (msStrLen(path) == 0 || msStrLen(path) >= (int64_t)sizeof(sa->sun_path) || memchr(bytes, 0, (size_t)msStrLen(path)) != NULL) return -1;
 	memset(sa, 0, sizeof(*sa));
 	sa->sun_family = AF_UNIX;
-	memcpy(sa->sun_path, bytes, (size_t)path.len);
-	*len = (ms_socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)path.len + 1);
+	memcpy(sa->sun_path, bytes, (size_t)msStrLen(path));
+	*len = (ms_socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)msStrLen(path) + 1);
 	return 0;
 }
 #endif
@@ -292,7 +292,7 @@ static inline int32_t msNetSendBytes(int32_t fd, const uint8_t* data, int64_t le
 }
 
 static inline int32_t msNetSend(int32_t fd, msString data) {
-	return msNetSendBytes(fd, (const uint8_t*)msStringToCString(data), data.len);
+	return msNetSendBytes(fd, (const uint8_t*)msStringToCString(data), msStrLen(data));
 }
 
 static _Thread_local int32_t _msNetRecvTimedOut = 0;
@@ -460,7 +460,7 @@ static inline int32_t msNetSendNonBlockBytes(int32_t fd, const uint8_t* data, in
 }
 
 static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offset) {
-	return msNetSendNonBlockBytes(fd, (const uint8_t*)msStringToCString(data), data.len, offset);
+	return msNetSendNonBlockBytes(fd, (const uint8_t*)msStringToCString(data), msStrLen(data), offset);
 }
 
 /**
@@ -489,9 +489,9 @@ static inline void msNetSetNoSigpipe(int32_t fd) {
  * Returns position after \r\n\r\n, or -1 if not found.
  * Assumes common case: full headers arrive in one read. */
 static inline int32_t msFastHeadersCheck(msString data) {
-	int32_t len = (int32_t)data.len;
-	if (len < 4 || !data.p) return -1;
-	const char* d = data.p->data;
+	int32_t len = (int32_t)msStrLen(data);
+	if (len < 4) return -1;
+	const char* d = msStrData(&data);
 	if (MS_LIKELY(d[len-4]=='\r' && d[len-3]=='\n' && d[len-2]=='\r' && d[len-1]=='\n'))
 		return len;
 	return -1;
@@ -499,9 +499,8 @@ static inline int32_t msFastHeadersCheck(msString data) {
 
 /* Slow headers check — linear scan for \r\n\r\n (fallback for partial headers). */
 static inline int32_t msSlowHeadersCheck(msString data) {
-	int32_t len = (int32_t)data.len;
-	if (!data.p) return -1;
-	const char* d = data.p->data;
+	int32_t len = (int32_t)msStrLen(data);
+	const char* d = msStrData(&data);
 	for (int32_t i = 0; i + 3 < len; i++) {
 		if (d[i]=='\r' && d[i+1]=='\n' && d[i+2]=='\r' && d[i+3]=='\n')
 			return i + 4;
@@ -512,9 +511,9 @@ static inline int32_t msSlowHeadersCheck(msString data) {
 /* Fast method parse — returns method enum (0=GET..6=OPTIONS) and method length, or -1 on error.
  * Avoids msString creation + parseMethod() match. */
 static inline int32_t msFastParseMethod(msString data) {
-	if (data.len < 14 || !data.p) return -1;  /* minimum: "GET / HTTP/1.1" */
-	const char* d = data.p->data;
-	int32_t len = (int32_t)data.len;
+	if (msStrLen(data) < 14) return -1;  /* minimum: "GET / HTTP/1.1" */
+	const char* d = msStrData(&data);
+	int32_t len = (int32_t)msStrLen(data);
 	switch (d[0]) {
 	case 'G': if (d[1]=='E' && d[2]=='T' && d[3]==' ') return 0; break;
 	case 'P':
@@ -532,9 +531,9 @@ static inline int32_t msFastParseMethod(msString data) {
 /* Fast path extract — returns path substring from raw request data.
  * Avoids indexOf + two slice() calls. */
 static inline msString msFastParsePath(msString data) {
-	if (data.len < 14 || !data.p) return MS_EMPTY_STRING;
-	const char* d = data.p->data;
-	int32_t len = (int32_t)data.len;
+	if (msStrLen(data) < 14) return MS_EMPTY_STRING;
+	const char* d = msStrData(&data);
+	int32_t len = (int32_t)msStrLen(data);
 	/* Find first space (end of method) */
 	int32_t i = 0;
 	while (i < len && d[i] != ' ') i++;
@@ -550,38 +549,35 @@ static inline msString msFastParsePath(msString data) {
 /* Fast path extract into existing buffer — zero-alloc after warmup.
  * Same logic as msFastParsePath but writes into dest instead of allocating. */
 static inline void msFastParsePathInto(msString* dest, msString data) {
-	extern void msStringPrepareAdd(msString* s, int64_t addLen);
-	if (data.len < 14 || !data.p) { dest->len = 0; return; }
-	const char* d = data.p->data;
-	int32_t len = (int32_t)data.len;
+	if (msStrLen(data) < 14) { msStrSetLen(dest, 0); return; }
+	const char* d = msStrData(&data);
+	int32_t len = (int32_t)msStrLen(data);
 	int32_t i = 0;
 	while (i < len && d[i] != ' ') i++;
-	if (i >= len) { dest->len = 0; return; }
+	if (i >= len) { msStrSetLen(dest, 0); return; }
 	int32_t pathStart = i + 1;
 	int32_t pathEnd = pathStart;
 	while (pathEnd < len && d[pathEnd] != ' ') pathEnd++;
-	if (pathEnd >= len) { dest->len = 0; return; }
+	if (pathEnd >= len) { msStrSetLen(dest, 0); return; }
 	int32_t pathLen = pathEnd - pathStart;
-	dest->len = 0;
-	msStringPrepareAdd(dest, (int64_t)pathLen);
-	memcpy(dest->p->data, d + pathStart, pathLen);
-	dest->len = pathLen;
-	dest->p->data[pathLen] = '\0';
+	msStrSetLen(dest, 0);
+	memcpy(msStrReserve(dest, (int64_t)pathLen), d + pathStart, pathLen);
+	msStrCommit(dest, pathLen);
 }
 
 /* Shift string left by offset (memmove in-place, zero alloc).
  * Used for HTTP pipelining: discard processed request, keep remainder. */
 static inline void msStringShiftLeft(msString* s, int32_t offset) {
 	if (offset <= 0) return;
-	if (offset >= (int32_t)s->len) {
-		s->len = 0;
-		if (s->p) s->p->data[0] = '\0';
+	if (offset >= (int32_t)msStrLen(*s)) {
+		msStringClear(s);
 		return;
 	}
-	int32_t remaining = (int32_t)s->len - offset;
-	memmove(s->p->data, s->p->data + offset, remaining);
-	s->len = remaining;
-	s->p->data[remaining] = '\0';
+	int32_t remaining = (int32_t)msStrLen(*s) - offset;
+	char* w = msStrWritable(s);
+	memmove(w, w + offset, remaining);
+	msStrSetLen(s, remaining);
+	w[remaining] = '\0';
 }
 
 /* Thread-local cached Date header line (httpbeast/Bun pattern).
@@ -637,7 +633,7 @@ static inline const char* msGetDateHeader(void) {
  * literal flag prevents DRC from freeing the thread-local backing. */
 static inline msString msHttpDateLine(void) {
 	_msEnsureDate();
-	return (msString){ .len = _msDateLen, .p = (msStrPayload*)&_msDatePayload };
+	return MS_STRING_LIT(&_msDatePayload, _msDateLen);
 }
 
 /* ===== Static response cache (Layer D — Bun parity for hello-world hot path) =====
@@ -728,11 +724,9 @@ static inline void msStaticCachePut(int32_t slotId, int64_t currentSec, msString
 		msStringDestroyForce(_msStaticCache[slotId].prev);
 		_msStaticCache[slotId].prev = _msStaticCache[slotId].current;
 	}
-	if (source.len > 0 && source.p != NULL) {
-		_msStaticCache[slotId].current = msStringNew((const char*)source.p->data, source.len);
-		if (_msStaticCache[slotId].current.p != NULL) {
-			_msStaticCache[slotId].current.p->cap |= MS_STRLIT_FLAG;
-		}
+	if (msStrLen(source) > 0) {
+		_msStaticCache[slotId].current = msStringNew(msStrData(&source), msStrLen(source));
+		msStrMarkLiteral(&_msStaticCache[slotId].current);
 	} else {
 		_msStaticCache[slotId].current = MS_EMPTY_STRING;
 	}
@@ -746,14 +740,14 @@ static inline void msStaticCachePut(int32_t slotId, int64_t currentSec, msString
 static inline msString msBuildResponse(int32_t status, msString statusTextStr,
                                         msString contentType, msString body) {
 	char header[512];
-	int32_t bodyLen = (int32_t)body.len;
+	int32_t bodyLen = (int32_t)msStrLen(body);
 	/* Extract C strings from msString for snprintf */
 	char stBuf[64], ctBuf[128];
-	int stLen = statusTextStr.len < 63 ? (int)statusTextStr.len : 63;
-	int ctLen = contentType.len < 127 ? (int)contentType.len : 127;
-	if (statusTextStr.p) memcpy(stBuf, statusTextStr.p->data, stLen);
+	int stLen = msStrLen(statusTextStr) < 63 ? (int)msStrLen(statusTextStr) : 63;
+	int ctLen = msStrLen(contentType) < 127 ? (int)msStrLen(contentType) : 127;
+	memcpy(stBuf, msStrData(&statusTextStr), stLen);
 	stBuf[stLen] = '\0';
-	if (contentType.p) memcpy(ctBuf, contentType.p->data, ctLen);
+	memcpy(ctBuf, msStrData(&contentType), ctLen);
 	ctBuf[ctLen] = '\0';
 
 	int hlen = snprintf(header, 512,
@@ -761,16 +755,11 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 		(int)status, stBuf, ctBuf, (int)bodyLen, msGetDateHeader());
 	if (hlen < 0 || hlen >= 512) hlen = 511;
 	int32_t total = hlen + bodyLen;
-	/* Allocate string: payload header + data */
-	msStrPayload* pp = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + total + 1);
-	pp->cap = total;
-	memcpy(pp->data, header, hlen);
-	if (body.p && bodyLen > 0)
-		memcpy(pp->data + hlen, body.p->data, bodyLen);
-	pp->data[total] = '\0';
-	msString result;
-	result.len = total;
-	result.p = pp;
+	msString result = msStringNewUninit(total);
+	char* w = msStrWritable(&result);
+	memcpy(w, header, hlen);
+	if (bodyLen > 0)
+		memcpy(w + hlen, msStrData(&body), bodyLen);
 	return result;
 }
 
@@ -780,13 +769,13 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 static inline void msBuildResponseReuse(msString* dest, int32_t status, msString statusTextStr,
                                          msString contentType, msString body) {
 	char header[512];
-	int32_t bodyLen = (int32_t)body.len;
+	int32_t bodyLen = (int32_t)msStrLen(body);
 	char stBuf[64], ctBuf[128];
-	int stLen = statusTextStr.len < 63 ? (int)statusTextStr.len : 63;
-	int ctLen = contentType.len < 127 ? (int)contentType.len : 127;
-	if (statusTextStr.p) memcpy(stBuf, statusTextStr.p->data, stLen);
+	int stLen = msStrLen(statusTextStr) < 63 ? (int)msStrLen(statusTextStr) : 63;
+	int ctLen = msStrLen(contentType) < 127 ? (int)msStrLen(contentType) : 127;
+	memcpy(stBuf, msStrData(&statusTextStr), stLen);
 	stBuf[stLen] = '\0';
-	if (contentType.p) memcpy(ctBuf, contentType.p->data, ctLen);
+	memcpy(ctBuf, msStrData(&contentType), ctLen);
 	ctBuf[ctLen] = '\0';
 
 	int hlen = snprintf(header, 512,
@@ -796,14 +785,12 @@ static inline void msBuildResponseReuse(msString* dest, int32_t status, msString
 	int32_t total = hlen + bodyLen;
 
 	/* Reuse buffer: reset length, grow if needed (realloc only on first call or size increase) */
-	extern void msStringPrepareAdd(msString* s, int64_t addLen);
-	dest->len = 0;
-	msStringPrepareAdd(dest, (int64_t)total);
-	memcpy(dest->p->data, header, hlen);
-	if (body.p && bodyLen > 0)
-		memcpy(dest->p->data + hlen, body.p->data, bodyLen);
-	dest->p->data[total] = '\0';
-	dest->len = total;
+	msStrSetLen(dest, 0);
+	char* w = msStrReserve(dest, (int64_t)total);
+	memcpy(w, header, hlen);
+	if (bodyLen > 0)
+		memcpy(w + hlen, msStrData(&body), bodyLen);
+	msStrCommit(dest, total);
 }
 
 #ifdef __cplusplus
