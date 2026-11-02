@@ -1084,7 +1084,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			if (operand != null && operand.flags.has(NodeFlag.BoundSym)) {
 				const value = nodeToValue(operand, objHeap, arrHeap, false);
 				if (operand.typeExprs != null) setNodes(objHeap, arrHeap, value.intVal, "boundTypeNames", operand.typeExprs, false);
-				heapObjectSetField(objHeap, handle, "boundTypeExpr", value);
+				wireSet(arrHeap, objHeap, handle, "boundTypeExpr", value);
 			}
 		},
 
@@ -1811,7 +1811,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
-					if (heapObjectGetField(objHeap, handle, "genericDefaults").kind == RaiserValueKind.Array) {
+					if (wireGet(arrHeap, objHeap, handle, "genericDefaults").kind == RaiserValueKind.Array) {
 						const defaults: (Node | null)[] = [];
 						for (const annotation of readDefaults(objHeap, arrHeap, handle, "genericDefaults", fallbackLoc)) {
 							defaults.push(annotation == null ? null : annotation);
