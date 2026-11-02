@@ -289,15 +289,18 @@ test('webpack-watch-established: native watch generations execute and invalidate
   const f = fixture(t);
   const compiler = await webpackCompiler(f);
   const queue = watchTestQueue();
-  let phase = 'initial', generation = 0;
+  let phase = 'initial', generation = 0, compilationInput;
   const trace = (event, details = {}) => {
     const record = { webpackWatch: event, phase, generation, ...details };
     t.diagnostic(JSON.stringify(record));
     writeFileSync(join(f.work, 'webpack-watch-trace.jsonl'), `${JSON.stringify(record)}\n`, { flag: 'a' });
   };
   compiler.hooks.invalid.tap('AcceptanceWatchTrace', (file, time) => trace('invalid', { file, time }));
-  compiler.hooks.watchRun.tap('AcceptanceWatchTrace', current => trace('watchRun', {
-    modified: [...(current.modifiedFiles ?? [])], removed: [...(current.removedFiles ?? [])] }));
+  compiler.hooks.watchRun.tap('AcceptanceWatchTrace', current => {
+    const modified = [...(current.modifiedFiles ?? [])], removed = [...(current.removedFiles ?? [])];
+    compilationInput = { phase, files: new Set([...modified, ...removed]) };
+    trace('watchRun', { modified, removed });
+  });
   compiler.hooks.done.tap('AcceptanceWatchTrace', stats => trace('done', { errors: stats.hasErrors() }));
   compiler.hooks.afterDone.tap('AcceptanceWatchTrace', () => trace('afterDone'));
   compiler.hooks.failed.tap('AcceptanceWatchTrace', error => trace('failed', { error: error.message }));
@@ -317,22 +320,35 @@ test('webpack-watch-established: native watch generations execute and invalidate
   const watching = compiler.watch({ aggregateTimeout: 10 }, (error, stats) => {
     generation++;
     trace('callback', { error: error?.message, errors: stats?.hasErrors() });
-    queue.push({ error, stats });
+    queue.push({ error, stats, input: compilationInput });
   });
   let closing;
   const stop = () => closing ??= new Promise((resolve, reject) => watching.close(error => error ? reject(error) : resolve()));
   t.after(async () => { await stop(); await closeWebpack(compiler); });
   const next = async () => {
-    trace('await-callback');
-    const { error, stats } = await queue.next();
-    trace('consume-callback');
-    return webpackResult(error, stats);
+    const expectedFile = phase === 'initial' ? undefined : phase === 'edit-runtime' ? f.primary : f.label;
+    while (true) {
+      trace('await-callback');
+      const { error, stats, input } = await queue.next();
+      const result = webpackResult(error, stats);
+      assert.ok(input, 'watch callback must identify its compilation inputs');
+      trace('consume-callback', { inputPhase: input.phase, inputFiles: [...input.files] });
+      if (input.phase === phase && (!expectedFile || input.files.has(expectedFile))) return result;
+      trace('unrelated-callback', { expectedFile });
+    }
   };
   const success = async delta => {
     await webpackRuntime(f, await next(), delta);
     trace('runtime-verified', { delta });
   };
   await success(1); sourceFamily(f);
+  const hostFile = join(f.src, 'host.js');
+  const hostRebuilt = new Promise(resolve => compiler.hooks.afterDone.tap('AcceptanceHostRebuild', stats => {
+    if (compiler.modifiedFiles?.has(hostFile)) resolve(stats);
+  }));
+  writeFileSync(hostFile, `${readFileSync(hostFile, 'utf8')}\n`);
+  await webpackRuntime(f, await hostRebuilt);
+  assert.ok(queue.pending > 0, 'an unrelated native build must be queued before the MS edit');
   await establishedEdits(f, success, async () => assert.equal((await next()).hasErrors(), true), nextPhase => {
     phase = nextPhase; trace('phase');
   });
