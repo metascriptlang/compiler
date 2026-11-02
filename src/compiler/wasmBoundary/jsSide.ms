@@ -47,7 +47,8 @@ function wireToJsValue(kind: BoundaryKind, expr: string): string {
 			| BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
-			| BoundaryKind.Span => {
+			| BoundaryKind.Span
+			| BoundaryKind.Handle => {
 				unwiredKind(kind, "scalar conversion from the wasm side");
 			},
 	};
@@ -71,7 +72,8 @@ function jsValueToWire(kind: BoundaryKind, expr: string): string {
 			| BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
-			| BoundaryKind.Span => {
+			| BoundaryKind.Span
+			| BoundaryKind.Handle => {
 				unwiredKind(kind, "scalar conversion to the wasm side");
 			},
 	};

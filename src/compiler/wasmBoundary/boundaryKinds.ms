@@ -16,6 +16,7 @@ export enum BoundaryKind {
 	Struct,
 	Vec,
 	Span,
+	Handle,
 }
 
 export function unwiredKind(kind: BoundaryKind, what: string): never {
@@ -135,7 +136,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			| BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
-			| BoundaryKind.Span => { unwiredKind(kind, what); },
+			| BoundaryKind.Span
+			| BoundaryKind.Handle => { unwiredKind(kind, what); },
 	};
 }
 

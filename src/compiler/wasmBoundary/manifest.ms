@@ -22,6 +22,7 @@ import { hasFlag } from "../../checker/symbol";
 import {
 	PEEL_ALIAS,
 	getAttachedOp,
+	getBuiltinKind,
 	hasGenericParams,
 	isAtomicRef,
 	isLockedRef,
@@ -103,6 +104,7 @@ interface Collector {
 	fnName: string;
 	modulePath: string;
 	at: SourceLocation;
+	exports: ExportedSymInfo[];
 }
 
 export function copiesArgsIn(f: BoundaryFunction): boolean {
@@ -209,6 +211,63 @@ function refuse(
 	cannotCross(c, code, `${what} has type '${describe(t)}', ${why}`);
 }
 
+function isHandleType(t: Type): boolean {
+	return getBuiltinKind(t) == "FfiHandle";
+}
+
+function handleTarget(t: Type): Type {
+	if (t.kind != TypeKind.GenericInstance || t.typeChildren.length != 1) {
+		throw new Error(`internal: Handle type '${describe(t)}' has no one type argument`);
+	}
+	const arg = peeled(t.typeChildren[0]);
+	return arg.kind == TypeKind.Ref && arg.typeReturn != null
+		? peeled(arg.typeReturn!)
+		: arg;
+}
+
+function isExportedTarget(c: Collector, target: Type): boolean {
+	if (target.sym == null) return false;
+	for (const e of c.exports) {
+		if (e.sym == target.sym) return true;
+	}
+	return false;
+}
+
+function handleRefusal(
+	c: Collector,
+	code: string,
+	what: string,
+	text: string,
+): null {
+	cannotCross(c, code, `${what}: ${text}`);
+	return null;
+}
+
+function checkHandle(
+	c: Collector,
+	what: string,
+	t: Type,
+	nullable: boolean,
+): void {
+	if (nullable) {
+		handleRefusal(c, "handle-null", what, "nullable Handle<T> is not supported");
+		return;
+	}
+	const target = handleTarget(t);
+	const name = describe(target);
+	if (!isExportedTarget(c, target)) {
+		const text = `Handle<${name}>: ${name} must be exported to cross`;
+		handleRefusal(c, "handle-unexported", what, text);
+		return;
+	}
+	handleRefusal(
+		c,
+		"handle-not-generated",
+		what,
+		`Handle<${name}> crossing is not generated yet`,
+	);
+}
+
 function callbackParamKind(pt: Type): BoundaryKind | null {
 	if (isMaybeType(pt)) return null;
 	return pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
@@ -243,7 +302,15 @@ function callbackOf(
 				element = ek;
 			}
 		}
-		if (k == null) {
+		if (k == null && isHandleType(pt)) {
+			handleRefusal(
+				c,
+				"handle-callback",
+				`parameter ${i + 1} of ${what}`,
+				"Handle<T> as a callback parameter or result is not supported",
+			);
+			ok = false;
+		} else if (k == null) {
 			refuse(
 				c,
 				"callback-param",
@@ -265,7 +332,15 @@ function callbackOf(
 	if (!isVoidType(t.typeReturn)) {
 		const rt = peeled(t.typeReturn!);
 		const k = isMaybeType(rt) ? null : scalarKind(rt);
-		if (k == null) {
+		if (k == null && isHandleType(rt)) {
+			handleRefusal(
+				c,
+				"handle-callback",
+				`the result of ${what}`,
+				"Handle<T> as a callback parameter or result is not supported",
+			);
+			ok = false;
+		} else if (k == null) {
 			refuse(
 				c,
 				"callback-result",
@@ -340,7 +415,8 @@ function structLeaves(
 			what,
 			t,
 			"which declares a lifecycle hook, and a copy made field by field "
-				+ "would skip it",
+				+ `would skip it; ${describe(t)} has no JS/wasm boundary form: `
+				+ `it crosses as Handle<${describe(t)}>`,
 		);
 		return false;
 	}
@@ -401,11 +477,17 @@ function isClassRef(t: Type): boolean {
 	return runtimeClassSym(target) != null;
 }
 
-function classWhy(at: NoFormAt, nullable: boolean): string {
+function classTargetOf(t: Type): Type {
+	return t.kind == TypeKind.Ref && t.typeReturn != null
+		? peeled(t.typeReturn!)
+		: t;
+}
+
+function classWhy(at: NoFormAt, nullable: boolean, t: Type): string {
 	const identity = `and a ${nullable ? "nullable " : ""}class instance has an `
 		+ "identity on one heap and does not cross as a copy: ";
-	const later = "; sharing the instance itself waits for Handle<T>, "
-		+ "which is planned";
+	const later = `; ${describe(classTargetOf(t))} has no JS/wasm boundary form: `
+		+ `it crosses as Handle<${describe(classTargetOf(t))}>`;
 	return identity + byPosition(
 		at,
 		"pass the values it holds as parameters or as a struct, which crosses "
@@ -442,7 +524,7 @@ function enumWhy(t: Type, at: NoFormAt): string {
 
 function unionWhy(t: Type, at: NoFormAt): string | null {
 	const held = unwrapRefNullUnion(t);
-	if (held != null) return isClassRef(held) ? classWhy(at, true) : null;
+	if (held != null) return isClassRef(held) ? classWhy(at, true, held) : null;
 	const variants = "and a union has no single boundary form: ";
 	return variants + byPosition(
 		at,
@@ -497,7 +579,7 @@ function noFormWhy(t: Type, at: NoFormAt): string | null {
 	) {
 		return arrayWhy(at);
 	}
-	return isClassRef(t) ? classWhy(at, false) : null;
+	return isClassRef(t) ? classWhy(at, false, t) : null;
 }
 
 function valueShape(
@@ -621,6 +703,10 @@ function paramOf(
 		param.element = element;
 		return param;
 	}
+	if (isHandleType(t)) {
+		checkHandle(c, what, t, nullable);
+		return null;
+	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, what, t, nullable);
 	if (shape != null) {
@@ -662,6 +748,10 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 			"and a Span borrows its memory only for the call, so it cannot outlive "
 				+ "it: return a Vec",
 		);
+		return null;
+	}
+	if (isHandleType(t)) {
+		checkHandle(c, "the result", t, nullable);
 		return null;
 	}
 	const errorsBefore = c.errors.length;
@@ -934,7 +1024,7 @@ export function manifestFor(
 ): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
 	const at = makeLoc(0, 0);
-	const c: Collector = { errors: [], fnName: "", modulePath, at };
+	const c: Collector = { errors: [], fnName: "", modulePath, at, exports };
 	const functions: BoundaryFunction[] = [];
 	const locs: SourceLocation[] = [];
 	const seen: string[] = [];

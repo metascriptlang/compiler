@@ -144,7 +144,7 @@ export function paramNullable(b: Box | null): int32 { return 0; }
 	assert errorFor(m.errors, "resultArray").includes("the result has type") && errorFor(m.errors, "resultArray").includes(array + ": return a Vec of bool, integer or float elements, which crosses as a copy");
 	assert errorFor(m.errors, "fieldArray").includes("field 'xs' of parameter 'r' has type") && errorFor(m.errors, "fieldArray").includes(array + ", and a struct holds no Vec: pass the elements as a separate Vec parameter");
 	const identity = "class instance has an identity on one heap and does not cross as a copy: ";
-	const later = "; sharing the instance itself waits for Handle<T>, which is planned";
+	const later = "; Box has no JS/wasm boundary form: it crosses as Handle<Box>";
 	assert errorFor(m.errors, "paramClass").includes("parameter 'b' has type 'Box', and a " + identity + "pass the values it holds as parameters or as a struct, which crosses as a copy" + later);
 	assert errorFor(m.errors, "resultClass").includes("the result has type 'Box', and a " + identity + "return the values it holds as a struct, which crosses as a copy" + later);
 	assert errorFor(m.errors, "fieldClass").includes("field 'b' of parameter 'h' has type 'Box', and a " + identity + "copy the values it holds into fields of the struct" + later);
@@ -409,4 +409,55 @@ export function callbackOnly(cb: (xs: Span<int32>) => void): void {}
 	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
 	assert m.errors[0].code == "span-and-callback" && m.errors[0].message.includes("'mapInto'") && m.errors[0].message.includes("pass a Vec");
 	assert m.errors[1].code == "span-and-callback" && m.errors[1].message.includes("'viewThen'");
+}
+
+const HANDLE = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+`;
+
+test "manifest: a class or a hook struct crossing points at Handle<T>" {
+	const src = HANDLE + `
+export class Counter { n: int32 = 0; }
+struct Owned { n: int32; }
+function onDestroy(this o: Owned): void {}
+export function makeClass(): Counter { return new Counter(); }
+export function takeOwned(o: Owned): int32 { return 0; }
+`;
+	const names = ["makeClass", "takeOwned"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.functions.length == 0;
+	assert errorFor(m.errors, "makeClass").includes("Counter has no JS/wasm boundary form: it crosses as Handle<Counter>");
+	assert errorFor(m.errors, "takeOwned").includes("Owned has no JS/wasm boundary form: it crosses as Handle<Owned>");
+}
+
+test "manifest: a Handle<T> of an exported class is not generated yet" {
+	const src = HANDLE + `
+export class Counter { n: int32 = 0; }
+export function open(): Handle<Counter> { return null as unknown as Handle<Counter>; }
+export function use(h: Handle<Counter>): int32 { return 0; }
+`;
+	const names = ["open", "use"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", ...names]), names);
+	assert m.functions.length == 0;
+	assert errorFor(m.errors, "open").includes("Handle<Counter> crossing is not generated yet");
+	assert errorFor(m.errors, "use").includes("parameter 'h': Handle<Counter> crossing is not generated yet");
+}
+
+test "manifest: a nullable Handle, a Handle callback parameter or result and an unexported target are refused by name" {
+	const src = HANDLE + `
+export class Counter { n: int32 = 0; }
+class Hidden { n: int32 = 0; }
+export function maybe(h: Handle<Counter> | null): int32 { return 0; }
+export function cbParam(cb: (h: Handle<Counter>) => void): int32 { return 0; }
+export function cbResult(cb: () => Handle<Counter>): int32 { return 0; }
+export function hidden(h: Handle<Hidden>): int32 { return 0; }
+`;
+	const names = ["maybe", "cbParam", "cbResult", "hidden"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", ...names]), names);
+	assert m.functions.length == 0;
+	assert errorFor(m.errors, "maybe").includes("nullable Handle<T> is not supported");
+	assert errorFor(m.errors, "cbParam").includes("Handle<T> as a callback parameter or result is not supported");
+	assert errorFor(m.errors, "cbResult").includes("Handle<T> as a callback parameter or result is not supported");
+	assert errorFor(m.errors, "hidden").includes("Handle<Hidden>: Hidden must be exported to cross");
 }

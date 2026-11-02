@@ -20,6 +20,7 @@ const ALL_KINDS: BoundaryKind[] = [
 	BoundaryKind.Bool, BoundaryKind.I8, BoundaryKind.I16, BoundaryKind.I32, BoundaryKind.U8, BoundaryKind.U16,
 	BoundaryKind.U32, BoundaryKind.I64, BoundaryKind.U64, BoundaryKind.F32, BoundaryKind.F64, BoundaryKind.Void,
 	BoundaryKind.Callback, BoundaryKind.String, BoundaryKind.Struct, BoundaryKind.Vec, BoundaryKind.Span,
+	BoundaryKind.Handle,
 ];
 
 const SCALARS: BoundaryKind[] = [
@@ -52,6 +53,7 @@ function accepts(kind: BoundaryKind, at: Position): boolean {
 		BoundaryKind.Callback => at == Position.Param,
 		BoundaryKind.Struct | BoundaryKind.Vec => at == Position.Param || at == Position.Result,
 		BoundaryKind.Span => at == Position.Param || at == Position.CallbackParam,
+		BoundaryKind.Handle => false,
 	};
 }
 

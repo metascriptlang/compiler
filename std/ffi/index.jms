@@ -1,3 +1,4 @@
+@builtin("FfiHandle")
 export struct Handle<T> { ptr: Ptr<void>; }
 
 export function retain<T>(this typeof Handle, x: T): Handle<T> {
