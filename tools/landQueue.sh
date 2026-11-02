@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -u
+cd "$(dirname "$0")/.." || exit 1
 Q=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
 WT_TOOL=${MSC_WT_TOOL:-$HOME/nerdtools/claude/tools/wt.sh}
 IDLE=${MSC_LAND_QUEUE_IDLE:-600}
@@ -80,13 +81,14 @@ run_item() {
   printf '\n===== %s try %s\n' "$(date '+%F %T')" "$tries" >>"$Q/$name.land.log"
   (WT_CWD="$worktree" MSC_LAND_MAC=1 bash "$WT_TOOL" land "$worktree" >>"$Q/$name.land.log" 2>&1)
   rc=$?
-  if [ "$rc" -eq 0 ]; then
-    log "$name: $(tail -1 "$Q/$name.land.log")"
-    finish "$name" done "$(tail -1 "$Q/$name.land.log")"
+  this_try=$(awk '/^===== /{t=""} {t=t $0 ORS} END{printf "%s", t}' "$Q/$name.land.log")
+  landed=$(grep -E '^landed ' <<<"$this_try" | tail -1)
+  if [ "$rc" -eq 0 ] && [ -n "$landed" ]; then
+    log "$name: $landed"
+    finish "$name" done "$landed"
     rm -f "$running"
     return
   fi
-  this_try=$(awk '/^===== /{t=""} {t=t $0 ORS} END{printf "%s", t}' "$Q/$name.land.log")
   if grep -qE '^gate: BUSY ' <<<"$this_try"; then
     log "$name: machine busy, queued again with its green lanes kept; try $tries not counted"
     { printf 'name=%s\nworktree=%s\ntries=%s\n' "$name" "$worktree" "$((tries - 1))"; } >"$running.tmp"
@@ -98,6 +100,13 @@ run_item() {
     log "$name: retry ($(tail -1 "$Q/$name.land.log"))"
     { printf 'name=%s\nworktree=%s\ntries=%s\n' "$name" "$worktree" "$tries"; } >"$running.tmp"
     mv "$running.tmp" "$item"
+    rm -f "$running"
+    return
+  fi
+  if [ "$rc" -eq 0 ]; then
+    log "$name: land exited 0 without a landed line, so it stopped before landing — see queue/$name.red"
+    finish "$name" red "land-queue: the land exited 0 but printed no landed line, so it stopped before landing (killed?); main is untouched, queue it again
+$(tail -8 "$Q/$name.land.log")"
     rm -f "$running"
     return
   fi

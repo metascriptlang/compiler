@@ -19,7 +19,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, borrowHoldsReference, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
@@ -688,14 +688,15 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 		NodeKind.HiddenDeref => {
 			const hd = node.data as HiddenDerefData;
 			const pointer = compileExpr(s, hd.expr);
-			if (!heldByLocation(s, node.nodeType)) return pointer;
+			const viewType = hd.expr.kind == NodeKind.Identifier && hd.expr.resolvedSym != null ? hd.expr.resolvedSym.symbolType : hd.expr.nodeType;
+			if (!heldByLocation(s, node.nodeType) || borrowHoldsReference(viewType)) return pointer;
 			const dest = allocFor(s, node.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.LoadDeref, dest, pointer, 0));
 			return dest;
 		},
 		NodeKind.HiddenAddr => {
 			const hd = node.data as HiddenDerefData;
-			if (!heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			if (!heldByLocation(s, hd.expr.nodeType) || borrowHoldsReference(node.nodeType)) return compileExpr(s, hd.expr);
 			if (!isPlace(s, hd.expr)) return compileCellAddress(s, hd.expr);
 			return compileAddress(s, hd.expr);
 		},

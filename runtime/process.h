@@ -460,6 +460,18 @@ static inline void _msAppendWinArg(char** buf, size_t* len, size_t* cap, const c
 	*len = out - *buf;
 }
 
+static inline int _msWinRunsThroughCmd(const char* path) {
+	size_t n = strlen(path);
+	while (n > 0 && (path[n - 1] == ' ' || path[n - 1] == '.')) n--;
+	if (n < 4 || path[n - 4] != '.') return 0;
+	char ext[3];
+	for (int i = 0; i < 3; i++) {
+		char c = path[n - 3 + i];
+		ext[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+	}
+	return memcmp(ext, "bat", 3) == 0 || memcmp(ext, "cmd", 3) == 0;
+}
+
 /* Serializes pipe creation + CreateProcess + closing the parent's write ends.
  *
  * CreateProcess with bInheritHandles=TRUE hands the child EVERY handle that is
@@ -485,6 +497,10 @@ extern SRWLOCK _msSpawnCreateLock;
 
 static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
+	if (_msWinRunsThroughCmd(pathStr)) {
+		errno = EINVAL;
+		return -1.0;
+	}
 
 	/* Assemble command line: "path" arg1 arg2 ... */
 	size_t cap = 256;
@@ -1008,6 +1024,10 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	_msProcSpawnErrno = 0;
 
 #ifdef _WIN32
+	if (_msWinRunsThroughCmd(msStringToCString(exe))) {
+		_msProcSpawnErrno = EINVAL;
+		return MS_EMPTY_STRING;
+	}
 	AcquireSRWLockExclusive(&_msSpawnCreateLock);
 
 	HANDLE outRd = NULL, outWr = NULL;
@@ -1393,6 +1413,7 @@ static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* arg
 }
 
 static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msString cwd, int32_t mergeStderr) {
+	if (_msWinRunsThroughCmd(msStringToCString(path))) return -(int64_t)EINVAL;
 	wchar_t* wcmd = _msProcChildCommandLine(path, args);
 	wchar_t* wcwd = cwd.len > 0 ? _msProcChildWide(msStringToCString(cwd), 1) : NULL;
 	msProcChild* c = (msProcChild*)calloc(1, sizeof(msProcChild));

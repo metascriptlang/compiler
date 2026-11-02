@@ -235,6 +235,18 @@ extern function msProcessPlatform(): string;
 const onWindows = msProcessPlatform() == "windows";
 const shell = onWindows ? "sh" : "/bin/sh";
 
+test "spawn of a batch file on Windows is refused naming EINVAL" {
+	if (!onWindows) return;
+	for (const path of ["C:\\msProcChildProbe\\x.bat", "C:\\msProcChildProbe\\Y.CMD. "]) {
+		const r = spawn(path, ["c&echo.PWNED"]);
+		assert !r.ok;
+		if (!r.ok) {
+			assert r.error.kind == ProcessErrorKind.SpawnFailed;
+			assert r.error.message == `spawnSync ${path} EINVAL`;
+		}
+	}
+}
+
 test "cwd sets the child's working directory" {
 	const r = onWindows
 		? spawn("cmd", ["/c", "cd"], { cwd: "C:\\" })

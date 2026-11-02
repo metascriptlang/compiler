@@ -2887,6 +2887,8 @@ unregister("database");                 // auto-unregisters on actor death
 
 #### Constructor
 
+A constructor argument crosses to the actor like a method argument and passes the same send check: a plain function inside it, or a plain reference the creator keeps, is refused at `new`, while a moved reference and a scalar cross (guard `actorCtorArgRejects`, measured 2026-10-31 with msc c9670868a).
+
 Actor constructors run after the actor's pid is wired, so `this.pid` is available:
 
 ```typescript
@@ -3301,7 +3303,8 @@ not rerun for this fixture correction.
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
 
 - **Purpose**: Avoid memory copies when accessing large objects or array elements.
-- **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`.
+- **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`. A `Borrow` of a class or array is that reference itself, so a `Borrow` returned through a parameter (`self(): Borrow<this>`, `head(xs)`) and forwarded again stays valid after the callee returns, on C and the Raiser VM alike (corpus `1231-borrowReturnOfReferenceParam`).
+- **Returned views**: `sort()` and `reverse()` return a `Borrow` of the array they reorder, so `a.sort() === a`. On a `Vec<T>` receiver the view has the type `Vec<T>`; storing it where a `T[]` is owned (a field, a return, a `push`) is refused with "Type 'Vec<number>' is not assignable to type 'number[]' — memory layout differs". Copy it (`[...v.sort()]`) or keep it as a `Vec<T>` (`let k: Vec<number> = v.sort()`). Measured 2026-10-31 on C and JS with msc c9670868a.
 - **Safety**: read-only: `b = …`, `b.x = …`, `b[0] = 5` (also on a `Borrow<int32[]>` or a class), `b.push(…)` and passing `b[0]` to a `ref` parameter are refused; write through the source or a `ref` parameter. The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
 
 ```typescript
@@ -4191,6 +4194,7 @@ walkTree(panel, 1.0);   // monomorphized: direct static calls, zero dispatch cos
 Rules:
 
 - **Exported or not, the calling module's extensions are seen.** The instantiation looks up every extension of the calling module, private ones included. The same holds for a key's `hash` and `==` used by `Map`/`Set` (corpus `privateKeyOps`, `privateKeyOpsLib`, `privateMixinExtension`, measured 2026-10-29 on C, `--danger`, JS and ESM).
+- **A key's `hash` and `==` take `Readonly<K>`.** A `Map` or `Set` probes its keys through a read-only view, so an operator declared over the mutable `K` is refused at `new` on every backend: "'Line' cannot be a Map key: the Map hashes a key through Readonly<Line>, a read-only view, and 'hash' is declared on the mutable 'Line' — declare 'function hash(this k: Readonly<Line>): int64'" (guard `paralockKeyOpsThroughViewRejects`, measured 2026-10-31 on C and JS with msc c9670868a).
 - **Conflict is an error.** If the defining module and the calling module both provide an extension with the same name and receiver, instantiation fails with "Ambiguous call to overloaded extension method" — there is no silent preference.
 - **Keep extensions next to the type or next to the walker** (orphan-rule-lite). Defining protocol extensions in an unrelated third module makes instantiation depend on which caller ran first.
 

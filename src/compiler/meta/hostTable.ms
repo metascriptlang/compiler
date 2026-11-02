@@ -60,8 +60,8 @@ import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
-	readFile, readFileBytes, writeFile, appendFile, chmod, changeStamp, changedTime,
-	mkdir, rmdir, remove, rename, symlink, readDir,
+	readFile, readFileBytes, writeFile, writeFileBytes, appendFile, chmod, changeStamp, changedTime,
+	mkdir, mkdirExclusive, rmdir, remove, rename, symlink, readDir,
 	ensureDir, removeAll, readLines, writeLines, copyFile,
 } from "std/fs";
 import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
@@ -164,6 +164,14 @@ function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
 	return _vmStringResult(readFile(_readForBuild(unboxString(args[0]))));
 }
 
+function _stdFsReadFileBytes(args: RaiserValue[]): RaiserValue {
+	const r = readFileBytes(_readForBuild(unboxString(args[0])));
+	if (!r.ok) return _toVm(_vmFailure(r.error));
+	const items: RaiserHostValue[] = [];
+	for (const b of r.value) items.push(hostValue(boxInt(b)));
+	return _toVm(_vmSuccess(hostArray(items)));
+}
+
 function _stdFsReadLines(args: RaiserValue[]): RaiserValue {
 	return _vmStringsResult(readLines(_readForBuild(unboxString(args[0]))));
 }
@@ -174,6 +182,14 @@ function _stdFsReadDir(args: RaiserValue[]): RaiserValue {
 
 function _stdFsWriteFile(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(writeFile(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsWriteFileBytes(args: RaiserValue[]): RaiserValue {
+	const heap = activeHostArrayHeap();
+	if (heap == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
+	const bytes: uint8[] = [];
+	for (let i: int32 = 0; i < heapArrayLen(heap, args[1].intVal); i += 1) bytes.push(heapArrayGet(heap, args[1].intVal, i).intVal as uint8);
+	return _vmVoidResult(writeFileBytes(unboxString(args[0]), bytes));
 }
 
 function _stdFsAppendFile(args: RaiserValue[]): RaiserValue {
@@ -194,6 +210,10 @@ function _stdFsChmod(args: RaiserValue[]): RaiserValue {
 
 function _stdFsMkdir(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(mkdir(unboxString(args[0])));
+}
+
+function _stdFsMkdirExclusive(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(mkdirExclusive(unboxString(args[0])));
 }
 
 function _stdFsEnsureDir(args: RaiserValue[]): RaiserValue {
@@ -337,6 +357,11 @@ function _bridgeMsFsCopyFile(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsMkdir(args: RaiserValue[]): RaiserValue {
 	const r = mkdir(unboxString(args[0]));
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
+function _bridgeMsFsMkdirExclusive(args: RaiserValue[]): RaiserValue {
+	const r = mkdirExclusive(unboxString(args[0]));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
@@ -1357,6 +1382,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
 	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
+	registerHostFn("std/fs.readFileBytes", _stdFsReadFileBytes, HostCapability.FileRead);
 	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
 	registerHostFn("std/fs.readDir",     _stdFsReadDir, HostCapability.FileRead);
 	registerHostFn("std/fs.exists",      _stdFsExists, HostCapability.FileRead);
@@ -1369,11 +1395,13 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.changedTime", _stdFsChangedTime, HostCapability.FileRead);
 	registerHostFn("std/fs.changeStamp", _stdFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
+	registerHostFn("std/fs.writeFileBytes", _stdFsWriteFileBytes);
 	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
 	registerHostFn("std/fs.writeLines",  _stdFsWriteLines);
 	registerHostFn("std/fs.copyFile",    _stdFsCopyFile);
 	registerHostFn("std/fs.chmod",       _stdFsChmod);
 	registerHostFn("std/fs.mkdir",       _stdFsMkdir);
+	registerHostFn("std/fs.mkdirExclusive", _stdFsMkdirExclusive);
 	registerHostFn("std/fs.ensureDir",   _stdFsEnsureDir);
 	registerHostFn("std/fs.rmdir",       _stdFsRmdir);
 	registerHostFn("std/fs.remove",      _stdFsRemove);
@@ -1383,6 +1411,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsCopyFile",       _bridgeMsFsCopyFile);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
+	registerHostFn("msFsMkdirExclusive", _bridgeMsFsMkdirExclusive);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
 	registerHostFn("msFsRemove",         _bridgeMsFsRemove);
 	registerHostFn("msFsRename",         _bridgeMsFsRename);

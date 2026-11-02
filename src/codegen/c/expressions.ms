@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, borrowIsPointer, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -2191,6 +2191,11 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const hd = node.data as ExprStmtData;
+		const viewType = hd.expr.kind == NodeKind.Identifier && hd.expr.resolvedSym != null ? hd.expr.resolvedSym.symbolType : hd.expr.nodeType;
+		if (borrowIsPointer(g, viewType)) {
+			ctx.results.push(inner);
+			return;
+		}
 		if (isRefArrayAccessCall(g, hd.expr) && hd.expr.nodeType != null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
 			if (elemDesc != "void*" && elemDesc != "void") {
@@ -2214,7 +2219,9 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
-		if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
+		if (borrowIsPointer(g, node.nodeType)) {
+			ctx.results.push(inner);
+		} else if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
 			ctx.results.push(indirectParamCName(g, p, d.expr));
 		} else {
 			ctx.results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));

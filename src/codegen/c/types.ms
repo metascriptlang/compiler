@@ -356,6 +356,15 @@ export function runtimeParamCount(t: Readonly<Type>): int32 {
 	return n;
 }
 
+function isPointerDesc(desc: string): boolean {
+	return desc.byteLength > 0 && desc.charAt(desc.byteLength - 1) == "*";
+}
+
+// NIM-REF CG-53
+export function borrowIsPointer(g: CGen, t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Borrow && t.typeReturn != null && isPointerDesc(getTypeDesc(g, t.typeReturn));
+}
+
 function isPromotedParam(g: CGen, t: Readonly<Type>, mut: boolean, hookAbi: boolean, borrowsFirst: boolean): boolean {
 	const promote = hookAbi ? ccgIntroducedPtr(g.target, t) : shouldIndirectParam(g.target, t, mut, borrowsFirst);
 	if (!promote) return false;
@@ -1505,7 +1514,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 		},
 		TypeKind.Borrow => {
 			const inner = getTypeDesc(g, t.typeReturn);
-			const ptrType = "const " + inner + "*";
+			const ptrType = isPointerDesc(inner) ? inner : "const " + inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
 		},

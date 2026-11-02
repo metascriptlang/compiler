@@ -119,7 +119,7 @@ test "C: a module-level function cast to Ptr<void> still compiles" {
 const CONST_SLOTS_HEADER = "test/cFunctionPointer/constSlots.h";
 const CONST_SLOTS = "typedef struct Pair { int a; int b; int c; int d; } Pair;\n"
 	+ "typedef void (*PairSink)(void *, const Pair *);\n"
-	+ "typedef void (*ByteSink)(void *, const unsigned char *, unsigned long);\n"
+	+ "typedef void (*ByteSink)(void *, const unsigned char *, unsigned long long);\n"
 	+ "void runPairSink(PairSink f);\n"
 	+ "void runByteSink(ByteSink f);\n";
 

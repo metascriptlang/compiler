@@ -335,6 +335,7 @@ interface Spec {
 	serial: boolean;
 	skipJs: boolean;
 	skipRaiser: boolean;
+	skipWindows: string;
 	slackTypes: string[];
 	slackNs: int32[];
 	atomicHosts: string[];
@@ -537,7 +538,7 @@ function directiveValue(line: string, key: string): string {
 
 const VALUE_DIRECTIVES = ["@maxrss:", "@stdout:", "@maxrcops:", "@maxroots:", "@exit:"];
 const LANE_DIRECTIVES = ["@xfail(", "@ledger-slack(", "@maxatomics("];
-const FLAG_DIRECTIVES = ["@serial", "@skip-js", "@skip-raiser", "@selftest-red"];
+const FLAG_DIRECTIVES = ["@serial", "@skip-js", "@skip-raiser", "@skip-windows", "@selftest-red"];
 
 function knownDirective(line: string): boolean {
 	const body = line.slice(3, line.length);
@@ -555,7 +556,7 @@ function parseSpec(name: string, entry: string): Spec {
 	const spec: Spec = {
 		name, entry,
 		maxRssMb: -1.0, stdoutSubs: [], expectExit: 0,
-		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
+		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false, skipWindows: "",
 		slackTypes: [], slackNs: [],
 		atomicHosts: [], atomicMax: [], selftestRed: "",
 		maxRcOps: -1, maxRoots: -1, unknownDirectives: [],
@@ -580,6 +581,7 @@ function parseSpec(name: string, entry: string): Spec {
 		if (t.indexOf("// @selftest-red ") == 0) { spec.selftestRed = t.slice(17, t.length).trim(); }
 		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
 		if (t.indexOf("// @skip-raiser") == 0) { spec.skipRaiser = true; }
+		if (t.indexOf("// @skip-windows: ") == 0) { spec.skipWindows = t.slice(18, t.length).trim(); }
 		if (t.indexOf("// @xfail(") == 0) {
 			const close = t.indexOf(")");
 			if (close > 10) { spec.xfailLanes.push(t.slice(10, close)); }
@@ -658,7 +660,9 @@ function discoverSpecs(): Spec[] {
 		}
 		if (FILTER != "" && !name.contains(FILTER)) { continue; }
 		if (ONLY.length > 0 && !listHas(ONLY, name)) { continue; }
-		specs.push(parseSpec(name, entry));
+		const spec = parseSpec(name, entry);
+		if (IS_WIN && spec.skipWindows != "") { progress("  - " + name + " skipped on Windows: " + spec.skipWindows); continue; }
+		specs.push(spec);
 	}
 	return specs;
 }

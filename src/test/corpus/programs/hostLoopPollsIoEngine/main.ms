@@ -5,6 +5,7 @@
 // @exit: 0
 // @skip-js: binds the C fixture pump.c, a host loop that sleeps on the dispatcher selector fd
 // @skip-raiser: binds the C fixture pump.c, which has no Raiser host bridge
+// @skip-windows: the Windows event loop waits on a completion port, which gives a host loop no fd to poll, and pump.c needs poll.h
 // @serial
 // note: a native host loop (a desktop window's run loop) sleeps in poll() on the dispatcher
 //   selector fd and calls msRunOnce(0) when it turns readable; it never awaits. Before the fix

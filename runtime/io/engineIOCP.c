@@ -15,6 +15,9 @@
 #include <windows.h>
 #include <stdlib.h>
 #include <string.h>
+#include "runtime/promise/dispatch.h"
+
+static void iocpEngineEntry(const OVERLAPPED_ENTRY* entry);
 
 /* AcceptEx function pointer (loaded dynamically via WSAIoctl) */
 static LPFN_ACCEPTEX _fnAcceptEx = NULL;
@@ -38,7 +41,7 @@ typedef struct msIocpOv {
 	msIoRequest* req;      /* back-pointer to our request */
 	WSABUF wsaBuf;         /* buffer descriptor for WSARecv/WSASend */
 	SOCKET acceptSocket;   /* pre-created socket for AcceptEx */
-	char acceptBuf[128];   /* address buffer for AcceptEx */
+	char acceptBuf[2 * (sizeof(struct sockaddr_storage) + 16)];   /* address buffer for AcceptEx */
 } msIocpOv;
 
 #define ENGINE_INIT_POOL 64
@@ -102,7 +105,7 @@ static void freeOv(msIoEngine* e, msIocpOv* iov) {
  * returns NULL with ERROR_INVALID_PARAMETER — we treat that as success. */
 
 static void iocpAssociate(msIoEngine* e, SOCKET s) {
-	HANDLE h = CreateIoCompletionPort((HANDLE)s, e->iocp, 0, 0);
+	HANDLE h = CreateIoCompletionPort((HANDLE)s, e->iocp, MS_IOCP_ENGINE_KEY, 0);
 	(void)h; /* NULL is OK if socket was already associated */
 }
 
@@ -121,7 +124,7 @@ static void ensureWsa(void) {
 msIoEngine* msIoEngineCreate(void) {
 	ensureWsa();
 	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
-	e->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	e->iocp = msDispatcherShareIocp(iocpEngineEntry);
 	if (e->iocp == NULL) { free(e); return NULL; }
 	/* Pre-allocate request + OVERLAPPED pools */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
@@ -141,7 +144,6 @@ msIoEngine* msIoEngineCreate(void) {
 void msIoEngineDestroy(msIoEngine* e) {
 	if (e == NULL) return;
 	msSchedWakeUnregisterEngine(e);  /* Amendment B: drop targeted-wake reg before freeing */
-	CloseHandle(e->iocp);
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
 		msIoRequest* next = r->next;
@@ -189,7 +191,11 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	iocpAssociate(e, listenSock);
 
 	/* Pre-create accept socket (AcceptEx requirement) */
-	iov->acceptSocket = WSASocketW(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	struct sockaddr_storage bound;
+	int boundLen = sizeof(bound);
+	iov->acceptSocket = getsockname(listenSock, (struct sockaddr*)&bound, &boundLen) == 0
+		? WSASocketW(bound.ss_family, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED)
+		: INVALID_SOCKET;
 	if (iov->acceptSocket == INVALID_SOCKET) {
 		msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1);
 		freeRequest(e, req);
@@ -208,7 +214,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	}
 
 	DWORD bytes = 0;
-	DWORD addrLen = sizeof(struct sockaddr_in) + 16;
+	DWORD addrLen = sizeof(struct sockaddr_storage) + 16;
 	BOOL ok = fnAcceptEx(listenSock, iov->acceptSocket,
 	                     iov->acceptBuf, 0,
 	                     addrLen, addrLen,
@@ -336,7 +342,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 		_msFsWatchLastError = GetLastError();
 		return -1;
 	}
-	if (CreateIoCompletionPort(dir, e->iocp, 0, 0) == NULL) {
+	if (CreateIoCompletionPort(dir, e->iocp, MS_IOCP_ENGINE_KEY, 0) == NULL) {
 		_msFsWatchLastError = GetLastError();
 		CloseHandle(dir);
 		return -1;
@@ -416,9 +422,8 @@ static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
 
 /* ===== Process Completions ===== */
 
-/* No-op: closesocket() queues ABORTED packet to the IOCP. */
 void msIoEngineCancelFd(msIoEngine* e, int fd) {
-	(void)e; (void)fd;
+	if (e != NULL && fd >= 0) CancelIoEx((HANDLE)(intptr_t)fd, NULL);
 }
 
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
@@ -438,14 +443,7 @@ void msIoEngineWake(msIoEngine* e) {
 	if (e != NULL) PostQueuedCompletionStatus(e->iocp, 0, 0, NULL);
 }
 
-int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
-	OVERLAPPED_ENTRY entries[64];
-	ULONG count = 0;
-
-	BOOL ok = GetQueuedCompletionStatusEx(e->iocp, entries, 64, &count,
-	                                       (DWORD)(timeoutMs >= 0 ? timeoutMs : INFINITE), FALSE);
-	if (!ok || count == 0) return 0;
-
+static int completeEntries(msIoEngine* e, const OVERLAPPED_ENTRY* entries, ULONG count) {
 	int processed = 0;
 	for (ULONG i = 0; i < count; i++) {
 		OVERLAPPED* lpOv = entries[i].lpOverlapped;
@@ -454,11 +452,12 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		msIocpOv* iov = (msIocpOv*)lpOv;
 		msIoRequest* req = iov->req;
 		DWORD bytes = entries[i].dwNumberOfBytesTransferred;
+		bool failed = lpOv->Internal != 0;
 
 		switch (req->op) {
 		case MS_IO_RECV: {
 			msString recvResult;
-			if (bytes == 0) {
+			if (failed || bytes == 0) {
 				recvResult = MS_EMPTY_STRING;
 			} else {
 				req->buf[bytes] = '\0';
@@ -471,9 +470,15 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		}
 		case MS_IO_ACCEPT: {
 			SOCKET accepted = iov->acceptSocket;
+			SOCKET listenSock = (SOCKET)(intptr_t)req->fd;
+			if (failed) {
+				closesocket(accepted);
+				msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)-1);
+				break;
+			}
 			/* Finalize accepted socket — inherit listen socket properties */
 			setsockopt(accepted, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
-			           (const char*)&req->fd, sizeof(req->fd));
+			           (const char*)&listenSock, sizeof(listenSock));
 			/* Set TCP_NODELAY for low latency */
 			int flag = 1;
 			setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY,
@@ -484,7 +489,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		case MS_IO_SEND: {
 			if (req->strRef.p) msStringDecref(req->strRef);
 			req->strRef = MS_EMPTY_STRING;
-			msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)bytes);
+			msFutureCompleteT((msFuture_int32*)req->fut, failed ? (int32_t)-1 : (int32_t)bytes);
 			break;
 		}
 		case MS_IO_CLOSE: {
@@ -506,6 +511,30 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		processed++;
 	}
 
+	return processed;
+}
+
+static void iocpEngineEntry(const OVERLAPPED_ENTRY* entry) {
+	msIoEngine* e = msGetIoEngineIfExists();
+	if (e != NULL) (void)completeEntries(e, entry, 1);
+}
+
+int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
+	OVERLAPPED_ENTRY entries[64];
+	ULONG count = 0;
+
+	BOOL ok = GetQueuedCompletionStatusEx(e->iocp, entries, 64, &count,
+	                                       (DWORD)(timeoutMs >= 0 ? timeoutMs : INFINITE), FALSE);
+	if (!ok || count == 0) return 0;
+
+	int processed = 0;
+	for (ULONG i = 0; i < count; i++) {
+		if (entries[i].lpCompletionKey == MS_IOCP_ENGINE_KEY) {
+			processed += completeEntries(e, &entries[i], 1);
+		} else {
+			msDispatcherCompleteEntry(&entries[i]);
+		}
+	}
 	return processed;
 }
 

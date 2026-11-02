@@ -6,7 +6,7 @@
 // @stdout: moved beat 1
 // @stdout: moved beat 2
 // @serial
-// note: a cell that became a cycle root on the main thread reaches an actor through its constructor's sink parameter, once as a fresh value and once by `move`. The actor's private helper returns a graph that reaches the cell, and its result is disowned from the actor's root set. Before the fix the cell kept its root entry in main's set, so that disown stopped with "M1 owner violation".
+// note: a cell that became a cycle root on the main thread reaches an actor through its constructor's sink parameter, twice, each from a binding by `move`, since a call result with side effects is not isolated and stays refused. The actor's private helper returns a graph that reaches the cell, and its result is disowned from the actor's root set. Before the fix the cell kept its root entry in main's set, so that disown stopped with "M1 owner violation".
 
 class Cell {
 	next: Cell | null = null;
@@ -63,7 +63,8 @@ async function drive(label: string, caller: Caller): Promise<void> {
 }
 
 async function main(): Promise<void> {
-	await drive("fresh", new Caller(load()));
+	const fresh = load();
+	await drive("fresh", new Caller(move fresh));
 	const info = load();
 	await drive("moved", new Caller(move info));
 }

@@ -7,6 +7,7 @@
 
 import { readFile, writeFile, removeAll, mkdir, exists } from "std/fs";
 import { spawn } from "std/process/child";
+import { platform } from "std/process";
 
 function procfsReads(): boolean {
 	if (!exists("/proc/self/stat")) return true;
@@ -14,17 +15,26 @@ function procfsReads(): boolean {
 	return r.ok && r.value.length > 0;
 }
 
-function main(): void {
-	const dir = "mscorpusReadToEnd.tmp";
-	removeAll(dir);
-	mkdir(dir);
+function hostHasFifo(): boolean {
+	return platform != "windows";
+}
+
+function fifoReads(dir: string): string {
+	if (!hostHasFifo()) return "ok:fed through a pipe";
 	const fifo = dir + "/pipe";
 	const made = spawn("mkfifo", [fifo]);
 	if (made.ok) made.value.wait(5000);
 	const writer = spawn("sh", ["-c", `printf 'fed through a pipe' > ${fifo}`]);
 	const r = readFile(fifo);
 	if (writer.ok) writer.value.wait(5000);
-	const fifoRead = r.ok ? `ok:${r.value}` : `err ${r.error.message}`;
+	return r.ok ? `ok:${r.value}` : `err ${r.error.message}`;
+}
+
+function main(): void {
+	const dir = "mscorpusReadToEnd.tmp";
+	removeAll(dir);
+	mkdir(dir);
+	const fifoRead = fifoReads(dir);
 	const empty = dir + "/empty.txt";
 	writeFile(empty, "");
 	const re = readFile(empty);

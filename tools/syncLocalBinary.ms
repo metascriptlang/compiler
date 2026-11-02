@@ -210,7 +210,16 @@ function samePath(a: string, b: string): boolean {
 	return windows ? a.toLowerCase() == b.toLowerCase() : a == b;
 }
 
+function keyedToHead(built: string): boolean {
+	const keyFile = `${SRC}/msc.key`;
+	if (!exists(keyFile) || modifiedTime(keyFile) < modifiedTime(built)) return false;
+	const key = readFile(keyFile);
+	const head = execFileResult("bash", [`${SRC}/tools/gate.sh`, "--tree-key", "HEAD"], SRC);
+	return key.ok && key.value.trim() != "" && head.started && head.exitCode == 0 && head.output.trim() == key.value.trim();
+}
+
 function foreignBuildRoot(built: string): string {
+	if (keyedToHead(built)) return "";
 	const rsp = `${built}_link.rsp`;
 	if (!exists(rsp)) return `${rsp} is missing, so nothing shows which std/ and runtime/ ${built} was compiled against`;
 	const age = modifiedTime(built) - modifiedTime(rsp);

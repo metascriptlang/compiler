@@ -2407,24 +2407,32 @@ function runKeys(): void {
 		if (!started.ok) continue;
 		const child = started.value;
 		const seen = [""];
-		const asked = readUntil(child, seen, "HCR-KEYS reloaded 9", 120000);
-		if (!asked) console.log(seen[0]);
-		need(tag, asked, `key ${key}: the edited body did not reload into the running program`);
-		need(tag, seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
+		const check = (ok: boolean, why: string): void => {
+			if (ok) return;
+			console.log(seen[0]);
+			child.write("q\n", 5000);
+			if (!child.wait(30000).ok) child.kill();
+			child.close();
+			failWith(tag, why);
+		};
+		check(readUntil(child, seen, "HCR-KEYS reloaded 9", 120000), `key ${key}: the edited body did not reload into the running program`);
+		check(seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
 		if (key != "q") {
 			child.write(`${key}\n`, 5000);
 			const marker = key == "R" ? "HCR-KEYS start 9" : "watch: rebuilt on key r";
-			const answered = readUntil(child, seen, marker, 120000);
-			if (!answered) console.log(seen[0]);
-			need(tag, answered, `key ${key}: no '${marker}' after the key`);
+			check(readUntil(child, seen, marker, 120000), `key ${key}: no '${marker}' after the key`);
 			if (key == "R") {
-				need(tag, seen[0].contains("watch: restarting"), "key R: no restart notice");
-				need(tag, seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
+				check(seen[0].contains("watch: restarting"), "key R: no restart notice");
+				check(seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
 			}
 		}
 		child.write("q\n", 5000);
 		const ended = child.wait(30000);
-		if (!ended.ok) console.log(seen[0]);
+		if (!ended.ok) {
+			console.log(seen[0]);
+			child.kill();
+			child.close();
+		}
 		need(tag, ended.ok, `key ${key}: q did not end msc`);
 		readUntil(child, seen, "watch: quit", 2000);
 		need(tag, seen[0].contains("watch: quit"), `key ${key}: q printed no 'watch: quit'`);
@@ -2448,6 +2456,48 @@ function eventAt(events: string[], from: int32, needle: string): int32 {
 		if (events[i].contains(needle)) return i;
 	}
 	return -1;
+}
+
+const OWN_OUTPUT_FLOOD = 4000;
+
+function watchOwnOutput(): void {
+	const tag = "hcrWatchOwnOutput";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const dir = freshDir(`${TMP}/watchOwnOutput`);
+	ensureDir(`${dir}/sub`);
+	ensureDir(`${dir}/out/flood`);
+	copy(`${FIXTURES}/watchOwnOutput/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/watchOwnOutput/sub/logic.ms`, `${dir}/sub/logic.ms`);
+	const events = `${dir}/events.jsonl`;
+	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
+	need(tag, started.ok, `cannot start ${MSC}`);
+	if (!started.ok) return;
+	const child = started.value;
+	const seen = [""];
+	const up = readUntil(child, seen, "OWN start 7", 120000);
+	let reloaded = false;
+	if (up) {
+		copy(`${FIXTURES}/watchOwnOutput/logicGrown.txt`, `${dir}/sub/logic.ms`);
+		for (let i = 0; i < OWN_OUTPUT_FLOOD; i += 1) writeFile(`${dir}/out/flood/f${i}.txt`, `${i}`);
+		reloaded = readUntil(child, seen, "OWN reloaded 9", 120000);
+	}
+	child.write("q\n", 5000);
+	const ended = child.wait(30000);
+	readUntil(child, seen, "watch: quit", 2000);
+	child.close();
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	if (!up || !reloaded || !ended.ok) console.log(seen[0]);
+	need(tag, up, "the program did not start on the first build");
+	need(tag, reloaded, "the edit of sub/logic.ms did not reload into the running program");
+	need(tag, ended.ok, "q did not end msc");
+	const starts: string[] = [];
+	for (const line of eventsOf(events)) {
+		if (line.contains("\"event\":\"build.start\"")) starts.push(line);
+	}
+	need(tag, starts.length == 2, `${OWN_OUTPUT_FLOOD} files written under out/ during the edit's build gave ${starts.length} builds, not the first build and the edit's: ${starts.join(" | ")}`);
+	need(tag, starts.length == 2 && starts[1].contains("\"changed\":[\"sub/logic.ms\"]"), `the edit's build does not name sub/logic.ms as changed: ${starts.join(" | ")}`);
+	console.log(`ok   ${tag}`);
 }
 
 function startEvents(tag: string, name: string, events: string): ChildProcess {
@@ -2621,6 +2671,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
 	{ name: "hcrRunEvents", run: runEvents },
+	{ name: "hcrWatchOwnOutput", run: watchOwnOutput },
 	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });

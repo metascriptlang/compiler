@@ -279,10 +279,17 @@ function signature(text: string): string {
 		if ((c == "|".code || c == "&".code) && startsType(out)) continue;
 		const closes = c == ")".code || c == "}".code || c == ">".code || c == "]".code;
 		if (closes && out.endsWith(",")) out = out.byteSlice(0, out.byteLength - 1);
+		if ((c == "|".code || c == "&".code) && opensTypeOperand(out)) continue;
 		out += c == "'".code ? "\"" : c == ";".code ? "," : text.byteSlice(i, i + 1);
 	}
 	if (out.endsWith(",")) out = out.byteSlice(0, out.byteLength - 1);
 	return out;
+}
+
+function opensTypeOperand(out: string): boolean {
+	if (out == "" || out.endsWith("=>")) return true;
+	const last = out.byteAt(out.byteLength - 1);
+	return last == ":".code || last == "(".code || last == "<".code || last == "[".code || last == ",".code || last == "{".code || last == "=".code;
 }
 
 // The type as its tree prints it, or null when the tree is missing, lacks syntax the text has, or holds a comment.

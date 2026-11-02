@@ -87,7 +87,7 @@ export extern function concat(this arr: Vec<number>, other: number[]): number[] 
  */
 extern function reverseInPlace(this arr: number[]): void from "&msNumberArrayReverse";
 
-export function reverse(this arr: number[]): number[] {
+export function reverse(this arr: number[]): Borrow<number[]> {
 	arr.reverseInPlace();
 	return arr;
 }
@@ -98,7 +98,7 @@ export function reverse(this arr: number[]): number[] {
  */
 extern function sortInPlace(this arr: number[]): void from "&msNumberArraySort";
 
-export function sort(this arr: number[]): number[] {
+export function sort(this arr: number[]): Borrow<number[]> {
 	arr.sortInPlace();
 	return arr;
 }
@@ -180,7 +180,7 @@ export extern function concat(this arr: Vec<string>, other: string[]): string[] 
  */
 extern function reverseInPlace(this arr: string[]): void from "&msStringArrayReverse";
 
-export function reverse(this arr: string[]): string[] {
+export function reverse(this arr: string[]): Borrow<string[]> {
 	arr.reverseInPlace();
 	return arr;
 }
@@ -191,7 +191,7 @@ export function reverse(this arr: string[]): string[] {
  */
 extern function sortInPlace(this arr: string[]): void from "&msStringArraySort";
 
-export function sort(this arr: string[]): string[] {
+export function sort(this arr: string[]): Borrow<string[]> {
 	arr.sortInPlace();
 	return arr;
 }
@@ -360,7 +360,7 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
 	arr.sortBy(cmp);
 	return arr;
 }
@@ -503,7 +503,7 @@ export function fill<T>(this arr: T[], value: T): void {
 }
 
 /** Reverses the array in place. */
-export function reverse<T>(this arr: T[]): T[] {
+export function reverse<T>(this arr: T[]): Borrow<T[]> {
 	arr.reverseInPlace();
 	return arr;
 }

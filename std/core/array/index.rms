@@ -77,7 +77,7 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number, ite
 	arr[s] = item;
 }
 
-export function reverse<T>(this arr: T[]): T[] {
+export function reverse<T>(this arr: T[]): Borrow<T[]> {
 	arr.reverseInPlace();
 	return arr;
 }
@@ -139,17 +139,17 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-export function sort(this arr: number[]): number[] {
+export function sort(this arr: number[]): Borrow<number[]> {
 	arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
 	return arr;
 }
 
-export function sort(this arr: string[]): string[] {
+export function sort(this arr: string[]): Borrow<string[]> {
 	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
 	return arr;
 }
 
-export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
 	arr.sortBy(cmp);
 	return arr;
 }

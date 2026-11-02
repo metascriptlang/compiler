@@ -67,7 +67,7 @@ after another, and compare every red against src/test/known-red.json.
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --select       print the corpus programs with no recorded pass for their emitted C and JS
-  --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
+  --tree-key <rev>  print the key of the src, std and runtime tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check routing, red parsers, shared-cache publication and real C/JS emit guards
 
@@ -96,7 +96,7 @@ root; installed or symlinked builders use the full bootstrap. Response-based
 verification still regenerates gen1's link evidence. Current emit-RC scans and
 all selected test lanes still run.
 
-A GREEN run whose build lane produced the candidate for the clean src and std tree
+A GREEN run whose build lane produced the candidate for the clean src, std and runtime tree
 of HEAD makes that candidate the worktree builder ./msc (the old one stays as
 msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
 refreshed" and changes neither verdict nor exit code. --tree-key <rev> prints
@@ -316,7 +316,7 @@ tier_select() {
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 tree_key() {
   local t
-  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
+  t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std runtime; } 2>/dev/null)
   [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
 }
 refresh_builder() {
@@ -339,7 +339,7 @@ adopt_builder() {
   [ "$verdict" = GREEN ] || return 0
   case " $ran " in *" build "*) ;; *) return 0 ;; esac
   [ -n "$cand_key" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
-  [ -z "$(git -C "$TOP" status --porcelain -- src std)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
+  [ -z "$(git -C "$TOP" status --porcelain -- src std runtime)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
   [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.green.exe"
   if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ] || [ "$(cat "$TOP/msc.green.key" 2>/dev/null)" = "$cand_key" ]; then
     say "gate: builder already current for tree ${cand_key:0:12}"
@@ -1012,6 +1012,10 @@ triage_judge() {
   done <"$1"
 }
 
+copy_vendor() {
+  mkdir -p "$2" && (cd "$1" && tar cf - --exclude=.git .) | (cd "$2" && tar xf -)
+}
+
 # root of a candidate built from the merge base, shared by the gates on this host by tree; the caller removes <root>.lock
 triage_main() {
   local mb tree d lock old
@@ -1025,7 +1029,7 @@ triage_main() {
   echo $$ >"$lock/pid"
   if [ ! -x "$d/out/gate/msc" ]; then
     rm -rf "$d"; git worktree prune
-    { git worktree add -q -f --detach "$d" "$mb" && rsync -a --exclude=.git "$TOP/vendor/" "$d/vendor/" && cp -p "$BUILDER" "$d/msc" \
+    { git worktree add -q -f --detach "$d" "$mb" && copy_vendor "$TOP/vendor" "$d/vendor" && cp -p "$BUILDER" "$d/msc" \
       && (cd "$d" && ./msc build src/index.ms --danger $CC_FLAG --output=out/gate/msc); } >&2 || { rm -rf "$lock"; return 1; }
     ls -dt "${d%/*}"/*/ | grep -v '\.lock/$' | tail -n +4 | while read -r old; do [ -d "${old%/}.lock" ] || rm -rf "${old%/}"; done
   fi
@@ -1915,6 +1919,18 @@ runner_self_test() {
   return $bad
 }
 
+copy_vendor_self_test() {
+  local t bad=0
+  t=$(mktemp -d) || return 1
+  mkdir -p "$t/src/lib/sub" "$t/dst/lib"
+  printf 'x\n' >"$t/src/lib/sub/a.h"; printf 'gitdir: elsewhere\n' >"$t/src/lib/.git"; printf 'old\n' >"$t/dst/lib/keep.h"
+  copy_vendor "$t/src" "$t/dst" || { printf 'FAIL copy_vendor: the copy failed\n'; bad=1; }
+  [ "$(cat "$t/dst/lib/sub/a.h" 2>/dev/null)" = x ] && [ ! -e "$t/dst/lib/.git" ] && [ -e "$t/dst/lib/keep.h" ] \
+    || { printf 'FAIL copy_vendor: the copy must carry files, leave .git behind and keep what the checkout holds\n'; bad=1; }
+  rm -rf "$t"
+  return $bad
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -2210,6 +2226,7 @@ CASES
   reread_share_self_test || bad=1
   slow_starts_self_test || bad=1
   runner_self_test || bad=1
+  copy_vendor_self_test || bad=1
   resume_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
@@ -2389,7 +2406,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 cand_key=""
-[ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
+[ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
@@ -2687,11 +2704,10 @@ with_test_binary() {
 }
 
 run_sharded_lane() {
-  local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc claims="" name
+  local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc claims=""
   if [ "$lane" = guard ]; then
     claims="$OUT/guard.claims"
     rm -rf "$claims" && mkdir -p "$claims/done" "$claims/taken"
-    guard_probe_names | while read -r name; do : >"$claims/$name"; done
   fi
   for ((i = 0; i < n; i++)); do
     part="$OUT/$lane.$i.part"
@@ -2764,7 +2780,7 @@ lane_body() {
       [ -f "$f" ] && { echo "---- $f (last 40 lines)"; tail -40 "$f" | sed 's/^/    | /'; }
     done >>"$log" ;;
   esac
-  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
+  if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std runtime)" ] \
     && [ "$(tree_key HEAD)" = "$cand_key" ]; then
     printf '%s\n' "$cand_key" >"$CAND.key"
   fi

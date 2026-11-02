@@ -4,7 +4,7 @@ import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findShare
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isPlainFunctionPointer } from "../../checker/types";
+import { peelToRepr, unwrapRef, isPlainFunctionPointer, isCountedRef } from "../../checker/types";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
@@ -262,6 +262,12 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 
 const MAX_TYPE_DEPTH = 32;
 
+// NIM-REF CG-53
+export function borrowHoldsReference(t: Type | null): boolean {
+	const b = skipModifier(t);
+	return b != null && b.kind == TypeKind.Borrow && isCountedRef(b.typeReturn);
+}
+
 export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
 	const t = skipModifier(pointee);
 	if (t == null) return false;
@@ -353,7 +359,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 		},
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Var | TypeKind.Borrow => {
 			if (t.kind == TypeKind.Ptr && skipModifier(t.typeReturn) != null && skipModifier(t.typeReturn)!.kind == TypeKind.Void) return RaiserRegClass.Ref;
-			if (heldByLocation(s, t.typeReturn)) return RaiserRegClass.Dyn;
+			if (heldByLocation(s, t.typeReturn) && !borrowHoldsReference(t)) return RaiserRegClass.Dyn;
 			return classOfType(s, t.typeReturn, depth + 1);
 		},
 		TypeKind.Sink | TypeKind.Lent | TypeKind.Cursor | TypeKind.Alias | TypeKind.Distinct => classOfType(s, t.typeReturn, depth + 1),

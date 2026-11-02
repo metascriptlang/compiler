@@ -1430,9 +1430,12 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 	const slots: string[][] = [];
 	const byAddress: boolean[] = [];
 	const receiverByAddress = call.resolvedSym != null && call.resolvedSym!.nativeName.startsWith("&");
+	const fnType = call.resolvedSym != null && call.resolvedSym!.symbolType != null && call.resolvedSym!.symbolType!.kind == TypeKind.Function ? call.resolvedSym!.symbolType : null;
+	const formals = fnType != null && fnType.typeChildren.length == args.length ? fnType.typeChildren : null;
 	let any = false;
 	for (const a of args) {
-		byAddress.push(a != null && (a.kind == NodeKind.HiddenAddr || (byAddress.length == 0 && receiverByAddress)));
+		const toRefParam = formals != null && formals[byAddress.length] != null && formals[byAddress.length].kind == TypeKind.Var;
+		byAddress.push(a != null && (toRefParam || a.kind == NodeKind.HiddenAddr || (byAddress.length == 0 && receiverByAddress)));
 		const s: string[] = [];
 		const source = cstringSource(a);
 		roots.push(a != null ? pathSlots(w, source ?? a, s) : null);

@@ -96,6 +96,7 @@ export function errnoName(errnum: int32): string {
 		12 => "ENOMEM",
 		13 => "EACCES",
 		20 => "ENOTDIR",
+		22 => "EINVAL",
 		4028 => "EFTYPE",
 		_ => `UNKNOWN (errno ${errnum})`,
 	};

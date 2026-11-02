@@ -23,7 +23,7 @@ function collectionDue(root: string, now: float64): string {
 	const mark = `${root}/${COLLECTED_MARK}`;
 	const last = modifiedTime(mark);
 	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return "";
-	const real = realpath(root);
+	const real = realpath(root).replaceAll("\\", "/");
 	if (real == "" || !writeFile(mark, "").ok) return "";
 	return real;
 }
@@ -35,7 +35,7 @@ export function collectStaleEntries(root: string, now: float64, suffixesRecordFi
 		if (!e.endsWith("/")) continue;
 		const name = e.slice(0, e.length - 1);
 		const dir = `${root}/${name}`;
-		if (realpath(dir) != `${real}/${name}`) continue;
+		if (realpath(dir).replaceAll("\\", "/") != `${real}/${name}`) continue;
 		collectStaleFiles(dir, now, suffixesRecordFirst, staleSeconds);
 		rmdir(dir);
 	}

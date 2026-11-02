@@ -19,7 +19,7 @@ import {
 	ProcessError,
 	ProcessErrorKind,
 } from "std/process";
-import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
+import { writeFile, ensureDir, exists, readDir, remove, readFileBytes } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, CC_PREPARED, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
@@ -985,9 +985,30 @@ test "a prepared bundle owns the headers under its root, an explicit clang owns 
 	assert toolchainHeaderRoot(0, "/usr/bin/clang") == "";
 }
 
-function isZigDriver(command: ToolCommand): boolean {
+function isZigDriver(command: Readonly<ToolCommand>): boolean {
 	const name = basename(command.path).toLowerCase();
 	return (name == "zig" || name == "zig.exe") && command.args.length > 0 && (command.args[0] == "cc" || command.args[0] == "c++");
+}
+
+function targetTriple(args: string[]): string {
+	let triple = "";
+	for (let i = 0; i < args.length; i += 1) {
+		if (args[i].startsWith("--target=")) triple = args[i].slice(9, args[i].length);
+		else if (args[i] == "-target" && i + 1 < args.length) triple = args[i + 1];
+	}
+	return triple;
+}
+
+function emitsCodeView(command: Readonly<ToolCommand>, lead: Readonly<string[]>, trail: Readonly<string[]>): boolean {
+	const name = basename(command.path).toLowerCase();
+	if (!isZigDriver(command) && name.indexOf("clang", 0) < 0) return false;
+	const args: string[] = [];
+	for (const arg of command.args) args.push(arg);
+	for (const arg of lead) args.push(arg);
+	for (const arg of trail) args.push(arg);
+	const triple = targetTriple(args);
+	if (triple == "") return platform == "windows";
+	return triple.indexOf("windows", 0) >= 0 || triple.indexOf("mingw", 0) >= 0;
 }
 
 function withoutExtension(path: string): string {
@@ -1212,6 +1233,7 @@ export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boo
 	const trail: string[] = [];
 	const flags = appendParsedFlags(command.path, trail, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
+	if (emitsCodeView(command, lead, trail)) lead.push("-gno-codeview-command-line");
 	return Result.ok({ command, lead, quote: runtimeQuoteDir(), trail });
 }
 
@@ -1374,10 +1396,18 @@ export function compileCFile(cFile: string, oFile: string, dependencyFile: strin
 		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
 	}
 	const args = objectCompileArgv(parts, cFile, tmp, depTmp);
+	const objectName = `${withoutExtension(cFile)}.o`;
+	if (emitsCodeView(command, parts.lead, parts.trail)) {
+		args.push("-Xclang");
+		args.push(`-object-file-name=${objectName}`);
+	}
 	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
 	let planned = false;
 	if (plan.exe != "") {
 		const direct = planArgs(plan, [cFile], tmp, depTmp);
+		for (let k = 0; k < direct.length; k += 1) {
+			if (direct[k] == `-object-file-name=${tmp}`) direct[k] = `-object-file-name=${objectName}`;
+		}
 		if (pch != "") {
 			const withPch: string[] = [direct[0], "-include-pch", pch];
 			for (let k = 1; k < direct.length; k += 1) withPch.push(direct[k]);
@@ -1915,4 +1945,23 @@ test "trim mode adds no flag for a compiler that may not take it" {
 	for (const cc of ["cc", "cl", "cl.exe", "clang-cl", "emcc", "tcc"]) {
 		assert trimPrefixMapFlags(cc, "/work/app", "/opt/msc", "/cache/extracted").length == 0;
 	}
+}
+
+test "compiling the same C twice leaves byte-identical objects, whatever name the cache gives each" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const dir = `${base}/msc-det-${performance.now()}`;
+	ensureDir(dir);
+	const source = `${dir}/a.c`;
+	writeFile(source, "int answer(void) { return 42; }\n");
+	const parts = objectCompileArgs(0, "", false, 0, "");
+	assert parts.ok;
+	assert compileCFile(source, `${dir}/a.1.o`, `${dir}/a.d`, parts.value, NO_PLAN).ok;
+	const first = readFileBytes(`${dir}/a.1.o`);
+	assert compileCFile(source, `${dir}/a.2.o`, `${dir}/a.d`, parts.value, NO_PLAN).ok;
+	const second = readFileBytes(`${dir}/a.2.o`);
+	assert first.ok && second.ok;
+	assert first.value.byteLength() == second.value.byteLength();
+	for (let i = 0; i < first.value.byteLength(); i += 1) assert first.value.byteAt(i as int32) == second.value.byteAt(i as int32);
+	for (const name of ["a.c", "a.1.o", "a.2.o", "a.d"]) remove(`${dir}/${name}`);
+	remove(dir);
 }

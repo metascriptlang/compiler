@@ -905,9 +905,20 @@ function implicitSearch(ccOption: number, ccBinary: string, isCpp: boolean, mode
 	let found = parseImplicitSearch(readSealed(memo).join("\n"), key);
 	if (!found.complete) {
 		const devNull = platform == "windows" ? "NUL" : "/dev/null";
-		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", devNull, "-o", devNull]) args.push(arg);
+		let input = devNull;
+		let output = devNull;
+		if (platform == "windows") {
+			input = absoluteSlashed(`${getCacheDir()}/search.empty.${performance.now()}.${isCpp ? "cpp" : "c"}`);
+			output = `${input}.i`;
+			atomicWriteFile(input, "");
+		}
+		for (const arg of ["-E", "-v", "-x", isCpp ? "c++" : "c", input, "-o", output]) args.push(arg);
 		const run = execFileResult(probe.path, args);
 		found = parseImplicitSearch(run.started && run.pipeOk && run.exitCode == 0 ? run.errorOutput : "", key);
+		if (input != devNull) {
+			tryRemoveFile(input);
+			tryRemoveFile(output);
+		}
 		if (found.complete) writeSealed(memo, searchLines(found));
 	}
 	_implicitByKey.set(key, found);
@@ -1102,7 +1113,7 @@ function writeQueryRecord(depFile: string, record: QueryRecord, settled: boolean
 
 function recordQueries(depFile: string, sources: string[], deps: string[], search: HeaderSearch, includers: string[], startedSeconds: number): boolean {
 	const record = queryRecord(sources, deps, search, includers);
-	const settled = record.bounded && newestCandidate(record) < Math.floor(startedSeconds);
+	const settled = !record.bounded || newestCandidate(record) < Math.floor(startedSeconds);
 	writeQueryRecord(depFile, record, settled);
 	trackQueryRecord(depFile);
 	return settled;
@@ -3157,4 +3168,13 @@ test "a trimmed manifest names roots by token and reads back against the reading
 	_stemRoots = [];
 	assert tokensOfRoots(manifest("/work/a")) == manifest("/work/a");
 	_stemRoots = saved;
+}
+
+test "a record that cannot bound its header queries settles untrusted, so a cold object is named as a warm one" {
+	const dir = `out/test/unboundedSettles${performance.now()}`;
+	ensureDir(dir);
+	writeFile(`${dir}/entry.c`, "int a;\n");
+	const search: HeaderSearch = { dirs: [], frameworks: [], complete: false };
+	assert recordQueries(`${dir}/entry.d`, [`${dir}/entry.c`], [], search, [], Date.now() / 1000 + 60);
+	assert queryPresence(`${dir}/entry.d`) == HEADER_QUERY_UNBOUNDED;
 }

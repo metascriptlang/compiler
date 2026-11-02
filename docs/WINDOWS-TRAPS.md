@@ -5,7 +5,11 @@ Only relevant when the dev box is Windows. On macOS/Linux hosts, skip.
 - **Corpus `MSC=` must name a `.exe`.** The runner spawns the subject through
   `cmd.exe`, which refuses extension-less binaries — an extension-less MSC
   once produced an 863-fail corpus run where every cell said "build failed"
-  for a reason that had nothing to do with the compiler.
+  for a reason that had nothing to do with the compiler. The guard runner
+  fails the other way: with an extension-less `MSC=` its `[drc]` cell printed
+  `Up to date` and reused the previous candidate's binary (2026-10-31), so
+  check `out/guard/logs/<name>.drc.build` before trusting a guard verdict
+  across candidates.
 - **A Windows C test driver forwarding to another compiler must re-quote argv.**
   `_spawnv` joins the supplied strings into a command line; first-hop quoting
   does not survive that second hop. The native-boundary drivers use the same

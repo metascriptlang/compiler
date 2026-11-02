@@ -1,7 +1,7 @@
 // std/compress/deflate — gzip / zlib / raw-deflate COMPRESSION.
 //
-// Import directly as `std/compress/deflate` for minimal binaries: only the
-// miniz core + tdefl translation units get compiled (~38 KB), no inflate/zip.
+// Import directly as `std/compress/deflate` to leave zip out. Both miniz halves
+// compile: miniz.c names each, and lld-link refuses an unresolved name in dropped code.
 //
 // Wraps runtime/compress/deflate.c which drives miniz's low-level
 // tdefl_compress state machine. Exposes one-shot helpers and a streaming
@@ -12,6 +12,7 @@
 @compile("runtime/compress/deflate.c");
 @compile("vendor/miniz/miniz.c");
 @compile("vendor/miniz/miniz_tdef.c");
+@compile("vendor/miniz/miniz_tinfl.c");
 
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";

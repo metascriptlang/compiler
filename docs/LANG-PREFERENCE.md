@@ -1284,7 +1284,7 @@ protocols exist. `docs/LANG.md` "Convention-based dispatch protocols" is the use
 | `toString` | Formatting in supported concatenation/templates; use explicit formatting at boundaries, not an assumed wire encoder or every console/String site. |
 | `toJSON` | `JSON.stringify` of a value of that static type, at the top level, as a field or as an array element. Called once; the result is serialized, and its own `toJSON` is not called again. A wire encoder, not a formatter: it does not affect `toString` or the console. |
 | `inspect` | `console.log` of a value of that static type and of the fields and elements it prints; read before `toString`, never by `String`, templates or `+`. A debug view, not a wire format or a formatter: keep it readable and free of side effects. |
-| `hash` and `==` | Native collection-key hashing/equality. Equal keys must hash alike; do not mutate key semantics while stored. There is no implicit `equals`/`hashCode` protocol. |
+| `hash` and `==` | Native collection-key hashing/equality. Equal keys must hash alike; do not mutate key semantics while stored. Declare both over `Readonly<K>`: one over the mutable `K` is refused at `new` (`docs/LANG.md` §Cross-module generic protocols (mixin)). There is no implicit `equals`/`hashCode` protocol. |
 | `toItems` / `toPairs` | Element versus key/value traversal. Supply the required array/Iterator shape; returned views still need live owners. |
 | `getDynamicField` | Otherwise unknown dotted field reads. Deliberately gives up typo checking on opted-in types. |
 | `setDynamicField` | Otherwise unknown dotted writes. Define miss/write policy; known physical fields remain ordinary fields. |
@@ -2007,7 +2007,7 @@ every exported operation works on every backend.
 | Prelude JSON/JsonValue, Buffer, BigInt, Math, Date, performance, console | Values, bytes, time and diagnostics; clocks/formatting are not security/determinism guarantees. Native Buffer's string backing does not authorize text-index APIs for binary offsets. |
 | Prelude fetch/WebSocket | Supported-host network APIs; transport, protocol/status, cancellation and authorization are separate checks. |
 | Prelude Proxy/Reflect | Deliberately intercepted object operations (§15), not universal reflection. |
-| `std/io`, `std/fs`, `std/fs/path`, `std/os`, `std/process` | Streams, files/paths/globs/watch, system information, argv/env/cwd/children. Shell exec strings are not sanitized argv. |
+| `std/io`, `std/fs`, `std/fs/path`, `std/os`, `std/process` | Streams, files/paths/globs/watch, system information, argv/env/cwd/children. Shell exec strings are not sanitized argv. On Windows an argv spawn (`execFile*`, `spawn`) of a `.bat` or `.cmd` fails with EINVAL, since cmd.exe reparses its arguments; run one through `exec`. |
 | `std/net`, `std/http`, `std/https` | Sockets, protocol parsing/client/server/TLS integration. Check status and explicitly own connection cleanup. |
 | `std/hash`, `std/crypto` | Collection hashing versus cryptographic hashing/randomness/signatures/ciphers. An exported algorithm or Math.random is not an authentication recipe. |
 | `std/compress`, `std/archive/tar` | Compression/archives; bound decompressed size and validate extracted paths. Native dependencies do not imply JS/browser support. |

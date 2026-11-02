@@ -60,12 +60,12 @@ export function restFrom<T>(this arr: Vec<T>, n: number): T[] {
 	return arr.slice(n);
 }
 export extern function concat<T>(this arr: Vec<T>, other: T[]): T[] from "#.concat(#)";
-export extern function reverse<T>(this arr: T[]): T[] from "#.reverse()";
+export extern function reverse<T>(this arr: T[]): Borrow<T[]> from "#.reverse()";
 // Typed overloads mirroring index.cms — bare native sort() is LEXICOGRAPHIC,
 // wrong for numbers.
-export extern function sort(this arr: number[]): number[] from "#.sort((a, b) => a - b)";
-export extern function sort(this arr: string[]): string[] from "#.sort()";
-export extern function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] from "#.sort(#)";
+export extern function sort(this arr: number[]): Borrow<number[]> from "#.sort((a, b) => a - b)";
+export extern function sort(this arr: string[]): Borrow<string[]> from "#.sort()";
+export extern function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> from "#.sort(#)";
 export function fill<T>(this arr: T[], value: T): void {
 	when (needsCopy<T>()) {
 		for (let i = 0; i < arr.length; i += 1) {
