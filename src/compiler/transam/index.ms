@@ -3023,3 +3023,66 @@ test "building the prelude registers no module exports" {
 	dbEnsurePrelude(db);
 	assert db.preludeCtx == prelude;
 }
+
+function checkLoadedInOrder(files: string[][], order: string[]): string {
+	const db = createTransAmDb(100);
+	for (const file of files) dbSetFileText(db, file[0], file[1]);
+	return checkInOrder(db, order, true);
+}
+
+function checkInOrder(db: TransAmDb, order: string[], withErrors: boolean): string {
+	const failures: string[] = [];
+	for (const path of order) {
+		const ctx = dbTypeCheck(db, path);
+		if (ctx == null) return `${path}: no check`;
+		if (withErrors) for (const e of ctx.errors) failures.push(`${path}: ${e.message}`);
+		try {
+			ifaceDigest(ctx);
+		} catch (e) {
+			failures.push(`${path}: ${(e as Error).message}`);
+		}
+	}
+	return failures.join("; ");
+}
+
+function loadedChain(root: string, decl: string, name: string): string[][] {
+	return [
+		[`${root}/types.ms`, decl],
+		[`${root}/mid.ms`, `import { ${name} } from "./types";\nexport { ${name} } from "./types";\n`],
+		[`${root}/facade.ms`, `export { ${name} } from "./mid";\n`],
+	];
+}
+
+const EXT_DECL = 'export function asStr(this v: int32, def: string = ""): string {\n\treturn def;\n}\n';
+const CLASS_DECL = "export class Cell {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\n";
+
+test "a loaded module that imports an extension function and re-exports it, checked before its re-exporter, exports the declaration" {
+	const failure = checkLoadedInOrder(loadedChain("/loadedExt", EXT_DECL, "asStr"), ["/loadedExt/mid.ms", "/loadedExt/facade.ms"]);
+	assert failure == "", failure;
+}
+
+test "a loaded module that imports a class and re-exports it, checked before its re-exporter, exports the declaration" {
+	const failure = checkLoadedInOrder(loadedChain("/loadedClass", CLASS_DECL, "Cell"), ["/loadedClass/mid.ms", "/loadedClass/facade.ms"]);
+	assert failure == "", failure;
+}
+
+function checkStdInOrder(names: string[]): string {
+	const db = createTransAmDb(100);
+	const std = resolveRuntimeDir() + "/std";
+	dbSetStdPath(db, std);
+	dbEnsurePrelude(db);
+	const order: string[] = [];
+	for (const name of names) {
+		const text = readStdFile(`${std}/${name}`);
+		if (!text.ok) return `${name}: unreadable`;
+		dbSetFileText(db, `${std}/${name}`, text.value);
+		order.push(`${std}/${name}`);
+	}
+	return checkInOrder(db, order, false);
+}
+
+test "a loaded std module that re-exports an imported extension function, checked before the facade over it, gives the facade an interface" {
+	const failure = checkStdInOrder(["serialize/json/accessors.ms", "core/json/index.ms"]);
+	assert failure == "", failure;
+}
+
