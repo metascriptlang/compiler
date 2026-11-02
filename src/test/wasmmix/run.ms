@@ -6,6 +6,12 @@
 //   // @mixed-error: <substr> -> the mixed build must fail with <substr>
 //   // @foreign-stdout: <line> -> a line printed by foreign.mjs
 //   // @slots                 -> slotTable.mjs checks the built slot table
+//   // @columns: <list>       -> only these of c, js, mixed run (default all);
+//                                tree runs with mixed
+//   // @mixed-stderr: <substr> -> the mixed run's stderr has a line with it; a
+//                                program without it fails on a `msb leak:` line
+//   // @loads: <n>            -> n loads of the module (not available yet)
+//   // @ledger-balanced: <T>  -> handle ledger of T balanced (not available yet)
 //
 //   MSC=./msc msc run src/test/wasmmix/run.ms
 //   WASMMIX_ONLY=scalars,callback  # select programs
@@ -24,6 +30,7 @@ import {
 	parseSpec,
 	describeDiff,
 	hasLineWith,
+	hasLineStartingWith,
 	normalizeOutput,
 	WasmmixSpec,
 } from "./spec";
@@ -53,11 +60,12 @@ interface Column {
 	name: string;
 	ok: boolean;
 	out: string;
+	err: string;
 	detail: string;
 }
 
 function failedColumn(name: string, detail: string, out: string = ""): Column {
-	return { name, ok: false, out, detail };
+	return { name, ok: false, out, err: "", detail };
 }
 
 function tail(text: string): string {
@@ -77,7 +85,7 @@ function runProcess(label: string, path: string, args: string[]): Column {
 			r.output,
 		);
 	}
-	return { name: label, ok: true, out: r.output, detail: "" };
+	return { name: label, ok: true, out: r.output, err: r.errorOutput, detail: "" };
 }
 
 function buildAndRun(
@@ -127,6 +135,20 @@ function judge(spec: WasmmixSpec, cols: Column[]): string[] {
 		const diff = describeDiff(base.out, cols[i].out);
 		if (diff == "") continue;
 		problems.push(`[${cols[i].name}] differs from [${base.name}]: ${diff}`);
+	}
+	return problems;
+}
+
+function stderrProblems(spec: WasmmixSpec, mixed: Column): string[] {
+	if (!mixed.ok) return [];
+	const problems: string[] = [];
+	for (const want of spec.mixedStderr) {
+		if (hasLineWith(mixed.err, want)) continue;
+		const missing = `[mixed] stderr lacks ${JSON.stringify(want)}`;
+		problems.push(`${missing}:\n${tail(mixed.err)}`);
+	}
+	if (spec.mixedStderr.length == 0 && hasLineStartingWith(mixed.err, "msb leak:")) {
+		problems.push(`[mixed] unexpected leak report:\n${tail(mixed.err)}`);
 	}
 	return problems;
 }
@@ -192,19 +214,37 @@ function runProgram(name: string): boolean {
 		say(`  FAIL ${name} — unknown directive ${spec.unknown[0]}`);
 		return false;
 	}
+	const problems: string[] = [];
+	if (spec.loads != 1) {
+		problems.push(`@loads: ${spec.loads} is not available yet`);
+	}
+	for (const type of spec.ledgerBalanced) {
+		problems.push(`@ledger-balanced: ${type} is not available yet`);
+	}
+	if (problems.length > 0) {
+		say(`  FAIL ${name}`);
+		for (const p of problems) say("    " + p);
+		return false;
+	}
 	const dir = OUT_DIR + name + "/";
 	const cols: Column[] = [];
-	cols.push(runProcess("c", MSC, ["run", entry]));
-	cols.push(
-		buildAndRun("js", entry, dir + "js/", ["--wasm-placement=off"], false),
-	);
-	const problems: string[] = [];
+	if (spec.columns.includes("c")) {
+		cols.push(runProcess("c", MSC, ["run", entry]));
+	}
+	if (spec.columns.includes("js")) {
+		cols.push(
+			buildAndRun("js", entry, dir + "js/", ["--wasm-placement=off"], false),
+		);
+	}
 	const driver = PROG_DIR + name + "/foreign.mjs";
 	const wantsForeign = spec.foreignStdout.length > 0;
 	if (wantsForeign != exists(driver)) {
 		problems.push(`@foreign-stdout lines and ${driver} must come together`);
 	}
 	if (spec.mixedErrors.length > 0) {
+		if (spec.mixedStderr.length > 0) {
+			problems.push("@mixed-stderr needs a mixed run and @mixed-error expects it to fail");
+		}
 		if (wantsForeign) {
 			problems.push(
 				"@foreign-stdout needs a mixed build and @mixed-error expects it to fail",
@@ -215,6 +255,7 @@ function runProgram(name: string): boolean {
 		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
 		cols.push(mixed);
 		cols.push(runProcess("tree", MSC, ["run", "--target=js", entry]));
+		for (const p of stderrProblems(spec, mixed)) problems.push(p);
 		const bundle = dir + "mixed/app.js";
 		if (mixed.ok && wantsForeign && exists(driver)) {
 			for (const p of foreignProblems(spec, driver, bundle)) problems.push(p);

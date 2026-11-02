@@ -7,6 +7,10 @@ export interface WasmmixSpec {
 	foreignStdout: string[];
 	mixedErrors: string[];
 	slots: boolean;
+	columns: string[];
+	mixedStderr: string[];
+	loads: int32;
+	ledgerBalanced: string[];
 	unknown: string[];
 }
 
@@ -25,6 +29,10 @@ export function parseSpec(src: string): WasmmixSpec {
 		foreignStdout: [],
 		mixedErrors: [],
 		slots: false,
+		columns: ["c", "js", "mixed"],
+		mixedStderr: [],
+		loads: 1,
+		ledgerBalanced: [],
 		unknown: [],
 	};
 	for (const line of src.split("\n")) {
@@ -39,6 +47,25 @@ export function parseSpec(src: string): WasmmixSpec {
 			spec.foreignStdout.push(directiveValue(t, "@foreign-stdout"));
 		} else if (t.startsWith("// @mixed-error:")) {
 			spec.mixedErrors.push(directiveValue(t, "@mixed-error"));
+		} else if (t.startsWith("// @columns:")) {
+			const names = directiveValue(t, "@columns").split(",").map((n) => n.trim());
+			if (names.every((n) => n == "c" || n == "js" || n == "mixed")) {
+				spec.columns = names;
+			} else {
+				spec.unknown.push(t);
+			}
+		} else if (t.startsWith("// @mixed-stderr:")) {
+			spec.mixedStderr.push(directiveValue(t, "@mixed-stderr"));
+		} else if (t.startsWith("// @loads:")) {
+			const v = directiveValue(t, "@loads");
+			const n = v.parseInt();
+			if (n >= 1 && `${n}` == v) {
+				spec.loads = n as int32;
+			} else {
+				spec.unknown.push(t);
+			}
+		} else if (t.startsWith("// @ledger-balanced:")) {
+			spec.ledgerBalanced.push(directiveValue(t, "@ledger-balanced"));
 		} else if (t == "// @slots") {
 			spec.slots = true;
 		} else if (t.startsWith("// @")) {
@@ -66,6 +93,13 @@ export function describeDiff(expected: string, actual: string): string {
 		}
 	}
 	return "";
+}
+
+export function hasLineStartingWith(text: string, prefix: string): boolean {
+	for (const line of normalizeOutput(text).split("\n")) {
+		if (line.startsWith(prefix)) return true;
+	}
+	return false;
 }
 
 export function hasLineWith(text: string, want: string): boolean {
@@ -141,4 +175,37 @@ test "parseSpec reads @slots" {
 	assert s.slots;
 	assert s.unknown.length == 0;
 	assert !parseSpec("// @stdout: 1\nx").slots;
+}
+
+test "parseSpec defaults to all three columns and one load" {
+	const s = parseSpec("// @stdout: 1\nx");
+	assert s.columns.length == 3;
+	assert s.loads == 1;
+	assert s.mixedStderr.length == 0;
+	assert s.ledgerBalanced.length == 0;
+}
+
+test "parseSpec reads @columns, @mixed-stderr, @loads and @ledger-balanced" {
+	const s = parseSpec(
+		"// @columns: mixed\n// @mixed-stderr: x\n// @loads: 2\n// @ledger-balanced: Counter\nx",
+	);
+	assert s.columns.length == 1;
+	assert s.columns[0] == "mixed";
+	assert s.mixedStderr.length == 1;
+	assert s.mixedStderr[0] == "x";
+	assert s.loads == 2;
+	assert s.ledgerBalanced.length == 1;
+	assert s.ledgerBalanced[0] == "Counter";
+	assert s.unknown.length == 0;
+}
+
+test "parseSpec flags a bad @columns name, a bad @loads and an unknown directive" {
+	assert parseSpec("// @columns: wasm\nx").unknown.length == 1;
+	assert parseSpec("// @loads: 0\nx").unknown.length == 1;
+	assert parseSpec("// @bogus: 1\nx").unknown.length == 1;
+}
+
+test "hasLineStartingWith matches a line start only" {
+	assert hasLineStartingWith("a\r\nmsb leak: x\n", "msb leak:");
+	assert !hasLineStartingWith("a msb leak: x", "msb leak:");
 }
