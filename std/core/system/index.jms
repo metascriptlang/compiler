@@ -197,7 +197,7 @@ export class AbortSignal {
 		}
 	}
 
-	static abort(reason: string): AbortSignal {
+	static abort(reason: string = "AbortError: This operation was aborted"): AbortSignal {
 		const s = new AbortSignal();
 		s.aborted = true;
 		s.reason = reason;
@@ -212,7 +212,7 @@ export class AbortController {
 		this.signal = new AbortSignal();
 	}
 
-	abort(reason: string): void {
+	abort(reason: string = "AbortError: This operation was aborted"): void {
 		this.signal.dispatchAbort(reason);
 	}
 }
