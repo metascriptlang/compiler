@@ -13,7 +13,7 @@
 	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
 });
 
-import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+import { IoError, IoErrorKind, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 extern function readFileSync(path: string, encoding: string): string;
 extern function readBytesSync(path: string): Buffer from "Array.from(readFileSync(#))";
@@ -140,12 +140,16 @@ export function chmod(path: string, mode: int32): Result<void, IoError> {
 // Same contract as mkdir on the C backend: an already-existing directory
 // is success, not an error.
 export function mkdir(path: string): Result<void, IoError> {
+	const made = mkdirExclusive(path);
+	return !made.ok && made.error.kind == IoErrorKind.AlreadyExists ? Result.ok(null) : made;
+}
+
+export function mkdirExclusive(path: string): Result<void, IoError> {
 	try {
 		mkdirSync(path);
 		return Result.ok(null);
 	} catch (e) {
 		const err = errnoOf(e);
-		if (err == 17) return Result.ok(null);
 		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 		return Result.err(writeFailed(path, "mkdir failed"));
 	}

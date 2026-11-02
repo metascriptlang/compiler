@@ -424,12 +424,14 @@ catch_up() {
 }
 
 main_held() {
-  local old=$1 paths=$2 p was
+  local old=$1 paths=$2 p was blob
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     was=$(git -C "$MAIN" ls-tree "$old" -- "$p")
     [ "$(printf '%s' "$was" | awk '{print $1}')" = 160000 ] && continue
-    if [ "$(main_blob "$p")" != "$(printf '%s' "$was" | awk '{print $3}')" ]; then
+    if ! blob=$(main_blob "$p"); then
+      printf '%s (git could not hash it from %s, so its state is unknown)\n' "$p" "$PWD"
+    elif [ "$blob" != "$(printf '%s' "$was" | awk '{print $3}')" ]; then
       printf '%s\n' "$p"
     elif [ -n "$(git -C "$MAIN" diff --cached --name-only "$old" -- "$p")" ]; then
       printf '%s (staged)\n' "$p"

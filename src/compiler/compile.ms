@@ -2,7 +2,7 @@
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, readFile, writeFile, appendFile, remove } from "std/fs";
+import { exists, readFile, writeFile, appendFile, remove, readDir, isDir } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
 import { getDynamicField, jsonToStringArray } from "std/serialize/json/accessors";
 import { asString } from "std/serialize/json/types";
@@ -2610,9 +2610,50 @@ function emitDirOf(opts: CliOptions): string {
 interface WatchFeed {
 	watchers: FsWatch[];
 	armed: boolean[];
+	prefixes: string[];
+	projectRoot: string;
+	outputRoot: string;
 	batches: FsChanges[];
-	batchRoots: string[];
+	batchWatchers: FsWatch[];
 	changed: string[];
+}
+
+function addFeedWatch(feed: WatchFeed, dir: string, recursive: boolean, prefix: string): string {
+	const watcher = watch(dir, recursive);
+	if (!watcher.ok) return `--watch cannot watch ${dir}: ${watcher.error.message}`;
+	feed.watchers.push(watcher.value);
+	feed.armed.push(false);
+	feed.prefixes.push(prefix);
+	return "";
+}
+
+function isBuildOutputDir(feed: WatchFeed, dir: string): boolean {
+	return canonicalModulePath(dir) == feed.outputRoot;
+}
+
+function watchProjectRoot(feed: WatchFeed, root: string, mode: number): string {
+	feed.projectRoot = root;
+	feed.outputRoot = canonicalModulePath(outDirForMode(mode).split("/")[0]);
+	const failed = addFeedWatch(feed, root, false, "");
+	if (failed != "") return failed;
+	for (const entry of readDir(root)) {
+		if (!entry.endsWith("/")) continue;
+		const name = entry.slice(0, entry.length - 1);
+		if (isBuildOutputDir(feed, join(root, name))) continue;
+		const sub = addFeedWatch(feed, join(root, name), true, `${name}/`);
+		if (sub != "") return sub;
+	}
+	return "";
+}
+
+function watchNewProjectDirs(feed: WatchFeed, changes: FsChanges): void {
+	for (const path of changes.paths) {
+		if (path.indexOf("/", 0) >= 0 || feed.prefixes.includes(`${path}/`)) continue;
+		const dir = join(feed.projectRoot, path);
+		if (!isDir(dir) || isBuildOutputDir(feed, dir)) continue;
+		const failed = addFeedWatch(feed, dir, true, `${path}/`);
+		if (failed != "") sayFlushed(`watch: ${failed}; its sources are not watched`);
+	}
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
@@ -2620,11 +2661,20 @@ function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
 		if (feed.armed[i]) continue;
 		feed.armed[i] = true;
 		const target = feed;
-		const slot = i;
-		nextChanges(target.watchers[slot]).then((changes: FsChanges): void => {
-			target.batches.push(changes);
-			target.batchRoots.push(target.watchers[slot].root);
+		const watcher = feed.watchers[i];
+		nextChanges(watcher).then((changes: FsChanges): void => {
+			const slot = target.watchers.indexOf(watcher);
+			if (slot < 0) return;
 			target.armed[slot] = false;
+			if (changes.ended && target.prefixes[slot] != "") {
+				target.watchers.splice(slot, 1);
+				target.armed.splice(slot, 1);
+				target.prefixes.splice(slot, 1);
+				return;
+			}
+			if (watcher.root == target.projectRoot) watchNewProjectDirs(target, changes);
+			target.batches.push(changes);
+			target.batchWatchers.push(watcher);
 		});
 	}
 	msIoRunOnce(timeoutMs);
@@ -2645,19 +2695,22 @@ interface PendingWrites {
 
 function absorbBatches(feed: WatchFeed, pending: PendingWrites): void {
 	const queued = feed.batches;
-	const roots = feed.batchRoots;
+	const watchers = feed.batchWatchers;
 	feed.batches = [];
-	feed.batchRoots = [];
+	feed.batchWatchers = [];
 	for (let i = 0; i < queued.length; i += 1) {
 		const changes = queued[i];
+		const slot = feed.watchers.indexOf(watchers[i]);
+		const prefix = slot >= 0 ? feed.prefixes[slot] : "";
 		if (changes.ended) pending.ended = true;
 		if (changes.rescan) pending.rescan = true;
-		for (const path of changes.paths) {
+		for (const raw of changes.paths) {
+			const path = `${prefix}${raw}`;
 			if (!isWatchedSource(path)) continue;
 			if (!pending.shown.includes(path)) pending.shown.push(path);
-			const full = join(roots[i], path);
+			const full = join(watchers[i].root, raw);
 			const at = pending.open.indexOf(full);
-			if (changes.closed.includes(path)) {
+			if (changes.closed.includes(raw)) {
 				if (at >= 0) pending.open.splice(at, 1);
 			} else if (at < 0) {
 				pending.open.push(full);
@@ -2766,15 +2819,13 @@ function openWatch(entryPath: string, opts: CliOptions): WatchRun {
 		for (const depRoot of fileDepRoots(root).values) {
 			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		const opened: WatchFeed = { watchers: [], armed: [], batches: [], batchRoots: [], changed: [] };
+		const opened: WatchFeed = { watchers: [], armed: [], prefixes: [], projectRoot: "", outputRoot: "", batches: [], batchWatchers: [], changed: [] };
 		for (const dir of roots) {
-			const watcher = watch(dir, true);
-			if (!watcher.ok) {
-				printError(`--watch cannot watch ${dir}: ${watcher.error.message}`);
+			const failed = dir == root ? watchProjectRoot(opened, dir, opts.mode) : addFeedWatch(opened, dir, true, "");
+			if (failed != "") {
+				printError(failed);
 				exit(1);
 			}
-			opened.watchers.push(watcher.value);
-			opened.armed.push(false);
 			console.log(`watch: watching ${dir}`);
 		}
 		feed = opened;
