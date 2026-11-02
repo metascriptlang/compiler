@@ -145,6 +145,7 @@ test "wire kinds: every kind in every position is emitted or refused naming the 
 }
 
 const WASM_CALL = "__msbMod._msb_calc_f()";
+const RESULT = "v";
 
 function resultCode(kind: BoundaryKind): string {
 	const m: Manifest = { functions: [functionOf([], kind, [], BoundaryKind.Void)], errors: [] };
@@ -153,21 +154,21 @@ function resultCode(kind: BoundaryKind): string {
 
 test "js side: every scalar result is converted from the wasm side as listed" {
 	const expected: string[] = [
-		`${WASM_CALL} !== 0`,
-		`(${WASM_CALL} << 24) >> 24`,
-		`(${WASM_CALL} << 16) >> 16`,
-		WASM_CALL,
-		`${WASM_CALL} & 255`,
-		`${WASM_CALL} & 65535`,
-		`${WASM_CALL} >>> 0`,
-		WASM_CALL,
-		`BigInt.asUintN(64, ${WASM_CALL})`,
-		WASM_CALL,
-		WASM_CALL,
+		`${RESULT} !== 0`,
+		`(${RESULT} << 24) >> 24`,
+		`(${RESULT} << 16) >> 16`,
+		RESULT,
+		`${RESULT} & 255`,
+		`${RESULT} & 65535`,
+		`${RESULT} >>> 0`,
+		RESULT,
+		`BigInt.asUintN(64, ${RESULT})`,
+		RESULT,
+		RESULT,
 	];
 	for (let i = 0; i < SCALARS.length; i += 1) {
 		const code = resultCode(SCALARS[i]);
-		assert code.includes(`\treturn ${expected[i]};\n`), `${BoundaryKind[SCALARS[i]]}: ${code}`;
+		assert code.includes(`v = ${WASM_CALL};`) && code.includes(`\treturn ${expected[i]};\n`), `${BoundaryKind[SCALARS[i]]}: ${code}`;
 	}
 }
 

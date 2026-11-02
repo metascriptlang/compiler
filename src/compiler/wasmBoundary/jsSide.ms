@@ -486,24 +486,28 @@ function wrapperLines(
 	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
+	const guardedCall = (target: string): string => {
+		return `try { ${target}${call}; } catch (e) { throw __msb.die(e); }`;
+	};
 	const body: string[] = match (f.result) {
-		BoundaryKind.Void => [`${call};`],
+		BoundaryKind.Void => [guardedCall(""), "__msb.leave();"],
 		BoundaryKind.String | BoundaryKind.Struct | BoundaryKind.Vec => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
 			lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 			cleanup.push("__msb.takes.length = d;");
-			[`${call};`, "return r;"]
+			[guardedCall(""), "__msb.leave();", "return r;"]
 		},
 		_ => {
+			const keep = ["let v;", guardedCall("v = "), "__msb.leave();"];
 			if (f.resultNullable) {
-				[
-					`const v = ${call};`,
+				keep.push(
 					"return __msbMod._msb_ret_some() !== 0 ? "
 						+ `${wireToJsValue(f.result, "v")} : null;`,
-				]
+				);
 			} else {
-				[`return ${wireToJsValue(f.result, call)};`]
+				keep.push(`return ${wireToJsValue(f.result, "v")};`);
 			}
+			keep
 		},
 	};
 	const out = [`function ${bundleName}(${sig}) {`];

@@ -296,8 +296,8 @@ export function preludeFor(
 		return `\t\t\tif (${staleSlot}) throw new Error("${message}");`;
 	};
 	const rejectFull = `throw new RangeError("${tableFull}")`;
-	const deadGlue = "the wasm half cannot run again: a JS exception crossed its "
-		+ "frames";
+	const deadGlue = "the wasm half cannot run again: a trap or a host error "
+		+ "left its frames unfinished";
 	const lentGlue = "a wasm function was called while a Span was lent to a JS "
 		+ "callback: the callback's copy and the wasm side's would diverge, so "
 		+ "call it after the callback returns";
@@ -312,6 +312,8 @@ export function preludeFor(
 		"\tconst free = [];",
 		"\tlet dead = false;",
 		"\tlet cause;",
+		"\tlet pending = null;",
+		"\tlet escaped = null;",
 		"\treturn {",
 		"\t\tpush(f) {",
 		"\t\t\tlet s = free.pop();",
@@ -343,6 +345,23 @@ export function preludeFor(
 		`\t\t\tif (this.lent !== 0) throw new Error("${lentGlue}");`,
 		"\t\t},",
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
+		"\t\tfail(e, z) {",
+		"\t\t\tif (dead) throw e;",
+		"\t\t\tconst m = String(e?.message ?? e);",
+		"\t\t\tpending = [e, m];",
+		"\t\t\tconst b = __msbEncOwned(m);",
+		"\t\t\t__msbMod._msb_fail(b[0], b[1]);",
+		"\t\t\treturn z;",
+		"\t\t},",
+		"\t\tescape(p, n) { escaped = __msbDec(p >>> 0, n); },",
+		"\t\tleave() {",
+		"\t\t\tconst p = pending;",
+		"\t\t\tpending = null;",
+		"\t\t\tif (escaped === null) return;",
+		"\t\t\tconst m = escaped;",
+		"\t\t\tescaped = null;",
+		"\t\t\tthrow p !== null && p[1] === m ? p[0] : new Error(m);",
+		"\t\t},",
 		"\t};",
 		"})();",
 		glue.join("\n"),
