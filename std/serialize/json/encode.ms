@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind, declaredCallType } from "std/meta";
+import { Node, NodeKind, declaredCallType, getType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -50,6 +50,23 @@ export macro jsonValueOf(arg: Node): Node {
 				}],
 			}],
 		};
+	}
+	const declared = getType(t);
+	if (declared != null) {
+		let mapType: Node = declared;
+		if (mapType.kind == NodeKind.TypeGeneric && mapType.typExprBase.kind == NodeKind.Identifier && mapType.typExprBase.name == "Ref" && mapType.typExprArgs.length == 1) mapType = mapType.typExprArgs[0];
+		if (mapType.kind == NodeKind.TypeGeneric && mapType.typExprBase.kind == NodeKind.Identifier && mapType.typExprArgs.length == 2
+				&& (mapType.typExprBase.name == "Map" || mapType.typExprBase.name == "HashMap")) {
+			const keyType: Node = implementationOf(mapType.typExprArgs[0]);
+			if (mapType.typExprBase.name == "HashMap" || keyType.kind != NodeKind.Identifier || keyType.name != "string") {
+				error("jsonValueOf: only a Map<string, V> or Record<string, V> serializes to a JSON object", t);
+			}
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonObjectOfValues" },
+				arguments: [t],
+			};
+		}
 	}
 	let tt = implementationOf(t);
 	while (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);

@@ -13,7 +13,7 @@
 // Day 5 scope: all atomic field types (string/boolean/number/float*/int*/uint*).
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
-import { Node, NodeKind, TypeKind, typeKind, getTypeImpl } from "std/meta";
+import { Node, NodeKind, TypeKind, typeKind, getTypeImpl, TypeGenericData, IdentifierData, TypeObjectData } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -29,6 +29,44 @@ import {
 // is a real member of T | null, not a deceptive `null as unknown as T` lie.
 // The macro peels the Union to extract T, then emits an ObjectLiteral
 // constructing T from per-field accessor calls.
+interface MapFieldRead { helper: string; typed: boolean; problem: string; }
+
+function isRefGeneric(t: Node): boolean {
+	if (t.kind != NodeKind.TypeGeneric) return false;
+	const g = t as TypeGenericData;
+	return g.typExprArgs.length == 1 && g.typExprBase.kind == NodeKind.Identifier && (g.typExprBase as IdentifierData).name == "Ref";
+}
+
+function mapFieldDecode(raw: Node, fname: string): MapFieldRead {
+	const none: MapFieldRead = { helper: "", typed: false, problem: "" };
+	let t: Node = raw;
+	if (isRefGeneric(t)) t = (t as TypeGenericData).typExprArgs[0];
+	if (t.kind != NodeKind.TypeGeneric) return none;
+	const generic = t as TypeGenericData;
+	if (generic.typExprBase.kind != NodeKind.Identifier || generic.typExprArgs.length != 2) return none;
+	const base: string = (generic.typExprBase as IdentifierData).name;
+	if (base != "Map" && base != "HashMap") return none;
+	if (base == "HashMap") return { helper: "", typed: false, problem: "JSON decode: field '" + fname + "' is a HashMap; declare it Map<string, V> or Record<string, V>" };
+	const key: Node = implementationOf(generic.typExprArgs[0]);
+	if (key.kind != NodeKind.Identifier || (key as IdentifierData).name != "string") return { helper: "", typed: false, problem: "JSON decode: field '" + fname + "' is a Map whose key is not string; a JSON object's keys are strings" };
+	let value: Node = implementationOf(generic.typExprArgs[1]);
+	if (isRefGeneric(value)) value = (value as TypeGenericData).typExprArgs[0];
+	if (value.kind == NodeKind.TypeGeneric) value = unwrapType(value);
+	let helper: string = "";
+	let typed: boolean = true;
+	if (value.kind == NodeKind.Identifier && !namesStruct(value)) {
+		const vn: string = (value as IdentifierData).name;
+		if (vn == "string") { helper = "_jsonToStringMap"; typed = false; }
+		else if (vn == "boolean") { helper = "_jsonToBooleanMap"; typed = false; }
+		else if (vn == "number" || vn == "float32" || vn == "float64") helper = "_jsonToNumberMap";
+		else if (vn == "int8" || vn == "int16" || vn == "int32" || vn == "int64" || vn == "uint8" || vn == "uint16" || vn == "uint32") helper = "_jsonToIntMap";
+	} else if (namesStruct(value) || (value.kind == NodeKind.TypeObject && (value as TypeObjectData).typExprTypeName != "")) {
+		helper = "_jsonToStructMap";
+	}
+	if (helper == "") return { helper: "", typed: false, problem: "JSON decode: field '" + fname + "' is a Map whose values are neither a string, a boolean, a number nor a named struct" };
+	return { helper, typed, problem: "" };
+}
+
 export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	let tt = implementationOf(witness);
 	// Peel `T | null` Union → T (single non-null variant). For multi-variant
@@ -207,6 +245,16 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	let i = 0;
 	while (i < fields.length) {
 		const fname: string = fields[i];
+		const mapRead = mapFieldDecode(fieldTypes[i], fname);
+		if (mapRead.problem != "") error(mapRead.problem, witness);
+		if (mapRead.helper != "") {
+			const mapArgs: Node[] = [{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] }];
+			if (mapRead.typed) mapArgs.push({ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true });
+			keyNodes.push(fname);
+			valueNodes.push({ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: mapRead.helper }, arguments: mapArgs });
+			i = i + 1;
+			continue;
+		}
 		const ftype: Node = implementationOf(fieldTypes[i]);
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
@@ -629,6 +677,15 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			nonNullCount = nonNullCount + 1;
 		}
 		if (nonNullCount == 1 && firstNonNull != null) {
+			const rootMap = mapFieldDecode(firstNonNull, "(top level)");
+			if (rootMap.problem != "") error(rootMap.problem, witness);
+			if (rootMap.helper != "") {
+				const rootArgs: Node[] = [jv];
+				if (rootMap.typed) rootArgs.push({ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true });
+				rootArgs.push(errs);
+				rootArgs.push(pfx);
+				return { kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: rootMap.helper + "E" }, arguments: rootArgs };
+			}
 			tt = implementationOf(firstNonNull);
 		}
 	}
@@ -828,6 +885,23 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 	let i = 0;
 	while (i < fields.length) {
 		const fname: string = fields[i];
+		const mapRead = mapFieldDecode(fieldTypes[i], fname);
+		if (mapRead.problem != "") error(mapRead.problem, witness);
+		if (mapRead.helper != "") {
+			const mapKey: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
+			const mapArgs: Node[] = [{
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: { kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, mapKey] }, property: "reqObject" },
+				arguments: [pfx, mapKey, errs],
+			}];
+			if (mapRead.typed) mapArgs.push({ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true });
+			mapArgs.push(errs);
+			mapArgs.push({ kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: mapKey });
+			keyNodes.push(fname);
+			valueNodes.push({ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: mapRead.helper + "E" }, arguments: mapArgs });
+			i = i + 1;
+			continue;
+		}
 		const ftype: Node = implementationOf(fieldTypes[i]);
 		const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
 

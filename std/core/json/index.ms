@@ -31,6 +31,7 @@ export {
 // calls, so we must import `jsonValueOf` even though we never call it
 // directly. Same for the other two macros.
 import { jsonStringify, jsonValueOf, jsonValueToStruct, jsonValueToStructE } from "std/serialize/json";
+import { Map } from "std/core/struct";
 
 function _jsonStringifyTyped<T>(value: T): string {
 	return jsonStringify(value);
@@ -81,6 +82,20 @@ export function _jsonArrayOfValues<T>(arr: Readonly<Span<T>>): JsonValue {
 		i = i + 1;
 	}
 	return jsonArray(items);
+}
+
+export function _jsonObjectOfValues<V>(m: Readonly<Map<string, V>>): JsonValue {
+	const names: string[] = [];
+	const items: JsonValue[] = [];
+	const ks = m.keys();
+	const vs = m.values();
+	let i = 0;
+	while (i < ks.length) {
+		names.push(ks[i]);
+		items.push(jsonValueOf(vs[i]));
+		i = i + 1;
+	}
+	return jsonObject(names, items);
 }
 
 export function _jsonHooked<T>(v: T): T {
@@ -206,6 +221,118 @@ export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: s
 	return out;
 }
 
+
+export function _jsonToStringMap(jv: JsonValue): Map<string, string> {
+	const out = new Map<string, string>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], asString(jv.values[i]));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToBooleanMap(jv: JsonValue): Map<string, boolean> {
+	const out = new Map<string, boolean>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], asBoolean(jv.values[i]));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToNumberMap<V>(jv: JsonValue, witness: V | null): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], asNumber(jv.values[i]) as V);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToIntMap<V>(jv: JsonValue, witness: V | null): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], asInt64(jv.values[i]) as V);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToStructMap<V>(jv: JsonValue, witness: V | null): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], jsonValueToStruct(jv.values[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToStringMapE(jv: JsonValue, errs: string[], mapPath: string): Map<string, string> {
+	const out = new Map<string, string>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], reqString(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToBooleanMapE(jv: JsonValue, errs: string[], mapPath: string): Map<string, boolean> {
+	const out = new Map<string, boolean>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], reqBoolean(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToNumberMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], reqNumber(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToIntMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		out.set(jv.keys[i], reqInt64(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToStructMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
+	const out = new Map<string, V>();
+	if (jv == null || jv.kind != JsonKind.Object) return out;
+	let i = 0;
+	while (i < jv.keys.length) {
+		const valuePath: string = mapPath == "" ? jv.keys[i] : mapPath + "." + jv.keys[i];
+		const el: JsonValue = reqObject(jv.values[i], valuePath, "", errs);
+		out.set(jv.keys[i], jsonValueToStructE(el, witness, errs, valuePath + "."));
+		i = i + 1;
+	}
+	return out;
+}
 
 
 export class JSON {
