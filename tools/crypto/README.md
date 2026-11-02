@@ -239,3 +239,50 @@ remote evidence is `m1m:~/work/rr-recompiler-182168b2/out/crypto-m1m-matched-edf
 This is bounded raw-fixture DCE and performance evidence, not public-API reachability or a new constant-time
 certificate. Speed readiness still fails; x86 and real `std/crypto/bench.ms` pilot performance remain unmeasured.
 Production/API selection remains unchanged and the provider-refused Cryptofuzz task remains blocked.
+
+## Unintegrated ref-output experiment, 2026-11-02
+
+Prototype source tree `3822b7b84499e73abba02060d130c1d1eecceb1c` is `f557ea4d61a` with only `pilot.cms`
+replaced by SHA-256 `f0b1cc31145fb560bff0e8c86cf21f8a9684532860610885cc6898abf5c3a9c3`.
+It is not the branch's implementation. The machine-local draft is preserved at
+`~/metascript/.wt/std-crypto-ms.prototype.cms`; measured source/diff/commands/raw output are in
+`/tmp/crypto-ref-output-564-retry1-cb8a39e737/`.
+
+The ref-output helpers reuse existing FFI output storage instead of zeroing/copying a temporary on each
+ladder reduction. Pinned C and target MS reducers load every input before storing limbs 0–9; the static
+implementation review found no issue with the in-place callers. This is not inherited proof or security
+certification. Field arithmetic, inversion, scratch layout, validation and deferred wipe source are unchanged.
+
+A strict m1m call rebuilt R1/prototype/C with `--release --cc=clang --lto=thin`, compiler SHA-256
+`564fd69e65363ea1e099a4ecd7140406b7919d800247bbfec369b7fc145a1841`, BUILD binary/support `d155e7356b1`.
+First, `cryptoX25519Pilot.ms --tests-in-dir` with those flags passed 11/11 in 34.704 s
+(`PROTOTYPE_11_TESTS_PASS`). Preflights preceded balanced C/R1/prototype/prototype/R1/C timing:
+ten 4096-call samples each, all 30 timed digests equal to the 4096-call digest above.
+
+| Raw kernel | Median µs/call | Range |
+|---|---:|---:|
+| R1 | 74.593 | 74.569–74.826 |
+| Ref-output prototype | 70.009 | 69.892–71.624 |
+| C | 66.942 | 66.909–75.992 |
+
+Prototype/R1 time = 0.93855 (6.15% lower); prototype/C = 1.04583 (4.58% higher). Do not combine these
+percentages with the compiler948 experiment. This window ran 10:37:35–10:37:43Z, loaded/unpinned M1 Pro
+(load averages about 14/26/33); job ended 10:37:44Z. Source, copied compiler and both support fingerprints
+were stable; staged pilot was restored to R1. Output: `M1M_REF_OUTPUT_PASS`.
+
+Emitted C/assembly show the first multiply's output directly at scratch+0xe0, not a zeroed 40-byte stack
+temporary followed by a copy. Static kernel instruction lines fell 1335→1259. This is neither a timing-only
+constant-time test nor a spill-erasure guarantee. No prototype DCE, full matrix, Linux assurance, x86 or
+real-public-API parity result exists.
+
+After canonical compiler changed to SHA `1e57151b011630e1d01bc4f5fdd7f9458b16e0aa1cee8d684e782484e1d2e442`
+(BUILD `a0f6f1be1e3`), a fresh matrix/DCE attempt expired 300 s before host assignment: **0/16 cells,
+0/164 executions, 0/5 DCE fixtures**. Evidence: `/tmp/ref-output-fresh-bc2f94bd4c31/`. A separate Linux
+ASan/taint/differential attempt also expired admission before any remote check; these are not test reds
+and provide no validation for the changed compiler/prototype. The draft remains unintegrated and NOT READY.
+
+The local timing coordinator initially wrote different BEGIN/END descriptions, which the ledger's full-key
+matcher did not pair. The two already-completed own QUIET rows were closed with matching keys, without
+changing other open rows. An immutable label now names both ends; the extracted row writer's three ending
+cases mismatched before the fix and matched afterward, using a temporary ledger and no network. Runtime
+completion times above come from the original raw output, not the later bookkeeping corrections.
