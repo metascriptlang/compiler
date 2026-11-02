@@ -826,7 +826,6 @@ function transformHeadA2(checked: Node, ctx: CheckerContext, job: A2Job): void {
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	flowStop("a2.xform", _fx0);
 	job.errBase = errBase;
-	leaveModuleOps();
 }
 
 function transformTailA2(ctx: CheckerContext, job: A2Job): Node {
@@ -3706,6 +3705,7 @@ resetLiftedOps();
 			leaveModuleOps();
 		} else {
 			transformHeadA2(program, ctx, job);
+			leaveModuleOps();
 			staged.push({ at, job, tree: program });
 		}
 	}
