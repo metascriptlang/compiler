@@ -2066,23 +2066,30 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteTypeParams(t, substParams, parentInst.typeChildren));
 		}
 		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
+		const restAt = expectedCount > 0 && ctorParamTypes![expectedCount - 1].kind == TypeKind.Varargs ? expectedCount - 1 : -1;
+		const fixedCount = restAt >= 0 ? restAt : expectedCount;
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
-			const expected = (ctorParamTypes != null && ai < ctorParamTypes.length) ? ctorParamTypes[ai] : null;
+			let expected = (ctorParamTypes != null && ai < ctorParamTypes.length) ? ctorParamTypes[ai] : null;
+			if (restAt >= 0 && ai >= restAt) {
+				const restArr = unwrapRef(unwrapVarargs(ctorParamTypes![restAt]));
+				const restElem = getElementType(restArr);
+				expected = restElem.kind == TypeKind.Inferred || d.arguments[ai].kind == NodeKind.SpreadExpr ? restArr : restElem;
+			}
 			callCheckExpr(ctx, d.arguments[ai], expected);
 			const argType = d.arguments[ai].nodeType;
 			if (expected != null && expected.kind != TypeKind.Varargs && argType != null && d.arguments[ai].kind != NodeKind.SpreadExpr) {
 				d.arguments[ai] = fitNode(ctx, d.arguments[ai], expected, argType);
 			}
 		}
-		if (d.arguments.length < expectedCount) {
+		if (d.arguments.length < fixedCount) {
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
 			const defaultsFrom = owner == parentSym ? parentCtor : ctorRoutineOf(owner);
 			if (defaultsFrom != null && defaultsFrom.defaultParams.length > 0) {
-				fillDefaults(ctx, d.arguments, defaultsFrom.defaultParams, expectedCount, 0, ctorParamTypes!, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
+				fillDefaults(ctx, d.arguments, defaultsFrom.defaultParams, fixedCount, 0, ctorParamTypes!, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
 			}
 		}
-		if (d.arguments.length != expectedCount) {
-			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
+		if (restAt >= 0 ? d.arguments.length < fixedCount : d.arguments.length != expectedCount) {
+			addError(ctx, "super() expects " + (restAt >= 0 ? "at least " : "") + fixedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
 		}
 		node.nodeType = voidType();
 		return voidType();
