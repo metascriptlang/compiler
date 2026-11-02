@@ -1,3 +1,4 @@
+// @skip-raiser: the Raiser VM takes 160 s for these 18.6 million actor sends on an idle 8-core host (d87, 2026-11-02; C takes 10 s), so a loaded gate host crosses the 300 s cell timeout
 // @stdout: one 6000000
 // @stdout: two 6000000 6000000
 // @stdout: three 200000 200000 200000
