@@ -137,6 +137,14 @@ test "readonlyReturn: a nullable view stays read-only whichever way it is writte
 	assert errors(node + "function f(t: Readonly<Node> | null): void { if (t != null) t.n = 1; }", "cannot write through Readonly<Node>") == 1;
 }
 
+test "readonlyReturn: a nullable view of a struct that holds a reference never converts back" {
+	const key = "class Cell { n: int32 = 0; }\nstruct Key { owner: Cell; id: int32; }\n";
+	assert errors(key + "function f(a: Readonly<Key | null>): Key | null { return a; }", "never converts back to the mutable type") == 1;
+	assert errors(key + "function f(a: Readonly<Key | null>): void { const m: Key | null = a; }", "never converts back to the mutable type") == 1;
+	assert errors(key + "struct Bag { items: Cell[]; }\nfunction f(a: Readonly<Bag | null>): Bag | null { return a; }", "never converts back to the mutable type") == 1;
+	assert errors(key + "function f(a: Readonly<Key | null>): Readonly<Key> | null { return a; }\nfunction g(a: Readonly<Key> | null): Readonly<Key | null> { return a; }", "") == 0;
+}
+
 test "readonlyReturn: a fresh literal widens into a nullable view of a struct that holds a Vec" {
 	const curve = "struct Curve { times: Vec<float32>; }\n";
 	assert errors(curve + "const x: Readonly<Curve> | null = { times: [1.0] };\nconsole.log(x == null);", "") == 0;
