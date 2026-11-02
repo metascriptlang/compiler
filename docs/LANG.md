@@ -2067,7 +2067,8 @@ the emptied slot: the path starts at a local of the enclosing function (not a pa
 or a captured variable), every step is held by value (a struct, a `Vec`, a fixed array, a tuple, a `Result`),
 and the local is not named again after the move nor moved inside a loop that does not declare it. A class
 on the path (`s.room.wrap.leaf` with `room` a class) keeps the refusal, because another reference can reach
-the slot. Otherwise read it without `move` (a class reference is shared, not copied), declare the slot
+the slot, and so does a destroy hook on any holder of the path (`Holder`'s `onDestroy` reads the slot when
+the local dies). Otherwise read it without `move` (a class reference is shared, not copied), declare the slot
 nullable, or exchange it with `swap`:
 
 ```typescript
@@ -2080,10 +2081,12 @@ w.leaf.v;                        // with this line the move is refused: 'w' is u
 ```
 
 Where the move hands its value on (a binding, an assignment, a return, a throw, a sink or constructor
-argument, a literal), C and JS both leave the field empty; a number or plain-struct field keeps its value,
-and a plain argument only lends it. Measured with corpus `explicitMoveEmptiesFieldOnEveryBackend` on C
-and JS (tree of this change): `decl /0/null/4 | … | struct :0/7 | borrow s1/2/leaf/4`. The Raiser VM
-still leaves a moved field holding its value. The dead-local cases (a field, a `Vec` element, a nested struct
+argument, a literal), C and JS both leave the field empty. C keeps a number or plain-struct field's value
+and only lends a field or element passed with `move` to a plain parameter; JS empties those too
+(measured 2026-11-02 on main 786d77d46e5 with this change: C `… | struct :0/7 | borrow s1/2/leaf/4 |
+element a1/1/leaf`, JS `… | struct :0/0 | borrow /0/null/4 | element /0/null`; inbox card
+`2026-11-02-js-move-empties-a-lent-argument-and-a-plain-struct-field-c-keeps`). The Raiser VM still leaves
+a moved field holding its value. The dead-local cases (a field, a `Vec` element, a nested struct
 field, a `Result` payload, a local declared in the loop) compile and the refused ones are rejected through
 the C pipeline (handoff `bindingOwnership`); not run as programs on JS or the Raiser.
 
