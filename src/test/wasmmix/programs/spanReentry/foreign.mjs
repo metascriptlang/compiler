@@ -15,14 +15,14 @@ function thrown(call) {
 let inner;
 const w = m.lendWritable((xs) => {
 	inner = thrown(() => m.twice(4));
-	xs[0] = 10;
+	xs.base[xs.off] = 10;
 });
 console.log(`writable: ${inner}`);
 console.log(`writable result: ${w}`);
 
 const r = m.lendReadonly((xs) => {
 	inner = thrown(() => m.twice(1));
-	return xs[0] + xs[1];
+	return xs.base[xs.off] + xs.base[xs.off + 1];
 });
 console.log(`readonly: ${inner}`);
 console.log(`readonly result: ${r}`);
