@@ -2568,6 +2568,22 @@ test "interface no RC" { assert !needsRC(createStruct("Bar", [], [], true)); }
 
 test "number no RC" { assert !needsRC(createPrimitive(TypeKind.Number)); }
 
+test "a never return type is C void" {
+	const g = createCGen(null as unknown as CheckerContext, "", createAliveSet(), rootedFacts());
+	assert getTypeDesc(g, createPrimitive(TypeKind.Never)) == "void";
+}
+
+test "a type kind with no C type is an internal error that names it" {
+	const g = createCGen(null as unknown as CheckerContext, "probe.ms", createAliveSet(), rootedFacts());
+	let refused = "";
+	try {
+		getTypeDesc(g, createPrimitive(TypeKind.Conditional));
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: type kind " + (TypeKind.Conditional as number).toString() + " (" + typeDisplayNameUnprofiled(createPrimitive(TypeKind.Conditional)) + ") has no C type, reached codegen in probe.ms", refused;
+}
+
 test "primitive type desc" {
 	const facts = rootedFacts();
 	const alive = createAliveSet();
