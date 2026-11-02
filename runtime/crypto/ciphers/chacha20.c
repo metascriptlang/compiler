@@ -3,6 +3,8 @@
  */
 
 #include "runtime/crypto/ciphers/chacha20.h"
+#include "runtime/crypto/ciphers/chacha20Simd.h"
+#include "runtime/crypto/ciphers/poly1305x64.h"
 #include "vendor/monocypher/src/monocypher.h"
 
 #include <stdlib.h>
@@ -59,6 +61,61 @@ int64_t msChacha20KeysLive(void) {
 	return __atomic_load_n(&liveKeys, __ATOMIC_RELAXED);
 }
 
+/* ChaCha20 xor from block counter ctr: four blocks at a time where the target has them, Monocypher for the rest. */
+static void chachaXor(uint8_t *out, const uint8_t *in, size_t n, const uint8_t key[32], const uint8_t nonce[8], uint64_t ctr) {
+	size_t done = 0;
+#ifdef MS_CHACHA20_SIMD
+	done = msChacha20SimdXor(out, in, n, key, nonce, &ctr);
+#endif
+	if (n > done) crypto_chacha20_djb(out + done, in + done, n - done, key, nonce, ctr);
+}
+
+static void aeadTag(uint8_t mac[16], const uint8_t authKey[32], const uint8_t *ad, size_t adLen, const uint8_t *cipherText, size_t textLen) {
+#ifdef MS_POLY1305_X64
+	msPoly1305Aead(mac, authKey, ad, adLen, cipherText, textLen);
+#else
+	static const uint8_t zeros[16] = {0};
+	uint8_t sizes[16];
+	for (int i = 0; i < 8; i++) {
+		sizes[i] = (uint8_t)((uint64_t)adLen >> (8 * i));
+		sizes[8 + i] = (uint8_t)((uint64_t)textLen >> (8 * i));
+	}
+	crypto_poly1305_ctx ctx;
+	crypto_poly1305_init(&ctx, authKey);
+	crypto_poly1305_update(&ctx, ad, adLen);
+	crypto_poly1305_update(&ctx, zeros, (16 - (adLen & 15)) & 15);
+	crypto_poly1305_update(&ctx, cipherText, textLen);
+	crypto_poly1305_update(&ctx, zeros, (16 - (textLen & 15)) & 15);
+	crypto_poly1305_update(&ctx, sizes, 16);
+	crypto_poly1305_final(&ctx, mac);
+#endif
+}
+
+/* XChaCha20-Poly1305 as Monocypher's crypto_aead_lock: HChaCha20 subkey, block 0 keys Poly1305, text from block 1. */
+static void aeadLock(uint8_t *cipherText, uint8_t mac[16], const uint8_t key[32], const uint8_t nonce[24], const uint8_t *ad, size_t adLen, const uint8_t *plainText, size_t textLen) {
+	uint8_t subKey[32], authKey[64];
+	crypto_chacha20_h(subKey, key, nonce);
+	crypto_chacha20_djb(authKey, NULL, 64, subKey, nonce + 16, 0);
+	chachaXor(cipherText, plainText, textLen, subKey, nonce + 16, 1);
+	aeadTag(mac, authKey, ad, adLen, cipherText, textLen);
+	crypto_wipe(subKey, sizeof subKey);
+	crypto_wipe(authKey, sizeof authKey);
+}
+
+/* Returns 0 when the tag matches, and writes plainText only then. */
+static int aeadUnlock(uint8_t *plainText, const uint8_t mac[16], const uint8_t key[32], const uint8_t nonce[24], const uint8_t *ad, size_t adLen, const uint8_t *cipherText, size_t textLen) {
+	uint8_t subKey[32], authKey[64], realMac[16];
+	crypto_chacha20_h(subKey, key, nonce);
+	crypto_chacha20_djb(authKey, NULL, 64, subKey, nonce + 16, 0);
+	aeadTag(realMac, authKey, ad, adLen, cipherText, textLen);
+	int mismatch = crypto_verify16(mac, realMac);
+	if (!mismatch) chachaXor(plainText, cipherText, textLen, subKey, nonce + 16, 1);
+	crypto_wipe(subKey, sizeof subKey);
+	crypto_wipe(authKey, sizeof authKey);
+	crypto_wipe(realMac, sizeof realMac);
+	return mismatch;
+}
+
 int64_t msChacha20SealInto(int64_t keyHandle, msString plainText, msString aad, uint8_t *out) {
 	const msChachaKey *key = (const msChachaKey *)(uintptr_t)keyHandle;
 	if (key == NULL) return 0;
@@ -68,7 +125,7 @@ int64_t msChacha20SealInto(int64_t keyHandle, msString plainText, msString aad, 
 	size_t pt_len = plainText.p ? (size_t)plainText.len : 0;
 
 	/* Layout: nonce(24) || cipherText || mac(16) */
-	crypto_aead_lock(
+	aeadLock(
 		out + NONCE_SIZE,                /* cipher_text */
 		out + NONCE_SIZE + pt_len,       /* mac */
 		key->bytes,                      /* key */
@@ -86,7 +143,7 @@ int64_t msChacha20OpenInto(int64_t keyHandle, msString sealed, msString aad, uin
 	const uint8_t *data = (const uint8_t *)sealed.p->data;
 	size_t ct_len = (size_t)sealed.len - NONCE_SIZE - MAC_SIZE;
 
-	int r = crypto_aead_unlock(
+	int r = aeadUnlock(
 		out,                             /* plain_text */
 		data + NONCE_SIZE + ct_len,      /* mac */
 		key->bytes,                      /* key */
