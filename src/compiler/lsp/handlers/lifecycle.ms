@@ -35,7 +35,7 @@ import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
 	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics, recordPublishedDiagnostics,
 } from "./diagnostics";
-import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
+import { prebuildCompletionCache, forgetPrebuiltCompletion, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
 import {
 	handleHover,
@@ -210,6 +210,7 @@ export function handleDidClose(params: string, db: TransAmDb): string {
 	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	markDocumentClosed(path);
+	forgetPrebuiltCompletion(uri);
 	forgetPublishedDiagnostics(path);
 	forgetChangedFile(path);
 	refreshFromDisk(db, path);

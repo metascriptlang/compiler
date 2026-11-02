@@ -77,6 +77,10 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	_prebuiltCache.set(uri, { snapshot, candidates });
 }
 
+export function forgetPrebuiltCompletion(uri: string): void {
+	_prebuiltCache.delete(uri);
+}
+
 // ===== Object Literal Type Resolution (AST-Based) =====
 
 // Nodes from root down to target, both included; empty when target is not under root.
