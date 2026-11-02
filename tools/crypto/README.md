@@ -335,3 +335,28 @@ parent source and all guarded fingerprints remained unchanged during execution.
 These results cover Linux clang **LTO off** only. Fresh ARM thin-LTO matrix/DCE, current-toolchain matched
 performance, x86 performance and real-public-API parity remain unverified. Production/vendor selection is
 unchanged, the prototype is still unintegrated, and the speed/DCE readiness gate and Cryptofuzz refusal remain.
+
+## Matrix transport failure and local-only repair, 2026-11-02
+
+The aligned-root M1 attempt at HEAD `520add635962367f136957228d9dbfb41fefaf66` admitted m1m, then ended
+SSH rc255 before any payload acknowledgement: **0/16 cells, 0/164 executions, 0/5 DCE fixtures observed**.
+Raw argv/log and local input provenance: `/tmp/ref-output-fresh-89ed106681af/`. Remote consumption and
+restoration are unknown; this is not a test, compatibility or DCE verdict.
+
+The coordinator put 381076 bytes of compressed/base64 manifest in its command. Reconstructing the stock
+`run-remote.sh` quoting gave a **396279-byte SSH exec command**, versus 81537 bytes for the successful Linux
+invocation. Reference OpenSSH [V_10_0_P1 `packet.c`](https://github.com/openssh/openssh-portable/blob/V_10_0_P1/packet.c)
+defines `PACKET_MAX_SIZE` as 256 KiB and rejects oversized input in `ssh_packet_read_poll2`. The remote SSH
+version and failing phase were not observed, so this does not prove the sole cause of historical resets.
+
+The prepared local coordinator `/tmp/refOutputFreshCoordinator.fileStaged.py` (SHA-256
+`fc5f39ff681d788c62457fc40b0023330569c8eef044aab5b4dcc1d2049ef0b8`, pinned to HEAD520) instead lets stock
+file copying carry a temporary untracked script. Its command is **103 bytes**, or **339 bytes** after the same
+stock SSH wrapping. Local-only pins verified old-size rejection/new-size acceptance, exact environment and
+validator bytes, all 5663 manifest entries and prototype bytes, rejection of a wrong transport hash before
+the callback, and hash-guarded cleanup after a successful synthetic callback. No compiler, crypto host,
+network or remote job ran in these pins. No manifest/identity/assertion/cap was weakened and no server or
+harness configuration changed.
+
+The repaired file transport has **not run on M1**. Its local pin is not matrix/DCE evidence and does not
+relax the readiness gate. Existing Linux results and the unintegrated prototype remain unchanged.
