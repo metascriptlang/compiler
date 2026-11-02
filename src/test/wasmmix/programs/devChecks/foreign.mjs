@@ -46,3 +46,5 @@ console.log(`internal: ${typeof m.bump} ${typeof m.scaled}`);
 attempt("callback type", () => m.evalCb(1, "nope"));
 attempt("callback result", () => m.evalCb(1, () => "x"));
 attempt("callback bool", () => m.testCb(1, () => 1));
+attempt("after a callback check failed", () => m.evalCb(1, (x) => x + 1));
+attempt("after, argument check", () => m.addI32(2, 3));

@@ -1,21 +1,29 @@
 @wasm
-export function editThrough(xs: Span<int32>, cb: (v: Span<int32>) => void): void {
+export function editThenStop(xs: Span<int32>, at: int32): void {
 	xs[0] = 100;
-	cb(xs);
+	xs[1] = 200;
+	if (at >= 0) throw new Error("stop");
 	xs[2] = 300;
 }
 
 @wasm
-export function stampThrough(bs: Span<boolean>, cb: (at: int32) => void): int32 {
+export function stampThenTick(bs: Span<boolean>, fail: boolean): int32 {
 	bs[0] = true;
-	cb(1);
+	if (fail) throw new Error("tick");
 	bs[1] = true;
 	return 1;
 }
 
 @wasm
-export function halveThrough(xs: Span<float32>, k: int32, cb: (v: Span<float32>, at: int32) => void): void {
+export function halveThenStop(xs: Span<float32>): void {
 	for (let i = 0; i < xs.length; i += 1) xs[i] = xs[i] / 2;
-	cb(xs, k);
-	xs[0] = -1;
+	throw new Error("half");
+}
+
+@wasm
+export function sumThenStop(xs: Readonly<Span<int32>>, fail: boolean): int32 {
+	let s = 0;
+	for (const x of xs) s += x;
+	if (fail) throw new Error("read");
+	return s;
 }

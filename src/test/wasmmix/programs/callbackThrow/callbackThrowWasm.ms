@@ -16,5 +16,9 @@ export function finalsRun(): int32 {
 
 @wasm
 export function recover(label: string, f: (s: string) => int32): string {
-	return `ok ${f(label)}`;
+	try {
+		return `ok ${f(label)}`;
+	} catch (e) {
+		return `caught [${e.message}]`;
+	}
 }

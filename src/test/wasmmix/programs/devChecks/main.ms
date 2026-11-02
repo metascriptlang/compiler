@@ -47,6 +47,8 @@
 // @foreign-stdout: callback type: TypeError: evalCb: parameter 'cb' expected function, found string
 // @foreign-stdout: callback result: TypeError: evalCb: result of callback 'cb' expected int32, found string
 // @foreign-stdout: callback bool: TypeError: testCb: result of callback 'cb' expected boolean, found number
+// @foreign-stdout: after a callback check failed: ok 3
+// @foreign-stdout: after, argument check: ok 5
 import { bump, addI32, lowByte, echo64, echoU64, not, join2, sumVec, countTrue, bigSum, reach, sumSpan, evalCb, testCb } from "./devChecksWasm";
 export { addI32, lowByte, echo64, echoU64, not, half, join2, sumVec, countTrue, bigSum, reach, sumSpan, evalCb, testCb } from "./devChecksWasm";
 export { scaled as scaledTwice } from "./devChecksWasm";
