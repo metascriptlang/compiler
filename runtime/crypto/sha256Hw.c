@@ -180,8 +180,12 @@ static size_t msSha256Blocks(mbedtls_sha256_context *ctx, const uint8_t *msg, si
 
 static int msSha256OneBlock(mbedtls_sha256_context *ctx, const unsigned char *block)
 {
+#if defined(__x86_64__)
     return msSha256Blocks(ctx, block, SHA256_BLOCK_SIZE) == SHA256_BLOCK_SIZE
                ? 0 : MBEDTLS_ERR_ERROR_GENERIC_ERROR;
+#else
+    return mbedtls_internal_sha256_process(ctx, block);
+#endif
 }
 
 int mbedtls_sha256_update(mbedtls_sha256_context *ctx, const unsigned char *input, size_t ilen)
