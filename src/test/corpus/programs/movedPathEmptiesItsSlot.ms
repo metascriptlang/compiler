@@ -1,5 +1,4 @@
 // @stdout: nullable null 2 | vec 0 3 | text '' abab | nested null 4 | sink null 6 | struct 0 '' 3 tt
-// @xfail(raiser): the Raiser VM compiles `move` as a plain read, so the moved field keeps its value ('nullable kept 2 | vec 3 3 | ...')
 // note: a move out of a field takes the value and leaves the slot empty for every other reader, on JS as on C: a nullable slot reads null, a Vec slot empty, a string slot '', a struct slot its zero value.
 
 struct P { x: int32; tag: string; }
