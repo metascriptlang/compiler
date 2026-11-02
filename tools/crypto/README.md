@@ -157,3 +157,33 @@ from `0x2c0` to `0x590` (not a complete call-chain stack bound). Inlining is the
 Pilot used-executable SHA-256: off `2f80c0994754f553ad50a0e87e62334f235c9ea564b86b5eccb718319be9c1e9`;
 thin `d00d1293c4be7e7aeb5c539d2c0e41353a736a9d5718bf94fc5b72db040f0fc4`.
 A quiet, matched workload and unchanged security checks are still required before choosing flags or code changes.
+
+## m1m follow-up, 2026-11-02
+
+The person selected m1m for ARM runs. Destination guards verified `Metacrafts-MacBook-Pro`, Apple M1 Pro,
+8 cores, Darwin 25.5.0, Apple clang 21; the `run-remote.sh --mac` local-M3 fallback was forbidden.
+Source tree `1c62cb278ef873f48cb7b507cd024b63a6a0cc12`; compiler/support `2a52560f0bc` and compiler hash
+match the thin-LTO investigation above. Kernel, field, wipe and Monocypher source hashes were checked unchanged.
+
+Through `run-remote.sh --mac --cores 8`, each of `cryptoX25519Assurance`, `cryptoX25519Pilot`,
+`cryptoX25519Wipe` ran with `--tests-in-dir --release --cc=clang --lto=thin`: 24/11/3 passed (38 total),
+16.94/12.06/11.32 s. This was release only, not a repeat of the old compiler's four-mode/ASan matrix.
+Raw pilot/C 8-call smoke digests matched. Fresh empty/unused/used builds used the same release/thin flags:
+empty and both unused executables had identical complete `__TEXT` section bytes (`__text` 24848 bytes).
+Their file lengths were 75608/75616/75616 bytes; the 8-byte delta is signature length (728 versus 736).
+Used pilot/C `__text` was 40952/41376 bytes, with no unrelated named crypto API symbols observed.
+This is bounded section/symbol evidence for the measurement fixture, not a production-API reachability proof.
+
+A separate, hash-guarded raw ABBA run rebuilt both used executables in one remote call with the same flags:
+C/pilot/pilot/C, five 4096-call rounds per arm, ten samples per implementation. All output digests matched.
+Median microseconds/call: pilot 86.201, C 69.706 (pilot/C 1.2366); ranges 85.724–90.239 and 69.250–74.540.
+The m1m scheduling-quiet ledger window was 06:10:43–06:10:59Z, with all 8 cores reserved and no CPU affinity pin.
+Load averages were still about 21: this is not an idle-machine absolute budget or public async-API benchmark.
+The driver printed `M1M_RAW_ABBA_PASS`, coordinator passed and recorded QUIET END/rc0. Speed readiness was not met.
+
+A further source-only candidate is to defer the pilot's post-add/sub carry to the generated multiply/square
+consumers. Pinned `fiat_25519_carry_mul`, `fiat_25519_carry_square` and `fiat_25519_carry_scmul_121666` accept
+loose inputs; add/sub take tight inputs and produce loose outputs. Conservative max-bound interval checks and
+tracing the 17 ladder assignments found that loop-carried coordinates remain tight under that proposed flow.
+The current wrappers perform eight normalizing carries per step, 2040 over 255 steps. No candidate was built:
+this review is not compiled equivalence, field-bound proof, secret-taint evidence or a measured saving.
