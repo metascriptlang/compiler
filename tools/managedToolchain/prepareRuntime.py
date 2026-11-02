@@ -143,13 +143,13 @@ REMOVED_DISABLED_FEATURES_AARCH64_LINUX = [dict(e, target="aarch64-linux-gnu.2.3
 
 GNU_LINUX = {
     "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
-    "driverFlags": ["-no-pie"],
+    "driverFlags": ["-nostdlib", "-no-pie"],
     "notices": {"zig": ["../LICENSE"], "glibc": ["libc/glibc/LICENSES"]},
 }
 
 TARGETS = {
     "wasm32-wasi": {
-        "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
+        "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": ["-nostdlib"],
         "clangTarget": "wasm32-wasip1", "emptyArchives": ["libm.a"],
         "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"],
                     "wasi-libc": ["libc/wasi/" + n for n in WASI_LICENSES]},
@@ -165,7 +165,7 @@ ELF_TARGETS = {
 }
 # The shared-object profile of a glibc target: Zig's `-shared` link of a library that exports `addNumbers`.
 # Its directory `<target>.so` and config `<target>.so.cfg` are apart from the executable's.
-GNU_SHARED = dict(GNU_LINUX, fixture="runtimeLinuxShared.c", zigArgs=["-shared"], driverFlags=["-shared"],
+GNU_SHARED = dict(GNU_LINUX, fixture="runtimeLinuxShared.c", zigArgs=["-shared"], driverFlags=["-nostdlib", "-shared"],
                   exportedSymbol="addNumbers")
 SHARED_TARGETS = {target: GNU_SHARED for target in ELF_TARGETS}
 SHARED_PROVENANCE = "notices/runtime-shared-provenance.json"
@@ -304,7 +304,7 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     lines.append("-nostdinc")
     lines.append(configLine(["-isystem", "%s/lib/clang/%s/include" % (engine, major)]))
     lines += [configLine(["-isystem", "%s/include/libc/%s" % (here, d)]) for d in directories]
-    lines += ["-nostdlib"] + [configLine([f]) for f in spec["driverFlags"]]
+    lines += [configLine([f]) for f in spec["driverFlags"]]
     lines.append(configLine(["--ld-path=%s/bin/%s" % (engine, spec["linker"])]))
     lines.append(configLine(["-Xlinker", "-L", "-Xlinker", "%s/%s" % (here, directory)]))
     for kind, value in items:

@@ -1178,7 +1178,7 @@ class SharedProfileTest(TempCase):
             with self.assertRaises(pe.EngineError, msg=bad):
                 pr.selectTargets(bad, pr.SHARED_TARGETS)
         self.assertEqual(list(pr.TARGETS), ["wasm32-wasi", "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
-        self.assertEqual(pr.TARGETS["x86_64-linux-gnu.2.31"]["driverFlags"], ["-no-pie"])
+        self.assertEqual(pr.TARGETS["x86_64-linux-gnu.2.31"]["driverFlags"], ["-nostdlib", "-no-pie"])
 
     def test_the_config_names_the_shared_directory_and_carries_shared_without_startup(self):
         compile_ = pr.parseCompileArgv(LINUX_COMPILE)

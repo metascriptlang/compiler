@@ -255,6 +255,12 @@ class ConfigTest(unittest.TestCase):
             self.assertFalse(any("x86" in l or "amd64" in l.lower() for l in lines))
         self.assertNotIn("tme", "\n".join(exe))
 
+    def test_the_harvested_configs_keep_nostdlib_between_the_headers_and_the_linker_path(self):
+        for variant, flags in ("exe", ["-nostdlib"]), ("dll", ["-nostdlib", "-shared"]):
+            lines = self.render(variant).splitlines()
+            head = lines.index("-isystem <CFGDIR>/include/libc/any-windows-any")
+            self.assertEqual(lines[head + 1:head + 2 + len(flags)], flags + ["--ld-path=<CFGDIR>/../../bin/ld.lld"])
+
     def test_the_executable_config_reaches_the_engine_two_levels_up_and_the_startup_object_first(self):
         lines = self.render("exe").splitlines()
         self.assertIn("-target x86_64-unknown-windows-gnu", lines)
