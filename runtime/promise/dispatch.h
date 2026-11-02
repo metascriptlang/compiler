@@ -145,4 +145,11 @@ void msWorkerWaitOnFuture(void* fut);
 typedef int (*msIoPollFn)(void);
 void msDispatcherWatchIoEngine(int engineFd, msIoPollFn poll);
 
+#if defined(_WIN32) && !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+#define MS_IOCP_ENGINE_KEY 1
+typedef void (*msIocpEntryFn)(const OVERLAPPED_ENTRY* entry);
+HANDLE msDispatcherShareIocp(msIocpEntryFn engineEntry);
+void msDispatcherCompleteEntry(const OVERLAPPED_ENTRY* entry);
+#endif
+
 #endif /* MS_DISPATCH_H */

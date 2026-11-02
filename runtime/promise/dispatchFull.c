@@ -451,6 +451,25 @@ static void msIocpDispatchMsg(msCompletionMsg* msg) {
 	free(msg);
 }
 
+static MS_THREAD_LOCAL msIocpEntryFn gIocpEngineEntry = NULL;
+
+HANDLE msDispatcherShareIocp(msIocpEntryFn engineEntry) {
+	gIocpEngineEntry = engineEntry;
+	return msGetDispatcher()->iocp;
+}
+
+void msDispatcherCompleteEntry(const OVERLAPPED_ENTRY* entry) {
+	if (entry->lpCompletionKey == MS_IOCP_ENGINE_KEY) {
+		if (gIocpEngineEntry == NULL) {
+			fprintf(stderr, "internal: IO engine completion on a thread with no IO engine\n");
+			abort();
+		}
+		gIocpEngineEntry(entry);
+	} else if (entry->lpOverlapped != NULL) {
+		msIocpDispatchMsg((msCompletionMsg*)entry->lpOverlapped);
+	}
+}
+
 bool msCompletionQueueDrain(void) {
 	if (gDispatcher == NULL || gDispatcher->iocp == NULL) return false;
 	bool didWork = false;
@@ -458,10 +477,9 @@ bool msCompletionQueueDrain(void) {
 	ULONG count = 0;
 	while (GetQueuedCompletionStatusEx(gDispatcher->iocp, entries, 64, &count, 0, FALSE)) {
 		for (ULONG i = 0; i < count; i++) {
-			msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
-			if (msg == NULL) continue;
+			if (entries[i].lpOverlapped == NULL) continue;
 			didWork = true;
-			msIocpDispatchMsg(msg);
+			msDispatcherCompleteEntry(&entries[i]);
 		}
 	}
 	return didWork;
@@ -1015,7 +1033,6 @@ static bool msRunOnceIn(int timeoutMs) {
 		BOOL ok = GetQueuedCompletionStatusEx(d->iocp, entries, 64, &count, waitMs, FALSE);
 		if (ok) {
 			for (ULONG i = 0; i < count; i++) {
-				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
 				/* NULL = a cross-thread wake (msActorWakeEventLoop - the same
 				 * Amendment B IOCP-arm primitive msIoEngineWake uses). Nothing
 				 * to dispatch; engineIOCP.c's poll skips these identically.
@@ -1023,8 +1040,7 @@ static bool msRunOnceIn(int timeoutMs) {
 				 * share the port with completions and can fill a whole batch
 				 * ahead of them, so a wake-only batch is not an idle loop. */
 				didWork = true;
-				if (msg == NULL) continue;
-				msIocpDispatchMsg(msg);
+				msDispatcherCompleteEntry(&entries[i]);
 			}
 		}
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {
