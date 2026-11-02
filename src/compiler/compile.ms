@@ -4485,11 +4485,13 @@ resetLiftedOps();
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
+	const tested = testedModules(graph.loadOrder, filePath, opts);
 	const dispatcher = genTestDispatcher(
 		graph.loadOrder,
-		testedModules(graph.loadOrder, filePath, opts),
+		tested,
 		filePath,
 		opts.showTime,
+		planDynamicModules(graph, filePath, graph.loadOrder, config.stdPath, tested),
 	);
 	pushDispatcherJob(cJobs, oSlots, "_test_dispatch", dispatcher, allFlags, opts);
 

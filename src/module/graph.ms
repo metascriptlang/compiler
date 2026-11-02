@@ -208,7 +208,7 @@ function evaluationClosure(graph: ModuleGraph, roots: string[]): HashSet<string>
 	return closed;
 }
 
-export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string): DynamicModulePlan {
+export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string, eagerRoots: string[] = []): DynamicModulePlan {
 	const plan = new DynamicModulePlan();
 	const targets: string[] = [];
 	let typeOnlyEdges = false;
@@ -229,6 +229,7 @@ export function planDynamicModules(graph: ModuleGraph, entryPath: string, order:
 		if (mod != null) for (const imp of mod.imports) pending.push(imp.sourcePath);
 	}
 	const roots: string[] = [entryPath];
+	for (const path of eagerRoots) roots.push(path);
 	for (const path of order) {
 		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) roots.push(path);
 	}
@@ -378,6 +379,18 @@ test "planDynamicModules defers what only import() reaches" {
 	assert plan.requested[0].length == 0;
 	assert plan.requested[1].length == 1 && plan.requested[1][0] == 2;
 	assert plan.requested[2].length == 1 && plan.requested[2][0] == 1;
+}
+
+test "planDynamicModules evaluates an eager root and what it imports, keeping its record" {
+	const g = createModuleGraph();
+	const paths = ["/lazy.ms", "/dep.ms", "/main.ms"];
+	for (const p of paths) addModule(g, createModule(p));
+	findModule(g, "/main.ms").imports.push(createImportEntry([], [], "/lazy.ms", "./lazy", true));
+	findModule(g, "/lazy.ms").imports.push(createImportEntry(["y"], ["y"], "/dep.ms", "./dep"));
+	assert planDynamicModules(g, "/main.ms", paths, "").lazy.size == 2;
+	const plan = planDynamicModules(g, "/main.ms", paths, "", ["/lazy.ms"]);
+	assert plan.records.join(",") == "/lazy.ms";
+	assert plan.lazy.size == 0;
 }
 
 test "planDynamicModules is empty without import()" {

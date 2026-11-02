@@ -11,12 +11,13 @@
 
 import { Node, NodeKind, TestDeclData, BlockStmtData } from "../../ast/node";
 import {
-	CGen, CSection,
+	CGen, CSection, Builder,
 	createProc, createBuilder, addLine, addNewline, sec, extract, emitProcBody,
 } from "./context";
 import { genStmt } from "./statements";
 import { mangleModuleName, buildModuleNameRoots } from "./names";
 import { escapeCString } from "./literals";
+import { DynamicModulePlan } from "../../module/graph";
 
 // ===== Test Declaration → Wrapper Function =====
 // Emits: static void __ms_test_N(void) { body }
@@ -93,6 +94,7 @@ export function genTestDispatcher(
 	testedPaths: string[],
 	entryPath: string,
 	timings: boolean = false,
+	plan: DynamicModulePlan = new DynamicModulePlan(),
 ): string {
 	const b = createBuilder();
 
@@ -129,6 +131,8 @@ export function genTestDispatcher(
 	addLine(b, "int msProgramResult;");
 	addNewline(b);
 
+	emitModuleRecords(b, plan, new HashSet<string>(), new HashSet<string>());
+
 	addLine(b, "int main(int argc, char** argv, char** env) {");
 	addLine(b, "  cmdLine = argv;");
 	addLine(b, "  cmdCount = argc;");
@@ -136,11 +140,12 @@ export function genTestDispatcher(
 	addNewline(b);
 
 	// Init all modules
+	if (plan.records.length > 0) addLine(b, `  msModuleTableRegister(msModuleRecords, ${plan.records.length});`);
 	for (const mp of modulePaths) {
 		addLine(b, `  ${mangleModuleName(buildModuleNameRoots(), mp)}__DatInit000();`);
 	}
 	for (const mp of modulePaths) {
-		addLine(b, `  ${mangleModuleName(buildModuleNameRoots(), mp)}__Init000();`);
+		if (!plan.lazy.has(mp)) addLine(b, `  ${mangleModuleName(buildModuleNameRoots(), mp)}__Init000();`);
 	}
 	addNewline(b);
 
@@ -167,11 +172,50 @@ test "test dispatcher keeps the legacy runner by default" {
 	assert !generated.includes("ms_test_main_timed");
 }
 
+test "test dispatcher registers module records and leaves a lazy module's body to import()" {
+	const plan = new DynamicModulePlan();
+	plan.records.push("/late.ms");
+	plan.lazy.add("/late.ms");
+	plan.requested.push([]);
+	const generated = genTestDispatcher(["/late.ms", "/main.ms"], ["/main.ms"], "/main.ms", false, plan);
+	assert generated.includes("msModuleTableRegister(msModuleRecords, 1);");
+	assert generated.includes("__Init000, .deinit = NULL");
+	assert generated.split("__Init000();").length == 2;
+}
+
 test "timed test dispatcher preserves the native argv" {
 	const generated = genTestDispatcher([], [], "", true);
 	assert generated.includes("return ms_test_main_timed(__ms_modules, argc, argv);");
 	assert generated.includes("cmdLine = argv;");
 	assert generated.includes("cmdCount = argc;");
+}
+
+export function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: HashSet<string>, deinits: HashSet<string>): void {
+	if (plan.records.length == 0) return;
+	for (let i = 0; i < plan.records.length; i += 1) {
+		if (plan.requested[i].length == 0) continue;
+		let list = "";
+		for (const at of plan.requested[i]) list = list == "" ? `${at}` : `${list}, ${at}`;
+		addLine(b, `static const int32_t msModuleRequested${i}[] = { ${list} };`);
+	}
+	addLine(b, `static msModuleRecord msModuleRecords[${plan.records.length}] = {`);
+	b.indent += 1;
+	for (let i = 0; i < plan.records.length; i += 1) {
+		const mp = plan.records[i];
+		const modName = mangleModuleName(buildModuleNameRoots(), mp);
+		if (!plan.lazy.has(mp)) {
+			addLine(b, `{ .name = "${modName}", .status = MS_MODULE_EVALUATED },`);
+			continue;
+		}
+		const init = emptyInits.has(mp) ? "NULL" : `${modName}__Init000`;
+		const deinit = deinits.has(mp) ? `${modName}__Deinit000` : "NULL";
+		const requested = plan.requested[i].length > 0 ? `msModuleRequested${i}` : "NULL";
+		const tla = plan.topLevelAwait.has(mp) ? ", .hasTLA = true" : "";
+		addLine(b, `{ .name = "${modName}", .init = ${init}, .deinit = ${deinit}, .requested = ${requested}, .requestedCount = ${plan.requested[i].length}, .status = MS_MODULE_PENDING${tla} },`);
+	}
+	b.indent -= 1;
+	addLine(b, "};");
+	addNewline(b);
 }
 
 // escapeCString imported from literals.ms
