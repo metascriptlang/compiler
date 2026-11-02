@@ -3140,3 +3140,28 @@ test "a loaded module binds an intrinsically decorated export of a module only r
 	for (const e of dbTypeCheck(db, "/intrinsicDep/use.ms").errors) messages.push(e.message);
 	assert messages.length == 0, messages.join("; ");
 }
+
+const KEEP_DECORATOR = 'import { Node } from "std/meta";\nexport function keep(value: Node, context: unknown): Node {\n\treturn value;\n}\n';
+
+function userDecoratedImportErrors(root: string, dep: string, use: string): string {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, `${root}/keep.ms`, KEEP_DECORATOR);
+	dbSetFileText(db, `${root}/dep.ms`, dep);
+	dbSetFileText(db, `${root}/use.ms`, use);
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, `${root}/use.ms`).errors) messages.push(e.message);
+	return messages.join("; ");
+}
+
+test "a loaded module binds a user-decorated function export of a module only registered" {
+	const dep = 'import { keep } from "./keep";\n@keep\nexport function f(): int32 {\n\treturn 1;\n}\n';
+	const failure = userDecoratedImportErrors("/userDecoFn", dep, 'import { f } from "./dep";\nexport const v: int32 = f();\n');
+	assert failure == "", failure;
+}
+
+test "a loaded module binds a user-decorated class export of a module only registered" {
+	const dep = 'import { keep } from "./keep";\n@keep\nexport class C {\n\tv: int32 = 1;\n}\n';
+	const failure = userDecoratedImportErrors("/userDecoClass", dep, 'import { C } from "./dep";\nexport const v: int32 = new C().v;\n');
+	assert failure == "", failure;
+}
