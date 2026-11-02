@@ -35,7 +35,7 @@ import "./encodingNative";
 
 // mbedTLS vendor sources (hash algorithms)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
-@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
+@compile("runtime/crypto/sha256Armv8.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
