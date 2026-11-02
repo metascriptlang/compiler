@@ -2,7 +2,7 @@
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, isDir, readFile, writeFile, appendFile, remove } from "std/fs";
+import { exists, isDir, readDir, readFile, writeFile, appendFile, remove } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
 import { getDynamicField, jsonToStringArray } from "std/serialize/json/accessors";
 import { asString } from "std/serialize/json/types";
@@ -1125,7 +1125,28 @@ function userProjectFlag(path: string, projectRoot: string, compilerRoot: string
 	if (projectRoot == "" || projectRoot == compilerRoot) return "";
 	if (path == "" || path == ".") return "";
 	if (isUnder(path, compilerRoot)) return "";
+	const physical = canonicalModulePath(path);
+	for (const home of physicalSupportHomes(compilerRoot)) {
+		if (isUnder(physical, home)) return "";
+	}
 	return quoteCcArg(`-I${projectRoot}`);
+}
+
+let _supportHomesRoot = "";
+let _supportHomes: string[] = [];
+
+function physicalSupportHomes(compilerRoot: string): string[] {
+	if (_supportHomesRoot == compilerRoot) return _supportHomes;
+	const homes = [canonicalModulePath(compilerRoot)];
+	for (const entry of readDir(compilerRoot)) {
+		const at = join(compilerRoot, entry);
+		if (!isDir(at)) continue;
+		const home = canonicalModulePath(at);
+		if (!homes.includes(home)) homes.push(home);
+	}
+	_supportHomesRoot = compilerRoot;
+	_supportHomes = homes;
+	return homes;
 }
 
 function ownedBySupportRoot(dir: string, compilerRoot: string): boolean {
