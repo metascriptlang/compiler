@@ -2019,7 +2019,18 @@ function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, targe
 // A result nobody reads makes `i++` the same step as `++i`: no old value is kept.
 export function compileExprForEffect(s: RaiserCompState, node: Node): void {
 	if (node.kind == NodeKind.UpdateExpr) compileUpdateExpr(s, node, true);
+	else if (node.kind == NodeKind.ConditionalExpr) compileConditionalForEffect(s, node);
 	else compileExpr(s, node);
+}
+
+function compileConditionalForEffect(s: RaiserCompState, node: Node): void {
+	const d = node.data as ConditionalExprData;
+	const toAlt = condJumps(s, d.ternaryCondition, false);
+	compileExprForEffect(s, d.ternaryConsequent);
+	const jumpPastAlt = emitJumpPlaceholder(s);
+	patchJumpsTo(s, toAlt, codeLen(s));
+	compileExprForEffect(s, d.ternaryAlternate);
+	patchJumpTo(s, jumpPastAlt, codeLen(s));
 }
 
 function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean): int32 {
