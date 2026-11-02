@@ -758,7 +758,7 @@ static inline void msActorScheduleEdge(msActor* a) {
     if (sid >= 0 && sid < msSchedulerCount) {
         msSchedRunPush(&msSchedulers[sid], a);
         if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
-                memory_order_acq_rel)) {
+                memory_order_seq_cst)) {
             if (sid == 0) msActorWakeEventLoop();
             else msPoolWakeWorker(sid);
         }
@@ -1821,6 +1821,7 @@ extern _Atomic(int) msNextActorRR;        /* round-robin assignment counter */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorReadyHook(bool (*hook)(void)); /* dispatch.c */
+extern void msSetActorParkReadyHook(bool (*hook)(void)); /* dispatch.c */
 static inline bool msActorSystemIdle(void);           /* defined below */
 static inline void msActorShutdownAtExit(void);       /* defined below */
 extern void msPoolSetActorPollHook(bool (*pollFn)(void));  /* pool.c */
@@ -1859,6 +1860,20 @@ static inline bool msActorLocalRunQueued(void) {
         && atomic_load_explicit(&msSchedulers[id].runHead, memory_order_relaxed) != NULL;
 }
 
+/* A loop about to park in its I/O engine drops the amortized wake before its last look at
+ * the run queue: a sender then either sees the flag dropped and wakes the loop, or pushed
+ * before the re-read (the seq_cst exchange in msActorScheduleEdge pairs with the fence). */
+static inline bool msActorLocalRunQueuedBeforePark(void) {
+    int id = msMySchedulerID;
+    if (id < 0 || id >= msSchedulerCount) return false;
+    msSchedActors* sched = &msSchedulers[id];
+    if (atomic_load_explicit(&sched->runHead, memory_order_relaxed) != NULL) return true;
+    if (!atomic_load_explicit(&sched->wakeAmortized, memory_order_relaxed)) return false;
+    atomic_store_explicit(&sched->wakeAmortized, false, memory_order_relaxed);
+    atomic_thread_fence(memory_order_seq_cst);
+    return atomic_load_explicit(&sched->runHead, memory_order_relaxed) != NULL;
+}
+
 extern pthread_once_t msActorSystemOnce;
 extern _Atomic(bool) msActorSystemLive;
 
@@ -1873,6 +1888,7 @@ static inline void msActorSystemInit(void) {
     msSetActorPollHook(msActorPollEventLoop);
     msSetActorIdleHook(msActorSystemIdle);
     msSetActorReadyHook(msActorLocalRunQueued);
+    msSetActorParkReadyHook(msActorLocalRunQueuedBeforePark);
     msSetActorExitHook(msActorShutdownAtExit);
     atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
 }

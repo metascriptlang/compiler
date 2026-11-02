@@ -32,6 +32,8 @@ static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorReadyHook = NULL;
 void msSetActorReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorReadyHook, hook, memory_order_relaxed); }
+static _Atomic(msActorPollFn) msActorParkReadyHook = NULL;
+void msSetActorParkReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorParkReadyHook, hook, memory_order_relaxed); }
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -975,7 +977,12 @@ static bool msLoopReadyIn(msDispatcher* d) {
 	return actorReady != NULL && actorReady();
 }
 
-bool msLoopHasReadyWork(void) { return msLoopReadyIn(gDispatcher); }
+/* Asked only by a loop about to park in its I/O engine (msIoRunOnce, msUringWait). */
+bool msLoopHasReadyWork(void) {
+	if (gDispatcher != NULL && msDequeLen(&gDispatcher->callbacks) > 0) return true;
+	msActorPollFn ready = atomic_load_explicit(&msActorParkReadyHook, memory_order_relaxed);
+	return ready != NULL && ready();
+}
 
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 	if (msLoopReadyIn(d)) return 0;
