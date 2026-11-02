@@ -1948,6 +1948,35 @@ test "editing a dependency publishes nothing for an importer that was only check
 	assert wire == "", wire;
 }
 
+test "a created module re-checks only the checks that probed its path, open or not" {
+	const dir = syncTmpDir("createdProbe");
+	const other = dir + "/other.ms";
+	const use = dir + "/use.ms";
+	const closed = dir + "/closed.ms";
+	const importsLater = 'import { later } from "./later";\nexport const v: int32 = later;\n';
+	writeFile(other, "export const o: int32 = 1;\n");
+	writeFile(use, importsLater);
+	writeFile(closed, importsLater);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(other, "export const o: int32 = 1;\n"), db);
+	handleDidOpen(syncOpenParams(use, importsLater), db);
+	lspEnsureFileLoaded(db, closed);
+	dbTypeCheck(db, closed);
+	const before = dbCheckIsCurrent(db, other) && dbCheckIsCurrent(db, use) && dbCheckIsCurrent(db, closed);
+	writeFile(dir + "/later.ms", "export const later: int32 = 2;\n");
+	handleDidChangeWatchedFiles(syncWatchedParams(dir + "/later.ms", 1), db);
+	const otherKept = dbCheckIsCurrent(db, other);
+	const useStale = !dbCheckIsCurrent(db, use);
+	const closedStale = !dbCheckIsCurrent(db, closed);
+	markDocumentClosed(other);
+	markDocumentClosed(use);
+	assert before;
+	assert otherKept;
+	assert useStale;
+	assert closedStale;
+	assert dbTypeCheck(db, closed).errors.length == 0;
+}
+
 test "an open document ignores disk events for itself" {
 	const dir = syncTmpDir("open");
 	const depPath = dir + "/dep.ms";
