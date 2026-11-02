@@ -26,6 +26,42 @@ export function ${name}(): int32 {
 `;
 }
 
+function arraySibling(name: string, tag: string): string {
+	return `import { Node } from "./cyc";
+export function ${name}(): int32 {
+	const xs: [string, int32][] = [["${tag}", 1]];
+	const ns: Node[] = [new Node()];
+	ns[0].next = ns[0];
+	return (xs.length + ns.length) as int32;
+}
+`;
+}
+
+function arrayProject(name: string): string {
+	const dir = `${root}/out/hookHome/${name}`;
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(`${dir}/cyc.ms`, "export class Node { next: Node | null = null; tag: int32 = 0; }\n");
+	writeFile(`${dir}/a.ms`, arraySibling("fa", "a"));
+	writeFile(`${dir}/b.ms`, arraySibling("fb", "b"));
+	writeFile(`${dir}/mainAB.ms`, "import { fa } from \"./a\";\nimport { fb } from \"./b\";\nconsole.log(fa() + fb());\n");
+	writeFile(`${dir}/mainBA.ms`, "import { fb } from \"./b\";\nimport { fa } from \"./a\";\nconsole.log(fa() + fb());\n");
+	return dir;
+}
+
+function moduleQualifiedHooks(files: HashMap<string, string>): string {
+	if (files.has("BUILD-FAILED")) return files.get("BUILD-FAILED")!;
+	let report = "";
+	for (const file of files.keys()) {
+		for (const line of files.get(file)!.split("\n")) {
+			for (const hook of ["Destroy__", "Copy__", "Sink__", "WasMoved__", "Trace__", "Custody__"]) {
+				if (line.contains(`Array${hook}`) || line.contains(`RefCell${hook}`)) report += `${file}: ${line.trim()}\n`;
+			}
+		}
+	}
+	return report;
+}
+
 function project(name: string): string {
 	const dir = `${root}/out/hookHome/${name}`;
 	removeAll(dir);
@@ -77,7 +113,7 @@ function definedName(line: string): string {
 	return space < 0 ? head : head.substring(space + 1);
 }
 
-function duplicateDefinitions(files: HashMap<string, string>, stem: string): string {
+function duplicateDefinitions(files: HashMap<string, string>, stem: string, hook: string): string {
 	if (files.has("BUILD-FAILED")) return files.get("BUILD-FAILED")!;
 	const seen = new HashMap<string, string>();
 	let found = 0;
@@ -85,14 +121,14 @@ function duplicateDefinitions(files: HashMap<string, string>, stem: string): str
 	for (const file of files.keys()) {
 		for (const line of files.get(file)!.split("\n")) {
 			const name = definedName(line);
-			if (name == "" || !name.contains(stem) || !name.endsWith("Destroy")) continue;
+			if (name == "" || !name.contains(stem) || !name.endsWith(hook)) continue;
 			found += 1;
 			const first = seen.get(name);
 			if (first != null) report += `${name} is defined in ${first} and ${file}\n`;
 			else seen.set(name, file);
 		}
 	}
-	return found == 0 ? `no definition of a ${stem}…Destroy hook` : report;
+	return found == 0 ? `no definition of a ${stem}…${hook} hook` : report;
 }
 
 function typeInfoOwner(files: HashMap<string, string>, stem: string): string {
@@ -135,9 +171,9 @@ test "two siblings lifting the same structural hooks link one definition of each
 	const dir = project("structuralLink");
 	for (const entry of ["mainAB", "mainBA"]) {
 		const files = emitted(dir, entry);
-		const anon = duplicateDefinitions(files, "msAnon_");
+		const anon = duplicateDefinitions(files, "msAnon_", "Destroy");
 		assert anon == "", anon;
-		const tuple = duplicateDefinitions(files, "msTuple_");
+		const tuple = duplicateDefinitions(files, "msTuple_", "Destroy");
 		assert tuple == "", tuple;
 	}
 	assert runs(dir, "mainAB") == "5", "mainAB prints fa() + fb()";
@@ -156,7 +192,7 @@ test "a sibling's generic instance hooks do not depend on whether or in which or
 	const order = sameC("gb's C changes with the import order of its siblings", moduleC(ab, "gb"), moduleC(ba, "gb"));
 	assert order == "", order;
 	for (const files of [ab, ba]) {
-		const pair = duplicateDefinitions(files, "Pair");
+		const pair = duplicateDefinitions(files, "Pair", "Destroy");
 		assert pair == "", pair;
 	}
 	assert runs(dir, "gmainBA") == "5", "gmainBA prints ga() + gb()";
@@ -167,4 +203,19 @@ test "the TypeInfo of a lifted anonymous struct has the same owner whichever sib
 	const ab = typeInfoOwner(emitted(dir, "mainAB"), "msAnon_");
 	const ba = typeInfoOwner(emitted(dir, "mainBA"), "msAnon_");
 	assert ab.endsWith(".c") && ab == ba, `owner after a then b: ${ab}; after b then a: ${ba}`;
+}
+
+test "array and ref-array cell hooks two siblings both lift are named by content, defined once, and run in either import order" {
+	const dir = arrayProject("arrayHooks");
+	for (const entry of ["mainAB", "mainBA"]) {
+		const files = emitted(dir, entry);
+		const qualified = moduleQualifiedHooks(files);
+		assert qualified == "", `${entry} names an array hook after a module:\n${qualified}`;
+		const seq = duplicateDefinitions(files, "msTuple_", "ArrayDestroy");
+		assert seq == "", seq;
+		const trace = duplicateDefinitions(files, "RefCell", "Trace");
+		assert trace == "", trace;
+	}
+	assert runs(dir, "mainAB") == "4", "mainAB prints fa() + fb()";
+	assert runs(dir, "mainBA") == "4", "mainBA prints fa() + fb()";
 }

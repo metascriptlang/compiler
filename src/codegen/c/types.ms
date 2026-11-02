@@ -13,7 +13,7 @@ import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeIn
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly, isCTagSpelling } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots, paramCName, rootedModuleKey } from "./names";
-import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
+import { CheckerContext, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
 function namingSym(t: Readonly<Type>): Readonly<Symbol | null> {
@@ -320,19 +320,6 @@ export function requireOpByKey(t: Type, op: AttachedOp): Symbol {
 	const key = opKey(t, op);
 	const sym = viewedOp(key);
 	if (sym == null) throw new Error(`internal: type-bound op ${key} is used before it was lifted`);
-	return sym;
-}
-
-export function opPrototype(t: Type, op: AttachedOp, name: string, ctx: CheckerContext): Symbol {
-	const key = opKey(t, op);
-	const existing = viewedOp(key);
-	if (existing != null) return existing;
-	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
-	const sym = newSym(ctx, SymbolKind.Function, name, null);
-	setFlag(sym, SymbolFlag.GeneratedOp);
-	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
-	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
-	recordOp(key, sym, true);
 	return sym;
 }
 

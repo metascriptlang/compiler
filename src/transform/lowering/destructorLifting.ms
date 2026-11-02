@@ -25,7 +25,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
 import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
@@ -546,7 +546,7 @@ function registerArrayOps(arrT: Type, lctx: LiftCtx): void {
 	if (!isRuntimeArrayFamily(canon)) {
 		const seqName = arrayCTypeName(canon);
 		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
-			opPrototype(canon, attachedOpOf(hook), seqName + hookSuffix(hook), lctx.checkerCtx);
+			liftedOp(canon, attachedOpOf(hook), seqName + hookSuffix(hook), null);
 		}
 		lctx.seqTypes.push(canon);
 		const pointerElem = elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.String || elem.kind == TypeKind.Function);
@@ -2350,7 +2350,7 @@ function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
 	const cell = createRef(canon);
 	if (getOpByKey(cell, AttachedOp.AttachedTrace) != null) return;
-	opPrototype(cell, AttachedOp.AttachedTrace, refArrayCellName(canon) + "Trace", lctx.checkerCtx);
+	liftedOp(cell, AttachedOp.AttachedTrace, refArrayCellName(canon) + "Trace", null);
 	lctx.refCellTraces.push(canon);
 }
 
@@ -2361,7 +2361,7 @@ function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
 	if (!custodyAddsEdge(canon, lctx.cyclicCache, lctx.nonCyclicCache)) return;
 	const cell = createRef(canon);
 	if (getOpByKey(cell, AttachedOp.AttachedCustody) != null) return;
-	opPrototype(cell, AttachedOp.AttachedCustody, refArrayCellName(canon) + "Custody", lctx.checkerCtx);
+	liftedOp(cell, AttachedOp.AttachedCustody, refArrayCellName(canon) + "Custody", null);
 	lctx.refCellCustodies.push(canon);
 }
 

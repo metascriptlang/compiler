@@ -230,10 +230,9 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const custody = refArrayCellOp(arrT, AttachedOp.AttachedCustody);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
-		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
-		if (destroyHome != "") owner = destroyHome;
-		if (trace != null) owner = trace.modulePath;
-		else if (custody != null) owner = custody.modulePath;
+		if (!hasFlag(destroy, SymbolFlag.ImportC)) owner = opOwner(destroy, owner);
+		if (trace != null) owner = opOwner(trace, owner);
+		else if (custody != null) owner = opOwner(custody, owner);
 	}
 	_aliveSet.typeInfoKeys.add(key);
 	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", custody };
