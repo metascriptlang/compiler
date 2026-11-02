@@ -663,7 +663,7 @@ function takesAddress(node: Node | null): boolean {
 }
 
 
-function carriesPointer(t: Type | null, depth: int32 = 0): boolean {
+export function carriesPointer(t: Type | null, depth: int32 = 0): boolean {
 	if (t == null || depth > 8) return true;
 	if (isPrimitiveKind(t.kind)) return false;
 	return match (t.kind) {
@@ -871,7 +871,7 @@ function addTemp(n: Node, out: Node[], paths: string[], handles: string[]): void
 	handles.push("");
 }
 
-function pathOf(node: Node | null): string {
+export function pathOf(node: Node | null): string {
 	let n = node;
 	let path = "";
 	while (n != null) {
