@@ -33,6 +33,7 @@
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
+  #include <afunix.h>
   #include <windows.h>
   typedef int ms_socklen_t;
   typedef int ms_ssize_t;
@@ -228,7 +229,6 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 	return (int32_t)ret;
 }
 
-#ifndef _WIN32
 /* An empty path, a path holding a NUL byte, or one that does not fit sun_path with its terminator is
  * refused: Linux binds an empty or NUL-led path in its abstract namespace, and every kernel reads a
  * pathname only up to the first NUL, so each would bind or reach another socket. */
@@ -241,40 +241,27 @@ static inline int32_t msNetUnixAddr(msString path, struct sockaddr_un* sa, ms_so
 	*len = (ms_socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)path.len + 1);
 	return 0;
 }
-#endif
 
 static inline int32_t msNetSocketUnix(void) {
-#ifdef _WIN32
-	return -1;
-#else
 	return msNetStreamSocket(AF_UNIX);
-#endif
 }
 
 static inline int32_t msNetBindUnix(int32_t fd, msString path) {
-#ifdef _WIN32
-	(void)fd; (void)path;
-	return -1;
-#else
 	struct sockaddr_un sa;
 	ms_socklen_t len;
 	if (msNetUnixAddr(path, &sa, &len) != 0) return -1;
 	return (int32_t)bind(fd, (struct sockaddr*)&sa, len);
-#endif
 }
 
 static inline int32_t msNetConnectUnix(int32_t fd, msString path) {
-#ifdef _WIN32
-	(void)fd; (void)path;
-	return -1;
-#else
 	struct sockaddr_un sa;
 	ms_socklen_t len;
 	if (msNetUnixAddr(path, &sa, &len) != 0) return -1;
 	int ret = connect(fd, (struct sockaddr*)&sa, len);
+#ifndef _WIN32
 	if (ret < 0 && errno == EINTR) ret = msNetConnectResume(fd);
-	return (int32_t)ret;
 #endif
+	return (int32_t)ret;
 }
 
 /* ===== Data Transfer ===== */

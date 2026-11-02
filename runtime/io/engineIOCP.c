@@ -38,7 +38,7 @@ typedef struct msIocpOv {
 	msIoRequest* req;      /* back-pointer to our request */
 	WSABUF wsaBuf;         /* buffer descriptor for WSARecv/WSASend */
 	SOCKET acceptSocket;   /* pre-created socket for AcceptEx */
-	char acceptBuf[128];   /* address buffer for AcceptEx */
+	char acceptBuf[2 * (sizeof(struct sockaddr_storage) + 16)];   /* address buffer for AcceptEx */
 } msIocpOv;
 
 #define ENGINE_INIT_POOL 64
@@ -189,7 +189,11 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	iocpAssociate(e, listenSock);
 
 	/* Pre-create accept socket (AcceptEx requirement) */
-	iov->acceptSocket = WSASocketW(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	struct sockaddr_storage bound;
+	int boundLen = sizeof(bound);
+	iov->acceptSocket = getsockname(listenSock, (struct sockaddr*)&bound, &boundLen) == 0
+		? WSASocketW(bound.ss_family, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED)
+		: INVALID_SOCKET;
 	if (iov->acceptSocket == INVALID_SOCKET) {
 		msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1);
 		freeRequest(e, req);
@@ -208,7 +212,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	}
 
 	DWORD bytes = 0;
-	DWORD addrLen = sizeof(struct sockaddr_in) + 16;
+	DWORD addrLen = sizeof(struct sockaddr_storage) + 16;
 	BOOL ok = fnAcceptEx(listenSock, iov->acceptSocket,
 	                     iov->acceptBuf, 0,
 	                     addrLen, addrLen,
