@@ -40,7 +40,7 @@ import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength, checkOverloadSets } from "./callResolve";
+import { engineNodeVirtualKeyType, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength, checkOverloadSets } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
@@ -2593,7 +2593,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			if (prop.kind != NodeKind.ObjectPatternProp) continue;
 			const p = prop.data as ObjectPatternPropData;
 			if (p.propAlias.kind == NodeKind.Identifier || isNestedPattern(p.propAlias)) {
-				const derivedField = destrNamedFieldType(iterType, p.propKey);
+				const derivedField = destrNamedFieldType(iterType, p.propKey) ?? engineNodeVirtualKeyType(peelToStructOrUnion(iterType) ?? iterType, p.propKey);
 				if (derivedField == null) {
 					const settled = iterType != null && !isUnresolvedType(iterType) && iterType.kind != TypeKind.Unknown && !hasGenericParams(iterType);
 					if (sourceStruct != null) {
