@@ -207,7 +207,9 @@ test "runtimeDirFrom finds the install behind a symlinked binary or a symlinked 
 
 test "a file through a linked directory has one physical path before it exists, while it exists and after it is deleted" {
 	if (platform == "windows") return;
-	const probe = join(cwd(), "out/physicalPathProbe-" + Math.floor(Math.random() * 1000000000));
+	const probe = join(cwd(), "out/physicalPathProbe");
+	remove(join(probe, "linked"));
+	removeAll(probe);
 	ensureDir(join(probe, "real"));
 	assert symlink(join(probe, "real"), join(probe, "linked")).ok;
 	const linked = join(probe, "linked/a.ms");
