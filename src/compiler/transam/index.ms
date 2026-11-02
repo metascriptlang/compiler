@@ -11,7 +11,7 @@ import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, isCancelled } from "../../checker/context";
-import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision, nextRevision, TA_REVISION_MAX,
@@ -19,6 +19,7 @@ import {
 } from "./revision";
 import { taHashString } from "./hash";
 import { ifaceDigest, implDigest } from "./digest";
+import { intrinsicBuiltins } from "../../checker/decoratorHelpers";
 import { installBodyReadSink } from "../../checker/bodyReads";
 import {
 	TaCacheEntry, createCacheEntry,
@@ -663,7 +664,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
-		const tmpCtx = createTempCollectContext(depPath);
+		const tmpCtx = createTempCollectContext(db, depPath);
 		tmpCtx.exportRegistry = db.exportRegistry;
 		const depMod = createModule(depPath);
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
@@ -739,9 +740,14 @@ function sameDeclaration(a: Symbol, b: Symbol): boolean {
 }
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
-function createTempCollectContext(modulePath: string): CheckerContext {
+function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerContext {
+	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	const ctx = createContext();
 	ctx.modulePath = modulePath;
+	for (const name of intrinsicBuiltins) {
+		const sym = lookupSymbol(db.preludeCtx.table, name);
+		if (sym != null) defineSymbolAs(ctx.table, name, sym);
+	}
 	openScope(ctx.table, ScopeKind.Module);
 	return ctx;
 }
@@ -753,7 +759,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	const program = dbParse(db, filePath);
 	if (program == null) return;
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
-	const tmpCtx = createTempCollectContext(filePath);
+	const tmpCtx = createTempCollectContext(db, filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
 	depMod.imports = buildImportEntries(db, filePath, program);
