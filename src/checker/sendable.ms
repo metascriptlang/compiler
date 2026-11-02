@@ -1038,7 +1038,9 @@ function holdsAwaitable(t: Type | null, seen: Type[]): boolean {
 }
 
 function isBorrowingSpawn(f: HandleFrame, p: Node): boolean {
-	return f.ownSpawns && p.kind == NodeKind.CallExpr && p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn" && !p.flags.has(NodeFlag.Isolated);
+	if (!f.ownSpawns || p.kind != NodeKind.CallExpr) return false;
+	if (p.flags.has(NodeFlag.LendsPastCall)) return true;
+	return p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn" && !p.flags.has(NodeFlag.Isolated);
 }
 
 function keepsArgumentsInFrame(call: Node): boolean {

@@ -359,6 +359,7 @@ export enum NodeFlag {
 	SendableClosure, // checker: this closure is converted to Sendable<F>, so lambda lifting gives it an env of its own that holds copies of its captures
 	ConstData,     // transform: every element of this array literal is deep-constant data, so codegen copies one static initializer
 	DecoratorRefused, // checker: a decorator on this declaration was refused, so a check that would only follow from it skips the declaration
+	LendsPastCall, // checker: this call of an async routine returns while a spawn it started still borrows from the caller, so a scope exit joins its promise
 }
 
 // ===== Node Kind Enum =====
