@@ -1591,7 +1591,10 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 			if (body == declBody) return genUnionType(g, body);
 			return genUnionTypeAs(g, body, "union:" + instCName, instCName, instName);
 		},
-		_ => "void",
+		TypeKind.Never => "void",
+		_ => {
+			throw new Error(`internal: type kind ${(t.kind as number).toString()} (${typeDisplayNameUnprofiled(t)}) has no C type, reached codegen in ${g.modulePath}`);
+		},
 	};
 }
 
