@@ -37,6 +37,7 @@ import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc, documentUri,
 } from "./shared";
 import { LineIndex } from "../../../utils/sourceLines";
+import { boundaryHoverSection, collectBoundaryHints } from "./boundary";
 import { lspPositionIn, lspSourcePosition } from "../position";
 
 // ===== Hover =====
@@ -65,6 +66,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// position. If found, substitute the winning overload's type into
 	// `suggest.symType` before formatting. Non-overloaded calls and
 	// Identifier-as-value references fall through unchanged.
+	let boundaryOverload = -1;
 	if (suggest.kind == SymbolKind.Function && suggest.sym != null
 			&& suggest.sym.overloads != null && suggest.sym.overloads.length > 0) {
 		// Use the checked program (AST with resolvedOverloadIdx populated).
@@ -75,6 +77,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 		if (callExpr != null) {
 			const cd = callExpr.data as CallExprData;
 			const idx = cd.resolvedOverloadIdx;
+			boundaryOverload = idx > 0 ? idx as int32 : 0;
 			if (idx > 0 && idx - 1 < suggest.sym.overloads.length) {
 				const winnerSym = suggest.sym.overloads[idx - 1];
 				if (winnerSym != null && winnerSym.symbolType != null
@@ -108,7 +111,9 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	if (docComment == "" && lspHasBuiltinDoc(db, suggest.sym)) {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
 	}
-	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
+	let hoverDoc = sgFormatHoverDoc(suggest, docComment);
+	const boundary = suggest.kind == SymbolKind.Function ? boundaryHoverSection(suggest.sym, boundaryOverload) : "";
+	if (boundary != "") hoverDoc = hoverDoc == "" ? boundary : hoverDoc + "\n\n" + boundary;
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
 	const fileSource = dbGetSource(db, path);
 	const lines = LineIndex.build(fileSource);
@@ -272,11 +277,16 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
 
-	if (hintsList.length == 0) return lspResponse(id, "[]");
+	const crossings = collectBoundaryHints(program, startLine, endLine);
+	if (hintsList.length == 0 && crossings.length == 0) return lspResponse(id, "[]");
 
 	const hints: string[] = [];
 	const lines = LineIndex.build(source);
 	const clientLines = LineIndex.buildLsp(source);
+	for (const c of crossings) {
+		const at = lspPositionIn(lines, clientLines, source, c.line, c.col);
+		hints.push(lspFmtInlayHint(at.line, at.character, c.label, 1, false, true));
+	}
 	for (const h of hintsList) {
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		// Exception hints map to Type kind (1) with paddingLeft
