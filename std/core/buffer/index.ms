@@ -1,0 +1,5 @@
+export { Buffer, alloc, allocUnsafe, bufReverse, byteAt, byteLength, compare, concat, concatList, copy, copyTo, fill, fillBuffer, fillString, fromArray, fromString, includes, includesBuffer, indexOf, indexOfBuffer, isAscii, isBufferEncoding, isUtf8, lastIndexOf, lastIndexOfBuffer, readDoubleBE, readDoubleLE, readFloatBE, readFloatLE, readInt16BE, readInt16LE, readInt32BE, readInt32LE, readInt8, readIntBE, readIntLE, readUInt16BE, readUInt16LE, readUInt32BE, readUInt32LE, readUInt8, readUIntBE, readUIntLE, set, swap16, swap32, swap64, toBase64, toHex, toStringEncoded, write, writeDoubleBE, writeDoubleLE, writeFloatBE, writeFloatLE, writeInt16BE, writeInt16LE, writeInt32BE, writeInt32LE, writeInt8, writeIntBE, writeIntLE, writeUInt16BE, writeUInt16LE, writeUInt32BE, writeUInt32LE, writeUInt8, writeUIntBE, writeUIntLE } from "./kernel";
+
+when (!bare && !solana) {
+	export { readBigInt64BE, readBigInt64LE, readBigUInt64BE, readBigUInt64LE, writeBigInt64BE, writeBigInt64LE, writeBigUInt64BE, writeBigUInt64LE } from "./kernel";
+}

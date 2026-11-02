@@ -312,7 +312,7 @@ import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { setExtraGlobalImports } from "./prelude";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
-import { writeFile, ensureDir } from "std/fs";
+import { writeFile, ensureDir, readDir, isDir } from "std/fs";
 import { lookupSymbol } from "./symbol";
 import { findExtension } from "./context";
 test "single file checked" {
@@ -476,6 +476,82 @@ function stdImportWithoutPreludeChecks(): boolean {
 test "a graph that imports a prelude module without loading the prelude still checks against the full prelude" {
 	assert preludeDeclaresWhatMainBinds(".cms");
 	assert stdImportWithoutPreludeChecks();
+}
+
+const BACKEND_EXTS: string[] = [".cms", ".jms", ".rms"];
+
+function kernelOf(surface: string): string {
+	return surface == "index" ? "kernel" : surface + "Kernel";
+}
+
+function isKernel(base: string): boolean {
+	return base == "kernel" || base.endsWith("Kernel");
+}
+
+function backendsWith(files: string[], base: string): string[] {
+	if (files.includes(base + ".ms")) return BACKEND_EXTS;
+	const found: string[] = [];
+	for (const ext of BACKEND_EXTS) {
+		if (files.includes(base + ext)) found.push(ext);
+	}
+	return found;
+}
+
+function baseOf(file: string): string {
+	for (const ext of BACKEND_EXTS) {
+		if (file.endsWith(ext)) return file.slice(0, file.length - ext.length);
+	}
+	return "";
+}
+
+function surfaceErrors(indexPath: string, ext: string, stdPath: string): string[] {
+	const config = createDefaultConfig(backendOfExtension(ext), stdPath);
+	const graph = createModuleGraph();
+	loadModule(graph, indexPath, createFileSystemProvider(), config, 1);
+	checkModuleGraph(graph, stdPath, ext);
+	const found: string[] = [];
+	for (const e of graph.errors) found.push(`${indexPath} on ${ext}: ${e}`);
+	for (let i = 0; i < graph.modules.length; i += 1) {
+		for (const e of graph.modules[i].errors) {
+			if (e.severity == ErrorSeverity.Error) found.push(`${graph.modulePaths[i]} on ${ext}: ${e.message}`);
+		}
+	}
+	return found;
+}
+
+function stdSurfaceProblems(dir: string, stdPath: string, found: string[]): void {
+	const files = readDir(dir);
+	const seen: string[] = [];
+	for (const f of files) {
+		const base = baseOf(f);
+		if (base == "" || seen.includes(base)) continue;
+		seen.push(base);
+		let variants = files.includes(base + ".ms") ? 1 : 0;
+		for (const ext of BACKEND_EXTS) {
+			if (files.includes(base + ext)) variants += 1;
+		}
+		if (!isKernel(base) && variants > 1) {
+			found.push(`${dir}/${base}: declared once per backend; declare the surface once in ${base}.ms and keep backend code in ${kernelOf(base)}.<ext>`);
+		}
+	}
+	for (const f of files) {
+		if (!f.endsWith(".ms") || isKernel(f.slice(0, f.length - 3))) continue;
+		const base = f.slice(0, f.length - 3);
+		for (const ext of backendsWith(files, kernelOf(base))) {
+			for (const e of surfaceErrors(`${dir}/${f}`, ext, stdPath)) found.push(e);
+		}
+	}
+	for (const f of files) {
+		const name = f.endsWith("/") ? f.slice(0, f.length - 1) : f;
+		if (isDir(`${dir}/${name}`)) stdSurfaceProblems(`${dir}/${name}`, stdPath, found);
+	}
+}
+
+test "a std module available on several backends declares its public surface once and checks on each" {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const found: string[] = [];
+	stdSurfaceProblems(stdPath, stdPath, found);
+	assert found.length == 0, found.join("\n");
 }
 
 test "an extra global import is matched by loader identity, never by spelling" {

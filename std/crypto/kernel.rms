@@ -1,0 +1,48 @@
+// C bindings (private — wrapped by exported functions)
+
+// Initialization
+export extern function msCryptoInit(): boolean from "msCryptoInit";
+export extern function msCryptoCleanup(): void from "msCryptoCleanup";
+
+// Hashing
+export extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string from "msCryptoHashString";
+export extern function msCryptoHashBuffer(algorithm: string, data: string): string from "msCryptoHashBuffer";
+
+// HMAC
+export extern function msCryptoHmacString(algorithm: string, key: string, data: string, encoding: string): string from "msCryptoHmacString";
+export extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string): string from "msCryptoHmacBuffer";
+
+// Random
+export extern function msCryptoRandomBytes(size: number): string from "msCryptoRandomBytes";
+export extern function msCryptoRandomInt(min: number, max: number): number from "msCryptoRandomInt";
+export extern function msCryptoRandomUuid(): string from "msCryptoRandomUuid";
+
+// Timing-safe comparison
+export extern function msCryptoTimingSafeEqual(a: string, b: string): boolean from "msCryptoTimingSafeEqual";
+
+// Streaming hash (int64 handle wrappers)
+export extern function msCryptoHashInitHandle(algorithm: string): int64 from "msCryptoHashInitHandle";
+export extern function msCryptoHashUpdateHandle(ctx: int64, data: string): void from "msCryptoHashUpdateHandle";
+export extern function msCryptoHashFinalHandle(ctx: int64, encoding: string): string from "msCryptoHashFinalHandle";
+export extern function msCryptoHashFinalBufferHandle(ctx: int64): string from "msCryptoHashFinalBufferHandle";
+export extern function msCryptoHashFreeHandle(ctx: int64): void from "msCryptoHashFreeHandle";
+
+// Streaming HMAC (int64 handle wrappers)
+export extern function msCryptoHmacInitHandle(algorithm: string, key: string): int64 from "msCryptoHmacInitHandle";
+export extern function msCryptoHmacUpdateHandle(ctx: int64, data: string): void from "msCryptoHmacUpdateHandle";
+export extern function msCryptoHmacFinalHandle(ctx: int64, encoding: string): string from "msCryptoHmacFinalHandle";
+export extern function msCryptoHmacFinalBufferHandle(ctx: int64): string from "msCryptoHmacFinalBufferHandle";
+export extern function msCryptoHmacFreeHandle(ctx: int64): void from "msCryptoHmacFreeHandle";
+
+// Utility
+export extern function msCryptoIsHashSupported(algorithm: string): boolean from "msCryptoIsHashSupported";
+
+// Encoding
+export extern function msCryptoToHex(data: string): string from "msCryptoToHex";
+export extern function msCryptoFromHex(hex: string): string from "msCryptoFromHex";
+export extern function msCryptoToBase64(data: string): string from "msCryptoToBase64";
+export extern function msCryptoFromBase64(b64: string): string from "msCryptoFromBase64";
+
+// Key Derivation
+export extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string from "msCryptoPbkdf2";
+export extern function msCryptoHkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): string from "msCryptoHkdf";

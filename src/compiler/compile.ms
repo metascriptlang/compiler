@@ -3227,7 +3227,7 @@ setGlobalHookOwners(sharedHookOwners);
 	if (opts.targetOs == "emcc" && aliveSet.computed) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
-			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
+			if (mp.endsWith("promise/kernel.cms")) { hasAsync = true; }
 		}
 		if (hasAsync) {
 			linkFlags = appendFlag(linkFlags, "-sASYNCIFY");

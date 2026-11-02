@@ -5,8 +5,8 @@
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
 import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
+import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, checkPreludeFromSource, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, isExportedBy } from "../../checker/context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -23,7 +23,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction 
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, registerEngineBodyCtxFn, preludeSubCtxOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
@@ -60,7 +60,7 @@ function raiserPreludeCtx(): CheckerContext {
 		const root = resolveRuntimeDir();
 		const stdPath = root != "" ? join(root, "std") : "";
 		_raiserPreludeBuilding = true;
-		_raiserPreludeCtx = buildPreludeContext(stdPath, ".rms");
+		_raiserPreludeCtx = checkPreludeFromSource(stdPath, ".rms");
 		_raiserPreludeBuilding = false;
 	}
 	return _raiserPreludeCtx;
@@ -186,13 +186,37 @@ function isVmPreludeSym(sym: Symbol): boolean {
 		_vmPreludeSyms = own;
 	}
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
-	return _vmPreludeSyms!.has(origin);
+	return _vmPreludeSyms!.has(origin) || preludeSubCtxOf(raiserPreludeCtx(), origin.modulePath) != null;
+}
+
+// A std routine declared in a prelude sub-module sees that module's private declarations, as a
+// user module's routine sees its own; the exported ones stay the VM prelude's.
+function vmSubSeeds(sym: Symbol): Symbol[] {
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	const sub = preludeSubCtxOf(raiserPreludeCtx(), origin.modulePath);
+	const out: Symbol[] = [];
+	if (sub == null) return out;
+	for (const s of moduleScopeSymbols(sub.table)) {
+		if (!isExportedBy(sub, s)) out.push(s);
+	}
+	return out;
 }
 
 function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
 	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
+	const sub = owner != null ? preludeSubCtxOf(raiserPreludeCtx(), definingModulePath) : null;
+	if (sub != null) {
+		const knownSub = _engine.bodyCtxs.get(sub);
+		if (knownSub != null) return knownSub;
+		registerSeedSymbols(vmSubSeeds(owner!), []);
+		const emptySub = createNode(NodeKind.Program, { programStmts: [] }, synthToken(makeLoc(1, 1)));
+		const subBody = checkProgramWithRegistryCancellable(emptySub, outer.registry, outer.graph, outer.module, raiserPreludeCtx(), null as unknown as CancelCtx, 0);
+		clearSeedSymbols();
+		_engine.bodyCtxs.set(sub, subBody);
+		return subBody;
+	}
 	const mod = findModule(outer.graph, definingModulePath);
 	if (mod == null) return null;
 	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? raiserPreludeCtx() : null;
@@ -208,12 +232,13 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	return bodyCtx;
 }
 
-function vmStdSeeds(skipName: string): Symbol[] {
+function vmStdSeeds(skipName: string, sym: Symbol): Symbol[] {
 	const prelude = raiserPreludeCtx();
 	const seeds: Symbol[] = [];
 	for (const s of prelude.table.current.symbols.values()) {
 		if (s.name != skipName && !isPreludeExport(prelude, s)) seeds.push(s);
 	}
+	for (const s of vmSubSeeds(sym)) { if (s.name != skipName) seeds.push(s); }
 	return seeds;
 }
 
@@ -316,7 +341,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
 	if (isVmPreludeSym(sym)) {
-		for (const s of vmStdSeeds(sym.name)) seeds.push(s);
+		for (const s of vmStdSeeds(sym.name, sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);
@@ -412,6 +437,21 @@ test "engine: an engine check leaves no C generic type rows to the module being 
 	const mark = genericTypeInstMark();
 	const _engineProgram = transformForEngine(pr.value);
 	assert takeGenericTypeInstsFrom(mark).length == 0;
+}
+
+test "engine: the VM prelude keeps a std sub-module's private declarations" {
+	const prelude = raiserPreludeCtx();
+	assert preludeSubCtxOf(prelude, join(join(resolveRuntimeDir(), "std"), "core/structKernel.ms")) != null;
+	let mapSym: Symbol | null = null;
+	for (const s of prelude.table.current.symbols.values()) {
+		if (s.name == "Map") mapSym = s;
+	}
+	assert mapSym != null;
+	let sawPrivate = false;
+	for (const s of vmSubSeeds(mapSym!)) {
+		if (s.name == "msMapFatal") sawPrivate = true;
+	}
+	assert sawPrivate;
 }
 
 test "engine: byteLength counts UTF-8 bytes independently from UTF-16 length" {

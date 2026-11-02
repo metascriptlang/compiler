@@ -1,0 +1,147 @@
+// std/fs — File System (POSIX)
+
+@include("runtime/fs/header.h");
+
+import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+
+extern function msFsLastErrno(): int32;
+extern function msFsReadFile(path: string): string;
+extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
+extern function msFsChmod(path: string, mode: int32): number;
+extern function msFsExists(path: string): number;
+extern function msFsIsFile(path: string): number;
+extern function msFsIsDir(path: string): number;
+extern function msFsIsExecutable(path: string): number;
+extern function msFsRealPath(path: string): string;
+extern function msFsMkdir(path: string): number;
+extern function msFsRmdir(path: string): number;
+extern function msFsReadDirEntries(path: string): string;
+extern function msFsRemove(path: string): number;
+extern function msFsRename(oldPath: string, newPath: string): number;
+extern function msFsSymlink(target: string, path: string): number;
+
+// ===== Result-returning API (primary) =====
+
+export function readFile(path: string): Result<string, IoError> {
+	const raw = msFsReadFile(path);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.ok(raw);
+}
+
+export function writeFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "wb");
+	if (ok != 1) {
+		const err = msFsLastErrno();
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+	return Result.ok(null);
+}
+
+export function appendFile(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "ab");
+	if (ok != 1) {
+		const err = msFsLastErrno();
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "append failed"));
+	}
+	return Result.ok(null);
+}
+
+// Change POSIX permission bits on a path. Mode is passed as a decimal int32
+// (e.g. 384 for rw------- = 0600). No-op on Windows.
+export function chmod(path: string, mode: int32): Result<void, IoError> {
+	if (msFsChmod(path, mode) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "chmod failed"));
+}
+
+export function mkdir(path: string): Result<void, IoError> {
+	if (msFsMkdir(path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "mkdir failed"));
+}
+
+export function rmdir(path: string): Result<void, IoError> {
+	if (msFsRmdir(path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "rmdir failed"));
+}
+
+export function remove(path: string): Result<void, IoError> {
+	if (msFsRemove(path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "remove failed"));
+}
+
+
+export function symlink(target: string, path: string): Result<void, IoError> {
+	if (msFsSymlink(target, path) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+	return Result.err(writeFailed(path, "symlink failed"));
+}
+
+export function rename(oldPath: string, newPath: string): Result<void, IoError> {
+	if (msFsRename(oldPath, newPath) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, oldPath));
+	return Result.err(writeFailed(oldPath, "rename failed"));
+}
+
+// ===== Predicates (stay as boolean — not fallible) =====
+
+export function exists(path: string): boolean { return msFsExists(path) == 1; }
+export function realpath(path: string): string { return msFsRealPath(path); }
+export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
+export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
+export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
+export extern function fileSize(path: string): number from "msFsFileSize";
+export extern function modifiedTime(path: string): number from "msFsModifiedTime";
+export extern function changeStamp(path: string): string from "msFsChangeStamp";
+
+// List directory entries. Directories have a trailing "/" marker.
+// "." and ".." are always excluded. Returns an empty list on error or
+// when the directory is empty — callers that need to distinguish should
+// check `exists(path) && isDir(path)` first.
+export function readDir(path: string): string[] {
+	const joined = msFsReadDirEntries(path);
+	const result: string[] = [];
+	if (joined == "") return result;
+	const lines = joined.split("\n");
+	for (const line of lines) {
+		if (line != "") result.push(line);
+	}
+	return result;
+}
+
+// ===== Composed utilities =====
+
+
+
+
+export function ensureDir(path: string): Result<void, IoError> {
+	if (msFsExists(path) == 1) return Result.ok(null);
+	let i = 0;
+	while (i < path.length) {
+		if (path.charCodeAt(i) == "/".code) {
+			if (i > 0) {
+				const prefix = path.slice(0, i);
+				if (msFsExists(prefix) != 1) {
+					const mkResult = mkdir(prefix);
+					if (!mkResult.ok) return mkResult;
+				}
+			}
+		}
+		i = i + 1;
+	}
+	if (msFsExists(path) != 1) {
+		return mkdir(path);
+	}
+	return Result.ok(null);
+}

@@ -1,13 +1,13 @@
 // MetaScript String Prelude — Shared Byte-Loop Algorithms
 // Single source for BOTH backends (Nim model: algorithms here, per-backend
-// byte kernels live in bytes.<ext>, extern fast paths in index.<ext>).
+// byte kernels and extern fast paths live in kernel.<ext>).
 // Strings are UTF-8 byte arrays on both backends; everything here uses ONLY
 // asBytes/asString + uint8[] push/indexing/.length — the rest of the uint8[]
 // method surface is blocked on the §2 15-methods row (neon BUGS.md).
 // ⚠ Every COMPUTED push must cast `as uint8` (a number-typed arg silently
 // binds the number[] overload on C — §2 push-dispatch facet).
 
-import { asBytes, byteSlice, byteIndexOf } from "./bytes";
+import { asBytes, byteSlice, byteIndexOf } from "./kernel";
 
 export function startsWith(this s: string, prefix: string): boolean {
 	const sb = s.asBytes();

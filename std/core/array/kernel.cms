@@ -1,0 +1,419 @@
+// MetaScript Array Prelude — C Backend
+// Extension methods backed by runtime/core/array.h
+// Loaded automatically via globalImports() -> "std/core/array"
+
+// ===== Array<T> — Generic array type =====
+// Backed by per-element-type C arrays (monomorphized by the compiler).
+// This declaration makes Array<T> a real symbol in scope for:
+//   - new Array<T>(size) — typed construction
+//   - Array<T> in type annotations
+//   - LSP hover/completion
+// NOTE: The actual array type is TypeKind.Array (compiler magic).
+// This class declaration is for symbol visibility only — resolveAnnotation
+// handles "Array<T>" as a keyword, and .length is resolved by the checker's
+// special case (checkExprPass.ms), not from this struct field.
+export class Array<T> {
+	length: number;
+}
+
+// ===== Number Array =====
+
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
+export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
+
+export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
+
+/**
+ * Removes the last element from an array and returns it.
+ * An empty array raises the index error, as a[-1] would.
+ */
+export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
+
+/**
+ * Removes the first element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
+export extern function shift(this arr: number[]): number from "&msNumberArrayShift";
+
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
+export extern function at(this arr: Vec<number>, idx: number): number from "&msNumberArrayAt";
+
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
+export extern function indexOf(this arr: Vec<number>, value: number): number from "&msNumberArrayIndexOf";
+
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
+export extern function includes(this arr: Vec<number>, value: number): boolean from "&msNumberArrayIncludes";
+
+/**
+ * Returns a copy of a section of an array.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
+export extern function slice(this arr: Vec<number>, start: number, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
+
+/**
+ * Combines two or more arrays.
+ * This method returns a new array without modifying any existing arrays.
+ */
+export extern function concat(this arr: Vec<number>, other: number[]): number[] from "&msNumberArrayConcat";
+
+/**
+ * Reverses the elements in an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
+export extern function reverse(this arr: number[]): void from "&msNumberArrayReverse";
+
+/**
+ * Sorts an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
+export extern function sort(this arr: number[]): void from "&msNumberArraySort";
+
+/** Changes all array elements to a static value, from a start index to an end index. */
+export extern function fill(this arr: number[], value: number): void from "&msNumberArrayFill";
+
+/** Returns the number of occurrences of a value in an array. */
+export extern function count(this arr: Vec<number>, value: number): number from "&msNumberArrayCount";
+
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
+export extern function join(this arr: Vec<number>, sep: string): string from "&msNumberArrayJoin";
+
+/** Sets the length of the array. */
+export extern function setLength(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
+
+/** Returns the allocated capacity of the array buffer. */
+export extern function capacity(this arr: Vec<number>): number from "&msNumberArrayCapacity";
+
+/** Removes deleteCount elements starting at index start. */
+export extern function splice(this arr: number[], start: number, deleteCount: number): void from "&msNumberArraySplice";
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: number[], start: number, deleteCount: number, item: number): void from "&msNumberArraySplice3";
+
+// ===== String Array =====
+
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
+export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
+
+/**
+ * Removes the last element from an array and returns it.
+ * An empty array raises the index error, as a[-1] would.
+ */
+export extern function pop(this arr: string[]): string from "&msStringArrayPop";
+
+/**
+ * Removes the first element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
+export extern function shift(this arr: string[]): string from "&msStringArrayShift";
+
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
+export extern function indexOf(this arr: Vec<string>, value: string): number from "&msStringArrayIndexOf";
+
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
+export extern function includes(this arr: Vec<string>, value: string): boolean from "&msStringArrayIncludes";
+
+/**
+ * Returns a copy of a section of an array.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
+export extern function slice(this arr: Vec<string>, start: number, end: number = 9007199254740991): string[] from "&msStringArraySlice";
+
+/**
+ * Combines two or more arrays.
+ * This method returns a new array without modifying any existing arrays.
+ */
+export extern function concat(this arr: Vec<string>, other: string[]): string[] from "&msStringArrayConcat";
+
+/**
+ * Reverses the elements in an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
+export extern function reverse(this arr: string[]): void from "&msStringArrayReverse";
+
+/**
+ * Sorts an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
+export extern function sort(this arr: string[]): void from "&msStringArraySort";
+
+/** Changes all array elements to a static value. */
+export extern function fill(this arr: string[], value: string): void from "&msStringArrayFill";
+
+/** Returns the number of occurrences of a value in an array. */
+export extern function count(this arr: Vec<string>, value: string): number from "&msStringArrayCount";
+
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
+export extern function join(this arr: Vec<string>, sep: string): string from "&msStringArrayJoin";
+
+/** Sets the length of the array. */
+export extern function setLength(this arr: string[], newLen: number): void from "&msStringArraySetLen";
+
+/** Returns the allocated capacity of the array buffer. */
+export extern function capacity(this arr: Vec<string>): number from "&msStringArrayCapacity";
+
+/** Removes deleteCount elements starting at index start. */
+export extern function splice(this arr: string[], start: number, deleteCount: number): void from "&msStringArraySplice";
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: string[], start: number, deleteCount: number, item: string): void from "&msStringArraySplice3";
+
+// ===== Byte/Bool Array (boolean[] shares the msUint8Array representation) =====
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: uint8[], start: number, deleteCount: number, item: uint8): void from "&msUint8ArraySplice3";
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: boolean[], start: number, deleteCount: number, item: boolean): void from "&msUint8ArraySplice3";
+
+// ===== Generic Array (matches any T[] not covered by number[]/string[]) =====
+// Uses msGenericArray* macros which work with any MS_ARRAY(T) typedef.
+// These are C macros (not functions) that use sizeof(arr->p->data[0]) for type safety.
+
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
+export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+
+/**
+ * Removes the last element from an array and returns it.
+ * An empty array raises the index error, as a[-1] would.
+ */
+export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
+
+extern function checkedIndex<T>(this arr: Vec<T>, idx: number): int64 from "&msGenericArrayCheckedIndex";
+
+/** Returns a copy of the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
+export function at<T>(this arr: Vec<T>, idx: number): T {
+	const element = arr[arr.checkedIndex(idx)];
+	return element;
+}
+
+extern function growLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+
+/** Sets the length of the array. Shrinking destroys every evicted element. */
+export function setLength<T>(this arr: T[], newLen: number): void {
+	const n = newLen < 0 ? 0 : newLen;
+	while (arr.length > n) {
+		arr.pop();
+	}
+	arr.growLength(n);
+}
+
+/** Returns the allocated capacity of the array buffer. */
+export extern function capacity<T>(this arr: Vec<T>): number from "&msGenericArrayCapacity";
+
+/** Removes deleteCount elements starting at index start. */
+export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
+	const n = arr.length;
+	if (start < 0 || start >= n || deleteCount <= 0) return;
+	const k = start + deleteCount > n ? n - start : deleteCount;
+	let i = start;
+	while (i + k < n) {
+		arr[i] = arr[i + k];
+		i = i + 1;
+	}
+	arr.setLength(n - k);
+}
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
+
+/**
+ * Calls a function on every element in order and returns the results as a new array.
+ * @param fn Mapper receiving the element and its index.
+ */
+export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
+	const out: U[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		out.push(fn(arr[i], i));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function join<T>(this arr: Vec<T>, sep: string): string {
+	let out = "";
+	let i = 0;
+	while (i < arr.length) {
+		if (i > 0) out = out + sep;
+		out = out + `${arr[i]}`;
+		i = i + 1;
+	}
+	return out;
+}
+
+/**
+ * Returns a copy of a section of an array.
+ * Generic over element type — monomorphized per T, element-wise copy. The
+ * number[]/string[] overloads above bind first and stay memcpy-fast.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
+export function slice<T>(this arr: Vec<T>, start: number, end: number = 9007199254740991): T[] {
+	const n = arr.length;
+	let lo = start < 0 ? n + start : start;
+	let hi = end < 0 ? n + end : end;
+	if (lo < 0) { lo = 0; }
+	if (hi > n) { hi = n; }
+	const out: T[] = [];
+	let i = lo;
+	while (i < hi) {
+		out.push(arr[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
+/** Copies a range of a byte view into a new owned array, like `Uint8Array.prototype.slice`. */
+export function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] {
+	const n = view.length;
+	let lo = start < 0 ? n + start : start;
+	let hi = end < 0 ? n + end : end;
+	if (lo < 0) { lo = 0; }
+	if (hi > n) { hi = n; }
+	const out: uint8[] = [];
+	let i = lo;
+	while (i < hi) {
+		out.push(view[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
+/** Returns the index of the first occurrence of a value, or -1 if absent. */
+export function indexOf<T>(this arr: Vec<T>, value: T): number {
+	const n = arr.length;
+	let i = 0;
+	while (i < n) {
+		if (arr[i] == value) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+/** Returns true when the array contains the value. */
+export function includes<T>(this arr: Vec<T>, value: T): boolean {
+	const n = arr.length;
+	let i = 0;
+	while (i < n) {
+		if (arr[i] == value) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
+export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
+	const n = view.length;
+	let i = 0;
+	while (i < n) {
+		if (view[i] == value) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean {
+	return view.indexOf(value) >= 0;
+}
+
+/** Counts occurrences of a value. */
+export function count<T>(this arr: Vec<T>, value: T): number {
+	const n = arr.length;
+	let c = 0;
+	let i = 0;
+	while (i < n) {
+		if (arr[i] == value) c = c + 1;
+		i = i + 1;
+	}
+	return c;
+}
+
+/** Fills every existing slot with the value in place. */
+export function fill<T>(this arr: T[], value: T): void {
+	const n = arr.length;
+	let i = 0;
+	while (i < n) {
+		arr[i] = value;
+		i = i + 1;
+	}
+}
+
+/** Reverses the array in place. */
+export function reverse<T>(this arr: T[]): void {
+	let lo = 0;
+	let hi = arr.length - 1;
+	while (lo < hi) {
+		const tmp = arr[lo];
+		arr[lo] = arr[hi];
+		arr[hi] = tmp;
+		lo = lo + 1;
+		hi = hi - 1;
+	}
+}
+
+/** Removes and returns the first element, shifting the rest down. */
+export function shift<T>(this arr: T[]): T {
+	const first = arr[0];
+	const n = arr.length;
+	let i = 1;
+	while (i < n) {
+		arr[i - 1] = arr[i];
+		i = i + 1;
+	}
+	arr.setLength(n - 1);
+	return first;
+}
+
+/** Returns a new array holding the elements of both arrays. */
+export function concat<T>(this arr: Vec<T>, other: T[]): T[] {
+	const out: T[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		out.push(arr[i]);
+		i = i + 1;
+	}
+	let j = 0;
+	while (j < other.length) {
+		out.push(other[j]);
+		j = j + 1;
+	}
+	return out;
+}
+
+// ===== Zero-Copy Bridge (uint8[] → string) =====
+
+/** Returns the byte array as a string (zero-copy). */
+@builtin("AsString")
+export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";
+
+export function asString(this view: Readonly<Span<uint8>>): string {
+	return view.slice(0).asString();
+}

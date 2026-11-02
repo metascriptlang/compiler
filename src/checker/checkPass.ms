@@ -26,7 +26,7 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerPreludeSubCtx, preludeSubCtxOf, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -3500,6 +3500,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		openScope(subCtx.table, ScopeKind.Module);
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
+		registerPreludeSubCtx(ctx, subResolved, subCtx);
 
 		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
@@ -3788,23 +3789,26 @@ export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string)
 	_graphPreludeFn = fn;
 }
 
-export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
-	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|");
+// `fromSource` builds the prelude without the disk pack: a pack hit carries no sub-module scopes,
+// and a checker with no module graph needs them to re-check a std generic that calls a private
+// helper of its own sub-module.
+export function preludeContextFor(stdPath: string, backendExt: string, fromSource: boolean = false): CheckerContext {
+	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|") + (fromSource ? "|source" : "");
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
-		shared = buildSharedPrelude(stdPath, backendExt);
+		shared = buildSharedPrelude(stdPath, backendExt, fromSource);
 		_preludeCtxByKey.set(key, shared);
 	}
 	replayPreludeContributions(shared);
 	return packContentView(shared.ctx);
 }
 
-function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
+function buildSharedPrelude(stdPath: string, backendExt: string, fromSource: boolean): SharedPrelude {
 	const typeInstMark = genericTypeInstMark();
 	const duMark = duVariantMark();
 	const ctorMark = ctorDefaultsMark();
 	const outerDispatch = startDispatchCapture();
-	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	const ctx = fromSource && extraGlobalImports().length == 0 ? checkPreludeFromSource(stdPath, backendExt) : _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
 	const typeInstances = takeGenericTypeInstsFrom(typeInstMark);
 	for (const row of typeInstances) row.prelude = true;
 	return {
@@ -3853,7 +3857,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 function standalonePreludeCtx(): CheckerContext {
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "";
-	return preludeContextFor(stdPath, ".cms");
+	return preludeContextFor(stdPath, ".cms", true);
 }
 
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools
@@ -5797,6 +5801,26 @@ test "a module numbers its template locals in its own context, whatever was chec
 	assert templateLocalsOfOneCheck() == first;
 }
 
+test "the standalone prelude keeps a std sub-module's private declarations when a prelude pack is warm" {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	// The pack is written by the first build and hit by the second; the standalone prelude is then
+	// rebuilt in the presence of that warm pack.
+	const _cold = buildPreludeContext(stdPath, ".cms");
+	const _warm = buildPreludeContext(stdPath, ".cms");
+	const base = ".cms|" + stdPath + "|" + extraGlobalImports().join("|");
+	const savedPlain = _preludeCtxByKey.get(base);
+	const savedSource = _preludeCtxByKey.get(base + "|source");
+	_preludeCtxByKey.delete(base);
+	_preludeCtxByKey.delete(base + "|source");
+	const ok = preludeSubCtxOf(standalonePreludeCtx(), join(stdPath, "core/structKernel.ms")) != null
+		&& checkOk("const m = new Map<string, number>(); m.set('a', 1); const v = m.get('a');");
+	_preludeCtxByKey.delete(base);
+	_preludeCtxByKey.delete(base + "|source");
+	if (savedPlain != null) _preludeCtxByKey.set(base, savedPlain);
+	if (savedSource != null) _preludeCtxByKey.set(base + "|source", savedSource);
+	assert ok;
+}
+
 test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
 	env.set("MSC_NO_PRELUDE_PACK", "1");
 	try {
@@ -5816,7 +5840,7 @@ function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
 }
 
 test "an instance requested from inside a prelude generic body stays with the requesting module, so a second check against the same prelude queues it again" {
-	const prelude = buildPreludeContext(join(resolveRuntimeDir(), "std"));
+	const prelude = preludeContextFor(join(resolveRuntimeDir(), "std"), ".cms", true);
 	const scopeSize = prelude.table.current.symbols.size;
 	for (const src of ["const m = new Map<string, int32>();\nm.set(\"k\", 1);\n", "const s = new HashSet<string>([\"a\"]);\nconsole.log(s.size);\n"]) {
 		const first = pendingCountOfCheck(prelude, src);

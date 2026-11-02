@@ -1,0 +1,245 @@
+// std/fs — File System (Node.js Backend)
+// Mirrors the C backend API (std/fs/index.cms) using Node.js built-ins.
+// Returns Result<T, IoError> for fallible operations.
+//
+// The C twin reads `msFsLastErrno()` after each primitive and classifies
+// through io/errors `ioErrorFromErrno`. Node surfaces the same libuv failure
+// as an exception carrying the POSIX `code` name, so each primitive is
+// wrapped once (`errnoOf`) to recover the errno number and the SAME table
+// classifies on both backends - no second error taxonomy on js.
+
+@import("node:fs", {
+	readFileSync, writeFileSync, appendFileSync, existsSync, statSync, accessSync,
+	mkdirSync, rmdirSync, unlinkSync, renameSync, symlinkSync, readdirSync, chmodSync, realpathSync,
+});
+
+import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+
+extern function readFileSync(path: string, encoding: string): string;
+extern function writeFileSync(path: string, data: string): void;
+extern function appendFileSync(path: string, data: string): void;
+extern function existsSync(path: string): boolean;
+extern function realpathSync(path: string): string;
+extern function statSync(path: string): Stats;
+extern function accessSync(path: string, mode: number): void;
+extern function mkdirSync(path: string): void;
+extern function rmdirSync(path: string): void;
+extern function unlinkSync(path: string): void;
+extern function renameSync(oldPath: string, newPath: string): void;
+extern function symlinkSync(target: string, path: string): void;
+extern function readdirSync(path: string): string[];
+extern function chmodSync(path: string, mode: int32): void;
+
+// node `fs.Stats` - only the members the C twin's stat() path exposes.
+interface Stats {
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+	dev: number;
+	ino: number;
+	isFile: () => boolean;
+	isDirectory: () => boolean;
+}
+
+// node system errors carry the POSIX name in `code` (`err.errno` is the
+// libuv value and differs per platform, so it is not the portable key).
+function nodeErrorCode(e: Error): string {
+	@emit(`return typeof ${e}.code === "string" ? ${e}.code : "";`);
+	unreachable;
+}
+
+// POSIX errno for a node exception - the values `ioErrorFromErrno` keys on.
+// 0 = unmapped, which makes the caller fall through to the same
+// writeFailed/readFailed fallback the C twin uses when errno is 0.
+function errnoOf(e: Error): number {
+	const code = nodeErrorCode(e);
+	return match (code) {
+		"ENOENT" => 2,
+		"EACCES" => 13,
+		"EEXIST" => 17,
+		"ENOTDIR" => 20,
+		"EISDIR" => 21,
+		_ => 0,
+	};
+}
+
+// ===== Result-returning API (primary) =====
+
+export function readFile(path: string): Result<string, IoError> {
+	try {
+		return Result.ok(readFileSync(path, "utf-8"));
+	} catch (e) {
+		return Result.err(ioErrorFromErrno(errnoOf(e), path));
+	}
+}
+
+export function writeFile(path: string, content: string): Result<void, IoError> {
+	try {
+		writeFileSync(path, content);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+}
+
+export function appendFile(path: string, content: string): Result<void, IoError> {
+	try {
+		appendFileSync(path, content);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "append failed"));
+	}
+}
+
+// Change POSIX permission bits on a path. Mode is passed as a decimal int32
+// (e.g. 384 for rw------- = 0600). No-op on Windows.
+export function chmod(path: string, mode: int32): Result<void, IoError> {
+	try {
+		chmodSync(path, mode);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "chmod failed"));
+	}
+}
+
+// Same contract as the C runtime's msFsMkdir: an already-existing directory
+// is success, not an error.
+export function mkdir(path: string): Result<void, IoError> {
+	try {
+		mkdirSync(path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err == 17) return Result.ok(null);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "mkdir failed"));
+	}
+}
+
+export function rmdir(path: string): Result<void, IoError> {
+	try {
+		rmdirSync(path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "rmdir failed"));
+	}
+}
+
+export function remove(path: string): Result<void, IoError> {
+	try {
+		unlinkSync(path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "remove failed"));
+	}
+}
+
+
+export function symlink(target: string, path: string): Result<void, IoError> {
+	try {
+		symlinkSync(target, path);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "symlink failed"));
+	}
+}
+
+export function rename(oldPath: string, newPath: string): Result<void, IoError> {
+	try {
+		renameSync(oldPath, newPath);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, oldPath));
+		return Result.err(writeFailed(oldPath, "rename failed"));
+	}
+}
+
+// ===== Predicates (stay as boolean — not fallible) =====
+// stat() failure is `false` / -1, the same as the C runtime's stat() path.
+
+export function exists(path: string): boolean { return existsSync(path); }
+
+export function realpath(path: string): string {
+	try { return realpathSync(path); } catch (e) { return ""; }
+}
+
+export function isFile(path: string): boolean {
+	try { return statSync(path).isFile(); } catch (e) { return false; }
+}
+
+export function isDir(path: string): boolean {
+	try { return statSync(path).isDirectory(); } catch (e) { return false; }
+}
+
+// access(X_OK) - the POSIX constant is 1 (fs.constants.X_OK).
+export function isExecutable(path: string): boolean {
+	try { accessSync(path, 1); return true; } catch (e) { return false; }
+}
+
+export function fileSize(path: string): number {
+	try { return statSync(path).size; } catch (e) { return -1; }
+}
+
+export function modifiedTime(path: string): number {
+	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
+}
+
+export function changeStamp(path: string): string {
+	try {
+		const s = statSync(path);
+		return s.ctimeMs == 0 ? "" : `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+	} catch (e) { return ""; }
+}
+
+// List directory entries. Directories have a trailing "/" marker.
+// "." and ".." are always excluded. Returns an empty list on error or
+// when the directory is empty — callers that need to distinguish should
+// check `exists(path) && isDir(path)` first.
+export function readDir(path: string): string[] {
+	const result: string[] = [];
+	let names: string[] = [];
+	try { names = readdirSync(path); } catch (e) { return result; }
+	for (const name of names) {
+		result.push(isDir(path + "/" + name) ? name + "/" : name);
+	}
+	return result;
+}
+
+// ===== Composed utilities =====
+
+
+
+
+export function ensureDir(path: string): Result<void, IoError> {
+	if (existsSync(path)) return Result.ok(null);
+	let i = 0;
+	while (i < path.length) {
+		if (path.charCodeAt(i) == "/".code) {
+			if (i > 0) {
+				const prefix = path.slice(0, i);
+				if (!existsSync(prefix)) {
+					const mkResult = mkdir(prefix);
+					if (!mkResult.ok) return mkResult;
+				}
+			}
+		}
+		i = i + 1;
+	}
+	if (!existsSync(path)) {
+		return mkdir(path);
+	}
+	return Result.ok(null);
+}

@@ -1,0 +1,101 @@
+// MetaScript Array Prelude — JavaScript Backend.
+// Array methods bind to native JS dispatch as element-typed UFCS extensions on
+// T[]. The `extern class Array` method form does NOT resolve for arrays (array
+// types carry an empty typeName, so the class-method path is never taken); only
+// `this arr: T[]` extensions reach the checker. Keep this UFCS shape.
+
+import { needsCopy } from "std/typetraits";
+
+export class Array<T> {
+	length: number;
+}
+
+export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
+export function pop<T>(this arr: T[]): T {
+	const last = arr[arr.length - 1];
+	@emit(`${arr}.pop();`);
+	return last;
+}
+export extern function shift<T>(this arr: T[]): T from "#.shift()";
+function checkedIndex<T>(this arr: Vec<T>, idx: number): int64 {
+	@emit(`var n = ${arr}.length, x = Math.trunc(${idx});
+	return x < 0 && x >= -n ? n + x : x;`);
+	unreachable;
+}
+export function at<T>(this arr: Vec<T>, idx: number): T {
+	return arr[arr.checkedIndex(idx)];
+}
+export extern function indexOf<T>(this arr: Vec<T>, value: T): number from "#.indexOf(#)";
+export extern function includes<T>(this arr: Vec<T>, value: T): boolean from "#.includes(#)";
+export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
+	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
+	return i >= 0 && i < ${view}.off + ${view}.len ? i - ${view}.off : -1;`);
+	unreachable;
+}
+export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean {
+	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
+	return i >= 0 && i < ${view}.off + ${view}.len;`);
+	unreachable;
+}
+export extern function slice<T>(this arr: Vec<T>, start: number, end: number = 9007199254740991): T[] from "#.slice(#, #)";
+export function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] {
+	@emit(`return Array.from(${view}.base.slice(${view}.off, ${view}.off + ${view}.len).slice(${start}, ${end}));`);
+	unreachable;
+}
+export extern function concat<T>(this arr: Vec<T>, other: T[]): T[] from "#.concat(#)";
+export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
+// Typed overloads mirroring kernel.cms — bare native sort() is LEXICOGRAPHIC,
+// wrong for numbers.
+export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
+export extern function sort(this arr: string[]): void from "#.sort()";
+export function fill<T>(this arr: T[], value: T): void {
+	when (needsCopy<T>()) {
+		for (let i = 0; i < arr.length; i += 1) {
+			arr[i] = value;
+		}
+	} else {
+		arr.fillShared(value);
+	}
+}
+extern function fillShared<T>(this arr: T[], value: T): void from "#.fill(#)";
+export extern function join<T>(this arr: Vec<T>, sep: string): string from "#.join(#)";
+export extern function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] from "#.map(#)";
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "#.splice(#, #)";
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number, sink item: T): void from "#.splice(#, #, #)";
+// Truncate/extend in place, mirroring kernel.cms. Native `length =` shrinks
+// identically; on the GROW path C zero-fills the new slots while JS leaves
+// holes that read as undefined, so callers that extend must write every new
+// index themselves (std/core/array/kernel.rms does exactly that).
+export extern function setLength<T>(this arr: T[], newLen: number): void from "#.length = #";
+
+export function count<T>(this arr: Vec<T>, value: T): number {
+	const n = arr.length;
+	let c = 0;
+	let i = 0;
+	while (i < n) {
+		if (arr[i] == value) c = c + 1;
+		i = i + 1;
+	}
+	return c;
+}
+
+export function capacity<T>(this arr: Vec<T>): number {
+	return arr.length;
+}
+// WTF-8 decode — 3-byte sequences may decode to lone surrogates (round-trip).
+export function asString(this arr: Readonly<uint8[]>): string {
+	@emit(`var b = ${arr}, r = "", i = 0;
+	while (i < b.length) {
+		var x = b[i];
+		if (x < 128) { r += String.fromCharCode(x); i++; }
+		else if (x < 224) { r += String.fromCharCode(((x & 31) << 6) | (b[i+1] & 63)); i += 2; }
+		else if (x < 240) { r += String.fromCharCode(((x & 15) << 12) | ((b[i+1] & 63) << 6) | (b[i+2] & 63)); i += 3; }
+		else { var cp = ((x & 7) << 18) | ((b[i+1] & 63) << 12) | ((b[i+2] & 63) << 6) | (b[i+3] & 63); cp -= 65536; r += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); i += 4; }
+	}
+	return r;`);
+	unreachable;
+}
+
+export function asString(this view: Readonly<Span<uint8>>): string {
+	return view.slice(0).asString();
+}

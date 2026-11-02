@@ -1,0 +1,35 @@
+// std/os — Raiser tier: what derives from the std/process bridges (Tier 2).
+// hostname, cpus, memory, uptime and release read host state and have no bridge.
+
+import { env, platform as hostPlatform } from "../process";
+
+extern struct CpuInfo {
+	model: string;
+	speed: int32;
+}
+
+export function homeDir(): string {
+	return env.get(hostPlatform == "windows" ? "USERPROFILE" : "HOME");
+}
+
+export extern function hostname(): string from "msOsHostname";
+export extern function platform(): string from "msOsPlatform";
+export extern function arch(): string from "msOsArch";
+export extern function type(): string from "msOsType";
+export extern function release(): string from "msOsRelease";
+export extern function machine(): string from "msOsMachine";
+export extern function cpuCount(): int32 from "msOsCpuCount";
+export extern function totalMem(): int64 from "msOsTotalMem";
+export extern function freeMem(): int64 from "msOsFreeMem";
+export extern function tmpDir(): string from "msOsTmpdir";
+export extern function uptime(): number from "msOsUptime";
+export extern function endianness(): string from "msOsEndianness";
+
+extern function fillCpus(out buf: Span<CpuInfo>): int32 from "msOsCpus";
+
+export function cpus(): CpuInfo[] {
+	const count = cpuCount();
+	const result = new Array<CpuInfo>(count);
+	fillCpus(result);
+	return result;
+}

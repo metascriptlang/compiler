@@ -1,0 +1,15 @@
+// ===== Operators =====
+
+export function `==`(this a: string, b: string): boolean {
+	@emit(`return ${a} === ${b};`);
+	unreachable;
+}
+export function `<`(this a: string, b: string): boolean {
+	@emit(`return ${a} < ${b};`);
+	unreachable;
+}
+export function `<=`(this a: string, b: string): boolean {
+	@emit(`return ${a} <= ${b};`);
+	unreachable;
+}
+// Derived operators (!=, >, >=) come from the system templates.

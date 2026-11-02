@@ -1,0 +1,158 @@
+// MetaScript Map / Set — JavaScript backend.
+//
+// Bound to native JS Map / Set (reference parity: Nim's importjs). The
+// `extern class` form suppresses codegen so `new Map<K,V>()` reaches the
+// global Map constructor untouched. Method dispatch goes through
+// emitCallExpr's pattern substitutor — the `#` / `@` / `$1` placeholders in
+// `from "..."` strings are documented in src/codegen/js/expressions.ms.
+//
+// MS name === JS name is the convention here. A `from "JsName"` clause on
+// extern class would be required to bind to a differently-named global.
+
+@builtin("StdSet")
+export extern class Set<T> {
+	size: number;
+}
+
+export extern function add<T>(this s: Set<T>, value: T): void from "#.add(#)";
+export extern function has<T>(this s: Set<T>, value: T): boolean from "#.has(#)";
+export extern function delete<T>(this s: Set<T>, value: T): boolean from "#.delete(#)";
+export extern function clear<T>(this s: Set<T>): void from "#.clear()";
+export extern function forEach<T>(this s: Set<T>, fn: (value: T) => void): void from "#.forEach(#)";
+
+@builtin("IndexableMap")
+export extern class Map<K, V> {
+	size: number;
+}
+
+export extern function set<K, V>(this m: Map<K, V>, key: K, sink value: V): void from "#.set(#, #)";
+export extern function get<K, V>(this m: Map<K, V>, key: K): V | null from "(#.get(#) ?? null)";
+export extern function has<K, V>(this m: Map<K, V>, key: K): boolean from "#.has(#)";
+export extern function delete<K, V>(this m: Map<K, V>, key: K): boolean from "#.delete(#)";
+export extern function clear<K, V>(this m: Map<K, V>): void from "#.clear()";
+export extern function keys<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
+export extern function values<K, V>(this m: Map<K, V>): V[] from "Array.from(#.values())";
+export extern function toItems<K, V>(this m: Map<K, V>): K[] from "Array.from(#.keys())";
+export extern function toPairs<K, V>(this m: Map<K, V>): Array<[K, V]> from "Array.from(#.entries())";
+export extern function forEach<K, V>(this m: Map<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
+
+// HashMap/HashSet promise NO iteration order; native insertion order is a
+// permitted strengthening (STRING-CONTRACT §5). C keeps open addressing.
+@emit("const HashMap = Map;");
+@emit("const HashSet = Set;");
+
+@builtin("IndexableMap")
+export extern class HashMap<K, V> {
+	size: number;
+}
+
+export extern function set<K, V>(this m: HashMap<K, V>, key: K, sink value: V): void from "#.set(#, #)";
+export extern function get<K, V>(this m: HashMap<K, V>, key: K): V | null from "(#.get(#) ?? null)";
+export extern function has<K, V>(this m: HashMap<K, V>, key: K): boolean from "#.has(#)";
+export extern function delete<K, V>(this m: HashMap<K, V>, key: K): boolean from "#.delete(#)";
+export extern function clear<K, V>(this m: HashMap<K, V>): void from "#.clear()";
+export extern function keys<K, V>(this m: HashMap<K, V>): K[] from "Array.from(#.keys())";
+export extern function values<K, V>(this m: HashMap<K, V>): V[] from "Array.from(#.values())";
+export extern function toItems<K, V>(this m: HashMap<K, V>): K[] from "Array.from(#.keys())";
+export extern function toPairs<K, V>(this m: HashMap<K, V>): Array<[K, V]> from "Array.from(#.entries())";
+export extern function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
+
+export extern function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+
+@builtin("StdSet")
+export extern class HashSet<T> {
+	size: number;
+}
+
+export extern function add<T>(this s: HashSet<T>, value: T): void from "#.add(#)";
+export extern function has<T>(this s: HashSet<T>, value: T): boolean from "#.has(#)";
+export extern function delete<T>(this s: HashSet<T>, value: T): boolean from "#.delete(#)";
+export extern function clear<T>(this s: HashSet<T>): void from "#.clear()";
+export extern function toItems<T>(this s: HashSet<T>): T[] from "Array.from(#.values())";
+export extern function forEach<T>(this s: HashSet<T>, fn: (value: T) => void): void from "#.forEach(#)";
+export extern function toItems<T>(this s: Set<T>): T[] from "Array.from(#.values())";
+export extern function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: K): Readonly<V> | null from "(#.get(#) ?? null)";
+
+// ===== BitSet<E> =====
+// Same source as the native prelude: a set of enum members, bit position =
+// member ordinal, sized by the member count; the four operations are declared
+// without a body and lowered by tag before codegen.
+@builtin("SetHas")
+export extern function has<E>(this self: BitSet<E>, member: E): boolean;
+
+@builtin("SetIncl")
+export extern function incl<E>(this self: BitSet<E>, member: E): BitSet<E>;
+
+@builtin("SetExcl")
+export extern function excl<E>(this self: BitSet<E>, member: E): BitSet<E>;
+
+@builtin("SetIsEmpty")
+export extern function isEmpty<E>(this self: BitSet<E>): boolean;
+
+@builtin("SetUnion")
+export extern function union<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetIntersection")
+export extern function intersection<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetDifference")
+export extern function difference<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetSymmetricDifference")
+export extern function symmetricDifference<E>(this self: BitSet<E>, other: BitSet<E>): BitSet<E>;
+
+@builtin("SetIsSubsetOf")
+export extern function isSubsetOf<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetIsSupersetOf")
+export extern function isSupersetOf<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetIsDisjointFrom")
+export extern function isDisjointFrom<E>(this self: BitSet<E>, other: BitSet<E>): boolean;
+
+@builtin("SetSize")
+export extern function size<E>(this self: BitSet<E>): int32;
+
+export function toItems<E>(this self: BitSet<E>): E[] {
+	const result: E[] = [];
+	const count = self.size();
+	for (let i = 0; result.length < count; i++) {
+		const m = i as E;
+		if (self.has(m)) { result.push(m); }
+	}
+	return result;
+}
+
+export function toString<E>(this self: BitSet<E>): string {
+	const items = self.toItems();
+	let out = "{";
+	let i = 0;
+	while (i < items.length) {
+		if (i > 0) { out = out + ", "; }
+		out = out + items[i].toString();
+		i = i + 1;
+	}
+	return out + "}";
+}
+
+
+export function msSetCard32(v: uint32): int32 {
+	let n: uint32 = v;
+	let c: int32 = 0;
+	while (n != 0) {
+		if ((n & 1) != 0) { c = c + 1; }
+		n = n >> 1;
+	}
+	return c;
+}
+
+export function toItems<T>(this iter: Iterator<T>): T[] {
+	const result: T[] = [];
+	let r = iter.next();
+	while (!r.done) {
+		result.push(r.value);
+		r = iter.next();
+	}
+	return result;
+}

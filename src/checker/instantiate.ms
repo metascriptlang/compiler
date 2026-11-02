@@ -10,7 +10,7 @@ import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { splitTopLevel } from "../utils/string";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry, isFrameValue } from "./symbol";
+import { SymbolTable, lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry, isFrameValue } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -80,6 +80,26 @@ export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: 
 	_engineBodyCtxFn = fn;
 }
 
+// A prelude sub-module's own scope (its private helpers and consts) outlives its load, owned by
+// the prelude that loaded it: a generic declared there is re-checked in that scope, which no
+// graph module ctx holds when the prelude is used without a graph (checkProgram, the macro VM).
+// Keyed by the prelude's symbol table, the identity every view of one prelude shares.
+let _preludeSubCtxs: HashMap<SymbolTable, HashMap<string, CheckerContext>> = new HashMap<SymbolTable, HashMap<string, CheckerContext>>();
+
+export function registerPreludeSubCtx(prelude: CheckerContext, path: string, sub: CheckerContext): void {
+	let subs = _preludeSubCtxs.get(prelude.table);
+	if (subs == null) {
+		subs = new HashMap<string, CheckerContext>();
+		_preludeSubCtxs.set(prelude.table, subs);
+	}
+	subs.set(path, sub);
+}
+
+export function preludeSubCtxOf(prelude: CheckerContext, path: string): CheckerContext | null {
+	const subs = _preludeSubCtxs.get(prelude.table);
+	return subs != null ? subs.get(path) ?? null : null;
+}
+
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
 	if (isEngineCheckMode()) {
@@ -88,7 +108,10 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 	}
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining != null) return defining;
-	if (ctx.preludeCtx != null) return ctx.preludeCtx;
+	if (ctx.preludeCtx != null) {
+		const sub = preludeSubCtxOf(ctx.preludeCtx, definingModulePath);
+		return sub != null ? sub : ctx.preludeCtx;
+	}
 	return ctx;
 }
 

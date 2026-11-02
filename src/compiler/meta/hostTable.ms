@@ -1245,9 +1245,9 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const rmsFiles = [
-		join(stdPath, "core/string/index.rms"),
-		join(stdPath, "core/string/bytes.rms"),
-		join(stdPath, "core/array/index.rms"),
+		join(stdPath, "core/string/kernel.rms"),
+		join(stdPath, "core/string/operatorsKernel.ms"),
+		join(stdPath, "core/array/kernel.rms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [
@@ -1260,6 +1260,8 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	const knownDead: string[] = [
 		"msStringParseFloat", "msStringParseInt",         // parsing not in the shared tier
 		"msStringFromCodePoint",                          // needs a codepoint-to-UTF8 encoder
+		"msStringCapacity", "&msStringSetLength", "&msStringAppend",
+		"&msStringSetSlice", "&msStringStripInPlace",     // in-place string ops write through the receiver
 	];
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();

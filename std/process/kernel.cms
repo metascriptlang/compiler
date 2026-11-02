@@ -1,0 +1,213 @@
+/**
+ * Process — C/POSIX Backend
+ *
+ * Provides command-line arguments, process exit, working directory,
+ * shell execution, and environment variables.
+ *
+ * File I/O lives in `std/fs` (readFile/writeFile/exists/...).
+ * Wall-clock / monotonic time live in the `Date` / `performance` preludes.
+ */
+
+@include("runtime/process.h");
+
+import {
+	ProcessError,
+	spawnFailed, notFound, nonZeroExit, signalTerminated, pipeError,
+} from "./errors";
+
+extern function msProcessArgc(): number;
+extern function msProcessArgvAt(idx: number): string;
+extern function msProcessExit(code: number): void;
+extern function msProcessCwd(): string;
+extern function msProcessExecFile(path: string, args: string[]): number;
+extern function msProcessSpawnSync(command: string): string;
+extern function msProcSpawnGetExitCode(): int32;
+extern function msProcSpawnGetSignal(): int32;
+extern function msProcSpawnGetStderr(): string;
+extern function msProcSpawnGetOk(): int32;
+extern function msProcSpawnGetPipeOk(): int32;
+extern function msProcessGetEnv(name: string): string;
+extern function msProcessSetEnv(name: string, value: string): number;
+extern function msProcessUnsetEnv(name: string): number;
+extern function msProcessPlatform(): string;
+extern function msProcessArch(): string;
+
+// =============================================================================
+// Command-line arguments
+// =============================================================================
+
+function buildArgv(): string[] {
+	const result: string[] = [];
+	const count = msProcessArgc();
+	let i = 0;
+	while (i < count) {
+		result.push(msProcessArgvAt(i));
+		i += 1;
+	}
+	return result;
+}
+
+export const argv: string[] = buildArgv();
+
+// =============================================================================
+// Process control
+// =============================================================================
+
+export function exit(code: number): void {
+	msProcessExit(code);
+}
+
+// =============================================================================
+// Working directory
+// =============================================================================
+
+export function cwd(): string {
+	return msProcessCwd();
+}
+
+// =============================================================================
+// Shell execution
+// =============================================================================
+
+// Execute a shell command synchronously; capture stdout, stderr, exit status.
+//
+// Returns Result<string, ProcessError>:
+//   - Result.ok(stdout) on exit-code 0
+//   - Result.err(ProcessError) on spawn failure, non-zero exit, signal kill,
+//     or pipe error. ProcessError carries kind + exitCode + signal + stdout +
+//     stderr + message — caller pattern-matches on kind for granular handling.
+//
+// The command runs through /bin/sh (POSIX) or cmd.exe (Windows), so shell
+// features (pipes, redirects, glob, variable expansion) work naturally.
+// 16 MB cap per stream; longer outputs truncate.
+//
+// Naming convention: sync is the default in std/* — async variant would be
+// named `execAsync` (mirrors hashAsync, rsaGenerateAsync, etc.).
+export function exec(command: string): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSync(command);
+	const ok = msProcSpawnGetOk();
+	if (ok == 0) {
+		return Result.err(spawnFailed(command, "fork/exec failed"));
+	}
+	const pipeOk = msProcSpawnGetPipeOk();
+	if (pipeOk == 0) {
+		return Result.err(pipeError(command, "failed to drain stdout/stderr from child"));
+	}
+	const signal = msProcSpawnGetSignal();
+	const exitCode = msProcSpawnGetExitCode();
+	const stderrText = msProcSpawnGetStderr();
+	if (signal != 0) {
+		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
+	}
+	if (exitCode != 0) {
+		// Heuristic: exit-code 127 from /bin/sh -c "name ..." means command not found.
+		// Match shell convention so callers can pattern-match isNotFound() cleanly.
+		if (exitCode == 127) {
+			return Result.err(notFound(command));
+		}
+		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
+	}
+	return Result.ok(stdoutText);
+}
+
+// Run a binary directly (no shell). Mirrors Node.js `child_process.execFile`:
+// path is taken literally (no PATH search — use `findOnPath` first if needed),
+// args are passed as argv (POSIX) or assembled with MS-CRT quoting (Windows).
+// On Windows this bypasses cmd.exe entirely, so forward-slash paths like
+// "out/debug/hello.exe" work without normalization. Stdio inherits the parent.
+export function execFile(path: string, args: string[] = []): number {
+	return msProcessExecFile(path, args);
+}
+
+extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string): string;
+
+// Direct-argv counterpart of exec(): spawn `path` with `args` — no /bin/sh, no
+// cmd.exe — capturing stdout/stderr/exit/signal exactly like exec(). Same
+// Result<string, ProcessError> shape, so callers can swap exec() for this one
+// token at a time. The one difference: no exit-127 not-found heuristic (that
+// is a shell convention; here a missing binary reports as SpawnFailed).
+//
+// Prefer this over exec() whenever the command is assembled from tokens
+// (compilers, build tools) rather than written as a shell one-liner: without
+// a shell there is no quote-stripping, no 8191-char line cap, no AutoRun, and
+// no temptation to lean on shell-only syntax (`rm -f`, `2>/dev/null`).
+export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
+	const ok = msProcSpawnGetOk();
+	if (ok == 0) {
+		return Result.err(spawnFailed(path, "fork/exec failed"));
+	}
+	const pipeOk = msProcSpawnGetPipeOk();
+	if (pipeOk == 0) {
+		return Result.err(pipeError(path, "failed to drain stdout/stderr from child"));
+	}
+	const signal = msProcSpawnGetSignal();
+	const exitCode = msProcSpawnGetExitCode();
+	const stderrText = msProcSpawnGetStderr();
+	if (signal != 0) {
+		return Result.err(signalTerminated(path, signal, stdoutText, stderrText));
+	}
+	if (exitCode != 0) {
+		return Result.err(nonZeroExit(path, exitCode, stdoutText, stderrText));
+	}
+	return Result.ok(stdoutText);
+}
+
+export interface ExecFileResult {
+	started: boolean;
+	pipeOk: boolean;
+	exitCode: int32;
+	signal: int32;
+	output: string;
+	errorOutput: string;
+}
+
+// Like execFileCapture, but a child that ran reports every stream and status
+// whatever its exit code � `started` is false only when it never ran.
+export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
+	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
+	return {
+		started: msProcSpawnGetOk() != 0,
+		pipeOk: msProcSpawnGetPipeOk() != 0,
+		exitCode: msProcSpawnGetExitCode(),
+		signal: msProcSpawnGetSignal(),
+		output: stdoutText,
+		errorOutput: msProcSpawnGetStderr(),
+	};
+}
+
+// =============================================================================
+// Environment variables
+// =============================================================================
+
+// Namespaced env API — Deno-style.
+export class env {
+	static get(name: string): string {
+		return msProcessGetEnv(name);
+	}
+
+	static set(name: string, value: string): boolean {
+		return msProcessSetEnv(name, value) != 0.0;
+	}
+
+	static delete(name: string): boolean {
+		return msProcessUnsetEnv(name) != 0.0;
+	}
+}
+
+// Time primitives moved to std/core/date (Date.now() — wall-clock) and
+// std/core/performance (performance.now() — monotonic) — both preludes,
+// no import needed.
+
+// =============================================================================
+// Platform detection
+// =============================================================================
+//
+// Matches Node/Bun/Deno: single string identifier, resolved once at module load.
+// Values: "windows" | "darwin" | "linux" | "other". Compare with `platform === "..."`.
+
+export const platform: string = msProcessPlatform();
+
+// The CPU this program was compiled for, in `--cpu` spelling: "amd64" | "arm64" | "i386" |
+// "arm" | "wasm32" | "riscv64" | "other".
+export const arch: string = msProcessArch();

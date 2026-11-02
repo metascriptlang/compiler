@@ -1,0 +1,32 @@
+// std/os — System information (Node.js os module parity)
+
+@include("runtime/os.h");
+
+extern struct CpuInfo {
+	model: string;
+	speed: int32;
+}
+
+export extern function hostname(): string from "msOsHostname";
+export extern function platform(): string from "msOsPlatform";
+export extern function arch(): string from "msOsArch";
+export extern function type(): string from "msOsType";
+export extern function release(): string from "msOsRelease";
+export extern function machine(): string from "msOsMachine";
+export extern function cpuCount(): int32 from "msOsCpuCount";
+export extern function totalMem(): int64 from "msOsTotalMem";
+export extern function freeMem(): int64 from "msOsFreeMem";
+export extern function uptime(): number from "msOsUptime";
+export extern function homeDir(): string from "msOsHomedir";
+export extern function tmpDir(): string from "msOsTmpdir";
+export extern function endianness(): string from "msOsEndianness";
+
+// Span expansion: CpuInfo* buf, int64_t buf_len → out buf: Span<CpuInfo>
+extern function fillCpus(out buf: Span<CpuInfo>): int32 from "msOsCpus";
+
+export function cpus(): CpuInfo[] {
+	const count = cpuCount();
+	const result = new Array<CpuInfo>(count);
+	fillCpus(result);
+	return result;
+}

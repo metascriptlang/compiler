@@ -1,0 +1,271 @@
+// MetaScript String Kernel — JavaScript Backend
+// string = native JS string (docs/STRING-CONTRACT.md §3).
+
+export function msStringCompare(a: string, b: string): int32 {
+	@emit(`return ${a} < ${b} ? -1 : (${a} > ${b} ? 1 : 0);`);
+	unreachable;
+}
+
+export function msStringEquals(a: string, b: string): boolean {
+	@emit(`return ${a} === ${b};`);
+	unreachable;
+}
+
+// ===== Character Construction =====
+
+export function fromCharCode(this typeof String, code: int32): string {
+	@emit(`return globalThis.String.fromCharCode(Number(${code}) & 0xFFFF);`);
+	unreachable;
+}
+
+// ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
+
+export function charAt(this s: string, idx: int32): string {
+	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
+	unreachable;
+}
+
+export function charCodeAt(this s: string, idx: int32): int32 {
+	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? -1 : ${s}.charCodeAt(${idx});`);
+	unreachable;
+}
+
+export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	@emit(`return ${s}.indexOf(${sub}, ${start});`);
+	unreachable;
+}
+
+export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
+	@emit(`return ${startIdx} < 0 ? ${s}.lastIndexOf(${sub}) : ${s}.lastIndexOf(${sub}, ${startIdx});`);
+	unreachable;
+}
+
+export function slice(this s: string, start: int32, end: int32 = 2147483647): string {
+	@emit(`return ${s}.slice(${start}, ${end});`);
+	unreachable;
+}
+
+export function equals(this s: string, other: string): boolean {
+	return msStringEquals(s, other);
+}
+
+export function padStart(this s: string, targetLen: int32, pad: string): string {
+	@emit(`return ${s}.padStart(${targetLen}, ${pad});`);
+	unreachable;
+}
+
+export function padEnd(this s: string, targetLen: int32, pad: string): string {
+	@emit(`return ${s}.padEnd(${targetLen}, ${pad});`);
+	unreachable;
+}
+
+// strtod/strtoll parity: unparseable input is 0, never NaN.
+export function parseFloat(this s: string): number {
+	@emit(`var v = Number.parseFloat(${s}); return Number.isNaN(v) ? 0 : v;`);
+	unreachable;
+}
+
+// int64 is a BigInt on this backend, so the decimal text is parsed exactly by
+// BigInt() — Number.parseInt would round the value before it ever gets here.
+// The regex keeps parseInt's own tolerance (leading sign, surrounding space)
+// and its 0-for-garbage answer.
+export function parseInt(this s: string): int64 {
+	@emit(`var m = /^([+-]?\\d+)$/.exec(${s}.trim());
+if (m !== null) return BigInt(m[1]);
+var v = Number.parseInt(${s}, 10);
+return Number.isNaN(v) ? 0n : BigInt(v);`);
+	unreachable;
+}
+
+// Native strings carry no separate allocation — capacity is the byte length.
+export function capacity(this s: string): int32 {
+	return s.byteLength();
+}
+
+// ===== In-Place Mutators (surface parity only) =====
+// C's string is a mutable heap buffer, so setLength/append/setSlice/
+// stripInPlace exist in kernel.cms. js strings are native and immutable, so
+// these cannot rebind the caller's value: the names are declared for graph
+// check parity (every C-surface program compiles on js), but a call refuses
+// loudly instead of silently diverging.
+
+export function setLength(this s: string, newLen: int32): void {
+	@emit(`throw new Error("string.setLength(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function append(this s: string, other: string): void {
+	@emit(`throw new Error("string.append(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function setSlice(this s: string, start: number, end: number): void {
+	@emit(`throw new Error("string.setSlice(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function stripInPlace(this s: string): void {
+	@emit(`throw new Error("string.stripInPlace(): in-place string mutation is not available on the js backend (strings are native and immutable)");`);
+	unreachable;
+}
+
+export function fromCodePoint(cp: number): string {
+	@emit(`return (${cp} < 0 || ${cp} > 1114111) ? "" : String.fromCodePoint(${cp});`);
+	unreachable;
+}
+
+// Number/bool to string (called by builtinLower .toString())
+export function msNumberToString(n: number): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msNumberToStringRadix(n: number, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
+// 64-bit integer formatting. On C these take an int64/uint64 parameter so the
+// value never round-trips through a double; here every number is already a
+// double, so they are the same String()/toString() call. Exact int64 semantics
+// on this backend wait on the BigInt mapping — until then these exist so the
+// shared lowering can name one function for both backends.
+export function msIntToString(n: int64): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msUint64ToString(n: uint64): string {
+	@emit(`return String(${n});`);
+	unreachable;
+}
+
+export function msIntToStringRadix(n: int64, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
+export function msUint64ToStringRadix(n: uint64, radix: number): string {
+	@emit(`return ${n}.toString(${radix});`);
+	unreachable;
+}
+
+export function msBoolToString(b: boolean): string {
+	@emit(`return ${b} ? "true" : "false";`);
+	unreachable;
+}
+
+// String hash — DJB2 over WTF-8 bytes (matches C runtime msStringHash)
+export function msStringHash(s: string): int32 {
+	const sb = wtf8Cached(s);
+	let h: int32 = 5381;
+	for (let i = 0; i < sb.length; i += 1) {
+		h = (h * 33 + sb[i]) as int32;
+	}
+	return h;
+}
+
+// .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
+export function msStringLength(s: string): int32 {
+	@emit(`return ${s}.length;`);
+	unreachable;
+}
+
+export function msStringByteLength(s: string): int32 {
+	return wtf8Cached(s).length;
+}
+
+export function msStringByteAt(s: string, idx: int32): int32 {
+	return s.byteAt(idx);
+}
+
+// A hand-rolled WTF-8 encode cached per string — TextEncoder is banned: it
+// rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
+
+// ===== WTF-8 byte tier =====
+
+export function wtf8Cached(s: string): uint8[] {
+	@emit(`var g = globalThis.__msWtf8Cache || (globalThis.__msWtf8Cache = new Map());
+	var c = g.get(${s});
+	if (c !== undefined) return c;
+	var r = [], i = 0;
+	while (i < ${s}.length) {
+		var ch = ${s}.charCodeAt(i);
+		if (ch < 128) { r.push(ch); }
+		else if (ch < 2048) { r.push((ch >> 6) | 192, (ch & 63) | 128); }
+		else if (ch < 55296 || ch >= 57344) { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); }
+		else { var lo = ${s}.charCodeAt(i + 1); if (ch < 56320 && lo >= 56320 && lo < 57344) { i++; var cp2 = 65536 + (((ch & 1023) << 10) | (lo & 1023)); r.push((cp2 >> 18) | 240, ((cp2 >> 12) & 63) | 128, ((cp2 >> 6) & 63) | 128, (cp2 & 63) | 128); } else { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); } }
+		i++;
+	}
+	if (g.size >= 512) g.clear();
+	g.set(${s}, r);
+	return r;`);
+	unreachable;
+}
+
+// Fresh mutable copy — the cache entry must never escape.
+@builtin("AsBytes")
+export function asBytes(this s: string): Readonly<Span<uint8>> {
+	const c = wtf8Cached(s);
+	@emit(`return { base: ${c}.slice(), off: 0, len: ${c}.length };`);
+	unreachable;
+}
+
+export function byteLength(this s: string): int32 {
+	return wtf8Cached(s).length;
+}
+
+export function byteAt(this s: string, idx: int32): int32 {
+	const b = wtf8Cached(s);
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int32, end: int32): string {
+	const b = wtf8Cached(s);
+	const sub: uint8[] = [];
+	for (let i = start < 0 ? 0 : start; i < end && i < b.length; i += 1) {
+		sub.push(b[i]);
+	}
+	return sub.asString();
+}
+
+export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
+	const sb = s.asBytes();
+	const xb = sub.asBytes();
+	if (xb.length == 0) return start;
+	if (start > sb.length) return -1;
+	let i = start;
+	if (i < 0) i = 0;
+	while (i <= sb.length - xb.length) {
+		let found = true;
+		let j = 0;
+		while (j < xb.length) {
+			if (sb[i + j] != xb[j]) { found = false; break; }
+			j = j + 1;
+		}
+		if (found) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
+	const sb = s.asBytes();
+	const xb = sub.asBytes();
+	if (xb.length == 0) return sb.length;
+	if (xb.length > sb.length) return -1;
+	let i = sb.length - xb.length;
+	if (startIdx >= 0 && startIdx < i) i = startIdx;
+	while (i >= 0) {
+		let found = true;
+		let j = 0;
+		while (j < xb.length) {
+			if (sb[i + j] != xb[j]) { found = false; break; }
+			j = j + 1;
+		}
+		if (found) return i;
+		i = i - 1;
+	}
+	return -1;
+}

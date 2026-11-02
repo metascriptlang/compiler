@@ -1,0 +1,87 @@
+@include("runtime/crypto/hash.h");
+
+// mbedTLS include paths + minimal config
+@passC("-Iruntime/crypto");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+
+// Our crypto implementation
+@compile("runtime/crypto/hash.c");
+// psa_util.c is NOT compiled here: nothing in this module references any of its
+// exports (mbedtls_psa_get_random, mbedtls_ecdsa_{raw_to_der,der_to_raw}, …) —
+// its only callers are the PSA/TLS vendor sources, which std/crypto/tls owns.
+// Compiling it here made this module depend on symbols it does not compile
+// (psa_generate_random from psa_crypto.c, mbedtls_asn1_* from asn1{parse,write}.c),
+// all of which live in std/crypto/tls. See that file for the owner list.
+//
+// md.c still *references* three psa_util.c symbols from a function that is
+// compiled but never called here, so the COFF linker demands them even though
+// ELF strips the section. psaMdStubs.c supplies weak definitions; when
+// std/crypto/tls is alive its psa_util.c provides the strong ones and wins.
+@compile("runtime/crypto/psaMdStubs.c");
+
+// mbedTLS vendor sources (hash algorithms)
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ripemd160.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+// mbedtls_calloc / mbedtls_free live here and are real functions, not macros,
+// because the config sets MBEDTLS_PLATFORM_MEMORY. md.c and the sha256/sha512
+// self-tests call them, so this module does not link without platform.c.
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+
+// C bindings (private — wrapped by exported functions)
+
+// Initialization
+export extern function msCryptoInit(): boolean;
+export extern function msCryptoCleanup(): void;
+
+// Hashing
+export extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
+export extern function msCryptoHashBuffer(algorithm: string, data: string): string;
+
+// HMAC
+export extern function msCryptoHmacString(algorithm: string, key: string, data: string, encoding: string): string;
+export extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string): string;
+
+// Random
+export extern function msCryptoRandomBytes(size: number): string;
+export extern function msCryptoRandomInt(min: number, max: number): number;
+export extern function msCryptoRandomUuid(): string;
+
+// Timing-safe comparison
+export extern function msCryptoTimingSafeEqual(a: string, b: string): boolean;
+
+// Streaming hash (int64 handle wrappers)
+export extern function msCryptoHashInitHandle(algorithm: string): int64;
+export extern function msCryptoHashUpdateHandle(ctx: int64, data: string): void;
+export extern function msCryptoHashFinalHandle(ctx: int64, encoding: string): string;
+export extern function msCryptoHashFinalBufferHandle(ctx: int64): string;
+export extern function msCryptoHashFreeHandle(ctx: int64): void;
+
+// Streaming HMAC (int64 handle wrappers)
+export extern function msCryptoHmacInitHandle(algorithm: string, key: string): int64;
+export extern function msCryptoHmacUpdateHandle(ctx: int64, data: string): void;
+export extern function msCryptoHmacFinalHandle(ctx: int64, encoding: string): string;
+export extern function msCryptoHmacFinalBufferHandle(ctx: int64): string;
+export extern function msCryptoHmacFreeHandle(ctx: int64): void;
+
+// Utility
+export extern function msCryptoIsHashSupported(algorithm: string): boolean;
+
+// Encoding
+export extern function msCryptoToHex(data: string): string;
+export extern function msCryptoFromHex(hex: string): string;
+export extern function msCryptoToBase64(data: string): string;
+export extern function msCryptoFromBase64(b64: string): string;
+
+// Key Derivation
+export extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
+export extern function msCryptoHkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): string;

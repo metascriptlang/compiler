@@ -25,7 +25,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite hcr tests fmt corpus san guard solana"
 LADDER="build boundary suite hcr tests fmt corpus san guard solana"
 KNOWN_LANES="boundary suite hcr tests fmt corpus san guard solana"
-RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^std/.*\.ms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
 
@@ -1406,10 +1406,12 @@ src/raiser/vm.ms|raiser
 src/codegen/raiser/emit.ms|raiser
 src/transform/raiserLowering.ms|raiser
 std/core/date/index.rms|raiser
+std/core/math/kernel.ms|raiser
 src/test/corpus/run.ms|raiser
 src/checker/checkPass.ms|
 src/codegen/c/expressions.ms|
 std/core/date/index.cms|
+std/core/math/kernel.jms|
 CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
@@ -1773,7 +1775,7 @@ solana_replays() {
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+  for entry in std/solana/test.cms std/solana/index.ms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done

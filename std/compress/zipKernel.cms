@@ -1,0 +1,21 @@
+@passC("-Iruntime/compress");
+@compile("runtime/compress/zip.c");
+@compile("vendor/miniz/miniz.c");
+@compile("vendor/miniz/miniz_tinfl.c");
+@compile("vendor/miniz/miniz_tdef.c");
+@compile("vendor/miniz/miniz_zip.c");
+
+@include("runtime/compress/zip.h");
+
+export extern function msZipReaderOpen(data: string): int64;
+export extern function msZipReaderCount(handle: int64): int32;
+export extern function msZipReaderEntryName(handle: int64, index: int32): string;
+export extern function msZipReaderEntrySize(handle: int64, index: int32): int64;
+export extern function msZipReaderEntryIsDir(handle: int64, index: int32): int32;
+export extern function msZipReaderExtract(handle: int64, index: int32): string;
+export extern function msZipReaderClose(handle: int64): void;
+
+export extern function msZipWriterNew(): int64;
+export extern function msZipWriterAdd(handle: int64, name: string, data: string, level: int32): int32;
+export extern function msZipWriterFinalize(handle: int64): string;
+export extern function msZipWriterClose(handle: int64): void;
