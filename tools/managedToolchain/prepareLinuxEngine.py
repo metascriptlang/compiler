@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Prepare a relocatable native clang/lld engine bundle for Linux x86_64 from an installed LLVM and lld.
+"""Prepare a relocatable native clang/lld engine bundle for Linux x64 or ARM64 from an installed LLVM and lld.
 
     prepareLinuxEngine.py --llvm-root DIR --lld-root DIR --output NEW_DIR --patchelf PATH [--library-dir DIR ...]
     prepareLinuxEngine.py --verify BUNDLE_DIR [--inspector LLVM_READOBJ]
 
-The bundle has the layout, aliases and contract files of prepareEngine.py (HOST x86_64-linux). Every ELF of bin/
-and of the dependency closure in lib/ is read by an llvm-readobj, never run: the machine must be x86_64, the loader the system one,
+The bundle has the layout, aliases and contract files of prepareEngine.py. Every ELF of bin/
+and of the dependency closure in lib/ is read by an llvm-readobj, never run: the machine must match HOST, the loader the system one,
 each GLIBC version it needs at most GLIBC_BASELINE, and each other needed library is copied under its soname.
 The bundle carries bin/llvm-readobj, the inspector of the LLVM root it was prepared with. Preparing reads with that
 source file; verifying reads with the bundle's own bin/llvm-readobj, after the contract and layout hold, and only
-on a native Linux x86_64 host. A bundle on another host is audited with an explicit --inspector, never by running
+on a matching native Linux host. A bundle on another host is audited with an explicit --inspector, never by running
 its ELF files. The glibc family and the loader stay the host's. Each copied ELF gets its own RUNPATH, `$ORIGIN` plus the way to
 lib/ and none when it needs nothing bundled, written by the explicit --patchelf tool; no other RUNPATH survives.
 
@@ -49,6 +49,14 @@ GLIBC_NAME = re.compile(r"^GLIBC_(\d+(?:\.\d+)*)$")
 BUILTINS = "lib/clang/%s/lib/linux/libclang_rt.builtins-x86_64.a"
 INSPECTOR = "llvm-readobj"
 TOOLS = pe.LLVM_TOOLS + (INSPECTOR,)
+HOSTS = {
+    pe.LINUX_X64: {"machine": ELF_MACHINE, "name": "x86_64", "interpreter": INTERPRETER, "builtins": BUILTINS,
+                   "libraryDirs": LIBRARY_DIRS, "systemLibraries": SYSTEM_LIBRARIES},
+    pe.LINUX_ARM64: {"machine": 183, "name": "aarch64", "interpreter": "/lib/ld-linux-aarch64.so.1",
+                     "builtins": "lib/clang/%s/lib/linux/libclang_rt.builtins-aarch64.a",
+                     "libraryDirs": ("lib/aarch64-linux-gnu", "usr/lib/aarch64-linux-gnu") + LIBRARY_DIRS[2:],
+                     "systemLibraries": (SYSTEM_LIBRARIES - {"ld-linux-x86-64.so.2"}) | {"ld-linux-aarch64.so.1"}},
+}
 
 JSON_FLAGS = ("--elf-output-style=JSON", "--file-headers", "--program-headers", "--dynamic-table", "--needed-libs")
 VERSION_FLAGS = ("--elf-output-style=GNU", "--version-info")
@@ -62,12 +70,21 @@ VERNEED_FILE_LINE = re.compile(r"^  0x[0-9a-f]+: Version: \d+  File: (\S+)  Cnt:
 VERNEED_NAME_LINE = re.compile(r"^  0x[0-9a-f]+:   Name: (\S+)  Flags: .+?  Version: \d+$")
 
 
+def hostSpec(host):
+    if host not in HOSTS:
+        raise pe.EngineError("unsupported Linux engine host %s; allowed: %s" % (host, ", ".join(HOSTS)))
+    return HOSTS[host]
+
+
 def detectHost():
     if not sys.platform.startswith("linux"):
-        raise pe.EngineError("unsupported host %s: only native Linux x86_64 is implemented" % sys.platform)
-    if platform.machine() != "x86_64":
-        raise pe.EngineError("unsupported host linux %s: only x86_64 is implemented" % platform.machine())
-    return pe.LINUX_X64
+        raise pe.EngineError("unsupported host %s: only native Linux x64 or ARM64 is implemented" % sys.platform)
+    machine = platform.machine().lower()
+    if machine == "x86_64":
+        return pe.LINUX_X64
+    if machine in ("aarch64", "arm64"):
+        return pe.LINUX_ARM64
+    raise pe.EngineError("unsupported host linux %s: only x64 or ARM64 is implemented" % machine)
 
 
 def isElf(path):
@@ -229,13 +246,14 @@ def readElf(path, inspector):
     return info
 
 
-def limitProblem(info):
-    if info["machine"] != ELF_MACHINE:
-        return "machine %d, not x86_64" % info["machine"]
-    if info["interpreter"] not in (None, INTERPRETER):
-        return "interpreter %s is not %s" % (info["interpreter"], INTERPRETER)
+def limitProblem(info, host=pe.LINUX_X64):
+    spec = hostSpec(host)
+    if info["machine"] != spec["machine"]:
+        return "machine %d, not %s" % (info["machine"], spec["name"])
+    if info["interpreter"] not in (None, spec["interpreter"]):
+        return "interpreter %s is not %s" % (info["interpreter"], spec["interpreter"])
     for file, names in info["verneed"]:
-        if file not in SYSTEM_LIBRARIES:
+        if file not in spec["systemLibraries"]:
             continue
         for name in names:
             match = GLIBC_NAME.match(name)
@@ -246,8 +264,8 @@ def limitProblem(info):
     return None
 
 
-def libraryDirectories(root):
-    return [os.path.join(root, d) for d in LIBRARY_DIRS]
+def libraryDirectories(root, host=pe.LINUX_X64):
+    return [os.path.join(root, d) for d in hostSpec(host)["libraryDirs"]]
 
 
 def describeRoot(root):
@@ -308,9 +326,9 @@ def runpathDirectories(owner, info):
     return directories
 
 
-def findLibrary(name, owner, directories, libraryRoots):
-    candidates = [(d, root) for root in libraryRoots for d in libraryDirectories(root)]
-    candidates += [(d, "host") for d in directories + libraryDirectories(HOST_ROOT)]
+def findLibrary(name, owner, directories, libraryRoots, host=pe.LINUX_X64):
+    candidates = [(d, root) for root in libraryRoots for d in libraryDirectories(root, host)]
+    candidates += [(d, "host") for d in directories + libraryDirectories(HOST_ROOT, host)]
     for directory, origin in candidates:
         path = os.path.join(directory, name)
         if os.path.isfile(path):
@@ -321,8 +339,8 @@ def findLibrary(name, owner, directories, libraryRoots):
     raise pe.EngineError("%s: cannot find %s; searched %s" % (owner, name, ", ".join(d for d, _ in candidates)))
 
 
-def roleProblem(rel, info):
-    if rel.startswith("lib/") and os.path.basename(rel) in SYSTEM_LIBRARIES:
+def roleProblem(rel, info, host=pe.LINUX_X64):
+    if rel.startswith("lib/") and os.path.basename(rel) in hostSpec(host)["systemLibraries"]:
         return "is a host-provided system library, never bundled"
     kind = "ELF type %d (%s)" % (info["type"], ELF_TYPES.get(info["type"], "unknown"))
     if rel.startswith("bin/"):
@@ -338,7 +356,8 @@ def roleProblem(rel, info):
     return None
 
 
-def planClosure(plan, origins, libraryRoots, inspector):
+def planClosure(plan, origins, libraryRoots, inspector, host=pe.LINUX_X64):
+    systemLibraries = hostSpec(host)["systemLibraries"]
     queue = sorted(plan)
     while queue:
         dest = queue.pop()
@@ -348,19 +367,19 @@ def planClosure(plan, origins, libraryRoots, inspector):
         info = readElf(source, inspector)
         if info is None:
             raise pe.EngineError("%s: not an ELF executable" % source)
-        problem = limitProblem(info)
+        problem = limitProblem(info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (source, problem))
-        problem = roleProblem(dest, info)
+        problem = roleProblem(dest, info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (source, problem))
         directories = runpathDirectories(source, info)
         for name in info["needed"]:
-            if name in SYSTEM_LIBRARIES:
+            if name in systemLibraries:
                 continue
             if "/" in name:
                 raise pe.EngineError("%s: needs %s by a path" % (source, name))
-            found, origin = findLibrary(name, source, directories, libraryRoots)
+            found, origin = findLibrary(name, source, directories, libraryRoots, host)
             wanted = "lib/" + name
             if wanted not in plan:
                 plan[wanted], origins[wanted] = found, origin
@@ -408,12 +427,12 @@ def writeNotices(root, records):
     return out
 
 
-def writeProvenance(root, versions, tools, packages, files):
+def writeProvenance(root, versions, tools, packages, files, host=pe.LINUX_X64):
     receipt = {
         "kind": "local-linux-package-proof",
         "statement": "Prepared from locally installed packages. Not an upstream-controlled build.",
         "redistributionCertified": False,
-        "host": pe.LINUX_X64,
+        "host": host,
         "clangVersion": versions[0],
         "lldVersion": versions[1],
         "glibcBaseline": ".".join(map(str, GLIBC_BASELINE)),
@@ -430,8 +449,9 @@ def bundleRunpath(root, path):
     return "$ORIGIN" if relative == "." else "$ORIGIN/" + relative
 
 
-def wantedRunpath(root, path, info):
-    return bundleRunpath(root, path) if any(n not in SYSTEM_LIBRARIES for n in info["needed"]) else None
+def wantedRunpath(root, path, info, host=pe.LINUX_X64):
+    systemLibraries = hostSpec(host)["systemLibraries"]
+    return bundleRunpath(root, path) if any(n not in systemLibraries for n in info["needed"]) else None
 
 
 def engineFiles(root):
@@ -440,10 +460,10 @@ def engineFiles(root):
             and (rel.startswith("bin/") or (rel.startswith("lib/") and not rel.startswith(RESOURCE_PREFIX)))]
 
 
-def rewriteRunpath(patchelf, inspector, root, rel):
+def rewriteRunpath(patchelf, inspector, root, rel, host=pe.LINUX_X64):
     path = os.path.join(root, rel)
     info = readElf(path, inspector)
-    wanted = wantedRunpath(root, path, info)
+    wanted = wantedRunpath(root, path, info, host)
     if (info["runpath"], info["rpath"]) == (wanted, None):
         return
     if info["runpath"] is not None or info["rpath"] is not None:
@@ -452,19 +472,22 @@ def rewriteRunpath(patchelf, inspector, root, rel):
         pe.run([patchelf, "--set-rpath", wanted, path])
 
 
-def verifyLayout(root, version):
+def verifyLayout(root, version, host=pe.LINUX_X64):
     major = version.split(".")[0]
+    builtins = hostSpec(host)["builtins"] % major
     required = (["bin/clang-" + major] + ["bin/lld"] + ["bin/" + a for a in pe.CLANG_ALIASES + pe.LLD_ALIASES]
                 + ["bin/" + t for t in TOOLS]
-                + ["lib/clang/%s/include/stddef.h" % major, BUILTINS % major, "notices/provenance.json"])
+                + ["lib/clang/%s/include/stddef.h" % major, builtins, "notices/provenance.json"])
     for rel in required:
         if not os.path.isfile(os.path.join(root, rel)):
             raise pe.EngineError("layout: missing %s" % rel)
 
 
-def bundledInspector(root):
+def bundledInspector(root, host=None):
     try:
-        detectHost()
+        native = detectHost()
+        if host is not None and native != host:
+            raise pe.EngineError("native host %s does not match %s" % (native, host))
     except pe.EngineError as error:
         raise pe.EngineError("%s: cannot run the bundle's own bin/%s here (%s); pass --inspector" % (root, INSPECTOR, error))
     path = os.path.join(root, "bin", INSPECTOR)
@@ -474,10 +497,9 @@ def bundledInspector(root):
 
 
 def verifyEngine(root, host, version, inspector=None):
-    if host != pe.LINUX_X64:
-        raise pe.EngineError("%s is not a %s bundle" % (root, pe.LINUX_X64))
-    verifyLayout(root, version)
-    inspector = inspector or bundledInspector(root)
+    systemLibraries = hostSpec(host)["systemLibraries"]
+    verifyLayout(root, version, host)
+    inspector = inspector or bundledInspector(root, host)
     if not os.path.isfile(inspector) or not os.access(inspector, os.X_OK):
         raise pe.EngineError("--inspector %s is not an executable file" % inspector)
     infos = {}
@@ -489,25 +511,25 @@ def verifyEngine(root, host, version, inspector=None):
         infos[rel] = info
     for rel, info in infos.items():
         path = os.path.join(root, rel)
-        problem = limitProblem(info)
+        problem = limitProblem(info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (rel, problem))
-        problem = roleProblem(rel, info)
+        problem = roleProblem(rel, info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (rel, problem))
         for name in info["needed"]:
             if "/" in name:
                 raise pe.EngineError("%s: needs %s by a path" % (rel, name))
-            if name not in SYSTEM_LIBRARIES and "lib/" + name not in infos:
+            if name not in systemLibraries and "lib/" + name not in infos:
                 raise pe.EngineError("%s: needs %s, which is not in lib/" % (rel, name))
         if info["rpath"] is not None:
             raise pe.EngineError("%s: has DT_RPATH %s" % (rel, info["rpath"]))
-        wanted = wantedRunpath(root, path, info)
+        wanted = wantedRunpath(root, path, info, host)
         if info["runpath"] != wanted:
             raise pe.EngineError("%s: runpath is %s, expected %s" % (
                 rel, info["runpath"], "none" if wanted is None else wanted))
         for file, names in info["verneed"]:
-            if file in SYSTEM_LIBRARIES:
+            if file in systemLibraries:
                 continue
             for name in names:
                 if name not in infos["lib/" + file]["verdef"]:
@@ -567,7 +589,7 @@ def prepareEngine(llvmRoot, lldRoot, output, libraryDirs=(), patchelf=None):
         if not os.path.isfile(source):
             raise pe.EngineError("missing source file %s" % source)
     origins = {}
-    planClosure(plan, origins, libraryDirs, inspector)
+    planClosure(plan, origins, libraryDirs, inspector, host)
     plan = {dest: os.path.realpath(source) for dest, source in plan.items()}
     records, named = collectPackages(plan, origins, described)
 
@@ -580,7 +602,7 @@ def prepareEngine(llvmRoot, lldRoot, output, libraryDirs=(), patchelf=None):
             shutil.copyfile(source, target)
             os.chmod(target, 0o755 if os.access(source, os.X_OK) else 0o644)
         for rel in engineFiles(partial):
-            rewriteRunpath(patchelf, inspector, partial, rel)
+            rewriteRunpath(patchelf, inspector, partial, rel, host)
         for alias in pe.CLANG_ALIASES:
             os.symlink("clang-" + major, os.path.join(partial, "bin", alias))
         for alias in pe.LLD_ALIASES:
@@ -589,7 +611,7 @@ def prepareEngine(llvmRoot, lldRoot, output, libraryDirs=(), patchelf=None):
         files = [{"path": dest, "source": plan[dest], "sourceSha256": pe.sha256File(plan[dest]),
                   "origin": origins.get(dest, "host"), "package": ", ".join(named[dest])}
                  for dest in sorted(plan) if not dest.startswith(RESOURCE_PREFIX)]
-        writeProvenance(partial, (version, lldVersion), tools, packages, files)
+        writeProvenance(partial, (version, lldVersion), tools, packages, files, host)
         pe.writeContract(partial, host, version)
         verified = pe.verifyEngine(partial, inspector)
         os.chmod(partial, 0o755)
@@ -613,8 +635,8 @@ def main(argv):
     try:
         if args.verify:
             host, version = pe.verifyContract(args.verify)
-            if host != pe.LINUX_X64:
-                raise pe.EngineError("%s is a %s bundle, not %s" % (args.verify, host, pe.LINUX_X64))
+            if host not in HOSTS:
+                raise pe.EngineError("%s is a %s bundle, not a Linux engine" % (args.verify, host))
             print("verified host=%s version=%s elf=%d" % (host, version, verifyEngine(args.verify, host, version, args.inspector)))
             return 0
         if not (args.llvm_root and args.lld_root and args.output and args.patchelf):

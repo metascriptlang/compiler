@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Prepare a relocatable native clang/lld engine bundle for Windows x86_64 from an installed LLVM.
+"""Prepare a relocatable native clang/lld engine bundle for Windows x64 or ARM64 from an installed LLVM.
 
     prepareWindowsEngine.py --llvm-root DIR --license FILE --output NEW_DIR
     prepareWindowsEngine.py --verify BUNDLE_DIR [--inspector LLVM_READOBJ]
 
-Runs on native Windows x86_64 only. The bundle has the layout and contract files of prepareEngine.py (HOST
-x86_64-windows): the thirteen .exe tools of the LLVM root's bin/ (the twelve compiler, linker and archive tools and llvm-readobj)
-and the resource directory lib/clang/MAJOR. The upstream payload ships no license, so --license names the exact-release
-license file, copied to notices/LICENSE.TXT with its hash recorded; it is never fetched.
+Runs on native Windows x64 or ARM64. The bundle has the layout and contract files of prepareEngine.py:
+the required .exe tools of the LLVM root's bin/ and the resource directory lib/clang/MAJOR. The upstream payload
+ships no license, so --license names the exact-release license file, copied to notices/LICENSE.TXT with its hash
+recorded; it is never fetched.
 
-Every PE file of bin/ is read, never run, with the bundle's own llvm-readobj: the machine must be AMD64, the image PE32+
+Every PE file of bin/ is read, never run, with the bundle's own llvm-readobj: the machine must match HOST, the image PE32+
 and an executable image, an .exe must not be a DLL and a .dll must be one. Each DLL it imports, normal or delayed, must be
 an operating system library of SYSTEM_DLLS or a file of the source bin/, which is copied under its own exact name with its
 own imports followed in turn. Names are matched with their case folded, so two source files that fold to one name, or a
@@ -33,18 +33,25 @@ import prepareEngine as pe
 import prepareRuntime as pr
 
 MACHINE_AMD64 = 0x8664
+MACHINE_ARM64 = 0xaa64
 MAGIC_PE32_PLUS = 0x20B
 IMAGE_EXECUTABLE = 0x2
 IMAGE_DLL = 0x2000
 INSPECTOR = "llvm-readobj.exe"
 TOOLS = ("clang.exe", "clang++.exe", "lld.exe", "ld.lld.exe", "ld64.lld.exe", "lld-link.exe", "wasm-ld.exe", "llvm-ar.exe",
-         "llvm-ranlib.exe", "llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", "llvm-dlltool.exe", INSPECTOR)
-SYSTEM_DLLS = frozenset(("advapi32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll", "shell32.dll",
-                         "user32.dll", "version.dll"))
+         "llvm-ranlib.exe", "llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", "llvm-dlltool.exe",
+         "llvm-symbolizer.exe", "llvm-rc.exe", INSPECTOR)
+SYSTEM_DLLS = frozenset(("advapi32.dll", "crypt32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll", "shell32.dll",
+                         "user32.dll", "version.dll", "winhttp.dll"))
 RESOURCE_PREFIX = "lib/clang/"
 INCLUDE = "lib/clang/%s/include/stddef.h"
 BUILTINS = "lib/clang/%s/lib/windows/clang_rt.builtins-x86_64.lib"
 LICENSE = "notices/LICENSE.TXT"
+HOSTS = {
+    pe.WINDOWS_X64: {"machine": MACHINE_AMD64, "name": "AMD64", "builtins": BUILTINS},
+    pe.WINDOWS_ARM64: {"machine": MACHINE_ARM64, "name": "ARM64",
+                       "builtins": "lib/clang/%s/lib/windows/clang_rt.builtins-aarch64.lib"},
+}
 INSPECT_FLAGS = ("--file-headers", "--coff-imports")
 BLOCK_START = re.compile(r"^([A-Za-z]+) \{$")
 MACHINE_LINE = re.compile(r"^  Machine: .*\(0x([0-9a-fA-F]+)\)$")
@@ -53,12 +60,21 @@ MAGIC_LINE = re.compile(r"^  Magic: 0x([0-9a-fA-F]+)$")
 NAME_LINE = re.compile(r"^  Name: (\S.*\S|\S)$")
 
 
+def hostSpec(host):
+    if host not in HOSTS:
+        raise pe.EngineError("unsupported Windows engine host %s; allowed: %s" % (host, ", ".join(HOSTS)))
+    return HOSTS[host]
+
+
 def detectHost():
     if sys.platform != "win32":
-        raise pe.EngineError("unsupported host %s: only native Windows x86_64 is implemented" % sys.platform)
-    if platform.machine().upper() not in ("AMD64", "X86_64"):
-        raise pe.EngineError("unsupported host windows %s: only x86_64 is implemented" % platform.machine())
-    return pe.WINDOWS_X64
+        raise pe.EngineError("unsupported host %s: only native Windows x64 or ARM64 is implemented" % sys.platform)
+    machine = platform.machine().upper()
+    if machine in ("AMD64", "X86_64"):
+        return pe.WINDOWS_X64
+    if machine in ("ARM64", "AARCH64"):
+        return pe.WINDOWS_ARM64
+    raise pe.EngineError("unsupported host windows %s: only x64 or ARM64 is implemented" % platform.machine())
 
 
 def isPe(path):
@@ -131,9 +147,10 @@ def readPe(path, inspector):
             "imports": imports["Import"], "delayImports": imports["DelayImport"]}
 
 
-def roleProblem(rel, info):
-    if info["machine"] != MACHINE_AMD64:
-        return "machine 0x%x, not AMD64 (0x%x)" % (info["machine"], MACHINE_AMD64)
+def roleProblem(rel, info, host=pe.WINDOWS_X64):
+    spec = hostSpec(host)
+    if info["machine"] != spec["machine"]:
+        return "machine 0x%x, not %s (0x%x)" % (info["machine"], spec["name"], spec["machine"])
     if info["magic"] != MAGIC_PE32_PLUS:
         return "optional header magic 0x%x, not PE32+ (0x%x)" % (info["magic"], MAGIC_PE32_PLUS)
     if not info["characteristics"] & IMAGE_EXECUTABLE:
@@ -190,14 +207,14 @@ def addPlanned(plan, folds, dest, source):
     plan[dest] = source
 
 
-def planClosure(plan, folds, binDir, listing, inspector):
+def planClosure(plan, folds, binDir, listing, inspector, host=pe.WINDOWS_X64):
     infos, queue = {}, sorted(d for d in plan if d.startswith("bin/"))
     while queue:
         dest = queue.pop()
         info = readPe(plan[dest], inspector)
         if info is None:
             raise pe.EngineError("%s: not a PE image" % plan[dest])
-        problem = roleProblem(dest, info)
+        problem = roleProblem(dest, info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (plan[dest], problem))
         infos[dest] = info
@@ -213,9 +230,11 @@ def planClosure(plan, folds, binDir, listing, inspector):
     return infos
 
 
-def bundledInspector(root):
+def bundledInspector(root, host=None):
     try:
-        detectHost()
+        native = detectHost()
+        if host is not None and native != host:
+            raise pe.EngineError("native host %s does not match %s" % (native, host))
     except pe.EngineError as error:
         raise pe.EngineError("%s: cannot run the bundle's own bin/%s here (%s); pass --inspector" % (root, INSPECTOR, error))
     path = os.path.join(root, "bin", INSPECTOR)
@@ -224,9 +243,10 @@ def bundledInspector(root):
     return path
 
 
-def verifyLayout(root, version):
+def verifyLayout(root, version, host=pe.WINDOWS_X64):
     major = version.split(".")[0]
-    for rel in ["bin/" + t for t in TOOLS] + [INCLUDE % major, BUILTINS % major, "notices/provenance.json", LICENSE]:
+    builtins = hostSpec(host)["builtins"] % major
+    for rel in ["bin/" + t for t in TOOLS] + [INCLUDE % major, builtins, "notices/provenance.json", LICENSE]:
         if not os.path.isfile(os.path.join(root, rel)):
             raise pe.EngineError("layout: missing %s" % rel)
     if os.path.getsize(os.path.join(root, LICENSE)) == 0:
@@ -235,12 +255,11 @@ def verifyLayout(root, version):
 
 def verifyEngine(root, host, version, inspector=None):
     """Audit the layout and every PE file of bin/ with the inspector; returns the number of PE files audited."""
-    if host != pe.WINDOWS_X64:
-        raise pe.EngineError("%s is not a %s bundle" % (root, pe.WINDOWS_X64))
-    verifyLayout(root, version)
+    hostSpec(host)
+    verifyLayout(root, version, host)
     if inspector and (not os.path.isfile(inspector) or not os.access(inspector, os.X_OK)):
         raise pe.EngineError("--inspector %s is not an executable file" % inspector)
-    inspector = inspector or bundledInspector(root)
+    inspector = inspector or bundledInspector(root, host)
     files = [rel for rel in pe.listFiles(root) if rel.startswith("bin/")]
     folds = {}
     for rel in files:
@@ -259,7 +278,7 @@ def verifyEngine(root, host, version, inspector=None):
         info = readPe(path, inspector)
         if info is None:
             raise pe.EngineError("%s: not a PE image" % rel)
-        problem = roleProblem(rel, info)
+        problem = roleProblem(rel, info, host)
         if problem:
             raise pe.EngineError("%s: %s" % (rel, problem))
         infos[rel] = info
@@ -300,12 +319,12 @@ def readLicense(path):
     return path
 
 
-def writeProvenance(root, versions, tools, license, files):
+def writeProvenance(root, versions, tools, license, files, host=pe.WINDOWS_X64):
     receipt = {
         "kind": "local-windows-llvm-proof",
         "statement": "Prepared from a locally installed LLVM and an operator-supplied license file. Not an upstream-controlled build.",
         "redistributionCertified": False,
-        "host": pe.WINDOWS_X64,
+        "host": host,
         "clangVersion": versions[0],
         "lldVersion": versions[1],
         "inspector": tools,
@@ -318,6 +337,7 @@ def writeProvenance(root, versions, tools, license, files):
 
 def prepareEngine(llvmRoot, licensePath, output):
     host = detectHost()
+    spec = hostSpec(host)
     llvmRoot, output = os.path.abspath(llvmRoot), os.path.abspath(output)
     if not os.path.isdir(llvmRoot):
         raise pe.EngineError("--llvm-root %s is not a directory" % llvmRoot)
@@ -354,10 +374,10 @@ def prepareEngine(llvmRoot, licensePath, output):
         for name in filenames:
             source = os.path.join(directory, name)
             addPlanned(plan, folds, RESOURCE_PREFIX + major + "/" + os.path.relpath(source, resource).replace(os.sep, "/"), source)
-    for rel in (INCLUDE % major, BUILTINS % major):
+    for rel in (INCLUDE % major, spec["builtins"] % major):
         if rel not in plan:
             raise pe.EngineError("missing %s in %s" % (rel, llvmRoot))
-    infos = planClosure(plan, folds, binDir, listing, inspector)
+    infos = planClosure(plan, folds, binDir, listing, inspector, host)
     refuseOutside(llvmRoot, plan)
     licenseRecord = {"source": licensePath, "sha256": pe.sha256File(licensePath), "bytes": os.path.getsize(licensePath),
                      "copy": LICENSE, "statement": "supplied by the operator and not checked against the release"}
@@ -374,7 +394,7 @@ def prepareEngine(llvmRoot, licensePath, output):
         files = [dict({"path": dest, "source": plan[dest], "sourceSha256": pe.sha256File(plan[dest])},
                       **({"imports": importedNames(infos[dest])} if dest in infos else {}))
                  for dest in sorted(plan) if not dest.startswith(RESOURCE_PREFIX)]
-        writeProvenance(partial, (version, lldVersion), tools, licenseRecord, files)
+        writeProvenance(partial, (version, lldVersion), tools, licenseRecord, files, host)
         pe.writeContract(partial, host, version)
         verified = pe.verifyEngine(partial, inspector)
         pr.renameNoReplace(partial, output)
@@ -395,8 +415,8 @@ def main(argv):
     try:
         if args.verify:
             host, version = pe.verifyContract(args.verify)
-            if host != pe.WINDOWS_X64:
-                raise pe.EngineError("%s is a %s bundle, not %s" % (args.verify, host, pe.WINDOWS_X64))
+            if host not in HOSTS:
+                raise pe.EngineError("%s is a %s bundle, not a Windows engine" % (args.verify, host))
             print("verified host=%s version=%s pe=%d" % (host, version, verifyEngine(args.verify, host, version, args.inspector)))
             return 0
         if not (args.llvm_root and args.output):

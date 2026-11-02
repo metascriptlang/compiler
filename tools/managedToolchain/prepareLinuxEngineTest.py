@@ -598,7 +598,7 @@ class World(TempCase):
         self.elf(os.path.join(self.llvm, "bin", "clang"), **dict(tool, needed=[
             "libclang-cpp.so.21.1", "libLLVM.so.21.1", "libstdc++.so.6", "libm.so.6", "libc.so.6"],
             verneed=[("libstdc++.so.6", ["GLIBCXX_3.4.30"]), LIBC]))
-        for name in ("lld", "llvm-ar", "llvm-ranlib", "llvm-strip", "llvm-objcopy", "llvm-nm", "dsymutil", "llvm-readobj"):
+        for name in ("lld",) + pl.TOOLS:
             self.elf(os.path.join(self.llvm, "bin", name), **tool)
         os.symlink("lld", os.path.join(self.llvm, "bin", "ld.lld"))
         self.elf(os.path.join(self.llvm, "lib", "libclang-cpp.so.21.1"), mode=0o644, soname="libclang-cpp.so.21.1",
@@ -1075,10 +1075,10 @@ class RefusalTest(World):
 
 
 class HostTest(unittest.TestCase):
-    def test_only_native_linux_x86_64_is_supported(self):
+    def test_native_linux_x64_is_supported_and_foreign_hosts_are_refused(self):
         with mock.patch.object(pl.sys, "platform", "linux"), mock.patch.object(pl.platform, "machine", return_value="x86_64"):
             self.assertEqual(pl.detectHost(), pe.LINUX_X64)
-        for platform_, machine in (("darwin", "x86_64"), ("linux", "aarch64"), ("win32", "AMD64")):
+        for platform_, machine in (("darwin", "x86_64"), ("linux", "riscv64"), ("win32", "AMD64")):
             with mock.patch.object(pl.sys, "platform", platform_), mock.patch.object(pl.platform, "machine", return_value=machine):
                 with self.assertRaisesRegex(pe.EngineError, "unsupported host"):
                     pl.detectHost()
@@ -1265,7 +1265,7 @@ class CommandLineTest(World):
         with mock.patch("sys.stderr", new_callable=__import__("io").StringIO) as err, \
                 mock.patch.object(pe, "verifyEngine", side_effect=AssertionError("mach-o audit")):
             self.assertEqual(pl.main(["--verify", mac, "--inspector", self.inspector]), 1)
-        self.assertIn("is a aarch64-macos bundle, not x86_64-linux", err.getvalue())
+        self.assertIn("is a aarch64-macos bundle, not a Linux engine", err.getvalue())
 
     def test_verify_of_a_linux_bundle_through_the_common_command_labels_it_elf(self):
         root = self.overrideRoot()

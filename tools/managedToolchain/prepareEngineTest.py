@@ -228,7 +228,8 @@ class WindowsHostContractTest(TempCase):
     def test_a_windows_x64_host_is_a_contract_host_and_the_other_hosts_still_are(self):
         self.assertEqual(pe.WINDOWS_X64, "x86_64-windows")
         self.assertEqual(pe.verifyContract(self.bundle()), ("x86_64-windows", "22.1.1"))
-        self.assertEqual(pe.KNOWN_HOSTS, ("aarch64-macos", "x86_64-macos", "x86_64-linux", "x86_64-windows"))
+        self.assertEqual(pe.KNOWN_HOSTS, ("aarch64-macos", "x86_64-macos", "x86_64-linux", "aarch64-linux",
+                                          "x86_64-windows", "aarch64-windows"))
 
     def test_native_windows_separators_become_slashes_before_the_contract_validates_and_sorts(self):
         root = self.bundle()
@@ -304,7 +305,7 @@ class LinuxHostContractTest(TempCase):
             self.assertEqual(pe.verifyContract(root), (host, "22.1.1"))
 
     def test_other_hosts_are_still_refused(self):
-        for host in ("aarch64-linux", "aarch64-windows", "x86_64-windows-gnu", "x86_64-linux-gnu", "windows", "linux"):
+        for host in ("riscv64-linux", "s390x-windows", "x86_64-windows-gnu", "x86_64-linux-gnu", "windows", "linux"):
             shutil.rmtree(self.path("bundle"), ignore_errors=True)
             with self.assertRaisesRegex(pe.EngineError, "HOST is not one line matching"):
                 pe.verifyContract(self.linuxBundle(host))
@@ -317,6 +318,18 @@ class LinuxHostContractTest(TempCase):
                 mock.patch.object(pe, "auditLoadCommands", side_effect=AssertionError("mach-o audit")):
             self.assertEqual(pe.verifyEngine(root, "/x/llvm-readobj"), ("x86_64-linux", "21.1.8", 7))
         module.verifyEngine.assert_called_once_with(root, "x86_64-linux", "21.1.8", "/x/llvm-readobj")
+
+    def test_arm64_hosts_are_contract_hosts_and_dispatch_to_their_own_binary_format(self):
+        for host, moduleName in (("aarch64-linux", "prepareLinuxEngine"), ("aarch64-windows", "prepareWindowsEngine")):
+            root = self.path(host)
+            write(os.path.join(root, "bin", "tool"), "tool\n")
+            pe.writeContract(root, host, "23.1.0")
+            self.assertEqual(pe.verifyContract(root), (host, "23.1.0"))
+            module = mock.Mock(**{"verifyEngine.return_value": 8})
+            with mock.patch.dict(sys.modules, {moduleName: module}), \
+                    mock.patch.object(pe, "verifyLayout", side_effect=AssertionError("mac layout")):
+                self.assertEqual(pe.verifyEngine(root, "/inspector"), (host, "23.1.0", 8))
+            module.verifyEngine.assert_called_once_with(root, host, "23.1.0", "/inspector")
 
     def test_verify_engine_keeps_the_mac_layout_and_load_command_audit_for_mac_hosts(self):
         root = self.path("mac")
@@ -332,7 +345,8 @@ class LinuxHostContractTest(TempCase):
 
     def test_the_verify_command_names_the_binary_kind_of_the_host(self):
         root = self.linuxBundle()
-        for host, count, label in (("x86_64-linux", 4, "elf=4"), ("aarch64-macos", 5, "macho=5")):
+        for host, count, label in (("x86_64-linux", 4, "elf=4"), ("aarch64-linux", 6, "elf=6"),
+                                   ("aarch64-windows", 7, "pe=7"), ("aarch64-macos", 5, "macho=5")):
             with mock.patch.object(pe, "verifyEngine", return_value=(host, "1.2.3", count)) as verify, \
                     mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 self.assertEqual(pe.main(["--verify", root, "--inspector", "/x/llvm-readobj"]), 0)

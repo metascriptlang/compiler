@@ -217,11 +217,12 @@ class RoleTest(unittest.TestCase):
         self.assertEqual(pw.roleProblem("bin/x.dll", self.info()), "is an executable image, required to be a DLL of bin/x.dll")
 
     def test_the_system_allowlist_and_the_tools_are_exactly_the_observed_ones(self):
-        self.assertEqual(sorted(pw.SYSTEM_DLLS), ["advapi32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll",
-                                                  "shell32.dll", "user32.dll", "version.dll"])
-        self.assertEqual(len(pw.TOOLS), 13)
-        self.assertIn("llvm-dlltool.exe", pw.TOOLS)
-        for name in ("dsymutil.exe", "clang-22.exe", "ld64.lld.exe"):
+        self.assertEqual(sorted(pw.SYSTEM_DLLS), ["advapi32.dll", "crypt32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll",
+                                                  "shell32.dll", "user32.dll", "version.dll", "winhttp.dll"])
+        self.assertEqual(len(pw.TOOLS), 16)
+        for name in ("llvm-dlltool.exe", "ld64.lld.exe", "llvm-symbolizer.exe", "llvm-rc.exe"):
+            self.assertIn(name, pw.TOOLS)
+        for name in ("dsymutil.exe", "clang-22.exe"):
             self.assertNotIn(name, pw.TOOLS)
 
 
@@ -284,7 +285,7 @@ MISSING = object()
 
 
 class World(TempCase):
-    """A fake installed LLVM: thirteen fake PE tools in bin/, a resource directory, an operator license."""
+    """A fake installed LLVM with PE tools, a resource directory and an operator license."""
     def setUp(self):
         super().setUp()
         self.llvm = self.path("LLVM root")
@@ -325,6 +326,12 @@ class World(TempCase):
 
 
 class PrepareTest(World):
+    def test_the_symbolizer_uses_os_crypto_and_http_dlls_without_bundling_them(self):
+        self.importing("KERNEL32.dll", "CRYPT32.dll", "WINHTTP.dll", tool="llvm-symbolizer.exe")
+        output, _, plan, _ = self.prepare()
+        self.assertFalse([p for p in plan if p.casefold().endswith(("crypt32.dll", "winhttp.dll"))])
+        self.assertEqual(pe.verifyEngine(output)[:2], (pe.WINDOWS_X64, "22.1.1"))
+
     def test_the_bundle_has_the_engine_layout_the_windows_contract_and_the_real_tool_files(self):
         out, (host, version, count), plan, _ = self.prepare()
         listed = pe.listFiles(out)
@@ -333,13 +340,13 @@ class PrepareTest(World):
         for rel in ("HOST", "VERSION", "lib/clang/22/include/stddef.h", "lib/clang/22/lib/windows/clang_rt.builtins-x86_64.lib",
                     "notices/provenance.json", "notices/LICENSE.TXT"):
             self.assertIn(rel, listed)
-        self.assertEqual((host, version, count), (pe.WINDOWS_X64, "22.1.1", 12))
+        self.assertEqual((host, version, count), (pe.WINDOWS_X64, "22.1.1", len(pw.TOOLS)))
         self.assertEqual(read(os.path.join(out, "HOST")), "x86_64-windows\n")
         self.assertEqual(read(os.path.join(out, "VERSION")), "22.1.1\n")
         self.assertEqual([n for n in listed if n.startswith("bin/") and n[4:] not in pw.TOOLS], [])
-        for name in ("bin/dsymutil.exe", "bin/clang-22.exe", "bin/ld64.lld.exe"):
+        for name in ("bin/dsymutil.exe", "bin/clang-22.exe"):
             self.assertNotIn(name, listed)
-        self.assertEqual(pe.verifyEngine(out), (pe.WINDOWS_X64, "22.1.1", 12))
+        self.assertEqual(pe.verifyEngine(out), (pe.WINDOWS_X64, "22.1.1", len(pw.TOOLS)))
         self.assertEqual(plan["bin/clang.exe"], os.path.join(self.bin, "clang.exe"))
 
     def test_aliases_are_real_files_with_the_bytes_of_their_source_and_no_symlink_is_made(self):
@@ -397,8 +404,8 @@ class PrepareTest(World):
     def test_an_explicit_root_reached_through_a_link_is_a_valid_root(self):
         os.symlink(self.llvm, self.path("alias root"))
         out, (_, _, count), plan, _ = pw.prepareEngine(self.path("alias root"), self.license, self.path("out2", "engine"))
-        self.assertEqual(count, 12)
-        self.assertEqual(pe.verifyEngine(out)[2], 12)
+        self.assertEqual(count, len(pw.TOOLS))
+        self.assertEqual(pe.verifyEngine(out)[2], len(pw.TOOLS))
         self.assertEqual(sorted(plan)[:2], ["bin/clang++.exe", "bin/clang.exe"])
 
     def test_the_resource_directory_is_carried_with_its_actual_paths(self):
@@ -480,7 +487,7 @@ class RefusalTest(World):
         self.refused(r"imports helper\.exe, which is not a \.dll file name")
 
     def test_a_system_library_name_in_the_source_bin_is_refused_before_any_version_or_inspector_run_even_when_nothing_imports_it(self):
-        for name in ("Kernel32.dll", "NTDLL.DLL", "version.dll", "shell32.dll"):
+        for name in ("Kernel32.dll", "NTDLL.DLL", "version.dll", "shell32.dll", "CRYPT32.dll", "WinHttp.dll"):
             self.dll(name)
             with self.subTest(name):
                 self.refused(r"holds %s, which would shadow the system library" % name.replace(".", r"\."))
@@ -627,15 +634,16 @@ class RefusalTest(World):
         with mock.patch.object(pe, "verifyEngine", side_effect=pe.EngineError("hash mismatch")):
             self.refused("hash mismatch")
 
-    def test_only_a_native_windows_x64_host_prepares(self):
-        for platform_, machine, ok in (("win32", "AMD64", True), ("win32", "amd64", True), ("win32", "ARM64", False),
-                                       ("win32", "x86", False), ("darwin", "arm64", False), ("linux", "x86_64", False)):
+    def test_only_native_windows_x64_or_arm64_hosts_prepare(self):
+        for platform_, machine, expected in (("win32", "AMD64", pe.WINDOWS_X64), ("win32", "amd64", pe.WINDOWS_X64),
+                                             ("win32", "ARM64", pe.WINDOWS_ARM64), ("win32", "aarch64", pe.WINDOWS_ARM64),
+                                             ("win32", "x86", None), ("darwin", "arm64", None), ("linux", "x86_64", None)):
             with self.subTest(platform=platform_, machine=machine):
                 self.patchers[0].stop()
                 try:
                     with mock.patch.object(pw.sys, "platform", platform_), mock.patch.object(pw.platform, "machine", return_value=machine):
-                        if ok:
-                            self.assertEqual(pw.detectHost(), pe.WINDOWS_X64)
+                        if expected is not None:
+                            self.assertEqual(pw.detectHost(), expected)
                         else:
                             with self.assertRaisesRegex(pe.EngineError, "unsupported host"):
                                 pw.detectHost()
@@ -667,14 +675,14 @@ class VerifyTest(World):
 
     def test_the_prepared_bundle_verifies_with_its_own_inspector_by_default(self):
         self.inspect.reset_mock()
-        self.assertEqual(pe.verifyEngine(self.out), (pe.WINDOWS_X64, "22.1.1", 13))
+        self.assertEqual(pe.verifyEngine(self.out), (pe.WINDOWS_X64, "22.1.1", len(pw.TOOLS) + 1))
         self.assertEqual({c.args[0] for c in self.inspect.call_args_list}, {os.path.join(self.out, "bin", "llvm-readobj.exe")})
 
     def test_an_explicit_inspector_replaces_the_bundled_one_and_may_come_from_another_host(self):
         explicit = buildPe(self.path("native", "llvm-readobj"))
         self.detect.side_effect = pe.EngineError("unsupported host darwin: only native Windows x86_64 is implemented")
         self.inspect.reset_mock()
-        self.assertEqual(pe.verifyEngine(self.out, explicit)[2], 13)
+        self.assertEqual(pe.verifyEngine(self.out, explicit)[2], len(pw.TOOLS) + 1)
         self.assertEqual({c.args[0] for c in self.inspect.call_args_list}, {explicit})
 
     def test_a_bundle_on_a_foreign_host_is_never_run_without_an_explicit_inspector(self):
@@ -759,7 +767,7 @@ class VerifyTest(World):
         self.mutate("bin/llvm-ar.exe", imports=["..\\x.dll"], delayImports=[])
         self.refused(r"bin/llvm-ar\.exe: imports '\.\.\\\\x\.dll', which is not a file basename|imports .*not a file basename")
         self.mutate("bin/llvm-ar.exe", imports=["kernel32.DLL"], delayImports=["LIBFOO.DLL", "ole32.dll"])
-        self.assertEqual(pe.verifyEngine(self.out)[2], 13)
+        self.assertEqual(pe.verifyEngine(self.out)[2], len(pw.TOOLS) + 1)
 
     def test_a_changed_file_or_a_missing_layout_file_or_an_empty_license_is_refused(self):
         os.remove(os.path.join(self.out, "lib", "clang", "22", "lib", "windows", "clang_rt.builtins-x86_64.lib"))
@@ -785,7 +793,7 @@ class VerifyTest(World):
         self.refused("bin/libfoo.dll is a symlink or reparse point")
 
     def test_a_bundle_of_another_host_is_not_handed_to_the_windows_audit(self):
-        with self.assertRaisesRegex(pe.EngineError, "is not a x86_64-windows bundle"):
+        with self.assertRaisesRegex(pe.EngineError, "unsupported Windows engine host x86_64-linux"):
             pw.verifyEngine(self.out, pe.LINUX_X64, "22.1.1")
 
 
@@ -798,7 +806,7 @@ class CommandLineTest(World):
         self.assertEqual(pw.main(["--llvm-root", self.llvm, "--license", self.license, "--output", out]), 1)
         with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
             self.assertEqual(pe.main(["--verify", out]), 0)
-        self.assertEqual(printed.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=12\n")
+        self.assertEqual(printed.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=%d\n" % len(pw.TOOLS))
 
     def test_the_license_is_required_on_the_command_line_and_a_missing_one_is_named(self):
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
@@ -813,7 +821,7 @@ class CommandLineTest(World):
         pe.writeContract(mac, "aarch64-macos", "22.1.1")
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
             self.assertEqual(pw.main(["--verify", mac]), 1)
-        self.assertIn("is a aarch64-macos bundle, not x86_64-windows", err.getvalue())
+        self.assertIn("is a aarch64-macos bundle, not a Windows engine", err.getvalue())
 
     def test_the_callers_that_pass_the_engine_root_alone_read_a_windows_bundle_through_the_common_api(self):
         out = self.prepare()[0]

@@ -37,8 +37,11 @@ def machO(cpu=0x0100000c, fileType=pd.MH_EXECUTE, dylib=pd.LIBSYSTEM, minos=pd.M
     """A 64-bit Mach-O header with the load commands of a linked executable, enough for readMachO."""
     name = dylib.encode() + b"\0"
     name += b"\0" * (-len(name) % 8)
-    commands = [(pd.LC_BUILD_VERSION, struct.pack("<IIIII", platform, minos, minos, 0, 0)),
+    dyld = struct.pack("<I", 12) + pd.DYLINKER.encode() + b"\0"
+    dyld += b"\0" * (-(8 + len(dyld)) % 8)
+    commands = [(pd.LC_BUILD_VERSION, struct.pack("<IIII", platform, minos, minos, 0)),
                 (pd.LC_MAIN, struct.pack("<QQ", 0, 0)),
+                (pd.LC_LOAD_DYLINKER, dyld),
                 (pd.LC_LOAD_DYLIB, struct.pack("<IIII", 24, 2, 0, 0) + name)]
     if signature:
         commands.append((pd.LC_CODE_SIGNATURE, struct.pack("<II", 0, 0)))
@@ -62,12 +65,64 @@ class MachOTest(TempCase):
         with self.assertRaisesRegex(pe.EngineError, "not a 64-bit Mach-O"):
             pd.readMachO(self.path("f"))
 
+    def test_malformed_command_tables_are_rejected_before_fields_are_read(self):
+        for cpu in (0x0100000c, 0x01000007):
+            original = machO(cpu=cpu)
+            for offset, value in ((16, 0xffffffff), (20, len(original)), (36, 0), (36, 4), (36, 12), (36, 0x1000)):
+                data = bytearray(original)
+                struct.pack_into("<I", data, offset, value)
+                with open(self.path("bad"), "wb") as f:
+                    f.write(data)
+                with self.subTest(cpu=cpu, offset=offset, value=value), self.assertRaisesRegex(pe.EngineError, "malformed Mach-O"):
+                    pd.readMachO(self.path("bad"))
+
+    def test_a_dylib_name_must_be_terminated_inside_its_own_command(self):
+        original = machO()
+        cursor = 32
+        while struct.unpack_from("<I", original, cursor)[0] != pd.LC_LOAD_DYLIB:
+            cursor += struct.unpack_from("<I", original, cursor + 4)[0]
+        size = struct.unpack_from("<I", original, cursor + 4)[0]
+        for offset in (8, size, size + 8):
+            data = bytearray(original)
+            struct.pack_into("<I", data, cursor + 8, offset)
+            with open(self.path("bad"), "wb") as f:
+                f.write(data)
+            with self.assertRaisesRegex(pe.EngineError, "malformed Mach-O.*name"):
+                pd.readMachO(self.path("bad"))
+        data = bytearray(original)
+        data[cursor + 24:cursor + size] = b"x" * (size - 24)
+        with open(self.path("bad"), "wb") as f:
+            f.write(data)
+        with self.assertRaisesRegex(pe.EngineError, "malformed Mach-O.*name"):
+            pd.readMachO(self.path("bad"))
+
+    def test_section_tables_are_bounded_by_their_segment_command_not_the_rest_of_the_file(self):
+        for cpu in (0x0100000c, 0x01000007):
+            payload = b"__TEXT".ljust(16, b"\0") + struct.pack("<QQQQiiII", 0, 0, 0, 0, 5, 5, 1, 0)
+            section = b"__unwind_info".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + bytes(48)
+            body = struct.pack("<II", pd.LC_SEGMENT_64, 72 + 80) + payload + section
+            header = struct.pack("<IiiIIIII", pd.MH_MAGIC_64, cpu, 0, pd.MH_EXECUTE, 1, len(body), 0, 0)
+            with open(self.path("segment"), "wb") as f:
+                f.write(header + body)
+            self.assertEqual(pd.readMachO(self.path("segment"))["sections"], [("__TEXT", "__unwind_info")])
+            for size, count in ((64, 0), (72, 1), (152, 2), (152, 0xffffffff)):
+                data = bytearray(header + body)
+                struct.pack_into("<I", data, 36, size)
+                struct.pack_into("<I", data, 32 + 64, count)
+                with open(self.path("bad"), "wb") as f:
+                    f.write(data)
+                with self.subTest(size=size, count=count), self.assertRaisesRegex(pe.EngineError, "malformed Mach-O"):
+                    pd.readMachO(self.path("bad"))
+
     def test_each_promise_of_an_executable_is_checked(self):
         self.assertIn("is not x86_64", pd.machOProblem(self.info(), pd.X64_TARGET))
         self.assertIn("LC_CODE_SIGNATURE is absent", pd.machOProblem(self.info(signature=False), pd.TARGET))
         self.assertIn("LC_CODE_SIGNATURE is present", pd.machOProblem(self.info(cpu=0x01000007), pd.X64_TARGET))
         self.assertIsNone(pd.machOProblem(self.info(cpu=0x01000007, signature=False), pd.X64_TARGET))
         self.assertIn("LC_MAIN", pd.machOProblem(self.info(fileType=6), pd.TARGET))
+        info = self.info()
+        info["dylinker"] = "/wrong/dyld"
+        self.assertIn("dynamic linker", pd.machOProblem(info, pd.TARGET))
         self.assertIn("dylibs", pd.machOProblem(self.info(dylib="/usr/lib/libz.dylib"), pd.TARGET))
         self.assertIn("build version", pd.machOProblem(self.info(minos=0x000c0000), pd.TARGET))
         self.assertIn("build version", pd.machOProblem(self.info(platform=2), pd.TARGET))

@@ -395,6 +395,71 @@ Measured per-file costs of edit-loop checks, and the checks that do not fit the 
 - **`msc test <file> --tests-in-dir` per owner, lc-1 alone, tree 3f19df9e0, seconds cold / warm:** `src/test/lang/accessorContexts.ms` 4.9 / 2.4, `src/codegen/c/types.ms` 53 / 25, `src/checker/checkPass.ms` 87 / 47, `src/test/js/accessCheck.ms` 81 / 55, `src/codegen/raiser/eval.ms` 98 / 62, `src/compiler/compile.ms` 138 / 79. One corpus program with `MSCORPUS_RAISER=1` took 9.8 / 4.1.
 - **Cold over-budget observation, 2026-10-26:** `msc test src/test/c/spawnCaptureCursor.ms --tests-in-dir` took 66.96 s cold on gc-sd (Linux, 16 vCPU), then 47.74 s warm. Cold source: `bb03b63af` plus the tests in `25412d9e2` (8 passed / 2 expected new assertion failures); warm candidate tree `1d6aacfba9f72f4e09f606630ff21b9d858baabd` passed 10/10. The test body took 6.63 s cold; most of the cost preceded execution.
 - **Cold over-budget observation, 2026-10-26:** `msc test src/test/c/referenceTransfer.ms --tests-in-dir` took 61.53 s cold on gc-sd (Linux, 16 vCPU), then 38.55 s warm. Matched `bb03b63af` builder with the regression tests in `f545e18c3` gave 3 passed / 1 expected new assertion failure; the combined capture/materialization candidate passed 4/4. Logs: `~/metascript/.scratch/pi-capturefollow-01a1795d/remote-evidence/evidence/{old-transfer,new-transfer}.log`.
+- **Windows native tooling checks, 2026-10-30, another land gate active:**
+  frozen compiler SHA256 `53fb0c65`, GNU-target Clang, `--lto=off`;
+  each entry was built once and then its binary executed. `processContractTest.ms`
+  took **71.926 s** with `--danger` (21 compiled modules), printing
+  `processContractTest: PASS 51 checks`. `textFileTest.ms` took **63 s** at
+  default O0 (22 modules), printing `strict UTF-8 files: 15 cases OK`.
+  Both had exact stdout, empty stderr and exit 0. These are slow build-plus-run
+  observations, not isolated performance comparisons; cache temperature and
+  compiler phases were not controlled or split. O0 alone did not establish a
+  sub-60 s check. Do not repeat these builds to reconfirm the same result;
+  reuse the frozen binary when the source is unchanged. Next changed-entry
+  builds need phase measurements before choosing a faster recipe. Other modes,
+  hosts and the complete native toolchain producer were not measured here.
+  Logs in `wt-toolchain-complete/out/native-verify/`:
+  `argv-process1-second.log` and `textfile-link1-rego.log`.
+- **Windows native publication check, 2026-10-31:**
+  `nativePublicationTest.ms` built 22 modules once at O0, frozen compiler
+  `53fb0c65`, GNU-target Clang, and printed
+  `native publication: 15 cases OK` with empty stderr and exit 0.
+  The build took **71 s**, excluding resource waiting; it is recorded slow,
+  not repeated as a normal edit-loop recipe. The existing `MSC_FLOWS` recorder
+  measured total 67.615 s, phase C 59.626 s, its cc subflow 26.193 s,
+  graph 1.389 s, phase A 2.110 s and link 3.994 s.
+  In this build path phase C includes cc, generated-code/cache processing and
+  object publication (`src/compiler/compile.ms:3750-3906`); these are not
+  disjoint timings and their difference does not isolate codegen alone.
+  Another land gate was active; cache temperature and host load were not
+  controlled for a performance comparison. Linux/macOS declarations only
+  passed source checks, not compilation or execution. Logs:
+  `out/native-verify/publication-native1.log`,
+  `native-publication1.flows.tsv`, `publication-cross-source.log`.
+- **Windows stored-alias verifier, 2026-10-31:** after moving managed
+  allocations before unmanaged acquisition, its 25-module O0 build took
+  **63 s** once and printed `stored relative aliases: 20 cases OK`, stderr
+  empty, exit 0. A prior source variant took 48 s; this is not a controlled
+  performance comparison. Flow total 61.942 s includes phase C 57.339 s
+  (cc subflow 28.987 s), graph 1.314 s, phase A 1.795 s and link 1.012 s.
+  The generated C confirms allocations and their error exits precede
+  `widePath` / `CreateFileW`, and no decref/destructor runs between either
+  failing Win32 API and `GetLastError`. OOM was not injected. Record this
+  build as slow; do not rerun it unchanged. Evidence:
+  `out/native-verify/alias-native2.log` and `native-alias2.flows.tsv`.
+  Linux/macOS remain source-check-only, not native execution evidence.
+- **Windows native tooling beside a land gate, 2026-10-31:** record once:
+  PE fixture build **76 s** (run RED: `index 0 out of bounds (length 0)`,
+  fixture fixed and a new build passed 91 cases); ELF header/table build
+  **111 s** (`ELF program tables: 75 cases OK`); real archive contract build
+  **63 s** (run RED on unsupported COFF long names); extended archive-reader
+  build **72 s** (`GNU/BSD/COFF archive: 59 cases OK`). Zero new
+  `0xC0000142` in those jobs. Flow totals were 74.656/108.900/61.896/72.051 s,
+  phase C 66.916/101.888/57.346/65.809 s, nested cc
+  22.227/34.012/23.136/33.689 s, respectively. Counters overlap. Gate load and
+  cache state were uncontrolled; these are slow checks, not a performance
+  comparison or proof of a specific bottleneck. Do not repeat unchanged.
+  Evidence: `out/native-verify/now-{pe1,elf1,archive1,archive-unit1}.log`
+  and corresponding `.flows.tsv`. Real archive acceptance remains separate
+  from the 59-case synthetic reader pin. The final real-tool check then
+  passed on Windows x64: `archive batching: 12 cases OK`, build 42 s,
+  wall 75.745 s (`now-archive3.log`). LLVM 23.1.0 strip/ar single-vs-batch
+  bytes and member order matched, including adaptive >32767-unit stress.
+  Empty COFF output was 140 bytes: two zero-count linker indexes, no payload
+  members; both the local parser and actual `llvm-ar t` accepted it. Retained
+  bytes and xxd: `now-archive3.exe.empty.a`, SHA256
+  `f3f1ba33a5904f262a7297bee6c335c45cf31c71dfcd8a5b801a5175721d99bb`.
+  This does not prove other object formats, target linking or runtime use.
 - **Over budget now, warm:**
   - `src/compiler/compile.ms`: 79 s.
   - `src/codegen/raiser/eval.ms`: 62 s, mostly `numericCondsFailure`.

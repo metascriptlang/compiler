@@ -4,8 +4,8 @@
     prepareEngine.py --llvm-root DIR --lld-root DIR --output NEW_DIR
     prepareEngine.py --verify BUNDLE_DIR
 
-On Linux x86_64 prepareLinuxEngine.py makes the bundle and on Windows x86_64 prepareWindowsEngine.py; --verify here checks a
-bundle of any host. A Linux or Windows bundle is read by its own bin/llvm-readobj on a native host of its kind and by an
+On Linux prepareLinuxEngine.py makes the bundle and on Windows prepareWindowsEngine.py; --verify here checks a
+bundle of any host. A Linux or Windows bundle is read by its own bin/llvm-readobj on a matching native host and by an
 explicit --inspector elsewhere.
 
 The bundle is a local proof built from installed packages, not an upstream-controlled
@@ -25,9 +25,12 @@ import sys
 
 HOSTS = {"arm64": ("aarch64-macos", 0x0100000C), "x86_64": ("x86_64-macos", 0x01000007)}
 LINUX_X64 = "x86_64-linux"
+LINUX_ARM64 = "aarch64-linux"
 WINDOWS_X64 = "x86_64-windows"
-KNOWN_HOSTS = tuple(h[0] for h in HOSTS.values()) + (LINUX_X64, WINDOWS_X64)
-LLVM_TOOLS = ("llvm-ar", "llvm-ranlib", "llvm-strip", "llvm-objcopy", "llvm-nm", "llvm-dlltool", "dsymutil")
+WINDOWS_ARM64 = "aarch64-windows"
+KNOWN_HOSTS = tuple(h[0] for h in HOSTS.values()) + (LINUX_X64, LINUX_ARM64, WINDOWS_X64, WINDOWS_ARM64)
+LLVM_TOOLS = ("llvm-ar", "llvm-ranlib", "llvm-strip", "llvm-objcopy", "llvm-nm", "llvm-dlltool", "llvm-symbolizer",
+              "llvm-rc", "dsymutil")
 CLANG_ALIASES = ("clang", "clang++")
 LLD_ALIASES = ("ld64.lld", "ld.lld", "lld-link", "wasm-ld")
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/")
@@ -439,10 +442,10 @@ def auditLoadCommands(root):
 
 def verifyEngine(root, inspector=None):
     host, version = verifyContract(root)
-    if host == LINUX_X64:
+    if host in (LINUX_X64, LINUX_ARM64):
         import prepareLinuxEngine
         return host, version, prepareLinuxEngine.verifyEngine(root, host, version, inspector)
-    if host == WINDOWS_X64:
+    if host in (WINDOWS_X64, WINDOWS_ARM64):
         import prepareWindowsEngine
         return host, version, prepareWindowsEngine.verifyEngine(root, host, version, inspector)
     verifyLayout(root, version)
@@ -551,7 +554,7 @@ def main(argv):
     try:
         if args.verify:
             host, version, count = verifyEngine(args.verify, args.inspector)
-            print("verified host=%s version=%s %s=%d" % (host, version, {LINUX_X64: "elf", WINDOWS_X64: "pe"}.get(host, "macho"), count))
+            print("verified host=%s version=%s %s=%d" % (host, version, {LINUX_X64: "elf", LINUX_ARM64: "elf", WINDOWS_X64: "pe", WINDOWS_ARM64: "pe"}.get(host, "macho"), count))
             return 0
         if not (args.llvm_root and args.lld_root and args.output):
             parser.error("--llvm-root, --lld-root and --output are required")
