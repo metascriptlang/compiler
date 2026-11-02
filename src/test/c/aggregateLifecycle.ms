@@ -22,7 +22,7 @@ test "array fields are cycle edges only when their element graph reaches the own
 
 function declaresItemArrayOp(c: string, op: string, params: string): boolean {
 	for (const line of c.split("\n")) {
-		if (line.startsWith("void Item__") && line.indexOf("Array" + op + "__") > 0 && line.endsWith(params)) return true;
+		if (line.startsWith("void Item__") && line.indexOf("Array" + op + "(") > 0 && line.endsWith(params)) return true;
 	}
 	return false;
 }
