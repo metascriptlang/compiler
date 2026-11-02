@@ -1911,6 +1911,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return TypeRelation.Exact;
 	}
 	if (crossesCharBoundary(actual, formal)) return TypeRelation.None;
+	if (isDoubleKind(formal) && isDoubleKind(actual)) return TypeRelation.Exact;
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
 	if (isIntegerType(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
