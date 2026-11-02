@@ -1,9 +1,13 @@
 // The legal neighbours of spawnLendAsyncCalleeRefuses.ms: the caller changes what it passed to an
 // async callee only after awaiting the callee's promise, or the callee's spawn copies what it reads
 // so the task borrows nothing, or the callee spawns nothing and the change is an ordinary
-// interleaving on the caller's own thread. Each must build, run, and read the value it lent.
+// interleaving on the caller's own thread, also when that callee is passed as a function value.
+// A callee that throws before awaiting the promise it holds joins it at its exit, so its caller
+// changes the object only after the task is done: TSan sees no race there. Each must build, run,
+// and read the value it lent.
 //
 // GUARD-JS
+// GUARD-TSAN
 
 class Child { v: int32; constructor(v: int32) { this.v = v; } }
 class Holder {
@@ -76,12 +80,37 @@ async function sameThreadCallee(): Promise<int32> {
 
 async function joinBoth(): Promise<int32> {
 	const obj = new Holder(new Child(1));
-	const rs = await Promise.all([worker(obj), worker(obj)]);
+	const rs = await Promise.all([obj.sum(), obj.sum()]);
 	obj.child = new Child(rs[0] + rs[1]);
 	return obj.child.v;
 }
 
+async function run(f: (h: Holder) => Promise<int32>, h: Holder): Promise<int32> { return await f(h); }
+
+async function neverSpawnsAsValue(): Promise<int32> {
+	const obj = new Holder(new Child(1));
+	const p = run(noSpawn, obj);
+	obj.child = new Child(4);
+	return await p;
+}
+
+async function throwsBeforeAwait(h: Holder, fail: boolean): Promise<int32> {
+	const p = worker(h);
+	if (fail) throw new Error("before the await");
+	return await p;
+}
+
+async function changeAfterThrow(): Promise<int32> {
+	const obj = new Holder(new Child(5));
+	try {
+		await throwsBeforeAwait(obj, true);
+	} catch (e) {
+		obj.child = new Child(1);
+	}
+	return obj.child.v;
+}
+
 const r = await awaitHandleFirst() + await awaitCallDirectly() + await methodAwaitedFirst() + await isolatedCallee()
-	+ await sameThreadCallee() + await joinBoth();
-if (r == 3003 + 2000 + 40 + 1000 + 6 + 2000) console.log("GUARD-OK");
+	+ await sameThreadCallee() + await joinBoth() + await neverSpawnsAsValue() + await changeAfterThrow();
+if (r == 3003 + 2000 + 40 + 1000 + 6 + 20 + 4 + 1) console.log("GUARD-OK");
 else console.log(`unexpected r=${r}`);
