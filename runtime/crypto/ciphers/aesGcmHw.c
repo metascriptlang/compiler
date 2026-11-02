@@ -42,6 +42,12 @@
 #pragma GCC target ("aes,pclmul,ssse3,sse4.1")
 #endif
 
+#if defined(__clang__)
+#define MS_UNROLL _Pragma("clang loop unroll(full)")
+#else
+#define MS_UNROLL _Pragma("GCC unroll 16")
+#endif
+
 #if defined(MS_GCM_HW_ARM)
 
 typedef uint8x16_t V;
@@ -73,11 +79,15 @@ static inline V aesRounds(V b, const V* rk, int nr) {
 	for (int r = 0; r < nr - 1; r++) b = vaesmcq_u8(vaeseq_u8(b, rk[r]));
 	return veorq_u8(vaeseq_u8(b, rk[nr - 1]), rk[nr]);
 }
-static inline void aesRounds8(V* b, const V* rk, int nr) {
-	for (int r = 0; r < nr - 1; r++) {
-		for (int i = 0; i < 8; i++) b[i] = vaesmcq_u8(vaeseq_u8(b[i], rk[r]));
+static inline __attribute__((always_inline)) void aesRounds8N(V* b, const V* rk, const int nr) {
+	V t[8];
+	MS_UNROLL for (int i = 0; i < 8; i++) t[i] = b[i];
+	MS_UNROLL for (int r = 0; r < nr - 1; r++) {
+		const V k = rk[r];
+		MS_UNROLL for (int i = 0; i < 8; i++) t[i] = vaesmcq_u8(vaeseq_u8(t[i], k));
 	}
-	for (int i = 0; i < 8; i++) b[i] = veorq_u8(vaeseq_u8(b[i], rk[nr - 1]), rk[nr]);
+	const V k = rk[nr - 1], last = rk[nr];
+	MS_UNROLL for (int i = 0; i < 8; i++) b[i] = veorq_u8(vaeseq_u8(t[i], k), last);
 }
 
 static int hwAvailable(void) {
@@ -113,12 +123,16 @@ static inline V aesRounds(V b, const V* rk, int nr) {
 	for (int r = 1; r < nr; r++) b = _mm_aesenc_si128(b, rk[r]);
 	return _mm_aesenclast_si128(b, rk[nr]);
 }
-static inline void aesRounds8(V* b, const V* rk, int nr) {
-	for (int i = 0; i < 8; i++) b[i] = _mm_xor_si128(b[i], rk[0]);
-	for (int r = 1; r < nr; r++) {
-		for (int i = 0; i < 8; i++) b[i] = _mm_aesenc_si128(b[i], rk[r]);
+static inline __attribute__((always_inline)) void aesRounds8N(V* b, const V* rk, const int nr) {
+	V t[8];
+	const V first = rk[0];
+	MS_UNROLL for (int i = 0; i < 8; i++) t[i] = _mm_xor_si128(b[i], first);
+	MS_UNROLL for (int r = 1; r < nr; r++) {
+		const V k = rk[r];
+		MS_UNROLL for (int i = 0; i < 8; i++) t[i] = _mm_aesenc_si128(t[i], k);
 	}
-	for (int i = 0; i < 8; i++) b[i] = _mm_aesenclast_si128(b[i], rk[nr]);
+	const V last = rk[nr];
+	MS_UNROLL for (int i = 0; i < 8; i++) b[i] = _mm_aesenclast_si128(t[i], last);
 }
 
 static int hwAvailable(void) {
@@ -126,6 +140,13 @@ static int hwAvailable(void) {
 }
 
 #endif
+
+/* One body per round count, so each loop has a constant trip count and unrolls. */
+static void aesRounds8(V* b, const V* rk, int nr) {
+	if (nr == 10) aesRounds8N(b, rk, 10);
+	else if (nr == 12) aesRounds8N(b, rk, 12);
+	else aesRounds8N(b, rk, 14);
+}
 
 /* GHASH runs on each block read as a big-endian integer. Key powers are stored multiplied by x
  * (twisted), which folds the bit reflection of GCM into the reduction below. */
