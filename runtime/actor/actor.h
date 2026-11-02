@@ -1858,7 +1858,7 @@ static inline bool msActorPollEventLoop(void) {
 static inline bool msActorLocalRunQueued(void) {
     int id = msMySchedulerID;
     return id >= 0 && id < msSchedulerCount
-        && atomic_load_explicit(&msSchedulers[id].runHead, memory_order_acquire) != NULL;
+        && atomic_load_explicit(&msSchedulers[id].runHead, memory_order_relaxed) != NULL;
 }
 
 extern pthread_once_t msActorSystemOnce;
