@@ -642,9 +642,8 @@ export function declaredTypeSym(t: Type): Symbol | null {
 	const nominal = nominalTypeSym(t);
 	if (nominal != null) return nominal;
 	const s = addressed(t);
-	if ((s.kind == TypeKind.Union || s.kind == TypeKind.Distinct) && s.sym != null && s.sym.symbolKind == SymbolKind.TypeAlias) return s.sym;
-	const base = s.kind == TypeKind.GenericInstance ? s.typeExtra : null;
-	if (base != null && base.kind == TypeKind.Distinct && base.sym != null && base.sym.symbolKind == SymbolKind.TypeAlias) return base.sym;
+	const declared = s.kind == TypeKind.GenericInstance && s.typeExtra != null ? s.typeExtra : s;
+	if ((declared.kind == TypeKind.Union || declared.kind == TypeKind.Distinct) && declared.sym != null && declared.sym.symbolKind == SymbolKind.TypeAlias) return declared.sym;
 	return null;
 }
 
@@ -2148,7 +2147,7 @@ test "instance extension isStatic false" {
 	assert !found[0].isStatic;
 }
 
-import { createUnion, numberType, stringType } from "./types";
+import { createUnion, createGenericInstance, numberType, stringType } from "./types";
 
 test "a named union is owned by its declaring alias symbol, an anonymous one by none" {
 	const named = createUnion([numberType(), stringType()]);
@@ -2156,4 +2155,11 @@ test "a named union is owned by its declaring alias symbol, an anonymous one by 
 	const alias = makeSymbol("U", SymbolKind.TypeAlias, named, false);
 	named.sym = alias;
 	assert declaredTypeSym(named) == alias;
+}
+
+test "a generic instance of a union alias is owned by that alias symbol" {
+	const body = createUnion([numberType(), stringType()]);
+	const alias = makeSymbol("Gen", SymbolKind.TypeAlias, body, false);
+	body.sym = alias;
+	assert declaredTypeSym(createGenericInstance(body, [numberType()])) == alias;
 }
