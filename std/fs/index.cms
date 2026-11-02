@@ -73,6 +73,8 @@ when (windows) {
 	extern const FILE_SHARE_DELETE: uint32;
 	extern const OPEN_EXISTING: uint32;
 	extern const FILE_FLAG_BACKUP_SEMANTICS: uint32;
+	extern const FILE_FLAG_OPEN_REPARSE_POINT: uint32;
+	extern const ERROR_CANT_ACCESS_FILE: uint32;
 	extern const FILE_NAME_NORMALIZED: uint32;
 	extern const VOLUME_NAME_DOS: uint32;
 	extern const FileBasicInfo: int32;
@@ -286,16 +288,21 @@ when (windows) {
 		freeWide(wide);
 		return found;
 	}
-	function openForAttributes(path: Ptr<uint16>): Ptr<void> {
+	function openAttributesWith(path: Ptr<uint16>, flags: uint32): Ptr<void> {
 		return CreateFileW(
 			path,
 			FILE_READ_ATTRIBUTES,
 			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			null,
 			OPEN_EXISTING,
-			FILE_FLAG_BACKUP_SEMANTICS,
+			flags,
 			null,
 		);
+	}
+	function openForAttributes(path: Ptr<uint16>): Ptr<void> {
+		const file = openAttributesWith(path, FILE_FLAG_BACKUP_SEMANTICS);
+		if (file != INVALID_HANDLE_VALUE || GetLastError() != ERROR_CANT_ACCESS_FILE) return file;
+		return openAttributesWith(path, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
 	}
 	function joinWords(high: uint32, low: uint32): uint64 {
 		return ((high as uint64) << 32) | (low as uint64);
