@@ -92,8 +92,8 @@ MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
 MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
 MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
 MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
-MS_ACTOR_JOB_PATH void msActorRootsPark(msActor* a);
-MS_ACTOR_JOB_PATH void msActorRootsResume(msActor* a);
+MS_ACTOR_JOB_PATH void msActorVisitPark(msActor* a);
+MS_ACTOR_JOB_PATH void msActorVisitResume(msActor* a);
 
 /* Set by the first thread to enter an actor; a thread whose msCurrentActor is set has
  * set it itself, so a relaxed read is enough and a program without actors reads no TLS. */
@@ -111,6 +111,18 @@ static inline msActor* msActorCurrentForJobs(void) {
 static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
 	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) return msActorStamp(cb, drop, chain);
 	return cb;
+}
+
+/* Work a visit runs that is not the actor's (a nested loop turn, an inline task) runs
+ * under the thread's identity and cycle roots (ULTRALOCK M1, A4). */
+static inline msActor* msActorStepOut(void) {
+	msActor* a = msActorCurrentForJobs();
+	if (__builtin_expect(a != NULL, 0)) msActorVisitPark(a);
+	return a;
+}
+
+static inline void msActorStepBack(msActor* a) {
+	if (__builtin_expect(a != NULL, 0)) msActorVisitResume(a);
 }
 #else
 #define MS_ACTOR_JOBS 0

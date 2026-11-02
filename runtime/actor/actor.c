@@ -140,9 +140,15 @@ static msActorJob* msActorJobNew(msClosure cb, void (*drop)(void*), void* chain)
     return r;
 }
 
-void msActorRootsPark(msActor* a) { msRootsLeaveActor(&a->roots); }
+void msActorVisitPark(msActor* a) {
+    msCurrentActor = NULL;
+    msRootsLeaveActor(&a->roots);
+}
 
-void msActorRootsResume(msActor* a) { msRootsEnterActor(&a->roots); }
+void msActorVisitResume(msActor* a) {
+    msRootsEnterActor(&a->roots);
+    msCurrentActor = a;
+}
 
 msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
     return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };

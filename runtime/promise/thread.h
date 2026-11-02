@@ -167,12 +167,11 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
 	if (!cancelledBeforeStart) {
 #if MS_ACTOR_JOBS
-		msActor* actor = msActorCurrentForJobs();
-		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
+		msActor* actor = msActorStepOut();
 #endif
 		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
 #if MS_ACTOR_JOBS
-		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
+		msActorStepBack(actor);
 #endif
 	}
 #if MS_ACTOR_JOBS

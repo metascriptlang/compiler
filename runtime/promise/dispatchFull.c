@@ -742,8 +742,7 @@ bool msWorkerLoopPending(void) {
 bool msWorkerLoopPump(void) {
     if (tlWorkerChannel == NULL) return false;
     const msTaskFrame* frame = msPoolFrameSwap(NULL);
-    msActor* actor = msActorCurrentForJobs();
-    if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
+    msActor* actor = msActorStepOut();
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
     bool didWork = msChannelDrain(tlWorkerChannel);
@@ -751,7 +750,7 @@ bool msWorkerLoopPump(void) {
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
     msSettleWorkerWork();
-    if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
+    msActorStepBack(actor);
     msPoolFrameSwap(frame);
     return didWork;
 }
@@ -996,16 +995,9 @@ static bool msRunOnceIn(int timeoutMs);
 
 bool msRunOnce(int timeoutMs) {
 	const msTaskFrame* frame = msPoolFrameSwap(NULL);
-	msActor* actor = msActorCurrentForJobs();
-	if (__builtin_expect(actor != NULL, 0)) {
-		msCurrentActor = NULL;
-		msActorRootsPark(actor);
-	}
+	msActor* actor = msActorStepOut();
 	bool didWork = msRunOnceIn(timeoutMs);
-	if (__builtin_expect(actor != NULL, 0)) {
-		msActorRootsResume(actor);
-		msCurrentActor = actor;
-	}
+	msActorStepBack(actor);
 	msPoolFrameSwap(frame);
 	return didWork;
 }
