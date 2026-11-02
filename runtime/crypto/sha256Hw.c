@@ -29,11 +29,8 @@
 
 static int msSha256X86HasSupport(void)
 {
-#if defined(MS_SHA256_NO_X86_SHA)
-    return 0;
-#else
     static int cached = -1;
-    int known = cached;
+    int known = __atomic_load_n(&cached, __ATOMIC_RELAXED);
     if (known < 0) {
         unsigned eax, ebx, ecx, edx;
         known = 0;
@@ -41,10 +38,9 @@ static int msSha256X86HasSupport(void)
             __get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx) && (ebx & (1u << 29))) {
             known = 1;
         }
-        cached = known;
+        __atomic_store_n(&cached, known, __ATOMIC_RELAXED);
     }
     return known;
-#endif
 }
 
 #define MS_X86_QUAD(m0, m1, m2, m3, k) \
