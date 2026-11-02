@@ -29,6 +29,8 @@ export function createDefineTable(): DefineTable {
 	defineSymbol(t, "mscEmitsDecrefFuture", "true");
 	// std reads the declared toJSON and inspect of a type only under this symbol: a compiler built by one that predates the host function builds the tree with the lookup answering none, so the guard goes one sync cycle after the compiler lands.
 	defineSymbol(t, "mscHasDeclaredCallType", "true");
+	// std sort and reverse return a Borrow only under this symbol: an older builder emits that Borrow as the address of the callee's parameter slot, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscReturnsBorrowedReference", "true");
 	return t;
 }
 
