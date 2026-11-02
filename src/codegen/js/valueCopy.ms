@@ -24,8 +24,28 @@ export function jsMovedValue(t: Type | null): string {
 	const repr = valueCopyRepr(t);
 	if (repr == null) return "";
 	if (repr.kind == TypeKind.Array) return "[]";
-	if (repr.kind == TypeKind.Struct && isStructType(repr) && !repr.typeFlags.has(TypeFlag.IsMaybe)) return defaultValueOf(t, []);
+	if (repr.kind == TypeKind.Struct && isStructType(repr) && !repr.typeFlags.has(TypeFlag.IsMaybe)) return holdsOwnedParts(t, []) ? defaultValueOf(t, []) : "";
 	return repr.kind == TypeKind.String ? "\"\"" : "";
+}
+
+function holdsOwnedParts(declared: Type | null, open: Type[]): boolean {
+	if (declared != null && isNullableShape([declared])) return true;
+	const t = valueCopyRepr(declared);
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct && isStructType(t) && !t.typeFlags.has(TypeFlag.IsMaybe)) {
+		if (open.includes(t)) return false;
+		open.push(t);
+		let owned = false;
+		for (const c of t.typeChildren) owned = owned || holdsOwnedParts(c, open);
+		open.pop();
+		return owned;
+	}
+	if (t.kind == TypeKind.SizedArray) return holdsOwnedParts(t.typeReturn, open);
+	return !(t.kind == TypeKind.Number || t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64
+		|| t.kind == TypeKind.Int8 || t.kind == TypeKind.Int16 || t.kind == TypeKind.Int32
+		|| t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32
+		|| t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64 || t.kind == TypeKind.BigInt
+		|| t.kind == TypeKind.Boolean || t.kind == TypeKind.Enum || t.kind == TypeKind.Char);
 }
 
 function defaultValueOf(declared: Type | null, open: Type[]): string {
