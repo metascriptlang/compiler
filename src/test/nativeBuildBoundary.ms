@@ -2035,11 +2035,15 @@ function runSupportAlias(): void {
 	for (const tree of ["std", "runtime", "src", "vendor"]) {
 		need(command(dir, `link-${tree}`, "ln", ["-s", `${support}/${tree}`, `${dir}/tc/${tree}`]).code == 0, `link ${tree}`);
 	}
-	const spellings = [["physical", `${support}/runtime/core/string.h`], ["toolchain", `${dir}/tc/runtime/core/string.h`]];
+	const spellings = [
+		["physical", `import { msStringFromCStr } from "${support}/runtime/core/string.h";`],
+		["toolchain", `import { msStringFromCStr } from "${dir}/tc/runtime/core/string.h";`],
+		["directive", `@compile("${support}/runtime/drc.c");`],
+	];
 	for (const spelling of spellings) {
-		put(`${dir}/app/${spelling[0]}.ms`, `import { msStringFromCStr } from "${spelling[1]}";\nconst seven: int32 = 7;\nconsole.log(seven);\n`);
+		put(`${dir}/app/${spelling[0]}.ms`, `${spelling[1]}\nconst seven: int32 = 7;\nconsole.log(seven);\n`);
 		const built = command(`${dir}/app`, `alias-${spelling[0]}`, `${dir}/tc/msc`, ["run", `${spelling[0]}.ms`]);
-		record(`a support header imported by its ${spelling[0]} path through a linked toolchain links its C once`, "0 7", `${built.code} ${built.stdout.trim()}`);
+		record(`a support C file reached by its ${spelling[0]} spelling through a linked toolchain links once`, "0 7", `${built.code} ${built.stdout.trim()}`);
 	}
 }
 
