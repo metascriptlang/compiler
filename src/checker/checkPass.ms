@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { iterateThroughProxy } from "./proxy";
-import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
+import { isSuperReceiver, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
@@ -32,9 +32,10 @@ import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputed
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseNames, paramSymbol } from "./bindNames";
-import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
+import { getFlowTypeOfReference, isEndOfBodyReachable, isPostSuperFlowNode } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
+import { checkMovesIn } from "./moveCheck";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -714,10 +715,13 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext): Type | null {
 	if (returnTypeStr == "") return null;
 	if (paramTypeStrs.length != paramNames.length) return null;
 	const paramTypes: Type[] = [];
+	const mark = ctx.errors.length;
 	for (let i = 0; i < paramTypeStrs.length; i += 1) {
-		if (paramTypeStrs[i] == "") return null;
+		if (paramTypeStrs[i] == "") { ctx.errors.shrink(mark); return null; }
 		paramTypes.push(annotatedType(paramTypeStrs[i], operandAt(fn.typeExprs, i), ctx, 0, 0));
 	}
+	// The routine's own check resolves each parameter annotation again and reports it at its place.
+	ctx.errors.shrink(mark);
 	const predicate = predicateReturnOf(returnTypeStr, ctx, 0, 0, fn.typeExpr);
 	const closure = createClosureType(paramTypes, paramNames, predicate != null ? predicate.returnType : annotatedType(returnTypeStr, fn.typeExpr, ctx, 0, 0));
 	if (predicate != null) closure.typeExtra = predicate.sentinel;
@@ -1526,7 +1530,7 @@ function refuseAccessorOverField(ctx: CheckerContext, node: Node, receiver: Type
 function refuseExtensionOverMethod(ctx: CheckerContext, sym: Symbol, fnType: Type, name: string, at: SourceLocation): void {
 	if (ctx.extensionRegistry == null || sym.symbolKind != SymbolKind.Function || !isInstanceExtension(sym)) return;
 	const receiver = unwrapRef(fnType.typeChildren[0]);
-	if (receiver == null || withoutReadonlyView(receiver).kind == TypeKind.GenericParam) return;
+	if (receiver == null || receiver.kind == TypeKind.Error || withoutReadonlyView(receiver).kind == TypeKind.GenericParam) return;
 	for (const ext of findAllExtensionsByName(ctx.extensionRegistry, name)) {
 		const method = ext.sym;
 		if (method == null || method == sym || ext.isStatic || method.declNode == null || method.declNode.kind != NodeKind.MethodDecl) continue;
@@ -2136,10 +2140,37 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			if (d.ctorDefaults != null) {
 				for (const def of d.ctorDefaults) ctorDefaults.push(def);
 			}
+			if (extendsParentClass(classType)) refuseThisBeforeSuper(ctx, d.ctorBody);
 			node.paramSyms = checkFunctionBody(ctx, ctorSym, ctorParams, d.ctorBody, ctorLocs, ctorDefaults);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
+	};
+}
+
+function extendsParentClass(classType: Type): boolean {
+	const decl = classType.sym != null ? classDeclNodeOf(classType.sym) : null;
+	return decl != null && decl.kind == NodeKind.ClassDecl && (decl.data as ClassDeclData).classExtends != "";
+}
+
+// A derived constructor's `this` exists only once `super(...)` has returned, on every path to the access.
+function refuseThisBeforeSuper(ctx: CheckerContext, node: Node): void {
+	match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction | NodeKind.ClassDecl => {},
+		NodeKind.Identifier => {
+			if ((node.data as IdentifierData).name == "this" && node.flowNode != null && !isPostSuperFlowNode(node.flowNode)) {
+				addError(ctx, "'super' must be called before accessing 'this' in the constructor of a derived class", node.location.line, node.location.column);
+			}
+		},
+		NodeKind.MemberExpr => {
+			const object = (node.data as MemberExprData).object;
+			if (isSuperReceiver(object) && object.flowNode != null && !isPostSuperFlowNode(object.flowNode)) {
+				addError(ctx, "'super' must be called before accessing a property of 'super' in the constructor of a derived class", object.location.line, object.location.column);
+				return;
+			}
+			forEachChild(node, (child: Node): void => { refuseThisBeforeSuper(ctx, child); });
+		},
+		_ => { forEachChild(node, (child: Node): void => { refuseThisBeforeSuper(ctx, child); }); },
 	};
 }
 
@@ -2775,10 +2806,13 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
 	const fd = d.initializer.data as FunctionExprData;
 	const paramTypes: Type[] = [];
+	const mark = ctx.errors.length;
 	for (let i = 0; i < fd.funcExprParamTypes.length; i += 1) {
-		if (fd.funcExprParamTypes[i] == "") return;
+		if (fd.funcExprParamTypes[i] == "") { ctx.errors.shrink(mark); return; }
 		paramTypes.push(annotatedType(fd.funcExprParamTypes[i], operandAt(d.initializer.typeExprs, i), ctx, 0, 0));
 	}
+	// The function expression's own check resolves each parameter annotation again and reports it at its place.
+	ctx.errors.shrink(mark);
 	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, 0, 0) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
@@ -4499,6 +4533,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	analyzeParamMutations(ctx, program);
 	runDeferredEffectChecks(ctx);
 	checkViewBorrows(ctx, program);
+	checkMovesIn(ctx, program);
 	checkPointerEscapes(ctx, program);
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,

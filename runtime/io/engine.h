@@ -197,9 +197,10 @@ static inline int32_t msFsWriteSettled_ms(msString path) {
 static inline int32_t msIoRunOnce(int32_t timeoutMs) {
 	int32_t did = 0;
 #if MS_IO_HAS_ENGINE
+	extern bool msLoopHasReadyWork(void);
 	msIoEngine* eng = msGetIoEngineIfExists();
 	if (eng != NULL) {
-		did = (int32_t)msIoEnginePoll(eng, timeoutMs);
+		did = (int32_t)msIoEnginePoll(eng, timeoutMs > 0 && msLoopHasReadyWork() ? 0 : timeoutMs);
 	}
 #else
 	(void)timeoutMs;

@@ -9,6 +9,7 @@ import "./awaitOperand";
 import "./concurrencyBoundary";
 import "./testSuspension";
 import "./accessCheck";
+import "./sizedArrayAlloc";
 import "./float32";
 import "./intConv";
 import "./intArith";
@@ -30,3 +31,6 @@ import "./globalReferences";
 import "./bareReturnLineBreak";
 import "./throwLineBreak";
 import "./stringNative";
+
+import "./declarations";
+import "./declarationSource/emptySource";

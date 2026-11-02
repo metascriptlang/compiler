@@ -25,7 +25,13 @@ import {
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-@emit(`const msRsaPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+@emit(`function msRsaBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+const msRsaPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
 function msRsaPkSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
@@ -51,7 +57,7 @@ async function msRsaPkRun(job) {
 	const subtle = msRsaPkSubtle();
 	if (!subtle) return { value: [], error: msRsaPkNoSubtle };
 	try {
-		return { value: Array.from(new Uint8Array(await job(subtle))), error: "" };
+		return { value: msRsaBytes(new Uint8Array(await job(subtle))), error: "" };
 	} catch (e) {
 		return { value: [], error: msRsaPkMessage(e) };
 	}

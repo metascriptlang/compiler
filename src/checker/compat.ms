@@ -23,6 +23,7 @@ function isUntypedPointer(t: Type): boolean {
 function sameElement(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
 	if (sameType(a, b)) return true;
+	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return false;
 	if (isOpenElement(a) || isOpenElement(b)) return isAssignable(a, b);
 	const aDouble = a.kind == TypeKind.Number || a.kind == TypeKind.Float64;
 	const bDouble = b.kind == TypeKind.Number || b.kind == TypeKind.Float64;
@@ -1533,6 +1534,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (srcInner != null) src = srcInner;
 	const dstInner = nonNullMemberOfNullable(target);
 	if (dstInner != null) dst = dstInner;
+	if (isMaybeType(src) && src.typeReturn != null) src = src.typeReturn;
+	if (isMaybeType(dst) && dst.typeReturn != null) dst = dst.typeReturn;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {

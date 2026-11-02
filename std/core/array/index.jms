@@ -33,17 +33,19 @@ function checkedIndex<T>(this arr: Vec<T>, idx: number): int64 {
 export function at<T>(this arr: Vec<T>, idx: number): T {
 	return arr[arr.checkedIndex(idx)];
 }
-export extern function indexOf<T>(this arr: Vec<T>, value: T): number from "#.indexOf(#)";
-export extern function includes<T>(this arr: Vec<T>, value: T): boolean from "#.includes(#)";
+export extern function indexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): number from "#.indexOf(#, #)";
+export extern function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): boolean from "#.includes(#, #)";
 export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, values, keys, entries, flatMap } from "./shared";
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
-export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
-	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
+export function indexOf(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): number {
+	@emit(`var s = ${fromIndex} < 0 ? Math.max(0, ${view}.len + ${fromIndex}) : ${fromIndex};
+	var i = ${view}.base.indexOf(${value}, ${view}.off + s);
 	return i >= 0 && i < ${view}.off + ${view}.len ? i - ${view}.off : -1;`);
 	unreachable;
 }
-export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean {
-	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
+export function includes(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): boolean {
+	@emit(`var s = ${fromIndex} < 0 ? Math.max(0, ${view}.len + ${fromIndex}) : ${fromIndex};
+	var i = ${view}.base.indexOf(${value}, ${view}.off + s);
 	return i >= 0 && i < ${view}.off + ${view}.len;`);
 	unreachable;
 }

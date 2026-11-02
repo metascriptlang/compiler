@@ -10,7 +10,7 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, addIndirectSym, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
+	setLocalSymName, addIndirectSym, factClaimGeneric, genericClaimWins, scopeMangledParam, emitProcLocalsLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -111,10 +111,12 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (fnType == null) return;
 	if (hasGenericParams(fnType) || isGenericFn(d.fnFlags)) return;
 	const isGenericInstance = sym != null && sym.instantiatedFrom != null;
+	const isDrcHookFn = sym != null && hasFlag(sym, SymbolFlag.GeneratedOp);
+	const claimed = isGenericInstance || isDrcHookFn;
 	if (g.preparingDeclarations) {
-		if (isGenericInstance && g.preparationFacts != null
-				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
-			factClaimGeneric(g.preparationFacts, name, g.modulePath);
+		const home = isDrcHookFn || (sym != null && sym.modulePath == g.modulePath);
+		if (claimed && g.preparationFacts != null && genericClaimWins(g.preparationFacts, name, g.modulePath, home)) {
+			factClaimGeneric(g.preparationFacts, name, g.modulePath, home);
 		}
 		return;
 	}
@@ -123,13 +125,11 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (fnType.typeReturn == null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
-	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion.
-	const isDrcHookFn = sym != null && hasFlag(sym, SymbolFlag.GeneratedOp);
 	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
 
-	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)
+	const instanceAlreadyEmitted = claimed && (g.emittedInstances.has(name)
 		|| (g.emissionFacts.genericOwners.has(name) && g.emissionFacts.genericOwners.readonlyGet(name) != g.modulePath));
-	if (isGenericInstance && !instanceAlreadyEmitted && !inlineCopy) g.emittedInstances.add(name);
+	if (claimed && !instanceAlreadyEmitted && !inlineCopy) g.emittedInstances.add(name);
 
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static

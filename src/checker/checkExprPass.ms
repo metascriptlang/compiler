@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
@@ -1807,10 +1807,10 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 	if (d.operator == "+" && effLeft != null && effRight != null) {
 		if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
-			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effLeft, stringType()), d.left.location.line, d.left.location.column);
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effLeft, stringType()) + " in parentheses, (… as string), because 'as' binds looser than '+'", d.left.location.line, d.left.location.column);
 		}
 		if (effRight.kind == TypeKind.CString && isStringLike(effLeft)) {
-			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effRight, stringType()), d.right.location.line, d.right.location.column);
+			addError(ctx, "Type 'cstring' is not assignable to type 'string'" + cstringIntoStringHint(effRight, stringType()) + " in parentheses, (… as string), because 'as' binds looser than '+'", d.right.location.line, d.right.location.column);
 		}
 	}
 	if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
@@ -2175,7 +2175,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		const valNodes: Node[] = [];
 		let vi = 0;
 		while (vi < d.properties.length) {
-			valNodes.push(d.properties[vi]);
+			const value = d.properties[vi];
+			valNodes.push(value.nodeType != null && isAssignable(value.nodeType, mapValType) ? fitNode(ctx, value, mapValType, value.nodeType) : value);
 			vi = vi + 1;
 		}
 		const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
@@ -4240,6 +4241,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	wrapModifierTypes(fnFlags, modeTypes);
 	for (let si = 0; si < paramSyms.length; si += 1) {
 		if (modeTypes[si].kind == TypeKind.Sink && paramValueTypes[si].kind != TypeKind.Sink) setFlag(paramSyms[si], SymbolFlag.Sink);
+		if (modeTypes[si].kind == TypeKind.Var && paramValueTypes[si].kind != TypeKind.Var) paramSyms[si].symbolType = modeTypes[si];
 	}
 	if (body.kind == NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
@@ -4290,18 +4292,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturnStmts = savedReturnStmts;
 	ctx.inferredReturnTries = savedReturnTries;
 
-	const types: Type[] = [];
-	let ti = 0;
-	for (const p of params) {
-		let pType = inferredType();
-		if (ti < paramTypes.length && paramTypes[ti] != "") {
-			pType = annotatedType(paramTypes[ti], operandAt(fnNode.typeExprs, ti), ctx, 0, 0);
-		} else if (ctxParamTypes != null && ti < ctxParamTypes.length && ctxParamTypes[ti] != null) {
-			pType = ctxParamTypes[ti];
-		}
-		types.push(pType);
-		ti += 1;
-	}
+	const types: Type[] = paramValueTypes.slice(0, paramValueTypes.length);
 	wrapModifierTypes(fnFlags, types);
 	// Explicit return type annotation takes precedence over inferred (semProcAux parity).
 	// This ensures Result<Node, string> gets concrete types, not GenericParam("T") from
@@ -4582,6 +4573,7 @@ function createSyntheticToken(loc: SourceLocation): Token {
 
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
+registerReadonlyFieldWrite(reportReadonlyField);
 
 
 function checkedDistinctBase(srcType: Type, targetType: Type): Type | null {

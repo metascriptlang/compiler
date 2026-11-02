@@ -18,7 +18,13 @@ import { randomBytesSync } from "../index";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-@emit(`function msAesSubtle() {
+@emit(`function msAesBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+function msAesSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
 }
@@ -39,7 +45,7 @@ async function msAesGcmSeal(key, nonce, plain, aad) {
 		const out = new Uint8Array(12 + body.length);
 		out.set(iv);
 		out.set(body, 12);
-		return { value: Array.from(out), error: "" };
+		return { value: msAesBytes(out), error: "" };
 	} catch (e) {
 		return { value: [], error: msAesMessage(e) };
 	}
@@ -48,7 +54,7 @@ async function msAesGcmOpen(key, sealed, aad) {
 	try {
 		const all = Uint8Array.from(sealed);
 		const plain = await msAesSubtle().decrypt({ name: "AES-GCM", iv: all.subarray(0, 12), additionalData: Uint8Array.from(aad), tagLength: 128 }, key, all.subarray(12));
-		return { value: Array.from(new Uint8Array(plain)), error: "" };
+		return { value: msAesBytes(new Uint8Array(plain)), error: "" };
 	} catch (e) {
 		return { value: [], error: msAesMessage(e) };
 	}
@@ -58,7 +64,7 @@ async function msAesCbc(key, iv, data, encrypt) {
 		const s = msAesSubtle();
 		const algorithm = { name: "AES-CBC", iv: Uint8Array.from(iv) };
 		const out = encrypt ? await s.encrypt(algorithm, key, Uint8Array.from(data)) : await s.decrypt(algorithm, key, Uint8Array.from(data));
-		return { value: Array.from(new Uint8Array(out)), error: "" };
+		return { value: msAesBytes(new Uint8Array(out)), error: "" };
 	} catch (e) {
 		return { value: [], error: msAesMessage(e) };
 	}

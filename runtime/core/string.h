@@ -60,6 +60,33 @@ typedef struct {
 #define msIsLiteral(s) ((s).p == NULL || (msStrCapLoad((s).p) & MS_STRLIT_FLAG) != 0)
 
 /* ===== ASCII Fast Path ===== */
+#define MS_ASCII_BITS (MS_ASCII_CHECKED | MS_ASCII_FLAG)
+
+/* True when no byte of p[0, len) has the high bit set: 32-byte blocks, then words, then bytes. */
+static inline bool msBytesAscii(const unsigned char* p, int64_t len) {
+	const uint64_t high = 0x8080808080808080ull;
+	int64_t i = 0;
+	while (i + 32 <= len) {
+		uint64_t a, b, c, d;
+		memcpy(&a, p + i, 8);
+		memcpy(&b, p + i + 8, 8);
+		memcpy(&c, p + i + 16, 8);
+		memcpy(&d, p + i + 24, 8);
+		if (((a | b | c | d) & high) != 0) return false;
+		i += 32;
+	}
+	while (i + 8 <= len) {
+		uint64_t a;
+		memcpy(&a, p + i, 8);
+		if ((a & high) != 0) return false;
+		i += 8;
+	}
+	for (; i < len; i++) {
+		if (p[i] >= 0x80) return false;
+	}
+	return true;
+}
+
 /* Check and cache whether a string is pure ASCII. O(n) first call, O(1) after. */
 static inline bool msStringIsAscii(msString s) {
 	if (s.p == NULL || s.len == 0) return true;
@@ -68,11 +95,7 @@ static inline bool msStringIsAscii(msString s) {
 		return (cap & MS_ASCII_FLAG) != 0;
 	}
 	/* Scan once, cache result */
-	const unsigned char* p = (const unsigned char*)s.p->data;
-	bool ascii = true;
-	for (int64_t i = 0; i < s.len; i++) {
-		if (p[i] >= 0x80) { ascii = false; break; }
-	}
+	const bool ascii = msBytesAscii((const unsigned char*)s.p->data, s.len);
 	__atomic_store_n(&s.p->cap, cap | MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
 	return ascii;
 }
@@ -98,6 +121,34 @@ static inline bool msStrKnownAscii(const msStrPayload* p) {
 static inline bool msStringKnownAscii(msString s) { return msStrKnownAscii(s.p); }
 static inline void msStringMarkAscii(msString s) { msStrMarkAscii(s.p); }
 static inline void msStringMarkNonAscii(msString s) { msStrMarkNonAscii(s.p); }
+
+/* The cached ASCII answer of s as cap bits: the empty string is ASCII, an unchecked payload has none. */
+static inline int64_t msStringAsciiBits(msString s) {
+	if (s.p == NULL || s.len == 0) return MS_ASCII_BITS;
+	return msStrCapLoad(s.p) & MS_ASCII_BITS;
+}
+
+/* Answer bits of a ++ b: ASCII when both are, non-ASCII when either is, unknown otherwise. */
+static inline int64_t msAsciiBitsJoin(int64_t a, int64_t b) {
+	if ((a & b) == MS_ASCII_BITS) return MS_ASCII_BITS;
+	if ((a == MS_ASCII_CHECKED) | (b == MS_ASCII_CHECKED)) return MS_ASCII_CHECKED;
+	return 0;
+}
+
+/* Record `bits` on a payload this thread just allocated and owns exclusively (never a literal). */
+static inline void msStringSetAsciiBits(msString s, int64_t bits) {
+	if (s.p != NULL) s.p->cap = (s.p->cap & ~MS_ASCII_BITS) | bits;
+}
+
+/* The ASCII answer of the bytes copied from `from` to `to`, a fresh string, byte for byte. */
+static inline void msStringInheritAscii(msString to, msString from) {
+	msStringSetAsciiBits(to, msStringAsciiBits(from));
+}
+
+/* The ASCII answer of `to`, a fresh a ++ b. */
+static inline void msStringInheritAsciiJoin(msString to, msString a, msString b) {
+	msStringSetAsciiBits(to, msAsciiBitsJoin(msStringAsciiBits(a), msStringAsciiBits(b)));
+}
 
 /*
  * Static string literal constructor.
@@ -150,6 +201,13 @@ static inline int64_t msStrContentSize(int64_t cap) {
 /* Allocate + copy from raw bytes */
 msString msStringNew(const char* data, int64_t len);
 
+/* A fresh payload with the bytes of s and its cached ASCII answer, so a copy never rescans for .length. */
+static inline msString msStringDup(msString s) {
+	msString r = msStringNew(s.p->data, s.len);
+	msStringInheritAscii(r, s);
+	return r;
+}
+
 /* From null-terminated C string */
 msString msStringFromCStr(const char* cstr);
 
@@ -175,9 +233,6 @@ static inline void msStringDestroy(msString s) {
 static inline void msStringDestroyForce(msString s) {
 	if (s.p != NULL) free(s.p);
 }
-
-/* COW: copy literal before mutation */
-void msStringPrepareMutation(msString* s);
 
 /* Grow buffer for appending */
 void msStringPrepareAdd(msString* s, int64_t addLen);
@@ -250,6 +305,13 @@ static inline int64_t msMemMismatch(const uint8_t* a, int64_t aLen, const uint8_
 	int64_t n = aLen < bLen ? aLen : bLen;
 	if (a == b) return n;
 	int64_t i = 0;
+	while (i + 32 <= n) {
+		uint64_t x[4], y[4];
+		memcpy(x, a + i, 32);
+		memcpy(y, b + i, 32);
+		if (((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3])) != 0) break;
+		i += 32;
+	}
 	while (i + 8 <= n) {
 		uint64_t wa, wb;
 		memcpy(&wa, a + i, 8);
@@ -327,7 +389,15 @@ static inline msString msStringCharAt(msString s, int64_t idx) {
 }
 
 /* Character code at index (UTF-16 code unit, TypeScript parity). Returns -1 if out of range. */
-int64_t msStringCharCodeAt(msString s, int64_t idx);
+int64_t msStringCharCodeAtSlow(msString s, int64_t idx);
+
+static inline int64_t msStringCharCodeAt(msString s, int64_t idx) {
+	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len &&
+	    (msStrCapLoad(s.p) & MS_ASCII_BITS) == MS_ASCII_BITS) {
+		return (unsigned char)s.p->data[idx];
+	}
+	return msStringCharCodeAtSlow(s, idx);
+}
 
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
@@ -349,10 +419,35 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
 /* Count UTF-16 code units (TypeScript .length parity) */
 /* BMP chars (1-3 UTF-8 bytes) = 1 unit, supplementary (4 bytes) = 2 units */
-int64_t msStringLength(msString s);
+int64_t msStringLengthSlow(msString s);
+
+static inline int64_t msStringLength(msString s) {
+	if (s.p == NULL) return 0;
+	if ((msStrCapLoad(s.p) & MS_ASCII_BITS) == MS_ASCII_BITS) return s.len;
+	return msStringLengthSlow(s);
+}
 
 /* Count Unicode scalar values (codepoints) */
 int64_t msStringUnicodeLength(msString s);
+
+/* UTF-16 units of well-formed WTF-8: one per non-continuation byte, one more per 4-byte lead. */
+static inline int64_t msUtf16Units(const unsigned char* p, int64_t len) {
+	const uint64_t high = 0x8080808080808080ull;
+	int64_t units = 0;
+	int64_t i = 0;
+	for (; i + 8 <= len; i += 8) {
+		uint64_t w;
+		memcpy(&w, p + i, 8);
+		const uint64_t cont = w & ~(w << 1) & high;
+		const uint64_t astral = w & (w << 1) & (w << 2) & (w << 3) & high;
+		units += 8 - __builtin_popcountll(cont) + __builtin_popcountll(astral);
+	}
+	for (; i < len; i++) {
+		units += (p[i] & 0xC0) != 0x80;
+		units += p[i] >= 0xF0;
+	}
+	return units;
+}
 
 /* Byte length (for binary protocols like LSP Content-Length) */
 static inline int64_t msStringByteLength(msString s) {
@@ -395,20 +490,8 @@ msString msStringJoin(msStringArray* arr, msString sep);
 
 double msStringParseFloat(msString s);
 
-/* ===== Set Length ===== */
-
-/* Resize string, zero-filling on growth */
-void msStringSetLength(msString* s, int64_t newLen);
-
-/* ===== Capacity ===== */
-
-/* Return allocated capacity, stripping literal flag */
-int64_t msStringCapacity(msString s);
-
-/* ===== In-Place Operations (Standard reference patterns) ===== */
-
-/* In-place substring via memmove */
-void msStringSetSlice(msString* s, int64_t start, int64_t end);
+/* Empty a string but keep its buffer, for a reused response or request buffer */
+void msStringClear(msString* s);
 
 /* Trim and case conversion with the ECMAScript result (runtime/core/stringCase.c) */
 msString msStringTrim(msString s);
@@ -416,9 +499,6 @@ msString msStringTrimStart(msString s);
 msString msStringTrimEnd(msString s);
 msString msStringToUpperCase(msString s);
 msString msStringToLowerCase(msString s);
-
-/* In-place strip whitespace */
-void msStringStripInPlace(msString* s);
 
 /* ===== Single-Char Interning Table ===== */
 /* 128 precomputed ASCII single-char strings, const payloads (.rodata),

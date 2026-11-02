@@ -2134,12 +2134,30 @@ function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 	}
 	const bound = constRefAlias(sym);
 	if (bound != null && viewReturnFault(bound, routine, stepped) == "") return "";
+	if (hasFlag(sym, SymbolFlag.ForVar) && !hasFlag(sym, SymbolFlag.Mutable) && sym.symbolType != null && holdsReference(sym)) {
+		const iterated: Node[] = [];
+		collectForOfIterable(routine, sym, iterated);
+		if (iterated.length == 1 && viewReturnFault(iterated[0], routine, true) == "") return "";
+	}
 	return `'${sym.name}' escapes its stack frame`;
+}
+
+function holdsReference(sym: Symbol): boolean {
+	return withoutReadonlyView(withoutNullMember(withoutReadonlyView(sym.symbolType))).kind == TypeKind.Ref;
+}
+
+function collectForOfIterable(node: Node | null, sym: Symbol, out: Node[]): void {
+	if (node == null || out.length > 0) return;
+	if (node.kind == NodeKind.ForOfStmt && node.resolvedSym == sym) {
+		out.push((node.data as ForOfStmtData).forOfIterable);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { collectForOfIterable(child, sym, out); });
 }
 
 function constRefAlias(sym: Symbol): Node | null {
 	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Mutable) || hasFlag(sym, SymbolFlag.Global) || sym.symbolType == null) return null;
-	if (withoutReadonlyView(withoutNullMember(withoutReadonlyView(sym.symbolType))).kind != TypeKind.Ref) return null;
+	if (!holdsReference(sym)) return null;
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.VariableDecl || decl.resolvedSym != sym) return null;
 	return (decl.data as VariableDeclData).initializer;

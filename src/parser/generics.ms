@@ -1,6 +1,8 @@
 // Angle-bracket scanning - generic parameter lists and call-site type arguments
 
 import { Token, TokenKind, isIdentLikeKind } from "../lexer/token";
+import { Node, NodeKind, TypeAnnotationData, createNodeAt } from "../ast/node";
+import { captureType } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { ParserState, createState, current, advance, peek, peekIndex, tokenAt, skipComments, isAtEnd, addError } from "./cursor";
 
@@ -31,17 +33,18 @@ export function splitAngleAssign(state: ParserState): void {
 	const pos = skipComments(state, state.position);
 	if (pos >= state.tokens.length) return;
 	const tok = state.tokens[pos];
-	const closer = match (tok.kind) {
-		TokenKind.GtEq => TokenKind.Gt,
-		TokenKind.GtGtEq => TokenKind.GtGt,
-		TokenKind.GtGtGtEq => TokenKind.GtGtGt,
+	const remainder = match (tok.kind) {
+		TokenKind.GtEq => TokenKind.Assign,
+		TokenKind.GtGt => TokenKind.Gt,
+		TokenKind.GtGtGt => TokenKind.GtGt,
+		TokenKind.GtGtEq => TokenKind.GtEq,
+		TokenKind.GtGtGtEq => TokenKind.GtGtEq,
 		_ => TokenKind.Eof,
 	};
-	if (closer == TokenKind.Eof) return;
-	const width = tok.value.byteLength - 1;
-	state.tokens[pos] = { kind: closer, value: ">".repeat(width), line: tok.line, column: tok.column, endLine: tok.line, endColumn: tok.column + width, rawValue: "" };
-	const assign: Token = { kind: TokenKind.Assign, value: "=", line: tok.line, column: tok.column + width, endLine: tok.endLine, endColumn: tok.endColumn, rawValue: "" };
-	state.tokens.splice(pos + 1, 0, assign);
+	if (remainder == TokenKind.Eof) return;
+	state.tokens[pos] = { kind: TokenKind.Gt, value: ">", line: tok.line, column: tok.column, endLine: tok.line, endColumn: tok.column + 1, rawValue: "" };
+	const rest: Token = { kind: remainder, value: tok.value.byteSlice(1, tok.value.byteLength), line: tok.line, column: tok.column + 1, endLine: tok.endLine, endColumn: tok.endColumn, rawValue: "" };
+	state.tokens.splice(pos + 1, 0, rest);
 	state.splits.push({ position: pos, original: tok });
 }
 
@@ -56,6 +59,7 @@ function captureConstraint(state: ParserState): CapturedConstraint {
 	let union = false;
 	let closed = 0;
 	while (!isAtEnd(state)) {
+		splitAngleAssign(state);
 		const k = current(state).kind;
 		if (nest == 0 && (k == TokenKind.Comma || k == TokenKind.Assign || k == TokenKind.Gt || k == TokenKind.GtGt || k == TokenKind.GtGtGt)) break;
 		let value = current(state).value;
@@ -84,11 +88,22 @@ function captureConstraint(state: ParserState): CapturedConstraint {
 // Capture generic param names: <T, U> → "T,U", no generics → ""
 // Same depth-tracking as skipGenericParams but returns names instead of discarding.
 export function captureGenericParams(state: ParserState): string {
-	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return "";
+	return captureDeclarationTypeParams(state).names;
+}
+
+export interface CapturedTypeParams {
+	names: string;
+	defaults: (Node | null)[];
+}
+
+export function captureDeclarationTypeParams(state: ParserState): CapturedTypeParams {
+	const defaults: (Node | null)[] = [];
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return { names: "", defaults };
 	advance(state); // consume <
 	let names = "";
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
+		splitAngleAssign(state);
 		if (current(state).kind == TokenKind.Const && depth == 1) {
 			const constTok = current(state);
 			addError(state, `const generic parameter '${peek(state, 1).value}' is not supported: a generic parameter is a type, pass the value as an argument at line ${constTok.line}`);
@@ -99,6 +114,7 @@ export function captureGenericParams(state: ParserState): string {
 		if (isIdentLikeKind(current(state).kind) && depth == 1) {
 			if (names != "") { names = `${names},`; }
 			names = `${names}${current(state).value}`;
+			defaults.push(null);
 			advance(state);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Extends && depth == 1) {
 				advance(state);
@@ -108,7 +124,10 @@ export function captureGenericParams(state: ParserState): string {
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign && depth == 1) {
 				advance(state);
-				skipGenericParamRest(state);
+				const captured = captureType(state);
+				const annotation = createNodeAt(NodeKind.TypeAnnotation, { annotationType: captured.text }, captured.expr.location);
+				annotation.typeExpr = captured.expr;
+				defaults[defaults.length - 1] = annotation;
 			}
 			continue;
 		}
@@ -118,7 +137,7 @@ export function captureGenericParams(state: ParserState): string {
 		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
 		advance(state);
 	}
-	return names;
+	return { names, defaults };
 }
 
 export function angleCloserWidth(kind: TokenKind): int32 {
@@ -242,4 +261,53 @@ test "genericCallParenOffset counts offsets without comments" {
 	assert genericCallParenOffset(state) == 8;
 	const bad = stateOf("< A ; B > ( )");
 	assert genericCallParenOffset(bad) == -1;
+}
+
+test "captureDeclarationTypeParams retains nullable structured defaults" {
+	const state = stateOf("type Defaults<T, U = T[], V = { a: string; b: int32 }, W = (a: string, b: int32) => string>");
+	advance(state);
+	advance(state);
+	const params = captureDeclarationTypeParams(state);
+	assert params.names == "T,U,V,W", params.names;
+	assert params.defaults.length == 4;
+	assert params.defaults[0] == null;
+	for (let i = 1; i < params.defaults.length; i += 1) {
+		const annotation = params.defaults[i];
+		assert annotation != null;
+		if (annotation != null) {
+			const expr = annotation.typeExpr;
+			assert expr != null;
+			if (expr != null) assert expr.kind == (i == 1 ? NodeKind.TypeArray : i == 2 ? NodeKind.TypeObject : NodeKind.TypeFunction);
+		}
+	}
+}
+test "captureDeclarationTypeParams retains nested angle defaults and constraints" {
+	const state = stateOf("type Defaults<T extends string = string, U = Array<Array<T>>>;");
+	advance(state);
+	advance(state);
+	const params = captureDeclarationTypeParams(state);
+	assert params.names == "T:string,U", params.names;
+	assert params.defaults.length == 2;
+	const annotation = params.defaults[1];
+	assert annotation != null;
+	if (annotation != null) {
+		const expr = annotation.typeExpr;
+		assert expr != null;
+		if (expr != null) assert expr.kind == NodeKind.TypeGeneric;
+		assert (annotation.data as TypeAnnotationData).annotationType == "Array<Array<T>>";
+	}
+	assert current(state).kind == TokenKind.Semicolon;
+}
+
+
+test "captureDeclarationTypeParams splits compact constrained defaults one closer at a time" {
+	const state = stateOf("type Defaults<T extends Array<string>=Array<string>>=T;");
+	advance(state);
+	advance(state);
+	const params = captureDeclarationTypeParams(state);
+	assert params.defaults.length == 1;
+	const annotation = params.defaults[0];
+	assert annotation != null;
+	if (annotation != null) assert (annotation.data as TypeAnnotationData).annotationType == "Array<string>";
+	assert current(state).kind == TokenKind.Assign;
 }

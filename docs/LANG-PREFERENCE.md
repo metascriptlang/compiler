@@ -520,7 +520,6 @@ count must survive until C is finished. Calling `process.exit()` is not a substi
 | `Span<T>` | Pointer plus length; bounded non-owning access, not copied elements. |
 | `Borrow<T>` | Reads an existing location; its owner/storage must outlive every use. |
 | `Cursor<T>` | Nullable non-owning edge; does not retain or clear itself when the referent dies. |
-| `Var<T>` | Type-level mutable-location form corresponding to `ref`; ordinary APIs should spell their parameter modes. |
 | `Readonly<T>` | Access restriction; storage and ownership still follow `T`. |
 
 Native `x as Ptr<T>` can take the address of an inline place; an integer-to-pointer conversion
@@ -541,7 +540,7 @@ charge unless an actual resource/ownership operation requires taking over. The s
 | `onClone` | Return an independently valid owned `T` for a copy into a sink position. |
 | `onTrace` | Expose every managed edge required by the native cycle visitor. |
 
-For a struct/distinct `T`, mutating hooks take `this ref value: T` (or `this value: Var<T>`);
+For a struct/distinct `T`, mutating hooks take `this ref value: T`;
 copy/move add `source: T`, trace adds `env: Ptr<void>`. `onClone(this value: T): T` returns a fresh
 value; other hooks return void. Destroy can also take a plain/read-only value receiver.
 A class/interface already has reference storage: only destroy/trace apply, with a plain receiver,

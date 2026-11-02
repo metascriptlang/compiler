@@ -14,7 +14,13 @@ import { x25519 } from "../pure/x25519";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-@emit(`function msXSubtle() {
+@emit(`function msXBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+function msXSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
 }
@@ -34,7 +40,7 @@ async function msXFromRaw(raw) {
 		const key = await s.importKey("pkcs8", Uint8Array.from([...msXPkcs8Prefix, ...raw]), { name: "X25519" }, true, ["deriveBits"]);
 		const pubRaw = msXUnb64url((await s.exportKey("jwk", key)).x);
 		const pub = await s.importKey("raw", pubRaw, { name: "X25519" }, true, []);
-		return { key, pub, raw: Array.from(pubRaw), error: "" };
+		return { key, pub, raw: msXBytes(pubRaw), error: "" };
 	} catch (e) {
 		return { key: null, pub: null, raw: [], error: msXMessage(e) };
 	}
@@ -44,7 +50,7 @@ async function msXImportPublic(raw) {
 	if (!s) return { key: null, pub: null, raw: [], error: msXNoSubtle };
 	try {
 		const pub = await s.importKey("raw", Uint8Array.from(raw), { name: "X25519" }, true, []);
-		return { key: null, pub, raw: Array.from(raw), error: "" };
+		return { key: null, pub, raw: msXBytes(raw), error: "" };
 	} catch (e) {
 		return { key: null, pub: null, raw: [], error: msXMessage(e) };
 	}
@@ -54,7 +60,7 @@ async function msXDerive(key, pub) {
 	if (!s) return { value: [], error: msXNoSubtle };
 	try {
 		const bits = new Uint8Array(await s.deriveBits({ name: "X25519", public: pub }, key, 256));
-		return { value: Array.from(bits), error: "" };
+		return { value: msXBytes(bits), error: "" };
 	} catch (e) {
 		return { value: [], error: msXMessage(e) };
 	}
@@ -65,7 +71,7 @@ function msXNone() {
 function msXRandom() {
 	const out = new Uint8Array(32);
 	globalThis.crypto.getRandomValues(out);
-	return Array.from(out);
+	return msXBytes(out);
 }`);
 
 interface Imported {

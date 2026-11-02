@@ -53,7 +53,7 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames, macroPreludeSym } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
@@ -67,7 +67,7 @@ import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling, engineStdSymbol } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
-import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -273,7 +273,8 @@ function declaredTypeName(n: Node): string {
 
 function addOwnGenericNames(n: Node, out: string[]): void {
 	match (n.kind) {
-		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl => collectGenericNames(n.typeArg, out),
+		NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl => collectGenericNames(n.typeArg, out),
+		NodeKind.TypeAliasDecl => collectGenericNames((n.data as TypeAliasDeclData).aliasGenericParams, out),
 		NodeKind.FunctionDecl => { for (const g of extractGenericNames((n.data as FunctionDeclData).fnFlags)) out.push(g); },
 		NodeKind.MethodDecl => { for (const g of extractGenericNames((n.data as MethodDeclData).methodFlags)) out.push(g); },
 		NodeKind.ArrowFunction => { for (const g of extractGenericNames((n.data as ArrowFunctionData).arrowFlags)) out.push(g); },
@@ -288,6 +289,9 @@ function scopeQuoteTypeLocals(n: Node | null, outer: string[]): void {
 	forEachChild(n, (c: Node): void => { const name = declaredTypeName(c); if (name != "") visible.push(name); });
 	addOwnGenericNames(n, visible);
 	_quoteTypeLocals.set(n, visible);
+	if (n.genericDefaults != null) {
+		for (const annotation of n.genericDefaults) scopeQuoteTypeLocals(annotation, visible);
+	}
 	forEachChild(n, (c: Node): void => { scopeQuoteTypeLocals(c, visible); });
 }
 
@@ -354,8 +358,11 @@ function namesAnyOf(text: string, names: string[]): boolean {
 // names where the quote is written, and the text resolves where the quote expands.
 function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation): Node | null {
 	if (text == "" || _metaScope == null || _metaDefiner == "") return null;
-	const ctx = _metaScope!;
-	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
+	return typeOperandInScope(text, locals, _metaScope!, _metaDefiner, loc);
+}
+
+function typeOperandInScope(text: string, locals: string[], ctx: CheckerContext, definer: string, loc: SourceLocation): Node | null {
+	const home = scopeDefining(ctx.table, definer, definer);
 	if (home == null) return null;
 	const here = ctx.table.current;
 	ctx.table.current = home;
@@ -363,6 +370,24 @@ function quotedTypeOperand(text: string, locals: string[], loc: SourceLocation):
 	const operand = whole ?? typeNameBindings(text, locals, ctx, loc);
 	ctx.table.current = here;
 	return operand;
+}
+
+export function bindGenericDefaultTypes(node: Node, ctx: CheckerContext, definer: string): void {
+	if (node.genericDefaults == null) return;
+	const locals: string[] = [];
+	addOwnGenericNames(node, locals);
+	const defaults: (Node | null)[] = [];
+	for (const annotation of node.genericDefaults) {
+		if (annotation == null) {
+			defaults.push(null);
+			continue;
+		}
+		const copied = cloneNodeKeepSem(annotation);
+		copied.typeExpr = typeOperandInScope((copied.data as TypeAnnotationData).annotationType, locals, ctx, definer, copied.location);
+		if (copied.typeExpr != null) copied.typeExpr.flags = copied.typeExpr.flags.incl(NodeFlag.BoundSym);
+		defaults.push(copied);
+	}
+	node.genericDefaults = defaults;
 }
 
 function wholeTypeOperand(text: string, ctx: CheckerContext, loc: SourceLocation): Node | null {
@@ -455,6 +480,7 @@ function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: Sou
 		NodeKind.FunctionExpr => { const d = node.data as FunctionExprData; addQuotedSignature(keys, values, d.funcExprParamTypes, d.funcExprReturnType, typeLocalsAt(node), loc); },
 		NodeKind.MethodDecl => { const d = node.data as MethodDeclData; addQuotedSignature(keys, values, d.methodParamTypes, d.methodReturnType, typeLocalsAt(node), loc); },
 		NodeKind.ConstructorDecl => addQuotedSignature(keys, values, (node.data as ConstructorDeclData).ctorParamTypes, "", typeLocalsAt(node), loc),
+		NodeKind.TypeAnnotation => addQuotedTypeOperand(keys, values, (node.data as TypeAnnotationData).annotationType, typeLocalsAt(node), loc),
 		NodeKind.PropertyDecl => addQuotedTypeOperand(keys, values, (node.data as PropertyDeclData).propType, typeLocalsAt(node), loc),
 		NodeKind.SizeofExpr => addQuotedTypeOperand(keys, values, (node.data as SizeofExprData).sizeofType, typeLocalsAt(node), loc),
 		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
@@ -528,6 +554,15 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	values.push(mkNumber(node.location.endLine, loc));
 	keys.push("endColumn");
 	values.push(mkNumber(node.location.endColumn, loc));
+
+	if (node.genericDefaults != null) {
+		const defaults: Node[] = [];
+		for (const annotation of node.genericDefaults) {
+			defaults.push(annotation != null ? annotation : null as unknown as Node);
+		}
+		addNodeArrayField(keys, values, "genericDefaults", defaults, loc, includeTypeAst);
+	}
+	if (declaredTypeName(node) != "") addStrField(keys, values, "typeArg", node.typeArg, loc);
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
@@ -1121,6 +1156,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "aliasName", d.aliasName, loc);
 		addStrField(keys, values, "aliasType", d.aliasType, loc);
 		addBoolField(keys, values, "aliasIsDistinct", d.aliasIsDistinct, loc);
+		addStrField(keys, values, "aliasGenericParams", d.aliasGenericParams, loc);
 		return;
 	}
 	if (k == NodeKind.EnumDecl) {
@@ -1483,10 +1519,6 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	}, node.location);
 }
 
-// Compile-time diagnostics: `error("msg")` halts expansion and surfaces as
-// checker error; `warning("msg")` surfaces as checker warning but continues.
-// Rewritten to return statements with sentinel objects that expandMacroInvocation
-// detects before calling valueToNode.
 // Builds a MemberExpr: `obj.prop`
 function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
@@ -1502,38 +1534,51 @@ function consoleIdent(loc: SourceLocation): Node {
 	return id;
 }
 
-function tryRewriteCompileError(node: Node): Node {
+let _raisingCalls: HashSet<Node> = new HashSet<Node>();
+
+// `error(msg)` / `error(msg, node)` in any position becomes `error(payload)`, which the host bridge raises
+// as the "__MACRO_ERROR__:msg[\tline\tcolumn\tendLine\tendColumn]" text the VM reads back as the diagnostic.
+function tryRewriteMacroError(node: Node): Node {
+	if (node.kind != NodeKind.CallExpr || _raisingCalls.has(node)) return node;
+	const cd = node.data as CallExprData;
+	if (cd.callee == null || metaKind(cd.callee) != "MetaError") return node;
+	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
+	const loc = node.location;
+	let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
+		operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: cd.arguments[0],
+	}, loc);
+	if (cd.arguments.length == 2) {
+		const fields: string[] = ["line", "column", "endLine", "endColumn"];
+		for (const f of fields) {
+			payload = createNodeAt(NodeKind.BinaryExpr, {
+				operator: "+", left: payload, right: mkString("\t", loc),
+			}, loc);
+			payload = createNodeAt(NodeKind.BinaryExpr, {
+				operator: "+", left: payload, right: mkMember(cd.arguments[1], f, loc),
+			}, loc);
+		}
+	}
+	if (cd.callee.kind == NodeKind.Identifier && !cd.callee.flags.has(NodeFlag.BoundSym)) {
+		const sym = _metaBound.get(cd.callee) ?? macroPreludeSym(_metaScope!, (cd.callee.data as IdentifierData).name);
+		if (sym == null) throw new Error("internal: error() has no std/meta declaration to raise through");
+		cd.callee.resolvedSym = sym;
+		cd.callee.flags = cd.callee.flags.incl(NodeFlag.BoundSym);
+	}
+	cd.arguments = [payload];
+	_raisingCalls.add(node);
+	return node;
+}
+
+function tryRewriteCompileWarning(node: Node): Node {
 	if (node == null || node.kind != NodeKind.ExprStmt) return node;
 	const ed = node.data as ExprStmtData;
 	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return node;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null) return node;
-	const intrinsic = metaKind(cd.callee);
-	if (intrinsic != "MetaError" && intrinsic != "MetaWarning") return node;
+	if (cd.callee == null || metaKind(cd.callee) != "MetaWarning") return node;
 	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
 	const loc = node.location;
 	const msgArg = cd.arguments[0];
-	// 2-arg form: error("msg", astNode) — location from the input AST node.
-	// astNode.line and astNode.column carry the original source position.
-	const hasLoc = cd.arguments.length == 2;
-	const locNode = hasLoc ? cd.arguments[1] : null;
-	if (intrinsic == "MetaError") {
-		let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
-			operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: msgArg,
-		}, loc);
-		if (locNode != null) {
-			const fields: string[] = ["line", "column", "endLine", "endColumn"];
-			for (const f of fields) {
-				payload = createNodeAt(NodeKind.BinaryExpr, {
-					operator: "+", left: payload, right: mkString("\t", loc),
-				}, loc);
-				payload = createNodeAt(NodeKind.BinaryExpr, {
-					operator: "+", left: payload, right: mkMember(locNode, f, loc),
-				}, loc);
-			}
-		}
-		return createNodeAt(NodeKind.ThrowStmt, { throwArg: payload }, loc);
-	}
+	const locNode = cd.arguments.length == 2 ? cd.arguments[1] : null;
 	// warning("msg") / warning("msg", node) → console.log with encoded location.
 	// Non-halting — macro continues after the warning.
 	// Format: "__MACRO_WARN__:msg" or "__MACRO_WARN__:msg\tline\tcol"
@@ -1575,11 +1620,9 @@ function applyPreprocessRewrites(node: Node): Node {
 		return lowerQuoteExpr(node);
 	}
 
-	// Compile-time error/warning: rewrite `error("msg")` and `warning("msg")`
-	// in ExprStmt position to return statements with sentinel values.
-	// error → halts macro (returns sentinel), warning → stores msg + continues.
-	const errorRewrite = tryRewriteCompileError(node);
-	if (errorRewrite != node) return errorRewrite;
+	tryRewriteMacroError(node);
+	const warningRewrite = tryRewriteCompileWarning(node);
+	if (warningRewrite != node) return warningRewrite;
 
 	const callRewrite = tryRewriteCreateNodeAt(node);
 	if (callRewrite != node) return callRewrite;

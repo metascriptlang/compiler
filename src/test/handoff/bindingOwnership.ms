@@ -1,4 +1,4 @@
-import { compileToC, checkProjectDiagnostics, compileProjectToCWithStd, MapEntry } from "../helpers";
+import { compileToC, compileToJSWithStd, checkProjectDiagnostics, compileProjectToCWithStd, MapEntry } from "../helpers";
 import { checkModuleGraph } from "../../checker/orchestrator";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { Severity } from "../../checker/context";
@@ -19,6 +19,124 @@ test "bindingOwnership: explicit moves require ownership transfer rather than im
 	for (const item of cases) {
 		const result = compileToC(item.source);
 		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
+	}
+}
+
+function refusedOnBothBackends(source: string): string {
+	let c: Result<string, string>;
+	try { c = compileToC(source); } catch (e) { return "C threw: " + (e as Error).message; }
+	let js: Result<string, string>;
+	try { js = compileToJSWithStd(source); } catch (e) { return "JS threw: " + (e as Error).message; }
+	if (c.ok || js.ok) return (c.ok ? "C compiled" : "C refused") + ", " + (js.ok ? "JS compiled" : "JS refused");
+	return c.error + "\n" + js.error;
+}
+
+function keptOnBothBackends(source: string): string {
+	let c: Result<string, string>;
+	try { c = compileToC(source); } catch (e) { return "C threw: " + (e as Error).message; }
+	let js: Result<string, string>;
+	try { js = compileToJSWithStd(source); } catch (e) { return "JS threw: " + (e as Error).message; }
+	return (c.ok ? "" : "C: " + c.error) + (js.ok ? "" : " JS: " + js.error);
+}
+
+test "bindingOwnership: a variable read after its move is refused on every backend" {
+	const shapes = "class N { id: int32 = 1; }\nstruct P { x: int32; }\nfunction take(sink n: N): int32 { return n.id; }\n";
+	const refused = [
+		{ name: "a read after a move in one branch", body: "export function run(flag: boolean): int32 { const x = new N(); if (flag) take(move x); return x.id; }", variable: "x" },
+		{ name: "a move in a loop body", body: "export function run(): int32 { const x = new N(); let s = 0; for (let i = 0; i < 2; i++) s += take(move x); return s; }", variable: "x" },
+		{ name: "a move on one side of &&", body: "export function run(flag: boolean): int32 { const x = new N(); const ok = flag && take(move x) > 0; return ok ? x.id : 0; }", variable: "x" },
+		{ name: "a later argument of the same call", body: "function both(sink a: N, b: N): int32 { return a.id + b.id; }\nexport function run(): int32 { const x = new N(); return both(move x, x); }", variable: "x" },
+		{ name: "a write through the variable after its move", body: "class M { id: int32 = 1; other: int32 = 0; }\nfunction takeM(sink m: M): int32 { return m.id; }\nexport function run(): int32 { const x = new M(); x.other = takeM(move x); return 0; }", variable: "x" },
+		{ name: "a Vec read after its move", body: "export function run(): int32 { const v: Vec<int32> = [1, 2]; const w = move v; return w.length + v.length; }", variable: "v" },
+		{ name: "a POD struct read after its move", body: "export function run(): int32 { const a: P = { x: 7 }; const b = move a; return b.x + a.x; }", variable: "a" },
+		{ name: "an int read after its move", body: "export function run(): int32 { let n: int32 = 5; const m = move n; return m + n; }", variable: "n" },
+		{ name: "a read after a move that follows a for..of loop", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (const k of xs) s += k; const a = take(move x); return a + s + x.id; }", variable: "x" },
+		{ name: "a for..of loop that reads the name in the next outer iteration", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (let i = 0; i < 2; i++) { for (const k of xs) s += k + x.id; s += take(move x); } return s; }", variable: "x" },
+	];
+	for (const item of refused) {
+		const errors = refusedOnBothBackends(shapes + item.body);
+		assert errors.split("cannot move '" + item.variable + "': variable is still used after this point").length == 3, item.name + ": " + errors;
+	}
+	const kept = [
+		{ name: "a read in the branch that did not move", body: "export function run(flag: boolean): int32 { const x = new N(); return flag ? take(move x) : x.id; }" },
+		{ name: "a variable assigned again before the read", body: "export function run(): int32 { let x = new N(); const a = take(move x); x = new N(); return a + x.id; }" },
+		{ name: "a loop that assigns the variable again after the move", body: "export function run(): int32 { let x = new N(); let s = 0; for (let i = 0; i < 3; i++) { s += take(move x); x = new N(); } return s; }" },
+		{ name: "a variable declared in the loop body", body: "export function run(): int32 { let s = 0; for (let i = 0; i < 3; i++) { const x = new N(); s += take(move x); } return s; }" },
+		{ name: "a catch binding moved in a loop", body: "function boom(): int32 { throw new Error(\"b\"); }\nexport function run(): int32 { const kept: Error[] = []; for (let i = 0; i < 2; i++) { try { boom(); } catch (e) { kept.push(move e); } } return kept.length; }" },
+		{ name: "a POD struct moved at its last read", body: "export function run(): int32 { const a: P = { x: 7 }; const b = move a; return b.x; }" },
+		{ name: "a move after a for..of loop that reads the name", body: "export function run(): int32 { const xs: Vec<int32> = [1, 2]; const x = new N(); let s = 0; for (const k of xs) s += k + x.id; return s + take(move x); }" },
+		{ name: "a Vec filled in a for..of loop and moved after it", body: "function takeVec(sink v: Vec<int32>): int32 { return v.length; }\nexport function run(): int32 { const xs: Vec<int32> = [1, 2]; let known: Vec<int32> = []; for (const k of xs) known.push(k); return takeVec(move known); }" },
+	];
+	for (const item of kept) {
+		const errors = keptOnBothBackends(shapes + item.body);
+		assert errors == "", item.name + ": " + errors;
+	}
+}
+
+test "bindingOwnership: a read in a catch or a defer sees every move that can reach it" {
+	const shapes = "class N { id: int32 = 1; }\nfunction take(sink n: N): int32 { return n.id; }\nfunction takeVec(sink v: Vec<int32>): int32 { return v.length; }\nfunction risky(): void { throw new Error(\"r\"); }\n";
+	const refused = [
+		{ name: "a throw after an if, read in the catch", body: "export function run(flag: boolean): string { const x = new Error(\"b\"); try { if (flag) console.log(\"f\"); throw move x; } catch (e) { return x.message; } }", variable: "x" },
+		{ name: "a throw after a loop, read in the catch", body: "export function run(n: int32): string { const x = new Error(\"b\"); try { for (let i = 0; i < n; i++) console.log(\"i\"); throw move x; } catch (e) { return x.message; } }", variable: "x" },
+		{ name: "a move in a branch before a call that throws", body: "export function run(flag: boolean): int32 { const x = new N(); try { if (flag) console.log(\"f\"); if (flag) take(move x); risky(); } catch (e) { return x.id; } return 0; }", variable: "x" },
+		{ name: "a defer that reads a moved Vec", body: "export function run(): int32 { const x: Vec<int32> = [1, 2]; const n = takeVec(move x); defer console.log(x.length.toString()); return n; }", variable: "x" },
+		{ name: "a defer that reads a moved class", body: "export function run(): int32 { const x = new N(); take(move x); defer console.log(x.id.toString()); return 0; }", variable: "x" },
+	];
+	for (const item of refused) {
+		const errors = refusedOnBothBackends(shapes + item.body);
+		assert errors.split("cannot move '" + item.variable + "': variable is still used after this point").length == 3, item.name + ": " + errors;
+	}
+	const kept = [
+		{ name: "a throw whose catch reads another name", body: "export function run(): string { const x = new Error(\"b\"); const y = \"y\" + String(1); try { throw move x; } catch (e) { return y; } }" },
+		{ name: "a defer of an inner block that ends before the move", body: "export function run(): int32 { const x: Vec<int32> = [1, 2]; { defer console.log(x.length.toString()); } return takeVec(move x); }" },
+	];
+	for (const item of kept) {
+		const errors = keptOnBothBackends(shapes + item.body);
+		assert errors == "", item.name + ": " + errors;
+	}
+}
+
+test "bindingOwnership: a move of a name the function does not own is refused on every backend" {
+	const shapes = "struct S { xs: Vec<int32>; }\nfunction grow(sink s: S): int32 { return s.xs.length; }\nfunction takeText(sink s: string): int32 { return s.length; }\n";
+	const refused = [
+		{ name: "a plain parameter", body: "export function run(s: S): int32 { return grow(move s); }", variable: "s", why: "it is a parameter" },
+		{ name: "a plain string parameter", body: "export function run(s: string): int32 { return takeText(move s); }", variable: "s", why: "it is a parameter" },
+		{ name: "a module-level binding", body: "let g: S = { xs: [1] };\nexport function run(): int32 { return grow(move g); }", variable: "g", why: "it is a module-level binding" },
+		{ name: "a for-of element", body: "export function run(): int32 { const arr: S[] = [{ xs: [1] }]; let n = 0; for (const e of arr) n += grow(move e); return n; }", variable: "e", why: "it is a for..of element" },
+	];
+	for (const item of refused) {
+		const errors = refusedOnBothBackends(shapes + item.body);
+		assert errors.split("cannot move '" + item.variable + "': " + item.why).length == 3, item.name + ": " + errors;
+	}
+	const kept = [
+		{ name: "a sink parameter", body: "export function run(sink s: S): int32 { return grow(move s); }" },
+		{ name: "a constructor parameter", body: "class H { s: S; constructor(s: S) { this.s = move s; } }\nexport function run(): int32 { return new H({ xs: [1] }).s.xs.length; }" },
+		{ name: "a local", body: "export function run(): int32 { const s: S = { xs: [1] }; return grow(move s); }" },
+		{ name: "a module-level binding moved by top-level code", body: "let g: S = { xs: [1] };\nconst n = grow(move g);\nexport function run(): int32 { return n; }" },
+	];
+	for (const item of kept) {
+		const errors = keptOnBothBackends(shapes + item.body);
+		assert errors == "", item.name + ": " + errors;
+	}
+}
+
+test "bindingOwnership: an owned local copied while it is still read is refused on every backend" {
+	const shapes = "class N { id: int32 = 1; kids: Vec<Owned<N>> = []; }\n";
+	const refused = [
+		{ name: "a second owner bound while the first is read", body: "export function run(): int32 { const o: Owned<N> = new N(); const second: Owned<N> = o; return o.id + second.id; }", variable: "o" },
+		{ name: "an owned local pushed in a loop", body: "export function run(): int32 { const root: Owned<N> = new N(); const a: Owned<N> = new N(); for (let i = 0; i < 2; i++) root.kids.push(a); return root.kids.length; }", variable: "a" },
+	];
+	for (const item of refused) {
+		const errors = refusedOnBothBackends(shapes + item.body);
+		assert errors.split("cannot copy '" + item.variable + "'").length == 3, item.name + ": " + errors;
+	}
+	const kept = [
+		{ name: "the last read of an owned local", body: "export function run(): int32 { const root: Owned<N> = new N(); const a: Owned<N> = new N(); root.kids.push(a); return root.kids.length; }" },
+		{ name: "an owned local read as a plain reference", body: "export function run(): int32 { const a: Owned<N> = new N(); const p: N = a; return a.id + p.id; }" },
+	];
+	for (const item of kept) {
+		const errors = keptOnBothBackends(shapes + item.body);
+		assert errors == "", item.name + ": " + errors;
 	}
 }
 

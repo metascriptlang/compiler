@@ -109,6 +109,19 @@ test "Owned takes a class" {
 	assert refused("struct S { a: int32 }\nconst v: Owned<S> = { a: 1 };\nconsole.log(v.a);\n").contains("Owned<T> takes a class type");
 }
 
+test "an Owned annotation error on a lambda parameter is reported once" {
+	const forms = [
+		"const f = (x: Owned<int32>): void => { console.log(\"a\"); };\n",
+		"const f = function (x: Owned<int32>): void { console.log(\"a\"); };\n",
+		"function run(): void {\n\tconst g = (x: Owned<int32>): void => { console.log(\"a\"); };\n\tg;\n}\nrun();\n",
+		"function run(): void {\n\tfunction g(x: Owned<int32>): void { console.log(\"a\"); }\n\tg;\n}\nrun();\n",
+	];
+	for (const form of forms) {
+		const message = refused(form);
+		assert message.split("Owned<T> takes a class type").length == 2, form + message;
+	}
+}
+
 test "a const bound to a fresh value enters an owned slot at its last read" {
 	const r = compileToC(TREE + "const b = new N();\nroot.kids.push(b);\nconsole.log(root.kids.length);\n}\nadopt(new N());\n");
 	assert r.ok, r.ok ? "" : r.error;

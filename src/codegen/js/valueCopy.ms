@@ -18,6 +18,16 @@ export function jsDefaultValue(t: Type | null): string {
 	return defaultValueOf(t, []);
 }
 
+export function jsMovedValue(t: Type | null): string {
+	if (t == null) return "";
+	if (isNullableShape([t])) return "null";
+	const repr = valueCopyRepr(t);
+	if (repr == null) return "";
+	if (repr.kind == TypeKind.Array) return "[]";
+	if (repr.kind == TypeKind.Struct && isStructType(repr) && !repr.typeFlags.has(TypeFlag.IsMaybe)) return defaultValueOf(t, []);
+	return repr.kind == TypeKind.String ? "\"\"" : "";
+}
+
 function defaultValueOf(declared: Type | null, open: Type[]): string {
 	if (declared != null && isNullableShape([declared])) return "null";
 	const t = valueCopyRepr(declared);

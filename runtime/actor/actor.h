@@ -1817,6 +1817,7 @@ extern _Atomic(int) msNextActorRR;        /* round-robin assignment counter */
 /* Forward declarations */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
+extern void msSetActorReadyHook(bool (*hook)(void)); /* dispatch.c */
 static inline bool msActorSystemIdle(void);           /* defined below */
 static inline void msActorShutdownAtExit(void);       /* defined below */
 extern void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));  /* pool.c */
@@ -1854,6 +1855,12 @@ static inline bool msActorPollEventLoop(void) {
     return msActorPollLocal();
 }
 
+static inline bool msActorLocalRunQueued(void) {
+    int id = msMySchedulerID;
+    return id >= 0 && id < msSchedulerCount
+        && atomic_load_explicit(&msSchedulers[id].runHead, memory_order_acquire) != NULL;
+}
+
 extern pthread_once_t msActorSystemOnce;
 extern _Atomic(bool) msActorSystemLive;
 
@@ -1867,6 +1874,7 @@ static inline void msActorSystemInit(void) {
     msCDInit();
     msSetActorPollHook(msActorPollEventLoop);
     msSetActorIdleHook(msActorSystemIdle);
+    msSetActorReadyHook(msActorLocalRunQueued);
     msSetActorExitHook(msActorShutdownAtExit);
     atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
 }

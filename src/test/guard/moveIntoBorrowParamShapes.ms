@@ -1,4 +1,5 @@
-// injectdestructors.nim moveOrCopy: a `move x` into a borrowing parameter consumes nothing, whatever the shape around it.
+// injectdestructors.nim moveOrCopy: a `move x` into a borrowing parameter consumes nothing, whatever the shape around it,
+// so the write that makes `x` readable again destroys the value `x` still holds.
 // GUARD-BALANCE MbBox
 // GUARD-JS
 
@@ -9,14 +10,14 @@ function grow(b: MbBox): MbBox { return new MbBox(b.s + "+"); }
 function look(b: MbBox): int32 { return b.s.length; }
 function lookS(b: MbS): int32 { return b.s.length; }
 function growS(b: MbS): MbS { return { s: b.s + "+" }; }
-function relay(b: MbBox): int32 { return look(move b); }
+function relay(sink b: MbBox): int32 { return look(move b); }
 
 function inBranch(c: boolean): string {
 	let x = new MbBox("a");
 	x = grow(move x);
 	if (c) {
 		const n = look(move x);
-		x = grow(move x);
+		x = new MbBox("b");
 	}
 	const y = move x;
 	return y.s;
@@ -26,6 +27,7 @@ function receiver(): string {
 	let x = new MbBox("a");
 	x = grow(move x);
 	const n = (move x).look();
+	x = new MbBox("r");
 	const y = move x;
 	return y.s + n;
 }
@@ -34,6 +36,7 @@ function valueStruct(): string {
 	let x: MbS = { s: "a" };
 	x = growS(move x);
 	const n = lookS(move x);
+	x = { s: "v" };
 	const y = move x;
 	return y.s + n;
 }
@@ -43,6 +46,7 @@ function nestedCall(): string {
 	for (let i: int32 = 0; i < 2; i += 1) {
 		if (i == 0) {
 			const n = relay(move x);
+			x = new MbBox("n");
 		}
 		x = grow(move x);
 	}
@@ -51,7 +55,7 @@ function nestedCall(): string {
 }
 
 const got = inBranch(true) + " " + inBranch(false) + " " + receiver() + " " + valueStruct() + " " + nestedCall();
-if (got == "a++ a+ a+2 a+2 a++") {
+if (got == "b a+ r2 v2 n++") {
 	console.log("GUARD-OK");
 } else {
 	console.log("GUARD-RED " + got);

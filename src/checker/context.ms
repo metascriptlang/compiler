@@ -1220,13 +1220,7 @@ export function getExtReceiverText(flags: string): string {
 
 export function getExtReceiverType(flags: string): string {
 	const text = getExtReceiverText(flags);
-	return text == "" ? "" : receiverBaseName(varPointeeText(text));
-}
-
-function varPointeeText(typeText: string): string {
-	const t = typeText.trim();
-	const rest = t.startsWith("Var") ? t.slice(3, t.length).trim() : "";
-	return rest.startsWith("<") && rest.endsWith(">") ? rest.slice(1, rest.length - 1) : t;
+	return text == "" ? "" : receiverBaseName(text);
 }
 
 export function receiverBaseName(typeText: string): string {
@@ -2111,18 +2105,12 @@ test "getExtReceiverType" {
 	assert getExtReceiverType("ext:s:string") == "string";
 	assert getExtReceiverType("async|ext:self:Array") == "Array";
 	assert getExtReceiverType("") == "";
-}
-
-test "getExtReceiverType names a Var<T> receiver T, as `this ref x: T`" {
-	assert getExtReceiverType("ext:p:Var<Pet>") == "Pet";
-	assert getExtReceiverType("ext:p:Var < uint8 >") == "uint8";
-	assert getExtReceiverType("ext:v:Variant<T>") == "Variant";
 	assert getExtReceiverType("ext:p:Ptr<Pet>") == "Ptr";
 }
 
 test "getExtReceiverText keeps the receiver as it was written" {
 	assert getExtReceiverText("ext:p:Ptr<Pet>") == "Ptr<Pet>";
-	assert getExtReceiverText("async|ext:self: Var<Pet> |gen:T") == "Var<Pet>";
+	assert getExtReceiverText("async|ext:self: Readonly<Pet> |gen:T") == "Readonly<Pet>";
 	assert getExtReceiverText("sext:Pet") == "";
 	assert getExtReceiverText("") == "";
 }

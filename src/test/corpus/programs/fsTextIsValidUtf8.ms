@@ -14,7 +14,6 @@
 // @stdout: empty written=true text=0 bytes=0
 // @stdout: proc ok=true
 // @stdout: missing ok=false
-// @skip-raiser: the byte reads take Buffer, which the Raiser tier has no type for
 // @exit: 0
 
 import { argv } from "std/process";

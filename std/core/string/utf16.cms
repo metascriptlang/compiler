@@ -23,21 +23,15 @@ function bytesOf(sb: Readonly<Span<uint8>>, first: int64, end: int64): string {
 	return text;
 }
 
-@noinline
+extern function msUtf16Units(bytes: Readonly<Ptr<uint8>>, length: int64): int64;
+
+@inline
 function utf16UnitsOf(b: Readonly<Span<uint8>>): int64 {
-	const bytes = b as Readonly<Ptr<uint8>>;
-	const length = b.length as int64;
-	let count: uint64 = 0;
-	for (let i: int64 = 0; i < length; i++) {
-		const c = bytes[i];
-		count += (c & 0xC0) != 0x80 ? 1 as uint64 : 0;
-		count += c >= 0xF0 ? 1 as uint64 : 0;
-	}
-	return count as int64;
+	return msUtf16Units(b as Readonly<Ptr<uint8>>, b.length as int64);
 }
 
-@exportName("msStringLength")
-function msStringLength(s: string): int64 {
+@exportName("msStringLengthSlow")
+function stringLength(s: string): int64 {
 	return byteIsAscii(s) ? s.asBytes().length : utf16UnitsOf(s.asBytes());
 }
 
@@ -115,7 +109,7 @@ export function stringCharAtSlow(s: string, idx: int64): string {
 	return "";
 }
 
-@exportName("msStringCharCodeAt")
+@exportName("msStringCharCodeAtSlow")
 export function stringCharCodeAt(s: string, idx: int64): int64 {
 	const sb = s.asBytes();
 	const n = sb.length;
@@ -151,7 +145,7 @@ export function stringSlice(s: string, start: int64, end: int64): string {
 	const n = sb.length;
 	if (n == 0) return "";
 	const ascii = byteIsAscii(s);
-	const units = ascii ? n as int64 : msStringLength(s);
+	const units = ascii ? n as int64 : stringLength(s);
 	let from = start < 0 ? units + start : start;
 	let to = end < 0 ? units + end : end;
 	if (from < 0) from = 0;
@@ -250,6 +244,7 @@ function encodeCodePoint(out: Span<uint8>, cp: int64): int32 {
 
 @exportName("msStringFromCodePoint")
 export function stringFromCodePoint(cp: int64): string {
+	if (cp >= 0 && cp < 0x80) return msStringAsciiChar(cp as uint8);
 	let scratch: uint8[4] = [];
 	const out: Span<uint8> = scratch;
 	const len = encodeCodePoint(out, cp);

@@ -30,6 +30,20 @@ test "flowInvalidation: narrowing survives only while its dependency path is unc
 	}
 }
 
+test "flowInvalidation: a member narrowed before a loop stays narrowed on its back edge until the loop writes it" {
+	const decls = "class N { id: int32 = 0; }\nclass M { xs: Vec<N> | null = null; }\nclass O { m: M = new M(); }\n";
+	const cases = [
+		{ name: "a for condition", source: decls + "function f(m: M): int32 {\n\tif (m.xs != null) {\n\t\tlet n = 0;\n\t\tfor (let i = 0; i < m.xs.length; i += 1) n += 1;\n\t\treturn n;\n\t}\n\treturn -1;\n}\n", expected: 0 },
+		{ name: "a while condition and a read after the loop", source: decls + "function f(m: M): int32 {\n\tif (m.xs != null) {\n\t\tlet n = 0;\n\t\twhile (n < m.xs.length) { n += 1; }\n\t\treturn m.xs.length;\n\t}\n\treturn -1;\n}\n", expected: 0 },
+		{ name: "one member deeper", source: decls + "function f(o: O): int32 {\n\tif (o.m.xs != null) {\n\t\tlet n = 0;\n\t\twhile (n < o.m.xs.length) { n += 1; }\n\t\treturn n;\n\t}\n\treturn -1;\n}\n", expected: 0 },
+		{ name: "a loop that writes the member drops it", source: decls + "function f(m: M): int32 {\n\tif (m.xs != null) {\n\t\tlet n = 0;\n\t\twhile (n < m.xs.length) { n += 1; m.xs = null; }\n\t\treturn n;\n\t}\n\treturn -1;\n}\n", expected: -1 },
+	];
+	for (const item of cases) {
+		const errors = strictErrorCount(item.source);
+		assert item.expected < 0 ? errors > 0 : errors == item.expected, item.name;
+	}
+}
+
 test "flowInvalidation: unreachable values have no readable members" {
 	const cases = [
 		{ name: "a member read on a parameter narrowed to never is refused", source: "function f(v: int32): int32 {\n\tif (typeof v === \"string\") { return v.length; }\n\treturn 0;\n}\n", expected: -1 },

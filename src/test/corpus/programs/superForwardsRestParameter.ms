@@ -1,6 +1,8 @@
 // @stdout: 6 9 3 0 105 209 300
+// @stdout: 6 403 0
 // note: a rest parameter reaches the parent's rest parameter whole, through an explicit `super(...xs)` and through the constructor a subclass without one inherits; an empty rest stays empty. Same output on C, JS and the Raiser.
 // variant: the rest after a leading parameter, forwarded explicitly and inherited two levels down.
+// variant: separate arguments written in `super(1, 2, 3)` pack into the parent's rest parameter as they do for `new`.
 class Many {
 	total: int32 = 0;
 	constructor(...xs: int32[]) { for (const x of xs) { this.total += x; } }
@@ -17,3 +19,8 @@ class HeadedInherits extends Headed { }
 class HeadedDeeper extends HeadedInherits { }
 
 console.log(`${new Spread(1, 2, 3).total} ${new Many(4, 5).total} ${new Inherits(1, 2).total} ${new Inherits().total} ${new HeadedSpread(1, 2, 3).total} ${new HeadedDeeper(2, 4, 5).total} ${new HeadedDeeper(3).total}`);
+
+class Loose extends Many { constructor() { super(1, 2, 3); } }
+class HeadedLoose extends Headed { constructor() { super(4, 1, 2); } }
+class LooseEmpty extends Many { constructor() { super(); } }
+console.log(`${new Loose().total} ${new HeadedLoose().total} ${new LooseEmpty().total}`);

@@ -9,7 +9,7 @@ import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { hasFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { headerIncludes } from "../../module/cimport/emit";
-import { ModuleNameRoots, rootModulePath } from "./names";
+import { ModuleNameRoots, rootModulePath, rootedModuleKey } from "./names";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -675,6 +675,7 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
+	genericOwnedByHome: HashSet<string> = new HashSet<string>();
 	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
@@ -698,9 +699,23 @@ function noteFactWrite(facts: CEmissionFacts, write: string): void {
 	if (facts.writes != null) facts.writes.push(write);
 }
 
-export function factClaimGeneric(facts: CEmissionFacts, name: string, owner: string): void {
+export function factClaimGeneric(facts: CEmissionFacts, name: string, owner: string, home: boolean): void {
 	facts.genericOwners.set(name, owner);
-	noteFactWrite(facts, `g\t${name}\t${owner}`);
+	if (home) facts.genericOwnedByHome.add(name);
+	else facts.genericOwnedByHome.delete(name);
+	noteFactWrite(facts, `g\t${name}\t${owner}\t${home ? "h" : "n"}`);
+}
+
+export function genericClaimWins(facts: Readonly<CEmissionFacts>, name: string, claimant: string, home: boolean): boolean {
+	const prev = facts.genericOwners.readonlyGet(name);
+	if (prev == null) return true;
+	if (!home) return false;
+	if (!facts.genericOwnedByHome.has(name)) return true;
+	const core = facts.hcrCoreUnits.has(claimant);
+	if (core != facts.hcrCoreUnits.has(prev)) return core;
+	const roots = facts.moduleNameRoots;
+	if (roots == null) throw new Error(`internal: generic instance '${name}' is claimed before the build's module roots are set`);
+	return rootedModuleKey(roots, claimant) < rootedModuleKey(roots, prev);
 }
 
 
@@ -712,7 +727,7 @@ export function factCoreUnit(facts: CEmissionFacts, modulePath: string): void {
 export function replayFactWrites(facts: CEmissionFacts, writes: string[]): void {
 	for (const write of writes) {
 		const fields = write.split("\t");
-		if (fields[0] == "g") factClaimGeneric(facts, fields[1], fields[2]);
+		if (fields[0] == "g") factClaimGeneric(facts, fields[1], fields[2], fields[3] == "h");
 		else if (fields[0] == "c") factCoreUnit(facts, fields[1]);
 	}
 }
@@ -946,6 +961,48 @@ export function undefPlatformMacros(g: CGen): void {
 }
 
 // ===== Tests =====
+function claimedOwner(claims: { path: string, home: boolean }[], core: string[]): string {
+	const facts = new CEmissionFacts();
+	facts.moduleNameRoots = { compiler: "/opt/msc", packages: "/cache/extracted", project: "/work/app", uniqueNames: new HashMap<string, string>() };
+	for (const path of core) factCoreUnit(facts, path);
+	for (const claim of claims) {
+		if (genericClaimWins(facts, "box_int32", claim.path, claim.home)) factClaimGeneric(facts, "box_int32", claim.path, claim.home);
+	}
+	return facts.genericOwners.get("box_int32") ?? "";
+}
+
+test "a generic instance two homes mint goes to the smallest module whichever prepares first" {
+	const a = { path: "/work/app/a.ms", home: true };
+	const b = { path: "/work/app/b.ms", home: true };
+	assert claimedOwner([a, b], []) == "/work/app/a.ms";
+	assert claimedOwner([b, a], []) == "/work/app/a.ms";
+}
+
+test "a home claim takes an instance from a module that only uses it, and a user never takes it back" {
+	const user = { path: "/work/app/a.ms", home: false };
+	const home = { path: "/work/app/z.ms", home: true };
+	assert claimedOwner([user, home], []) == "/work/app/z.ms";
+	assert claimedOwner([home, user], []) == "/work/app/z.ms";
+}
+
+test "an HCR core module owns an instance an image also mints, even when the image sorts first" {
+	const image = { path: "/work/app/a.ms", home: true };
+	const core = { path: "/work/app/z.ms", home: true };
+	assert claimedOwner([core, image], ["/work/app/z.ms"]) == "/work/app/z.ms";
+	assert claimedOwner([image, core], ["/work/app/z.ms"]) == "/work/app/z.ms";
+}
+
+test "a replayed claim keeps whether its owner was the home" {
+	const facts = new CEmissionFacts();
+	facts.moduleNameRoots = { compiler: "/opt/msc", packages: "/cache/extracted", project: "/work/app", uniqueNames: new HashMap<string, string>() };
+	facts.writes = [];
+	factClaimGeneric(facts, "box_int32", "/work/app/a.ms", false);
+	const replayed = new CEmissionFacts();
+	replayed.moduleNameRoots = facts.moduleNameRoots;
+	replayFactWrites(replayed, facts.writes!);
+	assert genericClaimWins(replayed, "box_int32", "/work/app/z.ms", true);
+}
+
 test "add and extract" {
 	const b = createBuilder();
 	add(b, "hello");

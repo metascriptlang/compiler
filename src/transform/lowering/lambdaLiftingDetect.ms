@@ -115,29 +115,22 @@ export function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
 	});
 }
 
-export function symIn(syms: Symbol[], sym: Symbol): boolean {
-	for (const s of syms) {
-		if (s == sym) return true;
-	}
-	return false;
-}
-
-function collectRoutineCandidates(n: Node | null, depth: number, splitLoopLocals: Symbol[], out: Symbol[]): void {
+function collectRoutineCandidates(n: Node | null, depth: number, out: Symbol[]): void {
 	if (n == null) return;
 	if (depth > 0 && n.kind == NodeKind.VariableDecl) {
 		const sym = routineBindingSym(n);
 		const init = (n.data as VariableDeclData).initializer;
 		const detachedEnv = init != null && init.flags.has(NodeFlag.SendableClosure);
-		if (sym != null && !detachedEnv && (hasFlag(sym, SymbolFlag.StateMachine) || !refsAnySym(init, splitLoopLocals))) out.push(sym);
+		if (sym != null && !detachedEnv) out.push(sym);
 	}
 	const inner = isRoutineOrTestNode(n) ? depth + 1 : depth;
-	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, splitLoopLocals, out); });
+	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, out); });
 }
 
-export function routineSyms(root: Node, depth: number, splitLoopLocals: Symbol[]): SymSet {
+export function routineSyms(root: Node, depth: number): SymSet {
 	const routines = createSymSet();
 	const candidates: Symbol[] = [];
-	collectRoutineCandidates(root, depth, splitLoopLocals, candidates);
+	collectRoutineCandidates(root, depth, candidates);
 	for (const s of candidates) symSetAdd(routines, s);
 	return routines;
 }

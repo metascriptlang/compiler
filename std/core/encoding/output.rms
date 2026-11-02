@@ -14,7 +14,3 @@ export function newDecodingOutput(length: int64): uint8[] {
 export function freshEncodingOutputBytes(value: uint8[]): uint8[] {
 	return value;
 }
-
-export function encodingOutputBytes(value: uint8[]): uint8[] {
-	return value;
-}

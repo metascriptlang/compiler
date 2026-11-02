@@ -21,6 +21,25 @@ test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 	}
 }
 
+test "macro diagnostics: error() as a returned value or an operand rejects like the statement form, imported or not" {
+	const bodies = [
+		'return error("rejected input", node);',
+		'return node.line > 0 ? error("rejected input", node) : node;',
+		'function reject(n: Node): Node { return error("rejected input", n); } return reject(node);',
+		'function reject(n: Node): Node { return error("rejected input", n); } try { return reject(node); } catch (e) { return node; }',
+	];
+	const imports = ['import { Node } from "std/meta"; ', 'import { Node, error } from "std/meta"; '];
+	for (const head of imports) {
+		for (const body of bodies) {
+			const source = head + 'macro requireValid(node: Node): Node { ' + body + ' } const value = requireValid(1);';
+			for (const result of [compileToCWithStd(source), compileToJSWithStd(source)]) {
+				assert !result.ok, body;
+				assert result.error.split("Macro 'requireValid': rejected input").length == 2, result.error;
+			}
+		}
+	}
+}
+
 test "macro diagnostics: a number literal that contradicts itself is refused at the invocation" {
 	const header = 'import { Node, NodeKind } from "std/meta"; macro bad(node: Node): Node { ';
 	const cases = [

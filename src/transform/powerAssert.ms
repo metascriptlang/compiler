@@ -18,7 +18,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { isIntegerType } from "../checker/types";
 import { TransformContext, newLoweredSym } from "./context";
-import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
+import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken, callBuiltinKind } from "./util";
 import { createNode } from "../ast/node";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { calleeFormals } from "./lowering/jsVarParamLower";
@@ -225,9 +225,11 @@ function decomposeExpr(
 		const d = expr.data as CallExprData;
 		const formals = calleeFormals(d);
 		const newArgs: Node[] = [];
+		const subjects = heldSubjects(expr);
 		for (let i = 0; i < d.arguments.length; i += 1) {
 			const writesThrough = formals != null && i < formals.length && formals[i].kind == TypeKind.Var;
-			newArgs.push(writesThrough ? d.arguments[i] : decomposeExpr(ctx, d.arguments[i], captures, baseCol, loc));
+			const readsHolder = subjects >= 0 && i >= subjects;
+			newArgs.push(writesThrough || readsHolder ? d.arguments[i] : decomposeExpr(ctx, d.arguments[i], captures, baseCol, loc));
 		}
 		// A method callee is left intact — later passes lower it by matching on
 		// the original node (protocol methods have no property to read at all),
@@ -250,6 +252,13 @@ function decomposeExpr(
 }
 
 // ===== Helpers =====
+
+function heldSubjects(call: Node): int32 {
+	const kind = callBuiltinKind(call);
+	if (kind == "UnionText" || kind == "UnionDebug") return 1;
+	if (kind == "UnionEq") return 2;
+	return -1;
+}
 
 function captureValue(
 	ctx: TransformContext,

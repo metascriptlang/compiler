@@ -335,17 +335,26 @@ refresh_builder() {
 }
 
 adopt_builder() {
-  local verdict=$1 ran=$2 dest="$TOP/msc"
+  local verdict=$1 ran=$2 dest="$TOP/msc.green"
   [ "$verdict" = GREEN ] || return 0
   case " $ran " in *" build "*) ;; *) return 0 ;; esac
   [ -n "$cand_key" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
   [ -z "$(git -C "$TOP" status --porcelain -- src std runtime)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
-  [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.exe"
-  if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ]; then
+  [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.green.exe"
+  if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ] || [ "$(cat "$TOP/msc.green.key" 2>/dev/null)" = "$cand_key" ]; then
     say "gate: builder already current for tree ${cand_key:0:12}"
     return 0
   fi
   refresh_builder "$CAND" "$dest" "$cand_key" || return 0
+}
+
+promote_builder() {
+  local green="$TOP/msc.green" dest="$TOP/msc" key
+  [ ! -e "$TOP/msc.exe" ] || { green="$TOP/msc.green.exe"; dest="$TOP/msc.exe"; }
+  [ -e "$green" ] || return 0
+  key=$(cat "$TOP/msc.green.key" 2>/dev/null)
+  [ -n "$key" ] && [ "$key" = "$(cd "$TOP" && tree_key "$base")" ] || return 0
+  refresh_builder "$green" "$dest" "$key" && rm -f "$green" "$TOP/msc.green.key" "$TOP/msc.green.prev"
 }
 
 file_digest() { if [ -f "$1" ]; then digest <"$1"; else echo none; fi; }
@@ -918,7 +927,7 @@ self_host_boot() {
 test_one() {
   local bin=$1 f=$2 part=$3; shift 3
   printf 'gate: test job=%s %s\n' "${part##*/}" "$*" >"$part"
-  env -u NO_COLOR -u FORCE_COLOR "$bin" test --time "$f" "$@" >>"$part" 2>&1
+  env -u NO_COLOR -u FORCE_COLOR MSC="$bin" "$bin" test --time "$f" "$@" >>"$part" 2>&1
   local rc=$?
   case $rc in 137|143) echo "(exit $rc)" >>"$part" ;; esac
   echo $rc >"$part.rc"
@@ -932,6 +941,7 @@ test_one_self_test() (
 #!/bin/bash
 printf '%s\n' "$@" >"$GATE_TEST_ARGS"
 [ -z "${NO_COLOR+x}${FORCE_COLOR+x}" ] || exit 9
+[ "$MSC" = "$0" ] || exit 8
 [ "$2" != --time ] || printf 'compiled in 1.0ms\n'
 if [ "$GATE_TEST_RC" != 0 ]; then
   printf ' FAIL  %s\n\n  × preserved failure\n' "$GATE_TEST_ENTRY"
@@ -1047,7 +1057,7 @@ triage_side() {
         lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
         tests|suite)
           [ "$lane" = tests ] || cmp=$bld
-          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
+          r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR MSC="$cmp" "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
       esac
     ) >"$log" 2>&1; rc=$?
     (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
@@ -1169,15 +1179,21 @@ adopt_self_test() {
   [ -n "$k" ] && [ "$got" = "$k" ] || { printf 'FAIL adopt: --tree-key "%s" is not tree_key "%s"\n' "$got" "$k"; bad=1; }
   got=$(cd "$saveTOP" && bash tools/gate.sh --tree-key HEAD)
   [ "$got" = "$(tree_key HEAD)" ] || { printf 'FAIL adopt: --tree-key HEAD differs from tree_key in the real checkout\n'; bad=1; }
-  reset() { rm -rf "$TOP"/msc "$TOP"/msc.exe "$TOP"/msc.key "$TOP"/msc.prev "$TOP"/msc.new; printf 'old\n' >"$TOP/msc"; printf 'new\n' >"$CAND"; printf '%s\n' "$k" >"$CAND.key"; cand_key=$k; }
+  reset() { rm -rf "$TOP"/msc "$TOP"/msc.exe "$TOP"/msc.key "$TOP"/msc.prev "$TOP"/msc.new "$TOP"/msc.green*; printf 'old\n' >"$TOP/msc"; printf 'new\n' >"$CAND"; printf '%s\n' "$k" >"$CAND.key"; cand_key=$k; }
   reset; adopt_builder GREEN " tools build suite" >/dev/null
-  { [ "$(cat "$TOP/msc")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ] && [ "$(cat "$TOP/msc.key")" = "$k" ] && [ ! -e "$TOP/msc.new" ]; } \
-    || { printf 'FAIL adopt: GREEN with a matching key did not swap (msc=%s prev=%s)\n' "$(cat "$TOP/msc" 2>&1)" "$(cat "$TOP/msc.prev" 2>&1)"; bad=1; }
+  { [ "$(cat "$TOP/msc")" = old ] && [ "$(cat "$TOP/msc.green")" = new ] && [ "$(cat "$TOP/msc.green.key")" = "$k" ] && [ ! -e "$TOP/msc.green.new" ]; } \
+    || { printf 'FAIL adopt: a GREEN candidate must wait as msc.green until main is its tree, since an unlanded one can emit a runtime main lacks (msc=%s green=%s)\n' "$(cat "$TOP/msc" 2>&1)" "$(cat "$TOP/msc.green" 2>&1)"; bad=1; }
+  local saveBase=$base; base=no-such-rev; promote_builder >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: promoted msc.green although main is not its tree\n'; bad=1; }
+  base=HEAD; promote_builder >/dev/null; base=$saveBase
+  { [ "$(cat "$TOP/msc")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ] && [ "$(cat "$TOP/msc.key")" = "$k" ] && [ ! -e "$TOP/msc.green" ]; } \
+    || { printf 'FAIL adopt: main at the GREEN tree did not promote msc.green (msc=%s prev=%s)\n' "$(cat "$TOP/msc" 2>&1)" "$(cat "$TOP/msc.prev" 2>&1)"; bad=1; }
   printf 'newer\n' >"$CAND"; rm -f "$TOP/msc.key"; adopt_builder GREEN " build" >/dev/null
-  { [ "$(cat "$TOP/msc")" = newer ] && [ "$(cat "$TOP/msc.prev")" = new ]; } || { printf 'FAIL adopt: .prev was not rotated\n'; bad=1; }
+  printf 'newest\n' >"$CAND"; rm -f "$TOP/msc.green.key"; adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc.green")" = newest ] && [ "$(cat "$TOP/msc.green.prev")" = newer ]; } || { printf 'FAIL adopt: .prev was not rotated\n'; bad=1; }
   got=$(adopt_builder GREEN " build"); printf 'x\n' >"$CAND"
   adopt_builder GREEN " build" >/dev/null
-  { [ "$(cat "$TOP/msc")" = newer ] && [[ "$got" == *"already current"* ]]; } || { printf 'FAIL adopt: swapped although msc.key already equals the key: "%s"\n' "$got"; bad=1; }
+  { [ "$(cat "$TOP/msc.green")" = newest ] && [[ "$got" == *"already current"* ]]; } || { printf 'FAIL adopt: swapped although msc.green.key already equals the key: "%s"\n' "$got"; bad=1; }
   reset; adopt_builder RED " build" >/dev/null
   { [ "$(cat "$TOP/msc")" = old ] && [ ! -e "$TOP/msc.key" ]; } || { printf 'FAIL adopt: adopted on RED\n'; bad=1; }
   reset; adopt_builder GREEN " tools" >/dev/null
@@ -1194,8 +1210,8 @@ adopt_self_test() {
   { [ "$rc" -eq 0 ] && [[ "$got" == "gate: builder not refreshed: "* ]] && [ "$(cat "$TOP/msc")" = old ]; } \
     || { printf 'FAIL adopt: failure path: rc=%s, out "%s"\n' "$rc" "$got"; bad=1; }
   rm -rf "$TOP/msc.new"; reset; mv "$TOP/msc" "$TOP/msc.exe"
-  adopt_builder GREEN " build" >/dev/null
-  { [ "$(cat "$TOP/msc.exe")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ]; } || { printf 'FAIL adopt: msc.exe naming\n'; bad=1; }
+  adopt_builder GREEN " build" >/dev/null; saveBase=$base; base=HEAD; promote_builder >/dev/null; base=$saveBase
+  { [ "$(cat "$TOP/msc.exe")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ] && [ ! -e "$TOP/msc.green.exe" ]; } || { printf 'FAIL adopt: msc.exe naming\n'; bad=1; }
   TOP=$saveTOP CAND=$saveCAND cand_key=$savekey
   rm -rf "$d"
   return $bad
@@ -2387,6 +2403,7 @@ if [ "$record" -eq 1 ]; then
 $(printf '%s\n' "$off_main" | head -5 | sed 's/^/  /')"
 fi
 
+promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)

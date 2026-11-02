@@ -256,3 +256,18 @@ test "a struct match is checked for exhaustiveness and for its enum members" {
 	assert hasError(body + "function f(d: Data): number { return match (d.kind) { Kind.A => 1 }; }", "Non-exhaustive match: missing 'Kind.B'");
 	assert hasError("enum Kind { A, B }\nstruct Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.C => { y: string },\n};", "not a member");
 }
+
+const POSITION = "enum Kind { Slot, Const, Wild }\nstruct Position = match (kind: Kind) {\n\tKind.Slot => { slot: int32 },\n\tKind.Const => { value: int64 },\n\tKind.Wild => {},\n};\n";
+const SUM_SLOTS = "\tlet total: int32 = 0;\n\tfor (const pos of [a, b]) { if (pos.kind === Kind.Slot) { total += pos.slot; } }\n\treturn total;\n}\n";
+
+test "a sum read again after a guard on its discriminant narrows through an array literal" {
+	const forms = [
+		"function f(a: Position, b: Position): int32 {\n\tif (a.kind === Kind.Const) { console.log(a.value); }\n" + SUM_SLOTS,
+		"function f(p: { a: Position; b: Position }): int32 {\n\tif (p.a.kind === Kind.Const) { console.log(p.a.value); }\n" + SUM_SLOTS.replace("[a, b]", "[p.a, p.b]"),
+		"function f(a: Position, b: Position): int32 {\n\tif (a.kind === Kind.Const) return 0;\n" + SUM_SLOTS,
+	];
+	for (const form of forms) {
+		const ctx = checkSource(POSITION + form);
+		assert !hasErrors(ctx), form + (ctx.errors.length > 0 ? ctx.errors[0].message : "");
+	}
+}

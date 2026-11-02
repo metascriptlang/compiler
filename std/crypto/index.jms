@@ -26,7 +26,13 @@ export type HashAlgorithm =
 	| "sha1" | "md5" | "ripemd160"
 	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
 
-@emit(`const msWcNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+@emit(`function msWcBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+const msWcNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
 function msWcSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
@@ -35,7 +41,7 @@ async function msWcRun(job) {
 	const subtle = msWcSubtle();
 	if (!subtle) return { value: [], error: msWcNoSubtle };
 	try {
-		return { value: Array.from(new Uint8Array(await job(subtle))), error: "" };
+		return { value: msWcBytes(new Uint8Array(await job(subtle))), error: "" };
 	} catch (e) {
 		return { value: [], error: String(e && e.message ? e.message : e) };
 	}
@@ -66,7 +72,7 @@ function msWcRandom(size) {
 	if (!c || typeof c.getRandomValues !== "function") return { value: [], error: "crypto.getRandomValues is unavailable" };
 	const out = new Uint8Array(size);
 	for (let at = 0; at < size; at += 65536) c.getRandomValues(out.subarray(at, Math.min(at + 65536, size)));
-	return { value: Array.from(out), error: "" };
+	return { value: msWcBytes(out), error: "" };
 }
 function msWcUuid() {
 	const c = globalThis.crypto;

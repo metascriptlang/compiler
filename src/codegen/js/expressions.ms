@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangleProcName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
-import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
+import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, jsMovedValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isExtensionRoutine, isNativePattern, routineKindFlag } from "../../checker/context";
@@ -194,32 +194,6 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 	return safeJsName(name);
 }
 
-function moduleCountExporting(gen: JSGenerator, baseName: string): int32 {
-	let count = 0;
-	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
-		const names = gen.modFunctionOwnerNames[mi];
-		for (let ni = 0; ni < names.length; ni += 1) {
-			if (names[ni] == baseName) { count += 1; break; }
-		}
-	}
-	return count;
-}
-
-function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string): int32 {
-	let before = 0;
-	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
-		const names = gen.modFunctionOwnerNames[mi];
-		let routines = 0;
-		for (let ni = 0; ni < names.length; ni += 1) {
-			if (names[ni] == baseName) routines += 1;
-		}
-		if (routines == 0) continue;
-		if (gen.modExportKeys[mi] == modulePath) { return before; }
-		before += routines;
-	}
-	return -1;
-}
-
 // Multi-file naming derives from the module's export surface, NOT from
 // Exported/Imported symbol flags: registry clones on the importing side can
 // arrive with no flags at all, while the declaring side sees flagged symbols —
@@ -304,13 +278,7 @@ function multiFileHomeName(gen: JSGenerator, sym: Symbol, name: string, declared
 		}
 		if (moduleExportsName(gen, effPath, baseName)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads != null && sym.overloads.length > 0);
-			let slot = sym.overloadIdx;
-			let suffixed = inSet;
-			if (moduleCountExporting(gen, baseName) > 1) {
-				const before = exportersBefore(gen, effPath, baseName);
-				if (before >= 0) { slot = before + sym.overloadIdx; suffixed = true; }
-			}
-			return suffixed ? `${safeJsName(baseName)}_u${slot}` : exportedBindingName(baseName);
+			return inSet ? `${safeJsName(baseName)}_u${sym.overloadIdx}` : exportedBindingName(baseName);
 		}
 		return hasModule ? mangledFunctionName(buildModuleNameRoots(), sym, declared, sym.overloadIdx) : "";
 	}
@@ -874,6 +842,12 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	const arrayType = arrayOf(node.nodeType);
 	if (arrayType != null && d.newArguments.length == 1) {
 		const zero = jsDefaultValue(arrayType.typeReturn);
+		if (zero == "0" || zero == "0n" || zero == "false" || zero == "\"\"" || zero == "null") {
+			emit(gen, "new globalThis.Array(");
+			emitNode(gen, d.newArguments[0]);
+			emit(gen, ").fill(" + zero + ")");
+			return;
+		}
 		if (zero != "") {
 			emit(gen, "globalThis.Array.from({ length: ");
 			emitNode(gen, d.newArguments[0]);
@@ -1137,10 +1111,40 @@ function checkedConversionTarget(node: Node): Symbol | null {
 	return instance;
 }
 
-// ===== Move Expression (no-op in JS) =====
+// ===== Move Expression =====
+
+// The slot's declared type, not the read's: an assignment narrows `h.n` to its non-null member, and the slot still empties to null.
+function movedSlotType(source: Node): Type | null {
+	if (source.kind != NodeKind.MemberExpr) return source.nodeType;
+	const md = source.data as MemberExprData;
+	const shape = spreadStructOf(md.object.nodeType);
+	if (shape == null) return source.nodeType;
+	const at = shape.typeNames.indexOf(md.property);
+	return at >= 0 && at < shape.typeChildren.length && !hasGenericParams(shape.typeChildren[at]) ? shape.typeChildren[at] : source.nodeType;
+}
 
 export function emitMoveExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MoveExprData;
+	const source = emittedNode(d.moveArg);
+	const emptied = jsMovedValue(movedSlotType(source));
+	if (emptied != "" && source.kind == NodeKind.MemberExpr && !(source.data as MemberExprData).isOptional
+			&& (source.data as MemberExprData).object.nodeType != null && (source.data as MemberExprData).object.nodeType!.kind != TypeKind.Module) {
+		const md = source.data as MemberExprData;
+		const field = "m$o" + jsPropertyAccess(md.property);
+		emit(gen, `((m$o) => { const m$v = ${field}; ${field} = ${emptied}; return m$v; })(`);
+		emitNode(gen, md.object);
+		emit(gen, ")");
+		return;
+	}
+	if (emptied != "" && source.kind == NodeKind.ArrayAccess) {
+		const ad = source.data as ArrayAccessData;
+		emit(gen, `((m$a, m$i) => { const m$v = m$a[m$i]; m$a[m$i] = ${emptied}; return m$v; })(`);
+		emitNode(gen, ad.array);
+		emit(gen, ", ");
+		emitNode(gen, ad.index);
+		emit(gen, ")");
+		return;
+	}
 	emitNode(gen, d.moveArg);
 }
 

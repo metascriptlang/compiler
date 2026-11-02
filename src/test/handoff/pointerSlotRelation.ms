@@ -172,7 +172,7 @@ test "pointerSlotRelation: a method call refuses a value for a pointer receiver 
 	assert freeForm.contains(argumentMismatch), freeForm;
 }
 
-test "pointerSlotRelation: a method call on a Ptr<T> or Var<T> receiver lowers as the free call" {
+test "pointerSlotRelation: a method call on a Ptr<T> or this ref receiver lowers as the free call" {
 	const cases = [
 		{
 			name: "a struct pointee",
@@ -182,8 +182,8 @@ test "pointerSlotRelation: a method call on a Ptr<T> or Var<T> receiver lowers a
 			freeCall: "console.log(feed(ptr, 3));",
 		},
 		{
-			name: "a Var receiver",
-			declarations: "function rename(this p: Var<Pet>, name: string): void { p.name = name; }",
+			name: "a this ref receiver",
+			declarations: "function rename(this ref p: Pet, name: string): void { p.name = name; }",
 			methodCall: "pet.rename(\"b\"); console.log(pet.name);",
 			freeCall: "rename(pet, \"b\"); console.log(pet.name);",
 		},

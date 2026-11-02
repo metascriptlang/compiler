@@ -34,9 +34,9 @@ import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
 import { cloneIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
-import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
+import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, armGroupDeadline, throwIfTimedOut, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk } from "./spawnLower";
+import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk, needsBoxing } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -82,6 +82,14 @@ function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
 	return slots;
 }
 
+function awaitedSpawnSlots(awaitArg: Node): SpawnSlot[] {
+	const slots = getMultiSpawnSlots(awaitArg);
+	if (slots.length > 0 || !_isAsync) return slots;
+	const info = getSpawnInfo(awaitArg);
+	if (info.closure == null || info.timeout == null) return slots;
+	return [{ closure: info.closure!, timeout: info.timeout, innerType: awaitedType(awaitArg.nodeType) }];
+}
+
 // ===== Expansion =====
 
 function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: TransformContext, isAsync: boolean): { stmts: Node[], resultExpr: Node | null } {
@@ -110,7 +118,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	let si = 0;
 	while (si < n) {
 		const slot = slots[si];
-		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && mayHoldCycleRoot(slot.innerType, ctx)) slot.closure = callingThunk(slot.closure, slot.innerType);
+		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && (mayHoldCycleRoot(slot.innerType, ctx) || needsBoxing(slot.innerType))) slot.closure = callingThunk(slot.closure, slot.innerType);
 		const thunk = spawnThunk(slot.closure);
 		// Use first non-null timeout found
 		if (slot.timeout != null && groupTimeout == null) {
@@ -183,17 +191,21 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 			for (const r of read.stmts) reads.push(r);
 			values.push(read.value);
 		}
-		resultExpr = createNodeAt(NodeKind.ArrayLiteral, { elements: values }, loc);
+		resultExpr = n == 1 ? values[0] : createNodeAt(NodeKind.ArrayLiteral, { elements: values }, loc);
 	}
 
 	// 4. Wait
 	if (doneFut != null) {
+		const deadline = groupTimeout != null ? armGroupDeadline(ag.ident, groupTimeout!, loc) : null;
+		if (deadline != null) stmts.push(deadline.arm);
 		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
 		const awaitData: NodeData = { awaitArg: doneFut.ident };
 		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);
 		noteFact(ctx, ModuleFact.Await);
 		stmts.push(makeExprStmt(awaitNode, loc));
+		if (deadline != null) stmts.push(deadline.disarmBeforeGroupFree);
 		for (const r of reads) stmts.push(r);
+		if (deadline != null) stmts.push(throwIfTimedOut(ag.ident, loc));
 	} else {
 		// Sync: blocking wait (with optional timeout)
 		const waitStmts = emitAwaitGroupWait(cloneIdent(ag.ident, loc), groupTimeout, loc, ctx, reads);
@@ -217,7 +229,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as VariableDeclData;
 			if (d.initializer != null && d.initializer.kind == NodeKind.AwaitExpr) {
 				const ad = d.initializer.data as AwaitExprData;
-				const slots = getMultiSpawnSlots(ad.awaitArg);
+				const slots = awaitedSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
 					if (expansion.resultExpr != null) {
@@ -236,7 +248,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as ExprStmtData;
 			if (d.expr != null && d.expr.kind == NodeKind.AwaitExpr) {
 				const ad = d.expr.data as AwaitExprData;
-				const slots = getMultiSpawnSlots(ad.awaitArg);
+				const slots = awaitedSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
 					return expansion.stmts;
@@ -247,7 +259,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as ReturnStmtData;
 			if (d.argument != null && d.argument.kind == NodeKind.AwaitExpr) {
 				const ad = d.argument.data as AwaitExprData;
-				const slots = getMultiSpawnSlots(ad.awaitArg);
+				const slots = awaitedSpawnSlots(ad.awaitArg);
 				if (slots.length > 0) {
 					const expansion = expandSpawnGroup(slots, stmt.location, ctx, _isAsync);
 					if (expansion.resultExpr != null) {

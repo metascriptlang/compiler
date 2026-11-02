@@ -15,6 +15,11 @@ test "cstringIntoString: a cstring is refused as a string by const, argument, re
 	}
 }
 
+test "cstringIntoString: a refused concatenation names the parentheses the cast needs inside '+'" {
+	assert hasError(DECL + "const s = \"!\" + name(\"a\");", "(… as string)");
+	assert hasError(DECL + "const s = name(\"a\") + \"!\";", "(… as string)");
+}
+
 test "cstringIntoString: as string copies at the cast and string still converts to cstring implicitly" {
 	const accepted = [
 		{ name: "a cast const", source: DECL + "const s = name(\"a\") as string;" },

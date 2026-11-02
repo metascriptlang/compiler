@@ -9,7 +9,7 @@ import {
 } from "./protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats, getFileId } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbSetFileText, dbStats, getFileId } from "../transam/index";
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
@@ -22,7 +22,7 @@ import { buildResolverConfig } from "../compile";
 import { resetCancel } from "../transam/cancel";
 import { CompletionCache, createCompletionCache, clearCompletionCache, markDependentsStale } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
-import { projectUniverse } from "./projectUniverse";
+import { projectUniverse, entryRoots } from "./projectUniverse";
 
 import {
 	lspDispatch, publishPendingDiagnostics,
@@ -364,11 +364,16 @@ export function processMessage(msg: string, state: LspServerState): string {
 }
 
 function navigationScope(state: LspServerState, method: string): Result<string[] | null, string> {
-	if (method != "textDocument/references" && method != "textDocument/rename") return Result.ok(null);
+	const completion = method == "textDocument/completion";
+	if (!completion && method != "textDocument/references" && method != "textDocument/rename") return Result.ok(null);
 	const config = state.entries.get(state.root);
 	if (config == null) return Result.ok(null);
 	if (!config.ok) return Result.err(config.error);
 	if (config.value == "") return Result.ok(null);
+	if (completion) {
+		const roots = entryRoots(state.db, state.root, config.value);
+		return roots.ok ? Result.ok(roots.value) : Result.err(roots.error);
+	}
 	const universe = projectUniverse(state.db, state.root, config.value);
 	return universe.ok ? Result.ok(universe.value) : Result.err(universe.error);
 }
@@ -1186,7 +1191,7 @@ test "navigation reports a broken project config instead of treating it as infer
 	const state = createServerState();
 	state.root = "/broken-project";
 	state.entries.set(state.root, Result.err("build.ms: broken project config"));
-	for (const method of ["textDocument/references", "textDocument/rename"]) {
+	for (const method of ["textDocument/references", "textDocument/rename", "textDocument/completion"]) {
 		const scope = navigationScope(state, method);
 		assert !scope.ok;
 		assert scope.error == "build.ms: broken project config";
@@ -1194,6 +1199,26 @@ test "navigation reports a broken project config instead of treating it as infer
 	state.entries.set(state.root, Result.ok(""));
 	const inferred = navigationScope(state, "textDocument/references");
 	assert inferred.ok && inferred.value == null;
+	const inferredCompletion = navigationScope(state, "textDocument/completion");
+	assert inferredCompletion.ok && inferredCompletion.value == null;
+}
+
+test "a completion is rooted at the configured entry module, and an entry that resolves to no module is reported" {
+	const state = createServerState();
+	state.root = "/entry-project";
+	dbSetFileText(state.db, "/entry-project/app.ms", "export const appValue = 1;\n");
+	state.entries.set(state.root, Result.ok("./app"));
+	const configured = navigationScope(state, "textDocument/completion");
+	assert configured.ok && configured.value != null && configured.value.length == 1;
+	assert configured.value![0] == "/entry-project/app.ms";
+	state.entries.set(state.root, Result.ok("./missing"));
+	for (const method of ["textDocument/references", "textDocument/completion"]) {
+		const scope = navigationScope(state, method);
+		assert !scope.ok;
+		assert scope.error.indexOf("build.ms entry './missing' resolves to no module under /entry-project", 0) >= 0;
+	}
+	const hover = navigationScope(state, "textDocument/hover");
+	assert hover.ok && hover.value == null;
 }
 
 const IDENTITY_SHAPES = "export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\nexport function takeBox(b: Box): int32 {\n\treturn b.v;\n}\n";

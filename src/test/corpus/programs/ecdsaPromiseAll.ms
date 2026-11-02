@@ -4,7 +4,6 @@
 // @stdout: generated 6 signed 6 verified 6
 // @exit: 0
 // @skip-raiser: std/crypto/ec has a C and a JS backend and no ec.rms
-// @xfail(san): Promise.all over Results never destroys their payloads (ledger EcPrivateKey alloc=6 destroy=0; no spawn involved), inbox card 2026-11-01-promise-all-of-spawned-results-leaks-their-payload
 
 import { EcPrivateKey, ecdsaSign, ecdsaVerify } from "std/crypto/ec";
 

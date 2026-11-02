@@ -22,6 +22,7 @@ import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, callCheckLocalInstance, registerInstantiateGeneric, registerTypeInstanceHooks, registerGenericTypeHook } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
+import { checkMovesIn } from "./moveCheck";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
@@ -172,6 +173,7 @@ export function resetInstantiationState(): void {
 	_localGenerics = new HashMap<Symbol, Scope>();
 	_localInstances = new HashMap<Symbol, Node[]>();
 	_placedInstances = new HashMap<Symbol, Symbol>();
+	_instanceHomes = new HashMap<Symbol, string>();
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
 	resetCtorRoutines();
@@ -385,6 +387,15 @@ export function instanceGenericOf(node: Node): Symbol | null {
 }
 
 let _placedInstances: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
+let _instanceHomes: HashMap<Symbol, string> = new HashMap<Symbol, string>();
+
+export function setInstanceHome(sym: Symbol, home: string): void {
+	_instanceHomes.set(sym, home);
+}
+
+export function instanceHomeOf(sym: Readonly<Symbol>): string {
+	return _instanceHomes.readonlyGet(sym) ?? sym.modulePath;
+}
 
 export function distinctInstances(order: Node[]): Node[] {
 	const seen = new HashMap<Symbol, CheckedInstantiation[]>();
@@ -1065,13 +1076,8 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	if (boxed != null) addError(ctx, boxedReferenceRefusal(instancePhrase, boundParamName(dedup.params, dedup.types, boxed), boxed), callLoc.line, callLoc.column);
 
 	// Create and register symbol in root scope.
-	// Instance is OWNED by the generic's defining module (reference parity:
-	// generateInstance setOwner(result, fn)). It is emitted in that module's TU, so the
-	// generic body's module-private helpers (static functions, lifted closures) are visible
-	// to it — co-location, not cross-TU. The mangled C name becomes module-qualified
-	// (`gen__int32__<M>`) via mangledFunctionName; DCE/dedup predicates still key on the
-	// unqualified `fnName` containing `__`. Used-but-not-defining modules forward-decl it
-	// through the standard cross-module proto path.
+	// Routing re-homes a C instance to the module that minted it (`item` is already that module's);
+	// the JS and raiser backends keep it with the module declaring the generic.
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";
@@ -1127,6 +1133,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, cloned);
+		checkMovesIn(bodyCtx, cloned);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -1498,6 +1505,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, ctorDeclNode);
+		checkMovesIn(bodyCtx, ctorDeclNode);
 		if (newSite != null && bodyCtx != ctx && bodyCtx.errors.length > errBefore) {
 			addError(ctx, "in instantiation of '" + classSym.name + displayTypeArgs(types) + "': " + bodyCtx.errors[errBefore].message, newSite.line, newSite.column);
 			while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();

@@ -104,7 +104,6 @@ export interface LiftState {
 	sharedEnvChainNames: string[];      // enclosing shared-env names, immediate-parent first ($up walk)
 	sharedEnvChainTypes: Type[];        // parallel: enclosing shared-env struct types
 	loopEnvs: LoopEnv[];                // per-iteration envs open in the current frame, innermost last
-	splitLoopLocals: Symbol[];          // TransformContext.splitLoopLocals: captured by value (snapshot)
 	// Pass 1 result: pre-computed per-FunctionDecl captures (consumed by lift's
 	// FunctionDecl path instead of running detection inline).
 	detection: DetectionState;
@@ -196,7 +195,7 @@ export function createLiftState(ctx: TransformContext): LiftState {
 	const state: LiftState = {
 		liftedFunctions: [],
 		envStructs: [],
-		closureCounter: 0,
+		closureCounter: ctx.liftCounter,
 		currentFnName: "anon",
 		ss: createScopeStack(),
 		lastUseCaptures: createSymSet(),
@@ -219,7 +218,6 @@ export function createLiftState(ctx: TransformContext): LiftState {
 		sharedEnvChainNames: [],
 		sharedEnvChainTypes: [],
 		loopEnvs: [],
-		splitLoopLocals: [],
 		detection: createDetectionState(),
 		pendingRoutine: null,
 		routines: createSymSet(),
@@ -656,7 +654,7 @@ export interface PreCreatedEnv {
 	detached: boolean;
 }
 
-export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation, parentType: Type | null, detached: boolean): PreCreatedEnv {
+export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: LiftState, loc: SourceLocation, detached: boolean): PreCreatedEnv {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
 	const envName = `$Env_${state.currentFnName}_${counter}`;
@@ -664,8 +662,8 @@ export function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], 
 	const envFieldTypes: string[] = [];
 	const envResolvedTypes: Type[] = [];
 	envFieldSyms.push(null as unknown as Symbol);
-	envFieldTypes.push(parentType != null ? "" : "unknown");
-	envResolvedTypes.push(parentType != null ? createRef(parentType) : createPtr(voidType()));
+	envFieldTypes.push("unknown");
+	envResolvedTypes.push(createPtr(voidType()));
 	for (const sym of captures.items) {
 		const orig = findCapturedIdent(sym, capturedIdents);
 		envFieldSyms.push(sym);
@@ -695,14 +693,14 @@ function envStructNamed(state: LiftState, name: string): boolean {
 	for (const decl of state.envStructs) {
 		if (decl.nodeType!.sym!.name == name) return true;
 	}
-	return false;
+	return state.ctx.liftedEnvNames.includes(name);
 }
 
 // Creates the shared env struct type and hoisted declaration for a function.
 // Called after detectAllCaptures finds captures, before walkLiftBody.
 
-export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet): void {
-	const lent: CaptureCursors = inferCaptureCursors(state.writes, body, state.currentParams.items);
+export function setupSharedEnv(state: LiftState, body: Node, allCaptures: SymSet, allCapturedIdents: Node[], loc: SourceLocation, entryChainNames: string[], entryChainTypes: Type[], ownLocals: SymSet | null, loopSyms: SymSet, suspends: boolean): void {
+	const lent: CaptureCursors = suspends ? { lent: new HashSet<Symbol>(), envEscapes: true } : inferCaptureCursors(state.writes, body, state.currentParams.items);
 	const outerEnvName = entryChainNames.length > 0 ? entryChainNames[0] : "";
 	const outerEnvStructType = entryChainTypes.length > 0 ? entryChainTypes[0] : (null as unknown as Type);
 	const frameCaptures = createSymSet();

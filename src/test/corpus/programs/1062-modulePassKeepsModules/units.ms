@@ -9,3 +9,10 @@ export converter toMeters(n: Node): Meters {
 		properties: [{ kind: NodeKind.NumberLiteral, line: n.line, column: n.column, value: 3 }],
 	};
 }
+
+export enum Kind { A, B }
+
+export struct Shape = match (kind: Kind) {
+	Kind.A => {},
+	Kind.B => { size: int32 },
+};

@@ -15,8 +15,15 @@
 
 import { IoError, IoErrorKind, ioErrorFromErrno, writeFailed } from "../io/errors";
 
+@emit(`function msFsBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}`);
+
 extern function readFileSync(path: string, encoding: string): string;
-extern function readBytesSync(path: string): Buffer from "Array.from(readFileSync(#))";
+extern function readBytesSync(path: string): Buffer from "msFsBytes(readFileSync(#))";
 extern function copyFileSync(src: string, dst: string): void;
 extern function writeBytesSync(path: string, data: uint8[]): void from "writeFileSync(#, Uint8Array.from(#))";
 extern function writeFileSync(path: string, data: string): void;

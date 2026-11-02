@@ -548,6 +548,7 @@ function bindReturnStmt(state: BinderState, node: Node): void {
 function bindThrowStmt(state: BinderState, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	if (d.throwArg != null) bindExpression(state, d.throwArg);
+	addAntecedent(state.currentExceptionTarget, state.currentFlow);
 	state.currentFlow = state.unreachableFlow;
 }
 
@@ -583,6 +584,7 @@ function bindTryStmt(state: BinderState, node: Node): void {
 		exceptionLabel = createBranchLabel();
 		addAntecedent(exceptionLabel, state.currentFlow);
 		state.currentExceptionTarget = exceptionLabel;
+		if (d.catchName != "") state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 		bindStatement(state, d.catchBody);
 		addAntecedent(normalExitLabel, state.currentFlow);
 	}

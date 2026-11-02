@@ -4,7 +4,7 @@
 import {
 	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol,
 	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
-	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
+	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData, ConditionalExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
 	ExportDeclData, DecoratedDeclData,
@@ -29,11 +29,24 @@ import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 
 // --- Statement compilation ---
 
+function producesNoValue(node: Node): boolean {
+	if (node.kind != NodeKind.ConditionalExpr) return false;
+	const d = node.data as ConditionalExprData;
+	return isVoidArm(d.ternaryConsequent) || isVoidArm(d.ternaryAlternate);
+}
+
+function isVoidArm(arm: Node): boolean {
+	return (arm.nodeType != null && arm.nodeType.kind == TypeKind.Void) || producesNoValue(arm);
+}
+
 export function compileStmt(s: RaiserCompState, node: Node): void {
 	match (node.kind) {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument != null) {
+			if (d.argument != null && producesNoValue(d.argument)) {
+				compileExprForEffect(s, d.argument);
+				emitReturnNothing(s);
+			} else if (d.argument != null) {
 				let reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				if (s.tries.length > 0) {
 					const held = allocReg(s, classOfReg(s, reg));

@@ -864,6 +864,13 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	if (node.resolvedSym != null && declaresLocal(node)) {
 		heapObjectSetField(objHeap, handle, "declSymHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 	}
+	if (node.genericDefaults != null) {
+		const defaults: Node[] = [];
+		for (const annotation of node.genericDefaults) {
+			defaults.push(annotation != null ? annotation : null as unknown as Node);
+		}
+		setDefaults(objHeap, arrHeap, handle, "genericDefaults", defaults, includeTypeAst);
+	}
 	if (node.paramSyms != null) {
 		const ph = heapAllocArray(arrHeap);
 		for (const p of node.paramSyms) heapArrayPush(arrHeap, ph, raiserInt(registerBoundSym(p) as int64));
@@ -1067,6 +1074,12 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.TypeAnnotation => {
 			const d = node.data as TypeAnnotationData;
 			setStr(objHeap, arrHeap, handle, "annotationType", d.annotationType);
+			const operand = node.typeExpr;
+			if (operand != null && operand.flags.has(NodeFlag.BoundSym)) {
+				const value = nodeToValue(operand, objHeap, arrHeap, false);
+				if (operand.typeExprs != null) setNodes(objHeap, arrHeap, value.intVal, "boundTypeNames", operand.typeExprs, false);
+				heapObjectSetField(objHeap, handle, "boundTypeExpr", value);
+			}
 		},
 
 		// === Patterns ===
@@ -1229,6 +1242,10 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, arrHeap, handle, "aliasType", d.aliasType);
 			setBool(objHeap, handle, "aliasIsDistinct", d.aliasIsDistinct);
 			setStr(objHeap, arrHeap, handle, "aliasGenericParams", d.aliasGenericParams);
+			setStr(objHeap, arrHeap, handle, "discriminantName", d.discriminantName);
+			setStr(objHeap, arrHeap, handle, "discriminantType", d.discriminantType);
+			setStrs(objHeap, arrHeap, handle, "variantKeys", d.variantKeys);
+			setStrs(objHeap, arrHeap, handle, "variantTypes", d.variantTypes);
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
@@ -1658,7 +1675,26 @@ function rebindRedeclaredLocals(params: Symbol[], body: Node): void {
 function collectWireDeclared(node: Node, into: Symbol[]): void {
 	const sym = _wireDeclared.get(node);
 	if (sym != null) into.push(sym);
+	if (node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern) collectPatternBindings(node, into);
 	forEachChild(node, (child: Node): void => { if (child != null) collectWireDeclared(child, into); });
+}
+
+function collectPatternBindings(pattern: Node, into: Symbol[]): void {
+	const names: Node[] = [];
+	if (pattern.kind == NodeKind.ArrayPattern) {
+		for (const elem of (pattern.data as ArrayPatternData).patternElements) {
+			if (elem != null) names.push(elem.kind == NodeKind.SpreadExpr ? (elem.data as SpreadExprData).spreadArg : elem);
+		}
+	} else {
+		for (const prop of (pattern.data as ObjectPatternData).patternProps) {
+			if (prop == null) continue;
+			names.push(prop.kind == NodeKind.SpreadExpr ? (prop.data as SpreadExprData).spreadArg
+				: prop.kind == NodeKind.ObjectPatternProp ? (prop.data as ObjectPatternPropData).propAlias : prop);
+		}
+	}
+	for (const n of names) {
+		if (n != null && n.kind == NodeKind.Identifier && n.resolvedSym != null) into.push(n.resolvedSym);
+	}
 }
 
 function unbindDeclared(body: Node, declared: Symbol[]): void {
@@ -1715,7 +1751,8 @@ function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: R
 function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
 	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
 		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr
-		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr;
+		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr
+		|| out.kind == NodeKind.TypeAnnotation;
 	if (!carriesTypeText) return;
 	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
 	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
@@ -1768,6 +1805,13 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
+					if (heapObjectGetField(objHeap, handle, "genericDefaults").kind == RaiserValueKind.Array) {
+						const defaults: (Node | null)[] = [];
+						for (const annotation of readDefaults(objHeap, arrHeap, handle, "genericDefaults", fallbackLoc)) {
+							defaults.push(annotation == null ? null : annotation);
+						}
+						out.genericDefaults = defaults;
+					}
 					readQuotedTypeOperands(out, handle, objHeap, arrHeap, fallbackLoc);
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
@@ -1817,7 +1861,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	return fromTemplate(createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc));
 }
 
-const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList;
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList | NodeFlag.ValueUnion;
 
 export interface WireRefusal {
 	message: string;
@@ -2268,8 +2312,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.TypeAliasDecl, {
 				aliasName, aliasType, aliasIsDistinct,
 				aliasGenericParams: readStr(objHeap, arrHeap, h, "aliasGenericParams"),
-				discriminantName: "", discriminantType: "",
-				variantKeys: [], variantTypes: [], nameLocation: loc,
+				discriminantName: readStr(objHeap, arrHeap, h, "discriminantName"),
+				discriminantType: readStr(objHeap, arrHeap, h, "discriminantType"),
+				variantKeys: readStrs(objHeap, arrHeap, h, "variantKeys"),
+				variantTypes: readStrs(objHeap, arrHeap, h, "variantTypes"),
+				nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.EnumDecl => {
@@ -4503,6 +4550,23 @@ test "round-trip TypeAliasDecl keeps aliasGenericParams" {
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as TypeAliasDeclData;
 	assert d.aliasGenericParams == "T";
+}
+
+test "round-trip of a match alias keeps its discriminant, its variants and the struct form" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.TypeAliasDecl, {
+		aliasName: "Shape", aliasType: "| {} | { size: int32 }", aliasIsDistinct: false,
+		aliasGenericParams: "", discriminantName: "kind", discriminantType: "Kind",
+		variantKeys: ["Kind.A", "Kind.B"], variantTypes: ["{}", "{ size: int32 }"], nameLocation: loc,
+	}, synthToken(loc));
+	orig.flags = orig.flags.incl(NodeFlag.ValueUnion);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as TypeAliasDeclData;
+	assert d.discriminantName == "kind" && d.discriminantType == "Kind";
+	assert d.variantKeys.join(",") == "Kind.A,Kind.B" && d.variantTypes.join(",") == "{},{ size: int32 }";
+	assert back.flags.has(NodeFlag.ValueUnion);
 }
 
 test "round-trip WhileStmt keeps whileLabel" {

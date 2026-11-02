@@ -33,6 +33,7 @@ import {
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { routineFlags } from "../../checker/context";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx, checkedFnBodyStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import {
@@ -55,7 +56,7 @@ import {
 	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly, requireUp,
 } from "./lambdaLiftingEnv";
 import {
-	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, splitLoopCaptures, loopsHoldAll,
+	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, loopsHoldAll,
 	openLoopEnv,
 } from "./lambdaLiftingLoops";
 
@@ -129,7 +130,7 @@ function rewriteRoutineSelfRefs(node: Node, routine: Symbol, closureOf: (ref: No
 }
 
 function collectRoutines(program: Node, state: LiftState): void {
-	state.routines = routineSyms(program, 0, state.splitLoopLocals);
+	state.routines = routineSyms(program, 0);
 }
 
 function envPointerTo(state: LiftState, target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
@@ -897,6 +898,11 @@ function noopPreWalk(): void {}
 // One frame's body: the captures detection recorded for `node` become its shared
 // env, set up in walkLiftBody's preWalk so the env decl is hoisted into this frame
 // and its name is in scope before any closure in the body is lifted.
+function suspends(routine: Node): boolean {
+	const flags = routineFlagSet(routineFlags(routine));
+	return flags.has(RoutineFlag.Generator) || flags.has(RoutineFlag.Async);
+}
+
 function walkLiftFrame(node: Node, body: Node, state: LiftState): void {
 	const savedShared = saveSharedEnv(state);
 	const allCaptures = detectionGetCaptures(state.detection, node);
@@ -906,7 +912,7 @@ function walkLiftFrame(node: Node, body: Node, state: LiftState): void {
 	const loopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (allCaptures.items.length > 0) {
-			setupSharedEnv(state, body, allCaptures, allCapturedIdents, node.location, chain.names, chain.types, null, loopSyms);
+			setupSharedEnv(state, body, allCaptures, allCapturedIdents, node.location, chain.names, chain.types, null, loopSyms, suspends(node));
 		}
 	});
 	restoreSharedEnv(state, savedShared);
@@ -1022,12 +1028,11 @@ interface LoopPlan {
 	carrierIdx: number;
 	preSyms: SymSet | null;
 	preIdents: Node[];
-	preParent: Type | null;
 	detached: boolean;
 }
 
 function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol | null, ownCaptures: SymSet, ownCapturedIdents: Node[], ownLocals: SymSet, shared: SharedEnvSnapshot, detached: boolean): LoopPlan {
-	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], preParent: null, detached: false };
+	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], detached: false };
 	const enclosingLoops = shared.loopEnvs;
 	if (!detached && enclosingLoops.length == 0 && state.insideLoop == 0) return plan;
 	const directIdents: Node[] = [];
@@ -1070,13 +1075,6 @@ function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symb
 		if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
 			plan.preSyms = fullSet;
 			plan.preIdents = fullIdents;
-		}
-	} else {
-		const snap = splitLoopCaptures(fullSet, fullIdents, enclosingLoops, state.splitLoopLocals);
-		if (snap.syms.items.length > 0) {
-			plan.preSyms = snap.syms;
-			plan.preIdents = snap.idents;
-			plan.preParent = carrierIdx >= 0 ? enclosingLoops[carrierIdx].envStructType : shared.structType;
 		}
 	}
 	plan.carrierIdx = carrierIdx;
@@ -1200,7 +1198,7 @@ function liftCapturingClosureBody(
 	const plan = planLoopEnv(state, body, state.ss, routine, ownCaptures, ownCapturedIdents, ownLocals, savedShared, node.flags.has(NodeFlag.SendableClosure));
 	const carrierIdx = plan.carrierIdx;
 	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
-	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.preParent, plan.detached);
+	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.detached);
 	let entryChain = plan.detached ? envChainFrom([], -1, "", null as unknown as Type, [], []) : envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
 	if (preEnv != null) {
 		const names: string[] = [preEnv.envName];
@@ -1240,7 +1238,7 @@ function liftCapturingClosureBody(
 	const bodyLoopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
+			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms, suspends(node));
 		}
 	});
 	state.capturedIdents = [];
@@ -1271,6 +1269,14 @@ function liftCapturingClosureBody(
 	return liftNonCapturing(body, node.paramSyms!, paramTypes, flags, returnType, state, loc, node.nodeType!, routine);
 }
 
+function carryAsync(source: Node, state: LiftState, pair: Node): Node {
+	if (source.flags.has(NodeFlag.WasAsync)) {
+		const fn = state.liftedFunctions[state.liftedFunctions.length - 1];
+		fn.flags = fn.flags.incl(NodeFlag.WasAsync);
+	}
+	return pair;
+}
+
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
 function tryLiftClosure(node: Node, state: LiftState): Node {
 	// Save+clear scope state: closure body is a new scope.
@@ -1281,10 +1287,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		return liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow);
+		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow));
 	} else if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		return liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr);
+		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr));
 	} else {
 		popFuncBoundary(state.ss);
 		state.activeEnvRewrites = savedActiveRewrites;
@@ -1318,10 +1324,11 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	normalizeArrowBodies(program);
 	// Pass 1: collect per-fn capture info upfront.
 	state.detection = detectPass(program);
-	state.splitLoopLocals = ctx.splitLoopLocals;
 	collectRoutines(program, state);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);
+	ctx.liftCounter = state.closureCounter;
+	for (const s of state.envStructs) ctx.liftedEnvNames.push(s.nodeType!.sym!.name);
 
 	// Prepend env structs + lifted functions to program
 	if (state.envStructs.length == 0 && state.liftedFunctions.length == 0) {

@@ -232,11 +232,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 		for (const r of reads) stmts.push(r);
 		return stmts;
 	}
-	// Phase 3: timed wait — const $deadline = msMonoTimeMs() + timeoutExpr;
-	const int64Type = createPrimitive(TypeKind.Int64);
-	const nowCall = makeCall(runtimeRef("msMonoTimeMs", loc), [], loc);
-	nowCall.nodeType = int64Type;
-	const dl = makeTempDecl(ctx, "deadline", makeBinary(nowCall, "+", timeoutExpr, loc), int64Type, loc);
+	const dl = deadlineDecl(timeoutExpr, loc, ctx);
 	stmts.push(dl.decl);
 
 	// msAwaitGroupBlockingWithDeadline($ag, $deadline);
@@ -255,22 +251,40 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// join is safe on the loop thread: the blocking wait pumps the event loop
 	// while waiting, which is exactly what unblocks a timer-parked child.
 	// msAwaitGroupFree reports a child failure only that join observed.
-	const timedOut = (): Node => {
-		const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [cloneIdent(agIdent, loc)], loc);
-		c.nodeType = booleanType();
-		return c;
-	};
 	const joinCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [cloneIdent(agIdent, loc)], loc), loc);
-	stmts.push(makeIf(timedOut(), makeBlock([joinCall], loc), null, loc));
+	stmts.push(makeIf(timedOutCall(agIdent, loc), makeBlock([joinCall], loc), null, loc));
 	for (const r of reads) stmts.push(r);
+	stmts.push(throwIfTimedOut(agIdent, loc));
+
+	return stmts;
+}
+
+export function armGroupDeadline(agIdent: Node, timeoutExpr: Node, loc: SourceLocation): { arm: Node, disarmBeforeGroupFree: Node } {
+	const arm = makeExprStmt(makeCall(runtimeRef("msAwaitGroupArmDeadline", loc), [cloneIdent(agIdent, loc), timeoutExpr], loc), loc);
+	const disarm = makeExprStmt(makeCall(runtimeRef("msAwaitGroupDisarmDeadline", loc), [cloneIdent(agIdent, loc)], loc), loc);
+	return { arm, disarmBeforeGroupFree: disarm };
+}
+
+function deadlineDecl(timeoutExpr: Node, loc: SourceLocation, ctx: TransformContext): { decl: Node, ident: Node, sym: Symbol } {
+	const int64Type = createPrimitive(TypeKind.Int64);
+	const nowCall = makeCall(runtimeRef("msMonoTimeMs", loc), [], loc);
+	nowCall.nodeType = int64Type;
+	return makeTempDecl(ctx, "deadline", makeBinary(nowCall, "+", timeoutExpr, loc), int64Type, loc);
+}
+
+function timedOutCall(agIdent: Node, loc: SourceLocation): Node {
+	const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [cloneIdent(agIdent, loc)], loc);
+	c.nodeType = booleanType();
+	return c;
+}
+
+export function throwIfTimedOut(agIdent: Node, loc: SourceLocation): Node {
 	const freeCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [cloneIdent(agIdent, loc)], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
-	stmts.push(makeIf(timedOut(), makeBlock([freeCall, throwNode], loc), null, loc));
-
-	return stmts;
+	return makeIf(timedOutCall(agIdent, loc), makeBlock([freeCall, throwNode], loc), null, loc);
 }
 
 // ===== Fused Path: await spawn(fn) → zero-alloc or AwaitGroup lifecycle =====

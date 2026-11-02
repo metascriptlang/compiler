@@ -292,6 +292,8 @@ static inline void msUringSubmitCancel(int32_t fd, int32_t op) {
 /* Submit all pending + wait for completions, at most timeoutMs when it is >= 0.
  * Returns number of events; timer and cancel completions are not events. */
 static inline int32_t msUringWait(int32_t timeoutMs) {
+	extern bool msLoopHasReadyWork(void);
+	if (timeoutMs > 0 && msLoopHasReadyWork()) timeoutMs = 0;
 	msUringEvt* r = &_uringEvt;
 	struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
 	if (timeoutMs >= 0

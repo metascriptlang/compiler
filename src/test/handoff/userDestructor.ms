@@ -75,11 +75,8 @@ function petHookSource(receiver: string): string {
 		+ "use();";
 }
 
-test "user onDestroy on a Var<T> receiver is wired to T like one on a this ref receiver" {
+test "user onDestroy on a this ref receiver is wired to T" {
 	const byRef = compileToC(petHookSource("this ref self: Pet"));
 	assert byRef.ok, byRef.error;
 	assert countSub(byRef.value, "onDestroy") >= 3;
-	const byVar = compileToC(petHookSource("this self: Var<Pet>"));
-	assert byVar.ok, byVar.error;
-	assert byVar.value == byRef.value;
 }

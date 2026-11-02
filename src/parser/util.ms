@@ -335,7 +335,6 @@ export function parseParamList(state: ParserState, fnName: string, isCtor: boole
 				if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
-			// Instance extension: this name: Type, or `this ref name: T` for a `Var<T>` receiver
 			let receiverPrefix = "";
 			if (current(state).kind == TokenKind.Ref && isIdentLike(peek(state, 1))) {
 				advance(state);

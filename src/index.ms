@@ -85,6 +85,23 @@ export function main(): int32 {
 		process.exit(1);
 	}
 	const cfg = applied.value;
+	if (opts.jsEntries.length > 0 && (cmd != "build" || opts.target != Target.JS || !opts.splitModules)) {
+		console.log(`${error("error")}: --js-entry requires build --target=js --split`);
+		process.exit(1);
+	}
+	if (opts.declarationSourceRoot != "" && (cmd != "build" || opts.target != Target.JS || !opts.declaration || !opts.splitModules)) {
+		console.log(`${error("error")}: --declaration-source-root requires build --target=js --declaration --split`);
+		process.exit(1);
+	}
+	if (opts.declaration && (cmd != "build" || opts.target != Target.JS)) {
+		console.log(`${error("error")}: --declaration requires build --target=js (ES modules)`);
+		process.exit(1);
+	}
+	if (opts.declaration && !opts.splitModules && opts.outputPath != ""
+		&& !opts.outputPath.endsWith(".js") && !opts.outputPath.endsWith(".mjs")) {
+		console.log(`${error("error")}: --declaration requires an ESM .js or .mjs output`);
+		process.exit(1);
+	}
 	configureCachePaths(opts.cacheDir, opts.globalCacheDir, opts.globalCache);
 	collectGlobalCache();
 	if (opts.showDefines) {

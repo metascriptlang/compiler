@@ -1,11 +1,13 @@
 1	_msActorJobCancelMark
+1	_msActorJobEnvIdle
 1	_msActorLendBusy
 1	_msGetDispatcher
 1	_msPoolInit
+1	_msPoolShutdown
 1	_msThreadChannel
 1	_msWorkerLoopPump
 10	_msActorRunJobs
-10	_msCancelTimer
+11	_msCancelTimer
 11	_msPidTableFull
 11	_run__SsrcZtestZcorpusZprogramsZ409U2DawaitU53tructU41ctorU53pawnOms_u0
 13	_msActorProcess
@@ -13,15 +15,14 @@
 14	_msPoolWorkerLoop
 15	_msActorVisitEnd
 15	_msSpawnWorkerSettle
-16	_msProcessTimers
 17	_msActorPostJob
 18	_msActorSendOrDrop
+18	_msProcessTimersIn
 19	_msPoolCompensate
 2	_msActorJobAbandon
 2	_msActorJobTick
 2	_msDrainUntilIdle
 2	_msPoolRunQueued
-2	_msPoolShutdown
 20	_msWaitFor
 29	_msActorPollLocal
 3	_msActorJobFire
@@ -29,7 +30,7 @@
 3	_msCompletionQueuePushReleaseBatch
 3	_msPoolWakeWorker
 30	_msActorShutdownAtExit
-31	_msActorDestroyWithReason
+32	_msActorDestroyWithReason
 4	_msActorJobsFree
 4	_msChannelDrain
 4	_msPoolCompensateEnd
@@ -37,7 +38,6 @@
 5	_msActorReapLocalQueue
 5	_msFutureAddCallback
 52	_msCDDispatch
-6	_msActorJobRun
 7	_main
 7	_msActorStop
 7	_msAwaitGroupCompleteSlot
@@ -51,5 +51,6 @@
 8	_msRunOnce
 8	_msTimerDelayFrom
 8	_msTimerFiresHere
+9	_msActorJobRun
 9	_msActorLendWakeCb
 9	_msMainLoopIdle

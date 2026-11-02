@@ -1,7 +1,7 @@
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbResolveImport, dbForgetAllTypeChecks,
 	dbGetFileCount, getFileId, recordModuleImport, getDirectImports,
-	dbSetGlobalImports, cacheGet, createQueryKey, TaQueryKind,
+	dbSetGlobalImports, dbSetStdPath, cacheGet, createQueryKey, TaQueryKind,
 } from "../transam/index";
 import { collectImportCalls } from "../../module/loader";
 import { isStdImport } from "../../module/resolver";
@@ -9,7 +9,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { openDocuments, markDocumentOpen, markDocumentClosed } from "./handlers/shared";
 import { join, normalize } from "std/fs/path";
 import { mkdir, removeAll, writeFile } from "std/fs";
-import { tmpDir } from "../../utils/path";
+import { tmpDir, resolveRuntimeDir } from "../../utils/path";
 
 function staticImportSources(program: Node): string[] {
 	const sources: string[] = [];
@@ -21,7 +21,7 @@ function staticImportSources(program: Node): string[] {
 	return sources;
 }
 
-function walkImports(db: TransAmDb, roots: string[]): string[] {
+function walkImports(db: TransAmDb, roots: string[], stdLeaves: string[] | null = null): string[] {
 	const knownBefore = dbGetFileCount(db);
 	const reached = new HashSet<string>();
 	const universe: string[] = [];
@@ -35,7 +35,12 @@ function walkImports(db: TransAmDb, roots: string[]): string[] {
 		const program = dbParse(db, path);
 		const fileId = getFileId(db.fileInput, path);
 		const follow = (source: string, recordEdge: boolean): void => {
-			if (isStdImport(source)) return;
+			if (isStdImport(source)) {
+				if (stdLeaves == null) return;
+				const leaf = dbResolveImport(db, path, source);
+				if (leaf != "") stdLeaves.push(leaf);
+				return;
+			}
 			const target = dbResolveImport(db, path, source);
 			if (target == "") return;
 			const targetId = getFileId(db.fileInput, target);
@@ -53,15 +58,41 @@ function walkImports(db: TransAmDb, roots: string[]): string[] {
 	return universe;
 }
 
-export function projectUniverse(db: TransAmDb, root: string, entry: string): Result<string[], string> {
+export function entryRoots(db: TransAmDb, root: string, entry: string): Result<string[], string> {
 	const entryPath = dbResolveImport(db, join(root, "build.ms"), join(root, entry));
 	if (entryPath == "") return Result.err(`build.ms entry '${entry}' resolves to no module under ${root}, so the project's files are unknown`);
-	const roots = [entryPath];
+	return Result.ok([entryPath]);
+}
+
+function projectRoots(db: TransAmDb, entryRoots: string[]): string[] {
+	const roots = entryRoots.slice();
 	for (const global of db.globalImports) roots.push(global.path);
 	for (const open of openDocuments()) {
 		if (getFileId(db.fileInput, open) >= 0) roots.push(open);
 	}
-	return Result.ok(walkImports(db, roots));
+	return roots;
+}
+
+export function projectUniverse(db: TransAmDb, root: string, entry: string): Result<string[], string> {
+	const roots = entryRoots(db, root, entry);
+	if (!roots.ok) return Result.err(roots.error);
+	return Result.ok(walkImports(db, projectRoots(db, roots.value)));
+}
+
+export function completionSources(db: TransAmDb, entryRoots: string[], current: string): string[] {
+	const roots = projectRoots(db, entryRoots);
+	if (getFileId(db.fileInput, current) >= 0) roots.push(current);
+	const leaves: string[] = [];
+	const sources = walkImports(db, roots, leaves);
+	const held = new HashSet<string>();
+	for (const path of sources) held.add(path);
+	for (const leaf of leaves) {
+		if (held.has(leaf)) continue;
+		held.add(leaf);
+		sources.push(leaf);
+	}
+	sources.sort();
+	return sources;
 }
 
 const LIB = "export function target(): int32 { return 1; }";
@@ -186,4 +217,68 @@ test "a module created after its importer was checked makes that check stale" {
 	} finally {
 		removeAll(dir);
 	}
+}
+
+function sourcesOf(db: TransAmDb, entry: string | null, current: string, root: string = "/proj"): string {
+	let roots: string[] = [];
+	if (entry != null) {
+		const found = entryRoots(db, root, entry);
+		if (!found.ok) return found.error;
+		roots = found.value;
+	}
+	const names: string[] = [];
+	for (const path of completionSources(db, roots, current)) names.push(path.slice(root.length + 1));
+	return names.join(", ");
+}
+
+test "completion sources: the entry's closure holds the unopened importers and re-exports, and the file asked joins it" {
+	const db = projectDb();
+	assert sourcesOf(db, "./app", "/proj/app.ms") == CLOSURE, sourcesOf(db, "./app", "/proj/app.ms");
+	assert sourcesOf(db, "./app", "/proj/orphan.ms") == "app.ms, barrel.ms, direct.ms, lib.ms, orphan.ms, unrelated.ms, use.ms";
+	assert sourcesOf(db, null, "/proj/orphan.ms") == "lib.ms, orphan.ms";
+	assert sourcesOf(db, null, "/proj/app.ms") == CLOSURE;
+}
+
+test "completion sources: an open document is a root while it stays open, with no change to any text" {
+	const db = projectDb();
+	const revision = db.revision.value;
+	markDocumentOpen("/proj/orphan.ms");
+	const open = sourcesOf(db, null, "/proj/unrelated.ms");
+	markDocumentClosed("/proj/orphan.ms");
+	const closed = sourcesOf(db, null, "/proj/unrelated.ms");
+	assert open == "lib.ms, orphan.ms, unrelated.ms", open;
+	assert closed == "unrelated.ms", closed;
+	assert db.revision.value == revision;
+}
+
+test "completion sources: an import cycle ends, a literal dynamic import counts and a computed one adds nothing" {
+	const db = projectDb();
+	dbSetFileText(db, "/proj/ping.ms", "import { pong } from \"./pong\";\nexport const ping = pong;");
+	dbSetFileText(db, "/proj/pong.ms", "import { ping } from \"./ping\";\nexport const pong = ping;");
+	assert sourcesOf(db, null, "/proj/ping.ms") == "ping.ms, pong.ms", sourcesOf(db, null, "/proj/ping.ms");
+	dbSetFileText(db, "/proj/app.ms", "const name = \"./orphan\";\nconst lazy = import(\"./use\");\nconst guessed = import(name);");
+	assert sourcesOf(db, null, "/proj/app.ms") == "app.ms, barrel.ms, lib.ms, use.ms", sourcesOf(db, null, "/proj/app.ms");
+}
+
+test "completion sources: a std module a file imports is a leaf and the default prelude is no root" {
+	const db = projectDb();
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/proj/viaStd.ms", "import { readFile } from \"std/fs\";\nimport { target } from \"./lib\";\nreadFile; target;");
+	const fsPath = dbResolveImport(db, "/proj/viaStd.ms", "std/fs");
+	assert fsPath != "";
+	const sources = completionSources(db, [], "/proj/viaStd.ms");
+	let stdModules = 0;
+	for (const path of sources) {
+		if (path.startsWith(resolveRuntimeDir() + "/std")) stdModules++;
+	}
+	assert sources.includes(fsPath) && sources.includes("/proj/lib.ms");
+	assert stdModules == 1, sources.join(", ");
+	for (const path of completionSources(db, [], "/proj/orphan.ms")) assert !path.startsWith(resolveRuntimeDir() + "/std"), path;
+}
+
+test "completion sources: a global import is a root of every file's sources" {
+	const db = projectDb();
+	const unresolved = dbSetGlobalImports(db, ["/proj/unrelated"]);
+	assert unresolved.length == 0, unresolved.join(", ");
+	assert sourcesOf(db, null, "/proj/lib.ms") == "lib.ms, unrelated.ms", sourcesOf(db, null, "/proj/lib.ms");
 }

@@ -63,21 +63,9 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t n
 	return p;
 }
 
-/* Zeroing realloc — zeros only [oldCap+1..newCap) region.
-   Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
-static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
-	checkCap(newCap);
-	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
-	p->cap = newCap;
-	if (newCap > oldCap) {
-		memset(p->data + oldCap + 1, 0, newCap - oldCap);
-	}
-	return p;
-}
-
 /* ===== ASCII cache invariant =====
    The cached answer describes the payload's CURRENT bytes, so any in-place
-   content change must retract it. Gateways (PrepareAdd/PrepareMutation) retract;
+   content change must retract it. Gateways (PrepareAdd, Clear) retract;
    appenders re-derive by composition (ascii(a ++ b) = ascii(a) and ascii(b)).
    Retracting too often only costs a rescan; keeping a stale bit makes .length
    lie. Literal payloads are never written — their bytes cannot change, and they
@@ -131,16 +119,6 @@ msString msStringNewLen(int64_t len) {
 	if (len <= 0) return MS_EMPTY_STRING;
 	msStrPayload* p = allocPayload0(len);
 	return (msString){ .len = len, .p = p };
-}
-
-void msStringPrepareMutation(msString* s) {
-	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) != 0) {
-		msStrPayload* oldP = s->p;
-		s->p = allocPayload(s->len);
-		s->p->cap = s->len;
-		memcpy(s->p->data, oldP->data, s->len + 1);
-	}
-	msStrInvalidateAscii(s->p);
 }
 
 void msStringPrepareAdd(msString* s, int64_t addLen) {
@@ -202,39 +180,12 @@ void msStringAppendCharSlow(msString* dest, char c) {
 	else if (destKnown) msStrMarkAscii(dest->p);
 }
 
-void msStringSetLength(msString* s, int64_t newLen) {
-	if (newLen == 0) {
-		/* Don't free — common pattern: s.setLen(0) to reuse buffer */
-	} else {
-		if (msIsLiteral(*s)) {
-			msStrPayload* oldP = s->p;
-			s->p = allocPayload(newLen);
-			s->p->cap = newLen;
-			if (s->len > 0) {
-				int64_t copyLen = s->len < newLen ? s->len : newLen;
-				memcpy(s->p->data, oldP->data, copyLen);
-				if (newLen > s->len) {
-					memset(s->p->data + s->len, 0, newLen - s->len + 1);
-				} else {
-					s->p->data[newLen] = '\0';
-				}
-			} else {
-				memset(s->p->data, 0, newLen + 1);
-			}
-		} else if (newLen > s->len) {
-			int64_t oldCap = s->p->cap & MS_CAP_MASK;
-			if (newLen > oldCap) {
-				int64_t newCap = newLen;
-				int64_t resized = msStringResizeCap(oldCap);
-				if (resized > newCap) newCap = resized;
-				s->p = reallocPayload0(s->p, oldCap, newCap);
-			}
-			memset(s->p->data + s->len, 0, newLen - s->len);
-		}
-		if (s->p) s->p->data[newLen] = '\0';
+void msStringClear(msString* s) {
+	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) == 0) {
+		s->p->data[0] = '\0';
 		msStrInvalidateAscii(s->p);
 	}
-	s->len = newLen;
+	s->len = 0;
 }
 
 /* ===== Comparison ===== */
@@ -293,36 +244,4 @@ double msStringParseFloat(msString s) {
 	return strtod(s.p->data, NULL);
 }
 #endif
-
-/* ===== Capacity ===== */
-
-int64_t msStringCapacity(msString s) {
-	if (s.p == NULL) return 0;
-	return msStrCapLoad(s.p) & MS_CAP_MASK;
-}
-
-/* ===== In-Place Operations (Standard reference patterns) ===== */
-
-void msStringSetSlice(msString* s, int64_t start, int64_t end) {
-	if (start < 0) start = 0;
-	if (end > s->len) end = s->len;
-	if (start >= end) {
-		s->len = 0;
-		if (msIsLiteral(*s)) {
-			s->p = NULL;
-		} else {
-			s->p->data[0] = '\0';
-		}
-		return;
-	}
-	int64_t newLen = end - start;
-	if (start > 0 || msIsLiteral(*s)) {
-		msStringPrepareMutation(s);
-	}
-	if (start > 0) {
-		memmove(s->p->data, s->p->data + start, newLen);
-	}
-	s->len = newLen;
-	s->p->data[newLen] = '\0';
-}
 

@@ -5,7 +5,7 @@
 // @skip-js: `extern function` binds a C symbol, and JS has no pool to hold
 // note: every pool worker is held, so the next two spawns stay queued, `unrelated` ahead of `own`; `unrelated` ends only after the waiter releases the workers, which it does only after `await own`. A waiter that ran any queued task took `unrelated` and waited on itself forever (old runtime: hang, killed by the timeout). The first phase waits on the loop thread. In the second, a pool task waits: the holders then hold from inside a wait (`await spawn`), so the worker count no longer counts them busy and the task's spawns are queued instead of run inline. A holder's own task may run on another worker instead of on its waiter, taking two threads, so holders are added one at a time until exactly one worker is left for the task.
 @include("./pin.h");
-import { cpuCount } from "std/os";
+import { availableParallelism } from "std/os";
 extern function pinHold(): int32;
 extern function pinWaitAll(n: int32): void;
 extern function pinReleaseAll(): void;
@@ -37,7 +37,7 @@ function settle(held: Promise<int32>[]): boolean {
 	return s == held.length;
 }
 
-const n = cpuCount();
+const n = availableParallelism();
 const held: Promise<int32>[] = [];
 for (let i = 0; i < n; i++) held.push(spawn(() => pinHold()));
 pinWaitAll(n);

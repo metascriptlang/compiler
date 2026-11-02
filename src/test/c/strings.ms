@@ -18,6 +18,21 @@ test "E2E C: string === calls the std string == routine" {
 	assert c.contains("return eqeq___") && c.contains("ZstdZcoreZstringZindexOcms_u0(a_p0, b_p1);"), c;
 }
 
+test "E2E C: a string element stored from another element is copied into the destination slot" {
+	const src = "export function put(x: string[], y: string[], i: int32): void { x[i] = y[i]; }";
+	const c = compileToC(src);
+	assert c.ok;
+	const body = c.value.slice(c.value.indexOf("int32_t i_p2) {"), c.value.length);
+	assert body.contains("msStringCopy((&((*x_p0)[i_p2])), (*y_p1)[i_p2])"), body;
+}
+
+test "E2E C: a string field stored from another field is copied into the destination field" {
+	const src = "export class P { a: string = \"x\"; b: string = \"y\"; }\nexport function put(p: P): void { p.b = p.a; }";
+	const c = compileToC(src);
+	assert c.ok;
+	assert c.value.contains("msStringCopy((&((*p_p0).b)), (*p_p0).a)"), c.value;
+}
+
 test "E2E C: string literal pool" {
 	const src = "const s: string = \"hello\";\nconst x: number = 1;";
 	const c = compileToC(src);

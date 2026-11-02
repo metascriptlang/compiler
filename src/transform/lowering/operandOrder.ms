@@ -17,6 +17,7 @@ import { isAssignOp } from "../../ast/operators";
 export { isAssignOp } from "../../ast/operators";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
 import { cloneIfPure } from "../place";
+import { calleeFormals } from "./jsVarParamLower";
 
 export type Spiller = { ctx: TransformContext, has: (n: Node) => boolean, lower: (n: Node, pre: Node[]) => Node };
 
@@ -108,7 +109,8 @@ function bindOperand(sp: Spiller, e: Node, snapshot: boolean, pre: Node[]): Node
 	return e;
 }
 
-function lowerOperands(sp: Spiller, ops: Node[], pre: Node[], receivers: int32): void {
+// A place operand (bound to a ref or out formal) stays the place it names: what locates it is settled.
+function lowerOperands(sp: Spiller, ops: Node[], pre: Node[], receivers: int32, places: boolean[] | null = null): void {
 	let last = -1;
 	for (let i = 0; i < ops.length; i += 1) {
 		if (sp.has(ops[i])) last = i;
@@ -116,6 +118,10 @@ function lowerOperands(sp: Spiller, ops: Node[], pre: Node[], receivers: int32):
 	if (last < 0) return;
 	for (let i = 0; i < ops.length; i += 1) {
 		if (ops[i] == null) continue;
+		if (places != null && places[i]) {
+			ops[i] = settleTarget(sp, ops[i], pre);
+			continue;
+		}
 		const lowered = sp.lower(ops[i], pre);
 		const snapshot = i < last && i >= receivers && !unchangedByHoist(sp, lowered, ops.slice(i + 1, last + 1));
 		ops[i] = bindOperand(sp, lowered, snapshot, pre);
@@ -135,8 +141,13 @@ export function lowerOperandList(sp: Spiller, e: Node, pre: Node[]): boolean {
 		const d = e.data as CallExprData;
 		const viaMember = d.callee.kind == NodeKind.MemberExpr;
 		const ops: Node[] = [viaMember ? (d.callee.data as MemberExprData).object : d.callee];
-		for (const a of d.arguments) ops.push(a);
-		lowerOperands(sp, ops, pre, 1);
+		const formals = calleeFormals(d);
+		const places: boolean[] = [false];
+		for (let i = 0; i < d.arguments.length; i += 1) {
+			ops.push(d.arguments[i]);
+			places.push(formals != null && i < formals.length && formals[i] != null && formals[i].kind == TypeKind.Var);
+		}
+		lowerOperands(sp, ops, pre, 1, places);
 		if (viaMember) (d.callee.data as MemberExprData).object = ops[0];
 		else d.callee = ops[0];
 		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = ops[i + 1];

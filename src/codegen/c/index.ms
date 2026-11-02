@@ -21,7 +21,7 @@ import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
 import { factInlineDecls } from "./forward";
 import { mangleModuleName, mangledFunctionName, mangledTypeName, buildModuleNameRoots } from "./names";
 import { emitStringPoolDecls } from "./literals";
-import { emitTestHeader, emitTestTable } from "./test";
+import { emitTestHeader, emitTestTable, emitModuleRecords } from "./test";
 import { emitIncludeDirectives, emitIncludes } from "./context";
 import { placedInstances } from "../../checker/instantiate";
 import { headerIncludeTable } from "../../module/cimport/emit";
@@ -457,34 +457,6 @@ export function genProjectDispatcher(
 	};
 
 	return extract(b);
-}
-
-function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: HashSet<string>, deinits: HashSet<string>): void {
-	if (plan.records.length == 0) return;
-	for (let i = 0; i < plan.records.length; i += 1) {
-		if (plan.requested[i].length == 0) continue;
-		let list = "";
-		for (const at of plan.requested[i]) list = list == "" ? `${at}` : `${list}, ${at}`;
-		addLine(b, `static const int32_t msModuleRequested${i}[] = { ${list} };`);
-	}
-	addLine(b, `static msModuleRecord msModuleRecords[${plan.records.length}] = {`);
-	b.indent += 1;
-	for (let i = 0; i < plan.records.length; i += 1) {
-		const mp = plan.records[i];
-		const modName = mangleModuleName(buildModuleNameRoots(), mp);
-		if (!plan.lazy.has(mp)) {
-			addLine(b, `{ .name = "${modName}", .status = MS_MODULE_EVALUATED },`);
-			continue;
-		}
-		const init = emptyInits.has(mp) ? "NULL" : `${modName}__Init000`;
-		const deinit = deinits.has(mp) ? `${modName}__Deinit000` : "NULL";
-		const requested = plan.requested[i].length > 0 ? `msModuleRequested${i}` : "NULL";
-		const tla = plan.topLevelAwait.has(mp) ? ", .hasTLA = true" : "";
-		addLine(b, `{ .name = "${modName}", .init = ${init}, .deinit = ${deinit}, .requested = ${requested}, .requestedCount = ${plan.requested[i].length}, .status = MS_MODULE_PENDING${tla} },`);
-	}
-	b.indent -= 1;
-	addLine(b, "};");
-	addNewline(b);
 }
 
 export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutput[], plan: DynamicModulePlan): string {

@@ -24,7 +24,13 @@ import { p384 } from "../pure/p384";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
-@emit(`const msEcPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+@emit(`function msEcBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n).fill(0);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}
+const msEcPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
 function msEcPkSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
@@ -53,7 +59,7 @@ async function msEcPkRun(job) {
 	const subtle = msEcPkSubtle();
 	if (!subtle) return { value: [], error: msEcPkNoSubtle };
 	try {
-		return { value: Array.from(new Uint8Array(await job(subtle))), error: "" };
+		return { value: msEcBytes(new Uint8Array(await job(subtle))), error: "" };
 	} catch (e) {
 		return { value: [], error: msEcPkMessage(e) };
 	}

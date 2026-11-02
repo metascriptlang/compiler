@@ -81,10 +81,11 @@ The order is the code: `transformProgram` in `src/transform/index.ms` (one list,
 step gated by `jsBackend` where a backend needs it) and, for C only, `transformForNative` in
 `src/transform/native/index.ms`. Do not copy the list into a doc. Order is a contract, and these edges hold in `index.ms` at `99ff1ce60`:
 `for` lowers to `while` before `for-of`; `switch` and `match` lower to `if` before `async` and
-generators; `async` lowers before `generatorLower`; `generatorLower` runs before `lambdaLifting`
-(the reverse of the usual order, on purpose: the generator creates `$state` and a function
-expression, and lifting then captures `$state` into the environment; a nested routine is rebuilt
-at each resume rather than stored in the frame); `callHoist` runs after `lambdaLifting`;
+generators; `async` lowers before `generatorLower`; `lambdaLifting` runs before the state split
+(`asyncBridge`, `generatorLower`), as in the reference, so a closure's environment, a loop's
+per-iteration one included, is an ordinary local the split keeps in the frame; `lambdaLifting`
+runs again after the split to lift the resume routine the split creates; `callHoist` runs after
+`lambdaLifting`;
 `destructorLifting` is the last step of `transformProgram`; on C the `native/` tail follows it.
 
 ### What Phase 4 (Analyzer) requires Phase 3 to have done

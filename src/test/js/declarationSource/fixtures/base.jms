@@ -1,0 +1,6 @@
+export class Base {
+	value: int32 = 0;
+	private secret: int32 = 1;
+	constructor(value: int32) { this.value = value; }
+	add(amount: int32): int32 { return this.value + amount + this.secret; }
+}

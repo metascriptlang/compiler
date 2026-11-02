@@ -1,6 +1,6 @@
 // LSP Handlers — Completion, completion resolve, import path/name completion.
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbEnsureModuleExports, dbResolveImport, dbSetStdPath } from "../../transam/index";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbEnsureModuleExports, dbEnsurePrelude, dbResolveImport, dbSetStdPath } from "../../transam/index";
 import { resolveRuntimeDir } from "../../../utils/path";
 import { readDir } from "std/fs";
 import {
@@ -21,9 +21,12 @@ import {
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports, isCancelled } from "../../../checker/context";
+import { sharedPreludeOwns } from "../../../checker/checkPass";
+import { completionSources } from "../projectUniverse";
 import { requestCancel, resetCancel } from "../../transam/cancel";
 import { sgJsxSiteAt, sgCompleteJsx, sgFieldDeclLine } from "../../../checker/suggest";
 import { handleDidOpen, handleDidChange } from "./lifecycle";
+import { recordImportsForFile } from "./diagnostics";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
 import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, Symbol, SymbolKind } from "../../../ast/node";
@@ -35,7 +38,7 @@ import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
 	cacheResolveEdit, lookupResolveEdit, resolveKey, lspHasBuiltinDoc,
 	CompletionCache, CompletionSnapshot, createCompletionCache, LspCursorParams, completionCacheServes,
-	completionSnapshotOf, completionSnapshotCurrent, fillCompletionCache,
+	completionSnapshotOf, completionSnapshotCurrent, fillCompletionCache, markDocumentOpen, markDocumentClosed,
 } from "./shared";
 
 
@@ -163,10 +166,22 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 	return targetPath;
 }
 
-// Search ExportRegistry for cross-module auto-import candidates.
+function lspIsPreludeModule(db: TransAmDb, modulePath: string): boolean {
+	const prelude = db.preludeCtx;
+	return prelude != null && (prelude.preludeModuleScopes.has(modulePath) || sharedPreludeOwns(prelude, modulePath));
+}
+
+function lspEnsureSourceExports(db: TransAmDb, sources: string[], currentPath: string): void {
+	for (const modulePath of sources) {
+		if (modulePath == currentPath || lspIsPreludeModule(db, modulePath)) continue;
+		dbTypeCheck(db, modulePath);
+		if (findModuleExports(db.exportRegistry, modulePath) == null) dbEnsureModuleExports(db, modulePath);
+	}
+}
+
 function lspCrossModuleCandidates(
 	db: TransAmDb, prefix: string, currentPath: string,
-	program: Node, source: string, kind: SgCompletionKind, inScopeSet: HashSet<string>
+	program: Node, source: string, kind: SgCompletionKind, inScopeSet: HashSet<string>, sources: string[]
 ): string[] {
 	const items: string[] = [];
 	const lines = LineIndex.build(source);
@@ -174,9 +189,10 @@ function lspCrossModuleCandidates(
 	if (db.exportRegistry == null) return items;
 	const isTypeCtx = kind == SgCompletionKind.TypeAnnotation;
 
-	for (let ei = 0; ei < db.exportRegistry.entries.length; ei = ei + 1) {
-		const entry = db.exportRegistry.entries[ei];
-		if (entry.modulePath == currentPath) continue; // skip self
+	for (const modulePath of sources) {
+		if (modulePath == currentPath || lspIsPreludeModule(db, modulePath)) continue;
+		const entry = findModuleExports(db.exportRegistry, modulePath);
+		if (entry == null) continue;
 		const importSpec = lspModulePathToImportSpec(db, currentPath, entry.modulePath);
 
 		for (let si = 0; si < entry.symbols.length; si = si + 1) {
@@ -252,7 +268,7 @@ function lspCrossModuleCandidates(
 	return items;
 }
 
-export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
+export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache, entryRoots: string[] | null = null): string {
 	const t0 = performance.now();
 	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
@@ -335,15 +351,19 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		return lspResponse(id, "[]");
 	}
 
+	const offersImports = kind == SgCompletionKind.Identifier || kind == SgCompletionKind.TypeAnnotation;
+	const sources = offersImports ? completionSources(db, entryRoots != null ? entryRoots : [], path) : [];
+	if (offersImports) lspEnsureSourceExports(db, sources, path);
+
 	const reuseScope = completionCacheServes(cache, pos, kind as int32, prefix) && completionSnapshotCurrent(cache.snapshot, db, path);
-	if (reuseScope && prefix == cache.prefix) return lspResponse(id, joinJsonItems(cache.items));
+	if (reuseScope && !offersImports && prefix == cache.prefix) return lspResponse(id, joinJsonItems(cache.items));
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) {
 		// Type check failed (incomplete code) — still try cross-module/prelude suggestions
-		if (kind == SgCompletionKind.Identifier || kind == SgCompletionKind.TypeAnnotation) {
+		if (offersImports) {
 			const emptyScope: HashSet<string> = new HashSet<string>();
-			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
+			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope, sources);
 			for (const kwItem of lspKeywordItems(kind, prefix)) {
 				fallbackItems.push(kwItem);
 			}
@@ -415,13 +435,13 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const cachedItems = formatCompletionItemsArray(candidates, db, path);
 
 	// Cross-module auto-import candidates
-	if (kind == SgCompletionKind.Identifier || kind == SgCompletionKind.TypeAnnotation || kind == SgCompletionKind.ImportName) {
+	if (offersImports) {
 		const inScopeSet: HashSet<string> = new HashSet<string>();
 		for (let ci = 0; ci < candidates.length; ci = ci + 1) {
 			inScopeSet.add(candidates[ci].name);
 		}
 		const source = dbGetSource(db, path);
-		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet);
+		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet, sources);
 		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
 			cachedItems.push(autoImportItems[ai]);
 		}
@@ -1126,4 +1146,119 @@ test "completion cache: a computation cancelled or overtaken by an input change 
 	dbSetFileText(db, path, "const stoptwo = 1;\n");
 	fillCompletionCache(cache, beforeEdit, pos, 0, "", ["{}"]);
 	assert cache.snapshot == null && cache.items.length == 0;
+}
+
+const SOURCES_LIB = "export function alpOther(): int32 { return 1; }\nexport function alpLib(): int32 { return 2; }\nexport function alpInfer() { return 3; }\nexport function alpReal(): int32 { return 5; }\n";
+const SOURCES_OUTSIDE = "export function alpOutside(): int32 { return 4; }\n";
+const SOURCES_MAIN = "import { alpOther } from \"./lib\";\nconst alpmain = alpOther();\nalp";
+
+function recordFixtureImports(db: TransAmDb, path: string): void {
+	recordImportsForFile(db, path, dbParse(db, path));
+}
+
+function sourcesDb(dir: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dir + "/lib.ms", SOURCES_LIB);
+	dbSetFileText(db, dir + "/outside.ms", SOURCES_OUTSIDE);
+	dbSetFileText(db, dir + "/main.ms", SOURCES_MAIN);
+	recordFixtureImports(db, dir + "/main.ms");
+	return db;
+}
+
+function sourcesComplete(db: TransAmDb, cache: CompletionCache, dir: string): string {
+	return handleCompletion("1", cacheProbeParams("file://" + dir + "/main.ms", 2, 3), db, cache);
+}
+
+test "auto-import sources: a module no import reaches stays out whatever earlier queries registered" {
+	const fresh = sourcesComplete(sourcesDb("/srcpin1"), createCompletionCache(), "/srcpin1");
+	assert fresh.indexOf("\"label\":\"alpLib\"", 0) >= 0;
+	assert fresh.indexOf("\"label\":\"alpOutside\"", 0) < 0;
+	const db = sourcesDb("/srcpin1");
+	dbEnsureModuleExports(db, "/srcpin1/outside.ms");
+	assert dbTypeCheck(db, "/srcpin1/outside.ms") != null;
+	const cache = createCompletionCache();
+	const warm = sourcesComplete(db, cache, "/srcpin1");
+	assert warm.indexOf("\"label\":\"alpOutside\"", 0) < 0;
+	assert warm == fresh;
+	assert sourcesComplete(db, cache, "/srcpin1") == fresh;
+}
+
+test "auto-import sources: opening and closing a root with unchanged text moves the list without a new revision" {
+	const db = sourcesDb("/srcpin2");
+	const cache = createCompletionCache();
+	const base = sourcesComplete(db, cache, "/srcpin2");
+	sourcesComplete(db, cache, "/srcpin2");
+	assert cache.snapshot != null && cache.scopeCandidates.length > 0;
+	const scopeCandidate = cache.scopeCandidates[0];
+	const revision = db.revision.value;
+	markDocumentOpen("/srcpin2/outside.ms");
+	const opened = sourcesComplete(db, cache, "/srcpin2");
+	const sameCandidate = cache.scopeCandidates[0] == scopeCandidate;
+	markDocumentClosed("/srcpin2/outside.ms");
+	const closed = sourcesComplete(db, cache, "/srcpin2");
+	assert db.revision.value == revision;
+	assert base.indexOf("\"label\":\"alpOutside\"", 0) < 0;
+	assert opened.indexOf("\"label\":\"alpOutside\"", 0) >= 0;
+	assert opened.indexOf("additionalTextEdits", 0) >= 0 && opened.indexOf("./outside", 0) >= 0;
+	assert closed == base;
+	assert sameCandidate && cache.scopeCandidates[0] == scopeCandidate;
+}
+
+test "auto-import sources: an inferred return type reads the same before and after the module is checked" {
+	const fresh = sourcesComplete(sourcesDb("/srcpin3"), createCompletionCache(), "/srcpin3");
+	const db = sourcesDb("/srcpin3");
+	assert dbTypeCheck(db, "/srcpin3/main.ms") != null;
+	assert dbTypeCheck(db, "/srcpin3/lib.ms") != null;
+	const warm = sourcesComplete(db, createCompletionCache(), "/srcpin3");
+	assert fresh.indexOf("\"label\":\"alpInfer\"", 0) >= 0;
+	assert warm == fresh;
+}
+
+test "auto-import sources: an inferred return type carries its checked type" {
+	const fresh = sourcesComplete(sourcesDb("/srcpin4"), createCompletionCache(), "/srcpin4");
+	assert fresh.indexOf("\"label\":\"alpInfer\",\"kind\":3,\"detail\":\"() => int32 (from ./lib)\"", 0) >= 0;
+}
+
+test "auto-import sources: a re-export under an alias and a reachable unopened module both stay offered" {
+	const db = sourcesDb("/srcpin5");
+	dbSetFileText(db, "/srcpin5/barrel.ms", "export { alpReal as alpAlias } from \"./lib\";\nexport const alpZ = 1;\n");
+	dbSetFileText(db, "/srcpin5/main.ms", "import { alpOther } from \"./lib\";\nimport { alpZ } from \"./barrel\";\nconst alpmain = alpOther() + alpZ;\nalp");
+	recordFixtureImports(db, "/srcpin5/main.ms");
+	const r = handleCompletion("1", cacheProbeParams("file:///srcpin5/main.ms", 3, 3), db, createCompletionCache());
+	assert r.indexOf("\"label\":\"alpAlias\"", 0) >= 0;
+	assert r.indexOf("(from ./barrel)", 0) >= 0;
+	assert r.indexOf("\"label\":\"alpLib\"", 0) >= 0;
+	assert r.indexOf("\"label\":\"alpOutside\"", 0) < 0;
+}
+
+test "auto-import sources: a std module a file imports explicitly stays offered" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/srcpin6/main.ms", "import { readFile } from \"std/fs\";\nconst readback = readFile;\nwriteFi");
+	recordFixtureImports(db, "/srcpin6/main.ms");
+	const r = handleCompletion("1", cacheProbeParams("file:///srcpin6/main.ms", 2, 7), db, createCompletionCache());
+	assert r.indexOf("\"label\":\"writeFile\"", 0) >= 0;
+	assert r.indexOf("(from std/fs)", 0) >= 0;
+}
+
+test "auto-import sources: the configured entry roots the sources of a file the entry does not import" {
+	const db = sourcesDb("/srcpin7");
+	dbSetFileText(db, "/srcpin7/app.ms", "import { alpUse } from \"./use\";\nalpUse;\n");
+	dbSetFileText(db, "/srcpin7/use.ms", "export const alpUse = 1;\n");
+	const params = cacheProbeParams("file:///srcpin7/main.ms", 2, 3);
+	const inferred = handleCompletion("1", params, db, createCompletionCache());
+	const configured = handleCompletion("1", params, db, createCompletionCache(), ["/srcpin7/app.ms"]);
+	assert inferred.indexOf("\"label\":\"alpUse\"", 0) < 0;
+	assert configured.indexOf("\"label\":\"alpUse\"", 0) >= 0 && configured.indexOf("(from ./use)", 0) >= 0;
+	assert configured.indexOf("\"label\":\"alpLib\"", 0) >= 0;
+	assert configured.indexOf("\"label\":\"alpOutside\"", 0) < 0;
+}
+
+test "auto-import sources: a module the shared prelude holds is no source, a std module outside it is" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbEnsurePrelude(db);
+	assert lspIsPreludeModule(db, dbResolveImport(db, "/srcpin8/main.ms", "std/core/string"));
+	assert lspIsPreludeModule(db, dbResolveImport(db, "/srcpin8/main.ms", "std/core/system"));
+	assert !lspIsPreludeModule(db, dbResolveImport(db, "/srcpin8/main.ms", "std/fs"));
 }

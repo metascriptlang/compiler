@@ -16,6 +16,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #ifdef MSG_NOSIGNAL
 #define MS_IO_SEND_FLAGS MSG_NOSIGNAL
@@ -28,9 +29,14 @@
 
 /* ===== Engine State ===== */
 
+typedef struct {
+	msIoRequest* read;
+	msIoRequest* write;
+} msIoFdSlot;
+
 struct msIoEngine {
 	msSelector* selector;
-	msIoRequest** fdMap;      /* fd → pending request (O(1) lookup) */
+	msIoFdSlot* fdMap;        /* fd → pending read-side and write-side request (O(1) lookup) */
 	int fdMapCap;
 	msIoRequest* freeList;    /* pre-allocated request pool */
 	int freeCount;
@@ -63,9 +69,35 @@ static void growFdMap(msIoEngine* e, int fd) {
 	if (fd < e->fdMapCap) return;
 	int newCap = e->fdMapCap;
 	while (newCap <= fd) newCap *= 2;
-	e->fdMap = (msIoRequest**)msRealloc(e->fdMap, e->fdMapCap * sizeof(msIoRequest*), newCap * sizeof(msIoRequest*));
-	memset(e->fdMap + e->fdMapCap, 0, (newCap - e->fdMapCap) * sizeof(msIoRequest*));
+	e->fdMap = (msIoFdSlot*)msRealloc(e->fdMap, e->fdMapCap * sizeof(msIoFdSlot), newCap * sizeof(msIoFdSlot));
+	memset(e->fdMap + e->fdMapCap, 0, (newCap - e->fdMapCap) * sizeof(msIoFdSlot));
 	e->fdMapCap = newCap;
+}
+
+static uint32_t slotEvents(const msIoFdSlot* s) {
+	uint32_t events = 0;
+	if (s->read != NULL) events |= MS_EVENT_READ | (s->read->op == MS_IO_ACCEPT ? MS_EVENT_EXCLUSIVE : 0);
+	if (s->write != NULL) events |= MS_EVENT_WRITE;
+	return events;
+}
+
+/* A request waits on the side its op reads or writes; the selector holds the union of both sides. */
+static void armRequest(msIoEngine* e, msIoRequest* req) {
+	growFdMap(e, req->fd);
+	msIoFdSlot* s = &e->fdMap[req->fd];
+	int registered = s->read != NULL || s->write != NULL;
+	if (req->op == MS_IO_SEND) s->write = req; else s->read = req;
+	uint32_t events = slotEvents(s);
+	if (registered) msSelectorUpdate(e->selector, req->fd, events, req);
+	else msSelectorRegister(e->selector, req->fd, events, req);
+}
+
+static void disarmSide(msIoEngine* e, int fd, int writeSide) {
+	msIoFdSlot* s = &e->fdMap[fd];
+	if (writeSide) s->write = NULL; else s->read = NULL;
+	uint32_t events = slotEvents(s);
+	if (events == 0) msSelectorUnregister(e->selector, fd);
+	else msSelectorUpdate(e->selector, fd, events, s->read != NULL ? s->read : s->write);
 }
 
 /* ===== Create / Destroy ===== */
@@ -75,7 +107,7 @@ msIoEngine* msIoEngineCreate(void) {
 	e->selector = msSelectorCreate();
 	if (e->selector == NULL) { free(e); return NULL; }
 	e->fdMapCap = ENGINE_INIT_FDMAP;
-	e->fdMap = (msIoRequest**)msMemAllocN0(ENGINE_INIT_FDMAP, sizeof(msIoRequest*));
+	e->fdMap = (msIoFdSlot*)msMemAllocN0(ENGINE_INIT_FDMAP, sizeof(msIoFdSlot));
 	/* Pre-allocate request pool */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
@@ -133,9 +165,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	req->fd = listenFd;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
-	growFdMap(e, listenFd);
-	e->fdMap[listenFd] = req;
-	msSelectorRegister(e->selector, listenFd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
+	armRequest(e, req);
 	return fut;
 }
 
@@ -149,9 +179,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
-	growFdMap(e, fd);
-	e->fdMap[fd] = req;
-	msSelectorRegister(e->selector, fd, MS_EVENT_READ, req);
+	armRequest(e, req);
 	return fut;
 }
 
@@ -164,9 +192,7 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 	req->offset = 0;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
-	growFdMap(e, fd);
-	e->fdMap[fd] = req;
-	msSelectorRegister(e->selector, fd, MS_EVENT_WRITE, req);
+	armRequest(e, req);
 	return fut;
 }
 
@@ -198,15 +224,13 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 	req->strRef = data;  /* stored for decref on completion */
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
-	growFdMap(e, fd);
-	e->fdMap[fd] = req;
-	msSelectorRegister(e->selector, fd, MS_EVENT_WRITE, req);
+	armRequest(e, req);
 	return fut;
 }
 
 /* ===== Process Completions ===== */
 
-static void completeRecv(msIoRequest* req) {
+static int completeRecv(msIoEngine* e, msIoRequest* req) {
 	ssize_t n;
 	do {
 		n = recv(req->fd, req->buf, (size_t)req->len, 0);
@@ -220,16 +244,8 @@ static void completeRecv(msIoRequest* req) {
 		/* Legitimate EOF — peer sent FIN. */
 		result = MS_EMPTY_STRING;
 	} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-		/* Selector told us fd is readable but recv has no data — stale event
-		 * or leaked filter. completeRecv must not silently treat this as EOF;
-		 * that masks selector/registration bugs. Abort loudly so the cause is
-		 * visible in CI/logs rather than surfacing as "connection closed after
-		 * one keep-alive request" weeks later. */
-		fprintf(stderr,
-			"FATAL: completeRecv fd=%d got EAGAIN — selector fired spuriously. "
-			"Likely a leaked filter in the kqueue/epoll registration path.\n",
-			req->fd);
-		abort();
+		armRequest(e, req);
+		return 1;
 	} else {
 		/* Real socket error (ECONNRESET, EPIPE, EBADF, ...) — surface as EOF
 		 * for the caller. The fd will be closed by the caller's close path. */
@@ -239,6 +255,7 @@ static void completeRecv(msIoRequest* req) {
 	msFutureCompleteT((msFuture_msString*)req->fut, result);
 	free(req->buf);
 	req->buf = NULL;
+	return 0;
 }
 
 static int completeAccept(msIoEngine* e, msIoRequest* req) {
@@ -250,8 +267,7 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 	} while (cfd < 0 && errno == EINTR);
 
 	if (cfd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-		e->fdMap[req->fd] = req;
-		msSelectorRegister(e->selector, req->fd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
+		armRequest(e, req);
 		return 1;
 	}
 	if (cfd >= 0 && (addr.ss_family == AF_INET || addr.ss_family == AF_INET6)) {
@@ -263,25 +279,22 @@ static int completeAccept(msIoEngine* e, msIoRequest* req) {
 }
 
 static int completeSend(msIoEngine* e, msIoRequest* req) {
+	/* The fd belongs to the caller's sync API too, so it is non-blocking only for this one send:
+	 * a blocking send of the whole remainder would wait for the peer to read. */
+	int flags = fcntl(req->fd, F_GETFL);
+	int scoped = flags >= 0 && (flags & O_NONBLOCK) == 0;
+	if (scoped) fcntl(req->fd, F_SETFL, flags | O_NONBLOCK);
 	ssize_t bytesSent;
 	do {
 		bytesSent = send(req->fd, req->buf + req->offset, (size_t)(req->len - req->offset), MS_IO_SEND_FLAGS);
 	} while (bytesSent < 0 && errno == EINTR);
+	int sendErrno = errno;
+	if (scoped) fcntl(req->fd, F_SETFL, flags);
 
-	if (bytesSent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-		/* Same rationale as completeRecv: selector said writable, but send
-		 * blocked. That means our filter state is out of sync — abort loud. */
-		fprintf(stderr,
-			"FATAL: completeSend fd=%d got EAGAIN — selector fired spuriously. "
-			"Likely a leaked filter in the kqueue/epoll registration path.\n",
-			req->fd);
-		abort();
-	}
-
-	if (bytesSent >= 0 && req->offset + (int32_t)bytesSent < req->len) {
-		req->offset += (int32_t)bytesSent;
-		e->fdMap[req->fd] = req;
-		msSelectorRegister(e->selector, req->fd, MS_EVENT_WRITE, req);
+	int wouldBlock = bytesSent < 0 && (sendErrno == EAGAIN || sendErrno == EWOULDBLOCK);
+	if (wouldBlock || (bytesSent >= 0 && req->offset + (int32_t)bytesSent < req->len)) {
+		if (!wouldBlock) req->offset += (int32_t)bytesSent;
+		armRequest(e, req);
 		return 1;
 	}
 
@@ -293,15 +306,24 @@ static int completeSend(msIoEngine* e, msIoRequest* req) {
 	return 0;
 }
 
+static void cancelRequest(msIoEngine* e, msIoRequest* req);
+
 /* msFutureCompleteT (not msFutureCancel) — Cancel skips callbacks so the
  * stepper would never resume; CompleteT with empty/-1 mimics peer-close
  * and the fiber takes its existing close path. */
 void msIoEngineCancelFd(msIoEngine* e, int fd) {
 	if (e == NULL || fd < 0 || fd >= e->fdMapCap) return;
-	msIoRequest* req = e->fdMap[fd];
-	if (req == NULL) return;
-	e->fdMap[fd] = NULL;
+	msIoRequest* pending[2] = { e->fdMap[fd].read, e->fdMap[fd].write };
+	if (pending[0] == NULL && pending[1] == NULL) return;
+	e->fdMap[fd].read = NULL;
+	e->fdMap[fd].write = NULL;
 	msSelectorUnregister(e->selector, fd);
+	for (int i = 0; i < 2; i++) {
+		if (pending[i] != NULL) cancelRequest(e, pending[i]);
+	}
+}
+
+static void cancelRequest(msIoEngine* e, msIoRequest* req) {
 	if (req->strRef.p != NULL) {
 		msStringDecref(req->strRef);
 		req->strRef = MS_EMPTY_STRING;
@@ -320,7 +342,7 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 			break;
 		}
 	}
-	if (req->buf != NULL) { free(req->buf); req->buf = NULL; }
+	if (req->op == MS_IO_RECV && req->buf != NULL) { free(req->buf); req->buf = NULL; }
 	freeRequest(e, req);
 }
 
@@ -581,9 +603,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 
 static void fsWatchArm(msIoEngine* e, msFsWatcher* w, msIoRequest* req) {
 	w->pending = req;
-	growFdMap(e, w->readFd);
-	e->fdMap[w->readFd] = req;
-	msSelectorRegister(e->selector, w->readFd, MS_EVENT_READ, req);
+	armRequest(e, req);
 }
 
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
@@ -665,34 +685,33 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 
 	for (int i = 0; i < n; i++) {
 		int fd = readyBuf[i].fd;
-		/* Look up request: prefer userdata (kqueue/poll), fall back to fdMap (epoll) */
-		msIoRequest* req = (msIoRequest*)readyBuf[i].userdata;
-		if (req == NULL && fd >= 0 && fd < e->fdMapCap) {
-			req = e->fdMap[fd];
-		}
-		if (req == NULL) continue;
+		if (fd < 0 || fd >= e->fdMapCap) continue;
+		uint32_t ready = readyBuf[i].events & (MS_EVENT_READ | MS_EVENT_WRITE);
+		if (ready == 0) ready = MS_EVENT_READ | MS_EVENT_WRITE;
 
-		/* Clear fdMap + unregister (one-shot) */
-		if (fd >= 0 && fd < e->fdMapCap) e->fdMap[fd] = NULL;
-		msSelectorUnregister(e->selector, fd);
+		for (int side = 0; side < 2; side++) {
+			if ((ready & (side == 0 ? MS_EVENT_READ : MS_EVENT_WRITE)) == 0) continue;
+			msIoRequest* req = side == 0 ? e->fdMap[fd].read : e->fdMap[fd].write;
+			if (req == NULL) continue;
+			disarmSide(e, fd, side);
 
-		/* Perform syscall + complete future */
-		switch (req->op) {
-		case MS_IO_RECV:   completeRecv(req);   break;
-		case MS_IO_ACCEPT: if (completeAccept(e, req)) continue; break;
-		case MS_IO_SEND:   if (completeSend(e, req)) continue; break;
-		case MS_IO_CLOSE:
-			close(fd);
-			msFutureCompleteVoid(req->fut);
-			break;
+			switch (req->op) {
+			case MS_IO_RECV:   if (completeRecv(e, req)) continue; break;
+			case MS_IO_ACCEPT: if (completeAccept(e, req)) continue; break;
+			case MS_IO_SEND:   if (completeSend(e, req)) continue; break;
+			case MS_IO_CLOSE:
+				close(fd);
+				msFutureCompleteVoid(req->fut);
+				break;
 #if defined(__APPLE__) && TARGET_OS_OSX
-		case MS_IO_WATCH:
-			if (fsWatchComplete(e, req)) continue;
-			break;
+			case MS_IO_WATCH:
+				if (fsWatchComplete(e, req)) continue;
+				break;
 #endif
-		}
+			}
 
-		freeRequest(e, req);
+			freeRequest(e, req);
+		}
 	}
 
 	return n;

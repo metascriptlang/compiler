@@ -501,7 +501,7 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 
 export function modeFlags(mode: number): string {
 	return match (mode) {
-		2 => " -O3 -w -DNDEBUG -ffp-contract=off -fno-strict-aliasing",
+		2 => " -O3 -w -DNDEBUG -ffp-contract=off -fno-strict-aliasing -fwrapv",
 		1 => " -O2 -w -DNDEBUG -ffp-contract=off -fno-strict-aliasing",
 		_ => " -O0 -g -ffp-contract=off -fno-strict-aliasing",
 	};
@@ -513,6 +513,23 @@ test "every build mode keeps a*b+c as two roundings" {
 
 test "every build mode lets one memory be read through another type" {
 	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-fno-strict-aliasing") >= 0;
+}
+
+test "only --danger drops the signed overflow check, so only --danger asks C to wrap it" {
+	assert modeFlags(2).indexOf("-fwrapv") >= 0;
+	for (const mode of [0, 1]) assert modeFlags(mode).indexOf("-fwrapv") < 0;
+}
+
+test "an emcc link and an object compile of --danger carry the wrap flag" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["--os=emcc", "--danger"], 0).ok;
+	assert cliLinkFlags(cliCompileFlags(opts), opts).indexOf("-fwrapv", 0) >= 0;
+	const parts = objectCompileArgs(0, "clang -fno-pie", false, 2, "");
+	assert parts.ok;
+	assert parts.value.lead.includes("-fwrapv");
+	const debug = objectCompileArgs(0, "clang -fno-pie", false, 0, "");
+	assert debug.ok;
+	assert !debug.value.lead.includes("-fwrapv");
 }
 
 function acceptsFilePrefixMap(cc: string): boolean {

@@ -47,7 +47,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
-import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps } from "../codegen/c/types";
+import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps, rankOpModules, enterModuleOps, leaveModuleOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -57,7 +57,7 @@ import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, HcrTypeLayout, HcrStorageTable, hcrFunctions, lowerHcrIndirection, createHcrStorageTable, buildHcrStorage } from "../transform/native/hcrIndirect";
 import { hcrTypeCounts } from "./hcrCount";
-import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
+import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances, setInstanceHome } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { markTypeOnlyImports } from "../checker/importElision";
 import { markVmOnlyRoutines } from "../checker/vmOnly";
@@ -79,6 +79,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
+import { emitDeclarations, DeclarationModule } from "./declarations";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -514,6 +515,9 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
+	for (const path of opts.jsEntries) {
+		loadModule(graph, canonicalModulePath(path), provider, config, 1);
+	}
 	registerModuleNames(buildModuleNameRoots(), graph.loadOrder);
 	if (graphLoadTiming) {
 		const ht = takeHeaderTimings();
@@ -711,6 +715,7 @@ interface A2Job {
 	errBase: int32;
 	nativeCtx: TransformContext | null;
 	transformOps: KeyedOp[];
+	opClosure: HashSet<string>;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -741,6 +746,24 @@ function coreBeforeImages(paths: string[], imagePaths: string[]): int32[] {
 	return order;
 }
 
+function importClosure(graph: ModuleGraph, modulePath: string): HashSet<string> {
+	const seen = new HashSet<string>();
+	const start = findModule(graph, modulePath);
+	const pending: string[] = [];
+	if (start != null && !start.stdPrelude && !start.extraPrelude) {
+		for (const mod of graph.modules) if (mod.stdPrelude || mod.extraPrelude) pending.push(mod.path);
+	}
+	if (start != null) for (const entry of start.imports) pending.push(entry.sourcePath);
+	while (pending.length > 0) {
+		const path = pending.pop()!;
+		if (path == modulePath || seen.has(path)) continue;
+		seen.add(path);
+		const mod = findModule(graph, path);
+		if (mod != null) for (const entry of mod.imports) pending.push(entry.sourcePath);
+	}
+	return seen;
+}
+
 function programWithInstances(program: Node, instances: Node[] | null): Node {
 	if (instances == null || instances.length == 0) return program;
 	const stmts: Node[] = [];
@@ -751,6 +774,7 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 
 function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
+	enterModuleOps(job.modPath, job.opClosure);
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -813,10 +837,12 @@ function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node
 	job.errBase = errBase;
 	job.nativeCtx = nativeCtx;
 	job.transformOps = opsFrom(keyedOpMark);
+	leaveModuleOps();
 	return hcrLifted;
 }
 
 function analyzeModuleA2(hcrLifted: Node, ctx: CheckerContext, job: A2Job): Node {
+	enterModuleOps(job.modPath, job.opClosure);
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -845,6 +871,7 @@ function analyzeModuleA2(hcrLifted: Node, ctx: CheckerContext, job: A2Job): Node
 	truncateErrors(ctx, job.errBase);
 	const ops = job.transformOps;
 	for (const op of opsFrom(keyedOpMark)) ops.push(op);
+	leaveModuleOps();
 	job.claims = { ops, contracts: contractClaims(job.writeTables) };
 	return nativeLowered;
 }
@@ -1538,6 +1565,7 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 			const sym = instNode.resolvedSym!;
 			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
 			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
+			if (instNode.kind == NodeKind.ClassDecl) setInstanceHome(sym, home);
 			if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
 		}
 		byHome.set(home, placed);
@@ -1545,9 +1573,19 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 	return byHome;
 }
 
-function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false, ownHome: boolean = false): void {
 	retainCheckedInstances(moduleCtxs);
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
+	let homes: HashMap<Node, string> | null = null;
+	if (ownHome) {
+		homes = new HashMap<Node, string>();
+		const seen = new HashSet<CheckerContext>();
+		for (const moduleCtx of moduleCtxs) {
+			if (seen.has(moduleCtx)) continue;
+			seen.add(moduleCtx);
+			for (const instNode of moduleCtx.generatedInstances) homes.set(instNode, moduleCtx.modulePath);
+		}
+	}
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, homes, classesBesideGeneric);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -1602,6 +1640,150 @@ function isJsIdentifierName(name: string): boolean {
 	return true;
 }
 
+interface JsDeclarationOutput {
+	sourcePath: string;
+	outRel: string;
+	text: string;
+}
+
+function declarationOutRel(jsPath: string): string {
+	return jsPath.endsWith(".mjs")
+		? jsPath.slice(0, jsPath.length - 4) + ".d.mts"
+		: jsPath.slice(0, jsPath.length - 3) + ".d.ts";
+}
+
+function sourceDeclarationOutRel(sourcePath: string): string {
+	const extension = sourcePath.endsWith(".jms") ? ".jms" : ".ms";
+	return sourcePath.slice(0, sourcePath.length - extension.length) + ".d" + extension + ".ts";
+}
+
+function jsExplicitEntries(primary: string, opts: CliOptions): string[] {
+	const entries = [canonicalModulePath(primary)];
+	for (const path of opts.jsEntries) {
+		const canonical = canonicalModulePath(path);
+		if (!entries.includes(canonical)) entries.push(canonical);
+	}
+	return entries;
+}
+
+function checkedDeclarationSourceRoot(entries: string[], opts: CliOptions): string {
+	if (opts.declarationSourceRoot == "") return "";
+	const root = canonicalModulePath(opts.declarationSourceRoot);
+	if (!isDir(root)) {
+		printDiag(`${error("error")}: --declaration-source-root must be an existing directory: ${root}`);
+		stopBuild();
+	}
+	for (const path of entries) {
+		if (!path.startsWith(root.endsWith("/") ? root : `${root}/`)
+			|| (!path.endsWith(".ms") && !path.endsWith(".jms"))) {
+			printDiag(`${error("error")}: source declaration entry ${path} must be under ${root} and end in .ms or .jms`);
+			stopBuild();
+		}
+	}
+	return root;
+}
+
+function reserveJsTreeOutput(taken: HashMap<string, string>, path: string): void {
+	const key = path.toLowerCase();
+	const previous = taken.get(key) ?? taken.get(`${key}/`);
+	if (previous != null) {
+		printDiag(`${error("error")}: output collision: ${previous} and ${path}`);
+		stopBuild();
+	}
+	let parent = dirname(key);
+	while (parent != "." && parent != "" && parent != "/") {
+		const file = taken.get(parent);
+		if (file != null) {
+			printDiag(`${error("error")}: output collision: ${file} and ${path}`);
+			stopBuild();
+		}
+		taken.set(`${parent}/`, path);
+		parent = dirname(parent);
+	}
+	taken.set(key, path);
+}
+
+function checkJsTreeOutputs(
+	layout: JsTreeLayout, declarations: JsDeclarationOutput[],
+	sourceDeclarations: JsDeclarationOutput[], sourcePackage: string,
+	sourcemap: boolean,
+): void {
+	const taken = new HashMap<string, string>();
+	reserveJsTreeOutput(taken, "_manifest.json");
+	for (const path of layout.outRelOf.values()) {
+		reserveJsTreeOutput(taken, path);
+		if (sourcemap) reserveJsTreeOutput(taken, `${path}.map`);
+	}
+	for (const file of declarations) reserveJsTreeOutput(taken, file.outRel);
+	for (const file of sourceDeclarations) reserveJsTreeOutput(taken, file.outRel);
+	if (sourcePackage != "") reserveJsTreeOutput(taken, sourcePackage);
+}
+
+function snapshotJsDeclarations(
+	graph: ModuleGraph, paths: string[], programs: Node[],
+	ctxs: CheckerContext[], layout: JsTreeLayout, entryPaths: string[],
+	sourceFamily: boolean = false,
+): JsDeclarationOutput[] {
+	const modules: DeclarationModule[] = [];
+	for (let i = 0; i < paths.length; i += 1) {
+		modules.push({ sourcePath: paths[i], program: programs[i], ctx: ctxs[i] });
+	}
+	const result = emitDeclarations(modules,
+		(fromPath: string, toPath: string): string => {
+			const from = layout.outRelOf.get(fromPath);
+			const to = layout.outRelOf.get(toPath);
+			return from != null && to != null ? relSpecBetween(from, to) : "";
+		}, entryPaths);
+	for (const diagnostic of result.diagnostics) {
+		const mod = findModule(graph, diagnostic.sourcePath);
+		renderModuleError(diagnostic.sourcePath, mod != null ? mod.rawSource : "", {
+			message: diagnostic.message, line: diagnostic.line,
+			column: diagnostic.column, severity: ErrorSeverity.Error,
+		});
+	}
+	if (result.diagnostics.length > 0) stopBuild();
+	const outputs: JsDeclarationOutput[] = [];
+	for (const file of result.files) {
+		outputs.push({ sourcePath: file.sourcePath,
+			outRel: sourceFamily && entryPaths.includes(file.sourcePath)
+				? sourceDeclarationOutRel(layout.outRelOf.get(file.sourcePath)!)
+				: declarationOutRel(layout.outRelOf.get(file.sourcePath)!),
+			text: file.text });
+	}
+	return outputs;
+}
+
+function publishJsDeclarations(root: string, files: JsDeclarationOutput[]): void {
+	for (const file of files) {
+		const path = join(root, file.outRel);
+		ensureDir(dirname(path));
+		if (!atomicWriteFile(path, file.text)) {
+			printDiag(`${error("error")}: cannot publish declaration ${path}`);
+			stopBuild();
+		}
+	}
+}
+
+function jsInputDependencies(graph: ModuleGraph, opts: CliOptions): string[] {
+	const paths = new Set<string>();
+	for (const mod of graph.modules) {
+		if (exists(mod.path)) paths.add(canonicalModulePath(mod.path));
+	}
+	const root = opts.projectRoot != "" ? opts.projectRoot : cwd();
+	for (const name of ["build.ms", "msc.lock"]) {
+		const path = join(root, name);
+		if (exists(path)) paths.add(canonicalModulePath(path));
+	}
+	for (const depRoot of fileDepRoots(root).values) {
+		const path = join(depRoot, "build.ms");
+		if (exists(path)) paths.add(canonicalModulePath(path));
+	}
+	const dependencies: string[] = [];
+	for (const path of paths) dependencies.push(path);
+	dependencies.sort();
+	return dependencies;
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1613,7 +1795,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		// The source→output mapping is the compiler's to state: a bundler
 		// plugin that re-derives it has to replicate project-root discovery
 		// exactly, and silently resolves nothing when the two disagree.
-		let manifest = "{\n  \"entry\": \"" + escapeJSString(entryCanon) + "\",\n  \"modules\": [\n";
+		let manifest = `{\n  "entry": "${escapeJSString(entryCanon)}",\n  "entries": [${tree.entries.map((path: string): string => "\"" + escapeJSString(path) + "\"").join(", ")}],\n  "modules": [\n`;
+
 		for (let i = 0; i < tree.modulePaths.length; i += 1) {
 			const sep = i + 1 < tree.modulePaths.length ? "," : "";
 			manifest = `${manifest}    { "source": "${escapeJSString(tree.modulePaths[i])}", "out": "${escapeJSString(tree.moduleOutRels[i])}" }${sep}\n`;
@@ -1623,8 +1806,22 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			const sep = i + 1 < tree.instanceOutRels.length ? "," : "";
 			manifest = `${manifest}    { "source": "${escapeJSString(tree.instanceOwners[i])}", "out": "${escapeJSString(tree.instanceOutRels[i])}" }${sep}\n`;
 		}
-		manifest = `${manifest}  ]\n}\n`;
-		writeOutput(`${splitRoot}/_manifest.json`, manifest);
+		manifest = `${manifest}  ],\n  "declarations": [\n`;
+		for (let i = 0; i < tree.declarations.length; i += 1) {
+			const file = tree.declarations[i];
+			const sep = i + 1 < tree.declarations.length ? "," : "";
+			manifest = `${manifest}    { "source": "${escapeJSString(file.sourcePath)}", "out": "${escapeJSString(file.outRel)}" }${sep}\n`;
+		}
+		if (tree.sourceDeclarationRoot != "") {
+			manifest = `${manifest}  ],\n  "sourceDeclarationRoot": "${tree.sourceDeclarationRoot}",\n  "sourceDeclarationPackage": "${tree.sourceDeclarationPackage}",\n  "sourceDeclarations": [\n`;
+			for (let i = 0; i < tree.sourceDeclarations.length; i += 1) {
+				const file = tree.sourceDeclarations[i];
+				const sep = i + 1 < tree.sourceDeclarations.length ? "," : "";
+				manifest = `${manifest}    { "source": "${escapeJSString(file.sourcePath)}", "out": "${escapeJSString(file.outRel)}" }${sep}\n`;
+			}
+		}
+		manifest = `${manifest}  ],\n  "dependencies": [${tree.dependencies.map((path: string): string => "\"" + escapeJSString(path) + "\"").join(", ")}]\n}\n`;
+		publishJsDeclarations(splitRoot, [{ sourcePath: "", outRel: "_manifest.json", text: manifest }]);
 		if (opts.showTime) printTiming("emitted", t0);
 		printDiag(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
 		return;
@@ -1634,6 +1831,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const config = buildResolverConfig(Target.JS, opts);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
+	const outPath = opts.outputPath != ""
+		? opts.outputPath
+		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 
 	// Collect all external @import entries (from .jms files), dedup by modulePath
 	const extImportKeys: string[] = [];
@@ -1696,6 +1896,22 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
+	let declarations: JsDeclarationOutput[] = [];
+	if (opts.declaration) {
+		const layout = createJsTreeLayout();
+		const entryName = basename(outPath);
+		const supportRoot = entryName.slice(0, entryName.lastIndexOf(".")) + ".types";
+		for (const path of unitPaths) {
+			layout.outRelOf.set(path, path == entryPath ? entryName
+				: `${supportRoot}/${outRelForModule(path, moduleNameProjectRoot(entryPath, opts.projectRoot), config.stdPath)}`);
+		}
+		declarations = snapshotJsDeclarations(graph, unitPaths, unitPrograms,
+			unitCtxs, layout, [entryPath]);
+		const taken = new HashMap<string, string>();
+		reserveJsTreeOutput(taken, entryName);
+		if (opts.sourcemap) reserveJsTreeOutput(taken, `${entryName}.map`);
+		for (const file of declarations) reserveJsTreeOutput(taken, file.outRel);
+	}
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
@@ -1759,9 +1975,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// `--output` wins here exactly as it does for the C binary. Deriving the
 	// name from the entry file alone collides for directory-style programs,
 	// which are all spelled `main.ms`.
-	const outPath = opts.outputPath != ""
-		? opts.outputPath
-		: `${outDir}/${replaceExt(basename(entryPath), ".js")}`;
 	ensureDir(dirname(outPath));
 	// The link comment goes after the map is built; it sits past every mapped
 	// line, so it shifts nothing.
@@ -1777,6 +1990,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
+	publishJsDeclarations(dirname(outPath), declarations);
 	printDiag(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
@@ -3219,9 +3433,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	}
 	requirePreparedToolchain();
 
-// Reference parity: global hook ownership registry shared across all modules.
-// First module to need a type's DRC hooks generates them; others get extern protos.
-// Before the graph check: enum toString ops register during checking, and this resets the op table.
+// Before the graph check: enum toString ops register during checking, and this resets the op tables.
 resetLiftedOps();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
@@ -3309,12 +3521,8 @@ resetLiftedOps();
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
-	// created during a later module's check is OWNED by its defining module (set in
-	// instantiateGenericFunction). To emit it in that module's TU — so the generic body's
-	// module-private static helpers are visible in the same translation unit — it must be
-	// appended to that module's program BEFORE the module's transform/lower runs. Load order
-	// is dependency-first, so the owner is already past transform by the time a dependent
-	// instantiates it; hence we defer all transform to A2 and route instances by owner between.
+	// is HOMED in the module that minted it, so it is appended to that module's own program
+	// before the module's transform/lower runs, and no module's output depends on its importers.
 	const checkedMods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[] = [];
 	const programByPath: HashMap<string, Node> = new HashMap<string, Node>();
 	for (const modPath of graph.loadOrder) {
@@ -3344,10 +3552,9 @@ resetLiftedOps();
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
 		if (created == null) continue;
-		const keeps = reloadable.includes(modPath);
 		for (const instNode of created) {
 			routeOrder.push(instNode);
-			if (keeps) homes.set(instNode, modPath);
+			if (!opts.isHcr || reloadable.includes(modPath)) homes.set(instNode, modPath);
 		}
 	}
 	retainCheckedInstances(checkedModCtxs(checkedMods));
@@ -3366,6 +3573,7 @@ resetLiftedOps();
 	const checkedPaths: string[] = [];
 	for (const cm of checkedMods) checkedPaths.push(cm.modPath);
 	const lowerOrder = coreBeforeImages(checkedPaths, reloadable);
+	rankOpModules(checkedPaths, reloadable);
 	const lazyPlan = planDynamicModules(graph, entryPath, checkedPaths, config.stdPath);
 	const asyncBodies = new HashSet<string>();
 	for (const cm of checkedMods) if (lazyPlan.lazy.has(cm.modPath) && hasTopLevelAwait(cm.program)) asyncBodies.add(cm.modPath);
@@ -3427,8 +3635,10 @@ resetLiftedOps();
 			errBase: 0,
 			nativeCtx: null,
 			transformOps: [],
+			opClosure: importClosure(graph, modPath),
 		};
 		if (session.keep) {
+			enterModuleOps(modPath, job.opClosure);
 			const earlier = session.lowerClaims.get(modPath);
 			if (earlier != null) {
 				reuseClones(writeTables, earlier.contracts);
@@ -3449,6 +3659,7 @@ resetLiftedOps();
 				loweredByPath.set(modPath, tree);
 				noteUnitDecls(liftTables, modPath, tree);
 			}
+			leaveModuleOps();
 		} else {
 			const tree = transformModuleA2(program, ctx, job);
 			staged.push({ at, job, tree });
@@ -3633,6 +3844,11 @@ resetLiftedOps();
 		}
 	}
 	for (const p of processed) factInlineDecls(emissionFacts, p.program);
+	if (opts.isHcr) {
+		for (const p of processed) {
+			if (aliveSetHasModule(aliveSet, p.modPath) && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
+		}
+	}
 	setConcurrentTypeQueries(true);
 	try {
 		for (const p of processed) {
@@ -3649,7 +3865,6 @@ resetLiftedOps();
 				emissionFacts.writes = null;
 				if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
 			}
-			if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 		}
 		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc, hcrStorage);
 	} catch (e) {
@@ -4157,10 +4372,8 @@ resetLiftedOps();
 		programByPath.set(modPath, checked.program);
 	}
 
-	// Single drain after A1 — route each pending generic instance to its OWNER module's
-	// program so the generic body's module-private helpers are visible in the same TU.
-	// Owner-less nodes fall back to the entry program.
-	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
+	// Single drain after A1 — each pending generic instance goes to the program of the module that minted it.
+	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods), false, true);
 
 	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
@@ -4323,11 +4536,13 @@ resetLiftedOps();
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
+	const tested = testedModules(graph.loadOrder, filePath, opts);
 	const dispatcher = genTestDispatcher(
 		graph.loadOrder,
-		testedModules(graph.loadOrder, filePath, opts),
+		tested,
 		filePath,
 		opts.showTime,
+		planDynamicModules(graph, filePath, graph.loadOrder, config.stdPath, tested),
 	);
 	pushDispatcherJob(cJobs, oSlots, "_test_dispatch", dispatcher, allFlags, opts);
 
@@ -4560,10 +4775,16 @@ function importSpecsFrom(layout: JsTreeLayout, mod: Module | null, file: string)
 
 export interface JsTreeResult {
 	outRoot: string;
+	entries: string[];
+	sourceDeclarations: JsDeclarationOutput[];
+	sourceDeclarationRoot: string;
+	sourceDeclarationPackage: string;
 	modulePaths: string[];
 	moduleOutRels: string[];
 	instanceOwners: string[];
 	instanceOutRels: string[];
+	declarations: JsDeclarationOutput[];
+	dependencies: string[];
 	testNames: string[][];
 	testFuncs: string[][];
 }
@@ -4616,6 +4837,8 @@ function testRootName(entryPath: string): string {
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, opts);
+	const entries = jsExplicitEntries(filePath, opts);
+	const sourceRoot = checkedDeclarationSourceRoot(entries, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
@@ -4670,6 +4893,24 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		unitCtxs.push(ctx);
 	}
 
+	const declarations = opts.declaration
+		? snapshotJsDeclarations(graph, unitPaths, unitPrograms, unitCtxs,
+			layout, entries) : [];
+	const sourceLayout = createJsTreeLayout();
+	if (sourceRoot != "") {
+		for (const path of unitPaths) {
+			sourceLayout.outRelOf.set(path, entries.includes(path)
+				? `_source_declarations/${relative(sourceRoot, path)}`
+				: `_source_declarations/_types/${layout.outRelOf.get(path)!}`);
+		}
+	}
+	const sourceDeclarations = sourceRoot != ""
+		? snapshotJsDeclarations(graph, unitPaths, unitPrograms, unitCtxs,
+			sourceLayout, entries, true) : [];
+	const sourceDeclarationRoot = sourceRoot != "" ? "_source_declarations" : "";
+	const sourceDeclarationPackage = sourceRoot != "" ? "_source_declarations/package.json" : "";
+	const dependencies = jsInputDependencies(graph, opts);
+
 	// A generic instance belongs to the module that DECLARED the generic, and
 	// its emitted name says so: it is placed and transformed with that module,
 	// same routing as the bundle path. Vite reloads the page when the file of a
@@ -4686,6 +4927,9 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		layout.instanceFileOf.set(inst.name, file);
 		layout.outRelOf.set(file, outRel);
 	}
+
+	checkJsTreeOutputs(layout, declarations, sourceDeclarations,
+		sourceDeclarationPackage, opts.sourcemap);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -4868,7 +5112,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 	const outRels: string[] = [];
 	for (const mp of unitPaths) { outRels.push(layout.outRelOf.get(mp) ?? ""); }
-	return { outRoot, modulePaths: unitPaths, moduleOutRels: outRels, instanceOwners, instanceOutRels, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
+	publishJsDeclarations(outRoot, declarations);
+	publishJsDeclarations(outRoot, sourceDeclarations);
+	if (sourceDeclarationPackage != "") {
+		publishJsDeclarations(outRoot, [{ sourcePath: "", outRel: sourceDeclarationPackage, text: '{"type":"module"}\n' }]);
+	}
+	return { outRoot, entries, sourceDeclarations, sourceDeclarationRoot, sourceDeclarationPackage, modulePaths: unitPaths, moduleOutRels: outRels, instanceOwners, instanceOutRels, declarations, dependencies, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
 }
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {

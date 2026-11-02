@@ -151,6 +151,7 @@ export class Type {
 	typeChildren: Type[];
 	typeReturn: Type | null;
 	typeExtra: Type | null;
+	typeParamDefault: Type | null; // GenericParam: checked default, independent of its constraint.
 	typeFlags: BitSet<TypeFlag>;
 	typeValue: int32;
 	callConv: CallingConvention;
@@ -669,6 +670,7 @@ export class Node {
 	variantSlot: int32;
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	genericDefaults: (Node | null)[] | null; // Aligned declaration TypeAnnotation wrappers; null entry means no default.
 	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
@@ -822,6 +824,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		variantSlot: 0,
 		typeExpr: null,
 		typeExprs: null,
+		genericDefaults: null,
 		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
@@ -963,6 +966,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		variantSlot: 0,
 		typeExpr: null,
 		typeExprs: null,
+		genericDefaults: null,
 		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,

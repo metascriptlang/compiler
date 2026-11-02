@@ -321,11 +321,11 @@ function _bridgeMsFsChangeStamp(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
 	const path = unboxString(args[0]);
-	const r = readFile(path);
+	const r = readFileBytes(path);
 	registerCompileTimeRead(resolve(path, cwd()));
 	if (r.ok) {
 		_lastFsErrno = 0;
-		return boxString(r.value);
+		return boxString(rawString(r.value));
 	}
 	_setFsErrno(r.error.kind);
 	return boxString("");

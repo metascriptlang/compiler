@@ -455,6 +455,50 @@ test "an expression passed to a ref parameter is refused as a ref parameter, to 
 	assert !outBad.ok && outBad.error.contains("'put' arg 0: out parameter requires a variable, not an expression"), outBad.ok ? "accepted" : outBad.error;
 }
 
+test "a const binding of a reference type is rebound neither by an assignment nor by a ref argument" {
+	const head = "class Leaf { n: number; constructor(n: number) { this.n = n; } }\nfunction put(ref slot: Leaf, v: Leaf): void { slot = v; }\nfunction reset(ref f: () => int32): void { f = (): int32 => 0; }\n";
+	const writes = ["c = new Leaf(2);", "put(c, new Leaf(2));", "f = (): int32 => 2;", "reset(f);"];
+	for (const binding of ["const", "let"]) {
+		for (const body of writes) {
+			const source = head + `function run(): void { ${binding} c = new Leaf(1); ${binding} f = (): int32 => 1; ${body} console.log(c.n, f()); }\nrun();\n`;
+			const c = compileToCWithStd(source);
+			const js = compileProjectToJSWithStd([{ entryPath: "test/rebind.ms", entrySource: source }], "test/rebind.ms");
+			if (binding == "let") {
+				assert c.ok, c.ok ? "" : body + ": " + c.error;
+				assert !js.startsWith("ERROR:"), body + ": " + js;
+			} else {
+				assert !c.ok && c.error.contains("is const (use 'let')"), body;
+				assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+			}
+		}
+	}
+}
+
+test "a ref Span parameter writes the elements of a const array, not its binding" {
+	const head = "function fill(ref buf: Span<int32>): void { buf[0] = 7; }\n";
+	for (const decl of ["const xs: int32[] = [0, 0];", "let xs: int32[] = [0, 0];"]) {
+		const source = head + `function run(): void { ${decl} fill(xs); console.log(xs[0]); }\nrun();\n`;
+		const c = compileToCWithStd(source);
+		assert c.ok, c.ok ? "" : decl + ": " + c.error;
+	}
+	const sized = compileToCWithStd(head + "function run(): void { const xs: SizedArray<int32, 2> = [0, 0]; fill(xs); }\nrun();\n");
+	assert !sized.ok, "a const fixed array's elements are refused";
+}
+
+test "a readonly field passed to a ref or out parameter is refused as the write it stands for" {
+	const head = "class Leaf { n: number; constructor(n: number) { this.n = n; } }\nstruct P { x: int32; }\nclass Holder { readonly ro: Leaf = new Leaf(1); readonly p: P = { x: 1 }; rw: Leaf = new Leaf(1); }\nfunction put(ref slot: Leaf, v: Leaf): void { slot = v; }\nfunction fill(out slot: P): void { slot = { x: 2 }; }\n";
+	const refused = [{ call: "put(h.ro, new Leaf(2));", field: "ro" }, { call: "fill(out h.p);", field: "p" }];
+	for (const r of refused) {
+		const source = head + `const h = new Holder();\n${r.call}\n`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/readonlyRef.ms", entrySource: source }], "test/readonlyRef.ms");
+		assert !c.ok && c.error.contains(`cannot assign to '${r.field}' because it is a read-only property`), r.call;
+		assert js.startsWith("ERROR:") && js.contains(`cannot assign to '${r.field}' because it is a read-only property`), r.call;
+	}
+	const legal = compileToCWithStd(head + "const h = new Holder();\nput(h.rw, new Leaf(2));\n");
+	assert legal.ok, legal.ok ? "" : legal.error;
+}
+
 test "a ref or out parameter never escapes into a closure" {
 	const refused = [
 		"function twice(ref n: int32): void { const add = (): void => { n = n + 10; }; add(); }",

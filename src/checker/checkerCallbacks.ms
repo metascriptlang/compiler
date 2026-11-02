@@ -22,6 +22,7 @@ type SelfReadTypeFn = (callee: Node) => Type | null;
 type TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32) => void;
 type GenericTypeHookFn = (ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation) => void;
 type UndefinedVariableMessageFn = (ctx: CheckerContext, name: string) => string;
+type ReadonlyFieldWriteFn = (ctx: CheckerContext, target: Node) => void;
 
 let typeInstanceHooksFn: TypeInstanceHooksFn = (instType: Type, ctx: CheckerContext, line: int32, col: int32): void => {
 	throw new Error("internal: checker callback typeInstanceHooks was called before it was installed");
@@ -78,6 +79,9 @@ let demandFieldFn: DemandFieldFn = (ctx: CheckerContext, owner: Symbol, name: st
 };
 let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
 	throw new Error("internal: checker callback selfReadType was called before it was installed");
+};
+let readonlyFieldWriteFn: ReadonlyFieldWriteFn = (ctx: CheckerContext, target: Node): void => {
+	throw new Error("internal: checker callback readonlyFieldWrite was called before it was installed");
 };
 let undefinedVariableMessageFn: UndefinedVariableMessageFn = (ctx: CheckerContext, name: string): string => {
 	throw new Error("internal: checker callback undefinedVariableMessage was called before it was installed");
@@ -189,6 +193,14 @@ export function registerDemandReturn(fn: DemandFn): void {
 
 export function callDemandBinding(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	demandBindingFn(ctx, sym, read);
+}
+
+export function callReadonlyFieldWrite(ctx: CheckerContext, target: Node): void {
+	readonlyFieldWriteFn(ctx, target);
+}
+
+export function registerReadonlyFieldWrite(fn: ReadonlyFieldWriteFn): void {
+	readonlyFieldWriteFn = fn;
 }
 
 export function registerDemandBinding(fn: DemandFn): void {

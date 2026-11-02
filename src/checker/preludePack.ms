@@ -42,7 +42,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK8";
+const PACK_MAGIC = "MSPK9";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -529,8 +529,8 @@ export function replayPreludeTables(tables: PreludeTables): void {
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
 //   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
-//     opsCsv readonlyView mutableView typeInst
-//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv <payload...>
+//     opsCsv readonlyView mutableView typeInst typeParamDefault
+//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv genericDefaultsCsv <payload...>
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
@@ -702,6 +702,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			if (n.typeExprs != null) {
 				for (const te of n.typeExprs) enqNode(te);
 			}
+			if (n.genericDefaults != null) {
+				for (const value of n.genericDefaults) enqNode(value);
+			}
 			if (n.baseExprs != null) {
 				for (const be of n.baseExprs) enqNode(be);
 			}
@@ -715,6 +718,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		}
 		enqType(t.typeReturn);
 		enqType(t.typeExtra);
+		enqType(t.typeParamDefault);
 		enqType(t.readonlyView);
 		enqType(t.mutableView);
 		enqType(t.typeInst);
@@ -739,7 +743,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
 		const ops: int32[] = [];
 		for (const o of t.attachedOps) ops.push(idxSym(o));
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${idxType(t.readonlyView)}\t${idxType(t.mutableView)}\t${idxType(t.typeInst)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${idxType(t.readonlyView)}\t${idxType(t.mutableView)}\t${idxType(t.typeInst)}\t${idxType(t.typeParamDefault)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -749,6 +753,10 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const loc = n.location;
 		const tes = n.typeExprs != null ? idxs(n.typeExprs) : "-";
 		const bes = n.baseExprs != null ? idxs(n.baseExprs) : "-";
+		const defaults: int32[] = [];
+		if (n.genericDefaults != null) {
+			for (const value of n.genericDefaults) defaults.push(idxNode(value));
+		}
 		const pls = locsCsv(n.paramLocations);
 		let pss = "-";
 		if (n.paramSyms != null) {
@@ -756,7 +764,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const ps of n.paramSyms) psi.push(idxSym(ps));
 			pss = psi.length == 0 ? "" : intsCsv(psi);
 		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${n.genericDefaults == null ? "-" : intsCsv(defaults)}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -1296,6 +1304,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const typeViewIdx: int32[] = [];
 	const typeMutableIdx: int32[] = [];
 	const typeInstIdx: int32[] = [];
+	const typeDefaultIdx: int32[] = [];
 	const symTypeIdx: int32[] = [];
 	const symOverloadIdx: int32[][] = [];
 	const symStaticIdx: int32[][] = [];
@@ -1311,6 +1320,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const nodeTeRef: int32[] = [];
 	const nodeTesRaw: string[] = [];
 	const nodeBesRaw: string[] = [];
+	const nodeDefaultsRaw: string[] = [];
 	const nodePlsRaw: string[] = [];
 	const nodePssRaw: string[] = [];
 	const nodePayloadPos: int32[] = [];
@@ -1368,6 +1378,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeViewIdx.push(rd.int() as int32);
 			typeMutableIdx.push(rd.int() as int32);
 			typeInstIdx.push(rd.int() as int32);
+			typeDefaultIdx.push(rd.int() as int32);
 			types.push(t);
 			rd.endRow();
 		} else if (tag == 78) {
@@ -1389,6 +1400,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			n.variantSlot = rd.int() as int32;
 			nodePssRaw.push(rd.dashOrStr());
 			nodeBesRaw.push(rd.dashOrStr());
+			nodeDefaultsRaw.push(rd.dashOrStr());
 			nodePayloadPos.push(rd.last == 9 ? rd.pos : -1);
 			rd.endRow();
 			nodes.push(n);
@@ -1510,6 +1522,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		t.sym = typeSymIdx[i] >= 0 && typeSymIdx[i] < syms.length ? syms[typeSymIdx[i]] : null as unknown as Symbol;
 		t.readonlyView = typeViewIdx[i] >= 0 && typeViewIdx[i] < types.length ? types[typeViewIdx[i]] : null;
 		t.mutableView = typeMutableIdx[i] >= 0 && typeMutableIdx[i] < types.length ? types[typeMutableIdx[i]] : null;
+		t.typeParamDefault = typeDefaultIdx[i] >= 0 && typeDefaultIdx[i] < types.length ? types[typeDefaultIdx[i]] : null;
 		t.typeInst = typeInstIdx[i] >= 0 && typeInstIdx[i] < types.length ? types[typeInstIdx[i]] : null;
 		for (const k of typeOpsIdx[i]) {
 			if (k >= syms.length) return null;
@@ -1552,6 +1565,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		n.resolvedSym = nodeSymRef[i] >= 0 && nodeSymRef[i] < syms.length ? syms[nodeSymRef[i]] : null as unknown as Symbol;
 		n.typeExpr = nd(nodeTeRef[i], nodes) as Node;
 		n.typeExprs = nodeTesRaw[i] == "-" ? null : parseNodeArr(nodeTesRaw[i], nodes);
+		n.genericDefaults = nodeDefaultsRaw[i] == "-" ? null : parseNodeIdxList(nodeDefaultsRaw[i], nodes);
 		n.baseExprs = nodeBesRaw[i] == "-" ? null : parseNodeArr(nodeBesRaw[i], nodes);
 		n.paramLocations = nodePlsRaw[i] == "-" ? null : parseLocs(nodePlsRaw[i]);
 		if (nodePssRaw[i] != "-") {
@@ -1848,7 +1862,7 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 	}
 }
 
-test "preludePack: a generic type keeps its declared parameters and their constraints" {
+test "preludePack: generic defaults and parameter identity survive cold and warm reads" {
 	const prevHome = pkEnterPrivateCache();
 	try {
 		const ctx = makeTestCtx();
@@ -1859,8 +1873,18 @@ test "preludePack: a generic type keeps its declared parameters and their constr
 		const t = createGenericParam("T");
 		const k = createGenericParam("K");
 		k.typeExtra = createKeyOfType(t);
+		t.typeParamDefault = emptyType();
+		t.typeParamDefault!.kind = TypeKind.String;
+		k.typeParamDefault = t;
+		const decl = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: "pkAt", aliasType: "T", aliasIsDistinct: false, aliasGenericParams: "T,K", discriminantName: "", discriminantType: "", variantKeys: [], variantTypes: [], nameLocation: makeLoc(1, 1) }, makeLoc(1, 1));
+		const annotation = createNodeAt(NodeKind.TypeAnnotation, { annotationType: "T" }, makeLoc(1, 12));
+		annotation.typeExpr = createNodeAt(NodeKind.Identifier, { name: "T" }, makeLoc(1, 12));
+		annotation.nodeType = t;
+		decl.genericDefaults = [null, annotation];
+		sym.declNode = decl;
 		sym.typeParams = [t, k];
 		const key = preludePackKey("type-params", ".test");
+		assert tryLoadPreludePack(key, PK_STAMP) == null;
 		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);
 		assert loaded != null;
@@ -1871,7 +1895,30 @@ test "preludePack: a generic type keeps its declared parameters and their constr
 		const constraint = got.typeParams[1].typeExtra;
 		assert constraint != null && constraint.kind == TypeKind.KeyOf;
 		assert constraint.typeChildren[0] == got.typeParams[0];
-		remove(`${packRoot()}/${key}.pk`);
+		assert got.typeParams[0].typeParamDefault!.kind == TypeKind.String;
+		assert got.typeParams[1].typeParamDefault == got.typeParams[0];
+		const syntax = got.declNode!.genericDefaults;
+		assert syntax != null;
+		if (syntax != null) {
+			assert syntax.length == 2;
+			assert syntax[0] == null;
+			const value = syntax[1];
+			assert value != null;
+			if (value != null) {
+				assert value.nodeType == got.typeParams[0];
+				assert value.typeExpr != null;
+				if (value.typeExpr != null) assert value.typeExpr.kind == NodeKind.Identifier;
+			}
+		}
+		const warm = tryLoadPreludePack(key, PK_STAMP);
+		assert warm != null;
+		const warmSym = warm.table.current.symbols.get(getIdentId(warm.table.identCache, "pkAt"));
+		assert warmSym!.typeParams[1].typeParamDefault == warmSym!.typeParams[0];
+		const path = `${packRoot()}/${key}.pk`;
+		const packed = try readFile(path) catch "";
+		writeFile(path, packed.replace("MSPK9", "MSPK8"));
+		assert tryLoadPreludePack(key, PK_STAMP) == null;
+		remove(path);
 	} finally {
 		pkLeavePrivateCache(prevHome);
 	}
@@ -2042,7 +2089,7 @@ test "preludePack: escaped and unicode names, negative and large int fields surv
 		const header = lines[tRow].split("\t");
 		header[2] = "x1";
 		const payload = lines[binRow].split("\t");
-		payload[18] = "q";
+		payload[19] = "q";
 		const broken: string[] = [];
 		for (let i = 0; i < lines.length; i += 1) broken.push(i == tRow ? header.join("\t") : i == binRow ? payload.join("\t") : lines[i]);
 		writeFile(path, broken.join("\n"));
@@ -2272,14 +2319,14 @@ test "preludePack: a format keeps a peer's pack and in-flight write" {
 		writePreludePack(key, PK_STAMP, pkCtxWithOneSym(), emptyPreludeTables());
 		assert tryLoadPreludePack(key, PK_STAMP) != null;
 		const own = packRoot();
-		for (const foreign of ["MSPK2", "MSPK9"]) {
+		for (const foreign of ["MSPK2", "MSPK10"]) {
 			ensureDir(`${base}/${foreign}`);
 			writeFile(`${base}/${foreign}/${key}.pk`, "another compiler's pack");
 		}
 		assert tryLoadPreludePack(key, PK_STAMP) != null;
 		writePreludePack(key, PK_STAMP, pkCtxWithOneSym(), emptyPreludeTables());
 		assert exists(`${own}/${key}.pk`);
-		for (const foreign of ["MSPK2", "MSPK9"]) {
+		for (const foreign of ["MSPK2", "MSPK10"]) {
 			assert exists(`${base}/${foreign}/${key}.pk`), `${foreign} lost its pack`;
 		}
 		const saved = try readFile(peer) catch "";

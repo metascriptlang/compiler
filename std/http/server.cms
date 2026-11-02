@@ -71,6 +71,7 @@ extern function msStaticCachePut(slotId: int32, sec: int64, source: string): voi
 extern function buildResponseReuse(this dest: string, status: int32, st: string, ct: string, body: string): void from "&msBuildResponseReuse";
 extern function parsePathInto(this dest: string, data: string): void from "&msFastParsePathInto";
 extern function shiftLeft(this s: string, offset: int32): void from "&msStringShiftLeft";
+extern function emptyKeepingBuffer(this s: string): void from "&msStringClear";
 extern function msStringNewCap(cap: int64): string;
 
 import {
@@ -313,7 +314,7 @@ function endResponse(res: ServerResponse, data: string): void {
 	}
 	// Build response in-place into _responseData (pre-allocated 4KB cap via initClient).
 	// Zero alloc for responses that fit in cap — buffer is reused across requests
-	// because resetResponse calls setLength(0) (preserves cap). Parity with
+	// because resetResponse calls emptyKeepingBuffer (preserves cap). Parity with
 	// httpbeast (Karax) and uWebSockets (Bun) which use the same in-place pattern.
 	//
 	// Compiler trick: every `res._responseData += X` below is lowered by
@@ -321,7 +322,7 @@ function endResponse(res: ServerResponse, data: string): void {
 	// — an in-place byte-copy into the existing payload, NOT a fresh concat that
 	// would replace the msString and discard the pre-allocated capacity. The
 	// fast path requires HiddenAddr semantics on the LHS (see Fix E history).
-	res._responseData.setLength(0);
+	res._responseData.emptyKeepingBuffer();
 	// Status line: try pre-built literal first (1 append, zero alloc).
 	// Falls back to dynamic build for uncommon codes — keeps slow path correct.
 	const fastLine = statusLine(status);
@@ -413,7 +414,7 @@ export function sendStatic(res: ServerResponse, slotId: int32, status: int32, co
 		// is sub-noise (~5ns). The bug it exposed (per-second cache eviction
 		// race with in-flight io_uring SEND) drove the two-generation cache
 		// design in runtime/net/socket.h, which we keep for future use.
-		res._responseData.setLength(0);
+		res._responseData.emptyKeepingBuffer();
 		res._responseData += msStaticCacheGet(slotId);
 		res.headersSent = true;
 		res._finished = true;
@@ -616,7 +617,7 @@ function initClient(fd: int32, keepAliveSeconds: int32): ClientState {
 }
 
 function resetClient(client: ClientState, fd: int32): void {
-	client.data.setLength(0);
+	client.data.emptyKeepingBuffer();
 	client.bytesSent = 0;
 	client.headersEndPos = -1;
 	client.asyncPending = false;
@@ -633,7 +634,7 @@ function resetClient(client: ClientState, fd: int32): void {
 	client.response._chunked = false;
 	client.response.headers._names.length = 0;
 	client.response.headers._values.length = 0;
-	client.response._responseData.setLength(0);
+	client.response._responseData.emptyKeepingBuffer();
 	client.response._upgraded = false;
 }
 
@@ -657,7 +658,7 @@ function resetResponse(client: ClientState, fd: int32): void {
 	client.response._chunked = false;
 	client.response.headers._names.length = 0;
 	client.response.headers._values.length = 0;
-	client.response._responseData.setLength(0);  // preserves buffer (= "" would free it)
+	client.response._responseData.emptyKeepingBuffer();  // preserves buffer (= "" would free it)
 	client.response._upgraded = false;
 }
 
@@ -959,7 +960,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 		if (totalConsumed < client.data.byteLength()) {
 			client.data.shiftLeft(totalConsumed);
 		} else {
-			client.data.setLength(0);
+			client.data.emptyKeepingBuffer();
 		}
 
 		// 7) Protocol switch / keep-alive
@@ -1160,7 +1161,7 @@ function dispatchUringRecv(cfg: Readonly<LoopConfig>, client: ClientState, fd: i
 	if (totalConsumed < client.data.byteLength()) {
 		client.data.shiftLeft(totalConsumed);
 	} else {
-		client.data.setLength(0);
+		client.data.emptyKeepingBuffer();
 	}
 	client.headersEndPos = -1;
 
@@ -1405,7 +1406,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 		if (totalConsumed < client.data.byteLength()) {
 			client.data.shiftLeft(totalConsumed);
 		} else {
-			client.data.setLength(0);
+			client.data.emptyKeepingBuffer();
 		}
 
 		// 7) Protocol switch / keep-alive

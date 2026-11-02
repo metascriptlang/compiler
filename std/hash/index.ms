@@ -35,6 +35,10 @@ export function djb2(s: string): Hash {
 	let h: int64 = 5381;
 	let i = 0;
 	const len = s.byteLength;
+	while (i + 4 <= len) {
+		h = (h * (1185921 as int64) + (s.byteAt(i) as int64) * (35937 as int64) + (s.byteAt(i + 1) as int64) * (1089 as int64) + (s.byteAt(i + 2) as int64) * (33 as int64) + (s.byteAt(i + 3) as int64)) & MASK32;
+		i = i + 4;
+	}
 	while (i < len) {
 		h = (h * (33 as int64) + (s.byteAt(i) as int64)) & MASK32;
 		i = i + 1;
@@ -151,6 +155,17 @@ export function hashToBase36(s: string): string {
 test "hash string deterministic" {
 	assert djb2("hello") == djb2("hello");
 	assert djb2("a") != djb2("b");
+}
+
+test "djb2 of every length up to 40 equals the byte-at-a-time recurrence" {
+	let text = "";
+	for (let n: int32 = 0; n <= 40; n++) {
+		let h: int64 = 5381;
+		for (let i: int32 = 0; i < text.byteLength; i++) h = (h * (33 as int64) + (text.byteAt(i) as int64)) & MASK32;
+		assert djb2(text) == h, "length " + String(n);
+		text += String.fromCharCode(97 + ((n * 7) % 26));
+		if (n % 5 == 4) text += "é";
+	}
 }
 
 test "hash string empty" {

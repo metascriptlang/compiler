@@ -40,7 +40,8 @@ export class TransformContext {
 	pendingUnionEqs: Type[];  // payload unions compared by == on C
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
-	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
+	liftCounter: number;
+	liftedEnvNames: string[];
 	actorImpls: HashMap<Symbol, Symbol>;  // actor method → its _impl handler (actor lowering emits async ones in lowerActorPre)
 	jsEnumToStrings: EnumToStringCopy[];
 	tdzFlags: HashMap<Symbol, Symbol>;  // module binding → its initialized flag (moduleTdz); every read and write inside a function is guarded by it
@@ -61,7 +62,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, jsOverflowChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
+	return { tempCounter: 0, checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, jsOverflowChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), liftCounter: 0, liftedEnvNames: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, frameReach: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

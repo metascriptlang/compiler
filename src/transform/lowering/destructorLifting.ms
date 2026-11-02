@@ -26,7 +26,7 @@ import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, 
 import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { lookupInstanceHook } from "../../checker/instantiate";
+import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, cellTraceHasEdge, custodyReaches, custodyAddsEdge } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -938,7 +938,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
 				if (empties) primitiveUnionOp("wasMoved", fieldType, clonePath(xf, loc), clonePath(xf, loc), buf, loc);
-			} else {
+			} else if (walksValue(hook, fieldType, lctx)) {
 				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
 				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 			}
@@ -1655,7 +1655,8 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 				|| sym.symbolKind == SymbolKind.Interface) {
 				isClassOrInterface = true;
 				if (refType == null) refType = sym.symbolType;
-				isCrossModuleClass = sym.modulePath != "" && sym.modulePath != lctx.checkerCtx.modulePath;
+				const home = instanceHomeOf(sym);
+				isCrossModuleClass = home != "" && home != lctx.checkerCtx.modulePath;
 			}
 		}
 	}

@@ -90,6 +90,7 @@ import "./scenarios/constructorOverloads";
 import "./scenarios/abstractMembers";
 import "./scenarios/superMemberAccess";
 import "./scenarios/anonymousFunctionAnnotations";
+import "./scenarios/thisBeforeSuper";
 import "./scenarios/utilityFunctionTypes";
 import "./scenarios/genericRestInference";
 import "./scenarios/inKeywordNarrows";

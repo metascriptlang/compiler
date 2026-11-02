@@ -13,6 +13,9 @@ import { boxString, unboxString } from "../../raiser/marshal";
 import { definedValue } from "../defines";
 import { getParserDefines } from "../../parser/context";
 import { checkFunctionOnDemand } from "../../checker/checkPass";
+import { declaringModuleCtx } from "../../checker/instantiate";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { bindGenericDefaultTypes } from "./expand";
 import { callDemandBinding } from "../../checker/checkerCallbacks";
 import { readFile } from "std/fs";
 import { resolve } from "std/fs/path";
@@ -169,11 +172,18 @@ function hostGetImpl(args: RaiserValue[]): RaiserValue {
 	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.declNode == null) return raiserNil();
 	checkFunctionOnDemand(ctx, sym);
-	const impl = emitNode(sym.declNode);
+	if (isTypeSymbol(sym)) ensureShaped(sym, ctx);
+	let declaration = sym.declNode;
+	if (declaration.genericDefaults != null) {
+		const home = declaringModuleCtx(ctx, sym);
+		if (home == null) return queryError(ctx, `getImpl: no defining scope for '${sym.name}'`);
+		declaration = cloneNodeKeepSem(declaration);
+		bindGenericDefaultTypes(declaration, home, sym.name);
+	}
+	const impl = emitNode(declaration);
 	const objHeap = activeHostObjectHeap();
 	const arrHeap = activeHostArrayHeap();
 	if (objHeap != null && arrHeap != null && isTypeSymbol(sym)) {
-		ensureShaped(sym, ctx);
 		if (sym.symbolType != null) attachFieldTypeNodes(impl, sym.declNode, unwrapRefBase(sym.symbolType), objHeap, arrHeap);
 	}
 	return impl;
@@ -299,6 +309,11 @@ function hostReadFile(args: RaiserValue[]): RaiserValue {
 	return boxString(read.value);
 }
 
+function hostMacroError(args: RaiserValue[]): RaiserValue {
+	raiseFromHost(unboxString(args[0]), false);
+	return raiserNil();
+}
+
 function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null) return boxString("");
@@ -307,6 +322,7 @@ function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 
 export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaDefine", hostDefine, HostCapability.Pure);
+	registerHostFn("error", hostMacroError, HostCapability.Pure);
 	registerHostFn("msMetaExpansionFile", hostExpansionFile, HostCapability.Pure);
 	registerHostFn("msMetaReadFile", hostReadFile, HostCapability.FileRead);
 	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);

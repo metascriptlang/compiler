@@ -69,11 +69,22 @@ async function round(items: Item[], leaves: Leaf[]): Promise<int32> {
 	const b = spawn((): int32 => viaCapture(items) + leafCapture(leaves) + nested(items) + nullableCapture(items) + nullableLeafCapture(leaves[0]) + nullableLeafCapture(null));
 	return await a + await b;
 }
+async function roundAfterAwait(items: Item[]): Promise<int32> {
+	const first = await Promise.resolve(1 as int32);
+	const a = spawn((): int32 => {
+		const best = items[3];
+		const ok = (x: Readonly<Item>): boolean => x.v >= best.v;
+		let n: int32 = 0;
+		for (const x of items) if (ok(x)) n += 1;
+		return n;
+	});
+	return first + await a;
+}
 const items: Item[] = [];
 const leaves: Leaf[] = [];
 for (let i = 0; i < 8; i++) { const it = new Item(); it.v = i as int32; items.push(it); const l = new Leaf(); l.v = i as int32; leaves.push(l); }
 items[0].next = items[3];
-console.log(\`\${await round(items, leaves)} \${returned(items)()} \${pushed(items)} \${returnedNullable(items)()} \${pushedNullable(items)}\`);
+console.log(\`\${await round(items, leaves)} \${await roundAfterAwait(items)} \${returned(items)()} \${pushed(items)} \${returnedNullable(items)()} \${pushedNullable(items)}\`);
 `;
 
 function envInfos(prefix: string): string[] {
@@ -121,14 +132,19 @@ test "E2E C: a closure nested in a called closure reaches its parameter and the 
 }
 
 test "E2E C: a closure called inside a task holds the view it reads of the lent graph without a count" {
-	const infos = envInfos("round_fexpr");
-	let closures = 0;
-	for (const info of infos) {
-		if (!info.contains("_arrow")) continue;
-		closures += 1;
-		assert countsNothing(info);
+	for (const routine of ["round_arrow", "roundAfterAwait_arrow"]) {
+		const infos = envInfos(routine);
+		assert infos.length == 1, routine;
+		assert countsNothing(infos[0]), infos[0];
 	}
-	assert closures == 1;
+}
+
+test "E2E C: the env of an async routine counts the parameters its tasks capture, since its frame outlives the call" {
+	for (const routine of ["round_shared", "roundAfterAwait_shared"]) {
+		const infos = envInfos(routine);
+		assert infos.length > 0, routine;
+		for (const info of infos) assert !countsNothing(info), info;
+	}
 }
 
 test "E2E C: a returned closure still counts the element it captured" {

@@ -100,13 +100,8 @@ const i: string = s.padStart(20, ".");
 const j: string = s.padEnd(20, ".");
 const k: number = "3.5".parseFloat();
 const l: int64 = "42".parseInt();
-const m: int64 = s.capacity();
 const n: string = fromCodePoint(65);
 const o: int64 = s.lastIndexOf("l", 10);
-s.setLength(4);
-s.append("z");
-s.setSlice(0, 2);
-s.stripInPlace();
 `;
 	const entries: MapEntry[] = [
 		{ entryPath: "test/strParity.ms", entrySource: src },

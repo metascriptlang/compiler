@@ -404,7 +404,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<
 			if (!argIsPtr && argNode.resolvedSym != null && argNode.resolvedSym.symbolType != null) {
 				argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
 			}
-			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode)) {
+			if (paramIsPtr && !argIsPtr && !isNullExpr(argNode) && argNode.nodeType.kind != TypeKind.Null) {
 				return safeAddrOf(g, p, arg, argNode, formal);
 			} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 				return `*(${arg})`;
@@ -1407,6 +1407,10 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
 				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
+				if (initType != null && ai + 1 < initType.typeChildren.length && hasNoRuntimeRepr(initType.typeChildren[ai + 1])) {
+					dropVoidArg(p, argSnippet, argNode);
+					continue;
+				}
 				if (initType != null && ai + 1 < initType.typeChildren.length) {
 					argSnippet = shimCallArg(g, p, argSnippet, initType.typeChildren[ai + 1], argNode, 0, ai);
 				}

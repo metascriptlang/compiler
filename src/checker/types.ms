@@ -110,6 +110,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeChildren = source.typeChildren;
 	target.typeReturn = source.typeReturn;
 	target.typeExtra = source.typeExtra;
+	target.typeParamDefault = source.typeParamDefault;
 	target.typeFlags = source.typeFlags;
 	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
@@ -137,6 +138,7 @@ function typeOfKind(kind: TypeKind): Type {
 		typeChildren: [],
 		typeReturn: null,
 		typeExtra: null,
+		typeParamDefault: null,
 		typeFlags: 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
@@ -194,7 +196,7 @@ export function createArray(element: Type | null): Type {
 	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: element, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: element, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -206,7 +208,7 @@ export function createVarargs(arrayType: Type): Type {
 	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Varargs, typeName: "", typeNames: [], typeChildren: [arrayType],
-		typeReturn: null, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: null, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -263,7 +265,7 @@ export function createFunction(paramTypes: Type[], paramNames: string[], returnT
 	}
 	return {
 		kind: TypeKind.Function, typeName: "", typeNames: ownNames, typeChildren: ownTypes,
-		typeReturn: returnType, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
+		typeReturn: returnType, typeExtra: null, typeParamDefault: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -685,6 +687,10 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (needsFlatten) {
+		const spelled = sourceWithMembers(types, seen);
+		if (spelled != null) return spelled;
+	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
 	if (dropEnumMembersOfPresentEnums(seen) && seen.length == 1) return seen[0];
 	if (dropBrandsOfPresentBases(seen) && seen.length == 1) return seen[0];
@@ -736,6 +742,19 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 	}
 	return t;
+}
+
+function sourceWithMembers(types: Type[], members: Type[]): Type | null {
+	for (const ut of types) {
+		const nested = nestedUnionOf(ut);
+		if (nested == null || nested.typeChildren == null || nested.typeChildren.length != members.length) continue;
+		let all = true;
+		for (const m of members) {
+			if (!nested.typeChildren.includes(m)) { all = false; break; }
+		}
+		if (all) return ut;
+	}
+	return null;
 }
 
 // `Readonly<A> | null` is `Readonly<A | null>`: a view stays a view when null joins it.
@@ -1944,6 +1963,7 @@ export function copyTypeShallow(t: Type): Type {
 	c.typeChildren = t.typeChildren;
 	c.typeReturn = t.typeReturn;
 	c.typeExtra = t.typeExtra;
+	c.typeParamDefault = t.typeParamDefault;
 	c.typeFlags = t.typeFlags;
 	c.callConv = t.callConv;
 	c.attachedOps = t.attachedOps;
@@ -2170,7 +2190,7 @@ export function createOutVar(inner: Type): Type {
 	return t;
 }
 
-export function isOutParam(t: Type | null): boolean {
+export function isOutParam(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Var && t.typeFlags.has(TypeFlag.OutParam);
 }
 
@@ -2502,6 +2522,7 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 		typeChildren: typeArgs,
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
+		typeParamDefault: null,
 		typeFlags: innerBase != null ? innerBase.typeFlags : 0 as BitSet<TypeFlag>,
 		typeValue: 0,
 		callConv: CallingConvention.CcDefault,
@@ -3991,7 +4012,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.String) return true;
 	if (t.kind == TypeKind.StringLiteral) return true;
 	if (literalUnionBase(t) != null) return true;
-	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array || t.kind == TypeKind.Span) return true;
 	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && (isStructType(t.typeExtra) || peelToStructOrUnion(t.typeExtra)?.kind == TypeKind.Union);
 	return false;
 }
@@ -4381,7 +4402,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 		return false;
 	}
 	let structElem = elem;
-	if (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && elem.typeExtra.kind == TypeKind.Struct) {
+	if (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && (elem.typeExtra.kind == TypeKind.Struct || elem.typeExtra.kind == TypeKind.Union)) {
 		structElem = elem.typeExtra;
 	}
 	if ((structElem.kind == TypeKind.Struct || structElem.kind == TypeKind.Union) && structElem.typeName != "") {
@@ -4686,6 +4707,27 @@ function substitutedMapped(t: Type, params: Type[], concretes: Type[], active: C
 		return unionOfParts(parts);
 	}
 	const inner = withoutParam(params, concretes, mappedParam(t));
+	if (source != null && source.kind != TypeKind.GenericParam && mappedModifiers(t).has(MappedModifier.KeyOfDeclared) && hasGenericParams(source)) {
+		const settled = substituteAllParamsInner(source, params, concretes, active);
+		const settledMembers = mappedSourceMembers(settled);
+		const targets = settledMembers.length > 0 ? settledMembers : [settled];
+		const parts: Type[] = [];
+		for (const target of targets) {
+			const each = copyTypeForSubst(t);
+			_substitutingFrom.push(source);
+			_substitutingTo.push(target);
+			const targetActive: Cursor<Type>[] = [source];
+			each.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, targetActive);
+			for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
+				each.typeChildren[ci] = substituteAllParamsInner(t.typeChildren[ci], inner.params, inner.concretes, targetActive);
+			}
+			_substitutingFrom.pop();
+			_substitutingTo.pop();
+			each.typeExtra = target;
+			parts.push(evaluateMappedType(each));
+		}
+		return unionOfParts(parts);
+	}
 	const m = copyTypeForSubst(t);
 	m.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, active);
 	for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
@@ -5622,8 +5664,9 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 			return prefix;
 		}
 		if (cur.kind == TypeKind.Var) {
-			if (cur.typeReturn != null) { prefix = prefix + "out "; cur = cur.typeReturn; continue; }
-			return prefix + "out";
+			const mode = isOutParam(cur) ? "out" : "ref";
+			if (cur.typeReturn != null) { prefix = prefix + mode + " "; cur = cur.typeReturn; continue; }
+			return prefix + mode;
 		}
 		if (cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr) {
 			if (cur.typeReturn != null) { cur = cur.typeReturn; continue; }
@@ -5735,7 +5778,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + "[" + String(t.typeValue) + "]";
-	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes);
+	if (t.kind == TypeKind.Var && t.typeReturn != null) return (isOutParam(t) ? "out " : "ref ") + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes);
 	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + " | null";
 	const shape = namelessObjectShape(t, open, shapes);
 	if (shape != "") return shape;
@@ -6557,6 +6600,13 @@ test "createTuple" {
 test "typeNameOf Tuple" {
 	const tup = createTuple([numberType()]);
 	assert typeNameOf(tup) == "Tuple";
+}
+
+test "typeNameOf and typeDisplayName name a ref parameter ref and an out parameter out" {
+	assert typeNameOf(createVar(numberType())) == "ref number";
+	assert typeNameOf(createOutVar(numberType())) == "out number";
+	assert typeDisplayName(createVar(numberType())) == "ref number";
+	assert typeDisplayName(createOutVar(numberType())) == "out number";
 }
 
 test "substituteParams Tuple" {

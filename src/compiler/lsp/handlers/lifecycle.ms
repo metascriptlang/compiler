@@ -296,7 +296,7 @@ export function handleDidSave(params: string): string {
 
 export const METHOD_NOT_FOUND: int32 = -32601;
 
-export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache, candidates: string[] | null = null): string {
+export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache, scope: string[] | null = null): string {
 	return match (method) {
 		"initialize" => handleInitialize(id),
 		"shutdown" => handleShutdown(id),
@@ -306,15 +306,15 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didSave" => handleDidSave(params),
 		"workspace/didChangeWatchedFiles" => handleDidChangeWatchedFiles(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
-		"textDocument/completion" => handleCompletion(id, params, db, cache),
+		"textDocument/completion" => handleCompletion(id, params, db, cache, scope),
 		"completionItem/resolve" => handleCompletionResolve(id, params),
 		"textDocument/definition" => handleDefinition(id, params, db),
 		"textDocument/documentSymbol" => handleDocumentSymbol(id, params, db),
 		"textDocument/signatureHelp" => handleSignatureHelp(id, params, db),
 		"textDocument/inlayHint" => handleInlayHint(id, params, db),
-		"textDocument/references" => handleReferences(id, params, db, candidates),
+		"textDocument/references" => handleReferences(id, params, db, scope),
 		"textDocument/documentHighlight" => handleDocumentHighlight(id, params, db),
-		"textDocument/rename" => handleRename(id, params, db, candidates),
+		"textDocument/rename" => handleRename(id, params, db, scope),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
 		"textDocument/rangeFormatting" => handleRangeFormatting(id, params, db),
