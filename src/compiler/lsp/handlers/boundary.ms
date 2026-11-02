@@ -127,7 +127,18 @@ function costRank(p: BoundaryParam): int32 {
 		BoundaryKind.Struct => 3,
 		BoundaryKind.String => 2,
 		BoundaryKind.Callback => 1,
-		_ => 0,
+		BoundaryKind.Bool
+			| BoundaryKind.I8
+			| BoundaryKind.I16
+			| BoundaryKind.I32
+			| BoundaryKind.U8
+			| BoundaryKind.U16
+			| BoundaryKind.U32
+			| BoundaryKind.I64
+			| BoundaryKind.U64
+			| BoundaryKind.F32
+			| BoundaryKind.F64
+			| BoundaryKind.Void => 0,
 	};
 }
 
@@ -138,7 +149,18 @@ function costLabel(p: BoundaryParam): string {
 		BoundaryKind.Struct => "flatten struct",
 		BoundaryKind.String => "encode string",
 		BoundaryKind.Callback => "borrow callback",
-		_ => "",
+		BoundaryKind.Bool
+			| BoundaryKind.I8
+			| BoundaryKind.I16
+			| BoundaryKind.I32
+			| BoundaryKind.U8
+			| BoundaryKind.U16
+			| BoundaryKind.U32
+			| BoundaryKind.I64
+			| BoundaryKind.U64
+			| BoundaryKind.F32
+			| BoundaryKind.F64
+			| BoundaryKind.Void => "",
 	};
 }
 
