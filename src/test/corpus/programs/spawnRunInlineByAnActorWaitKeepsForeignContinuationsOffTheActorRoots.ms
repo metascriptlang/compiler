@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors and no per-thread cycle root sets, which this program pins
 // @skip-js: the program pins per-thread cycle root sets, which the JS backend does not have
 // @stdout: total 20700
 // @serial
