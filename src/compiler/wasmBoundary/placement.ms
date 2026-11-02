@@ -1,13 +1,23 @@
-import { Node, NodeKind, ProgramData, DecoratedDeclData, FunctionDeclData, SymbolFlag } from "../../ast/node";
+import {
+	Node,
+	NodeKind,
+	ProgramData,
+	DecoratedDeclData,
+	FunctionDeclData,
+	SymbolFlag,
+} from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasFlag } from "../../checker/symbol";
 
 function wasmFunctionOf(stmt: Node): Node | null {
 	let decl = stmt;
-	if (decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl.kind == NodeKind.DecoratedDecl) {
+		decl = (decl.data as DecoratedDeclData).decoratedNode;
+	}
 	if (decl == null || decl.kind != NodeKind.ExportDecl) return null;
 	const fn = exportedFunctionOf(decl);
-	if (fn == null || fn.resolvedSym == null || !hasFlag(fn.resolvedSym!, SymbolFlag.Wasm)) return null;
+	if (fn == null || fn.resolvedSym == null) return null;
+	if (!hasFlag(fn.resolvedSym!, SymbolFlag.Wasm)) return null;
 	return fn;
 }
 

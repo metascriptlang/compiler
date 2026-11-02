@@ -19,7 +19,8 @@ export enum BoundaryKind {
 }
 
 export function unwiredKind(kind: BoundaryKind, what: string): never {
-	throw new Error(`internal: boundary kind ${BoundaryKind[kind]} has no ${what}`);
+	const name = BoundaryKind[kind];
+	throw new Error(`internal: boundary kind ${name} has no ${what}`);
 }
 
 export interface ScalarRange {
