@@ -1526,6 +1526,11 @@ function createSameTypeClosure(): SameTypeClosure {
 	return { recCheck: 0, left: [], right: [] };
 }
 
+function maybeInnerKeepingView(t: Type): Type {
+	if (!isMaybeType(t) || t.typeReturn == null) return t;
+	return isReadonlyView(t) ? createReadonlyView(t.typeReturn) : t.typeReturn;
+}
+
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	let src: Type = source;
@@ -1534,8 +1539,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (srcInner != null) src = srcInner;
 	const dstInner = nonNullMemberOfNullable(target);
 	if (dstInner != null) dst = dstInner;
-	if (isMaybeType(src) && src.typeReturn != null) src = src.typeReturn;
-	if (isMaybeType(dst) && dst.typeReturn != null) dst = dst.typeReturn;
+	src = maybeInnerKeepingView(src);
+	dst = maybeInnerKeepingView(dst);
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {
