@@ -19,6 +19,22 @@ receipt records it and verification refuses an archive that is not empty. The en
 (`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
 the engine root, as in a full bundle.
 
+`--target x86_64-linux-musl` and `--target aarch64-linux-musl` add the static musl profile of a target, which no run
+without `--target` produces: `crt1.o`, `libc.a` and `libcompiler_rt.a` of Zig's default musl link, a config that links
+with `-static` (no loader), and the empty archives musl's install makes for `-lm -lpthread -ldl -lrt` and the other
+libraries its `libc.a` already holds. Production refuses a Zig run that names another target or carries a loader, PIE or
+shared-object argument, and verification refuses a linked file that is not a static executable of the target's machine,
+and runs it when the producer host executes that machine. There is no shared-object or dynamic musl profile.
+
+`--target x86_64-freebsd.14.0` and `--target aarch64-freebsd.14.0` add the dynamic FreeBSD 14.0 profile of a target, which no run
+without `--target` produces: Zig's `crt1.o` and its link-time stubs `libc.so.7`, `libm.so.5`, `libthr.so.3` and the rest of its
+14.0 set (stubs only: no FreeBSD libc ships, the program needs a FreeBSD host to run), a non-PIE config that names the
+versioned FreeBSD triple, `__FreeBSD_version` 1400500, `/libexec/ld-elf.so.1` and the machine's emulation, and `libpthread.so` as
+the alias of `libthr.so.3` that FreeBSD's own install makes. Production refuses a Zig run that names another triple or version
+or lacks one of those, and verification refuses a linked file whose machine, loader, FreeBSD ABI tag or `libc.so.7` dependency is
+not the target's. Nothing runs it: the receipt says `ranOnProducer: false`, and it claims the FreeBSD 14.0 userland only (Zig's 14.0
+set links `libutil.so.9`, which 15.x replaces by `.so.10`). There is no shared-object, C++ or sanitizer FreeBSD profile.
+
 `--shared` adds the shared-object profile of each glibc target to a prepared RUNTIME_DIR, which is only read. NEW_DIR
 receives an overlay of new paths: `<target>.so.cfg` (`clang --config RUNTIME/T.so.cfg -c x.c`, then `... x.o -o libx.so`),
 the `<target>.so/` directory of the link inputs of Zig's `-shared` link line, and
@@ -34,6 +50,7 @@ import errno
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -140,16 +157,22 @@ REMOVED_DISABLED_FEATURES += [{
 # feature once for the Windows consumers; translateFeatures reads both.
 REMOVED_DISABLED_FEATURES_AARCH64_LINUX = [dict(e, target="aarch64-linux-gnu.2.31") for e in REMOVED_DISABLED_FEATURES
                                            if e["target"] == "aarch64-windows-gnu"]
+REMOVED_DISABLED_FEATURES_MUSL = [dict(e, target=musl) for musl, source in (
+    ("x86_64-linux-musl", "x86_64-linux-gnu.2.31"), ("aarch64-linux-musl", "aarch64-windows-gnu"))
+    for e in REMOVED_DISABLED_FEATURES if e["target"] == source]
+REMOVED_DISABLED_FEATURES_FREEBSD = [dict(e, target=freebsd) for freebsd, source in (
+    ("x86_64-freebsd.14.0", "x86_64-linux-gnu.2.31"), ("aarch64-freebsd.14.0", "aarch64-windows-gnu"))
+    for e in REMOVED_DISABLED_FEATURES if e["target"] == source]
 
 GNU_LINUX = {
     "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
-    "driverFlags": ["-no-pie"],
+    "driverFlags": ["-nostdlib", "-no-pie"],
     "notices": {"zig": ["../LICENSE"], "glibc": ["libc/glibc/LICENSES"]},
 }
 
 TARGETS = {
     "wasm32-wasi": {
-        "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
+        "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": ["-nostdlib"],
         "clangTarget": "wasm32-wasip1", "emptyArchives": ["libm.a"],
         "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"],
                     "wasi-libc": ["libc/wasi/" + n for n in WASI_LICENSES]},
@@ -157,6 +180,50 @@ TARGETS = {
     "x86_64-linux-gnu.2.31": GNU_LINUX,
     "aarch64-linux-gnu.2.31": GNU_LINUX,
 }
+MUSL_EMPTY_ARCHIVES = ["libm.a", "librt.a", "libpthread.a", "libutil.a", "libresolv.a", "libdl.a", "libcrypt.a", "libxnet.a"]
+MUSL_STATIC = {
+    "fixture": "runtimeMusl.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
+    "driverFlags": ["-nostdlib", "-static"], "emptyArchives": MUSL_EMPTY_ARCHIVES, "linkage": "static",
+    "requiredInputs": ["crt1.o", "libc.a"], "refusedLinkArgs": ("--dynamic-linker", "-pie", "-shared"),
+    "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"]},
+}
+MUSL_TARGETS = {
+    "x86_64-linux-musl": dict(MUSL_STATIC, tripleArch="x86_64"),
+    "aarch64-linux-musl": dict(MUSL_STATIC, tripleArch="aarch64"),
+}
+FREEBSD_VERSION = 1400500
+FREEBSD_LOADER = "/libexec/ld-elf.so.1"
+FREEBSD_14 = {
+    "fixture": "runtimeFreebsd.c", "zigLinkArgs": ["-lm"], "linker": "ld.lld",
+    "driverFlags": ["-nostdlib", "-no-pie"],
+    "requiredInputs": ["crt1.o", "libc.so.7", "libm.so.5", "libthr.so.3"],
+    "refusedLinkArgs": ("-pie", "--pie", "-shared", "-static", "-Bstatic", "--no-dynamic-linker"),
+    "extraLibraryAliases": {"libpthread.so": "libthr.so.3"},
+    "notices": {"zig": ["../LICENSE"], "freebsd": ["libc/freebsd/COPYRIGHT"]},
+    "receipt": {
+        "linkage": "dynamic",
+        "abi": "FreeBSD 14.0 userland, __FreeBSD_version %d, loader %s, Zig's 14.0 stub set (libutil.so.9); "
+               "no claim for 15.x, whose libutil is libutil.so.10" % (FREEBSD_VERSION, FREEBSD_LOADER),
+        "executionProof": "none: no FreeBSD host has run this target; only the linked file's ELF structure is checked",
+        "noticeGaps": ["no license file ships in the Zig tree for the per-file BSD headers of libc/include/*-freebsd-none and "
+                       "generic-freebsd, or for the stubs generated from its abilists, beyond libc/freebsd/COPYRIGHT"],
+    },
+}
+FREEBSD_TARGETS = {
+    "x86_64-freebsd.14.0": dict(FREEBSD_14, zigTriple="x86_64-unknown-freebsd14.0.0-unknown", emulation="elf_x86_64"),
+    "aarch64-freebsd.14.0": dict(FREEBSD_14, zigTriple="aarch64-unknown-freebsd14.0.0-unknown", emulation="aarch64elf"),
+}
+FREEBSD_ELF_TARGETS = {
+    "x86_64-freebsd.14.0": {"machine": 62, "name": "x86_64"},
+    "aarch64-freebsd.14.0": {"machine": 183, "name": "aarch64"},
+}
+PRODUCIBLE_TARGETS = dict(TARGETS, **MUSL_TARGETS, **FREEBSD_TARGETS)
+MUSL_ELF_TARGETS = {
+    "x86_64-linux-musl": {"machine": 62, "name": "x86_64"},
+    "aarch64-linux-musl": {"machine": 183, "name": "aarch64"},
+}
+HOST_MACHINES = {"x86_64": ("x86_64", "amd64"), "aarch64": ("aarch64", "arm64")}
+MUSL_OUTPUT = "ok sum=9 sqrt=1.414 wide=120 eps=1 tls=7 pow=1024\n"
 # What a linked glibc executable of each GNU target must be: ELF machine and the loader it names.
 # The loader's soname is `.so.2` on x86_64 and `.so.1` on aarch64, so each target spells its own.
 ELF_TARGETS = {
@@ -165,14 +232,22 @@ ELF_TARGETS = {
 }
 # The shared-object profile of a glibc target: Zig's `-shared` link of a library that exports `addNumbers`.
 # Its directory `<target>.so` and config `<target>.so.cfg` are apart from the executable's.
-GNU_SHARED = dict(GNU_LINUX, fixture="runtimeLinuxShared.c", zigArgs=["-shared"], driverFlags=["-shared"],
+GNU_SHARED = dict(GNU_LINUX, fixture="runtimeLinuxShared.c", zigArgs=["-shared"], driverFlags=["-nostdlib", "-shared"],
                   exportedSymbol="addNumbers")
 SHARED_TARGETS = {target: GNU_SHARED for target in ELF_TARGETS}
 SHARED_PROVENANCE = "notices/runtime-shared-provenance.json"
 # Executable startup on a link line of a shared object, and the soname of the fixture.
 SHARED_REFUSED = ("--dynamic-linker", "--no-dynamic-linker", "--entry", "-pie", "-soname")
+PT_LOAD = 1
+PT_DYNAMIC = 2
 PT_INTERP = 3
+PT_NOTE = 4
+ET_EXEC = 2
 ET_DYN = 3
+DT_NEEDED, DT_STRTAB, DT_STRSZ = 1, 5, 10
+NT_FREEBSD_ABI_TAG = 1
+FREEBSD_NOTE_NAME = b"FreeBSD\0"
+FREEBSD_REQUIRED_NEEDED = "libc.so.7"
 
 
 def parseCompileArgv(line):
@@ -263,8 +338,10 @@ def selectLines(stderr, fixture, output):
     return compile_[0], link[0]
 
 
-def selectTargets(names, allowed=TARGETS):
-    chosen = list(names) if names else list(allowed)
+def selectTargets(names, allowed=None):
+    defaults = TARGETS if allowed is None else allowed
+    allowed = PRODUCIBLE_TARGETS if allowed is None else allowed
+    chosen = list(names) if names else list(defaults)
     for name in chosen:
         if name not in allowed:
             raise pe.EngineError("target %s is not supported; allowed: %s" % (name, ", ".join(allowed)))
@@ -286,6 +363,46 @@ def configLine(tokens):
     return " ".join(tokens)
 
 
+def checkLinkage(target, spec, compile_, items):
+    """A static target's Zig run must name this target's triple, carry no loader, PIE or shared-object argument, and
+    link the startup file and libc the config will name."""
+    if not re.match(r"^%s-[a-z]+-linux[0-9.]*-musl$" % spec["tripleArch"], compile_["target"]):
+        raise pe.EngineError("%s: Zig compiled for %s, not a %s musl target" % (target, compile_["target"], spec["tripleArch"]))
+    refused = [v for kind, v in items if kind == "arg" and v in spec["refusedLinkArgs"]]
+    if refused:
+        raise pe.EngineError("%s: a static link line carries %s" % (target, ", ".join(refused)))
+    names = [os.path.basename(v) for kind, v in items if kind == "input"]
+    missing = [n for n in spec["requiredInputs"] if n not in names]
+    if missing:
+        raise pe.EngineError("%s: the link line has no %s among %s" % (target, ", ".join(missing), names))
+
+
+def linkOptionValues(items, flag):
+    return [items[i + 1][1] for i, item in enumerate(items[:-1]) if item == ("arg", flag)]
+
+
+def checkFreebsdLink(target, spec, compile_, items):
+    """A FreeBSD target's Zig run must name this target's versioned triple and __FreeBSD_version, link the startup file and
+    the stubs the config will name, carry the FreeBSD loader and this machine's emulation once each, and carry no PIE,
+    shared-object or static argument."""
+    if compile_["target"] != spec["zigTriple"]:
+        raise pe.EngineError("%s: Zig compiled for %s, not %s" % (target, compile_["target"], spec["zigTriple"]))
+    if "-D__FreeBSD_version=%d" % FREEBSD_VERSION not in compile_["defines"]:
+        raise pe.EngineError("%s: the compile line does not define __FreeBSD_version=%d: %s" % (
+            target, FREEBSD_VERSION, compile_["defines"]))
+    refused = [v for kind, v in items if kind == "arg" and v in spec["refusedLinkArgs"]]
+    if refused:
+        raise pe.EngineError("%s: a FreeBSD link line carries %s" % (target, ", ".join(refused)))
+    for flag, expected in (("--dynamic-linker", FREEBSD_LOADER), ("-m", spec["emulation"])):
+        if linkOptionValues(items, flag) != [expected]:
+            raise pe.EngineError("%s: the link line has %s %s, not exactly %s" % (
+                target, flag, linkOptionValues(items, flag), expected))
+    names = [os.path.basename(v) for kind, v in items if kind == "input"]
+    missing = [n for n in spec["requiredInputs"] if n not in names]
+    if missing:
+        raise pe.EngineError("%s: the link line has no %s among %s" % (target, ", ".join(missing), names))
+
+
 def renderConfig(target, spec, compile_, items, directories, engineRelative, major, directory=None):
     """Text of RUNTIME/<target>.cfg. Compile and link both read it; linker arguments travel
     as -Xlinker pairs, which `-c` leaves alone and which stay safe around commas. The target's
@@ -295,7 +412,7 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     engine = "%s/%s" % (here, engineRelative)
     lines = [configLine(["-target", spec.get("clangTarget") or compile_["target"]]),
              configLine(["-Xclang", "-target-cpu", "-Xclang", compile_["cpu"]])]
-    if target in ELF_TARGETS:
+    if target in ELF_TARGETS or target in MUSL_TARGETS or target in FREEBSD_TARGETS:
         lines.append(configLine(["--sysroot=%s/%s" % (here, directory)]))
     lines += [configLine(["-Xclang", "-target-feature", "-Xclang", f]) for f in compile_["features"]]
     if compile_["pic"]:
@@ -304,7 +421,7 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     lines.append("-nostdinc")
     lines.append(configLine(["-isystem", "%s/lib/clang/%s/include" % (engine, major)]))
     lines += [configLine(["-isystem", "%s/include/libc/%s" % (here, d)]) for d in directories]
-    lines += ["-nostdlib"] + [configLine([f]) for f in spec["driverFlags"]]
+    lines += [configLine([f]) for f in spec["driverFlags"]]
     lines.append(configLine(["--ld-path=%s/bin/%s" % (engine, spec["linker"])]))
     lines.append(configLine(["-Xlinker", "-L", "-Xlinker", "%s/%s" % (here, directory)]))
     for kind, value in items:
@@ -323,6 +440,7 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
     carried, notCarried = [], []
     for feature in features:
         entry = next((e for e in REMOVED_DISABLED_FEATURES + REMOVED_DISABLED_FEATURES_AARCH64_LINUX
+                      + REMOVED_DISABLED_FEATURES_MUSL + REMOVED_DISABLED_FEATURES_FREEBSD
                       if e["feature"] == feature
                       and (e["zig"], e["engineMajor"], e["target"], e["cpu"]) == (
                           zigVersion, engineMajor, target, cpu)), None)
@@ -335,7 +453,7 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
 
 def runZig(zig, target, work, spec=None, directory=None):
     """One Zig compile and link of the target's fixture. Returns (stderr, cacheRoot, output)."""
-    spec = spec or TARGETS[target]
+    spec = spec or PRODUCIBLE_TARGETS[target]
     private = os.path.join(work, directory or target)
     cache = os.path.join(private, "global")
     output = os.path.join(private, "fixture.out")
@@ -396,7 +514,7 @@ def copyHeaders(isystem, output, zigLib):
 
 
 def parseArchive(data):
-    """Members of a GNU-format ar archive as [(name, bytes)], without its symbol table."""
+    """Members of a GNU or BSD ar archive as [(name, bytes)], without its symbol table."""
     if data[:8] != b"!<arch>\n":
         raise pe.EngineError("not an ar archive")
     members, longNames, offset = [], b"", 8
@@ -404,9 +522,16 @@ def parseArchive(data):
         header = data[offset:offset + 60]
         if len(header) < 60 or header[58:60] != b"`\n":
             raise pe.EngineError("bad ar member header at %d" % offset)
-        name, size = header[:16].decode("ascii").rstrip(), int(header[48:58])
+        try:
+            name = header[:16].decode("ascii").rstrip(" ")
+        except UnicodeDecodeError:
+            raise pe.EngineError("bad ar member name at %d" % offset)
+        sizeField = header[48:58].strip(b" ")
+        if not sizeField.isdigit():
+            raise pe.EngineError("bad ar member size at %d" % offset)
+        size = int(sizeField)
         body = data[offset + 60:offset + 60 + size]
-        if len(body) != size:
+        if len(body) != size or offset + 60 + size + size % 2 > len(data):
             raise pe.EngineError("ar member at %d is truncated" % offset)
         offset += 60 + size + size % 2
         if name == "/" or name == "/SYM64/":
@@ -414,14 +539,30 @@ def parseArchive(data):
         if name == "//":
             longNames = body
             continue
-        if name.startswith("/") and name[1:].isdigit():
+        if name.startswith("#1/"):
+            length = name[3:]
+            if not length.isdigit() or not 0 < int(length) <= len(body):
+                raise pe.EngineError("invalid BSD ar name length %r" % length)
+            length = int(length)
+            rawName, body = body[:length].rstrip(b"\0"), body[length:]
+        elif name.startswith("/"):
+            if not name[1:].isdigit():
+                raise pe.EngineError("unsupported ar member name %r" % name)
             start = int(name[1:])
-            name = longNames[start:longNames.index(b"/\n", start)].decode("utf-8")
-        elif name.endswith("/"):
-            name = name[:-1]
+            end = longNames.find(b"/\n", start)
+            if not 0 <= start < len(longNames) or end < start:
+                raise pe.EngineError("invalid ar long name reference %r" % name)
+            rawName = longNames[start:end]
         else:
-            raise pe.EngineError("unsupported ar member name %r" % name)
-        members.append((name, body))
+            rawName = (name[:-1] if name.endswith("/") else name).encode("ascii")
+        try:
+            name = rawName.decode("utf-8")
+        except UnicodeDecodeError:
+            raise pe.EngineError("ar member name is not UTF-8: %r" % rawName)
+        if not name or name.startswith(" ") or "\0" in name:
+            raise pe.EngineError("invalid ar member name %r" % name)
+        if name not in ("__.SYMDEF", "__.SYMDEF SORTED", "__.SYMDEF_64", "__.SYMDEF_64 SORTED"):
+            members.append((name, body))
     return members
 
 
@@ -478,16 +619,22 @@ def copyInputs(items, output, target, engine):
     return records
 
 
-def linkLibraryAliases(directory, names):
+def linkLibraryAliases(directory, names, extra=None):
     """Give each versioned stub `libNAME.so.N` of names the alias `libNAME.so`, a relative symlink
-    to the stub beside it, so `-lNAME` finds it. An alias that would land on an existing name,
-    or on one that two stubs both claim, is refused. Returns [{"alias", "target"}]."""
-    records = []
+    to the stub beside it, so `-lNAME` finds it, and each {alias: stub} of extra the alias the libc's own install makes
+    for a library it names otherwise; a stub of extra that names does not hold is refused. An alias that would land on
+    an existing name, or on one that two stubs both claim, is refused. Returns [{"alias", "target"}]."""
+    pairs = []
     for name in names:
         match = VERSIONED_STUB.match(name)
-        if not match or match.group(1) in NO_LINKER_NAME:
-            continue
-        alias = "lib%s.so" % match.group(1)
+        if match and match.group(1) not in NO_LINKER_NAME:
+            pairs.append(("lib%s.so" % match.group(1), name))
+    for alias, name in (extra or {}).items():
+        if name not in names:
+            raise pe.EngineError("%s: library alias %s names %s, which the runtime does not ship" % (directory, alias, name))
+        pairs.append((alias, name))
+    records = []
+    for alias, name in pairs:
         if os.path.lexists(os.path.join(directory, alias)):
             raise pe.EngineError("%s: library alias %s for %s collides with an existing file" % (
                 directory, alias, name))
@@ -587,7 +734,7 @@ def copyTargetHeaders(isystem, output, zigLib, copied):
 
 
 def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative, major, copied):
-    spec = TARGETS[target]
+    spec = PRODUCIBLE_TARGETS[target]
     stderr, cacheRoot, out = runZig(zig, target, work)
     fixture = os.path.join(FIXTURES, spec["fixture"])
     compileLine, linkLine = selectLines(stderr, fixture, out)
@@ -596,12 +743,16 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
     linker, items = parseLinkArgv(linkLine, out, objectName, cacheRoot, os.path.dirname(out))
     if linker != spec["linker"]:
         raise pe.EngineError("%s linked with %s, expected %s" % (target, linker, spec["linker"]))
+    if target in FREEBSD_TARGETS:
+        checkFreebsdLink(target, spec, compile_, items)
+    elif spec.get("linkage"):
+        checkLinkage(target, spec, compile_, items)
     zigLib = os.path.dirname(compile_["isystem"][0])
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
     directories, absent = copyTargetHeaders(compile_["isystem"], output, zigLib, copied)
     inputs = copyInputs(items, output, target, engine)
-    aliases = linkLibraryAliases(os.path.join(output, target), [i["name"] for i in inputs])
+    aliases = linkLibraryAliases(os.path.join(output, target), [i["name"] for i in inputs], spec.get("extraLibraryAliases"))
     emptyArchives = createEmptyArchives(engine, os.path.join(output, target), spec.get("emptyArchives", []))
     notices = copyNotices(output, zigLib, spec)
     carried, notCarried = translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
@@ -621,6 +772,8 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
         "notices": notices,
         "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags",
         "inputsNormalized": "debug sections stripped, stub symbol tables stripped; archive members renamed NNNN-name and the archive rebuilt deterministically",
+        **({"linkage": spec["linkage"]} if spec.get("linkage") else {}),
+        **spec.get("receipt", {}),
     }
 
 
@@ -886,7 +1039,7 @@ def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries
     -l<name> for each of libraries. Any nonzero exit or any stderr (an unhonored CPU feature
     warns) is an error. The fixture is the target's executable one unless spec names a profile,
     and name keeps the profile's files apart from the target's. Returns the linked binary."""
-    fixture = os.path.join(FIXTURES, (spec or TARGETS[target])["fixture"])
+    fixture = os.path.join(FIXTURES, (spec or PRODUCIBLE_TARGETS[target])["fixture"])
     name = name or target
     obj, binary = os.path.join(work, name + ".o"), os.path.join(work, name + ".bin")
     steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
@@ -945,10 +1098,21 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
                                          stderr=subprocess.PIPE, universal_newlines=True)
     for record in records:
         prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
-        checkConfig(run, os.path.join(link, "bin", "clang"),
-                    ["--config", os.path.join(copy, record["target"] + ".cfg")],
-                    record["target"], work, prefixes,
-                    libraryNames(record["libraryAliases"], record["emptyArchives"]))
+        binary = checkConfig(run, os.path.join(link, "bin", "clang"),
+                             ["--config", os.path.join(copy, record["target"] + ".cfg")],
+                             record["target"], work, prefixes,
+                             libraryNames(record["libraryAliases"], record["emptyArchives"]))
+        if record["target"] in MUSL_TARGETS:
+            problem, record["ranOnProducer"] = elfStaticProblem(binary, record["target"]), False
+            if not problem:
+                problem, record["ranOnProducer"] = runProblem(binary, record["target"], work)
+            if problem:
+                raise pe.EngineError("%s: %s" % (record["target"], problem))
+        elif record["target"] in FREEBSD_TARGETS:
+            problem, record["linkedExecutable"] = elfFreebsdProblem(binary, record["target"])
+            if problem:
+                raise pe.EngineError("%s: %s" % (record["target"], problem))
+            record["ranOnProducer"] = False
 
 
 def libraryNames(aliases, archives=()):
@@ -964,7 +1128,7 @@ def sandboxed(profile, work, command):
 
 
 def elfProblem(path, target="x86_64-linux-gnu.2.31"):
-    expected = ELF_TARGETS[target]
+    expected = dict(ELF_TARGETS, **MUSL_ELF_TARGETS, **FREEBSD_ELF_TARGETS)[target]
     with open(path, "rb") as f:
         head = f.read(20)
     machine = int.from_bytes(head[18:20], "little")
@@ -975,6 +1139,8 @@ def elfProblem(path, target="x86_64-linux-gnu.2.31"):
 
 def elfInterpreterProblem(path, target):
     """The ELF's PT_INTERP is exactly the loader of target, a single NUL-terminated path."""
+    if target not in ELF_TARGETS:
+        raise pe.EngineError("%s has no loader to check" % target)
     expected = ELF_TARGETS[target]["interpreter"]
     with open(path, "rb") as f:
         data = f.read()
@@ -988,6 +1154,158 @@ def elfInterpreterProblem(path, target):
     if found != [expected.encode("ascii") + b"\0"]:
         return "interpreter is %s, not %s" % ([f.rstrip(b"\0").decode("ascii", "replace") for f in found], expected)
     return None
+
+
+def elfStaticProblem(path, target):
+    """The ELF is a fixed-address executable of target (ET_EXEC) with no PT_INTERP and no PT_DYNAMIC, so it names no loader
+    and no shared library."""
+    problem = elfProblem(path, target)
+    if problem:
+        return problem
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 64:
+        return "truncated ELF header"
+    kind = int.from_bytes(data[16:18], "little")
+    if kind != ET_EXEC:
+        return "not a fixed-address executable (e_type %d)" % kind
+    segments, problem = elfProgramTable(data)
+    if problem:
+        return problem
+    types = [s[0] for s in segments]
+    if PT_LOAD not in types:
+        return "has no loadable segment"
+    dynamic = [t for t in types if t in (PT_INTERP, PT_DYNAMIC)]
+    return "is not static: program headers %s" % dynamic if dynamic else None
+
+
+def littleEndian(data, start, width):
+    return int.from_bytes(data[start:start + width], "little")
+
+
+def elfProgramTable(data):
+    """The program headers of an ELF64 little-endian file as ([(p_type, p_offset, p_vaddr, p_filesz)], None), or
+    (None, the problem) when the header or the table does not lie inside the file."""
+    if len(data) < 64:
+        return None, "truncated ELF header"
+    offset, size, count = littleEndian(data, 32, 8), littleEndian(data, 54, 2), littleEndian(data, 56, 2)
+    if not count or size != 56 or offset < 64 or offset + size * count > len(data):
+        return None, "invalid program header table"
+    return [(littleEndian(data, h, 4), littleEndian(data, h + 8, 8), littleEndian(data, h + 16, 8),
+             littleEndian(data, h + 32, 8)) for h in (offset + i * size for i in range(count))], None
+
+
+def segmentData(data, segment):
+    """The file bytes of a program header from elfProgramTable, or None when they run past the end of the file."""
+    _, offset, _, size = segment
+    return data[offset:offset + size] if offset + size <= len(data) else None
+
+
+def freebsdAbiTags(data, segments):
+    """The values of the NT_FREEBSD_ABI_TAG notes in the PT_NOTE segments, as ([values], None), or (None, the problem)
+    when a segment or a note runs past its end. Notes are padded to 4 bytes."""
+    tags = []
+    for segment in (s for s in segments if s[0] == PT_NOTE):
+        notes, position = segmentData(data, segment), 0
+        if notes is None:
+            return None, "a PT_NOTE segment runs past the end of the file"
+        while position < len(notes):
+            if position + 12 > len(notes):
+                return None, "a note header is truncated"
+            nameSize, descSize, kind = (littleEndian(notes, position + a, 4) for a in (0, 4, 8))
+            descStart = position + 12 + (nameSize + 3) // 4 * 4
+            if descStart + descSize > len(notes):
+                return None, "a note runs past its segment"
+            if kind == NT_FREEBSD_ABI_TAG and notes[position + 12:position + 12 + nameSize] == FREEBSD_NOTE_NAME:
+                if descSize != 4:
+                    return None, "a FreeBSD ABI tag note holds %d bytes, not 4" % descSize
+                tags.append(littleEndian(notes, descStart, 4))
+            position = descStart + (descSize + 3) // 4 * 4
+    return tags, None
+
+
+def dynamicNeeded(data, segments):
+    """The DT_NEEDED sonames of the one PT_DYNAMIC segment as ([names], None), or (None, the problem), reading the names
+    from DT_STRTAB through the PT_LOAD segment that holds it."""
+    dynamic = [s for s in segments if s[0] == PT_DYNAMIC]
+    table = segmentData(data, dynamic[0]) if len(dynamic) == 1 else None
+    if table is None or len(table) % 16:
+        return None, "has no single valid PT_DYNAMIC segment"
+    entries = [(littleEndian(table, i, 8), littleEndian(table, i + 8, 8)) for i in range(0, len(table), 16)]
+    end = next((i for i, e in enumerate(entries) if e[0] == 0), None)
+    if end is None:
+        return None, "has no DT_NULL terminator in the dynamic table"
+    entries = entries[:end]
+    addresses, lengths = ([v for tag, v in entries if tag == wanted] for wanted in (DT_STRTAB, DT_STRSZ))
+    if len(addresses) != 1 or len(lengths) != 1:
+        return None, "has no single DT_STRTAB and DT_STRSZ"
+    address, length = addresses[0], lengths[0]
+    holder = next((s for s in segments if s[0] == PT_LOAD and s[2] <= address and address + length <= s[2] + s[3]), None)
+    if holder is None:
+        return None, "has no string table inside a loadable segment"
+    table = segmentData(data, (0, holder[1] + address - holder[2], 0, length))
+    if table is None:
+        return None, "the string table runs past the end of the file"
+    names = []
+    for tag, value in entries:
+        if tag == DT_NEEDED:
+            end = table.find(b"\0", value) if value < len(table) else -1
+            if end < 0:
+                return None, "a needed name is not terminated inside the string table"
+            try:
+                names.append(table[value:end].decode("ascii"))
+            except UnicodeDecodeError:
+                return None, "a needed library name is not ASCII"
+    return names, None
+
+
+def elfFreebsdProblem(path, target):
+    """Check the linked executable of a FreeBSD target: ELF64 little-endian of its machine, ET_EXEC, loadable segments, the
+    one FreeBSD loader, exactly one FreeBSD ABI tag of __FreeBSD_version, and DT_NEEDED naming libc.so.7. Returns
+    (problem or None, facts), where facts are the ABI tag, the needed sonames and the EI_OSABI byte found.
+    EI_OSABI is recorded and never required: the emulation of this profile is not `_fbsd`, which lld stamps FreeBSD
+    on, and the FreeBSD kernel brands an executable by its ABI tag note before it reads EI_OSABI."""
+    problem = elfProblem(path, target)
+    if problem:
+        return problem, None
+    with open(path, "rb") as f:
+        data = f.read()
+    segments, problem = elfProgramTable(data)
+    if problem:
+        return problem, None
+    kind = littleEndian(data, 16, 2)
+    if kind != ET_EXEC:
+        return "not a fixed-address executable (e_type %d)" % kind, None
+    if PT_LOAD not in [s[0] for s in segments]:
+        return "has no loadable segment", None
+    loaders = [segmentData(data, s) for s in segments if s[0] == PT_INTERP]
+    if loaders != [FREEBSD_LOADER.encode("ascii") + b"\0"]:
+        return "interpreter is %s, not %s" % ([l if l is None else l.rstrip(b"\0").decode("ascii", "replace")
+                                              for l in loaders], FREEBSD_LOADER), None
+    tags, problem = freebsdAbiTags(data, segments)
+    if problem:
+        return problem, None
+    if tags != [FREEBSD_VERSION]:
+        return "FreeBSD ABI tags are %s, not [%d]" % (tags, FREEBSD_VERSION), None
+    needed, problem = dynamicNeeded(data, segments)
+    if problem:
+        return problem, None
+    if FREEBSD_REQUIRED_NEEDED not in needed:
+        return "does not need %s: %s" % (FREEBSD_REQUIRED_NEEDED, needed), None
+    return None, {"abiTag": tags[0], "needed": needed, "osabi": data[7]}
+
+
+def runProblem(binary, target, work):
+    """Run a static musl executable where the host can execute its machine and compare its output. Returns (problem or
+    None, whether it ran); a host of another machine or OS does not run it."""
+    name = MUSL_ELF_TARGETS[target]["name"]
+    if not (sys.platform.startswith("linux") and platform.machine().lower() in HOST_MACHINES[name]):
+        return None, False
+    ran = subprocess.run([binary], cwd=work, env={}, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         universal_newlines=True, timeout=60)
+    if ran.returncode != 0 or ran.stdout != MUSL_OUTPUT or ran.stderr:
+        return "run gave %d %r %r, not %r" % (ran.returncode, ran.stdout, ran.stderr, MUSL_OUTPUT), True
+    return None, True
 
 
 def glibcSymbolProblem(nm, path, limit=(2, 31), requiredSymbol="printf"):
@@ -1038,7 +1356,9 @@ def prove(engine, runtime, denied, zig=None, targets=None):
     clang, nm = os.path.join(movedEngine, "bin", "clang"), os.path.join(movedEngine, "bin", "llvm-nm")
     for target in targets:
         config = ["--config", os.path.join(movedRuntime, target + ".cfg")]
-        recorded = next(r for r in receipt["targets"] if r["target"] == target)
+        recorded = next((r for r in receipt["targets"] if r["target"] == target), None)
+        if recorded is None:
+            raise pe.EngineError("%s is not in the receipt of runtime %s" % (target, runtime))
         if "libraryAliases" not in recorded:
             raise pe.EngineError("%s receipt records no libraryAliases; prepare the runtime again" % target)
         prefixes = [e["absentMacroPrefix"] for e in recorded["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
@@ -1065,6 +1385,20 @@ def prove(engine, runtime, denied, zig=None, targets=None):
                     raise pe.EngineError("%s run of %s: %r %r" % (target, os.path.basename(program),
                                                                   ran.stdout, ran.stderr))
             print("%s: linked and ran (also with -l%s): %s" % (target, " -l".join(libraries), EXPECTED_OUTPUT.strip()))
+        elif target in MUSL_TARGETS:
+            problem, ran = elfStaticProblem(binary, target), False
+            if not problem:
+                problem, ran = runProblem(binary, target, work)
+            if problem:
+                raise pe.EngineError("%s: %s" % (target, problem))
+            print("%s: linked, static ELF checked; %s" % (target, "ran: " + MUSL_OUTPUT.strip() if ran
+                                                         else "not run (host cannot execute this machine)"))
+        elif target in FREEBSD_TARGETS:
+            problem, facts = elfFreebsdProblem(binary, target)
+            if problem:
+                raise pe.EngineError("%s: %s" % (target, problem))
+            print("%s: linked, FreeBSD ELF checked (loader, ABI tag %d, needed %s, EI_OSABI %d); not run (no FreeBSD host)" % (
+                target, facts["abiTag"], " ".join(facts["needed"]), facts["osabi"]))
         else:
             problem = elfProblem(binary, target) or elfInterpreterProblem(binary, target) or glibcSymbolProblem(nm, binary)
             if problem:
