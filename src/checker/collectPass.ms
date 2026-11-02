@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
-import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator, inlineMemberMisuse, wasmDecorator } from "./decoratorHelpers";
+import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, decoratorNamed, exportedFunctionOf, reloadHandlerDecorator, inlineMemberMisuse } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { expandParamProperties, hasParamProperties, isParamProperty } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
@@ -308,7 +308,7 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (info.borrow) markBorrow(ctx, dd, sym);
 	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
 	if (acceptsInline(ctx, dd)) setFlag(sym, SymbolFlag.Inline);
-	if (wasmDecorator(dd.decorators) != null && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.Wasm);
+	if (decoratorNamed(dd.decorators, "wasm") != null && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.Wasm);
 	if (info.noInline) {
 		if (sym.symbolKind != SymbolKind.Function) addError(ctx, `@noinline applies to a function, not to '${declName}'`, node.location.line, node.location.column);
 		else if (hasFlag(sym, SymbolFlag.Inline)) addError(ctx, `'${declName}' cannot be both @inline and @noinline`, node.location.line, node.location.column);
@@ -348,7 +348,7 @@ function stdBuiltinKind(ctx: CheckerContext, name: string, decl: Node): BuiltinK
 }
 
 function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
-	const dec = inlineDecorator(dd.decorators);
+	const dec = decoratorNamed(dd.decorators, "inline");
 	if (dec == null) return false;
 	const problem = inlineMisuse(dec.data as MacroInvocationData, dd);
 	if (problem == "") return true;
@@ -357,11 +357,11 @@ function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
 }
 
 function acceptsInlineMember(ctx: CheckerContext, dd: DecoratedDeclData, ownerKind: SymbolKind, ownerGenerics: string): boolean {
-	const dec = inlineDecorator(dd.decorators);
+	const dec = decoratorNamed(dd.decorators, "inline");
 	if (dec == null || dd.decoratedNode == null) return false;
 	let problem = inlineMemberMisuse(dec, dd.decoratedNode, ownerKind, ownerGenerics);
 	if (problem == "" && dd.decoratedNode.kind == NodeKind.MethodDecl && isGenericFn((dd.decoratedNode.data as MethodDeclData).methodFlags)) problem = "@inline on a generic static method is not supported: write it as a module-level @inline function";
-	if (exportNameDecorator(dd.decorators) != null) problem = "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
+	if (decoratorNamed(dd.decorators, "exportName") != null) problem = "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
 	if (problem == "") return true;
 	addError(ctx, problem, dec.location.line, dec.location.column);
 	return false;
@@ -373,7 +373,7 @@ function inlineMisuse(md: MacroInvocationData, dd: DecoratedDeclData): string {
 	if (fn == null) return "@inline applies to a module-level function";
 	const fd = fn.data as FunctionDeclData;
 	if (routineFlagSet(fd.fnFlags).has(RoutineFlag.Extern) || fd.fnBody == null) return "@inline needs a function with a body";
-	if (exportNameDecorator(dd.decorators) != null || reloadHandlerDecorator(dd.decorators) != null) {
+	if (decoratorNamed(dd.decorators, "exportName") != null || reloadHandlerDecorator(dd.decorators) != null) {
 		return "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
 	}
 	return "";
@@ -448,7 +448,7 @@ function reloadHandlerExportName(ctx: CheckerContext, dd: DecoratedDeclData, sym
 function reloadHandlerMisuse(md: MacroInvocationData, dd: DecoratedDeclData, sym: Symbol): string {
 	const name = `@${md.macroName}`;
 	if (md.macroArgs.length > 0) return `${name} takes no arguments`;
-	if (exportNameDecorator(dd.decorators) != null) return `${name} names the handler's C symbol itself; drop @exportName`;
+	if (decoratorNamed(dd.decorators, "exportName") != null) return `${name} names the handler's C symbol itself; drop @exportName`;
 	const fn = exportedFunctionOf(dd.decoratedNode);
 	if (fn == null) return `${name} applies to a module-level function`;
 	const fd = fn.data as FunctionDeclData;
@@ -461,7 +461,7 @@ function reloadHandlerMisuse(md: MacroInvocationData, dd: DecoratedDeclData, sym
 }
 
 function reportExportNameMisuse(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
-	const dec = exportNameDecorator(dd.decorators);
+	const dec = decoratorNamed(dd.decorators, "exportName");
 	if (dec == null) return false;
 	const problem = exportNameMisuse(dec.data as MacroInvocationData, dd.decoratedNode);
 	if (problem == "") return false;
@@ -954,7 +954,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			builtinKind = stdBuiltinKind(ctx, info.builtinName, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
-			const wasmDec = wasmDecorator(dd.decorators);
+			const wasmDec = decoratorNamed(dd.decorators, "wasm");
 			if (wasmDec != null) addError(ctx, "@wasm applies to an exported module-level function: a class method cannot be placed in wasm yet, so place a function that takes the values it needs", wasmDec.location.line, wasmDec.location.column);
 		}
 	}

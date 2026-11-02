@@ -2,7 +2,7 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind, ProgramData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { exportedFunctionOf, wasmDecorator } from "./decoratorHelpers";
+import { exportedFunctionOf, decoratorNamed } from "./decoratorHelpers";
 import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
@@ -678,7 +678,7 @@ export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		if (stmt.kind != NodeKind.DecoratedDecl) continue;
 		const dd = stmt.data as DecoratedDeclData;
-		const dec = wasmDecorator(dd.decorators);
+		const dec = decoratorNamed(dd.decorators, "wasm");
 		if (dec == null) continue;
 		const at = dec.location;
 		if ((dec.data as MacroInvocationData).macroArgs.length > 0) {

@@ -137,26 +137,10 @@ export function hasIntrinsicDecorator(ctx: CheckerContext, decorators: Node[], k
 	return false;
 }
 
-export function exportNameDecorator(decorators: Node[]): Node | null {
+export function decoratorNamed(decorators: Node[], name: string): Node | null {
 	for (const dec of decorators) {
 		if (dec.kind != NodeKind.MacroInvocation) continue;
-		if ((dec.data as MacroInvocationData).macroName == "exportName") return dec;
-	}
-	return null;
-}
-
-export function wasmDecorator(decorators: Node[]): Node | null {
-	for (const dec of decorators) {
-		if (dec.kind != NodeKind.MacroInvocation) continue;
-		if ((dec.data as MacroInvocationData).macroName == "wasm") return dec;
-	}
-	return null;
-}
-
-export function inlineDecorator(decorators: Node[]): Node | null {
-	for (const dec of decorators) {
-		if (dec.kind != NodeKind.MacroInvocation) continue;
-		if ((dec.data as MacroInvocationData).macroName == "inline") return dec;
+		if ((dec.data as MacroInvocationData).macroName == name) return dec;
 	}
 	return null;
 }
@@ -240,7 +224,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		if (name == "acyclic") prunesCycles = true;
 		if (name == "iteratorHelper") closesSource = true;
 	}
-	const exportDec = exportNameDecorator(dd.decorators);
+	const exportDec = decoratorNamed(dd.decorators, "exportName");
 	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
 	// Extract nativeName from inner decorated node (from "c_name" clause)
 	const inner = dd.decoratedNode;

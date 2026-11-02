@@ -27,7 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
-import { isBuiltinDirective, inlineDecorator, isWasmPlacementStmt, wasmDecorator } from "./decoratorHelpers";
+import { isBuiltinDirective, decoratorNamed, isWasmPlacementStmt } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -42,7 +42,6 @@ import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { REST_NOT_LAST, checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody, jsxTagPath } from "./checkExprPass";
 import { engineNodeVirtualKeyType, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand, carriesLength, checkOverloadSets } from "./callResolve";
-import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
@@ -429,9 +428,9 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
 	if (local && node.kind == NodeKind.DecoratedDecl) refuseComputedGotoDecorator(ctx, (node.data as DecoratedDeclData).decorators);
-	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
+	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? decoratorNamed((node.data as DecoratedDeclData).decorators, "inline") : null;
 	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
-	const wasmDec = local && node.kind == NodeKind.DecoratedDecl ? wasmDecorator((node.data as DecoratedDeclData).decorators) : null;
+	const wasmDec = local && node.kind == NodeKind.DecoratedDecl ? decoratorNamed((node.data as DecoratedDeclData).decorators, "wasm") : null;
 	if (wasmDec != null) addError(ctx, "@wasm applies to an exported module-level function", wasmDec.location.line, wasmDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
 		if (!mintDecoratedLocalType(ctx, node)) return;
