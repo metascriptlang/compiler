@@ -625,8 +625,11 @@ const _identityProvider = createFileSystemProvider();
 
 // `probed` collects the input of each candidate that holds no file, so the check that resolved the import depends on them.
 function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, probed: int32[] | null): string {
-	for (const spelled of resolveImportWithConfig(importSpec, basePath, db.resolverConfig)) {
-		const c = moduleIdentity(spelled, db.resolverConfig, _identityProvider);
+	for (const c of resolveImportWithConfig(importSpec, basePath, db.resolverConfig)) {
+		if (getFileId(db.fileInput, c) < 0) {
+			const identity = moduleIdentity(c, db.resolverConfig, _identityProvider);
+			if (identity != c && getFileId(db.fileInput, identity) >= 0) return identity;
+		}
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
 		if (probed != null) probed.push(getInputId(db.fileInput, c, db.revision.value));
