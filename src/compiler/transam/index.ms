@@ -3072,7 +3072,7 @@ test "a loaded module that imports a class and re-exports it, checked before its
 	assert failure == "", failure;
 }
 
-function checkStdInOrder(names: string[]): string {
+function checkStdInOrder(names: string[], withErrors: boolean = false): string {
 	const db = createTransAmDb(100);
 	const std = resolveRuntimeDir() + "/std";
 	dbSetStdPath(db, std);
@@ -3084,7 +3084,7 @@ function checkStdInOrder(names: string[]): string {
 		dbSetFileText(db, `${std}/${name}`, text.value);
 		order.push(`${std}/${name}`);
 	}
-	return checkInOrder(db, order, false);
+	return checkInOrder(db, order, withErrors);
 }
 
 test "a loaded std module that re-exports an imported extension function, checked before the facade over it, gives the facade an interface" {
@@ -3092,3 +3092,16 @@ test "a loaded std module that re-exports an imported extension function, checke
 	assert failure == "", failure;
 }
 
+test "a loaded std module binds the @compilerFunc exports it imports from a module only registered" {
+	const failure = checkStdInOrder(["serialize/json/accessors.ms"], true);
+	assert failure == "", failure;
+}
+
+test "a loaded module binds an intrinsically decorated export of a module only registered" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/intrinsicDep/dep.ms", '@throws\nexport function f(): int32 {\n\tthrow new Error("x");\n}\n');
+	dbSetFileText(db, "/intrinsicDep/use.ms", 'import { f } from "./dep";\nexport function g(): int32 {\n\ttry {\n\t\treturn f();\n\t} catch (e) {\n\t\treturn 0;\n\t}\n}\n');
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, "/intrinsicDep/use.ms").errors) messages.push(e.message);
+	assert messages.length == 0, messages.join("; ");
+}
