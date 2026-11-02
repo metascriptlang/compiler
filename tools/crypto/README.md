@@ -181,9 +181,61 @@ The m1m scheduling-quiet ledger window was 06:10:43–06:10:59Z, with all 8 core
 Load averages were still about 21: this is not an idle-machine absolute budget or public async-API benchmark.
 The driver printed `M1M_RAW_ABBA_PASS`, coordinator passed and recorded QUIET END/rc0. Speed readiness was not met.
 
-A further source-only candidate is to defer the pilot's post-add/sub carry to the generated multiply/square
-consumers. Pinned `fiat_25519_carry_mul`, `fiat_25519_carry_square` and `fiat_25519_carry_scmul_121666` accept
-loose inputs; add/sub take tight inputs and produce loose outputs. Conservative max-bound interval checks and
-tracing the 17 ladder assignments found that loop-carried coordinates remain tight under that proposed flow.
-The current wrappers perform eight normalizing carries per step, 2040 over 255 steps. No candidate was built:
-this review is not compiled equivalence, field-bound proof, secret-taint evidence or a measured saving.
+## Loose-carry candidate, 2026-11-02
+
+Measured source tree `d998aeb905450ceeb2fcc2f9d69a8e20f7c1a508` is base tree
+`0613127bbba4077a6f1eeb0b6f6427922c2b73c5` with only `pilot.cms` changed
+(SHA-256 `0d390d3bf4816de174a9e76363729f64ad2b409c0dfa166e0463d88448598257`). Field/wipe/vendor bytes
+remain those pinned above. The pinned generated add/sub take tight inputs and produce loose outputs;
+`carry_mul`, `carry_square` and `carry_scmul_121666` accept loose inputs. Source review traced every ladder
+consumer and found tight loop-carried coordinates. This permits deferring eight carries per step (2040 per
+scalar multiply); it is not an inherited proof for the translation.
+
+The three inline representation pins in `pilot.cms` failed their limb assertions on the old helpers:
+`Tests  0 passed | 3 failed (3)`. The old-red verifier's summary-format assertion failed afterward; the
+saved actual test failures, not that verifier status, are the red evidence. Candidate m1m commands were
+`./.matrix-builder-8726a6fc test <module> --tests-in-dir <flags>`, with a guarded root-adjacent builder. Modules/counts were
+`pilot.cms`/3, `cryptoX25519Assurance.ms`/24, `cryptoX25519Pilot.ms`/11 and `cryptoX25519Wipe.ms`/3:
+- default: `--cc=clang --lto=off`;
+- release/danger: `--cc=clang --lto=thin` with `--release` or `--danger`;
+- ASan: `--cc=clang --lto=off --sanitize=address --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address`.
+
+Output: `MATRIX_PASS cells=16 executions=164`; each whole cell took 4.828–14.828 s, with no failed summaries
+or sanitizer errors. Compiler SHA-256 was `948d6ef05cf843c3c26ec74528e6bd3387218c954ab7307de1808568f750751d`,
+the same executable as assertion-red. An earlier zero-cell guard stop compared a full `.local` hostname with
+a short name; changing only the producer to `hostname -s` preserved the exact host/CPU/hash guards.
+
+On Linux x86, `tools/crypto/x25519Taint.sh out/cryptoPilotTaint pilot` passed 12/12 rows in 34 s, positive taint rows having
+zero errors/suppressions. `tools/crypto/x25519Diff.sh out/cryptoLooseDiff 2000 0x25519d1ff` passed 14/14 rows in 45 s:
+release/danger each sampled 6592 cases with zero mismatches or unexpected refusals; negative controls passed.
+Both printed `ALL CHECKS PASSED`. These runners use LTO off, not ARM thin LTO, and are not Cryptofuzz.
+Actual Linux compiler SHA-256: `0849f8edfa8ea2683c81aea454ca587d812ccee2af28cdecc2872861bb6589a3`.
+Its `msc-builds/2a52560f0bc` path and installed BUILD (`fa6dca871`) disagree; that metadata is not a certificate
+of the executable's source revision. Source/compiler hashes were unchanged before/after both lanes.
+
+A single strict `run-remote.sh --host m1m --cores 8` call rebuilt old-with-identical-pins, candidate and C,
+plus empty/unusedC/unusedPilot, from `src/test/crypto/x25519Measure.cms`. All six used
+`--release --cc=clang --lto=thin`, isolated caches and the same guarded compiler/Apple clang 21. Preflights
+preceded the quiet window. Order C/old/new/new/old/C produced ten 4096-call samples per implementation;
+all 30 timed digests matched `a7407818217014dd368e5222c943950647ec70516e2cda15e191761d98c42061`.
+
+| Raw kernel | Median µs/call | Range |
+|---|---:|---:|
+| Old + identical pins | 86.930 | 86.204–100.656 |
+| Candidate | 77.269 | 77.191–78.159 |
+| C | 69.585 | 69.328–84.481 |
+
+Candidate/old time = 0.88886 (11.11% lower); candidate/C time = 1.11041 (11.04% higher). The scheduling-quiet ledger
+window was 08:41:36–08:41:46Z under the documented Mac/no-gate exception, not an idle-machine guarantee.
+Load averages rose from 13.02/8.66/11.24 to 14.68/9.16/11.39; execution was unpinned.
+
+Empty/unusedC/unusedPilot stdout and every `__TEXT` section payload were identical: `__text` 24848,
+`__const` 24, `__cstring` 676, `__stubs` 552, `__unwind_info` 264 bytes; each file was 75608 bytes with a
+728-byte signature. Used old/candidate/C `__text` was 40952/39760/41376 bytes. Relevant used kernels were
+present; no unrelated named crypto API symbols were observed. Output: `M1M_MATCHED_PASS`.
+Raw command/stdout and extracted measurements are at `/tmp/crypto-m1m-matched-edf71ed01b/`; the matching
+remote evidence is `m1m:~/work/rr-recompiler-182168b2/out/crypto-m1m-matched-edf71ed01b/`.
+
+This is bounded raw-fixture DCE and performance evidence, not public-API reachability or a new constant-time
+certificate. Speed readiness still fails; x86 and real `std/crypto/bench.ms` pilot performance remain unmeasured.
+Production/API selection remains unchanged and the provider-refused Cryptofuzz task remains blocked.
