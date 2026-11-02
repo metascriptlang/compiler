@@ -2790,9 +2790,11 @@ test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), creat
 
 test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) == TypeRelation.None; }
 
-test "a float into an integer formal does not match; into a float formal it is from-literal" {
+test "a number into an integer formal does not match, into float32 it is from-literal, and into float64 it is exact" {
 	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) == TypeRelation.None;
-	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float32), numberType()) == TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.Exact;
+	assert typeRelation(numberType(), createPrimitive(TypeKind.Float64)) == TypeRelation.Exact;
 }
 
 test "generic param" {
