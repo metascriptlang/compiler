@@ -87,16 +87,37 @@ export function sealHookSyms(sealed: boolean): void {
 }
 
 export class HookSymsState {
-	syms: HashMap<string, Symbol>;
-	keyOfSym: HashMap<Symbol, string>;
-	order: KeyedOp[];
+	shared: OpTable;
+	tables: HashMap<string, OpTable>;
+	module: string;
+	writing: OpTable;
+	view: OpTable[];
+	ranked: string[];
+	rank: HashMap<string, int32>;
+	merged: HashMap<string, Symbol> | null;
 }
 
 export function swapHookSyms(next: HookSymsState | null): HookSymsState {
-	const prev: HookSymsState = { syms: _opSyms, keyOfSym: _opKeyOfSym, order: _opOrder };
-	_opSyms = next != null ? next.syms : new HashMap<string, Symbol>();
-	_opKeyOfSym = next != null ? next.keyOfSym : new HashMap<Symbol, string>();
-	_opOrder = next != null ? next.order : [];
+	const prev: HookSymsState = { shared: _opShared, tables: _opTables, module: _opModule, writing: _opWriting, view: _opView, ranked: _opRanked, rank: _opRank, merged: _opMerged };
+	if (next == null) {
+		_opShared = new OpTable();
+		_opTables = new HashMap<string, OpTable>();
+		_opModule = "";
+		_opWriting = _opShared;
+		_opView = [];
+		_opRanked = [];
+		_opRank = new HashMap<string, int32>();
+		_opMerged = null;
+		return prev;
+	}
+	_opShared = next.shared;
+	_opTables = next.tables;
+	_opModule = next.module;
+	_opWriting = next.writing;
+	_opView = next.view;
+	_opRanked = next.ranked;
+	_opRank = next.rank;
+	_opMerged = next.merged;
 	return prev;
 }
 
