@@ -172,13 +172,13 @@ export function lspFmtDocumentSymbol(
 // ===== Inlay Hint =====
 
 export function lspFmtInlayHint(
-	line: number, col: number, label: string, kind: number,
+	line: number, col: number, label: string, kind: number | null,
 	paddingLeft: boolean, paddingRight: boolean
 ): string {
 	const b = jsonObj();
 	jRaw(b, "position", lspFmtPosition(line, col));
 	jStr(b, "label", label);
-	jNum(b, "kind", kind);
+	if (kind != null) jNum(b, "kind", kind!);
 	jBool(b, "paddingLeft", paddingLeft);
 	jBool(b, "paddingRight", paddingRight);
 	return jEnd(b);
@@ -317,6 +317,12 @@ test "document symbol with children" {
 test "inlay type hint" {
 	const h = lspFmtInlayHint(0, 5, ": number", 1, true, false);
 	assert h.length > 30;
+}
+
+test "an inlay hint with no kind omits the field" {
+	const h = lspFmtInlayHint(0, 3, "x", null, false, true);
+	assert h.indexOf("\"kind\"") < 0, h;
+	assert h.indexOf("\"label\":\"x\"") >= 0, h;
 }
 
 test "inlay param hint" {
