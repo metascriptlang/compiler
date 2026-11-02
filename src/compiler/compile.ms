@@ -1842,8 +1842,34 @@ function printBoundaryRefusal(graph: ModuleGraph, r: BoundaryRefusal): void {
 	renderModuleError(r.file, mod.rawSource, { message: r.message, line: r.line, column: r.column, severity: ErrorSeverity.Error });
 }
 
-function placeWasmModules(placed: string[], placedNames: string[][], graph: ModuleGraph, entryPath: string, dynamicPlan: DynamicModulePlan, importerPaths: string[], outStem: string, nameOf: (f: BoundaryFunction, sym: Symbol) => string, opts: CliOptions): JsBindings {
-	const errors = placedModuleErrors(placed, entryPath, dynamicPlan.lazy);
+interface PlacedModules {
+	paths: string[];
+	names: string[][];
+}
+
+function notePlacedFunctions(
+	placed: PlacedModules,
+	modPath: string,
+	program: Node,
+	opts: CliOptions,
+): void {
+	const names = opts.wasmPlacement ? wasmFunctionNames(program) : [];
+	if (names.length == 0) return;
+	placed.paths.push(modPath);
+	placed.names.push(names);
+}
+
+function placeWasmModules(
+	placed: PlacedModules,
+	graph: ModuleGraph,
+	entryPath: string,
+	dynamicPlan: DynamicModulePlan,
+	importerPaths: string[],
+	outStem: string,
+	nameOf: (f: BoundaryFunction, sym: Symbol) => string,
+	opts: CliOptions,
+): JsBindings {
+	const errors = placedModuleErrors(placed.paths, entryPath, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
 		const found = findModuleExports(graphRegistry, path);
 		return found == null ? [] : found.symbols;
@@ -1851,11 +1877,16 @@ function placeWasmModules(placed: string[], placedNames: string[][], graph: Modu
 	for (const importer of importerPaths) {
 		const mod = findModule(graph, importer);
 		if (mod == null) continue;
-		for (const e of placedImportErrors(importer, mod.imports, placed)) errors.push(e);
+		for (const e of placedImportErrors(importer, mod.imports, placed.paths)) errors.push(e);
 	}
 	const functions: BoundaryFunction[] = [];
-	for (let i = 0; i < placed.length; i += 1) {
-		const manifest = manifestFor(placed[i], entryPath, exportsOf(placed[i]), placedNames[i]);
+	for (let i = 0; i < placed.paths.length; i += 1) {
+		const manifest = manifestFor(
+			placed.paths[i],
+			entryPath,
+			exportsOf(placed.paths[i]),
+			placed.names[i],
+		);
 		for (const e of manifest.errors) errors.push(e);
 		for (const f of manifest.functions) functions.push(f);
 	}
@@ -1950,8 +1981,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const unitPaths: string[] = [];
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
-	const placedPaths: string[] = [];
-	const placedNames: string[][] = [];
+	const placed: PlacedModules = { paths: [], names: [] };
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -1962,11 +1992,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
-		const wasmNames = opts.wasmPlacement ? wasmFunctionNames(program) : [];
-		if (wasmNames.length > 0) {
-			placedPaths.push(modPath);
-			placedNames.push(wasmNames);
-		}
+		notePlacedFunctions(placed, modPath, program, opts);
 
 		// Collect external imports from @import registry
 		for (const entry of ctx.jsImportRegistry) {
@@ -2017,10 +2043,25 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
 	let wasmBindings: JsBindings = { prelude: "", modules: [] };
-	if (placedPaths.length > 0) wasmBindings = placeWasmModules(placedPaths, placedNames, graph, entryPath, dynamicPlan, unitPaths, outPath.endsWith(".js") ? outPath.slice(0, outPath.length - 3) : outPath, (f: BoundaryFunction, sym: Symbol): string => jsBundleReferenceName(sym, f.name), opts);
+	if (placed.paths.length > 0) {
+		const outStem = outPath.endsWith(".js")
+			? outPath.slice(0, outPath.length - 3)
+			: outPath;
+		wasmBindings = placeWasmModules(
+			placed,
+			graph,
+			entryPath,
+			dynamicPlan,
+			unitPaths,
+			outStem,
+			(f: BoundaryFunction, sym: Symbol): string =>
+				jsBundleReferenceName(sym, f.name),
+			opts,
+		);
+	}
 
 	// Phase 2 — backend transform + codegen
-	let anyTopLevelAwait = placedPaths.length > 0;
+	let anyTopLevelAwait = placed.paths.length > 0;
 	let entryExports = "";
 	const helpers = createJSHelpers();
 	setJsProgramScope(true);
@@ -2030,7 +2071,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 		let bound = "";
-		if (placedPaths.includes(modPath)) {
+		if (placed.paths.includes(modPath)) {
 			for (const m of wasmBindings.modules) {
 				if (m.modulePath == modPath) bound = m.code;
 			}
@@ -2085,6 +2126,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle + entryExports;
 
+	// `--output` wins here exactly as it does for the C binary. Deriving the
+	// name from the entry file alone collides for directory-style programs,
+	// which are all spelled `main.ms`.
 	ensureDir(dirname(outPath));
 	// The link comment goes after the map is built; it sits past every mapped
 	// line, so it shifts nothing.
@@ -5040,8 +5084,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const unitPaths: string[] = [];
 	const unitPrograms: Node[] = [];
 	const unitCtxs: CheckerContext[] = [];
-	const placedPaths: string[] = [];
-	const placedNames: string[][] = [];
+	const placed: PlacedModules = { paths: [], names: [] };
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
@@ -5052,11 +5095,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const ctx = checked.ctx;
 		ctx.errors = [];
 
-		const wasmNames = opts.wasmPlacement ? wasmFunctionNames(checked.program) : [];
-		if (wasmNames.length > 0) {
-			placedPaths.push(modPath);
-			placedNames.push(wasmNames);
-		}
+		notePlacedFunctions(placed, modPath, checked.program, opts);
 		const macroExpanded = expandMacros(checked.program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 
@@ -5137,15 +5176,18 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const placedImports: string[][] = [];
 	const placedTreeNames: string[][] = [];
 	const boundNames: string[] = [];
-	for (let i = 0; i < placedPaths.length; i += 1) { placedImports.push([]); placedTreeNames.push([]); }
+	for (let i = 0; i < placed.paths.length; i += 1) {
+		placedImports.push([]);
+		placedTreeNames.push([]);
+	}
 	const placedBoundRel = "_wasm/placed.bound.mjs";
-	if (placedPaths.length > 0) {
+	if (placed.paths.length > 0) {
 		const dynamicPlan = planDynamicModules(graph, filePath, unitPaths, stdRoot);
 		const stem = `${outRoot}/_wasm/placed`;
-		const bindings = placeWasmModules(placedPaths, placedNames, graph, filePath, dynamicPlan, unitPaths, stem, (f: BoundaryFunction, sym: Symbol): string => {
+		const bindings = placeWasmModules(placed, graph, filePath, dynamicPlan, unitPaths, stem, (f: BoundaryFunction, sym: Symbol): string => {
 			const bundleName = jsBundleReferenceName(sym, f.name);
 			const treeName = jsTreeFunctionName(sym, f.name, f.modulePath, modExportKeys, modExportVals, modFunctionOwnerNames);
-			const at = placedPaths.indexOf(f.modulePath);
+			const at = placed.paths.indexOf(f.modulePath);
 			placedImports[at].push(bundleName == treeName ? treeName : `${bundleName} as ${treeName}`);
 			placedTreeNames[at].push(treeName);
 			boundNames.push(bundleName);
@@ -5177,7 +5219,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		}
 		refusePointerOpsOnJs(ctx, unitPrograms[ui]);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
-		if (placedPaths.includes(modPath)) withoutWasmFunctions(unitPrograms[ui]);
+		if (placed.paths.includes(modPath)) withoutWasmFunctions(unitPrograms[ui]);
 		const written = new HashSet<Symbol>();
 		const writtenUnresolved = new HashSet<string>();
 		for (const stmt of (unitPrograms[ui].data as ProgramData).programStmts) {
@@ -5295,7 +5337,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	for (let fi = 0; fi < fileKeys.length; fi += 1) {
 		let code = fileResults[fi].code;
 		const forced = fileForced[fi];
-		const placedAt = placedPaths.indexOf(fileKeys[fi]);
+		const placedAt = placed.paths.indexOf(fileKeys[fi]);
 		if (placedAt >= 0) {
 			code = `${code}import { ${placedImports[placedAt].join(", ")} } from "${relSpecBetween(layout.outRelOf.get(fileKeys[fi])!, placedBoundRel)}";\n`;
 			for (const n of placedTreeNames[placedAt]) {
