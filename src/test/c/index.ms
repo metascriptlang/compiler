@@ -42,6 +42,7 @@ import "./buildIsolation";
 import "./instanceHome";
 import "./instanceWarm";
 import "./hookHome";
+import "./lowerOrder";
 import "./aggregateLifecycle";
 import "./inheritedTrace";
 import "./referenceTransfer";

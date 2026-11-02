@@ -16,7 +16,7 @@ import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { validateTypedAST } from "../checker/validate";
-import { transformProgram } from "../transform/index";
+import { transformProgram, transformProgramHead, transformProgramTail, TransformHead } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { inferSinkParams } from "../analyzer/sinkInference";
 import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
@@ -712,6 +712,8 @@ interface A2Job {
 	nativeCtx: TransformContext | null;
 	transformOps: KeyedOp[];
 	opClosure: HashSet<string>;
+	opMarkAt: int32;
+	head: TransformHead | null;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -769,9 +771,14 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 }
 
 function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
+	transformHeadA2(checked, ctx, job);
+	return transformTailA2(ctx, job);
+}
+
+function transformHeadA2(checked: Node, ctx: CheckerContext, job: A2Job): void {
 	job.ran = true;
 	enterModuleOps(job.modPath, job.opClosure);
-	const keyedOpMark = opMark();
+	job.opMarkAt = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
 	let program = checked;
@@ -815,7 +822,25 @@ function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node
 	const _fx0 = flowStart();
 	const reloadable: string[] = [];
 	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
-	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody, job.liftTables);
+	job.head = transformProgramHead(comptimeResolved, ctx, false, reloadable, job.liftTables, true, job.opClosure);
+	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
+	flowStop("a2.xform", _fx0);
+	job.errBase = errBase;
+	leaveModuleOps();
+}
+
+function transformTailA2(ctx: CheckerContext, job: A2Job): Node {
+	const head = job.head;
+	if (head == null) throw new Error(`internal: ${job.modPath} reached the second half of its transform before the first`);
+	job.head = null;
+	enterModuleOps(job.modPath, job.opClosure);
+	const opts = job.opts;
+	const modPath = job.modPath;
+	const errBase = job.errBase;
+	const hcrSlot = job.hcrSlot;
+	const _tx0 = performance.now();
+	const _fx0 = flowStart();
+	const transformed = transformProgramTail(head!, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	flowStop("a2.xform", _fx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
@@ -830,9 +855,8 @@ function transformModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node
 	flowStop("a2.native", _fn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
-	job.errBase = errBase;
 	job.nativeCtx = nativeCtx;
-	job.transformOps = opsFrom(keyedOpMark);
+	job.transformOps = opsFrom(job.opMarkAt);
 	leaveModuleOps();
 	return hcrLifted;
 }
@@ -3653,6 +3677,8 @@ resetLiftedOps();
 			nativeCtx: null,
 			transformOps: [],
 			opClosure: importClosure(graph, modPath),
+			opMarkAt: 0,
+			head: null,
 		};
 		if (session.keep) {
 			enterModuleOps(modPath, job.opClosure);
@@ -3678,9 +3704,14 @@ resetLiftedOps();
 			}
 			leaveModuleOps();
 		} else {
-			const tree = transformModuleA2(program, ctx, job);
-			staged.push({ at, job, tree });
-			noteUnitDecls(liftTables, modPath, tree);
+			transformHeadA2(program, ctx, job);
+			staged.push({ at, job, tree: program });
+		}
+	}
+	if (!session.keep) {
+		for (const st of staged) {
+			st.tree = transformTailA2(checkedMods[st.at].ctx, st.job);
+			noteUnitDecls(liftTables, st.job.modPath, st.tree);
 		}
 	}
 	if (!session.keep && !opts.isHcr && gcModeOf(opts.gcMode) == GcMode.Drc) {

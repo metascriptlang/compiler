@@ -49,7 +49,7 @@ const SITES: ReaderSite[] = [
 	{ file: "compiler/transam/index.ms", readers: 7, records: 0 },
 	{ file: "compiler/lsp/handlers/lifecycle.ms", readers: 3, records: 0 },
 	{ file: "codegen/raiser/eval.ms", readers: 6, records: 1 },
-	{ file: "transform/lowering/iterInline.ms", readers: 4, records: 1 },
+	{ file: "transform/lowering/iterInline.ms", readers: 4, records: 3 },
 	{ file: "transform/lowering/jsPointerLower.ms", readers: 2, records: 0 },
 	{ file: "transform/lowering/methodDispatchLower.ms", readers: 1, records: 0 },
 	{ file: "analyzer/cursors.ms", readers: 1, records: 0 },

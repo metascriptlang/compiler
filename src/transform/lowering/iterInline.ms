@@ -12,7 +12,7 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isLoopKind } from "./jumpRetarget";
 import { isRoutineOrTestNode } from "../../ast/shape";
-import { hasFlag } from "../../checker/symbol";
+import { hasFlag, symbolKey } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
@@ -31,11 +31,12 @@ import { recordBodyRead } from "../../checker/bodyReads";
 interface InlineState {
 	ctx: TransformContext;
 	generators: HashMap<Symbol, Node>;
+	ownConsumers: HashMap<Symbol, Node>;
+	ownForwarders: HashMap<Symbol, Node>;
 	recursive: HashSet<Symbol>;
 	expanding: HashSet<Symbol>;
 	fromCaller: HashSet<Node>;
 	localNames: HashSet<string>;
-	local: HashSet<Symbol>;
 	stored: HashMap<Symbol, StoredChain>;
 }
 
@@ -71,27 +72,115 @@ interface JumpPlan {
 }
 
 
-const _inlineBodies = new HashMap<Symbol, Node>();
-const _consumerBodies = new HashMap<Symbol, Node>();
-const _forwardBodies = new HashMap<Symbol, Node>();
+class ModuleOffers {
+	generators: HashMap<string, Node> = new HashMap<string, Node>();
+	consumers: HashMap<string, Node> = new HashMap<string, Node>();
+	forwarders: HashMap<string, Node> = new HashMap<string, Node>();
+}
+
+const _offers = new HashMap<string, ModuleOffers>();
+const _offerHomes = new HashMap<string, string[]>();
+const _offerNames = new HashSet<string>();
+
+export function offerIterBodies(program: Node, ctx: TransformContext): void {
+	const modulePath = ownModule(ctx);
+	const generators = new HashMap<Symbol, Node>();
+	const consumers = new HashMap<Symbol, Node>();
+	const forwarders = new HashMap<Symbol, Node>();
+	collectInlinable(program, generators, consumers, forwarders);
+	const previous = _offers.get(modulePath);
+	if (previous != null) {
+		for (const kept of [previous.generators, previous.consumers, previous.forwarders]) {
+			for (const key of kept.keys()) dropHome(key, modulePath);
+		}
+	}
+	const offers = new ModuleOffers();
+	offerBodies(generators, offers.generators, modulePath);
+	offerBodies(consumers, offers.consumers, modulePath);
+	offerBodies(forwarders, offers.forwarders, modulePath);
+	_offers.set(modulePath, offers);
+}
+
+function ownModule(ctx: TransformContext): string {
+	return ctx.checkerCtx != null ? ctx.checkerCtx.modulePath : "";
+}
+
+function offerKey(sym: Symbol): string | null {
+	if (sym.modulePath == "" || hasFlag(sym, SymbolFlag.Anon) || hasFlag(sym, SymbolFlag.StaticLocal)) return null;
+	return symbolKey(sym);
+}
+
+function dropHome(key: string, modulePath: string): void {
+	const homes = _offerHomes.get(key);
+	if (homes == null) return;
+	const at = homes.indexOf(modulePath);
+	if (at >= 0) homes.splice(at, 1);
+}
+
+function offerBodies(decls: HashMap<Symbol, Node>, offered: HashMap<string, Node>, modulePath: string): void {
+	for (const sym of decls.keys()) {
+		const key = offerKey(sym);
+		if (key == null) continue;
+		offered.set(key, keptBody(decls.get(sym)!));
+		_offerNames.add(sym.name);
+		const homes = _offerHomes.get(key);
+		if (homes == null) _offerHomes.set(key, [modulePath]);
+		else if (!homes.includes(modulePath)) homes.push(modulePath);
+	}
+}
+
+function keptBody(decl: Node): Node {
+	const copy = cloneNodeKeepSem(decl);
+	copyLabels(decl, copy);
+	return copy;
+}
+
+function seesModule(ctx: TransformContext, modulePath: string): boolean {
+	return ctx.importClosure == null || modulePath == ownModule(ctx) || ctx.importClosure!.has(modulePath);
+}
+
+function offersGenerators(ctx: TransformContext): boolean {
+	for (const modulePath of _offers.keys()) {
+		if (_offers.get(modulePath)!.generators.size > 0 && seesModule(ctx, modulePath)) return true;
+	}
+	return false;
+}
+
+enum OfferKind { Generator, Consumer, Forwarder }
+
+function offeredBody(sym: Symbol, kind: OfferKind, st: InlineState): Node | null {
+	recordBodyRead(sym.modulePath);
+	if (!_offerNames.has(sym.name)) return null;
+	const key = offerKey(sym);
+	const homes = key != null ? _offerHomes.get(key!) : null;
+	if (homes == null) return null;
+	let home = "";
+	for (const modulePath of homes) {
+		if (seesModule(st.ctx, modulePath) && (home == "" || modulePath < home)) home = modulePath;
+	}
+	if (home == "") return null;
+	recordBodyRead(home);
+	if (st.ctx.reloadableModules.indexOf(home) >= 0) return null;
+	const offers = _offers.get(home)!;
+	const table = kind == OfferKind.Generator ? offers.generators : kind == OfferKind.Consumer ? offers.consumers : offers.forwarders;
+	return table.get(key!);
+}
 
 export function lowerIterInline(program: Node, ctx: TransformContext): Node {
 	const generators = new HashMap<Symbol, Node>();
 	const consumers = new HashMap<Symbol, Node>();
 	const forwarders = new HashMap<Symbol, Node>();
 	collectInlinable(program, generators, consumers, forwarders);
-	keepBodies(generators, _inlineBodies);
-	keepBodies(consumers, _consumerBodies);
-	keepBodies(forwarders, _forwardBodies);
-	if (_inlineBodies.size == 0) return program;
+	if (generators.size == 0 && !offersGenerators(ctx)) return program;
 	const localNames = new HashSet<string>();
 	if (ctx.jsBackend) collectLocalNames(program, true, localNames);
-	const local = new HashSet<Symbol>();
-	for (const sym of consumers.keys()) { local.add(sym); }
-	for (const sym of forwarders.keys()) { local.add(sym); }
+	const ownConsumers = new HashMap<Symbol, Node>();
+	const ownForwarders = new HashMap<Symbol, Node>();
+	for (const sym of consumers.keys()) ownConsumers.set(sym, keptBody(consumers.get(sym)!));
+	for (const sym of forwarders.keys()) ownForwarders.set(sym, keptBody(forwarders.get(sym)!));
 	const st: InlineState = {
-		ctx, generators, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), fromCaller: new HashSet<Node>(),
-		localNames, local, stored: new HashMap<Symbol, StoredChain>(),
+		ctx, generators, ownConsumers, ownForwarders, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), fromCaller: new HashSet<Node>(),
+		localNames, stored: new HashMap<Symbol, StoredChain>(),
 	};
 	collectStored(program, st);
 	return walkNode(program, (node: Node): Node => inlineStmt(node, st));
@@ -134,15 +223,6 @@ function singleUseChain(stmts: Node[], at: int32, st: InlineState): boolean {
 function storedRead(arg: Node, st: InlineState): StoredChain | null {
 	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
 	return sym != null ? st.stored.get(sym) : null;
-}
-
-function keepBodies(decls: HashMap<Symbol, Node>, kept: HashMap<Symbol, Node>): void {
-	for (const sym of decls.keys()) {
-		const decl = decls.get(sym)!;
-		const copy = cloneNodeKeepSem(decl);
-		copyLabels(decl, copy);
-		kept.set(sym, copy);
-	}
 }
 
 function collectInlinable(
@@ -378,12 +458,11 @@ function matchIterable(iterable: Node, st: InlineState): InlineCall | null {
 	const sym = target.sym;
 	let decl: Node | null = null;
 	if (st.generators.has(sym)) decl = st.generators.get(sym)!;
-	else if (_inlineBodies.has(sym)) decl = foreignBody(sym, _inlineBodies, st);
-	else if (st.local.has(sym)) decl = _forwardBodies.get(sym);
-	else decl = foreignBody(sym, _forwardBodies, st);
+	else if (st.ownForwarders.has(sym)) decl = st.ownForwarders.get(sym)!;
+	else decl = foreignBody(sym, OfferKind.Generator, st) ?? foreignBody(sym, OfferKind.Forwarder, st);
 	if (decl == null || st.recursive.has(sym) || !inlinable(decl, target, st.fromCaller.has(iterable), st)) return null;
 	if (!isGenerator(decl) && !forwards(decl)) return null;
-	return { decl, args: target.args, foreign: !st.generators.has(sym) && !st.local.has(sym) };
+	return { decl, args: target.args, foreign: !st.generators.has(sym) && !st.ownForwarders.has(sym) };
 }
 
 function isGenerator(decl: Node): boolean {
@@ -418,13 +497,13 @@ function matchConsumer(call: Node, st: InlineState): InlineCall | null {
 	const target = callTarget(call);
 	if (target == null) return null;
 	const sym = target.sym;
-	const decl = st.local.has(sym) ? _consumerBodies.get(sym) : foreignBody(sym, _consumerBodies, st);
+	const decl = st.ownConsumers.has(sym) ? st.ownConsumers.get(sym)! : foreignBody(sym, OfferKind.Consumer, st);
 	if (decl == null || !inlinable(decl, target, false, st)) return null;
 	const body = (decl.data as FunctionDeclData).fnBody;
 	const params = decl.paramSyms!;
 	for (let i = 0; i < params.length; i += 1) {
 		if (!writesTo(body, params[i]) && chainSource(body, params[i], target.args[i], st) != null) {
-			return { decl, args: target.args, foreign: !st.local.has(sym) };
+			return { decl, args: target.args, foreign: !st.ownConsumers.has(sym) };
 		}
 	}
 	return null;
@@ -465,10 +544,12 @@ function inlinable(decl: Node, target: CallTarget, fromCaller: boolean, st: Inli
 	return st.localNames.size == 0 || !capturesLocalName(decl, st.localNames);
 }
 
-function foreignBody(sym: Symbol, kept: HashMap<Symbol, Node>, st: InlineState): Node | null {
-	recordBodyRead(sym.modulePath);
-	if (st.ctx.reloadableModules.indexOf(sym.modulePath) >= 0) return null;
-	const decl = kept.get(sym);
+function foreignBody(sym: Symbol, kind: OfferKind, st: InlineState): Node | null {
+	if (st.ctx.reloadableModules.indexOf(sym.modulePath) >= 0) {
+		recordBodyRead(sym.modulePath);
+		return null;
+	}
+	const decl = offeredBody(sym, kind, st);
 	if (decl == null || writesModuleState(decl)) return null;
 	return decl;
 }

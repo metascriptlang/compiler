@@ -61,7 +61,7 @@ import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
-import { lowerIterInline } from "./lowering/iterInline";
+import { lowerIterInline, offerIterBodies } from "./lowering/iterInline";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -199,11 +199,23 @@ function elideJsReexportBindings(program: Node, ctx: CheckerContext): void {
 }
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null, jsOverflowChecks: boolean = true): Node {
+	return transformProgramTail(transformProgramHead(program, checkerCtx, jsBackend, reloadableModules, liftTables, jsOverflowChecks, null), asyncModuleBody);
+}
+
+export interface TransformHead {
+	program: Node;
+	ctx: TransformContext;
+}
+
+// Every module's head runs before any module's tail, so the iterator bodies a module offers at the
+// split are in place whichever module of an import cycle is lowered first.
+export function transformProgramHead(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[], liftTables: WriteSummaries | null, jsOverflowChecks: boolean, importClosure: HashSet<string> | null): TransformHead {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
 	ctx.jsOverflowChecks = jsOverflowChecks;
 	ctx.liftTables = liftTables;
 	ctx.reloadableModules = reloadableModules;
+	ctx.importClosure = importClosure;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
 	if (jsBackend) elideJsReexportBindings(program, checkerCtx);
@@ -248,7 +260,18 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerDestructuring(result, ctx);
 	flowLap("pass.lowerDestructuring");
 	if (!jsBackend) { result = lowerForLoop(result, ctx); flowLap("pass.lowerForLoop"); }
-	result = lowerIterInline(result, ctx);
+	offerIterBodies(result, ctx);
+	return { program: result, ctx };
+}
+
+export function transformProgramTail(head: TransformHead, asyncModuleBody: boolean): Node {
+	const ctx = head.ctx;
+	const checkerCtx = ctx.checkerCtx;
+	const jsBackend = ctx.jsBackend;
+	const liftTables = ctx.liftTables;
+	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
+	flowMark();
+	let result = lowerIterInline(head.program, ctx);
 	flowLap("pass.lowerIterInline");
 	result = lowerForOf(result, ctx);
 	flowLap("pass.lowerForOf");
