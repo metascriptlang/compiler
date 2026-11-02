@@ -26,6 +26,30 @@ interface StdinState {
 
 const stdinState: StdinState = { pending: Buffer.alloc(0), eof: false };
 
+function stdinFill(): boolean {
+	@emit(`const st = ${stdinState};
+const chunk = new Uint8Array(65536);
+let n = 0;
+for (;;) {
+	try {
+		n = ${readSync}(0, chunk, 0, chunk.length, null);
+		break;
+	} catch (e) {
+		if (e.code === "EOF") { n = 0; break; }
+		if (e.code === "EAGAIN") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); continue; }
+		if (e.code === "EINTR") continue;
+		throw e;
+	}
+}
+if (n === 0) { st.eof = true; return false; }
+const joined = new Uint8Array(st.pending.length + n);
+joined.set(st.pending, 0);
+joined.set(chunk.subarray(0, n), st.pending.length);
+st.pending = joined;
+return true;`);
+	unreachable;
+}
+
 export function readLine(): string {
 	@emit(`const st = ${stdinState};
 const find = (from) => { for (let i = from; i < st.pending.length; i++) if (st.pending[i] === 10) return i; return -1; };
@@ -33,24 +57,7 @@ let scanned = 0;
 let lf = find(0);
 while (lf < 0 && !st.eof) {
 	scanned = st.pending.length;
-	const chunk = new Uint8Array(65536);
-	let n = 0;
-	for (;;) {
-		try {
-			n = ${readSync}(0, chunk, 0, chunk.length, null);
-			break;
-		} catch (e) {
-			if (e.code === "EOF") { n = 0; break; }
-			if (e.code === "EAGAIN") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); continue; }
-			if (e.code === "EINTR") continue;
-			throw e;
-		}
-	}
-	if (n === 0) { st.eof = true; break; }
-	const joined = new Uint8Array(st.pending.length + n);
-	joined.set(st.pending, 0);
-	joined.set(chunk.subarray(0, n), st.pending.length);
-	st.pending = joined;
+	if (!${stdinFill}()) break;
 	lf = find(scanned);
 }
 let end = lf < 0 ? st.pending.length : lf;
@@ -63,7 +70,16 @@ return line;`);
 }
 
 export function readBytes(n: number): Buffer {
-	return Buffer.alloc(0);
+	@emit(`const st = ${stdinState};
+const want = Math.min(Math.max(Math.trunc(${n}), 0), 1048576);
+while (st.pending.length < want && !st.eof) {
+	if (!${stdinFill}()) break;
+}
+const take = Math.min(want, st.pending.length);
+const out = Array.from(st.pending.slice(0, take));
+st.pending = st.pending.slice(take);
+return out;`);
+	unreachable;
 }
 
 export function stdinDisableBuffering(): void {}
