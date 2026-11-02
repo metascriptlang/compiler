@@ -314,7 +314,8 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   reported inside `std/**` means the builder is older than the commit that
   introduced it (`git log -S'<Name>' -- src/checker`); rebuild `./msc` with the
   installed `msc`.
-- **Bootstrap-only std guards:** keep `when (mscDeclaresRuntime)` until one sync
+- **Bootstrap-only std guards:** keep a capability guard such as
+  `when (mscReturnsBorrowedReference)` until one sync
   cycle after the compiler change lands and every builder can read the guarded
   declarations. The capability is defined in `src/compiler/defines.ms`; the
   guarded runtime declarations are not optional behavior for the new compiler.
