@@ -1,6 +1,19 @@
 import { preludeFor, quoted, viewHelpers } from "./jsGlue";
-import { BoundaryKind, msTypeOf, scalarFacts, unwiredKind } from "./boundaryKinds";
-import { BoundaryCallback, BoundaryFunction, BoundaryMode, BoundaryParam, Manifest, copiesArgsIn, leafLiteral } from "./manifest";
+import {
+	BoundaryKind,
+	msTypeOf,
+	scalarFacts,
+	unwiredKind,
+} from "./boundaryKinds";
+import {
+	BoundaryCallback,
+	BoundaryFunction,
+	BoundaryMode,
+	BoundaryParam,
+	Manifest,
+	copiesArgsIn,
+	leafLiteral,
+} from "./manifest";
 
 export interface JsModuleBindings {
 	modulePath: string;
@@ -25,13 +38,18 @@ function wireToJsValue(kind: BoundaryKind, expr: string): string {
 		BoundaryKind.U16 => `${expr} & 65535`,
 		BoundaryKind.U32 => `${expr} >>> 0`,
 		BoundaryKind.U64 => `BigInt.asUintN(64, ${expr})`,
-		BoundaryKind.I32 | BoundaryKind.I64 | BoundaryKind.F32 | BoundaryKind.F64 => expr,
+		BoundaryKind.I32
+			| BoundaryKind.I64
+			| BoundaryKind.F32
+			| BoundaryKind.F64 => expr,
 		BoundaryKind.Void
 			| BoundaryKind.Callback
 			| BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
-			| BoundaryKind.Span => { unwiredKind(kind, "scalar conversion from the wasm side"); },
+			| BoundaryKind.Span => {
+				unwiredKind(kind, "scalar conversion from the wasm side");
+			},
 	};
 }
 
@@ -53,7 +71,9 @@ function jsValueToWire(kind: BoundaryKind, expr: string): string {
 			| BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
-			| BoundaryKind.Span => { unwiredKind(kind, "scalar conversion to the wasm side"); },
+			| BoundaryKind.Span => {
+				unwiredKind(kind, "scalar conversion to the wasm side");
+			},
 	};
 }
 
@@ -88,6 +108,15 @@ function objectCheck(expr: string, at: string): string {
 	return `__msbType(${expr}, "object", "object", ${at});`;
 }
 
+function elementsCheck(
+	source: string,
+	range: string,
+	element: BoundaryKind,
+	at: string,
+): string {
+	return `__msbElems(${source}, ${range}, ${elementArgs(element)}, ${at});`;
+}
+
 function paramChecks(f: BoundaryFunction): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < f.params.length; i += 1) {
@@ -111,27 +140,40 @@ function paramChecks(f: BoundaryFunction): string[] {
 						const prefix = leaf.path.slice(0, d).join(".");
 						if (seen.includes(prefix)) continue;
 						seen.push(prefix);
-						out.push(objectCheck(`${x}.${prefix}`, at(`${label} field '${prefix}'`)));
+						const where = at(`${label} field '${prefix}'`);
+						out.push(objectCheck(`${x}.${prefix}`, where));
 					}
 					const path = leaf.path.join(".");
 					const where = at(`${label} field '${path}'`);
 					const skip = leaf.nullable ? `if (${x}.${path} != null) ` : "";
-					if (leaf.kind == BoundaryKind.String) out.push(`${skip}__msbType(${x}.${path}, "string", "string", ${where});`);
-					else out.push(skip + valueCheck(leaf.kind, `${x}.${path}`, where) + ";");
+					if (leaf.kind == BoundaryKind.String) {
+						const value = `${x}.${path}`;
+						const check = `__msbType(${value}, "string", "string", ${where});`;
+						out.push(skip + check);
+					} else {
+						out.push(skip + valueCheck(leaf.kind, `${x}.${path}`, where) + ";");
+					}
 				}
 			}
 			BoundaryKind.Vec => {
-				out.push(`__msbElems(__msbList(${x}, ${quoted(`Vec<${msTypeOf(p.element)}>`)}, ${at(label)}), 0, ${x}.length, ${elementArgs(p.element)}, ${at(label)});`);
+				const type = quoted(`Vec<${msTypeOf(p.element)}>`);
+				const list = `__msbList(${x}, ${type}, ${at(label)})`;
+				out.push(elementsCheck(list, `0, ${x}.length`, p.element, at(label)));
 			}
 			BoundaryKind.Span => {
-				out.push(`__msbElems(__msbSpan(${x}, ${quoted(`Span<${msTypeOf(p.element)}>`)}, ${at(label)}).base, ${x}.off, ${x}.len, ${elementArgs(p.element)}, ${at(label)});`);
+				const type = quoted(`Span<${msTypeOf(p.element)}>`);
+				const base = `__msbSpan(${x}, ${type}, ${at(label)}).base`;
+				const range = `${x}.off, ${x}.len`;
+				out.push(elementsCheck(base, range, p.element, at(label)));
 			}
 			_ => {
 				out.push(valueCheck(p.kind, x, at(label)) + ";");
 			}
 		}
 		if (p.nullable) {
-			for (let k = mark; k < out.length; k += 1) out[k] = `if (${x} != null) ${out[k]}`;
+			for (let k = mark; k < out.length; k += 1) {
+				out[k] = `if (${x} != null) ${out[k]}`;
+			}
 		}
 	}
 	return out;
@@ -143,6 +185,11 @@ function guarded(flag: string, expr: string): string {
 
 function anyOf(a: string, b: string): string {
 	return a == "" ? b : b == "" ? a : `${a} || ${b}`;
+}
+
+function vecOut(ptr: string, len: string, element: BoundaryKind): string {
+	const bool = element == BoundaryKind.Bool;
+	return `__msbVecOut(${ptr}, ${len}, ${typedArrayOf(element)}, ${bool})`;
 }
 
 function callbackSharesViews(cb: BoundaryCallback): boolean {
@@ -180,7 +227,11 @@ function wireRead(kind: BoundaryKind, nullable: boolean, w: int32): WireRead {
 	};
 }
 
-function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null): string {
+function adapterOf(
+	cb: BoundaryCallback,
+	target: string,
+	resultAt: string | null,
+): string {
 	const names: string[] = [];
 	const args: string[] = [];
 	let views = "";
@@ -202,35 +253,53 @@ function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null
 		const t = typedArrayOf(cb.elements[i]);
 		const bool = cb.elements[i] == BoundaryKind.Bool;
 		const written = cb.modes[i] == BoundaryMode.Shared;
+		const ptr = `x${at} >>> 0`;
+		const len = `x${at + 1}`;
 		if (shared) {
 			const v = `vs[${ranges.length}]`;
-			ranges.push(`[x${at} >>> 0, x${at + 1}, ${t}, ${bool}]`);
-			if (written) writesBack += `__msbCopyTo(x${at} >>> 0, ${v}.base, ${v}.off, x${at + 1}, ${t}); `;
+			ranges.push(`[${ptr}, ${len}, ${t}, ${bool}]`);
+			if (written) {
+				const dest = `${v}.base, ${v}.off`;
+				writesBack += `__msbCopyTo(${ptr}, ${dest}, ${len}, ${t}); `;
+			}
 			args.push(v);
 		} else {
-			views += `const s${i} = { base: __msbVecOut(x${at} >>> 0, x${at + 1}, ${t}, ${bool}), off: 0, len: x${at + 1} }; `;
-			if (written) writesBack += `__msbCopyTo(x${at} >>> 0, s${i}.base, 0, x${at + 1}, ${t}); `;
+			const base = vecOut(ptr, len, cb.elements[i]);
+			views += `const s${i} = { base: ${base}, off: 0, len: ${len} }; `;
+			if (written) {
+				writesBack += `__msbCopyTo(${ptr}, s${i}.base, 0, ${len}, ${t}); `;
+			}
 			args.push(`s${i}`);
 		}
 		w = at + 2;
 	}
 	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); `;
 	let call = `${target}(${args.join(", ")})`;
-	if (resultAt != null && cb.result != BoundaryKind.Void) call = valueCheck(cb.result, call, resultAt);
-	const body = cb.result == BoundaryKind.Void ? `${call};` : `return ${jsValueToWire(cb.result, call)};`;
+	const isVoid = cb.result == BoundaryKind.Void;
+	if (resultAt != null && !isVoid) call = valueCheck(cb.result, call, resultAt);
+	const returned = isVoid ? "" : jsValueToWire(cb.result, call);
+	const body = isVoid ? `${call};` : `return ${returned};`;
 	const params = names.join(", ");
-	if (writesBack != "") return `(${params}) => { ${views}try { ${body} } finally { ${writesBack}} }`;
+	if (writesBack != "") {
+		const guarded = `try { ${body} } finally { ${writesBack}}`;
+		return `(${params}) => { ${views}${guarded} }`;
+	}
 	if (views != "") return `(${params}) => { ${views}${body} }`;
-	if (cb.result == BoundaryKind.Void) return `(${params}) => { ${call}; }`;
-	return `(${params}) => ${jsValueToWire(cb.result, call)}`;
+	if (isVoid) return `(${params}) => { ${call}; }`;
+	return `(${params}) => ${returned}`;
 }
 
-function forwardsUnchanged(cb: BoundaryCallback, adapter: string, target: string): boolean {
+function forwardsUnchanged(
+	cb: BoundaryCallback,
+	adapter: string,
+	target: string,
+): boolean {
 	const names: string[] = [];
 	for (let i = 0; i < cb.params.length; i += 1) names.push(`x${i}`);
 	const list = names.join(", ");
 	const call = `${target}(${list})`;
-	return adapter == `(${list}) => ${call}` || adapter == `(${list}) => { ${call}; }`;
+	return adapter == `(${list}) => ${call}`
+		|| adapter == `(${list}) => { ${call}; }`;
 }
 
 function takerOf(f: BoundaryFunction): string {
@@ -238,7 +307,7 @@ function takerOf(f: BoundaryFunction): string {
 		return "(p, n) => { r = __msbDec(p >>> 0, n); }";
 	}
 	if (f.result == BoundaryKind.Vec) {
-		return `(p, n) => { r = __msbVecOut(p >>> 0, n, ${typedArrayOf(f.resultElement)}, ${f.resultElement == BoundaryKind.Bool}); }`;
+		return `(p, n) => { r = ${vecOut("p >>> 0", "n", f.resultElement)}; }`;
 	}
 	const names: string[] = [];
 	const values: string[] = [];
@@ -249,7 +318,8 @@ function takerOf(f: BoundaryFunction): string {
 		values.push(read.value);
 		w += read.width;
 	}
-	return `(${names.join(", ")}) => { r = ${leafLiteral(f.resultLeaves, values, 0)}; }`;
+	const literal = leafLiteral(f.resultLeaves, values, 0);
+	return `(${names.join(", ")}) => { r = ${literal}; }`;
 }
 
 function afterCall(body: string[], afters: string[]): string[] {
@@ -270,12 +340,24 @@ function functionSharesViews(f: BoundaryFunction): boolean {
 	let written = false;
 	for (const p of f.params) {
 		if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) views += 1;
-		if (p.kind == BoundaryKind.Span && p.mode == BoundaryMode.Shared) written = true;
+		if (p.kind == BoundaryKind.Span && p.mode == BoundaryMode.Shared) {
+			written = true;
+		}
 	}
 	return views >= 2 && written;
 }
 
-function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindingOptions): string[] {
+function scalarArg(kind: BoundaryKind, expr: string, absent: string): string {
+	const wire = jsValueToWire(kind, expr);
+	if (absent == "") return wire;
+	return `${absent} ? ${scalarFacts(kind, "zero").jsZero} : ${wire}`;
+}
+
+function wrapperLines(
+	f: BoundaryFunction,
+	bundleName: string,
+	options: JsBindingOptions,
+): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
 	const lines: string[] = [];
@@ -287,10 +369,20 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	const shared = functionSharesViews(f);
 	const sharedNames: string[] = [];
 	const sharedViews: string[] = [];
-	const encode = (name: string, expr: string, fn: string, adopted: boolean, absent: string): void => {
+	const encode = (
+		name: string,
+		expr: string,
+		fn: string,
+		adopted: boolean,
+		absent: string,
+	): void => {
 		if (adopted) wasmOwns = true;
 		encoded.push(name);
-		cleanup.push(adopted ? `if (${name} && !sent) __msbMod._free(${name}[0]);` : `if (${name}) __msbFree(${name}[0]);`);
+		cleanup.push(
+			adopted
+				? `if (${name} && !sent) __msbMod._free(${name}[0]);`
+				: `if (${name}) __msbFree(${name}[0]);`,
+		);
 		if (absent == "") {
 			encodes.push(`		${name} = ${fn}(${expr});`);
 			argList.push(`${name}[0], ${name}[1]`);
@@ -299,7 +391,13 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
 		}
 	};
-	const encodeView = (name: string, view: string, absent: string, role: string, label: string): void => {
+	const encodeView = (
+		name: string,
+		view: string,
+		absent: string,
+		role: string,
+		label: string,
+	): void => {
 		if (!shared) {
 			encode(name, view, "__msbCopyIn", false, absent);
 			return;
@@ -326,10 +424,16 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 			}
 			BoundaryKind.Callback => {
 				let resultAt: string | null = null;
-				if (options.checked) resultAt = `${quoted(f.name)}, ${quoted(`result of callback '${p.name}'`)}`;
+				if (options.checked) {
+					const what = quoted(`result of callback '${p.name}'`);
+					resultAt = `${quoted(f.name)}, ${what}`;
+				}
 				const target = `a${i}`;
 				const adapter = adapterOf(p.callback!, target, resultAt);
-				lines.push(`	const id${i} = __msb.push(${forwardsUnchanged(p.callback!, adapter, target) ? target : adapter});`);
+				const pushed = forwardsUnchanged(p.callback!, adapter, target)
+					? target
+					: adapter;
+				lines.push(`\tconst id${i} = __msb.push(${pushed});`);
 				cleanup.push(`__msb.pop(id${i});`);
 				argList.push(`id${i}`);
 			}
@@ -339,31 +443,40 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 					const expr = `a${i}.${leaf.path.join(".")}`;
 					const absent = anyOf(own, leaf.nullable ? `${expr} == null` : "");
 					if (leaf.nullable) argList.push(`${absent} ? 0 : 1`);
-					if (leaf.kind == BoundaryKind.String) encode(`e${i}_${j}`, expr, "__msbEncOwned", true, absent);
-					else if (absent == "") argList.push(jsValueToWire(leaf.kind, expr));
-					else argList.push(`${absent} ? ${scalarFacts(leaf.kind, "zero").jsZero} : ${jsValueToWire(leaf.kind, expr)}`);
+					if (leaf.kind == BoundaryKind.String) {
+						encode(`e${i}_${j}`, expr, "__msbEncOwned", true, absent);
+					} else {
+						argList.push(scalarArg(leaf.kind, expr, absent));
+					}
 				}
 			}
 			BoundaryKind.Vec => {
-				encodeView(`e${i}`, `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`, own, "copy", `parameter '${p.name}'`);
+				const view = `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`;
+				encodeView(`e${i}`, view, own, "copy", `parameter '${p.name}'`);
 			}
 			BoundaryKind.Span => {
-				const view = `a${i}.base, a${i}.off, a${i}.len, ${typedArrayOf(p.element)}`;
-				if (p.mode == BoundaryMode.Shared) copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${p.element == BoundaryKind.Bool});`);
-				encodeView(`e${i}`, view, "", p.mode == BoundaryMode.Shared ? "write" : "read", `parameter '${p.name}'`);
+				const array = typedArrayOf(p.element);
+				const view = `a${i}.base, a${i}.off, a${i}.len, ${array}`;
+				const written = p.mode == BoundaryMode.Shared;
+				if (written) {
+					const bool = p.element == BoundaryKind.Bool;
+					copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${bool});`);
+				}
+				const role = written ? "write" : "read";
+				encodeView(`e${i}`, view, "", role, `parameter '${p.name}'`);
 			}
 			_ => {
-				if (p.nullable) {
-					argList.push(`${own} ? ${scalarFacts(p.kind, "zero").jsZero} : ${jsValueToWire(p.kind, `a${i}`)}`);
-				} else {
-					argList.push(jsValueToWire(p.kind, `a${i}`));
-				}
+				argList.push(scalarArg(p.kind, `a${i}`, own));
 			}
 		}
 	}
 	if (shared) {
 		lines.push("	const hb = [];");
-		encodes.push(`		[${sharedNames.join(", ")}] = __msbCopyInViews([${sharedViews.join(", ")}], hb, ${quoted(f.name)});`);
+		const names = sharedNames.join(", ");
+		const views = sharedViews.join(", ");
+		encodes.push(
+			`\t\t[${names}] = __msbCopyInViews([${views}], hb, ${quoted(f.name)});`,
+		);
 		cleanup.push("for (const q of hb) __msbFree(q);");
 	}
 	const sig = sigs.join(", ");
@@ -380,7 +493,8 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 			if (f.resultNullable) {
 				[
 					`const v = ${call};`,
-					`return __msbMod._msb_ret_some() !== 0 ? ${wireToJsValue(f.result, "v")} : null;`,
+					"return __msbMod._msb_ret_some() !== 0 ? "
+						+ `${wireToJsValue(f.result, "v")} : null;`,
 				]
 			} else {
 				[`return ${wireToJsValue(f.result, call)};`]
@@ -397,7 +511,8 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	} else {
 		for (const l of lines) out.push(l);
 		if (encoded.length > 0) {
-			out.push(`	let ${encoded.join(", ")}${wasmOwns ? ", sent = false" : ""};`);
+			const names = encoded.join(", ") + (wasmOwns ? ", sent = false" : "");
+			out.push(`\tlet ${names};`);
 			out.push("	const mark = __msbTop;");
 		}
 		out.push("	try {");
@@ -413,7 +528,12 @@ function wrapperLines(f: BoundaryFunction, bundleName: string, options: JsBindin
 	return out;
 }
 
-export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f: BoundaryFunction) => string, options: JsBindingOptions): JsBindings {
+export function jsBindings(
+	m: Manifest,
+	wasmModuleUrl: string,
+	bundleNameOf: (f: BoundaryFunction) => string,
+	options: JsBindingOptions,
+): JsBindings {
 	const modules: JsModuleBindings[] = [];
 	const lines: string[][] = [];
 	let scratch = false;
@@ -423,7 +543,9 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 		if (copiesArgsIn(f)) scratch = true;
 		if (functionSharesViews(f)) viewsIn = true;
 		for (const p of f.params) {
-			if (p.kind == BoundaryKind.Callback && callbackSharesViews(p.callback!)) viewsOut = true;
+			if (p.kind == BoundaryKind.Callback && callbackSharesViews(p.callback!)) {
+				viewsOut = true;
+			}
 		}
 		let at = -1;
 		for (let i = 0; i < modules.length; i += 1) {
@@ -434,9 +556,14 @@ export function jsBindings(m: Manifest, wasmModuleUrl: string, bundleNameOf: (f:
 			lines.push([]);
 			at = modules.length - 1;
 		}
-		for (const l of wrapperLines(f, bundleNameOf(f), options)) lines[at].push(l);
+		for (const l of wrapperLines(f, bundleNameOf(f), options)) {
+			lines[at].push(l);
+		}
 	}
-	for (let i = 0; i < modules.length; i += 1) modules[i].code = lines[i].join("\n") + "\n";
+	for (let i = 0; i < modules.length; i += 1) {
+		modules[i].code = lines[i].join("\n") + "\n";
+	}
 	const views = viewHelpers(viewsIn, viewsOut);
-	return { prelude: preludeFor(wasmModuleUrl, options.checked, scratch, views), modules };
+	const prelude = preludeFor(wasmModuleUrl, options.checked, scratch, views);
+	return { prelude, modules };
 }
