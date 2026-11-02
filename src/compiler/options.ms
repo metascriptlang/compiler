@@ -84,7 +84,7 @@ export interface CliOptions {
 	eventsPath: string;        // msc run --hcr --events=<path>|-: JSON Lines of the watch session
 	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
-	wasmPlacement: boolean;    // --wasm-placement=on|off: a js build sends `@wasm();` modules to wasm; off builds them as js
+	wasmPlacement: boolean;    // --wasm-placement=on|off: a js build sends `@wasm` functions to wasm; off builds them as js
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
