@@ -48,6 +48,8 @@ LC_LOAD_DYLIB = 0xc
 LC_CODE_SIGNATURE = 0x1d
 LC_BUILD_VERSION = 0x32
 LC_MAIN = 0x80000028
+LC_SEGMENT_64, LC_ID_DYLIB, LC_LOAD_DYLINKER = 0x19, 0xd, 0xe
+DYLINKER = "/usr/lib/dyld"
 PLATFORM_MACOS = 1
 LIBSYSTEM = "/usr/lib/libSystem.B.dylib"
 
@@ -123,24 +125,71 @@ def copySysroot(zigLib, darwin):
 
 
 def readMachO(path):
-    """Cpu type, file type, load command kinds, dylibs and the macOS minos of a 64-bit little-endian Mach-O file."""
+    """Bounded load commands, sections, library names and platform facts of a 64-bit little-endian Mach-O file."""
     with open(path, "rb") as f:
         data = f.read()
     if len(data) < 32 or struct.unpack_from("<I", data, 0)[0] != MH_MAGIC_64:
         raise pe.EngineError("%s is not a 64-bit Mach-O file" % path)
-    cpuType, _, fileType, count = struct.unpack_from("<iiII", data, 4)
-    commands, dylibs, build, cursor = [], [], None, 32
+    cpuType, _, fileType, count, commandBytes = struct.unpack_from("<iiIII", data, 4)
+    commands, dylibs, sections, build, installName, dylinker, cursor = [], [], [], None, None, None, 32
+    end = cursor + commandBytes
+    def malformed(reason):
+        raise pe.EngineError("%s: malformed Mach-O: %s" % (path, reason))
+    if end > len(data) or count * 8 > commandBytes:
+        malformed("load command table extends past its bounds")
     for _ in range(count):
+        if cursor + 8 > end:
+            malformed("truncated load command")
         kind, size = struct.unpack_from("<II", data, cursor)
+        if size < 8 or size % 8 or cursor + size > end:
+            malformed("invalid load command size %d" % size)
+        command = data[cursor:cursor + size]
         commands.append(kind)
-        if kind == LC_LOAD_DYLIB:
-            offset = struct.unpack_from("<I", data, cursor + 8)[0]
-            end = data.index(b"\0", cursor + offset)
-            dylibs.append(data[cursor + offset:end].decode("ascii"))
+        if kind in (LC_LOAD_DYLIB, LC_ID_DYLIB, LC_LOAD_DYLINKER, 0x20, 0x80000018, 0x8000001f, 0x80000023):
+            minimum = 12 if kind == LC_LOAD_DYLINKER else 24
+            if size < minimum:
+                malformed("short library name command")
+            offset = struct.unpack_from("<I", command, 8)[0]
+            stop = command.find(b"\0", offset)
+            if offset < minimum or offset >= size or stop < 0:
+                malformed("library name extends outside its command")
+            try:
+                name = command[offset:stop].decode("utf-8")
+            except UnicodeDecodeError:
+                malformed("library name is not UTF-8")
+            if kind == LC_ID_DYLIB:
+                if installName is not None:
+                    malformed("duplicate LC_ID_DYLIB")
+                installName = name
+            elif kind == LC_LOAD_DYLINKER:
+                if dylinker is not None:
+                    malformed("duplicate LC_LOAD_DYLINKER")
+                dylinker = name
+            else:
+                dylibs.append(name)
         elif kind == LC_BUILD_VERSION:
-            build = struct.unpack_from("<II", data, cursor + 8)
+            if size < 24 or build is not None:
+                malformed("short or duplicate LC_BUILD_VERSION")
+            if 24 + 8 * struct.unpack_from("<I", command, 20)[0] > size:
+                malformed("build tools extend outside their command")
+            build = struct.unpack_from("<II", command, 8)
+        elif kind == LC_SEGMENT_64:
+            if size < 72:
+                malformed("short LC_SEGMENT_64")
+            countSections = struct.unpack_from("<I", command, 64)[0]
+            if 72 + 80 * countSections > size:
+                malformed("section table extends outside its segment command")
+            for at in range(72, 72 + 80 * countSections, 80):
+                try:
+                    sections.append(tuple(command[at + offset:at + offset + 16].split(b"\0")[0].decode("ascii")
+                                          for offset in (16, 0)))
+                except UnicodeDecodeError:
+                    malformed("section name is not ASCII")
         cursor += size
-    return {"cpuType": cpuType & 0xffffffff, "fileType": fileType, "commands": commands, "dylibs": dylibs, "build": build}
+    if cursor != end:
+        malformed("load commands do not cover sizeofcmds")
+    return {"cpuType": cpuType & 0xffffffff, "fileType": fileType, "commands": commands, "dylibs": dylibs, "build": build,
+            "sections": sections, "installName": installName, "dylinker": dylinker}
 
 
 def machOProblem(info, target):
@@ -150,6 +199,8 @@ def machOProblem(info, target):
         return "cpu type %#x is not %s" % (info["cpuType"], expected["arch"])
     if info["fileType"] != MH_EXECUTE or LC_MAIN not in info["commands"]:
         return "file type %d with commands %s is not an executable with LC_MAIN" % (info["fileType"], info["commands"])
+    if info["dylinker"] != DYLINKER:
+        return "dynamic linker %s is not %s" % (info["dylinker"], DYLINKER)
     if info["dylibs"] != [LIBSYSTEM]:
         return "dylibs %s are not exactly %s" % (info["dylibs"], LIBSYSTEM)
     if not info["build"] or info["build"][0] != PLATFORM_MACOS or info["build"][1] != MINOS:
