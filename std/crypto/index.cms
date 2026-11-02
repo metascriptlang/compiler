@@ -2,7 +2,7 @@
 
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
-import { newOutputBuffer, outputBytes } from "./outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "./outputBuffer";
 // The Raiser host table and the websocket handshake call msCryptoHashString, which this import carries.
 import "./encodingNative";
 
@@ -54,10 +54,10 @@ extern function msCryptoInit(): boolean;
 extern function msCryptoCleanup(): void;
 
 // Hashing
-extern function msCryptoHashInto(algorithm: string, data: string, output: Ptr<uint8>, capacity: int64): int64;
+extern function msCryptoHashSpanInto(algorithm: string, data: Readonly<Span<uint8>>, output: Ptr<uint8>, capacity: int64): int64;
 
 // HMAC
-extern function msCryptoHmacInto(algorithm: string, key: string, data: string, output: Ptr<uint8>, capacity: int64): int64;
+extern function msCryptoHmacSpanInto(algorithm: string, key: Readonly<Span<uint8>>, data: Readonly<Span<uint8>>, output: Ptr<uint8>, capacity: int64): int64;
 
 // Random
 extern function msCryptoRandomBytes(size: number): string;
@@ -111,8 +111,8 @@ export function cleanup(): void {
 
 export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
 	const size = msCryptoHashSize(algorithm) as int64;
-	const out = newOutputBuffer(size);
-	if (size == 0 || msCryptoHashInto(algorithm, rawString(data), outputBytes(out), size) != size) {
+	const out = newUninitOutputBuffer(size);
+	if (size == 0 || msCryptoHashSpanInto(algorithm, typeof data == "string" ? data.asBytes() : data, outputBytes(out), size) != size) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(out);
@@ -138,8 +138,8 @@ export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { r
 
 export function hmacSync(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
 	const size = msCryptoHashSize(algorithm) as int64;
-	const out = newOutputBuffer(size);
-	if (size == 0 || msCryptoHmacInto(algorithm, rawString(key), rawString(data), outputBytes(out), size) != size) {
+	const out = newUninitOutputBuffer(size);
+	if (size == 0 || msCryptoHmacSpanInto(algorithm, typeof key == "string" ? key.asBytes() : key, typeof data == "string" ? data.asBytes() : data, outputBytes(out), size) != size) {
 		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
 	}
 	return Result.ok(out);

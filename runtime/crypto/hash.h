@@ -32,6 +32,8 @@ msString msCryptoHashString(msString algorithm, msString data, msString encoding
  * Returns empty string on error. */
 msString msCryptoHashBuffer(msString algorithm, msString data);
 int64_t msCryptoHashInto(msString algorithm, msString data, void* output, int64_t capacity);
+/* The same over bytes the caller keeps alive for the call; data may be NULL when dataLen is 0. */
+int64_t msCryptoHashSpanInto(msString algorithm, const uint8_t* data, int64_t dataLen, void* output, int64_t capacity);
 
 /* ===== HMAC ===== */
 
@@ -39,6 +41,7 @@ int64_t msCryptoHashInto(msString algorithm, msString data, void* output, int64_
  * Returns empty string on error. */
 msString msCryptoHmacBuffer(msString algorithm, msString key, msString data);
 int64_t msCryptoHmacInto(msString algorithm, msString key, msString data, void* output, int64_t capacity);
+int64_t msCryptoHmacSpanInto(msString algorithm, const uint8_t* key, int64_t keyLen, const uint8_t* data, int64_t dataLen, void* output, int64_t capacity);
 
 /* ===== Random ===== */
 

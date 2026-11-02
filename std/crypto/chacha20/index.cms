@@ -15,7 +15,7 @@
 
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
-import { newOutputBuffer, outputBytes } from "../outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "../outputBuffer";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -24,8 +24,8 @@ extern function msChacha20KeyNew(raw: string): int64;
 extern function msChacha20KeyGenerate(): int64;
 extern function msChacha20KeyExport(handle: int64): string;
 extern function msChacha20KeyFree(handle: int64): void;
-extern function msChacha20SealInto(key: int64, plainText: string, aad: string, out: Ptr<uint8>): int64;
-extern function msChacha20OpenInto(key: int64, sealed: string, aad: string, out: Ptr<uint8>): int64;
+extern function msChacha20SealInto(key: int64, plainText: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
+extern function msChacha20OpenInto(key: int64, sealed: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
 
 // ===== Key =====
 
@@ -78,9 +78,9 @@ function liveHandle(key: ChaChaKey, op: string): int64 {
  */
 export function sealSync(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "seal");
-	const text = rawString(plainText);
-	const sealed = newOutputBuffer(24 + (text.byteLength as int64) + 16);
-	if (msChacha20SealInto(handle, text, rawString(aad), outputBytes(sealed)) != 1) {
+	const text: Readonly<Span<uint8>> = typeof plainText == "string" ? plainText.asBytes() : plainText;
+	const sealed = newUninitOutputBuffer(24 + (text.length as int64) + 16);
+	if (msChacha20SealInto(handle, text, typeof aad == "string" ? aad.asBytes() : aad, outputBytes(sealed)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "XChaCha20-Poly1305 encryption failed"));
 	}
 	return Result.ok(sealed);
@@ -90,12 +90,12 @@ export async function seal(key: ChaChaKey, plainText: Bytes, aad: Bytes = ""): P
 
 export function openSync(key: ChaChaKey, sealedBytes: Bytes, aad: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "open");
-	const sealed = rawString(sealedBytes);
-	if (sealed.byteLength < 40) {
+	const sealed: Readonly<Span<uint8>> = typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes;
+	if (sealed.length < 40) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
 	}
-	const plain = newOutputBuffer((sealed.byteLength as int64) - 40);
-	if (msChacha20OpenInto(handle, sealed, rawString(aad), outputBytes(plain)) != 1) {
+	const plain = newUninitOutputBuffer((sealed.length as int64) - 40);
+	if (msChacha20OpenInto(handle, sealed, typeof aad == "string" ? aad.asBytes() : aad, outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(plain);

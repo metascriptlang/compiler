@@ -31,7 +31,8 @@ int64_t msCryptoAesKeysLive(void);
  * Key: a handle from msCryptoAesKeyNew or msCryptoAesKeyGenerate; 0 is refused.
  * aad: additional authenticated data (can be empty).
  * Returns 1, 0 on a bad key or a cipher failure, -1 when the OS random source failed. */
-int64_t msCryptoAesSealInto(int64_t keyHandle, msString plainText, msString aad, uint8_t* out);
+int64_t msCryptoAesSealInto(int64_t keyHandle, const uint8_t* plainText, int64_t plainTextLen,
+		const uint8_t* aad, int64_t aadLen, uint8_t* out);
 
 /* Seal with a caller-chosen 12-byte nonce, for tests that need a reproducible blob; std/crypto/aes
  * never exposes it, because a repeated nonce under one key breaks GCM. Same layout and returns
@@ -41,7 +42,8 @@ int64_t msCryptoAesSealWithNonceInto(int64_t keyHandle, msString nonce, msString
 /* Open: AES-GCM decrypt from sealed blob nonce(12) || cipherText || authTag(16).
  * out holds sealed.len - 28 bytes. Returns 1 when the tag verifies and out holds the plaintext
  * (an empty plaintext is a valid success), 0 on error, with out zeroed after an auth failure. */
-int64_t msCryptoAesOpenInto(int64_t keyHandle, msString sealed, msString aad, uint8_t* out);
+int64_t msCryptoAesOpenInto(int64_t keyHandle, const uint8_t* sealed, int64_t sealedLen,
+		const uint8_t* aad, int64_t aadLen, uint8_t* out);
 
 /* ===== CBC Mode (expert use) ===== */
 
