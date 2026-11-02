@@ -41,8 +41,8 @@ static inline wchar_t* _msEnvBlock(msStringArray* pairs, int* error) {
 	size_t count = 0;
 	for (size_t i = 0; i < n; i++) {
 		msString pair = pairs->p->data[i];
-		if (memchr(pair.len > 0 ? pair.p->data : "", 0,
-			(size_t)pair.len)) { *error = EINVAL; goto failed; }
+		if (memchr(msStrData(&pair), 0,
+			(size_t)msStrLen(pair))) { *error = EINVAL; goto failed; }
 		items[count] = _msProcChildWide(msStringToCString(pair), 0);
 		if (!items[count]) { *error = ENOMEM; goto failed; }
 		count++;
@@ -256,13 +256,13 @@ static inline char** _msEnvPairs(msStringArray* pairs, int* error) {
 	if (!envp) { *error = ENOMEM; return NULL; }
 	for (size_t i = 0; i < count; i++) {
 		msString pair = pairs->p->data[i];
-		size_t n = (size_t)pair.len;
-		if (n == SIZE_MAX || memchr(n ? pair.p->data : "", 0, n)) {
+		size_t n = (size_t)msStrLen(pair);
+		if (n == SIZE_MAX || memchr(msStrData(&pair), 0, n)) {
 			*error = EINVAL; _msEnvFreePairs(envp); return NULL;
 		}
 		envp[i] = (char*)malloc(n + 1);
 		if (!envp[i]) { *error = ENOMEM; _msEnvFreePairs(envp); return NULL; }
-		memcpy(envp[i], n ? pair.p->data : "", n);
+		memcpy(envp[i], msStrData(&pair), n);
 		envp[i][n] = '\0';
 	}
 	return envp;

@@ -186,7 +186,7 @@ msString msFsReadDirEntries(msString path) {
 msString msFsReadDirNames(msString path) {
 	_msFsLastErrno = 0;
 	const char* cpath = msStringToCString(path);
-	if (memchr(cpath, '\0', (size_t)path.len) != NULL) {
+	if (memchr(cpath, '\0', (size_t)msStrLen(path)) != NULL) {
 		_msFsLastErrno = EINVAL;
 		return MS_EMPTY_STRING;
 	}
