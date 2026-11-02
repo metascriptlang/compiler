@@ -87,9 +87,15 @@ interface ActiveMetaFrame {
 }
 
 let _activeMetaFrames: ActiveMetaFrame[] = [];
+let _metaRuns: int32 = 0;
 
 export function pushActiveMetaCtx(ctx: CheckerContext, line: int32, column: int32): void {
 	_activeMetaFrames.push({ ctx, line, column });
+	_metaRuns += 1;
+}
+
+export function metaRunCount(): int32 {
+	return _metaRuns;
 }
 
 export function popActiveMetaCtx(): void {

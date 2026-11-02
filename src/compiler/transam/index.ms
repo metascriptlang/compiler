@@ -7,7 +7,8 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind } from "../../ast/node";
+import { hasGenericParams } from "../../checker/types";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, CancelCtx, createContext } from "../../checker/context";
@@ -54,12 +55,13 @@ import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/modulePass";
+import { metaRunCount } from "../meta/callbacks";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
-import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
+import { ImportDeclData, ExportDeclData, ProgramData, DecoratedDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, MethodDeclData, ConstructorDeclData, DeclKind } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
@@ -228,12 +230,6 @@ function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
 	const path = getFilePath(db.fileInput, fileId);
 	if (path != "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
 	resetRegisteredAt(db.moduleDeps, fileId);
-	const deps = getTransitiveDependents(db.moduleDeps, fileId);
-	for (let i = 0; i < deps.length; i = i + 1) {
-		const depPath = getFilePath(db.fileInput, deps[i]);
-		if (depPath != "" && !isStdPathFor(db, depPath)) removeExportEntry(db.exportRegistry, depPath);
-		resetRegisteredAt(db.moduleDeps, deps[i]);
-	}
 }
 
 function removeExportEntry(registry: ExportRegistry, path: string): void {
@@ -630,23 +626,22 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 	const inputHashes: number[] = [parseHash];
 
-	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
-	// Parse dep: structural changes (new/removed declarations).
-	// TypeCheck dep: semantic changes (export type signatures, error state).
-	// Without TypeCheck dep, changing an export's type in B wouldn't invalidate A if AST shape is same.
 	const importDepIds = getDirectImports(db.moduleDeps, fileId);
 	for (let di = 0; di < importDepIds.length; di = di + 1) {
 		const depId = importDepIds[di];
-		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
-		const depParseEntry = cacheGet(db.cache, depParseKey);
-		const depParseHash = depParseEntry != null ? depParseEntry.outputHash : 0;
-		recordDependency(db.depStack, depParseKey, depParseHash);
-		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
-		const depCheckEntry = cacheGet(db.cache, depCheckKey);
-		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
-		recordDependency(db.depStack, depCheckKey, depCheckHash);
-		inputHashes.push(depParseHash);
-		inputHashes.push(depCheckHash);
+		const depIfaceKey = createQueryKey(TaQueryKind.Iface, depId);
+		const depIfaceEntry = cacheGet(db.cache, depIfaceKey);
+		if (depIfaceEntry != null) {
+			recordDependency(db.depStack, depIfaceKey, depIfaceEntry.outputHash);
+			inputHashes.push(depIfaceEntry.outputHash);
+		}
+		if (depIfaceEntry == null || exposesBodies(db, depId)) {
+			const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+			const depCheckEntry = cacheGet(db.cache, depCheckKey);
+			const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
+			recordDependency(db.depStack, depCheckKey, depCheckHash);
+			inputHashes.push(depCheckHash);
+		}
 	}
 
 	if (!modulePassExempt(filePath)) {
@@ -669,6 +664,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	registerModuleProgram(filePath, program);
+	const metaRunsBefore = metaRunCount();
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
@@ -687,11 +683,123 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
 	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	inputHashes.push(db.revision.value);
+	if (metaRunCount() != metaRunsBefore) recordImplClosure(db, fileId, inputHashes);
 	const checkHash = checkOutputHash(checkerCtx, inputHashes);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
+	const ifaceKey = createQueryKey(TaQueryKind.Iface, fileId);
+	pushFrame(db.depStack, ifaceKey);
+	recordDependency(db.depStack, key, checkHash);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, ifaceKey, db.revision.value, ifaceHash(db, checkerCtx, filePath, importDepIds), true);
 	db.checkInProgress.delete(filePath);
 	return checkerCtx;
+}
+
+function recordImplClosure(db: TransAmDb, fileId: int32, inputHashes: number[]): void {
+	const seen = new HashSet<int32>();
+	const pending: int32[] = [...getDirectImports(db.moduleDeps, fileId)];
+	while (pending.length > 0) {
+		const depId = pending.pop()!;
+		if (depId == fileId || seen.has(depId)) continue;
+		seen.add(depId);
+		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+		const depCheckEntry = cacheGet(db.cache, depCheckKey);
+		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
+		recordDependency(db.depStack, depCheckKey, depCheckHash);
+		inputHashes.push(depCheckHash);
+		for (const next of getDirectImports(db.moduleDeps, depId)) pending.push(next);
+	}
+}
+
+function exposesBodies(db: TransAmDb, depId: int32): boolean {
+	const entry = findModuleExports(db.exportRegistry, getFilePath(db.fileInput, depId));
+	if (entry == null) return true;
+	for (const info of entry.symbols) {
+		if (info.sym.symbolKind == SymbolKind.Macro || hasGenericParams(info.sym.symbolType)) return true;
+	}
+	return false;
+}
+
+function ifaceHash(db: TransAmDb, ctx: CheckerContext, filePath: string, importDepIds: int32[]): number {
+	let key = "";
+	for (const info of collectExports(ctx, filePath)) {
+		key = key + info.name + ":" + (info.sym.symbolKind as number).toString() + ":" + ifaceTypeKey(info.sym.symbolType, 0)
+			+ ":" + declShapeHash(info.sym.declNode).toString() + ";";
+	}
+	for (const depId of importDepIds) {
+		const depIface = cacheGet(db.cache, createQueryKey(TaQueryKind.Iface, depId));
+		key = key + "|" + (depIface != null ? depIface.outputHash.toString() : "?");
+	}
+	return taHashString(key) as number;
+}
+
+function declShapeHash(node: Node | null): number {
+	if (node == null) return 0;
+	return match (node.kind) {
+		NodeKind.ExportDecl => declShapeHash((node.data as ExportDeclData).exportedDecl),
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			let h = declShapeHash(d.decoratedNode);
+			for (const dec of d.decorators) h = mixHash(h, transAmHashNode(dec));
+			return h;
+		},
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			return mixHash(signatureHash(d.fnName, d.params, d.fnParamTypes, d.fnReturnType + d.fnFlags + d.nativeName), defaultsHash(d.fnDefaults));
+		},
+		NodeKind.ClassDecl => {
+			const d = node.data as ClassDeclData;
+			let h = taHashString(d.className + "|" + d.classExtends) as number;
+			for (const member of d.classBody) h = mixHash(h, memberShapeHash(member));
+			return h;
+		},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			const head = taHashString(d.declName + "|" + d.declType + "|" + (d.declKind as number).toString()) as number;
+			return d.declKind == DeclKind.Const ? mixHash(head, transAmHashNode(d.initializer)) : head;
+		},
+		_ => transAmHashNode(node),
+	};
+}
+
+function memberShapeHash(member: Node): number {
+	return match (member.kind) {
+		NodeKind.MethodDecl => {
+			const d = member.data as MethodDeclData;
+			const extra = d.methodReturnType + d.methodFlags + d.methodVisibility + (d.methodIsStatic ? "s" : "") + d.nativeName;
+			return mixHash(signatureHash(d.methodName, d.methodParams, d.methodParamTypes, extra), defaultsHash(d.methodDefaults));
+		},
+		NodeKind.ConstructorDecl => {
+			const d = member.data as ConstructorDeclData;
+			return mixHash(signatureHash("constructor", d.ctorParams, d.ctorParamTypes, ""), defaultsHash(d.ctorDefaults));
+		},
+		NodeKind.DecoratedDecl => declShapeHash(member),
+		_ => transAmHashNode(member),
+	};
+}
+
+function signatureHash(name: string, params: string[], types: string[], extra: string): number {
+	let key = name + "(";
+	for (let i = 0; i < params.length; i += 1) key = key + params[i] + ":" + (i < types.length ? types[i] : "") + ",";
+	return taHashString(key + ")" + extra) as number;
+}
+
+function defaultsHash(defaults: Node[] | null): number {
+	let h: number = 0;
+	if (defaults == null) return h;
+	for (const value of defaults) h = mixHash(h, transAmHashNode(value));
+	return h;
+}
+
+function mixHash(h: number, v: number): number {
+	return (h * 31 + v) % 2147483647;
+}
+
+function ifaceTypeKey(t: Type | null, depth: int32): string {
+	if (t == null) return "_";
+	if (depth > 6) return "...";
+	let key = (t.kind as number).toString() + t.typeName + "[" + t.typeNames.join(",") + "](";
+	for (const child of t.typeChildren) key = key + ifaceTypeKey(child, depth + 1) + ",";
+	return key + ")" + ifaceTypeKey(t.typeReturn, depth + 1);
 }
 
 // Get the checked program (has resolvedSym/nodeType on AST nodes).

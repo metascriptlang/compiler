@@ -17,6 +17,7 @@ export enum TaQueryKind {
 	Analyze,      // derived: transformed -> DRC-injected AST
 	ModuleDeps,   // derived: parse -> import list
 	Lower,
+	Iface,
 }
 
 // ===== Query State — red-green verification state =====

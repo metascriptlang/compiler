@@ -348,6 +348,25 @@ function watchGeneric(): void {
 	console.log("ok   hcrWatchGeneric");
 }
 
+function watchIface(): void {
+	const tag = "hcrWatchIface";
+	const dir = freshDir(`${TMP}/watchIface`);
+	for (const f of readDir(`${FIXTURES}/watchIface`)) copy(`${FIXTURES}/watchIface/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "leafBody.ms", target: "leaf.ms", warm: true, fails: false },
+		{ file: "leafConst.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafDefault.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafField.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafEnum.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafSeed.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafSig.ms", target: "leaf.ms", warm: false, fails: false },
+		{ file: "leafOriginal.ms", target: "leaf.ms", warm: false, fails: false },
+	];
+	const statuses = replayMatchesCold(tag, dir, `${FIXTURES}/watchIface`, ["leaf.ms"], steps);
+	need(tag, statuses[1].contains("(checked 1/"), `a body-only edit re-checked an importer: ${statuses[1]}`);
+	console.log("ok   hcrWatchIface");
+}
+
 function copyAppAndLib(fixture: string): string {
 	const dir = freshDir(`${TMP}/${fixture}`);
 	for (const sub of ["app", "lib"]) {
@@ -535,7 +554,7 @@ function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: s
 	console.log(`ok   ${tag}`);
 }
 
-function replayMatchesCold(tag: string, dir: string, fixture: string, restored: string[], steps: WatchStep[]): void {
+function replayMatchesCold(tag: string, dir: string, fixture: string, restored: string[], steps: WatchStep[]): string[] {
 	let replay = "";
 	for (const s of steps) replay = replay + `${s.file} ${s.target}\n`;
 	put(`${dir}/replay.txt`, replay);
@@ -577,6 +596,7 @@ function replayMatchesCold(tag: string, dir: string, fixture: string, restored: 
 			need(tag, status.contains(" built ") && partialRecheck(status), `${label} did not stay warm: ${status}`);
 		}
 	}
+	return statuses;
 }
 
 function arrayOwner(): void {
@@ -1575,6 +1595,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrModuleLocalNames", run: localNames },
 	{ name: "hcrWatchWarm", run: watchWarm },
 	{ name: "hcrWatchGeneric", run: watchGeneric },
+	{ name: "hcrWatchIface", run: watchIface },
 	{ name: "hcrNewInstance", run: newInstance },
 	{ name: "hcrPrivateHelper", run: privateHelper },
 	{ name: "hcrSubdirModule", run: subdirModule },
