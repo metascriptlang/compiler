@@ -124,8 +124,36 @@ M3 empty 71264, pilot-unused=C-unused 71272, pilot-used 105280, C-used 104792.
 Unused stdout matched the empty control; used smoke digests matched. This shows no measured DCE advantage.
 Do not pass `-d:cryptoEmpty=false` or similar: `when(flag)` tests presence, so omit false flags.
 
+Read-only M3 follow-up (2026-11-02, same existing artifacts): `nm -n`, `size -m`, `otool -tvV` and parsing
+Mach-O section/signature load commands confirmed that empty and both unused binaries have identical complete
+`__TEXT` section bytes. Their `__text` is 22320 bytes, SHA-256
+`767b05958a751a77560b0b691f678dcbf1cb7ed865686f84a96192719f888dca`.
+The entire 8-byte unused-file delta is `LC_CODE_SIGNATURE` length (760 versus 768 unstripped), not retained code.
+Used pilot/C `__text` is 36684/39516 bytes; bounded crypto symbol intervals are 7096/9948 bytes including alignment.
+The expected field/inversion/wipe closure is reachable, with no unrelated named crypto API retained. Total file
+size is therefore not a kernel-size ranking. This supports DCE for these old-compiler M3 samples, not new-compiler,
+x86, production-API or formal exhaustive-reachability certification.
+
 A source-review aid compared all 13 ported field functions with the pinned fiat-crypto file in
 `std/crypto/x25519/provenance.md`: local variable types matched; 657 statements were compared after cast/address
 normalization, with differences only in the two `fiat_25519_cmovznz_u32` mask-setup statements. Those differ within the stated
 0/1 selector contract only in spelling (boolean normalization and the uint32 all-ones mask). This comparison
 omits cast semantics and is not a proof of field bounds, translation correctness or optimized code behaviour.
+
+## Native thin-LTO investigation, 2026-11-02
+
+No kernel change. Source tree `9fa1cf6cd25ac510d253fe50d9d068fbb852d904`, M3/Apple clang 21, installed
+binary/support `2a52560f0bc`; copied tree-root compiler SHA-256
+`948d6ef05cf843c3c26ec74528e6bd3387218c954ab7307de1808568f750751d`.
+`msc build src/test/crypto/x25519Measure.cms --release --cc=clang --lto=<off|thin>` was run separately
+for pilot (`-d:cryptoPilot`) and C (omit that flag), both with and without `-d:cryptoSmoke`.
+All four 8-call smoke outputs had equal digests; the driver printed `LTO_BUILD_SMOKE_PASS`.
+These short, non-quiet timings are not speed-parity evidence; no LTO taint/security verdict was established.
+
+`nm -n` and `otool -tvV` on the resulting pilot used executables show eight whole-field symbols with LTO off,
+five with thin LTO. The separate inversion symbol disappears under thin LTO, but field calls remain.
+The scalar-multiply body's disassembly expands from 512 to 1633 instructions; its `sub sp` reservation changes
+from `0x2c0` to `0x590` (not a complete call-chain stack bound). Inlining is therefore not itself proof of a win.
+Pilot used-executable SHA-256: off `2f80c0994754f553ad50a0e87e62334f235c9ea564b86b5eccb718319be9c1e9`;
+thin `d00d1293c4be7e7aeb5c539d2c0e41353a736a9d5718bf94fc5b72db040f0fc4`.
+A quiet, matched workload and unchanged security checks are still required before choosing flags or code changes.
