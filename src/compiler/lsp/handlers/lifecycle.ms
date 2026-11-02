@@ -29,7 +29,7 @@ import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, forgetChangedFile, isDocumentOpen, openDocuments,
-	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
+	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri, lspEnsureFileLoaded,
 } from "./shared";
 import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
@@ -1908,6 +1908,41 @@ test "an importer published on open is not republished while its diagnostics sta
 	assert buildTransitiveDiagnosticsWire(db, depPath) == "";
 	markDocumentClosed(depPath);
 	markDocumentClosed(usePath);
+}
+
+function dependentsPublishedAfterDepEdit(db: TransAmDb, depPath: string): string {
+	handleDidChange(syncDocumentParams(depPath).byteSlice(0, syncDocumentParams(depPath).byteLength - 1) + ",\"contentChanges\":[{\"text\":" + lspJsonString(DEP_WITH_PCT) + "}]}", db);
+	return buildTransitiveDiagnosticsWire(db, depPath);
+}
+
+test "editing a dependency publishes nothing for an importer that was closed" {
+	const dir = syncTmpDir("closedImporter");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PERCENT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	handleDidClose(syncDocumentParams(usePath), db);
+	const wire = dependentsPublishedAfterDepEdit(db, depPath);
+	markDocumentClosed(depPath);
+	assert wire == "", wire;
+}
+
+test "editing a dependency publishes nothing for an importer that was only checked, never opened" {
+	const dir = syncTmpDir("checkedImporter");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PERCENT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	lspEnsureFileLoaded(db, usePath);
+	assert dbTypeCheck(db, usePath) != null;
+	const wire = dependentsPublishedAfterDepEdit(db, depPath);
+	markDocumentClosed(depPath);
+	assert wire == "", wire;
 }
 
 test "an open document ignores disk events for itself" {
