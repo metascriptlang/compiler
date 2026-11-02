@@ -49,7 +49,7 @@ import { parseSource, parseSourceLenient } from "../../parser/statements/validat
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker/flow";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
-import { registerBoundModuleFn } from "../../checker/checkerCallbacks";
+import { registerBoundModuleFn, callDecoratorDefers } from "../../checker/checkerCallbacks";
 import { transformProgram } from "../../transform/index";
 import { lowerIterInline } from "../../transform/lowering/iterInline";
 import { createTransformContextWithChecker } from "../../transform/context";
@@ -714,7 +714,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const earlyExports = checkedByPrelude(db, depPath, collectExports(tmpCtx, depPath));
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
-		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion);
+		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion, decoratorRewritesTop(tmpCtx, collected));
 	}
 }
 
@@ -805,7 +805,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
-	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx));
+	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx), decoratorRewritesTop(tmpCtx, collected));
 }
 
 // The parse's imports, resolved with the same resolver as everything else.
@@ -871,8 +871,17 @@ function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): 
 	return false;
 }
 
-function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports: ImportEntry[], startVersion: int32): void {
-	if (!importsMacro(db, filePath, imports)) return;
+function decoratorRewritesTop(ctx: CheckerContext, program: Node): boolean {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (callDecoratorDefers(ctx, stmt)) return true;
+	}
+	return false;
+}
+
+// A module whose top level a macro or a user decorator rewrites is bound, because only running
+// the rewrite says what it exports; the collect alone drops a decorated function.
+function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports: ImportEntry[], startVersion: int32, decoratorRewrites: boolean): void {
+	if (!decoratorRewrites && !importsMacro(db, filePath, imports)) return;
 	const outerDb = _checkingDb;
 	_checkingDb = db;
 	const ctx = dbBoundModule(filePath);
