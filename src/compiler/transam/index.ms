@@ -72,7 +72,7 @@ import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, fi
 import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, createFileSystemProvider, moduleIdentity, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { resolveRuntimeDir } from "../../utils/path";
+import { resolveRuntimeDir, physicalPath } from "../../utils/path";
 import { forEachChild } from "../../ast/visitor";
 import { errorCount as checkErrorCount, addError } from "../../checker/context";
 import { modulePasses, modulePassExempt, setModulePassExempt, ModulePass } from "../../checker/prelude";
@@ -2902,7 +2902,7 @@ function resolveTmpDir(name: string): string {
 	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
 	const dir = normalize(tmp + "/msc-transam-" + name + "-" + Math.floor(Math.random() * 1000000000));
 	mkdir(dir);
-	return dir;
+	return physicalPath(dir);
 }
 
 test "an import resolves to its highest-priority candidate whether or not a lower one is loaded" {

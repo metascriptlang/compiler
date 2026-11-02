@@ -1,4 +1,5 @@
 import { digitValue } from "std/core/number/parse";
+import { physicalPath } from "../../utils/path";
 
 function escapedByte(s: string, at: int32): int32 {
 	if (at + 2 >= s.length || s.charAt(at) != "%") return -1;
@@ -53,7 +54,7 @@ export function lspUriToPath(uri: string): string {
 			if (stripped.length >= 3 && stripped.charAt(0) == "/" && stripped.charAt(2) == ":") {
 				return stripped.slice(1, stripped.length);
 			}
-			return stripped;
+			return physicalPath(stripped);
 		}
 	}
 	return uri;

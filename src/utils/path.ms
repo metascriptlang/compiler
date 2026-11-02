@@ -2,7 +2,7 @@
 
 import { argv, cwd, env, execPath, platform } from "std/process";
 import { exists, realpath, ensureDir, writeFile, remove, removeAll, symlink } from "std/fs";
-import { dirname, join, isAbsolute, normalize } from "std/fs/path";
+import { dirname, basename, join, isAbsolute, normalize } from "std/fs/path";
 
 // ~/.metascript. HOME wins over USERPROFILE on every host, so a Git-bash session on
 // Windows resolves the same root as a POSIX one; "" when neither is set.
@@ -120,6 +120,18 @@ function canonicalRootDir(dir: string): string {
 	if (dir == "" || dir == ".") return cwd();
 	const physical = realpath(dir);
 	return normalize(physical != "" ? physical : dir);
+}
+
+export function physicalPath(path: string): string {
+	let head = path;
+	let rest = "";
+	while (dirname(head) != head) {
+		const physical = realpath(head);
+		if (physical != "") return rest == "" ? normalize(physical) : join(normalize(physical), rest);
+		rest = rest == "" ? basename(head) : join(basename(head), rest);
+		head = dirname(head);
+	}
+	return path;
 }
 
 let _hostRuntimeDir = "";

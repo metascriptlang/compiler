@@ -9,7 +9,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { openDocuments, markDocumentOpen, markDocumentClosed } from "./handlers/shared";
 import { join, normalize } from "std/fs/path";
 import { mkdir, removeAll, writeFile } from "std/fs";
-import { tmpDir, resolveRuntimeDir } from "../../utils/path";
+import { tmpDir, resolveRuntimeDir, physicalPath } from "../../utils/path";
 
 function staticImportSources(program: Node): string[] {
 	const sources: string[] = [];
@@ -203,8 +203,9 @@ test "an entry that resolves to no module is an error naming it" {
 }
 
 test "a module created after its importer was checked makes that check stale" {
-	const dir = normalize(tmpDir() + "/msc-projuniverse-created-" + Date.now() + "-" + Math.random());
-	assert mkdir(dir).ok, dir;
+	const spelled = normalize(tmpDir() + "/msc-projuniverse-created-" + Date.now() + "-" + Math.random());
+	assert mkdir(spelled).ok, spelled;
+	const dir = physicalPath(spelled);
 	try {
 		const db = createTransAmDb(100);
 		dbSetFileText(db, dir + "/app.ms", "import { later } from \"./later\";\nlater;");

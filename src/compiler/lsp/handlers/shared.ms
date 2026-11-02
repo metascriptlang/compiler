@@ -10,7 +10,7 @@ import { getCancelVersion } from "../../transam/cancel";
 import { readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import {
-	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
+	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath, lspPathToUri,
 } from "../protocol";
 import { lspSourcePosition } from "../position";
 import { Symbol } from "../../../ast/node";
@@ -208,14 +208,21 @@ export function lspReloadFromDisk(db: TransAmDb, filePath: string): boolean {
 // Insertion order is the order reresolveOpenDocuments publishes in; the set answers membership.
 let _openDocuments: string[] = [];
 let _openDocumentSet: HashSet<string> = new HashSet<string>();
+let _openDocumentUris: HashMap<string, string> = new HashMap<string, string>();
 
-export function markDocumentOpen(path: string): void {
+export function markDocumentOpen(path: string, uri: string = ""): void {
+	if (uri != "") _openDocumentUris.set(path, uri);
 	if (_openDocumentSet.has(path)) return;
 	_openDocumentSet.add(path);
 	_openDocuments.push(path);
 }
 
+export function documentUri(path: string): string {
+	return _openDocumentUris.get(path) ?? lspPathToUri(path);
+}
+
 export function markDocumentClosed(path: string): void {
+	_openDocumentUris.delete(path);
 	if (!_openDocumentSet.delete(path)) return;
 	const kept: string[] = [];
 	for (const open of _openDocuments) {

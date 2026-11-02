@@ -8,7 +8,7 @@ import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
 import { platform, env, cwd } from "std/process";
 import { mkdir, writeFile } from "std/fs";
-import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
+import { lspNotification, lspFormatMessage, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
@@ -17,7 +17,7 @@ import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection, targetMemoryMode } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
-import { dbGetSource, lspEnsureFileLoaded, isDocumentOpen } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded, isDocumentOpen, documentUri } from "./shared";
 import { LineIndex } from "../../../utils/sourceLines";
 import { lspPositionIn } from "../position";
 import { dbResolveImport } from "../../transam/index";
@@ -283,7 +283,7 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 	for (const dep of deps) {
 		const depPath = getFilePath(db.fileInput, dep);
 		if (depPath == "" || !isDocumentOpen(depPath)) continue;
-		const depUri = lspPathToUri(depPath);
+		const depUri = documentUri(depPath);
 		const diagJson = buildDiagnosticsJson(depUri, db, depPath);
 		// Skip publish if diagnostics unchanged since last time
 		const cached = _lastDiagCache.get(depPath) ?? "";

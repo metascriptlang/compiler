@@ -17,6 +17,7 @@ import { writeStderr } from "std/io";
 import { readFile, writeFile, mkdir, remove } from "std/fs";
 import { cwd, env } from "std/process";
 import { normalize } from "std/fs/path";
+import { physicalPath } from "../../../utils/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
@@ -29,7 +30,7 @@ import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, forgetChangedFile, isDocumentOpen, openDocuments,
-	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri, lspEnsureFileLoaded,
+	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri, lspEnsureFileLoaded, documentUri,
 } from "./shared";
 import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
@@ -165,7 +166,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const uri = lspDocumentUri(params);
 	const text = lspGetField(lspGetObjectField(params, "textDocument"), "text");
 	const path = lspUriToPath(uri);
-	markDocumentOpen(path);
+	markDocumentOpen(path, uri);
 
 	dbSetFileText(db, path, text);
 	const t1 = performance.now();
@@ -254,7 +255,7 @@ function reresolveOpenDocuments(db: TransAmDb): void {
 	for (const path of openDocuments()) {
 		if (getFileId(db.fileInput, path) < 0) continue;
 		recordImportsForFile(db, path, dbParse(db, path));
-		markFileChanged(path, lspPathToUri(path));
+		markFileChanged(path, documentUri(path));
 	}
 }
 
@@ -1840,7 +1841,7 @@ function syncTmpDir(name: string): string {
 	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
 	const dir = normalize(tmp + "/msc-lspsync-" + name + "-" + syncRunTag);
 	mkdir(dir);
-	return dir;
+	return physicalPath(dir);
 }
 
 function syncOpenParams(path: string, text: string): string {

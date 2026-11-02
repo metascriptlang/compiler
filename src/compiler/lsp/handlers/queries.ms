@@ -9,7 +9,7 @@ import {
 } from "../../transam/index";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField, lspGetArrayItems,
-	lspUriToPath, lspPathToUri, lspResponse, lspErrorResponse
+	lspUriToPath, lspResponse, lspErrorResponse
 } from "../protocol";
 import {
 	lspFmtLocation, lspFmtTextEdit,
@@ -34,7 +34,7 @@ import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
 import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import {
-	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc,
+	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc, documentUri,
 } from "./shared";
 import { LineIndex } from "../../../utils/sourceLines";
 import { lspPositionIn, lspSourcePosition } from "../position";
@@ -376,7 +376,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb, cand
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
 		pushUniqueLocations(
-			items, lspPathToUri(otherPath), dbGetSource(db, otherPath),
+			items, documentUri(otherPath), dbGetSource(db, otherPath),
 			sgQueryBySym(otherCtx, suggest.sym), includeDeclaration,
 		);
 	}
@@ -499,7 +499,7 @@ export function handleRename(id: string, params: string, db: TransAmDb, candidat
 		if (otherCtx == null) continue;
 		const otherEdits = buildFileEditsOfImport(otherCtx, suggest.sym, suggest.name, newName, dbGetSource(db, otherPath));
 		if (otherEdits.byteLength > 0) {
-			changes.push(lspJsonString(lspPathToUri(otherPath)) + ":" + otherEdits);
+			changes.push(lspJsonString(documentUri(otherPath)) + ":" + otherEdits);
 		}
 	}
 

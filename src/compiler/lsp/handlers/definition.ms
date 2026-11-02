@@ -5,7 +5,7 @@ import { readFile, exists } from "std/fs";
 import { resolveRuntimeDir } from "../../../utils/path";
 import { writeStderr } from "std/io";
 import {
-	lspUriToPath, lspPathToUri, dirname,
+	lspUriToPath, dirname,
 	lspResponse
 } from "../protocol";
 import {
@@ -15,7 +15,7 @@ import { sgQueryAtPosition } from "../../../checker/suggest";
 import { findExportedSymbol } from "../../../checker/context";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { Node, SourceLocation, makeLoc, Symbol, SymbolKind, NodeKind, TypeKind, EnumDeclData, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, documentUri } from "./shared";
 import { lspPosition, lspPositionAt } from "../position";
 import { dbResolveImport } from "../../transam/index";
 import { isAlphanumeric, newlineWidth } from "../../../lexer/chars";
@@ -136,7 +136,7 @@ function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modul
 	const at = findWord(hResult.value, nativeName, 0, hResult.value.byteLength);
 	if (at < 0) return "";
 	const start = locationAt(hResult.value, at);
-	const hUri = lspPathToUri(hPath);
+	const hUri = documentUri(hPath);
 	return lspFmtLocation(
 		hUri, start.line, start.column, start.line, start.column + nativeName.byteLength,
 	);
@@ -187,7 +187,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		const modPath = suggest.modulePath;
 		if (modPath != null && modPath != "" && modPath != path) {
 			lspEnsureFileLoaded(db, modPath);
-			defUri = lspPathToUri(modPath);
+			defUri = documentUri(modPath);
 			defSrc = dbGetSource(db, modPath);
 		} else {
 			defSrc = dbGetSource(db, path);
@@ -237,7 +237,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const declPath = exported.sym.modulePath != null && exported.sym.modulePath != "" ? exported.sym.modulePath : targetPath;
 	lspEnsureFileLoaded(db, declPath);
 
-	const targetUri = lspPathToUri(declPath);
+	const targetUri = documentUri(declPath);
 	let tLine = exported.sym.location.line - 1;
 	let tCol = exported.sym.location.column - 1;
 	const targetSrc = dbGetSource(db, declPath);
