@@ -103,8 +103,10 @@ test "E2E C: overloads differing by parameter type still register" {
 	assert c.ok, c.error;
 }
 
-test "E2E C: one overload without a return annotation stays allowed" {
+test "E2E C: a second body without a return annotation is a redefinition, not an ambiguity" {
 	const src = "function pick(a: int32): int32 { return a; }\nfunction pick(a: int32) { return a; }";
 	const c = compileToC(src);
-	assert c.ok, c.error;
+	assert !c.ok;
+	assert c.error.contains("redefinition of 'pick' — previous declaration with the same parameters at line 1");
+	assert !c.error.contains("leads to ambiguous calls");
 }
