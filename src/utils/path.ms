@@ -205,6 +205,26 @@ test "runtimeDirFrom finds the install behind a symlinked binary or a symlinked 
 	removeAll(probe);
 }
 
+test "a file through a linked directory has one physical path before it exists, while it exists and after it is deleted" {
+	if (platform == "windows") return;
+	const probe = join(cwd(), "out/physicalPathProbe-" + Math.floor(Math.random() * 1000000000));
+	ensureDir(join(probe, "real"));
+	assert symlink(join(probe, "real"), join(probe, "linked")).ok;
+	const linked = join(probe, "linked/a.ms");
+	const physical = join(realpath(join(probe, "real")), "a.ms");
+	const before = physicalPath(linked);
+	writeFile(linked, "");
+	const present = physicalPath(linked);
+	remove(linked);
+	const after = physicalPath(linked);
+	remove(join(probe, "linked"));
+	removeAll(probe);
+	assert before == physical, before;
+	assert present == physical, present;
+	assert after == physical, after;
+	assert physicalPath("/msNoSuchRoot/a.ms") == "/msNoSuchRoot/a.ms";
+}
+
 test "execPath names the running binary as an absolute path, whatever argv[0] says" {
 	assert execPath != "";
 	assert isAbsolute(execPath);

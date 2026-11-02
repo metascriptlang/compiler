@@ -4,7 +4,7 @@
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
 	dbForgetAllTypeChecks, getFileId, getFilePath, recordModuleImport,
-	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents,
+	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents, dbResolveImport,
 } from "../../transam/index";
 import { lookupLocal } from "../../../checker/symbol";
 import { lookupModuleCtx } from "../../../checker/instantiate";
@@ -14,8 +14,8 @@ import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
 import { getDynamicField, asString, asInt32 } from "std/serialize/json/accessors";
 import { writeStderr } from "std/io";
-import { readFile, writeFile, mkdir, remove } from "std/fs";
-import { cwd, env } from "std/process";
+import { readFile, writeFile, mkdir, remove, symlink } from "std/fs";
+import { cwd, env, platform } from "std/process";
 import { normalize } from "std/fs/path";
 import { physicalPath } from "../../../utils/path";
 import {
@@ -1999,6 +1999,49 @@ test "a deleted dependency is emptied and its importer reports it" {
 	assert dbGetSource(db, depPath) == "";
 	assert syncReportsAnything(db, usePath);
 	markDocumentClosed(usePath);
+}
+
+test "a document opened through a linked directory is the module an import of it resolves to" {
+	if (platform == "windows") return;
+	const real = syncTmpDir("linkedOpen");
+	const linked = real + "-link";
+	remove(linked);
+	assert symlink(real, linked).ok;
+	writeFile(real + "/dep.ms", DEP_WITH_PCT);
+	writeFile(real + "/use.ms", USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(linked + "/dep.ms", DEP_WITH_PERCENT), db);
+	const resolved = dbResolveImport(db, real + "/use.ms", "./dep");
+	const source = dbGetSource(db, resolved);
+	markDocumentClosed(real + "/dep.ms");
+	remove(linked);
+	assert resolved == real + "/dep.ms", resolved;
+	assert source == DEP_WITH_PERCENT, source;
+}
+
+test "a document opened through a linked directory is republished under its own URI when its dependency changes or is deleted" {
+	if (platform == "windows") return;
+	const real = syncTmpDir("linked");
+	const linked = real + "-link";
+	remove(linked);
+	assert symlink(real, linked).ok;
+	const depPath = linked + "/dep.ms";
+	const usePath = linked + "/use.ms";
+	writeFile(depPath, DEP_WITH_PCT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	writeFile(depPath, DEP_WITH_PERCENT);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
+	const changed = publishPendingDiagnostics(db);
+	remove(depPath);
+	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 3), db);
+	const deleted = publishPendingDiagnostics(db);
+	markDocumentClosed(real + "/use.ms");
+	remove(linked);
+	const useUri = lspJsonString(lspPathToUri(usePath));
+	assert changed.indexOf(useUri) >= 0 && changed.indexOf("'percent'") < 0, changed;
+	assert deleted.indexOf(useUri) >= 0 && deleted.indexOf("\"message\"") >= 0, deleted;
 }
 
 test "a created file resolves an open importer's missing import" {
