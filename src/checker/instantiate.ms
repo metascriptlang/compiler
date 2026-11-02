@@ -16,7 +16,7 @@ import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym, ownExtensionCount, extensionsUnsharedWith } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym, ownExtensionCount, extensionsUnsharedWith } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
