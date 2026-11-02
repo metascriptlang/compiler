@@ -30,7 +30,8 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { getAttachedOp, unwrapRef, unwrapRefNullUnion } from "../checker/types";
 import { lookupInstanceHook } from "../checker/instantiate";
-import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../checker/symbol";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl, routineFlagSet, RoutineFlag } from "../checker/symbol";
+import { routineFlags } from "../checker/context";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
@@ -752,6 +753,11 @@ function moduleRoutines(body: Node): HashSet<Node> {
 	return own;
 }
 
+function literalSuspends(lit: Node): boolean {
+	const flags = routineFlagSet(routineFlags(lit));
+	return flags.has(RoutineFlag.Async) || flags.has(RoutineFlag.Generator) || lit.flags.has(NodeFlag.WasAsync);
+}
+
 function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: HashSet<Symbol>[]): void {
 	if (body == null || (!top && envEscapes)) return;
 	const moduleScope = top ? moduleRoutines(body) : new HashSet<Node>();
@@ -770,6 +776,7 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: H
 	};
 	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
 	const routine = (lit: Node, holder: Symbol | null): void => {
+		if (literalSuspends(lit)) envEscapes = true;
 		if (top && !moduleScope.has(lit)) {
 			const names = namesOf(lit);
 			closureNames.set(lit, names);
