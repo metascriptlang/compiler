@@ -156,12 +156,13 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformCont
 	if (cd.arguments.length < 1) return node;
 	const promiseType = node.nodeType!;
 	const held = awaitedType(promiseType);
-	if (held == null || held.kind == TypeKind.Void) return node;
+	if (held == null) return node;
 
 	const valueSym = mintSym(ctx, SymbolKind.Parameter, "value", held);
 	const futSym = mintSym(ctx, SymbolKind.Variable, "$fut", promiseType);
+	const written = held.kind == TypeKind.Void ? null : makeTypedIdentResolved(valueSym, held, loc);
 	const stmts: Node[] = [makeLocalDecl(futSym, makeRetFutAlloc(held, loc), promiseType, loc)];
-	for (const s of ownedCompletion(futSym, held, makeTypedIdentResolved(valueSym, held, loc), promiseType, loc, ctx)) stmts.push(s);
+	for (const s of ownedCompletion(futSym, held, written, promiseType, loc, ctx)) stmts.push(s);
 	stmts.push(makeReturn(makeTypedIdentResolved(futSym, promiseType, loc), loc));
 
 	const fnSym = mintSym(ctx, SymbolKind.Function, "$resolved" + generatedFnCount().toString(), null);
