@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, isCancelled, extensionsOf } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf, isCancelled } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
