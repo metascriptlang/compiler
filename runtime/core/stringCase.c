@@ -160,21 +160,21 @@ static int64_t msConvertCase(const uint8_t* s, int64_t n, uint8_t* dst, bool upp
 }
 
 static msString msCaseOf(msString s, bool upper) {
-	if (s.len == 0) return msStringNewUninit(0);
-	const uint8_t* src = (const uint8_t*)s.p->data;
+	if (msStrLen(s) == 0) return msStringNewUninit(0);
+	const uint8_t* src = (const uint8_t*)msStrData(&s);
 	if (msStringIsAscii(s)) {
-		msString r = msStringNewUninit(s.len);
-		uint8_t* dst = (uint8_t*)r.p->data;
+		msString r = msStringNewUninit(msStrLen(s));
+		uint8_t* dst = (uint8_t*)msStrWritable(&r);
 		const uint8_t lo = upper ? 'a' : 'A';
-		for (int64_t i = 0; i < s.len; i++) {
+		for (int64_t i = 0; i < msStrLen(s); i++) {
 			const uint8_t c = src[i];
 			dst[i] = (uint8_t)(c ^ (((uint8_t)(c - lo) < 26) << 5));
 		}
 		msStringMarkAscii(r);
 		return r;
 	}
-	msString r = msStringNewUninit(msConvertCase(src, s.len, NULL, upper));
-	if (r.len > 0) msConvertCase(src, s.len, (uint8_t*)r.p->data, upper);
+	msString r = msStringNewUninit(msConvertCase(src, msStrLen(s), NULL, upper));
+	if (msStrLen(r) > 0) msConvertCase(src, msStrLen(s), (uint8_t*)msStrWritable(&r), upper);
 	return r;
 }
 
@@ -188,9 +188,9 @@ static bool msIsTrimmed(uint32_t cp) {
 }
 
 static msString msTrimOf(msString s, bool lead, bool trail) {
-	if (s.len == 0) return msStringNewUninit(0);
-	const uint8_t* p = (const uint8_t*)s.p->data;
-	int64_t a = 0, b = s.len;
+	if (msStrLen(s) == 0) return msStringNewUninit(0);
+	const uint8_t* p = (const uint8_t*)msStrData(&s);
+	int64_t a = 0, b = msStrLen(s);
 	uint32_t cp;
 	if (lead) {
 		for (int64_t w; a < b && (w = msDecodeCp(p + a, b - a, &cp)) > 0 && msIsTrimmed(cp);) a += w;
@@ -203,7 +203,7 @@ static msString msTrimOf(msString s, bool lead, bool trail) {
 		}
 	}
 	msString r = msStringNewUninit(b - a);
-	if (r.len > 0) memcpy(r.p->data, p + a, (size_t)(b - a));
+	if (msStrLen(r) > 0) memcpy(msStrWritable(&r), p + a, (size_t)(b - a));
 	if (msStringKnownAscii(s)) msStringMarkAscii(r);
 	return r;
 }

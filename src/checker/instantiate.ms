@@ -246,6 +246,7 @@ function recordInstanceHook(owner: Symbol, types: Type[], op: AttachedOp, sym: S
 export function lookupInstanceHook(type: Type, op: AttachedOp): Symbol | null {
 	let t = type;
 	while ((t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr) && t.typeReturn != null) t = t.typeReturn;
+	if (t.typeInst != null) t = t.typeInst;
 	if (t.kind == TypeKind.GenericInstance) {
 		const owner = declaredTypeSym(t);
 		return owner != null ? instanceHook(owner, t.typeChildren, op) : null;

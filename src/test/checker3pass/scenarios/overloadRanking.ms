@@ -133,3 +133,27 @@ const f = pair([1, 0, 2]);
 	assert text.startsWith("No matching overload for 'pair'"), "a literal of another length fits no tuple: " + text;
 	assert errors.length == 1, "every other call picks the overload its declared result needs: " + text;
 }
+
+test "a second body with the same parameters is a redefinition at its declaration, for functions and extensions" {
+	const source = `
+function g(x: int32): int32 { return x; }
+function g(x: int32): int32 { return x + 1; }
+class Box { n: int32 = 1; }
+function size(this b: Box): int32 { return 1; }
+function size(this b: Box): int32 { return 2; }
+`;
+	const errors = checkOnly(source).errors;
+	assert errors.length == 2, errors.join("\n");
+	assert errors[0] == "redefinition of 'g' — previous declaration with the same parameters at line 2", errors.join("\n");
+	assert errors[1] == "redefinition of 'size' — previous declaration with the same parameters at line 5", errors.join("\n");
+}
+
+test "a signature followed by its body, and bodies whose parameters differ, are not redefinitions" {
+	const errors = checkOnly(`
+function k(x: int32): int32;
+function k(x: int32 | string): int32 { return 1; }
+function h(x: int32): int32 { return x; }
+function h(x: string): string { return x; }
+`).errors;
+	assert errors.length == 0, errors.join("\n");
+}

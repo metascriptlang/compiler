@@ -41,7 +41,7 @@ import {
 	projectUri,
 	scenarioSlug,
 	PROJECT_URI,
-	frames, request, notification, initializeDrain, openParams, changeParams, positionParams,
+	frames, request, notification, initializeDrain, openParams, changeParams, positionParams, idKey, hasKey,
 } from "./replayScenarios";
 import { getDynamicField, at, length, asString, asInt32 } from "std/serialize/json/accessors";
 import { resolveRuntimeDir, tmpDir } from "../../utils/path";
@@ -1284,4 +1284,32 @@ test "a stream that ends on anything but a clean close exits 1" {
 	assert streamExitCode(FrameEnd.Closed) == 0;
 	assert streamExitCode(FrameEnd.Truncated) == 1;
 	assert streamExitCode(FrameEnd.EmptyBody) == 1;
+}
+
+const CANCEL_URI = "file:///lspwire/cancelok.ms";
+
+function renameErrorAfter(drains: string[][]): string {
+	const at = positionParams(CANCEL_URI, 1, 14);
+	const r = replay([...drains, frames([
+		request("\"q1\"", "textDocument/completion", positionParams(CANCEL_URI, 2, 17)),
+		request("\"q2\"", "textDocument/rename", at.byteSlice(0, at.byteLength - 1) + ",\"newName\":\"renamed\"}"),
+	])]);
+	for (const m of r.messages) {
+		if (hasKey(m, "id") && idKey(getDynamicField(m, "id")) == "s:q2") return hasKey(m, "error") ? getDynamicField(getDynamicField(m, "error"), "message").asString() : "";
+	}
+	return "no answer to q2";
+}
+
+test "a rename after a completion loaded the std modules answers its edits" {
+	const opened = [initializeDrain(), frames([notification("textDocument/didOpen", openParams(CANCEL_URI, "// x\nexport const value: int32 = 42;\nexport const w = value;"))])];
+	const error = renameErrorAfter(opened);
+	assert error == "", error;
+}
+
+test "a rename after cancelled requests and a completion answers its edits" {
+	const found = lspScenarioByName("cancelled requests do not poison the checks after them");
+	assert found.ok;
+	const drains = found.ok ? found.value.drains : [];
+	const error = renameErrorAfter(drains);
+	assert error == "", error;
 }

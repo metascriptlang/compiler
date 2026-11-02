@@ -4,7 +4,7 @@
 //
 // Array -> Span: ObjectLiteral(SpanType, { data: arr.p->data, len: arr.len })
 // SizedArray -> Span: ObjectLiteral(SpanType, { data: arr.data, len: N })
-// String -> Span<char>: ObjectLiteral(SpanType, { data: str.p->data, len: str.len })
+// String -> Span<char>: ObjectLiteral(SpanType, { data: msStringBytesOf(str), len: str.len })
 //
 // Also handles:
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
@@ -73,8 +73,8 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 						const lenExpr = makeNumber(srcType.typeValue, loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
-						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const bytes = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						// String -> Span<char>: { data: msStringBytesOf(str), len: str.len }
+						const bytes = makeCall(generatedRef("msStringBytesOf", loc), [d.convExpr], loc);
 						bytes.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
 						const lenExpr2 = makeMember(secondRead(d.convExpr), "len", loc);

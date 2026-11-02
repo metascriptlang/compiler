@@ -23,10 +23,10 @@ typedef struct {
 static int64_t liveKeys = 0;
 
 int64_t msChacha20KeyNew(msString raw) {
-	if (raw.len != 32 || !raw.p) return 0;
+	if (msStrLen(raw) != 32) return 0;
 	msChachaKey *key = (msChachaKey *)calloc(1, sizeof(msChachaKey));
 	if (key == NULL) return 0;
-	memcpy(key->bytes, raw.p->data, 32);
+	memcpy(key->bytes, msStrData(&raw), 32);
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 	return (int64_t)(uintptr_t)key;
 }
@@ -122,7 +122,7 @@ int64_t msChacha20SealInto(int64_t keyHandle, msString plainText, msString aad, 
 
 	if (ms_random_fill(out, NONCE_SIZE) != 0) return 0;
 
-	size_t pt_len = plainText.p ? (size_t)plainText.len : 0;
+	size_t pt_len = (size_t)msStrLen(plainText);
 
 	/* Layout: nonce(24) || cipherText || mac(16) */
 	aeadLock(
@@ -130,25 +130,25 @@ int64_t msChacha20SealInto(int64_t keyHandle, msString plainText, msString aad, 
 		out + NONCE_SIZE + pt_len,       /* mac */
 		key->bytes,                      /* key */
 		out,                             /* nonce */
-		aad.p ? (const uint8_t *)aad.p->data : NULL, aad.p ? (size_t)aad.len : 0,
-		plainText.p ? (const uint8_t *)plainText.p->data : NULL, pt_len);
+		msStrIsEmpty(aad) ? NULL : (const uint8_t *)msStrData(&aad), (size_t)msStrLen(aad),
+		msStrIsEmpty(plainText) ? NULL : (const uint8_t *)msStrData(&plainText), pt_len);
 	return 1;
 }
 
 int64_t msChacha20OpenInto(int64_t keyHandle, msString sealed, msString aad, uint8_t *out) {
 	const msChachaKey *key = (const msChachaKey *)(uintptr_t)keyHandle;
 	if (key == NULL) return 0;
-	if (!sealed.p || sealed.len < NONCE_SIZE + MAC_SIZE) return 0;
+	if (msStrLen(sealed) < NONCE_SIZE + MAC_SIZE) return 0;
 
-	const uint8_t *data = (const uint8_t *)sealed.p->data;
-	size_t ct_len = (size_t)sealed.len - NONCE_SIZE - MAC_SIZE;
+	const uint8_t *data = (const uint8_t *)msStrData(&sealed);
+	size_t ct_len = (size_t)msStrLen(sealed) - NONCE_SIZE - MAC_SIZE;
 
 	int r = aeadUnlock(
 		out,                             /* plain_text */
 		data + NONCE_SIZE + ct_len,      /* mac */
 		key->bytes,                      /* key */
 		data,                            /* nonce */
-		aad.p ? (const uint8_t *)aad.p->data : NULL, aad.p ? (size_t)aad.len : 0,
+		msStrIsEmpty(aad) ? NULL : (const uint8_t *)msStrData(&aad), (size_t)msStrLen(aad),
 		data + NONCE_SIZE, ct_len);
 	return r == 0 ? 1 : 0;
 }

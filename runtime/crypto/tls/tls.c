@@ -363,14 +363,14 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 	tlsTimedOut = 0;
 
 	char hostBuf[256];
-	if (hostname.len > 255) {
+	if (msStrLen(hostname) > 255) {
 		tlsSetError("hostname is longer than 255 bytes%s", "");
 		return 0;
 	}
-	int64_t hlen = hostname.len;
-	if (hostname.p) memcpy(hostBuf, hostname.p->data, hlen);
+	int64_t hlen = msStrLen(hostname);
+	memcpy(hostBuf, msStrData(&hostname), hlen);
 	hostBuf[hlen] = '\0';
-	if (caPath.len > 511) {
+	if (msStrLen(caPath) > 511) {
 		tlsSetError("CA path is longer than 511 bytes%s", "");
 		return 0;
 	}
@@ -391,9 +391,9 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath, int32_t t
 
 	char caBuf[512];
 	const char *explicitCa = NULL;
-	if (caPath.len > 0 && caPath.p) {
-		memcpy(caBuf, caPath.p->data, caPath.len);
-		caBuf[caPath.len] = '\0';
+	if (msStrLen(caPath) > 0) {
+		memcpy(caBuf, msStrData(&caPath), msStrLen(caPath));
+		caBuf[msStrLen(caPath)] = '\0';
 		explicitCa = caBuf;
 	}
 	if (explicitCa) {
@@ -544,8 +544,8 @@ int32_t msTlsWriteBytes(int64_t handle, const uint8_t *buf, int64_t len64) {
 }
 
 int32_t msTlsWrite(int64_t handle, msString data) {
-	if (data.len == 0 || !data.p) return 0;
-	return msTlsWriteBytes(handle, (const uint8_t*)data.p->data, data.len);
+	if (msStrLen(data) == 0) return 0;
+	return msTlsWriteBytes(handle, (const uint8_t*)msStrData(&data), msStrLen(data));
 }
 
 void msTlsClose(int64_t handle) {

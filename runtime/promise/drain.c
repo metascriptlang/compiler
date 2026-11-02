@@ -100,7 +100,7 @@ static void msReportRejection(void* error) {
 	fputs("Error: unhandled rejection: ", stderr);
 	if (error != NULL) {
 		msString m = ((msError*)error)->message;
-		if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
+		if (msStrLen(m) > 0) fwrite(msStrData(&m), 1, (size_t)msStrLen(m), stderr);
 	}
 	fputc('\n', stderr);
 }

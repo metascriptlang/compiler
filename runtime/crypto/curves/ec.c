@@ -49,8 +49,8 @@ static msCryptoEcKey* newKey(void) {
 
 static int64_t implEcGenerate(msString curve) {
 	size_t bits = 0;
-	if (curve.len == 4 && memcmp(msStringToCString(curve), "p256", 4) == 0) bits = 256;
-	if (curve.len == 4 && memcmp(msStringToCString(curve), "p384", 4) == 0) bits = 384;
+	if (msStrLen(curve) == 4 && memcmp(msStringToCString(curve), "p256", 4) == 0) bits = 256;
+	if (msStrLen(curve) == 4 && memcmp(msStringToCString(curve), "p384", 4) == 0) bits = 384;
 	if (bits == 0) return 0;
 	/* Exported once into the PK context and destroyed at once, so it needs the export usage. */
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -90,7 +90,7 @@ static msString implEcExportPublicPem(int64_t handle) {
 
 static int64_t implEcPublicOf(int64_t handle) {
 	msString pem = implEcExportPublicPem(handle);
-	if (pem.len == 0) return 0;
+	if (msStrLen(pem) == 0) return 0;
 	return implEcImportPublicPem(pem);
 }
 
@@ -117,7 +117,7 @@ static double implEcdsaVerify(int64_t handle, msString algorithm, msString data,
 	int hashLen = pkHash(algorithm, 0, data, &mdType, hash);
 	if (hashLen == 0) return 0.0;
 	int ret = mbedtls_pk_verify(&key->pk, mdType, hash, hashLen,
-	                             (const unsigned char*)msStringToCString(signature), signature.len);
+	                             (const unsigned char*)msStringToCString(signature), msStrLen(signature));
 	return (ret == 0) ? 1.0 : 0.0;
 }
 

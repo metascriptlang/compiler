@@ -123,7 +123,7 @@ msString msStringNewLen(int64_t len) {
 
 void msStringPrepareAdd(msString* s, int64_t addLen) {
 	int64_t newLen = s->len + addLen;
-	if (msIsLiteral(*s)) {
+	if (msStrNeedsNoFree(*s)) {
 		msStrPayload* oldP = s->p;
 		s->p = allocPayload(newLen);
 		s->p->cap = newLen;
@@ -156,28 +156,28 @@ void msStringAppendSlow(msString* dest, msString src) {
 		   (prepareAdd copies existing content forward), like std::string::append(*this). */
 		int aliased = (src.p == dest->p);
 		bool destKnown = dest->len == 0 || (dest->p != NULL && (dest->p->cap & MS_ASCII_CHECKED) != 0);
-		bool destAscii = dest->len == 0 || msStrKnownAscii(dest->p);
+		bool destAscii = dest->len == 0 || msStringKnownAscii(*dest);
 		bool srcAscii = msStrScanAscii(src.p, src.len);
 		msStringPrepareAdd(dest, src.len);
 		const char* srcData = aliased ? dest->p->data : src.p->data;
 		memcpy(dest->p->data + dest->len, srcData, src.len);
 		dest->len += src.len;
 		dest->p->data[dest->len] = '\0';
-		if (!srcAscii || (destKnown && !destAscii)) msStrMarkNonAscii(dest->p);
-		else if (destKnown) msStrMarkAscii(dest->p);
+		if (!srcAscii || (destKnown && !destAscii)) msStringMarkNonAscii(*dest);
+		else if (destKnown) msStringMarkAscii(*dest);
 	}
 }
 
 void msStringAppendCharSlow(msString* dest, char c) {
 	bool destKnown = dest->len == 0 || (dest->p != NULL && (dest->p->cap & MS_ASCII_CHECKED) != 0);
-	bool destAscii = dest->len == 0 || msStrKnownAscii(dest->p);
+	bool destAscii = dest->len == 0 || msStringKnownAscii(*dest);
 	bool cAscii = (unsigned char)c < 0x80;
 	msStringPrepareAdd(dest, 1);
 	dest->p->data[dest->len] = c;
 	dest->len++;
 	dest->p->data[dest->len] = '\0';
-	if (!cAscii || (destKnown && !destAscii)) msStrMarkNonAscii(dest->p);
-	else if (destKnown) msStrMarkAscii(dest->p);
+	if (!cAscii || (destKnown && !destAscii)) msStringMarkNonAscii(*dest);
+	else if (destKnown) msStringMarkAscii(*dest);
 }
 
 void msStringClear(msString* s) {
@@ -191,10 +191,10 @@ void msStringClear(msString* s) {
 /* ===== Comparison ===== */
 
 bool msStringEquals(msString a, msString b) {
-	if (a.len != b.len) return false;
-	if (a.len == 0) return true;
-	if (a.p == b.p) return true;
-	return memcmp(a.p->data, b.p->data, a.len) == 0;
+	if (msStrLen(a) != msStrLen(b)) return false;
+	if (msStrIsEmpty(a)) return true;
+	if (msStrSameBuffer(a, b)) return true;
+	return memcmp(msStrData(&a), msStrData(&b), msStrLen(a)) == 0;
 }
 
 /* ===== Extraction ===== */
@@ -239,9 +239,8 @@ void msStringAppendArr(msString* dest, const msString* arr, int64_t count) {
 
 #ifndef MSOS_SOLANA
 double msStringParseFloat(msString s) {
-	if (s.len == 0 || s.p == NULL) return 0.0;
-	/* Ensure null-terminated (it should be, but be safe) */
-	return strtod(s.p->data, NULL);
+	if (msStrIsEmpty(s)) return 0.0;
+	return strtod(msStrData(&s), NULL);
 }
 #endif
 

@@ -48,7 +48,7 @@ static const mz_zip_archive_file_stat* entryStat(struct msZipReaderCtx* c, int32
 }
 
 int64_t msZipReaderOpen(msString data) {
-    if (data.len <= 0 || !data.p) return 0;
+    if (msStrLen(data) <= 0) return 0;
 
     struct msZipReaderCtx* c = (struct msZipReaderCtx*)msMemAlloc0(sizeof(*c));
     c->statIndex = -1;
@@ -61,9 +61,9 @@ int64_t msZipReaderOpen(msString data) {
      * Peak memory cost: ~2× the input size during extraction. For the
      * typical ~1 MB package tarball this is fine; callers handling very
      * large archives can stream entry-by-entry to keep peaks down. */
-    c->dataCopy = (char*)msMemAlloc((size_t)data.len);
-    memcpy(c->dataCopy, data.p->data, (size_t)data.len);
-    c->dataLen = (size_t)data.len;
+    c->dataCopy = (char*)msMemAlloc((size_t)msStrLen(data));
+    memcpy(c->dataCopy, msStrData(&data), (size_t)msStrLen(data));
+    c->dataLen = (size_t)msStrLen(data);
 
     if (!mz_zip_reader_init_mem(&c->zip, c->dataCopy, c->dataLen, 0)) {
         free(c->dataCopy);
@@ -120,11 +120,11 @@ int32_t msZipReaderFind(int64_t handle, msString name) {
     if (!c) return -1;
 
     /* miniz compares a NUL-terminated name; an embedded NUL can match no entry. */
-    if (name.len > 0 && memchr(name.p->data, '\0', (size_t)name.len)) return -1;
+    if (msStrLen(name) > 0 && memchr(msStrData(&name), '\0', (size_t)msStrLen(name))) return -1;
 
     /* CASE_SENSITIVE keeps the exact, first-match answer; without it miniz
      * binary-searches a lowercased index and "A" would find "a". */
-    int idx = mz_zip_reader_locate_file(&c->zip, name.len > 0 ? name.p->data : "", NULL, MZ_ZIP_FLAG_CASE_SENSITIVE);
+    int idx = mz_zip_reader_locate_file(&c->zip, msStrLen(name) > 0 ? msStrData(&name) : "", NULL, MZ_ZIP_FLAG_CASE_SENSITIVE);
     return (int32_t)idx;
 }
 
@@ -166,17 +166,17 @@ int32_t msZipWriterAdd(int64_t handle, msString name, msString data, int32_t lev
 
     /* Copy name to a null-terminated buffer on the stack (miniz wants char*).
      * The archive filename limit is MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE (512). */
-    if (name.len <= 0 || !name.p) return -1;
-    if (name.len >= MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE) return -1;
+    if (msStrLen(name) <= 0) return -1;
+    if (msStrLen(name) >= MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE) return -1;
     char nameBuf[MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE];
-    memcpy(nameBuf, name.p->data, (size_t)name.len);
-    nameBuf[name.len] = '\0';
+    memcpy(nameBuf, msStrData(&name), (size_t)msStrLen(name));
+    nameBuf[msStrLen(name)] = '\0';
 
     if (level < 0) level = 6;
     if (level > 9) level = 9;
 
-    const void* dataPtr = (data.len > 0 && data.p) ? data.p->data : NULL;
-    size_t dataLen = (data.len > 0) ? (size_t)data.len : 0;
+    const void* dataPtr = msStrLen(data) > 0 ? msStrData(&data) : NULL;
+    size_t dataLen = (msStrLen(data) > 0) ? (size_t)msStrLen(data) : 0;
 
     if (!mz_zip_writer_add_mem(&c->zip, nameBuf, dataPtr, dataLen, (mz_uint)level)) {
         return -1;

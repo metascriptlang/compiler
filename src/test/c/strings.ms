@@ -41,10 +41,10 @@ test "E2E C: string literal pool" {
 }
 
 test "E2E C: string length remapping" {
-	const src = "function len(s: string): number { return s.length; }\nconst r = len(\"hi\");";
+	const src = "function len(s: string): number { return s.length + s.byteLength; }\nconst r = len(\"hi\");";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains(".len");
+	assert c.value.contains("msStrLen(s_p0)") && !c.value.contains("s_p0.len");
 }
 
 test "E2E C: string !== negates the std string == routine" {

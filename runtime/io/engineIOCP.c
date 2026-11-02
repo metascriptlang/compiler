@@ -291,12 +291,12 @@ void* msIoSend(msIoEngine* e, int fd, const char* data, int32_t len) {
 }
 
 void* msIoSendString(msIoEngine* e, int fd, msString data) {
-	if (data.p) msStringIncref(data);
+	msStringIncref(data);
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_SEND;
 	req->fd = fd;
-	req->buf = data.p ? data.p->data : "";
-	req->len = (int32_t)data.len;
+	req->buf = (char*)msStrData(&data);
+	req->len = (int32_t)msStrLen(data);
 	req->strRef = data;
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
 	req->fut = fut;
@@ -309,7 +309,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data) {
 
 	int rc = WSASend((SOCKET)(intptr_t)fd, &iov->wsaBuf, 1, NULL, 0, &iov->ov, NULL);
 	if (rc == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-		if (data.p) msStringDecref(data);
+		msStringDecref(data);
 		msFutureCompleteT((msFuture_int32*)fut, (int32_t)-1);
 		freeRequest(e, req);
 		freeOv(e, iov);
@@ -330,9 +330,9 @@ int32_t msFsWatchLastError(void) {
 
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	_msFsWatchLastError = 0;
-	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, msStrData(&path), (int)msStrLen(path), NULL, 0);
 	WCHAR* wide = (WCHAR*)msMemAlloc(((size_t)wideLen + 1) * sizeof(WCHAR));
-	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
+	MultiByteToWideChar(CP_UTF8, 0, msStrData(&path), (int)msStrLen(path), wide, wideLen);
 	wide[wideLen] = 0;
 	HANDLE dir = CreateFileW(wide, FILE_LIST_DIRECTORY,
 	                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
@@ -379,9 +379,9 @@ void msFsWatchClose(int32_t handle) {
 }
 
 int32_t msFsWriteSettled(msString path) {
-	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, msStrData(&path), (int)msStrLen(path), NULL, 0);
 	WCHAR* wide = (WCHAR*)msMemAlloc(((size_t)wideLen + 1) * sizeof(WCHAR));
-	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
+	MultiByteToWideChar(CP_UTF8, 0, msStrData(&path), (int)msStrLen(path), wide, wideLen);
 	wide[wideLen] = 0;
 	HANDLE file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	free(wide);
@@ -487,7 +487,7 @@ static int completeEntries(msIoEngine* e, const OVERLAPPED_ENTRY* entries, ULONG
 			break;
 		}
 		case MS_IO_SEND: {
-			if (req->strRef.p) msStringDecref(req->strRef);
+			msStringDecref(req->strRef);
 			req->strRef = MS_EMPTY_STRING;
 			msFutureCompleteT((msFuture_int32*)req->fut, failed ? (int32_t)-1 : (int32_t)bytes);
 			break;

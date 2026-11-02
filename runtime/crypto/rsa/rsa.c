@@ -90,7 +90,7 @@ static msString implRsaExportPublicPem(int64_t handle) {
 /* A new key that holds only the public half of the given one. */
 static int64_t implRsaPublicOf(int64_t handle) {
 	msString pem = implRsaExportPublicPem(handle);
-	if (pem.len == 0) return 0;
+	if (msStrLen(pem) == 0) return 0;
 	return implRsaImportPublicPem(pem);
 }
 
@@ -116,7 +116,7 @@ static double implRsaVerify(int64_t handle, msString algorithm, int32_t pss, msS
 	if (hashLen == 0) return 0.0;
 	int ret = mbedtls_pk_verify_ext(pss ? MBEDTLS_PK_SIGALG_RSA_PSS : MBEDTLS_PK_SIGALG_RSA_PKCS1V15,
 		&key->pk, mdType, hash, hashLen,
-		(const unsigned char*)msStringToCString(signature), signature.len);
+		(const unsigned char*)msStringToCString(signature), msStrLen(signature));
 	return (ret == 0) ? 1.0 : 0.0;
 }
 
@@ -135,7 +135,7 @@ static msString implRsaEncrypt(int64_t handle, msString data) {
 	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_encrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
-		(const uint8_t*)msStringToCString(data), data.len, NULL, 0, output, outSize, &olen);
+		(const uint8_t*)msStringToCString(data), msStrLen(data), NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
 	if (status != PSA_SUCCESS) { free(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);
@@ -156,7 +156,7 @@ static msString implRsaDecrypt(int64_t handle, msString data) {
 	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_decrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
-		(const uint8_t*)msStringToCString(data), data.len, NULL, 0, output, outSize, &olen);
+		(const uint8_t*)msStringToCString(data), msStrLen(data), NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
 	if (status != PSA_SUCCESS) { mbedtls_platform_zeroize(output, outSize); free(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);

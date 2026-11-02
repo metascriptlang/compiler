@@ -461,8 +461,8 @@ static inline void msPrintln(msString s) {
 void msPrintln(msString s);
 #else
 static inline void msPrintln(msString s) {
-    if (s.p != NULL && s.len > 0) {
-        fwrite(s.p->data, 1, (size_t)s.len, stdout);
+    if (msStrLen(s) > 0) {
+        fwrite(msStrData(&s), 1, (size_t)msStrLen(s), stdout);
     }
     fputc('\n', stdout);
 }
@@ -473,7 +473,7 @@ static inline void msPrintln(msString s) {
 #define msStringDecref(s)     ((void)0)
 #define msStringIncref(s)     ((void)0)
 static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
-#define msStringWasMoved(s)   do { (s).len = 0; (s).p = (msStrPayload*)0; } while(0)
+#define msStringWasMoved(s)   do { (s) = MS_EMPTY_STRING; } while(0)
 #define msStringSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
 #define msSwap(a, b)          ({ __typeof__(a) msSwapA_ = (a); __typeof__(a) msSwapB_ = (b); \
 	__typeof__(*msSwapA_) msSwapHeld_ = *msSwapA_; *msSwapA_ = *msSwapB_; *msSwapB_ = msSwapHeld_; (void)0; })

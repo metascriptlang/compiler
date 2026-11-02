@@ -60,3 +60,33 @@ class C {
 `;
 	assert errorsAt(source, "'super' must be called before accessing 'this'") == "7:24";
 }
+
+test "this in a loop after super() is accepted, for and while with continue alike" {
+	const source = BASE + `class B extends A {
+	constructor(n: int32) {
+		super();
+		for (let i = 0; i < n; i++) {
+			if (i > 2) { this.x += i; }
+		}
+		let j = 0;
+		while (j < n) {
+			if (j == 3) { j++; continue; }
+			this.x += j;
+			j++;
+		}
+	}
+}
+`;
+	assert checkOnly(source).errors.length == 0, checkOnly(source).errors.join("\n");
+}
+
+test "this in a loop before super() is refused, as the path into the loop has not passed it" {
+	const source = BASE + `class B extends A {
+	constructor(n: int32) {
+		for (let i = 0; i < n; i++) { this.x = i; }
+		super();
+	}
+}
+`;
+	assert errorsAt(source, "'super' must be called before accessing 'this'") == "8:33";
+}

@@ -30,10 +30,10 @@ static const msAesKey* keyOf(int64_t handle) {
 }
 
 int64_t msCryptoAesKeyNew(msString raw) {
-	if (raw.len != 16 && raw.len != 32) return 0;
+	if (msStrLen(raw) != 16 && msStrLen(raw) != 32) return 0;
 	msAesKey* key = (msAesKey*)calloc(1, sizeof(msAesKey));
 	if (key == NULL) return 0;
-	key->len = (size_t)raw.len;
+	key->len = (size_t)msStrLen(raw);
 	memcpy(key->bytes, msStringToCString(raw), key->len);
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 	return (int64_t)(uintptr_t)key;
@@ -98,10 +98,10 @@ static int sealHw(const msAesKey* key, const uint8_t* iv, msString aad, msString
 	mbedtls_aes_init(&aes);
 	uint8_t tag[16];
 	int done = mbedtls_aes_setkey_enc(&aes, (const uint8_t*)key->bytes, (unsigned int)key->len * 8) == 0
-		&& msAesGcmHw(&aes, iv, (const uint8_t*)msStringToCString(aad), (size_t)aad.len,
-			(const uint8_t*)msStringToCString(plainText), (size_t)plainText.len, out + GCM_NONCE_SIZE, tag, 0);
+		&& msAesGcmHw(&aes, iv, (const uint8_t*)msStringToCString(aad), (size_t)msStrLen(aad),
+			(const uint8_t*)msStringToCString(plainText), (size_t)msStrLen(plainText), out + GCM_NONCE_SIZE, tag, 0);
 	mbedtls_aes_free(&aes);
-	if (done) memcpy(out + GCM_NONCE_SIZE + plainText.len, tag, GCM_TAG_SIZE);
+	if (done) memcpy(out + GCM_NONCE_SIZE + msStrLen(plainText), tag, GCM_TAG_SIZE);
 	return done ? 1 : -1;
 }
 
@@ -110,7 +110,7 @@ static int openHw(const msAesKey* key, msString aad, const uint8_t* data, size_t
 	mbedtls_aes_init(&aes);
 	uint8_t tag[16];
 	int done = mbedtls_aes_setkey_enc(&aes, (const uint8_t*)key->bytes, (unsigned int)key->len * 8) == 0
-		&& msAesGcmHw(&aes, data, (const uint8_t*)msStringToCString(aad), (size_t)aad.len,
+		&& msAesGcmHw(&aes, data, (const uint8_t*)msStringToCString(aad), (size_t)msStrLen(aad),
 			data + GCM_NONCE_SIZE, ctLen, out, tag, 1);
 	mbedtls_aes_free(&aes);
 	if (!done) return -1;
@@ -121,15 +121,15 @@ static int openHw(const msAesKey* key, msString aad, const uint8_t* data, size_t
 
 /* out already holds the nonce in its first 12 bytes. */
 static int64_t sealWithNonceInOut(const msAesKey* key, msString plainText, msString aad, uint8_t* out) {
-	if (key == NULL || !gcmLengthsOk((uint64_t)aad.len, (uint64_t)plainText.len)) return 0;
-	size_t ptLen = (size_t)plainText.len;
+	if (key == NULL || !gcmLengthsOk((uint64_t)msStrLen(aad), (uint64_t)msStrLen(plainText))) return 0;
+	size_t ptLen = (size_t)msStrLen(plainText);
 	if (sealHw(key, out, aad, plainText, out) == 1) return 1;
 
 	mbedtls_gcm_context gcm;
 	mbedtls_gcm_init(&gcm);
 	int ok = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const uint8_t*)key->bytes, (unsigned int)key->len * 8) == 0
 		&& mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, ptLen, out, GCM_NONCE_SIZE,
-			(const uint8_t*)msStringToCString(aad), (size_t)aad.len,
+			(const uint8_t*)msStringToCString(aad), (size_t)msStrLen(aad),
 			(const uint8_t*)msStringToCString(plainText), out + GCM_NONCE_SIZE,
 			GCM_TAG_SIZE, out + GCM_NONCE_SIZE + ptLen) == 0;
 	mbedtls_gcm_free(&gcm);
@@ -139,14 +139,14 @@ static int64_t sealWithNonceInOut(const msAesKey* key, msString plainText, msStr
 /* Layout: nonce(12) || cipherText || tag(16) */
 int64_t msCryptoAesSealInto(int64_t keyHandle, msString plainText, msString aad, uint8_t* out) {
 	const msAesKey* key = keyOf(keyHandle);
-	if (key == NULL || !gcmLengthsOk((uint64_t)aad.len, (uint64_t)plainText.len)) return 0;
+	if (key == NULL || !gcmLengthsOk((uint64_t)msStrLen(aad), (uint64_t)msStrLen(plainText))) return 0;
 	if (ms_random_fill(out, GCM_NONCE_SIZE) != 0) return -1;
 	return sealWithNonceInOut(key, plainText, aad, out);
 }
 
 int64_t msCryptoAesSealWithNonceInto(int64_t keyHandle, msString nonce, msString plainText, msString aad, uint8_t* out) {
 	const msAesKey* key = keyOf(keyHandle);
-	if (nonce.len != GCM_NONCE_SIZE) return 0;
+	if (msStrLen(nonce) != GCM_NONCE_SIZE) return 0;
 	memcpy(out, msStringToCString(nonce), GCM_NONCE_SIZE);
 	return sealWithNonceInOut(key, plainText, aad, out);
 }
@@ -154,11 +154,11 @@ int64_t msCryptoAesSealWithNonceInto(int64_t keyHandle, msString nonce, msString
 int64_t msCryptoAesOpenInto(int64_t keyHandle, msString sealed, msString aad, uint8_t* out) {
 	const msAesKey* key = keyOf(keyHandle);
 	if (key == NULL) return 0;
-	if (sealed.len < GCM_NONCE_SIZE + GCM_TAG_SIZE) return 0;
+	if (msStrLen(sealed) < GCM_NONCE_SIZE + GCM_TAG_SIZE) return 0;
 
 	const uint8_t* data = (const uint8_t*)msStringToCString(sealed);
-	size_t ctLen = (size_t)sealed.len - GCM_NONCE_SIZE - GCM_TAG_SIZE;
-	if (!gcmLengthsOk((uint64_t)aad.len, (uint64_t)ctLen)) return 0;
+	size_t ctLen = (size_t)msStrLen(sealed) - GCM_NONCE_SIZE - GCM_TAG_SIZE;
+	if (!gcmLengthsOk((uint64_t)msStrLen(aad), (uint64_t)ctLen)) return 0;
 	uint8_t none = 0;
 	if (out == NULL) out = &none;
 	int hw = openHw(key, aad, data, ctLen, out);
@@ -168,7 +168,7 @@ int64_t msCryptoAesOpenInto(int64_t keyHandle, msString sealed, msString aad, ui
 	mbedtls_gcm_init(&gcm);
 	int ok = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const uint8_t*)key->bytes, (unsigned int)key->len * 8) == 0
 		&& mbedtls_gcm_auth_decrypt(&gcm, ctLen, data, GCM_NONCE_SIZE,
-			(const uint8_t*)msStringToCString(aad), (size_t)aad.len,
+			(const uint8_t*)msStringToCString(aad), (size_t)msStrLen(aad),
 			data + GCM_NONCE_SIZE + ctLen, GCM_TAG_SIZE,
 			data + GCM_NONCE_SIZE, out) == 0;
 	mbedtls_gcm_free(&gcm);
@@ -180,9 +180,9 @@ int64_t msCryptoAesOpenInto(int64_t keyHandle, msString sealed, msString aad, ui
 msString msCryptoAesCbcEncrypt(int64_t keyHandle, msString plainText, msString iv) {
 	const msAesKey* key = keyOf(keyHandle);
 	if (key == NULL) return MS_EMPTY_STRING;
-	if (iv.len != 16) return MS_EMPTY_STRING;
+	if (msStrLen(iv) != 16) return MS_EMPTY_STRING;
 
-	size_t ptLen = (size_t)plainText.len;
+	size_t ptLen = (size_t)msStrLen(plainText);
 	size_t paddedLen = ptLen + (16 - (ptLen % 16));
 	uint8_t* padded = (uint8_t*)msMemAlloc(paddedLen);
 	memcpy(padded, msStringToCString(plainText), ptLen);
@@ -208,10 +208,10 @@ msString msCryptoAesCbcEncrypt(int64_t keyHandle, msString plainText, msString i
 int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, msString cipherText, msString iv, msString* plainTextOut) {
 	const msAesKey* key = keyOf(keyHandle);
 	if (key == NULL) return 0;
-	if (iv.len != 16) return 0;
-	if (cipherText.len == 0 || cipherText.len % 16 != 0) return 0;
+	if (msStrLen(iv) != 16) return 0;
+	if (msStrLen(cipherText) == 0 || msStrLen(cipherText) % 16 != 0) return 0;
 
-	size_t ctLen = (size_t)cipherText.len;
+	size_t ctLen = (size_t)msStrLen(cipherText);
 	uint8_t ivCopy[16];
 	memcpy(ivCopy, msStringToCString(iv), 16);
 

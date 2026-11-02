@@ -1526,6 +1526,11 @@ function createSameTypeClosure(): SameTypeClosure {
 	return { recCheck: 0, left: [], right: [] };
 }
 
+function maybeInnerKeepingView(t: Type): Type {
+	if (!isMaybeType(t) || t.typeReturn == null) return t;
+	return isReadonlyView(t) ? createReadonlyView(t.typeReturn) : t.typeReturn;
+}
+
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	let src: Type = source;
@@ -1534,8 +1539,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (srcInner != null) src = srcInner;
 	const dstInner = nonNullMemberOfNullable(target);
 	if (dstInner != null) dst = dstInner;
-	if (isMaybeType(src) && src.typeReturn != null) src = src.typeReturn;
-	if (isMaybeType(dst) && dst.typeReturn != null) dst = dst.typeReturn;
+	src = maybeInnerKeepingView(src);
+	dst = maybeInnerKeepingView(dst);
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {
@@ -1906,6 +1911,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return TypeRelation.Exact;
 	}
 	if (crossesCharBoundary(actual, formal)) return TypeRelation.None;
+	if (isDoubleKind(formal) && isDoubleKind(actual)) return TypeRelation.Exact;
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
 	if (isIntegerType(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
@@ -2784,9 +2790,11 @@ test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), creat
 
 test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) == TypeRelation.None; }
 
-test "a float into an integer formal does not match; into a float formal it is from-literal" {
+test "a number into an integer formal does not match, into float32 it is from-literal, and into float64 it is exact" {
 	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) == TypeRelation.None;
-	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float32), numberType()) == TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) == TypeRelation.Exact;
+	assert typeRelation(numberType(), createPrimitive(TypeKind.Float64)) == TypeRelation.Exact;
 }
 
 test "generic param" {

@@ -380,12 +380,7 @@ msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end)
 		/* Deep-copy non-literal strings so result owns its elements independently.
 		   Without this, destroying either array would free the shared payload and
 		   corrupt the other (use-after-free). Same rule as msStringArrayPush/From. */
-		msString s = arr->p->data[start + i];
-		if (s.p != NULL && !msIsLiteral(s)) {
-			result.p->data[i] = msStringDup(s);
-		} else {
-			result.p->data[i] = s;
-		}
+		result.p->data[i] = msStringDup(arr->p->data[start + i]);
 	}
 	result.len = newLen;
 	return result;
@@ -397,12 +392,10 @@ msStringArray msStringArrayConcat(msStringArray* a, const msStringArray* b) {
 	msStringArray result = msStringArrayNew(totalLen);
 	/* Deep-copy non-literal strings — same rule as Slice/Push/From. */
 	for (int64_t i = 0; i < a->len; i++) {
-		msString s = a->p->data[i];
-		result.p->data[i] = (s.p != NULL && !msIsLiteral(s)) ? msStringDup(s) : s;
+		result.p->data[i] = msStringDup(a->p->data[i]);
 	}
 	for (int64_t i = 0; i < b->len; i++) {
-		msString s = b->p->data[i];
-		result.p->data[a->len + i] = (s.p != NULL && !msIsLiteral(s)) ? msStringDup(s) : s;
+		result.p->data[a->len + i] = msStringDup(b->p->data[i]);
 	}
 	result.len = totalLen;
 	return result;
@@ -455,11 +448,7 @@ void msStringArrayFill(msStringArray* arr, msString value) {
 	}
 	/* Fill with copies — for literals, struct copy is sufficient */
 	for (int64_t i = 0; i < arr->len; i++) {
-		if (msIsLiteral(value)) {
-			arr->p->data[i] = value;
-		} else {
-			arr->p->data[i] = msStringDup(value);
-		}
+		arr->p->data[i] = msStringDup(value);
 	}
 }
 
@@ -483,11 +472,7 @@ void msStringArrayGrow(msStringArray* arr, int64_t newLen, msString value) {
 		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, newLen - arr->len, sizeof(msString));
 	}
 	for (int64_t i = arr->len; i < newLen; i++) {
-		if (msIsLiteral(value)) {
-			arr->p->data[i] = value;
-		} else {
-			arr->p->data[i] = msStringDup(value);
-		}
+		arr->p->data[i] = msStringDup(value);
 	}
 	arr->len = newLen;
 }
@@ -691,7 +676,7 @@ void msNumberArraySplice3(msNumberArray* arr, int64_t start, int64_t deleteCount
 }
 
 void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount, msString item) {
-	if (item.p != NULL && !msIsLiteral(item)) item = msStringDup(item);
+	item = msStringDup(item);
 	start = msSpliceStart(start, arr->len);
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (deleteCount > arr->len - start) deleteCount = arr->len - start;

@@ -90,7 +90,7 @@ msString msFsReadFile(msString path) {
 	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
 	msString result = msStringNewUninit((int64_t)sz);
 	errno = 0;
-	size_t nread = fread(result.p->data, 1, (size_t)sz, f);
+	size_t nread = fread(msStrWritable(&result), 1, (size_t)sz, f);
 	if (nread != (size_t)sz && ferror(f)) {
 		_msFsLastErrno = errno != 0 ? errno : EIO;
 		msStringDestroy(result);
@@ -99,8 +99,8 @@ msString msFsReadFile(msString path) {
 	}
 	fclose(f);
 	if (nread == 0) { msStringDestroy(result); return MS_EMPTY_STRING; }
-	result.len = (int64_t)nread;
-	result.p->data[nread] = '\0';
+	msStrSetLen(&result, (int64_t)nread);
+	msStrWritable(&result)[nread] = '\0';
 	return result;
 }
 

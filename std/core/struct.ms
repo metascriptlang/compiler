@@ -287,8 +287,10 @@ test "reference hashing routes through the one mixing site" {
 // a scalar does not transparently widen to number during extension-method
 // lookup. Without one, `Map<K, V>`'s `key.hash()` fails to resolve.
 export function hash(this s: string): int64 { return hashString(s); }
-export function hash(this n: number): int64 { return hashNumber(n); }
 export function hash(this f: float64): int64 { return hashNumber(f as number); }
+when (!mscRanksNumberAsFloat64) {
+	export function hash(this n: number): int64 { return hashNumber(n); }
+}
 export function hash(this f: float32): int64 { return hashNumber(f as number); }
 export function hash(this b: boolean): int64 { return hashWangYi1(b ? (1 as uint64) : (0 as uint64)); }
 export function hash(this c: char): int64 { return hashWangYi1(c as uint64); }
@@ -303,8 +305,10 @@ export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: Readonly<unknown>): int64 { return hashPointer(u as Readonly<Ptr<void>>); }
 
 function sameKey<T>(a: T, b: T): boolean { return a == b; }
-function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
+when (!mscRanksNumberAsFloat64) {
+	function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
+}
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
 
 function keyHash<K>(key: Readonly<K>): int64 {

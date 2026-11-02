@@ -622,7 +622,9 @@ function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): v
 	}
 }
 
-// Lazily ensure all files imported by `filePath` have their exports in the registry.
+// Lazily ensure all files imported by `filePath` have their exports in the registry, recording
+// the import edges of every module it visits from that module's parse, because a module only
+// loaded (never opened or bound) has no edges and would bind its imports to nothing.
 // Depth-first: processes transitive deps before current (compileModule pattern).
 function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: HashSet<string>, startVersion: int32): void {
 	// Cycle protection — O(1) Set lookup
@@ -631,6 +633,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return;
+	const program = dbParse(db, filePath);
+	if (program != null) dbRecordDepImports(db, filePath, program);
 
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
@@ -646,22 +650,12 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Skip if already registered (but still recurse for transitive deps).
 		if (findModuleExports(db.exportRegistry, depPath) != null) {
-			// Ensure dep's import edges are recorded before recursing
-			if (!visited.has(depPath)) {
-				const regProgram = dbParse(db, depPath);
-				if (regProgram != null) dbRecordDepImports(db, depPath, regProgram);
-			}
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 			continue;
 		}
 
-		// Phase 1: parse dep, record its import edges, then depth-first recurse.
 		const depProgram = dbParse(db, depPath);
 		if (depProgram == null) continue;
-
-		// Record dep's own import edges so depth-first recursion can traverse them
-		dbRecordDepImports(db, depPath, depProgram);
-		// Recurse into transitive deps BEFORE resolving this dep
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 		const registeredAtNow = getRegisteredAt(db.moduleDeps, depId);
 		if (registeredAtNow != null && registeredAtNow >= db.revision.value) continue;
@@ -758,7 +752,6 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
 	if (program == null) return;
-	dbRecordDepImports(db, filePath, program);
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
 	const tmpCtx = createTempCollectContext(filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
@@ -3030,3 +3023,66 @@ test "building the prelude registers no module exports" {
 	dbEnsurePrelude(db);
 	assert db.preludeCtx == prelude;
 }
+
+function checkLoadedInOrder(files: string[][], order: string[]): string {
+	const db = createTransAmDb(100);
+	for (const file of files) dbSetFileText(db, file[0], file[1]);
+	return checkInOrder(db, order, true);
+}
+
+function checkInOrder(db: TransAmDb, order: string[], withErrors: boolean): string {
+	const failures: string[] = [];
+	for (const path of order) {
+		const ctx = dbTypeCheck(db, path);
+		if (ctx == null) return `${path}: no check`;
+		if (withErrors) for (const e of ctx.errors) failures.push(`${path}: ${e.message}`);
+		try {
+			ifaceDigest(ctx);
+		} catch (e) {
+			failures.push(`${path}: ${(e as Error).message}`);
+		}
+	}
+	return failures.join("; ");
+}
+
+function loadedChain(root: string, decl: string, name: string): string[][] {
+	return [
+		[`${root}/types.ms`, decl],
+		[`${root}/mid.ms`, `import { ${name} } from "./types";\nexport { ${name} } from "./types";\n`],
+		[`${root}/facade.ms`, `export { ${name} } from "./mid";\n`],
+	];
+}
+
+const EXT_DECL = 'export function asStr(this v: int32, def: string = ""): string {\n\treturn def;\n}\n';
+const CLASS_DECL = "export class Cell {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\n";
+
+test "a loaded module that imports an extension function and re-exports it, checked before its re-exporter, exports the declaration" {
+	const failure = checkLoadedInOrder(loadedChain("/loadedExt", EXT_DECL, "asStr"), ["/loadedExt/mid.ms", "/loadedExt/facade.ms"]);
+	assert failure == "", failure;
+}
+
+test "a loaded module that imports a class and re-exports it, checked before its re-exporter, exports the declaration" {
+	const failure = checkLoadedInOrder(loadedChain("/loadedClass", CLASS_DECL, "Cell"), ["/loadedClass/mid.ms", "/loadedClass/facade.ms"]);
+	assert failure == "", failure;
+}
+
+function checkStdInOrder(names: string[]): string {
+	const db = createTransAmDb(100);
+	const std = resolveRuntimeDir() + "/std";
+	dbSetStdPath(db, std);
+	dbEnsurePrelude(db);
+	const order: string[] = [];
+	for (const name of names) {
+		const text = readStdFile(`${std}/${name}`);
+		if (!text.ok) return `${name}: unreadable`;
+		dbSetFileText(db, `${std}/${name}`, text.value);
+		order.push(`${std}/${name}`);
+	}
+	return checkInOrder(db, order, false);
+}
+
+test "a loaded std module that re-exports an imported extension function, checked before the facade over it, gives the facade an interface" {
+	const failure = checkStdInOrder(["serialize/json/accessors.ms", "core/json/index.ms"]);
+	assert failure == "", failure;
+}
+

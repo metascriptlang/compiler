@@ -1724,7 +1724,7 @@ export function createMaybeType(inner: Type): Type {
 }
 
 function maybePayloadIs(cached: Type, inner: Type): boolean {
-	return sameDeclarationsIn(cached.typeReturn, inner, [], []);
+	return isReadonlyView(cached.typeReturn) == isReadonlyView(inner) && sameDeclarationsIn(cached.typeReturn, inner, [], []);
 }
 
 // A pair already being compared is taken as equal, the coinductive answer for a recursive type; every

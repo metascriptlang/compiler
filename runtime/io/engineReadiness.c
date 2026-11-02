@@ -214,12 +214,12 @@ void msIoEngineWake(msIoEngine* e) {
 }
 
 void* msIoSendString(msIoEngine* e, int fd, msString data) {
-	if (data.p) msStringIncref(data);  /* keep alive during async send */
+	msStringIncref(data);  /* keep alive during async send */
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_SEND;
 	req->fd = fd;
-	req->buf = data.p ? data.p->data : "";
-	req->len = (int32_t)data.len;
+	req->buf = (char*)msStrData(&data);
+	req->len = (int32_t)msStrLen(data);
 	req->offset = 0;
 	req->strRef = data;  /* stored for decref on completion */
 	msFuture_int32* fut = msFutureCreateT(msFuture_int32);
@@ -299,7 +299,7 @@ static int completeSend(msIoEngine* e, msIoRequest* req) {
 	}
 
 	/* Decref the msString that msIoSendString incref'd */
-	if (req->strRef.p) msStringDecref(req->strRef);
+	msStringDecref(req->strRef);
 	req->strRef = MS_EMPTY_STRING;
 
 	msFutureCompleteT((msFuture_int32*)req->fut, bytesSent < 0 ? (int32_t)bytesSent : req->len);
@@ -324,10 +324,8 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 }
 
 static void cancelRequest(msIoEngine* e, msIoRequest* req) {
-	if (req->strRef.p != NULL) {
-		msStringDecref(req->strRef);
-		req->strRef = MS_EMPTY_STRING;
-	}
+	msStringDecref(req->strRef);
+	req->strRef = MS_EMPTY_STRING;
 	if (req->fut != NULL) {
 		switch (req->op) {
 		case MS_IO_RECV:
@@ -531,9 +529,9 @@ static void fsWatchRelease(int32_t handle) {
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	(void)e;
 	_msFsWatchLastError = 0;
-	char* given = (char*)msMemAlloc((size_t)path.len + 1);
-	memcpy(given, path.p ? path.p->data : "", (size_t)path.len);
-	given[path.len] = 0;
+	char* given = (char*)msMemAlloc((size_t)msStrLen(path) + 1);
+	memcpy(given, msStrData(&path), (size_t)msStrLen(path));
+	given[msStrLen(path)] = 0;
 	struct stat info;
 	char resolved[PATH_MAX];
 	int err = 0;
@@ -626,9 +624,9 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 }
 
 int32_t msFsWriteSettled(msString path) {
-	char* name = (char*)msMemAlloc((size_t)path.len + 1);
-	if (path.len > 0) memcpy(name, path.p->data, (size_t)path.len);
-	name[path.len] = 0;
+	char* name = (char*)msMemAlloc((size_t)msStrLen(path) + 1);
+	if (msStrLen(path) > 0) memcpy(name, msStrData(&path), (size_t)msStrLen(path));
+	name[msStrLen(path)] = 0;
 	int absent = access(name, F_OK) != 0;
 	free(name);
 	return absent ? 1 : 0;

@@ -72,7 +72,7 @@ msString msFsReadFile(msString path) {
 		size_t size = (size_t)st.st_size;
 		direct = msStringNewUninit((int64_t)size);
 		errno = 0;
-		len = fread(direct.p->data, 1, size, f);
+		len = fread(msStrWritable(&direct), 1, size, f);
 		if (ferror(f)) {
 			_msFsLastErrno = errno != 0 ? errno : EIO;
 			msStringDecref(direct);
@@ -83,16 +83,16 @@ msString msFsReadFile(msString path) {
 		if (next == EOF) {
 			fclose(f);
 			if (len == 0) { msStringDecref(direct); return MS_EMPTY_STRING; }
-			direct.len = (int64_t)len;
-			direct.p->data[len] = '\0';
+			msStrSetLen(&direct, (int64_t)len);
+			msStrWritable(&direct)[len] = '\0';
 			return direct;
 		}
 		ungetc(next, f);
 		cap = size * 2;
 	}
 	char* buf = (char*)malloc(cap);
-	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); if (direct.len > 0) msStringDecref(direct); return MS_EMPTY_STRING; }
-	if (len > 0) { memcpy(buf, direct.p->data, len); msStringDecref(direct); }
+	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); if (msStrLen(direct) > 0) msStringDecref(direct); return MS_EMPTY_STRING; }
+	if (len > 0) { memcpy(buf, msStrData(&direct), len); msStringDecref(direct); }
 	for (;;) {
 		errno = 0;
 		len += fread(buf + len, 1, cap - len, f);

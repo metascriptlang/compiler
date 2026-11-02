@@ -23,7 +23,7 @@ import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPo
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { createAliveSet, CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
-import { inferredCallRaises } from "../../checker/raises";
+import { inferredCallRaises, statementCanRaise } from "../../checker/raises";
 import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
@@ -1832,8 +1832,15 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 			ctx.results.push(`((void)(${obj}), ${unstored})`);
 			return;
 		}
-		// .length/.byteLength → .len for runtime types (arrays, strings, spans)
+		// .length/.byteLength → .len for runtime types (arrays, spans); a string's byte count is msStrLen
 		// SizedArray: compile-time constant size (no .len field in C struct)
+		if (d.property == "length" || d.property == "byteLength" || d.property == "len") {
+			const objType = d.object.nodeType != null ? peelTransparentInstance(d.object.nodeType) : null;
+			if (objType != null && isStringLike(objType)) {
+				ctx.results.push(`msStrLen(${obj})`);
+				return;
+			}
+		}
 		if (d.property == "length" || d.property == "byteLength") {
 			const objType = d.object.nodeType != null ? peelTransparentInstance(d.object.nodeType) : null;
 			if (objType != null && objType.kind == TypeKind.SizedArray) {
@@ -1841,8 +1848,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 				return;
 			}
 			const isRuntimeType = objType != null && (objType.kind == TypeKind.Array
-				|| objType.kind == TypeKind.Span
-				|| isStringLike(objType));
+				|| objType.kind == TypeKind.Span);
 			if (isRuntimeType) {
 				ctx.results.push(obj + ".len");
 				return;
@@ -2611,6 +2617,7 @@ function nrvoTempNeedsZero(cType: string): boolean {
 function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.NullLiteral) return;
 	emitStmtsLine(p, `(void)(${arg});`);
+	if (!p.suppressRaiseCheck && statementCanRaise(node)) emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Readonly<Type>, node: Readonly<Node>, ctx: ExprEvalCtx): void {

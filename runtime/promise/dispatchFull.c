@@ -31,7 +31,7 @@ void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPoll
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorReadyHook = NULL;
-void msSetActorReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorReadyHook, hook, memory_order_release); }
+void msSetActorReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorReadyHook, hook, memory_order_relaxed); }
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -970,7 +970,7 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 /* Standard reference adjustTimeout pattern */
 static bool msLoopReadyIn(msDispatcher* d) {
 	if (d != NULL && msDequeLen(&d->callbacks) > 0) return true;
-	msActorPollFn actorReady = atomic_load_explicit(&msActorReadyHook, memory_order_acquire);
+	msActorPollFn actorReady = atomic_load_explicit(&msActorReadyHook, memory_order_relaxed);
 	return actorReady != NULL && actorReady();
 }
 

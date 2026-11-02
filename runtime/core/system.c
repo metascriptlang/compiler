@@ -86,8 +86,8 @@ static SRWLOCK msLineLock = SRWLOCK_INIT;
 
 static void msWriteLine(FILE* f, msString s) {
 	MS_LINE_LOCK(f);
-	if (s.p != NULL && s.len > 0) {
-		fwrite(s.p->data, 1, s.len, f);
+	if (msStrLen(s) > 0) {
+		fwrite(msStrData(&s), 1, msStrLen(s), f);
 	}
 	fputc('\n', f);
 	fflush(f);
@@ -159,7 +159,7 @@ void msTestErrorFlag(void) {
 	if (!msErr || msCurrException == NULL || msModuleEvalDepth > 0) return;
 	msString m = ((msError*)msCurrException)->message;
 	fputs("Error: unhandled exception: ", stderr);
-	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
+	if (msStrLen(m) > 0) fwrite(msStrData(&m), 1, (size_t)msStrLen(m), stderr);
 	fputc('\n', stderr);
 	msDecrefAny((void*)msCurrException);
 	msCurrException = NULL;
@@ -253,7 +253,7 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 	msString text = msNumberToString(val);
 	fprintf(stderr, "Error: value %.*s not in range %lld .. %lld\n",
-		(int)text.len, text.p != NULL ? text.p->data : "", (long long)lo, (long long)hi);
+		(int)msStrLen(text), msStrData(&text), (long long)lo, (long long)hi);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
@@ -261,7 +261,7 @@ _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 _Noreturn void msRaiseRangeErrorFToU64(double val) {
 	msString text = msNumberToString(val);
 	fprintf(stderr, "Error: value %.*s not in range 0 .. 18446744073709551615\n",
-		(int)text.len, text.p != NULL ? text.p->data : "");
+		(int)msStrLen(text), msStrData(&text));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
@@ -281,24 +281,24 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 }
 
 _Noreturn void msRaiseStrLitError(msString s, msString target) {
-	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)s.len, s.p != NULL ? s.p->data : "",
-		(int)target.len, target.p != NULL ? target.p->data : "");
+	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)msStrLen(s), msStrData(&s),
+		(int)msStrLen(target), msStrData(&target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 msString msStrLitConv(msString s, msString members, msString target) {
-	const char* list = members.p != NULL ? members.p->data : "";
-	const char* text = s.p != NULL ? s.p->data : "";
+	const char* list = msStrData(&members);
+	const char* text = msStrData(&s);
 	int64_t i = 0;
-	while (i < members.len) {
+	while (i < msStrLen(members)) {
 		int64_t n = 0;
-		while (i < members.len && list[i] != ':') {
+		while (i < msStrLen(members) && list[i] != ':') {
 			n = n * 10 + (list[i] - '0');
 			i += 1;
 		}
 		i += 1;
-		if (n == s.len && i + n <= members.len && memcmp(list + i, text, (size_t)n) == 0) return s;
+		if (n == msStrLen(s) && i + n <= msStrLen(members) && memcmp(list + i, text, (size_t)n) == 0) return s;
 		i += n;
 	}
 	msRaiseStrLitError(s, target);
@@ -306,8 +306,8 @@ msString msStrLitConv(msString s, msString members, msString target) {
 
 _Noreturn void msRaiseNumLitError(double v, msString target) {
 	msString shown = msNumberToString(v);
-	fprintf(stderr, "Error: invalid union conversion: %.*s is not %.*s\n", (int)shown.len, shown.p != NULL ? shown.p->data : "",
-		(int)target.len, target.p != NULL ? target.p->data : "");
+	fprintf(stderr, "Error: invalid union conversion: %.*s is not %.*s\n", (int)msStrLen(shown), msStrData(&shown),
+		(int)msStrLen(target), msStrData(&target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
@@ -326,16 +326,16 @@ _Noreturn void msRaiseUnreachable(const char* text) {
 }
 
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
-	const char* text = labels.p != NULL ? labels.p->data : "";
+	const char* text = msStrData(&labels);
 	int64_t start = 0;
 	int64_t seen = 0;
-	for (int64_t i = 0; i < labels.len && seen < tag; i += 1) {
+	for (int64_t i = 0; i < msStrLen(labels) && seen < tag; i += 1) {
 		if (text[i] == '|') { seen += 1; start = i + 1; }
 	}
 	int64_t end = start;
-	while (end < labels.len && text[end] != '|') end += 1;
+	while (end < msStrLen(labels) && text[end] != '|') end += 1;
 	if (seen < tag || tag < 0) end = start;
-	fprintf(stderr, "Error: %.*s%.*s'\n", (int)head.len, head.p != NULL ? head.p->data : "",
+	fprintf(stderr, "Error: %.*s%.*s'\n", (int)msStrLen(head), msStrData(&head),
 		(int)(end - start), text + start);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -343,7 +343,7 @@ _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
 
 _Noreturn void msMapFatal(msString msg) {
 	fprintf(stderr, "fatal error: %.*s\n",
-		(int)msg.len, (msg.p != NULL) ? msg.p->data : "");
+		(int)msStrLen(msg), msStrData(&msg));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(2);
 }
