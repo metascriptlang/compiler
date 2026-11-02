@@ -5,7 +5,7 @@
 // @stdout: call 7
 // @stdout: done
 // @serial
-// note: a guest that became a cycle root on the main thread is captured by a closure inside a struct moved into an actor's constructor. The actor later disowns a result whose custody walk goes through that closure env to the guest. Before the fix the guest kept its root entry in main's set and the walk stopped with "M1 owner violation". Reduced from a wings fact caller.
+// note: a guest that became a cycle root on the main thread is captured by a Sendable closure inside a struct moved into an actor's constructor; the closure only reads it, since a plain closure or one that calls a function value is refused at the actor boundary. The actor later disowns a result whose custody walk goes through that closure env to the guest. Before the fix the guest kept its root entry in main's set and the walk stopped with "M1 owner violation". Reduced from a wings fact caller.
 
 type Host = { get: () => int32 };
 class CallState { db: Host | null = null; }
@@ -13,13 +13,7 @@ class Guest {
 	state: CallState;
 	constructor() { this.state = new CallState(); }
 }
-struct Info { name: string; call: (db: Host) => int32; }
-function callGuest(guest: Guest, db: Host): int32 {
-	guest.state.db = db;
-	const got = db.get();
-	guest.state.db = null;
-	return got;
-}
+struct Info { name: string; call: Sendable<(db: Host) => int32>; }
 function touch(guest: Guest): void {
 	const alias = guest;
 	alias.state.db = null;
@@ -27,7 +21,7 @@ function touch(guest: Guest): void {
 function load(): Info {
 	const guest = new Guest();
 	touch(guest);
-	return { name: "m", call: (db: Host): int32 => callGuest(guest, db) };
+	return { name: "m", call: (db: Host): int32 => guest.state.db === null ? 7 : 0 };
 }
 class Worker {
 	info: Info;
