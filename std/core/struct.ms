@@ -287,7 +287,6 @@ test "reference hashing routes through the one mixing site" {
 // a scalar does not transparently widen to number during extension-method
 // lookup. Without one, `Map<K, V>`'s `key.hash()` fails to resolve.
 export function hash(this s: string): int64 { return hashString(s); }
-export function hash(this n: number): int64 { return hashNumber(n); }
 export function hash(this f: float64): int64 { return hashNumber(f as number); }
 export function hash(this f: float32): int64 { return hashNumber(f as number); }
 export function hash(this b: boolean): int64 { return hashWangYi1(b ? (1 as uint64) : (0 as uint64)); }
