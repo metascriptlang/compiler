@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-# usage: x25519Taint.sh <outDir> [impl]   run from the repo root (impl defaults to monocypher; pilot after integration)
 set -uo pipefail
 out=${1:?outDir}
 impl=${2:-monocypher}
+mode=${3:-all}
+check=${4:-all}
+[ "$#" -le 4 ] || { echo "FAIL expected outDir [impl [mode [check]]]" >&2; exit 2; }
+case "$mode" in
+	all) modes=(release danger) ;;
+	release|danger) modes=("$mode") ;;
+	*) echo "FAIL unknown taint mode: $mode" >&2; exit 2 ;;
+esac
+case "$check" in
+	all|kat|taint|leakyBranch|leakyIndex|noopKat|noopTaint) ;;
+	*) echo "FAIL unknown taint check: $check" >&2; exit 2 ;;
+esac
+selected() { [ "$check" = all ] || [ "$check" = "$1" ]; }
+success="REQUESTED CHECKS PASSED"
+[ "$mode" = all ] && [ "$check" = all ] && success="ALL CHECKS PASSED"
+echo "SCOPE impl=$impl mode=$mode check=$check"
 tools=$(cd "$(dirname "$0")" && pwd)
 deps=$out/testDeps
 failures=0
@@ -70,22 +85,33 @@ native() {
 	expect "$label" "$want" "$?" "$must" "$log"
 }
 
-for mode in release danger; do
+for mode in "${modes[@]}"; do
 	build() { "$tools/x25519Build.sh" "$out" "$1" "$mode" ${2:+"$2"} 2>"$out/build.$1.$mode.log" || { echo "FAIL build $1 $mode"; tail -n 20 "$out/build.$1.$mode.log"; failures=$((failures + 1)); return 1; }; }
 	hostFor() { echo "$out/host.$1.$mode${2:+.taint}"; }
 
-	build "$impl" && native "kat-native-$impl-$mode" 0 "STAGE kat ok" "$(hostFor "$impl")"
-	build "$impl" "$vgRoot" && run "taint-$impl-$mode" 0 "STAGE taint ok" "$(hostFor "$impl" t)" --taint
-	grep -q "ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)" "$out/taint-$impl-$mode.log" || { echo "FAIL taint-$impl-$mode: valgrind reported errors"; failures=$((failures + 1)); }
-
-	build leakyBranch "$vgRoot" && run "control-leakyBranch-$mode" 99 "Conditional jump or move depends on uninitialised value" "$(hostFor leakyBranch t)" --no-kat --taint --no-output-taint-check
-	frameIn "control-leakyBranch-$mode" x25519ScalarMult
-	grep -q "STAGE taint ok" "$out/control-leakyBranch-$mode.log" || { echo "FAIL control-leakyBranch-$mode: host did not finish its stages, status 99 is not from the kernel alone"; failures=$((failures + 1)); }
-	build leakyIndex "$vgRoot" && run "control-leakyIndex-$mode" 99 "Use of uninitialised value of size" "$(hostFor leakyIndex t)" --no-kat --taint --no-output-taint-check
-	frameIn "control-leakyIndex-$mode" x25519ScalarMult
-	grep -q "STAGE taint ok" "$out/control-leakyIndex-$mode.log" || { echo "FAIL control-leakyIndex-$mode: host did not finish its stages, status 99 is not from the kernel alone"; failures=$((failures + 1)); }
-	build noop && native "control-noop-kat-$mode" 10 "KAT FAIL" "$(hostFor noop)"
-	build noop "$vgRoot" && run "control-noop-taint-$mode" 14 "taint never reached the output" "$(hostFor noop t)" --no-kat --taint
+	if selected kat; then
+		build "$impl" && native "kat-native-$impl-$mode" 0 "STAGE kat ok" "$(hostFor "$impl")"
+	fi
+	if selected taint; then
+		build "$impl" "$vgRoot" && run "taint-$impl-$mode" 0 "STAGE taint ok" "$(hostFor "$impl" t)" --taint
+		grep -q "ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)" "$out/taint-$impl-$mode.log" || { echo "FAIL taint-$impl-$mode: valgrind reported errors"; failures=$((failures + 1)); }
+	fi
+	if selected leakyBranch; then
+		build leakyBranch "$vgRoot" && run "control-leakyBranch-$mode" 99 "Conditional jump or move depends on uninitialised value" "$(hostFor leakyBranch t)" --no-kat --taint --no-output-taint-check
+		frameIn "control-leakyBranch-$mode" x25519ScalarMult
+		grep -q "STAGE taint ok" "$out/control-leakyBranch-$mode.log" || { echo "FAIL control-leakyBranch-$mode: host did not finish its stages, status 99 is not from the kernel alone"; failures=$((failures + 1)); }
+	fi
+	if selected leakyIndex; then
+		build leakyIndex "$vgRoot" && run "control-leakyIndex-$mode" 99 "Use of uninitialised value of size" "$(hostFor leakyIndex t)" --no-kat --taint --no-output-taint-check
+		frameIn "control-leakyIndex-$mode" x25519ScalarMult
+		grep -q "STAGE taint ok" "$out/control-leakyIndex-$mode.log" || { echo "FAIL control-leakyIndex-$mode: host did not finish its stages, status 99 is not from the kernel alone"; failures=$((failures + 1)); }
+	fi
+	if selected noopKat; then
+		build noop && native "control-noop-kat-$mode" 10 "KAT FAIL" "$(hostFor noop)"
+	fi
+	if selected noopTaint; then
+		build noop "$vgRoot" && run "control-noop-taint-$mode" 14 "taint never reached the output" "$(hostFor noop t)" --no-kat --taint
+	fi
 done
 
-[ "$failures" = 0 ] && echo "ALL CHECKS PASSED" || { echo "$failures CHECK(S) FAILED"; exit 1; }
+[ "$failures" = 0 ] && echo "$success" || { echo "$failures CHECK(S) FAILED"; exit 1; }

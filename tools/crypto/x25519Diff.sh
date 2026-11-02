@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 set -uo pipefail
-out=${1:?usage: x25519Diff.sh <outDir> [samplesPerRandomAxis [seed]]   run from the repo root}
+out=${1:?usage: x25519Diff.sh <outDir> [samplesPerRandomAxis [seed [mode]]]   run from the repo root}
 samples=${2:-2000}
 seed=${3:-0x25519d1ff}
+mode=${4:-all}
+[ "$#" -le 4 ] || { echo "FAIL expected outDir [samplesPerRandomAxis [seed [mode]]]" >&2; exit 2; }
+case "$mode" in
+	all) modes=(release danger) ;;
+	release|danger) modes=("$mode") ;;
+	*) echo "FAIL unknown differential mode: $mode" >&2; exit 2 ;;
+esac
+success="REQUESTED CHECKS PASSED"
+[ "$mode" = all ] && success="ALL CHECKS PASSED"
+echo "SCOPE mode=$mode"
 tools=$(cd "$(dirname "$0")" && pwd)
 harness=src/test/crypto/harness
 deps=$out/testDeps
@@ -72,7 +82,7 @@ run() {
 	expect "$label" "$want" "$?" "$must" "$out/$label.log"
 }
 
-for mode in release danger; do
+for mode in "${modes[@]}"; do
 	build pilot "$mode" || continue
 	pilotHost=$hostPath
 	run "diff-pilot-$mode" 0 "RESULT PASS" "$pilotHost" --candidate-label pilot --seed "$seed" --samples "$samples"
@@ -102,4 +112,4 @@ for mode in release danger; do
 	fi
 done
 
-[ "$failures" = 0 ] && echo "ALL CHECKS PASSED" || { echo "$failures CHECK(S) FAILED"; exit 1; }
+[ "$failures" = 0 ] && echo "$success" || { echo "$failures CHECK(S) FAILED"; exit 1; }
