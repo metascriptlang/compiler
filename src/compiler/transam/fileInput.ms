@@ -113,6 +113,12 @@ export function hasFile(store: TaFileInputStore, filePath: string): boolean {
 	return getFileId(store, filePath) >= 0;
 }
 
+// A path a resolution probed and found no file at; a check that probed it depends on it.
+export function isProbedAbsent(store: TaFileInputStore, filePath: string): boolean {
+	const idx = findByPath(store, filePath);
+	return idx >= 0 && !store.files[idx].present;
+}
+
 // Reverse lookup: fileId → file path. Returns "" if not found.
 export function getFilePath(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);

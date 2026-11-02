@@ -1392,7 +1392,7 @@ export {
 export { TaCacheStore, createCacheStore, cacheGet, cachePut } from "./cache";
 export {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileChangedAt, getFileId, getFilePath, hasFile,
+	setFileText, getFileText, getFileChangedAt, getFileId, getFilePath, hasFile, isProbedAbsent,
 	getFileCount, getFilePathByIndex
 } from "./fileInput";
 export {

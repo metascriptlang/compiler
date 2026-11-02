@@ -1,6 +1,6 @@
 import {
-	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbResolveImport, dbForgetAllTypeChecks,
-	dbGetFileCount, getFileId, recordModuleImport, getDirectImports,
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbResolveImport,
+	getFileId, recordModuleImport, getDirectImports,
 	dbSetGlobalImports, dbSetStdPath, cacheGet, createQueryKey, TaQueryKind,
 } from "../transam/index";
 import { collectImportCalls } from "../../module/loader";
@@ -22,11 +22,9 @@ function staticImportSources(program: Node): string[] {
 }
 
 function walkImports(db: TransAmDb, roots: string[], stdLeaves: string[] | null = null): string[] {
-	const knownBefore = dbGetFileCount(db);
 	const reached = new HashSet<string>();
 	const universe: string[] = [];
 	const pending: string[] = roots.slice();
-	let rebound = false;
 	while (pending.length > 0) {
 		const path = pending.pop()!;
 		if (reached.has(path)) continue;
@@ -45,7 +43,6 @@ function walkImports(db: TransAmDb, roots: string[], stdLeaves: string[] | null 
 			if (target == "") return;
 			const targetId = getFileId(db.fileInput, target);
 			if (recordEdge) recordModuleImport(db.moduleDeps, fileId, targetId);
-			if (fileId < knownBefore && targetId >= knownBefore) rebound = true;
 			pending.push(target);
 		};
 		for (const source of staticImportSources(program)) follow(source, true);
@@ -53,7 +50,6 @@ function walkImports(db: TransAmDb, roots: string[], stdLeaves: string[] | null 
 			for (const source of collectImportCalls(program)) follow(source, false);
 		}
 	}
-	if (rebound) dbForgetAllTypeChecks(db);
 	universe.sort();
 	return universe;
 }

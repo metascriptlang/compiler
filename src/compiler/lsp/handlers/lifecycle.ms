@@ -3,7 +3,7 @@
 
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
-	dbForgetAllTypeChecks, getFileId, getFilePath, recordModuleImport,
+	getFileId, getFilePath, recordModuleImport, isProbedAbsent,
 	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents, dbResolveImport,
 } from "../../transam/index";
 import { lookupLocal } from "../../../checker/symbol";
@@ -230,6 +230,8 @@ export function handleDidChangeWatchedFiles(params: string, db: TransAmDb): stri
 			refreshFromDisk(db, path);
 		} else if (lspGetNumberField(change, "type") == FILE_CREATED) {
 			created = true;
+			const probed = normalize(path);
+			if (isProbedAbsent(db.fileInput, probed)) lspEnsureFileLoaded(db, probed);
 		}
 	}
 	if (created) {
@@ -251,7 +253,6 @@ function refreshFromDisk(db: TransAmDb, path: string): void {
 }
 
 function reresolveOpenDocuments(db: TransAmDb): void {
-	dbForgetAllTypeChecks(db);
 	for (const path of openDocuments()) {
 		if (getFileId(db.fileInput, path) < 0) continue;
 		recordImportsForFile(db, path, dbParse(db, path));
