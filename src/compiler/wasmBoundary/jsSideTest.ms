@@ -246,8 +246,8 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 
 test "js side: a callback Span parameter arrives as a copied view, a writable one is copied back after the call even when the callback throws" {
 	const code = bindingsFor(["sumBy", "edit"]).modules[0].code;
-	assert code.includes("const id1 = __msb.push((x0, x1) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; return a1(s0); });");
-	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; try { a0(s0, x2); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); } });");
+	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; return a1(s0); } finally { __msb.lent -= 1; } });");
+	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; try { a0(s0, x2); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
 }
 
 test "js side: the prelude carries the string glue once and reads the heap fresh" {
@@ -433,7 +433,8 @@ test "js side: a Span is range-checked before its copy is allocated, so a throw 
 test "js side: the registry poisons itself on the first exception that crossed the wasm frames and every later wrapper call refuses" {
 	const p = bindingsFor(["add64"]).prelude;
 	assert p.includes("\tlet dead = false;\n\tlet cause;\n");
-	assert p.includes("\t\tenter() { if (dead) throw new Error(\"the wasm half cannot run again: a JS exception crossed its frames\", { cause }); },\n");
+	assert p.includes("\t\tenter() {\n\t\t\tif (dead) throw new Error(\"the wasm half cannot run again: a JS exception crossed its frames\", { cause });\n\t\t\tif (this.lent !== 0) throw new Error(\"a wasm function was called while a Span was lent to a JS callback: the callback's copy and the wasm side's would diverge, so call it after the callback returns\");\n\t\t},\n");
+	assert p.includes("\t\tlent: 0,\n");
 	assert p.includes("\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },\n");
 }
 
@@ -610,7 +611,7 @@ test "js side: without two views and a writer a call keeps one copy per argument
 	assert !p.modules[0].code.includes("const hb = []");
 	assert !p.modules[0].code.includes("__msbCopyInViews");
 	assert !p.modules[0].code.includes("__msbVecViews");
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Int32Array, false), off: 0, len: x1 }; const s1 = { base: __msbVecOut(x2 >>> 0, x3, Int32Array, false), off: 0, len: x3 }; a0(s0, s1); });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Int32Array, false), off: 0, len: x1 }; const s1 = { base: __msbVecOut(x2 >>> 0, x3, Int32Array, false), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
 	assert !p.prelude.includes("__msbGroups");
 	assert !p.prelude.includes("__msbCopyInViews");
 }
@@ -629,8 +630,15 @@ test "js side: the shared copy is range-checked and recorded before it is filled
 
 test "js side: two views handed to a callback of which one is written share one snapshot of wasm memory and are written back by range" {
 	const p = bindingsFor(["smearBy"]);
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { const vs = __msbVecViews([[x0 >>> 0, x1, Float64Array, false], [x2 >>> 0, x3, Float64Array, false]]); try { a0(vs[0], vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Float64Array); } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Float64Array, false], [x2 >>> 0, x3, Float64Array, false]]); try { a0(vs[0], vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Float64Array); } } finally { __msb.lent -= 1; } });");
 	assert p.prelude.includes("function __msbVecViews(rs) {");
 	assert p.prelude.includes("function __msbGroups(vs) {");
 	assert !p.prelude.includes("__msbCopyInViews");
+}
+
+test "js side: a callback that is handed a Span counts the lend around its body and a callback without one does not" {
+	const code = bindingsFor(["sumBy", "evaluate"]).modules[0].code;
+	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try {");
+	assert code.includes("} finally { __msb.lent -= 1; } });");
+	assert code.split("__msb.lent").length == 3;
 }

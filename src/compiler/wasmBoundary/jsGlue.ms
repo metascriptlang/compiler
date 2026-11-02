@@ -296,6 +296,9 @@ export function preludeFor(
 	const rejectFull = `throw new RangeError("${tableFull}")`;
 	const deadGlue = "the wasm half cannot run again: a JS exception crossed its "
 		+ "frames";
+	const lentGlue = "a wasm function was called while a Span was lent to a JS "
+		+ "callback: the callback's copy and the wasm side's would diverge, so "
+		+ "call it after the callback returns";
 	const glue = checked
 		? GLUE.concat(views).concat(CHECK_GLUE)
 		: GLUE.concat(views);
@@ -327,12 +330,16 @@ export function preludeFor(
 		"\t\t\tfree.push(s);",
 		"\t\t},",
 		"\t\ttakes: [],",
+		"\t\tlent: 0,",
 		"\t\tcb(id) {",
 		`\t\t\tconst s = id & ${SLOT_MASK};`,
 		rejectStale("callback used after its call returned"),
 		"\t\t\treturn vals[s];",
 		"\t\t},",
-		`\t\tenter() { if (dead) throw new Error("${deadGlue}", { cause }); },`,
+		`\t\tenter() {`,
+		`\t\t\tif (dead) throw new Error("${deadGlue}", { cause });`,
+		`\t\t\tif (this.lent !== 0) throw new Error("${lentGlue}");`,
+		"\t\t},",
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t};",
 		"})();",

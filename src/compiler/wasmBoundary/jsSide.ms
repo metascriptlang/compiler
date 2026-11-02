@@ -227,6 +227,10 @@ function wireRead(kind: BoundaryKind, nullable: boolean, w: int32): WireRead {
 	};
 }
 
+function lentWhile(statements: string): string {
+	return `__msb.lent += 1; try { ${statements} } finally { __msb.lent -= 1; }`;
+}
+
 function adapterOf(
 	cb: BoundaryCallback,
 	target: string,
@@ -280,11 +284,12 @@ function adapterOf(
 	const returned = isVoid ? "" : jsValueToWire(cb.result, call);
 	const body = isVoid ? `${call};` : `return ${returned};`;
 	const params = names.join(", ");
-	if (writesBack != "") {
-		const guarded = `try { ${body} } finally { ${writesBack}}`;
-		return `(${params}) => { ${views}${guarded} }`;
+	if (views != "") {
+		const inner = writesBack != ""
+			? `${views}try { ${body} } finally { ${writesBack}}`
+			: `${views}${body}`;
+		return `(${params}) => { ${lentWhile(inner)} }`;
 	}
-	if (views != "") return `(${params}) => { ${views}${body} }`;
 	if (isVoid) return `(${params}) => { ${call}; }`;
 	return `(${params}) => ${returned}`;
 }
