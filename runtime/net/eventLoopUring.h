@@ -36,6 +36,8 @@ static inline int32_t msHasUringEventLoop(void) {
 #include <netinet/tcp.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <stdbool.h>
+#include <poll.h>
 #include "runtime/promise/pool.h"
 
 /* ===== Ring management ===== */
@@ -61,6 +63,7 @@ static int __uring_enter(int fd, unsigned toSubmit, unsigned minComplete, unsign
 #define URING_OP_SEND   2
 #define URING_OP_TIMEOUT 3
 #define URING_OP_CANCEL  4
+#define URING_OP_WAKE    5
 
 /* Per-thread io_uring ring for event loop */
 typedef struct {
@@ -289,11 +292,39 @@ static inline void msUringSubmitCancel(int32_t fd, int32_t op) {
 	__uringSubmitSqe();
 }
 
+/* The thread's loop-channel wake pipe and its scheduler's wake eventfd, each watched by a
+ * oneshot POLL_ADD that is re-armed after it completes. */
+static _Thread_local int _uringWakeFds[2] = { -1, -1 };
+static _Thread_local bool _uringWakeArmed[2];
+
+static inline void __uringArmWakes(void) {
+	if (_uringWakeFds[0] < 0) {
+		extern int32_t msGetWakePipeFd(void);
+		extern int msIoEngineSchedWakeFd(void);
+		_uringWakeFds[0] = msGetWakePipeFd();
+		_uringWakeFds[1] = msIoEngineSchedWakeFd();
+	}
+	for (int i = 0; i < 2; i++) {
+		if (_uringWakeFds[i] < 0 || _uringWakeArmed[i]) continue;
+		struct io_uring_sqe* sqe = __uringGetSqe();
+		if (sqe == NULL) return;
+		sqe->opcode = IORING_OP_POLL_ADD;
+		sqe->fd = _uringWakeFds[i];
+		sqe->poll_events = POLLIN;
+		sqe->user_data = URING_TAG(i, URING_OP_WAKE);
+		__uringSubmitSqe();
+		_uringWakeArmed[i] = true;
+	}
+}
+
 /* Submit all pending + wait for completions, at most timeoutMs when it is >= 0.
- * Returns number of events; timer and cancel completions are not events. */
+ * Returns number of events; timer, cancel and wake completions are not events. */
 static inline int32_t msUringWait(int32_t timeoutMs) {
 	extern bool msLoopHasReadyWork(void);
-	if (timeoutMs > 0 && msLoopHasReadyWork()) timeoutMs = 0;
+	if (timeoutMs > 0) {
+		__uringArmWakes();
+		if (msLoopHasReadyWork()) timeoutMs = 0;
+	}
 	msUringEvt* r = &_uringEvt;
 	struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
 	if (timeoutMs >= 0
@@ -305,6 +336,7 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 			timer->fd = -1;
 			timer->addr = (uint64_t)(uintptr_t)&wait;
 			timer->len = 1;
+			timer->off = 1;
 			timer->user_data = URING_TAG(-1, URING_OP_TIMEOUT);
 			__uringSubmitSqe();
 		}
@@ -326,6 +358,14 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 		struct io_uring_cqe* cqe = &r->cqes[cqHead & *r->cqMask];
 		int32_t op = URING_TAG_OP(cqe->user_data);
 		if (op == URING_OP_TIMEOUT || op == URING_OP_CANCEL) { cqHead++; continue; }
+		if (op == URING_OP_WAKE) {
+			int i = URING_TAG_FD(cqe->user_data);
+			char drain[64];
+			while (read(_uringWakeFds[i], drain, sizeof(drain)) > 0) {}
+			_uringWakeArmed[i] = false;
+			cqHead++;
+			continue;
+		}
 		_uringEvtBuf[count].fd = URING_TAG_FD(cqe->user_data);
 		_uringEvtBuf[count].op = URING_TAG_OP(cqe->user_data);
 		int32_t res = (int32_t)cqe->res;

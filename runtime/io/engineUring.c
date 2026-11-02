@@ -47,6 +47,7 @@ static int io_uring_enter(int fd, unsigned to_submit, unsigned min_complete, uns
  * distinguish + re-arm the wake instead of dispatching it as a completion. */
 #define MS_URING_WAKE_UD ((uint64_t)0xACC0DE17EFD1ULL)
 #define MS_URING_TIMEOUT_UD ((uint64_t)0xACC0DE17EFD3ULL)
+#define MS_URING_LOOP_UD ((uint64_t)0xACC0DE17EFD5ULL)
 
 struct msUring {
 	int fd;
@@ -138,6 +139,8 @@ struct msIoEngine {
 	struct msUring ring;
 	msIoRequest* freeList;
 	int freeCount;
+	int loopFd;   /* the thread's loop-channel wake pipe, from msIoEngineAddWakeFd; -1 = none */
+	bool loopArmed;
 	int wakeFd;   /* eventfd for targeted cross-thread actor wake (Amendment B / I16); -1 = none */
 };
 
@@ -176,6 +179,19 @@ static void uringArmWake(msIoEngine* e) {
 	uringSubmit(&e->ring);
 }
 
+static void uringArmLoop(msIoEngine* e) {
+	if (e->loopFd < 0 || e->loopArmed) return;
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) return;
+	sqe->opcode = IORING_OP_POLL_ADD;
+	sqe->fd = e->loopFd;
+	sqe->poll_events = POLLIN;
+	sqe->user_data = MS_URING_LOOP_UD;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
+	e->loopArmed = true;
+}
+
 /* ===== Create / Destroy ===== */
 
 msIoEngine* msIoEngineCreate(void) {
@@ -184,6 +200,7 @@ msIoEngine* msIoEngineCreate(void) {
 		free(e);
 		return NULL;
 	}
+	e->loopFd = -1;
 	e->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  /* armed only on serve engines, in AddWakeFd */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
@@ -620,14 +637,27 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 }
 
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {
-	(void)fd;  /* external-fd chained-poll is PR-2's concern; the actor wake uses the eventfd below */
 	if (e == NULL) return;
+	/* The loop's wake pipe completes here as it does in the readiness selector, so a
+	 * completion or wake posted to this thread's loop breaks io_uring_enter. Armed only
+	 * when a poll is about to block: an armed pipe on a busy loop costs a re-arm per wake. */
+	if (fd >= 0 && e->loopFd < 0) e->loopFd = fd;
 	/* Amendment B / I16: register this engine as its scheduler's targeted cross-thread actor-wake
 	 * target, and arm the wake eventfd so msIoEngineWake can break io_uring_enter. Runs once per
 	 * serve thread as it wires up — mirrors the readiness backend's msSchedWakeRegister. */
 	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
 	msSchedWakeRegister(msMySchedulerID, e);
 	uringArmWake(e);
+}
+
+/* A serving thread that parks in its own ring rather than this engine's: the engine stays its
+ * scheduler's wake target, and the caller watches the eventfd returned. */
+int msIoEngineSchedWakeFd(void) {
+	msIoEngine* e = msGetIoEngine();
+	if (e == NULL) return -1;
+	extern MS_THREAD_LOCAL int msMySchedulerID;  /* actor.c */
+	msSchedWakeRegister(msMySchedulerID, e);
+	return e->wakeFd;
 }
 
 /* io_uring arm of the engine wake (Amendment B / I16): any thread write()s the eventfd; the
@@ -650,6 +680,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 
 	if (cqHead == cqTail) {
 		if (timeoutMs == 0) return 0;
+		uringArmLoop(e);
 		struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
 		struct io_uring_sqe* timer = timeoutMs > 0 ? uringGetSqe(ring) : NULL;
 		if (timer != NULL) {
@@ -657,6 +688,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 			timer->fd = -1;
 			timer->addr = (uint64_t)(uintptr_t)&wait;
 			timer->len = 1;
+			timer->off = 1;  /* also ends at the first other completion, so an early wake leaves no timer behind */
 			timer->user_data = MS_URING_TIMEOUT_UD;
 			uringSubmitSqe(ring);
 			uringSubmit(ring);
@@ -674,6 +706,15 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 
 		if (cqe->user_data == MS_URING_TIMEOUT_UD) {
 			cqHead++;
+			continue;
+		}
+
+		if (cqe->user_data == MS_URING_LOOP_UD) {
+			/* The pipe carries only wake bytes; msRunOnce drains the queue they announce. */
+			char drain[64];
+			while (read(e->loopFd, drain, sizeof(drain)) > 0) {}
+			cqHead++;
+			e->loopArmed = false;
 			continue;
 		}
 
