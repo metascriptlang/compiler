@@ -856,13 +856,23 @@ export struct EmccLookup {
 
 const EMCC_WIN_NAMES: string[] = ["emcc.exe", "emcc.cmd", "emcc.bat"];
 
+type PathHas = (path: string) => boolean;
+
+function forwardSlashes(path: string): string {
+	return path.replaceAll("\\", "/");
+}
+
 // emsdk ships emcc as emcc.bat, which CreateProcess does not resolve and which needs cmd /c with its
 // quoting; emcc.py run by the emsdk's own python avoids both. `config` is the EM_CONFIG to export, or
 // "" when EM_CONFIG is already set or the root has none.
-export function findEmcc(getEnv: (name: string) => string, has: (path: string) => boolean, list: (dir: string) => string[]): Result<EmccLookup, string> {
+export function findEmcc(
+	getEnv: (name: string) => string,
+	has: PathHas,
+	list: (dir: string) => string[],
+): Result<EmccLookup, string> {
 	const looked: string[] = [];
+	const emsdk = forwardSlashes(getEnv("EMSDK"));
 	let scriptDir = "";
-	const emsdk = getEnv("EMSDK").split("\\").join("/");
 	if (emsdk != "") {
 		const dir = `${emsdk}/upstream/emscripten`;
 		looked.push(`${dir}/emcc.py (EMSDK)`);
@@ -870,35 +880,59 @@ export function findEmcc(getEnv: (name: string) => string, has: (path: string) =
 	}
 	if (scriptDir == "") {
 		for (const entry of getEnv("PATH").split(";")) {
-			const dir = entry.split("\\").join("/");
+			const dir = forwardSlashes(entry);
 			if (dir == "") continue;
 			for (const name of EMCC_WIN_NAMES) {
 				if (!has(`${dir}/${name}`)) continue;
-				if (name == "emcc.exe") return Result.ok({ command: { path: `${dir}/${name}`, args: [] }, config: "" });
+				if (name == "emcc.exe") {
+					return Result.ok({
+						command: { path: `${dir}/${name}`, args: [] },
+						config: "",
+					});
+				}
 				looked.push(`${dir}/${name} (PATH, no emcc.py beside it)`);
 				if (has(`${dir}/emcc.py`)) scriptDir = dir;
 				break;
 			}
 			if (scriptDir != "") break;
 		}
-		if (scriptDir == "") looked.push("emcc.exe, emcc.cmd, emcc.bat in every PATH directory");
-	}
-	if (scriptDir == "") return Result.err(`emcc not found for --os=emcc; looked at ${looked.join(", ")}. Set EMSDK to the emsdk root or put emcc on PATH`);
-	const root = emsdk != "" ? emsdk : dirname(dirname(scriptDir));
-	let python = getEnv("EMSDK_PYTHON").split("\\").join("/");
-	if (python != "" && !has(python)) python = "";
-	if (python == "") {
-		for (const entry of list(`${root}/python`)) {
-			const candidate = `${root}/python/${entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry}/python.exe`;
-			if (has(candidate)) {
-				python = candidate;
-				break;
-			}
+		if (scriptDir == "") {
+			looked.push("emcc.exe, emcc.cmd, emcc.bat in every PATH directory");
 		}
 	}
-	if (python == "") return Result.err(`emcc.py found at ${scriptDir} but no emsdk python: looked at EMSDK_PYTHON and ${root}/python/*/python.exe`);
+	if (scriptDir == "") {
+		return Result.err(
+			`emcc not found for --os=emcc; looked at ${looked.join(", ")}. Set EMSDK to the emsdk root or put emcc on PATH`,
+		);
+	}
+	const root = emsdk != "" ? emsdk : dirname(dirname(scriptDir));
+	const python = emsdkPython(getEnv, has, list, root);
+	if (python == "") {
+		return Result.err(
+			`emcc.py found at ${scriptDir} but no emsdk python: looked at EMSDK_PYTHON and ${root}/python/*/python.exe`,
+		);
+	}
 	const config = `${root}/.emscripten`;
-	return Result.ok({ command: { path: python, args: [`${scriptDir}/emcc.py`] }, config: getEnv("EM_CONFIG") == "" && has(config) ? config : "" });
+	return Result.ok({
+		command: { path: python, args: [`${scriptDir}/emcc.py`] },
+		config: getEnv("EM_CONFIG") == "" && has(config) ? config : "",
+	});
+}
+
+function emsdkPython(
+	getEnv: (name: string) => string,
+	has: PathHas,
+	list: (dir: string) => string[],
+	root: string,
+): string {
+	const named = forwardSlashes(getEnv("EMSDK_PYTHON"));
+	if (named != "" && has(named)) return named;
+	for (const entry of list(`${root}/python`)) {
+		const version = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+		const candidate = `${root}/python/${version}/python.exe`;
+		if (has(candidate)) return candidate;
+	}
+	return "";
 }
 
 function emccInvocation(): Result<ToolCommand, ProcessError> {
