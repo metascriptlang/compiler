@@ -801,6 +801,11 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap, arrHeap: RaiserAr
 	heapObjectSetField(objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as int64));
 	setStr(objHeap, arrHeap, handle, "modulePath", sym.modulePath);
 	setStr(objHeap, arrHeap, handle, "builtinKind", sym.builtinKind);
+	heapObjectSetField(objHeap, handle, "itemModule", raiserInt(sym.itemModule as int64));
+	heapObjectSetField(objHeap, handle, "item", raiserInt(sym.item as int64));
+	if (sym.instantiatedFrom != null && sym.instantiatedFrom != sym) {
+		heapObjectSetField(objHeap, handle, "instantiatedFrom", symbolToValue(sym.instantiatedFrom, objHeap, arrHeap));
+	}
 	return raiserObject(handle);
 }
 
@@ -4397,6 +4402,28 @@ test "nodeToValue — Symbol with empty name still emits object with empty strin
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
 	assert heapStringText(arrH, nameVal) == "";
+}
+
+test "nodeToValue — a resolvedSym carries its item identity and its generic origin" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const origin = makeSymbol("where", SymbolKind.Function);
+	origin.itemModule = 3;
+	origin.item = 7;
+	const instance = makeSymbol("where", SymbolKind.Function);
+	instance.itemModule = 3;
+	instance.item = 9;
+	instance.instantiatedFrom = origin;
+	const ident = createNodeAt(NodeKind.Identifier, { name: "where" }, loc);
+	ident.resolvedSym = instance;
+	const v = nodeToValue(ident, objH, arrH);
+	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
+	assert heapObjectGetField(objH, symVal.intVal, "item").intVal == 9;
+	const from = heapObjectGetField(objH, symVal.intVal, "instantiatedFrom");
+	assert from.kind == RaiserValueKind.Object;
+	assert heapObjectGetField(objH, from.intVal, "itemModule").intVal == 3;
+	assert heapObjectGetField(objH, from.intVal, "item").intVal == 7;
 }
 
 test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
