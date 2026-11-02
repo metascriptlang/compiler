@@ -1,0 +1,120 @@
+// An async routine runs until its first suspension and hands its caller a promise; a spawn it
+// starts over a parameter, or over anything reachable from one, keeps reading that parameter on
+// another thread after the call has returned. So the call lends what it passes for that parameter
+// until the caller awaits the call's promise, as an inline spawn lends what its thunk reads until
+// its await: the caller may read it in that span but not change it, directly or through a callee,
+// and the promise stays in the scope that made the call, as a borrowing spawn's handle does. Each
+// case below breaks that and must be a compile error. The legal neighbours (the caller awaits
+// first, the callee's spawn is isolated, the callee spawns nothing) are pinned by
+// spawnLendAsyncCalleeAccepts.ms, which must build and run.
+//
+// GUARD-JS
+// GUARD-CHECK-FAIL 'writeObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'methodObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'calleeObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'deepObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'passObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'syncObj' is lent to the spawn
+// GUARD-CHECK-FAIL 'discardObj' is lent to the spawn
+// GUARD-CHECK-FAIL returning it
+// GUARD-CHECK-FAIL storing it in 'box.p'
+// GUARD-CHECK-FAIL passing it to 'keep'
+
+class Child { v: int32; constructor(v: int32) { this.v = v; } }
+class Holder {
+	child: Child;
+	constructor(c: Child) { this.child = c; }
+	async sum(): Promise<int32> {
+		const f = spawn(() => this.child.v);
+		return await f;
+	}
+}
+class Box { p: Promise<int32> | null = null; }
+
+async function worker(h: Holder): Promise<int32> {
+	const f = spawn(() => h.child.v);
+	return await f;
+}
+
+async function inner(h: Holder): Promise<int32> {
+	const f = spawn(() => h.child.v);
+	return await f;
+}
+
+async function outer(h: Holder): Promise<int32> { return await inner(h); }
+
+async function passOn(h: Holder): Promise<int32> {
+	const p = worker(h);
+	return await p;
+}
+
+function replace(h: Holder, v: int32): void { h.child = new Child(v); }
+function keep(p: Promise<int32>): void {}
+
+async function writeBeforeAwait(): Promise<int32> {
+	const writeObj = new Holder(new Child(1));
+	const p = worker(writeObj); // GUARD-REFUSED
+	writeObj.child = new Child(2);
+	return await p;
+}
+
+async function methodLendsThis(): Promise<int32> {
+	const methodObj = new Holder(new Child(1));
+	const p = methodObj.sum(); // GUARD-REFUSED
+	methodObj.child = new Child(2);
+	return await p;
+}
+
+async function writeThroughCallee(): Promise<int32> {
+	const calleeObj = new Holder(new Child(1));
+	const p = worker(calleeObj); // GUARD-REFUSED
+	replace(calleeObj, 2);
+	return await p;
+}
+
+async function lendOneCallDeeper(): Promise<int32> {
+	const deepObj = new Holder(new Child(1));
+	const p = outer(deepObj); // GUARD-REFUSED
+	deepObj.child = new Child(2);
+	return await p;
+}
+
+async function lendThroughParameter(): Promise<int32> {
+	const passObj = new Holder(new Child(1));
+	const p = passOn(passObj); // GUARD-REFUSED
+	passObj.child = new Child(2);
+	return await p;
+}
+
+async function discarded(): Promise<int32> {
+	const discardObj = new Holder(new Child(1));
+	worker(discardObj); // GUARD-REFUSED
+	discardObj.child = new Child(2);
+	return discardObj.child.v;
+}
+
+function returned(retObj: Holder): Promise<int32> {
+	return worker(retObj); // GUARD-REFUSED
+}
+
+async function stored(): Promise<int32> {
+	const box = new Box();
+	const storeObj = new Holder(new Child(1));
+	box.p = worker(storeObj); // GUARD-REFUSED
+	return await box.p!;
+}
+
+async function passed(): Promise<int32> {
+	const argObj = new Holder(new Child(1));
+	keep(worker(argObj)); // GUARD-REFUSED
+	return argObj.child.v;
+}
+
+const syncObj = new Holder(new Child(1));
+const sp = worker(syncObj); // GUARD-REFUSED
+syncObj.child = new Child(2);
+
+const r = await writeBeforeAwait() + await methodLendsThis() + await writeThroughCallee() + await lendOneCallDeeper()
+	+ await lendThroughParameter() + await sp + await discarded() + await returned(new Holder(new Child(1)))
+	+ await stored() + await passed();
+console.log(`r=${r}`);
