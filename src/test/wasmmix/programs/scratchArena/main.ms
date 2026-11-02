@@ -9,7 +9,7 @@
 // @stdout: 10.5
 // @stdout: true,false,true,true
 // @stdout: false,true
-// @stdout: 11050
+// @stdout: 10050
 // @stdout: 47,233,47,55357,56832
 // @stdout: 65539,47,233,120
 // @stdout: 8194,233,233,47
@@ -62,10 +62,9 @@ console.log(fl.join(","));
 console.log(f2.join(","));
 
 console.log(`${feed(4, (xs: Span<int32>): int32 => {
-	let tmp: Vec<int32> = [xs[0], xs[1], xs[2], xs[3]];
-	const got = bump(tmp, 0, (n: int32): int32 => n);
+	const got = xs[0] + xs[1] + xs[2] + xs[3];
 	xs[0] = 50;
-	return got + tmp[0];
+	return got;
 })}`);
 
 console.log(units(joined("", "\u00E9", "\u{1F600}")));
