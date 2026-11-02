@@ -1,4 +1,5 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral, msTypeOf, signatureLetter, unwiredKind } from "./manifest";
+import { BoundaryKind, msTypeOf, signatureLetter, unwiredKind } from "./boundaryKinds";
+import { BoundaryCallback, BoundaryFunction, BoundaryLeaf, BoundaryMode, BoundaryParam, leafLiteral } from "./manifest";
 
 const REGISTRY = "Module['msb']";
 

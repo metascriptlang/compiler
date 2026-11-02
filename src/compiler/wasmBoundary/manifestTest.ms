@@ -2,7 +2,8 @@ import { ExtensionRegistry, buildExportInfo, ExportedSymInfo } from "../../check
 import { CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { BoundaryKind, BoundaryMode, BoundaryRefusal, manifestFor, moduleKeyOf } from "./manifest";
+import { BoundaryKind } from "./boundaryKinds";
+import { BoundaryMode, BoundaryRefusal, manifestFor, moduleKeyOf } from "./manifest";
 
 const ENTRY = "/proj/app/main.ms";
 const MODULE = "/proj/app/calc/core.ms";

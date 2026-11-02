@@ -1,7 +1,8 @@
 import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
+import { BoundaryKind } from "./boundaryKinds";
+import { BoundaryCallback, BoundaryFunction, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
 import { wasmEntrySource } from "./wasmSide";
 import { ensureDir, writeFile } from "std/fs";

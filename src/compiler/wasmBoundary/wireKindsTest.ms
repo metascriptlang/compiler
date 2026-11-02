@@ -1,4 +1,5 @@
-import { BoundaryCallback, BoundaryFunction, BoundaryKind, BoundaryLeaf, BoundaryMode, BoundaryParam, Manifest, signatureLetter } from "./manifest";
+import { BoundaryKind, signatureLetter } from "./boundaryKinds";
+import { BoundaryCallback, BoundaryFunction, BoundaryLeaf, BoundaryMode, BoundaryParam, Manifest } from "./manifest";
 import { jsBindings } from "./jsSide";
 import { wasmEntrySource } from "./wasmSide";
 
