@@ -490,15 +490,15 @@ function wrapperLines(
 		return `try { ${target}${call}; } catch (e) { throw __msb.die(e); }`;
 	};
 	const body: string[] = match (f.result) {
-		BoundaryKind.Void => [guardedCall(""), "__msb.leave();"],
+		BoundaryKind.Void => [guardedCall(""), "if (__msb.dirty) __msb.leave();"],
 		BoundaryKind.String | BoundaryKind.Struct | BoundaryKind.Vec => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
 			lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 			cleanup.push("__msb.takes.length = d;");
-			[guardedCall(""), "__msb.leave();", "return r;"]
+			[guardedCall(""), "if (__msb.dirty) __msb.leave();", "return r;"]
 		},
 		_ => {
-			const keep = ["let v;", guardedCall("v = "), "__msb.leave();"];
+			const keep = ["let v;", guardedCall("v = "), "if (__msb.dirty) __msb.leave();"];
 			if (f.resultNullable) {
 				keep.push(
 					"return __msbMod._msb_ret_some() !== 0 ? "
