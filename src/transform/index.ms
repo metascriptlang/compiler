@@ -34,7 +34,7 @@ import { hasGenericParams } from "../checker/types";
 import { resolveImportSourcePath } from "../checker/collectPass";
 import { createTransformContextWithChecker, TransformContext, ModuleFact } from "./context";
 import { WriteSummaries, noteUnitDecls } from "../analyzer/writeEffects";
-import { bindCompilerFuncs } from "./util";
+import { bindCompilerFuncs, takeValueShareFns, addGeneratedFn, generatedFnCount } from "./util";
 import { skipsModule } from "./moduleFacts";
 import { flowLap, flowMark, flowTally } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
@@ -205,6 +205,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 export interface TransformHead {
 	program: Node;
 	ctx: TransformContext;
+	generatedFns: Node[];
 }
 
 // Every module's head runs before any module's tail, so the iterator bodies a module offers at the
@@ -261,7 +262,7 @@ export function transformProgramHead(program: Node, checkerCtx: CheckerContext, 
 	flowLap("pass.lowerDestructuring");
 	if (!jsBackend) { result = lowerForLoop(result, ctx); flowLap("pass.lowerForLoop"); }
 	offerIterBodies(result, ctx);
-	return { program: result, ctx };
+	return { program: result, ctx, generatedFns: takeValueShareFns() };
 }
 
 export function transformProgramTail(head: TransformHead, asyncModuleBody: boolean): Node {
@@ -269,6 +270,8 @@ export function transformProgramTail(head: TransformHead, asyncModuleBody: boole
 	const checkerCtx = ctx.checkerCtx;
 	const jsBackend = ctx.jsBackend;
 	const liftTables = ctx.liftTables;
+	if (generatedFnCount() != 0) throw new Error(`internal: ${checkerCtx.modulePath} starts its transform tail while another module's generated routines wait to be placed`);
+	for (const decl of head.generatedFns) addGeneratedFn(decl);
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
 	let result = lowerIterInline(head.program, ctx);
