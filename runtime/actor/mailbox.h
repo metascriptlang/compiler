@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include "runtime/hcrTls.h"
 #include "runtime/drc.h"
+#include "runtime/core/stringRep.h"
 #include <string.h>
 
 /* ===== Message (Pony parity: size-class allocation, exact-fit per method) ===== */
@@ -179,25 +180,23 @@ static inline bool msMsgGetBool(msMessage* m, int idx) {
     return ((int32_t*)m->data)[idx * 2] != 0;
 }
 
-/* msString packing: msString = {int64_t len, msStrPayload* p} = 16 bytes = 2 slots.
+/* An msString takes two 8-byte slots.
  *
  * Heap strings: deep-copy on send so the msg owns its payload independently
  * of the caller's local (which DRC frees at scope exit — bitwise alias would
- * dangle). Literals (MS_STRLIT_FLAG) share pointer with static program data. */
+ * dangle). Literals share pointer with static program data. */
+_Static_assert(sizeof(msString) == 2 * sizeof(uint64_t), "an msString fills two message slots");
+
 #define msMsgSetString(m, idx, s) do { \
-    msString __mscp; \
-    if ((s).p == NULL || msIsLiteral(s)) { \
-        __mscp = (s); \
-    } else { \
-        __mscp = msStringNew((s).p->data, (s).len); \
-    } \
-    ((void**)((msMessage*)(m))->data)[(idx)]     = (void*)(intptr_t)(__mscp).len; \
-    ((void**)((msMessage*)(m))->data)[(idx) + 1] = (void*)(__mscp).p; \
+    msString __mscp = msStringDup(s); \
+    memcpy(&((uint64_t*)((msMessage*)(m))->data)[(idx)], &__mscp, sizeof(msString)); \
 } while(0)
 
-#define msMsgGetString(m, idx) \
-    ((msString){ .len = (int64_t)(intptr_t)((void**)((msMessage*)(m))->data)[(idx)], \
-                 .p = (msStrPayload*)((void**)((msMessage*)(m))->data)[(idx) + 1] })
+static inline msString msMsgGetString(msMessage* m, int idx) {
+    msString s;
+    memcpy(&s, &((uint64_t*)m->data)[idx], sizeof(msString));
+    return s;
+}
 
 /* ===== MPSC Queue ===== */
 

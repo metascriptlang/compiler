@@ -171,50 +171,39 @@ static inline bool msErrTake(void) {
 
 /* --- String lifecycle --- */
 #define msStringDecref(s)     msStringDestroy(s)
-#define msStringIncref(s)     do { \
-	if ((s).p != NULL && !msIsLiteral(s)) { \
-		msString __c = msStringDup(s); \
-		(s) = __c; \
-	} \
-} while(0)
+#define msStringIncref(s)     do { (s) = msStringDup(s); } while(0)
 /* =copy(var dest, src) — string copy-on-write assignment.
    Literal CoW: shallow copy for literals (pointer only, no alloc).
    Buffer reuse: if dest has enough capacity, memcpy without malloc.
    Full copy only when dest buffer is too small or is a literal. */
 static inline void msStringCopy(msString* dest, msString src) {
 	/* Identity: same pointer + same length = same string */
-	if (dest->p == src.p && dest->len == src.len) return;
+	if (msStrSameBuffer(*dest, src) && msStrLen(*dest) == msStrLen(src)) return;
 	/* Shared payload (e.g. after bitwise copy): both point to same buffer.
 	   Don't free — source still owns it. Must allocate a fresh independent copy. */
-	if (dest->p == src.p) {
-		if (src.p != NULL && !msIsLiteral(src)) {
-			*dest = msStringDup(src);
-		} else {
-			dest->len = src.len;  /* literal: just update length */
-		}
+	if (msStrSameBuffer(*dest, src)) {
+		*dest = msStringDup(src);
 		return;
 	}
 	/* Source is literal (or interned char): shallow copy — pointer only */
-	if (msIsLiteral(src)) {
-		if (!msIsLiteral(*dest)) free(dest->p);
-		dest->len = src.len;
-		dest->p = src.p;
+	if (msStrNeedsNoFree(src)) {
+		msStringDestroy(*dest);
+		*dest = src;
 		return;
 	}
 	/* Source is heap: try buffer reuse (reuse if capacity sufficient) */
-	if (!msIsLiteral(*dest) && dest->p != NULL &&
-		(dest->p->cap & MS_CAP_MASK) >= src.len) {
-		dest->len = src.len;
-		memcpy(dest->p->data, src.p->data, src.len + 1);
+	if (msStrIsHeap(*dest) && msStrCap(*dest) >= msStrLen(src)) {
+		msStrSetLen(dest, msStrLen(src));
+		memcpy(msStrWritable(dest), msStrData(&src), msStrLen(src) + 1);
 		msStringInheritAscii(*dest, src);
 		return;
 	}
 	/* Must allocate new buffer */
-	msString newStr = msStringDup(src);
-	if (!msIsLiteral(*dest)) free(dest->p);
+	msString newStr = msStrDupHeap(src);
+	msStringDestroy(*dest);
 	*dest = newStr;
 }
-#define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
+#define msStringWasMoved(s)   do { (s) = MS_EMPTY_STRING; } while(0)
 #define msPlainWasMoved(x)    memset(&(x), 0, sizeof(x))
 #define msSwap(a, b)          ({ __typeof__(a) msSwapA_ = (a); __typeof__(a) msSwapB_ = (b); \
 	__typeof__(*msSwapA_) msSwapHeld_ = *msSwapA_; *msSwapA_ = *msSwapB_; *msSwapB_ = msSwapHeld_; (void)0; })
