@@ -1304,6 +1304,9 @@ extern function msSpawnHeldCreate(): Ptr<void>;
 extern function msSpawnHeldSubmit(hp: Ptr<void>, fn: () => void): Ptr<void>;
 
 @compilerFunc
+extern function msSpawnHeldKeep(hp: Ptr<void>, fut: Ptr<void>): void;
+
+@compilerFunc
 extern function msSpawnHeldSettle(hp: Ptr<void>): void;
 
 @compilerFunc

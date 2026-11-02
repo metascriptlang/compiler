@@ -34,7 +34,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
-	Type, NodeData, createNodeAt,
+	Type, NodeData, createNodeAt, ArrayLiteralData,
 } from "../../ast/node";
 import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact, reportTransformError } from "../context";
 import { skipsModule } from "../moduleFacts";
@@ -724,6 +724,82 @@ function holdSpawns(n: Node | null, ctx: TransformContext): void {
 		(n.data as CallExprData).arguments.push(list);
 		_heldUsed = true;
 	}
+	if (_heldFrame.held != null && n.kind == NodeKind.BlockStmt) keepLendingCalls(n, ctx);
+}
+
+function isLendingCall(n: Node | null): boolean {
+	const p = peelConvNode(n);
+	return p != null && p.kind == NodeKind.CallExpr && p.flags.has(NodeFlag.LendsPastCall);
+}
+
+function peelConvNode(n: Node | null): Node | null {
+	let p = n;
+	while (p != null && (p.kind == NodeKind.HiddenStdConv || p.kind == NodeKind.HiddenSubConv)) p = (p.data as { convExpr: Node }).convExpr;
+	return p;
+}
+
+function boundLendingCall(s: Node): Symbol | null {
+	if (s.kind == NodeKind.VariableDecl) return isLendingCall((s.data as VariableDeclData).initializer) ? s.resolvedSym : null;
+	if (s.kind != NodeKind.ExprStmt) return null;
+	const e = peelConvNode((s.data as ExprStmtData).expr);
+	if (e == null || e.kind != NodeKind.BinaryExpr) return null;
+	const d = e.data as { operator: string, left: Node, right: Node };
+	const target = peelConvNode(d.left);
+	return d.operator == "=" && target != null && target.kind == NodeKind.Identifier && isLendingCall(d.right) ? target.resolvedSym : null;
+}
+
+function joinedLendingList(s: Node): Node | null {
+	const top = match (s.kind) {
+		NodeKind.VariableDecl => (s.data as VariableDeclData).initializer,
+		NodeKind.ExprStmt => (s.data as ExprStmtData).expr,
+		NodeKind.ReturnStmt => (s.data as ReturnStmtData).argument,
+		_ => null,
+	};
+	const a = peelConvNode(top);
+	if (a == null || a.kind != NodeKind.AwaitExpr) return null;
+	const join = peelConvNode((a.data as AwaitExprData).awaitArg);
+	if (join == null || join.kind != NodeKind.CallExpr) return null;
+	const sym = join.resolvedSym != null ? join.resolvedSym : (join.data as CallExprData).callee.resolvedSym;
+	if (sym == null || (sym.builtinKind != "PromiseAll" && sym.builtinKind != "PromiseAllSettled")) return null;
+	const args = (join.data as CallExprData).arguments;
+	const list = args.length > 0 ? peelConvNode(args[0]) : null;
+	if (list == null || list.kind != NodeKind.ArrayLiteral) return null;
+	return (list.data as ArrayLiteralData).elements.some((e: Node): boolean => isLendingCall(e)) ? list : null;
+}
+
+function keepStmt(promise: Symbol, loc: SourceLocation): Node {
+	const held = makeIdentResolved(_heldFrame.held!, loc);
+	held.nodeType = VOID_PTR_TYPE;
+	return makeExprStmt(makeCall(runtimeRef("msSpawnHeldKeep", loc), [held, makeIdentResolved(promise, loc)], loc), loc);
+}
+
+function keepLendingCalls(block: Node, ctx: TransformContext): void {
+	const d = block.data as BlockStmtData;
+	const out: Node[] = [];
+	let kept = false;
+	for (const s of d.statements) {
+		const list = joinedLendingList(s);
+		if (list != null) {
+			const elems = (list.data as ArrayLiteralData).elements;
+			for (let i = 0; i < elems.length; i += 1) {
+				const e = elems[i];
+				const t = makeTempDecl(ctx, "lent", e, e.nodeType, e.location);
+				out.push(t.decl);
+				if (isLendingCall(e)) out.push(keepStmt(t.sym, e.location));
+				elems[i] = t.ident;
+			}
+			kept = true;
+		}
+		out.push(s);
+		const bound = boundLendingCall(s);
+		if (bound != null) {
+			out.push(keepStmt(bound, s.location));
+			kept = true;
+		}
+	}
+	if (!kept) return;
+	d.statements = out;
+	_heldUsed = true;
 }
 
 function hasOwnSpawn(n: Node | null): boolean {
