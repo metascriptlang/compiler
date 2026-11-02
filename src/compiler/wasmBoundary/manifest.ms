@@ -41,7 +41,7 @@ export interface BoundaryFunction {
 	modulePath: string;
 	moduleKey: string;
 	name: string;
-	overloadIndex: number;
+	overloadIndex: int32;
 	exportSymbol: string;
 	params: BoundaryParam[];
 	result: BoundaryKind;
@@ -407,7 +407,7 @@ function fnDeclOf(sym: Symbol): Node | null {
 	return sym.declNode != null && sym.declNode.kind == NodeKind.FunctionDecl ? sym.declNode : null;
 }
 
-function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol, overloadIndex: number, inSet: boolean): BoundaryFunction | null {
+function boundaryFunction(c: Collector, key: string, name: string, sym: Symbol, overloadIndex: int32, inSet: boolean): BoundaryFunction | null {
 	c.fnName = name;
 	const decl = fnDeclOf(sym);
 	const nameAt = decl != null ? (decl.data as FunctionDeclData).nameLocation : sym.location;
