@@ -802,10 +802,10 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap, arrHeap: RaiserAr
 	wireSet(arrHeap, objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as int64));
 	setStr(objHeap, arrHeap, handle, "modulePath", sym.modulePath);
 	setStr(objHeap, arrHeap, handle, "builtinKind", sym.builtinKind);
-	heapObjectSetField(objHeap, handle, "itemModule", raiserInt(sym.itemModule as int64));
-	heapObjectSetField(objHeap, handle, "item", raiserInt(sym.item as int64));
+	wireSet(arrHeap, objHeap, handle, "itemModule", raiserInt(sym.itemModule as int64));
+	wireSet(arrHeap, objHeap, handle, "item", raiserInt(sym.item as int64));
 	if (sym.instantiatedFrom != null && sym.instantiatedFrom != sym) {
-		heapObjectSetField(objHeap, handle, "instantiatedFrom", symbolToValue(sym.instantiatedFrom, objHeap, arrHeap));
+		wireSet(arrHeap, objHeap, handle, "instantiatedFrom", symbolToValue(sym.instantiatedFrom, objHeap, arrHeap));
 	}
 	return raiserObject(handle);
 }
@@ -4418,12 +4418,12 @@ test "nodeToValue — a resolvedSym carries its item identity and its generic or
 	const ident = createNodeAt(NodeKind.Identifier, { name: "where" }, loc);
 	ident.resolvedSym = instance;
 	const v = nodeToValue(ident, objH, arrH);
-	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
-	assert heapObjectGetField(objH, symVal.intVal, "item").intVal == 9;
-	const from = heapObjectGetField(objH, symVal.intVal, "instantiatedFrom");
+	const symVal = wireGet(arrH, objH, v.intVal, "resolvedSym");
+	assert wireGet(arrH, objH, symVal.intVal, "item").intVal == 9;
+	const from = wireGet(arrH, objH, symVal.intVal, "instantiatedFrom");
 	assert from.kind == RaiserValueKind.Object;
-	assert heapObjectGetField(objH, from.intVal, "itemModule").intVal == 3;
-	assert heapObjectGetField(objH, from.intVal, "item").intVal == 7;
+	assert wireGet(arrH, objH, from.intVal, "itemModule").intVal == 3;
+	assert wireGet(arrH, objH, from.intVal, "item").intVal == 7;
 }
 
 test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
