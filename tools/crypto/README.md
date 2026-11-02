@@ -22,10 +22,12 @@ the host checked that taint reached it and that the tainted call returned the un
 
 ## Run
 
-From the repo root, off the Mac (one `run-remote.sh` call, 2 cores; warm 20–40 s, cold about 3 min with the 22 MB download):
+From the repo root, off the Mac. Use a bounded cell in the edit loop; the aggregate runners each hit the
+60 s cap on the aligned toolchain below. Selector validation lives in `x25519Taint.sh` and `x25519Diff.sh`.
+For example, the following cell took 11 s in that run:
 
 ```
-~/metascript/.gate-host/run-remote.sh --cores 2 --job "<session>: x25519 taint" -- tools/crypto/x25519Taint.sh out/crypto [monocypher|pilot]
+~/metascript/.gate-host/run-remote.sh --linux --cores 2 --job "<session>: x25519 taint index" -- tools/crypto/x25519Taint.sh out/crypto pilot danger leakyIndex
 ```
 
 It copies the `msc` on `PATH` to `x25519TaintBuilder` at the tree root, so `std/` and `runtime/` come from the tree
@@ -272,8 +274,9 @@ were stable; staged pilot was restored to R1. Output: `M1M_REF_OUTPUT_PASS`.
 
 Emitted C/assembly show the first multiply's output directly at scratch+0xe0, not a zeroed 40-byte stack
 temporary followed by a copy. Static kernel instruction lines fell 1335→1259. This is neither a timing-only
-constant-time test nor a spill-erasure guarantee. No prototype DCE, full matrix, Linux assurance, x86 or
-real-public-API parity result exists.
+constant-time test nor a spill-erasure guarantee. That compiler564 experiment supplied no prototype DCE,
+full matrix, Linux assurance, x86 or real-public-API parity result. Subsequent Linux assurance below uses a
+different compiler/support bundle; it does not certify the old ARM binary.
 
 After canonical compiler changed to SHA `1e57151b011630e1d01bc4f5fdd7f9458b16e0aa1cee8d684e782484e1d2e442`
 (BUILD `a0f6f1be1e3`), a fresh matrix/DCE attempt expired 300 s before host assignment: **0/16 cells,
@@ -286,3 +289,49 @@ matcher did not pair. The two already-completed own QUIET rows were closed with 
 changing other open rows. An immutable label now names both ends; the extracted row writer's three ending
 cases mismatched before the fix and matched afterward, using a temporary ledger and no network. Runtime
 completion times above come from the original raw output, not the later bookkeeping corrections.
+
+## Aligned Linux prototype assurance, 2026-11-02
+
+Reconstructed final prototype input tree `530883ee52759bbc21512e149aacb08dff4b2ca4` is committed tree
+`0931f935f6a670796ec38e25dcbcf6f03e5a46b0` plus the unchanged external ref-output prototype above and the
+exercised runner patches: taint SHA-256 `12ff3749431fec931157192857ca5917270c96e536e10d567725cdc9f32d3ace`,
+differential `60f851cadaf8f1757605a64a94a06057d75a74e0a9bc80097a1e054a6ca59f96`. This is not integration.
+
+Linux x86_64, clang 18.1.3, glibc 2.39; copied canonical compiler SHA-256
+`c70d2c793a25a0d527a5fab305c8c6790ef17a23c8f4fa28c1fa18dedb075849`, native source checkout
+`a0f6f1be1e31f0856610551c12c73784d7c7f08e`. Staged support was aligned to that landed bundle by rebasing,
+not by overlaying installed files. Installed BUILD still said `fa6dca871`; it is not asserted as provenance.
+The earlier missing `msStringBytesOf`/`msStrLen` compile error was compiler/support skew, before any test.
+A separate preflight stopped at `ldd --version | head -1` with rc141; consuming the full version output fixed
+that producer without weakening `pipefail` or any check.
+
+Parent-audited results, all individual checks capped at 60 s:
+
+- ASan: `test src/test/lang/cryptoX25519Pilot.ms --tests-in-dir --cc=clang --lto=off --sanitize=address
+  --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address`: **11/11**, 15 s, no sanitizer finding.
+- Taint: **12/12 composite**, nine carried rows plus three new danger controls, not a fresh full rerun.
+  Positive release/danger rows had zero memcheck errors and suppressions; branch/index controls had the
+  kernel as first error frame and reached the host's end. New `leakyIndex`, `noopKat`, `noopTaint` cells took
+  **11/7/2 s**, each exactly one expected row with its original status/marker/frame checks.
+- Differential: **14/14 composite**, thirteen carried rows plus one new danger pilot, not a fresh full rerun.
+  `x25519Diff.sh <out> 2000 0x25519d1ff danger` took **21 s**, rc0, exactly one requested row. Both pilot modes
+  ran **6592/6592 samples**, zero mismatches, unexpected refusals or failures. All corruption, refusal,
+  repro, seed-change, noop and current-C comparison rows passed. This is not Cryptofuzz.
+
+The original taint aggregate stopped at 60 s after 9/12 rows; differential stopped at 60 s after 13/14.
+Only missing cells were executed afterward, with unchanged sample counts, flags, oracles, assertions and
+caps. Prior logs, source manifests, prototype bytes and compiler/support fingerprints were reconciled before
+carrying their results. The selector dispatch pin compared old/new defaults (12 and 14 callbacks unchanged),
+old ignored selection against new exact selection, and unknown argument errors; those controller-only
+stubs ran no compiler, crypto host or oracle. A prechange selector prototype cost 45.1 ms including shell
+startup (median of five), versus the observed 60 s aggregate. This is not a crypto performance measurement.
+
+Raw commands, results and before/after provenance are in
+`/tmp/crypto-ref-output-validation-aligned4-1793636439/`,
+`/tmp/crypto-ref-output-validation-aligned5-1793638423/` and
+`/tmp/crypto-ref-output-validation-aligned6-1793639377/`. Each staged prototype was restored to baseline;
+parent source and all guarded fingerprints remained unchanged during execution.
+
+These results cover Linux clang **LTO off** only. Fresh ARM thin-LTO matrix/DCE, current-toolchain matched
+performance, x86 performance and real-public-API parity remain unverified. Production/vendor selection is
+unchanged, the prototype is still unintegrated, and the speed/DCE readiness gate and Cryptofuzz refusal remain.
