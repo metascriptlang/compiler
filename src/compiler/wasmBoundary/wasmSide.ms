@@ -123,7 +123,10 @@ function callbackImportJs(signature: string): string {
 		for (const n of wireNames(i, letters.slice(i, i + 1))) wire.push(n);
 	}
 	const call = `${REGISTRY}.cb(id)(${wire.join(", ")})`;
-	return guardedImportJs(`msb_cb_${signature}`, ["id", ...wire], call);
+	const zero = signature.slice(0, 1) == "j" ? "0n" : "0";
+	const fail = `catch (e) { return ${REGISTRY}.fail(e, ${zero}); }`;
+	const list = ["id", ...wire].join(", ");
+	return `\tmsb_cb_${signature}: (${list}) => { try { return ${call}; } ${fail} },`;
 }
 
 function leafLetters(leaves: BoundaryLeaf[]): string {
@@ -178,9 +181,13 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 		args += ", " + wireArgsOut(params[i], nullable, `a${i}`);
 	}
 	const call = `msb_cb_${cb.signature}(${args})`;
-	if (cb.result == BoundaryKind.Void) return `(${sig}): void => { ${call}; }`;
+	if (cb.result == BoundaryKind.Void) {
+		return `(${sig}): void => { ${call}; msbCheck(); }`;
+	}
 	const result = msTypeOf(cb.result);
-	return `(${sig}): ${result} => ${wireToMsValue(cb.result, call)}`;
+	const value = wireToMsValue(cb.result, "w");
+	return `(${sig}): ${result} => { const w = ${call}; msbCheck(); `
+		+ `return ${value}; }`;
 }
 
 function wireArgsOut(
@@ -235,24 +242,35 @@ function stringHelperLines(): string[] {
 	];
 }
 
-function takenResult(
+function takenBody(f: BoundaryFunction, call: string, take: string): string[] {
+	const lines = [`const r = ${call};`];
+	if (f.resultNullable) {
+		lines.push("if (r != null) {");
+		lines.push("\t" + take);
+		lines.push("}");
+	} else {
+		lines.push(take);
+	}
+	return lines;
+}
+
+function guardedExport(
 	f: BoundaryFunction,
-	call: string,
 	sig: string,
-	take: string,
+	type: string,
+	body: string[],
+	zero: string,
 ): string[] {
 	const lines = [
 		`@exportName("${f.exportSymbol}")`,
-		`export function ${f.exportSymbol}(${sig}): void {`,
-		`\tconst r = ${call};`,
+		`export function ${f.exportSymbol}(${sig}): ${type} {`,
+		"\ttry {",
 	];
-	if (f.resultNullable) {
-		lines.push("\tif (r != null) {");
-		lines.push("\t\t" + take);
-		lines.push("\t}");
-	} else {
-		lines.push("\t" + take);
-	}
+	for (const l of body) lines.push("\t\t" + l);
+	lines.push("\t} catch (e) {");
+	lines.push("\t\tmsbEscape(e.message);");
+	if (zero != "") lines.push(`\t\treturn ${zero};`);
+	lines.push("\t}");
 	lines.push("}");
 	return lines;
 }
@@ -308,43 +326,33 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 				wires.push(wireArgsOut(leaf.kind, leaf.nullable, value));
 			}
 			const letters = leafLetters(f.resultLeaves);
-			takenResult(f, call, sig, `msb_rs_${letters}(${wires.join(", ")});`)
+			const take = `msb_rs_${letters}(${wires.join(", ")});`;
+			guardedExport(f, sig, "void", takenBody(f, call, take), "")
 		},
 		BoundaryKind.Vec => {
 			const t = valueTypeOf(f.resultElement);
 			const base = `(r as Span<${t}>) as Ptr<void> as uint64 as int32`;
-			takenResult(f, call, sig, `msb_rv(${base}, r.length as int32);`)
+			const take = `msb_rv(${base}, r.length as int32);`;
+			guardedExport(f, sig, "void", takenBody(f, call, take), "")
 		},
 		BoundaryKind.String => {
-			if (f.resultNullable) {
-				takenResult(f, call, sig, "msb_rs_s(msbStrPtr(r), r.asBytes().length);")
-			} else {
-				[
-					`@exportName("${f.exportSymbol}")`,
-					`export function ${f.exportSymbol}(${sig}): void {`,
-					`\tconst r = ${call};`,
-					"\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);",
-					"}",
-				]
-			}
+			const take = "msb_rs_s(msbStrPtr(r), r.asBytes().length);";
+			guardedExport(f, sig, "void", takenBody(f, call, take), "")
 		},
 		_ => {
+			const type = f.result == BoundaryKind.Void ? "void" : msTypeOf(f.result);
+			const zero = f.result == BoundaryKind.Void ? "" : zeroOf(f.result);
 			if (f.resultNullable) {
-				[
-					`@exportName("${f.exportSymbol}")`,
-					`export function ${f.exportSymbol}(${sig}): ${msTypeOf(f.result)} {`,
-					`\tconst r = ${call};`,
-					"\tmsbRetSome = r != null ? 1 : 0;",
-					`\treturn r ?? ${zeroOf(f.result)};`,
-					"}",
-				]
+				guardedExport(f, sig, type, [
+					`const r = ${call};`,
+					"msbRetSome = r != null ? 1 : 0;",
+					`return r ?? ${zero};`,
+				], zero)
 			} else {
-				[
-					`@exportName("${f.exportSymbol}")`,
-					`export function ${f.exportSymbol}(${sig}): ${msTypeOf(f.result)} {`,
-					f.result == BoundaryKind.Void ? `\t${call};` : `\treturn ${call};`,
-					"}",
-				]
+				const body = f.result == BoundaryKind.Void
+					? `${call};`
+					: `return ${call};`;
+				guardedExport(f, sig, type, [body], zero)
 			}
 		},
 	};
@@ -354,6 +362,38 @@ function guardedImportJs(name: string, params: string[], call: string): string {
 	const die = `catch (e) { throw ${REGISTRY}.die(e); }`;
 	const list = params.join(", ");
 	return `\t${name}: (${list}) => { try { return ${call}; } ${die} },`;
+}
+
+function escapeLines(): string[] {
+	return [
+		...importLines("msb_esc", "p", "v", false),
+		"function msbEscape(m: string): void {",
+		"\tmsb_esc(msbStrPtr(m), m.asBytes().length);",
+		"}",
+	];
+}
+
+function failureLines(): string[] {
+	return [
+		"let msbFailed: int32 = 0;",
+		"let msbFailPtr: uint32 = 0;",
+		"let msbFailLen: int32 = 0;",
+		'@exportName("msb_fail")',
+		"export function msb_fail(ptr: uint32, len: int32): void {",
+		"\tif (msbFailed != 0) {",
+		"\t\tconst unread = msbStrAdopt(msbFailPtr, msbFailLen);",
+		"\t}",
+		"\tmsbFailed = 1;",
+		"\tmsbFailPtr = ptr;",
+		"\tmsbFailLen = len;",
+		"}",
+		"function msbCheck(): void {",
+		"\tif (msbFailed != 0) {",
+		"\t\tmsbFailed = 0;",
+		"\t\tthrow new Error(msbStrAdopt(msbFailPtr, msbFailLen));",
+		"\t}",
+		"}",
+	];
 }
 
 function unsignedWireLines(): string[] {
@@ -383,7 +423,7 @@ interface EntryUsage {
 function usageOf(fns: BoundaryFunction[]): EntryUsage {
 	const usage: EntryUsage = {
 		modules: [],
-		hasString: false,
+		hasString: true,
 		readsHeap: false,
 		copiesIn: false,
 		hasScalarSome: false,
@@ -484,16 +524,17 @@ function moduleImportLines(
 
 function jsLibraryOf(usage: EntryUsage): string {
 	const signatures = usage.callbacks.map((cb) => cb.signature);
-	if (signatures.length == 0 && usage.resultImports.length == 0) return "";
 	const entries: string[] = [];
 	for (const s of signatures) entries.push(callbackImportJs(s));
 	for (const name of usage.resultImports) {
 		const take = `${REGISTRY}.takes.pop()(...a)`;
 		entries.push(guardedImportJs(name, ["...a"], take));
 	}
+	const escape = `${REGISTRY}.escape(a0p, a0l)`;
+	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));
 	const first = signatures.length > 0
 		? "msb_cb_" + signatures[0]
-		: usage.resultImports[0];
+		: usage.resultImports.length > 0 ? usage.resultImports[0] : "msb_esc";
 	const missing = `if (!${REGISTRY}) throw new Error('msb registry missing: `
 		+ "pass { msb } to the wasm module factory');";
 	entries.push(`\t${first}__postset: "${missing}",`);
@@ -513,6 +554,8 @@ function entryLines(
 		lines.push('@exportName("msb_ret_some")');
 		lines.push("export function msb_ret_some(): int32 { return msbRetSome; }");
 	}
+	for (const l of escapeLines()) lines.push(l);
+	if (usage.callbacks.length > 0) for (const l of failureLines()) lines.push(l);
 	for (const k of usage.vecElements) {
 		for (const l of vecFromLines(k)) lines.push(l);
 	}
@@ -535,10 +578,9 @@ function exportedSymbolsOf(
 ): string[] {
 	const exported = fns.map((f) => "_" + f.exportSymbol);
 	if (usage.hasScalarSome) exported.push("_msb_ret_some");
-	if (usage.copiesIn) {
-		exported.push("_malloc");
-		exported.push("_free");
-	}
+	if (usage.callbacks.length > 0) exported.push("_msb_fail");
+	if (usage.copiesIn || usage.callbacks.length > 0) exported.push("_malloc");
+	if (usage.copiesIn) exported.push("_free");
 	exported.push("_MsMain");
 	return exported;
 }
