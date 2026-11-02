@@ -16,7 +16,7 @@ if (argv.length > 1 && argv[1] == "child") {
 	exit(0);
 }
 
-const path = `readLineFromStdin-${argv[0].split("/").slice(-2).join("-")}.txt`;
+const path = `readLineFromStdin-${argv[0].replaceAll("\\", "/").split("/").slice(-2).join("-")}.txt`;
 writeFile(path, "one\r\ntwo\n\ncafé\ntail\r");
 const self = argv[0].endsWith("js") ? `${execPath} ${argv[0]}` : argv[0];
 const r = exec(`${self} child < ${path}`);
