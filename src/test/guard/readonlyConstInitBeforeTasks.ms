@@ -1,15 +1,15 @@
 // guard: a deep Readonly module const crosses threads only when no task can start before its
 // initializer runs: a `spawn` or an actor started by module top-level code before the declaration,
 // directly or through a callee, or by any top-level code of a module in its import cycle, refuses
-// it on C and JS; a spawn after the declaration, or in a module that imports it without a cycle,
-// is accepted.
+// it on C and JS; a spawn after the declaration, in a module that imports it without a cycle, or in
+// a test, which runs after every module's initializer, is accepted.
 //
 // WHY A SUBPROCESS: the accepted cases are a claim that check stays silent, and the cycle cases
 //   need several modules.
 //
 // RED MEANS: a task that can read the const's slot before it is initialised compiles (TSan
 //   reported 3 races on the slot of the top-level case), or the init-order rule refuses a const
-//   every task starts after.
+//   every task starts after, such as one whose module or import cycle spawns only in a test.
 
 import { execFileResult, cwd, exit, env } from "std/process";
 import { ensureDir, isFile, writeFile } from "std/fs";
@@ -102,6 +102,28 @@ const cases: Case[] = [
 				+ "console.log(await f);\n" },
 			{ file: "cell.ms", text: CELL + READ
 				+ "export const K: Readonly<Cell> = new Cell();\n" },
+		],
+	},
+	{
+		name: "a test that spawns, before the declaration",
+		refused: false,
+		sources: [{ file: "main.ms", text: CELL + READ
+			+ "test \"reads in a task\" { assert await spawn(() => read()) == 7000; }\n"
+			+ "const K: Readonly<Cell> = new Cell();\n"
+			+ "const f = spawn(() => read());\n"
+			+ "console.log(await f);\n" }],
+	},
+	{
+		name: "a test that spawns in a module of the const's import cycle",
+		refused: false,
+		sources: [
+			{ file: "main.ms", text: "import { early } from \"./other\";\n" + CELL + READ
+				+ "export const K: Readonly<Cell> = new Cell();\n"
+				+ "const f = spawn(() => read());\n"
+				+ "console.log(await f, early);\n" },
+			{ file: "other.ms", text: "import { read } from \"./main\";\n"
+				+ "export const early = 1;\n"
+				+ "test \"reads in a task\" { assert await spawn(() => read()) == 7000; }\n" },
 		],
 	},
 ];
