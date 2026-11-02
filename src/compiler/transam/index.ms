@@ -622,7 +622,9 @@ function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): v
 	}
 }
 
-// Lazily ensure all files imported by `filePath` have their exports in the registry.
+// Lazily ensure all files imported by `filePath` have their exports in the registry, recording
+// the import edges of every module it visits from that module's parse, because a module only
+// loaded (never opened or bound) has no edges and would bind its imports to nothing.
 // Depth-first: processes transitive deps before current (compileModule pattern).
 function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: HashSet<string>, startVersion: int32): void {
 	// Cycle protection — O(1) Set lookup
@@ -631,6 +633,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return;
+	const program = dbParse(db, filePath);
+	if (program != null) dbRecordDepImports(db, filePath, program);
 
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
@@ -646,22 +650,12 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 		// Skip if already registered (but still recurse for transitive deps).
 		if (findModuleExports(db.exportRegistry, depPath) != null) {
-			// Ensure dep's import edges are recorded before recursing
-			if (!visited.has(depPath)) {
-				const regProgram = dbParse(db, depPath);
-				if (regProgram != null) dbRecordDepImports(db, depPath, regProgram);
-			}
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 			continue;
 		}
 
-		// Phase 1: parse dep, record its import edges, then depth-first recurse.
 		const depProgram = dbParse(db, depPath);
 		if (depProgram == null) continue;
-
-		// Record dep's own import edges so depth-first recursion can traverse them
-		dbRecordDepImports(db, depPath, depProgram);
-		// Recurse into transitive deps BEFORE resolving this dep
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 		const registeredAtNow = getRegisteredAt(db.moduleDeps, depId);
 		if (registeredAtNow != null && registeredAtNow >= db.revision.value) continue;
@@ -758,7 +752,6 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
 	if (program == null) return;
-	dbRecordDepImports(db, filePath, program);
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
 	const tmpCtx = createTempCollectContext(filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
