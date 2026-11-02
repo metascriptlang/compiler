@@ -10,7 +10,6 @@
 // @stdout: round 1 1 true
 // @stdout: round 65536 65536 true
 // @exit: 0
-// @skip-raiser: the Raiser's readFileBytes returns 131072 bytes for a 65536-byte file (measured), unrelated to the JS array lowering
 
 import { Buffer } from "std/core/buffer";
 import { argv } from "std/process";
