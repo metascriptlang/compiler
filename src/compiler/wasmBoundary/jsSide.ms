@@ -156,57 +156,73 @@ function callbackSharesViews(cb: BoundaryCallback): boolean {
 	return spans >= 2 && written;
 }
 
+interface WireRead {
+	names: string;
+	value: string;
+	width: int32;
+}
+
+function wireRead(kind: BoundaryKind, nullable: boolean, w: int32): WireRead {
+	const flag = nullable ? `x${w}` : "";
+	const at = nullable ? w + 1 : w;
+	const prefix = nullable ? `${flag}, ` : "";
+	if (kind == BoundaryKind.String) {
+		return {
+			names: `${prefix}x${at}, x${at + 1}`,
+			value: guarded(flag, `__msbDec(x${at}, x${at + 1})`),
+			width: at + 2 - w,
+		};
+	}
+	return {
+		names: `${prefix}x${at}`,
+		value: guarded(flag, wireToJsValue(kind, `x${at}`)),
+		width: at + 1 - w,
+	};
+}
+
 function adapterOf(cb: BoundaryCallback, target: string, resultAt: string | null): string {
-	let names = "";
-	let args = "";
+	const names: string[] = [];
+	const args: string[] = [];
 	let views = "";
 	let writesBack = "";
 	const shared = callbackSharesViews(cb);
 	const ranges: string[] = [];
 	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
-		if (i > 0) args += ", ";
-		if (w > 0) names += ", ";
-		let flag = "";
-		if (cb.nullables[i]) {
-			flag = `x${w}`;
-			names += `${flag}, `;
-			w += 1;
+		if (cb.params[i] != BoundaryKind.Span) {
+			const read = wireRead(cb.params[i], cb.nullables[i], w);
+			names.push(read.names);
+			args.push(read.value);
+			w += read.width;
+			continue;
 		}
-		if (cb.params[i] == BoundaryKind.String) {
-			names += `x${w}, x${w + 1}`;
-			args += guarded(flag, `__msbDec(x${w}, x${w + 1})`);
-			w += 2;
-		} else if (cb.params[i] == BoundaryKind.Span) {
-			const t = typedArrayOf(cb.elements[i]);
-			const bool = cb.elements[i] == BoundaryKind.Bool;
-			const written = cb.modes[i] == BoundaryMode.Shared;
-			names += `x${w}, x${w + 1}`;
-			if (shared) {
-				const v = `vs[${ranges.length}]`;
-				ranges.push(`[x${w} >>> 0, x${w + 1}, ${t}, ${bool}]`);
-				if (written) writesBack += `__msbCopyTo(x${w} >>> 0, ${v}.base, ${v}.off, x${w + 1}, ${t}); `;
-				args += v;
-			} else {
-				views += `const s${i} = { base: __msbVecOut(x${w} >>> 0, x${w + 1}, ${t}, ${bool}), off: 0, len: x${w + 1} }; `;
-				if (written) writesBack += `__msbCopyTo(x${w} >>> 0, s${i}.base, 0, x${w + 1}, ${t}); `;
-				args += `s${i}`;
-			}
-			w += 2;
+		const at = cb.nullables[i] ? w + 1 : w;
+		if (cb.nullables[i]) names.push(`x${w}, x${at}, x${at + 1}`);
+		else names.push(`x${at}, x${at + 1}`);
+		const t = typedArrayOf(cb.elements[i]);
+		const bool = cb.elements[i] == BoundaryKind.Bool;
+		const written = cb.modes[i] == BoundaryMode.Shared;
+		if (shared) {
+			const v = `vs[${ranges.length}]`;
+			ranges.push(`[x${at} >>> 0, x${at + 1}, ${t}, ${bool}]`);
+			if (written) writesBack += `__msbCopyTo(x${at} >>> 0, ${v}.base, ${v}.off, x${at + 1}, ${t}); `;
+			args.push(v);
 		} else {
-			names += `x${w}`;
-			args += guarded(flag, wireToJsValue(cb.params[i], `x${w}`));
-			w += 1;
+			views += `const s${i} = { base: __msbVecOut(x${at} >>> 0, x${at + 1}, ${t}, ${bool}), off: 0, len: x${at + 1} }; `;
+			if (written) writesBack += `__msbCopyTo(x${at} >>> 0, s${i}.base, 0, x${at + 1}, ${t}); `;
+			args.push(`s${i}`);
 		}
+		w = at + 2;
 	}
 	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); `;
-	let call = `${target}(${args})`;
+	let call = `${target}(${args.join(", ")})`;
 	if (resultAt != null && cb.result != BoundaryKind.Void) call = valueCheck(cb.result, call, resultAt);
-	const body =cb.result == BoundaryKind.Void ? `${call};` : `return ${jsValueToWire(cb.result, call)};`;
-	if (writesBack != "") return `(${names}) => { ${views}try { ${body} } finally { ${writesBack}} }`;
-	if (views != "") return `(${names}) => { ${views}${body} }`;
-	if (cb.result == BoundaryKind.Void) return `(${names}) => { ${call}; }`;
-	return `(${names}) => ${jsValueToWire(cb.result, call)}`;
+	const body = cb.result == BoundaryKind.Void ? `${call};` : `return ${jsValueToWire(cb.result, call)};`;
+	const params = names.join(", ");
+	if (writesBack != "") return `(${params}) => { ${views}try { ${body} } finally { ${writesBack}} }`;
+	if (views != "") return `(${params}) => { ${views}${body} }`;
+	if (cb.result == BoundaryKind.Void) return `(${params}) => { ${call}; }`;
+	return `(${params}) => ${jsValueToWire(cb.result, call)}`;
 }
 
 function forwardsUnchanged(cb: BoundaryCallback, adapter: string, target: string): boolean {
@@ -228,21 +244,10 @@ function takerOf(f: BoundaryFunction): string {
 	const values: string[] = [];
 	let w = 0;
 	for (const leaf of f.resultLeaves) {
-		let flag = "";
-		if (leaf.nullable) {
-			flag = `x${w}`;
-			names.push(flag);
-			w += 1;
-		}
-		if (leaf.kind == BoundaryKind.String) {
-			names.push(`x${w}, x${w + 1}`);
-			values.push(guarded(flag, `__msbDec(x${w}, x${w + 1})`));
-			w += 2;
-		} else {
-			names.push(`x${w}`);
-			values.push(guarded(flag, wireToJsValue(leaf.kind, `x${w}`)));
-			w += 1;
-		}
+		const read = wireRead(leaf.kind, leaf.nullable, w);
+		names.push(read.names);
+		values.push(read.value);
+		w += read.width;
 	}
 	return `(${names.join(", ")}) => { r = ${leafLiteral(f.resultLeaves, values, 0)}; }`;
 }
