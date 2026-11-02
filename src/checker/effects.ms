@@ -419,7 +419,7 @@ function declares(stmt: Node, decl: Node): boolean {
 
 function topLevelStartsTask(stmt: Node): boolean {
 	const s = unpackDecl(stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt);
-	if (s == null || isRoutineNode(s)) return false;
+	if (s == null || isRoutineNode(s) || s.kind == NodeKind.TestDecl) return false;
 	if (s.kind != NodeKind.ClassDecl) return walkEffect(s, Effect.StartsTask) != null;
 	for (const m of (s.data as ClassDeclData).classBody) {
 		const member = unpackDecl(m);
