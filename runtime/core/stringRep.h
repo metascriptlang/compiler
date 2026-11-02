@@ -61,8 +61,7 @@ static inline bool msStrIsEmpty(msString s) { return s.len == 0; }
 static inline const char* msStrData(const msString* s) { return s->len != 0 ? s->p->data : ""; }
 
 /* The data pointer of a Span over s; NULL for a string without a buffer. */
-static inline uint8_t* msStrBytes(const msString* s) { return s->p != NULL ? (uint8_t*)s->p->data : NULL; }
-#define msStringBytesOf(s) msStrBytes((const msString[1]){ (s) })
+#define msStringBytesOf(s) ((s).p != NULL ? (s).p->data : NULL)
 
 static inline bool msStrNeedsNoFree(msString s) {
 	return s.p == NULL || (msStrCapLoad(s.p) & MS_STRLIT_FLAG) != 0;
