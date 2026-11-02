@@ -7,7 +7,7 @@ let refMoves: int32 = 0;
 let varMoves: int32 = 0;
 
 function onMove(this ref dest: ByRef, src: ByRef): void { refMoves += 1; dest.id = src.id; dest.n = src.n; }
-function onMove(this dest: Var<ByVar>, src: ByVar): void { varMoves += 1; dest.id = src.id; dest.n = src.n; }
+function onMove(this ref dest: ByVar, src: ByVar): void { varMoves += 1; dest.id = src.id; dest.n = src.n; }
 
 function mkRef(i: int32): ByRef { return { id: i, n: i + 2 }; }
 function mkVar(i: int32): ByVar { return { id: i, n: i + 2 }; }
