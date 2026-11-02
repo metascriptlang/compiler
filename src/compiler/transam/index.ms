@@ -51,7 +51,7 @@ import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { registerBoundModuleFn, callDecoratorDefers } from "../../checker/checkerCallbacks";
 import { transformProgram } from "../../transform/index";
-import { lowerIterInline } from "../../transform/lowering/iterInline";
+import { lowerIterInline, offerIterBodies } from "../../transform/lowering/iterInline";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { analyzeProgram } from "../../analyzer/index";
 import { RoutineDecls, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
@@ -2216,7 +2216,10 @@ test "a module's lowering reruns after its check reruns" {
 
 function inlineLowering(checked: Node, ctx: CheckerContext, count: LowerCount): Node {
 	count.n += 1;
-	return lowerIterInline(cloneNodeKeepSem(checked), createTransformContextWithChecker(ctx));
+	const program = cloneNodeKeepSem(checked);
+	const transformCtx = createTransformContextWithChecker(ctx);
+	offerIterBodies(program, transformCtx);
+	return lowerIterInline(program, transformCtx);
 }
 
 test "a module's lowering reruns after a generator body it expanded changes in another module" {

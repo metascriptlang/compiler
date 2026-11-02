@@ -12,7 +12,7 @@ import { lookupLocal, symbolKey } from "../../checker/symbol";
 import { typeDisplayName } from "../../checker/types";
 import { ifaceDigest } from "./digest";
 import { resetInstantiationState } from "../../checker/instantiate";
-import { lowerIterInline } from "../../transform/lowering/iterInline";
+import { lowerIterInline, offerIterBodies } from "../../transform/lowering/iterInline";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
@@ -29,7 +29,10 @@ function countLowering(checked: Node, ctx: CheckerContext, count: Count): Node {
 
 function inlineLowering(checked: Node, ctx: CheckerContext, count: Count): Node {
 	count.n += 1;
-	return lowerIterInline(cloneNodeKeepSem(checked), createTransformContextWithChecker(ctx));
+	const program = cloneNodeKeepSem(checked);
+	const transformCtx = createTransformContextWithChecker(ctx);
+	offerIterBodies(program, transformCtx);
+	return lowerIterInline(program, transformCtx);
 }
 
 // Modules are given dependencies first; each entry of `edges` is [importer, imported] as indexes into `paths`.
