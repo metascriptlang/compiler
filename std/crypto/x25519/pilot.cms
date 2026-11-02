@@ -1,5 +1,5 @@
 import {
-	fiat_25519_add, fiat_25519_carry, fiat_25519_carry_mul,
+	fiat_25519_add, fiat_25519_carry_mul,
 	fiat_25519_carry_square, fiat_25519_carry_scmul_121666,
 	fiat_25519_from_bytes, fiat_25519_sub, fiat_25519_to_bytes,
 } from "./field";
@@ -34,32 +34,22 @@ function one(): FieldElement {
 
 function add(a: FieldElement, b: FieldElement): FieldElement {
 	let loose = zero();
-	let tight = zero();
 	fiat_25519_add(
 		(loose.limbs as Span<uint32> as Ptr<uint32>),
 		(a.limbs as Span<uint32> as Ptr<uint32>),
 		(b.limbs as Span<uint32> as Ptr<uint32>),
 	);
-	fiat_25519_carry(
-		(tight.limbs as Span<uint32> as Ptr<uint32>),
-		(loose.limbs as Span<uint32> as Ptr<uint32>),
-	);
-	return tight;
+	return loose;
 }
 
 function subtract(a: FieldElement, b: FieldElement): FieldElement {
 	let loose = zero();
-	let tight = zero();
 	fiat_25519_sub(
 		(loose.limbs as Span<uint32> as Ptr<uint32>),
 		(a.limbs as Span<uint32> as Ptr<uint32>),
 		(b.limbs as Span<uint32> as Ptr<uint32>),
 	);
-	fiat_25519_carry(
-		(tight.limbs as Span<uint32> as Ptr<uint32>),
-		(loose.limbs as Span<uint32> as Ptr<uint32>),
-	);
-	return tight;
+	return loose;
 }
 
 function multiply(a: FieldElement, b: FieldElement): FieldElement {
@@ -187,4 +177,54 @@ export function x25519ScalarMult(
 		output,
 		(scratch.result.limbs as Span<uint32> as Ptr<uint32>),
 	);
+}
+
+function maximumMaskedField(): FieldElement {
+	return { limbs: [
+		0x3ffffff, 0x1ffffff, 0x3ffffff, 0x1ffffff, 0x3ffffff,
+		0x1ffffff, 0x3ffffff, 0x1ffffff, 0x3ffffff, 0x1ffffff,
+	] };
+}
+
+test "X25519 addition preserves generated loose limbs" {
+	const maximum = maximumMaskedField();
+	let expected = zero();
+	fiat_25519_add(
+		(expected.limbs as Span<uint32> as Ptr<uint32>),
+		(maximum.limbs as Span<uint32> as Ptr<uint32>),
+		(maximum.limbs as Span<uint32> as Ptr<uint32>),
+	);
+	const actual = add(maximum, maximum);
+	for (let i: int32 = 0; i < 10; i++) {
+		assert actual.limbs[i] == expected.limbs[i];
+	}
+}
+
+test "X25519 subtraction preserves loose upper-bound limbs" {
+	const maximum = maximumMaskedField();
+	const minimum = zero();
+	let expected = zero();
+	fiat_25519_sub(
+		(expected.limbs as Span<uint32> as Ptr<uint32>),
+		(maximum.limbs as Span<uint32> as Ptr<uint32>),
+		(minimum.limbs as Span<uint32> as Ptr<uint32>),
+	);
+	const actual = subtract(maximum, minimum);
+	for (let i: int32 = 0; i < 10; i++) {
+		assert actual.limbs[i] == expected.limbs[i];
+	}
+}
+
+test "X25519 equal-input subtraction preserves loose bias" {
+	const maximum = maximumMaskedField();
+	let expected = zero();
+	fiat_25519_sub(
+		(expected.limbs as Span<uint32> as Ptr<uint32>),
+		(maximum.limbs as Span<uint32> as Ptr<uint32>),
+		(maximum.limbs as Span<uint32> as Ptr<uint32>),
+	);
+	const actual = subtract(maximum, maximum);
+	for (let i: int32 = 0; i < 10; i++) {
+		assert actual.limbs[i] == expected.limbs[i];
+	}
 }
