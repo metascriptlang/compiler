@@ -25,7 +25,7 @@ import { sharedPreludeOwns } from "../../../checker/checkPass";
 import { completionSources } from "../projectUniverse";
 import { requestCancel, resetCancel } from "../../transam/cancel";
 import { sgJsxSiteAt, sgCompleteJsx, sgFieldDeclLine } from "../../../checker/suggest";
-import { handleDidOpen, handleDidChange } from "./lifecycle";
+import { handleDidOpen, handleDidChange, handleDidClose } from "./lifecycle";
 import { recordImportsForFile } from "./diagnostics";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
@@ -1088,6 +1088,30 @@ test "completion cache: a prebuilt list built before an edit is not served after
 	const r = handleCompletion("1", cacheProbeParams(uri, 1, 0), db, createCompletionCache());
 	assert r.indexOf("\"label\":\"newname\"", 0) >= 0;
 	assert r.indexOf("\"label\":\"oldname\"", 0) < 0;
+}
+
+test "completion cache: a prebuilt list built before a dependency edit is not current after it" {
+	const uri = "file:///prebuiltdepuse.ms";
+	const path = lspUriToPath(uri);
+	const depPath = lspUriToPath("file:///prebuiltdep.ms");
+	const db = createTransAmDb(100);
+	dbSetFileText(db, depPath, "export const depold = 1;\n");
+	dbSetFileText(db, path, 'import { depold } from "./prebuiltdep";\nconst x = depold;\n\n');
+	prebuildCompletionCache(db, path, uri);
+	const before = _prebuiltCache.get(uri);
+	assert before != null && completionSnapshotCurrent(before.snapshot, db, path);
+	dbSetFileText(db, depPath, "export const depnew = 1;\n");
+	const after = _prebuiltCache.get(uri);
+	assert after != null && !completionSnapshotCurrent(after.snapshot, db, path);
+}
+
+test "completion cache: closing a document drops its prebuilt list" {
+	const uri = "file:///prebuiltclose.ms";
+	const db = createTransAmDb(100);
+	handleDidOpen(`{"textDocument":{"uri":"${uri}","text":"const closename = 1;\\n"}}`, db);
+	assert _prebuiltCache.has(uri);
+	handleDidClose(`{"textDocument":{"uri":"${uri}"}}`, db);
+	assert !_prebuiltCache.has(uri);
 }
 
 test "completion cache: a prebuilt list of an unchanged snapshot is served" {
