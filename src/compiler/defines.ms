@@ -21,14 +21,6 @@ export interface DefineTable {
 
 export function createDefineTable(): DefineTable {
 	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
-	// std blocks the previous compiler cannot read sit under this symbol; the guards go one sync cycle after the compiler lands.
-	defineSymbol(t, "mscDeclaresRuntime", "true");
-	// The runtime aborts on a foreign root entry only under this symbol: a compiler built by one that predates it still emits worker code that registers program cells in worker roots, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscKeepsRootsWithOwner", "true");
-	// The runtime's plain msDecref skips the future test only under this symbol: a compiler built by one that predates it emits msDecref for a future, so the fast form goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscEmitsDecrefFuture", "true");
-	// std reads the declared toJSON and inspect of a type only under this symbol: a compiler built by one that predates the host function builds the tree with the lookup answering none, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscHasDeclaredCallType", "true");
 	// std sort and reverse return a Borrow only under this symbol: an older builder emits that Borrow as the address of the callee's parameter slot, so the guard goes one sync cycle after the compiler lands.
 	defineSymbol(t, "mscReturnsBorrowedReference", "true");
 	// A number argument ranks as an exact match for a float64 parameter only under this symbol: std keeps its number overloads for a compiler that predates it, which would take the generic overload instead, so the guard goes one sync cycle after the compiler lands.
@@ -228,10 +220,6 @@ test "define: bare flag stores true" {
 
 test "define: a fresh table carries the compiler feature symbol" {
 	const t = createDefineTable();
-	assert isDefined(t, "mscDeclaresRuntime");
-	assert isDefined(t, "mscKeepsRootsWithOwner");
-	assert isDefined(t, "mscEmitsDecrefFuture");
-	assert isDefined(t, "mscHasDeclaredCallType");
 	assert isDefined(t, "mscRanksNumberAsFloat64");
 	assert isDefined(t, "mscBuildsPreludeTables");
 }

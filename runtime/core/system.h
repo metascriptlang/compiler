@@ -378,10 +378,6 @@ static inline void msStringCopy(msString* dest, msString src) {
 	void* __msDecrefFutureP = (void*)(p); \
 	if (__msDecrefFutureP != NULL) msFutureDeferredRelease(__msDecrefFutureP); \
 } while(0)
-/* The compiler routes a future to msDecrefFuture, so msDecref carries no future test. A compiler
- * that predates msDecrefFuture still emits msDecref for a future, so the fast form waits for the
- * symbol that declares the split. */
-#ifdef MS_DECREF_FUTURE_ROUTED
 #define msDecref(p)           do { \
 	void* __msDecrefP = (void*)(p); \
 	if (__msDecrefP != NULL && msDecRefIsLast(__msDecrefP)) { \
@@ -389,9 +385,6 @@ static inline void msStringCopy(msString* dest, msString src) {
 		msDestroyAndDispose(__msDecrefP); \
 	} \
 } while(0)
-#else
-#define msDecref(p)           msDecrefAny(p)
-#endif
 #define msPtrWasMoved(p)      msWasMoved(p)
 
 /* --- Arc<T> atomic ref lifecycle (cross-thread shared; decref tail == msDecref) --- */

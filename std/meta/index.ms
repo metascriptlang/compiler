@@ -63,12 +63,7 @@ extern function msMetaGetType(n: Node, impl: boolean): Node | null;
 extern function msMetaGetImpl(n: Node): Node | null;
 extern function msMetaResolveType(text: string): Node | null;
 extern function msMetaTypeKind(n: Node | null): int32;
-when (mscHasDeclaredCallType) {
-	extern function msMetaDeclaredCallType(n: Node | null, name: string): Node | null;
-}
-when (!mscHasDeclaredCallType) {
-	function msMetaDeclaredCallType(n: Node | null, name: string): Node | null { return null; }
-}
+extern function msMetaDeclaredCallType(n: Node | null, name: string): Node | null;
 extern function msMetaSameType(a: Node | null, b: Node | null): boolean;
 extern function msMetaSymKind(n: Node | null): int32;
 extern function msMetaGetSize(n: Node): int32;

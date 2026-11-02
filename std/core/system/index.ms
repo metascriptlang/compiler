@@ -1,12 +1,6 @@
 @include("runtime/core/system.h");
 @compile("runtime/core/system.c");
 @compile("runtime/drc.c");
-when (mscKeepsRootsWithOwner) {
-	@passC("-DMS_ROOT_OWNER_AT_FREE");
-}
-when (mscEmitsDecrefFuture) {
-	@passC("-DMS_DECREF_FUTURE_ROUTED");
-}
 
 export class console {
 	/**
@@ -323,1127 +317,1125 @@ export class AbortController {
 	}
 }
 
-when (mscDeclaresRuntime) {
-	// ===== Runtime routines the compiler synthesizes calls to =====
-	// A macro that dispatches on its argument count is declared at its widest arity.
+// ===== Runtime routines the compiler synthesizes calls to =====
+// A macro that dispatches on its argument count is declared at its widest arity.
 
-	@compilerFunc
-	extern function msIncref(p: Ptr<void>): void;
+@compilerFunc
+extern function msIncref(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msDecref(p: Ptr<void>): void;
+@compilerFunc
+extern function msDecref(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msDecrefAny(p: Ptr<void>): void;
+@compilerFunc
+extern function msDecrefAny(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msDecrefFuture(p: Ptr<void>): void;
+@compilerFunc
+extern function msDecrefFuture(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msIncRef(p: Ptr<void>): void;
+@compilerFunc
+extern function msIncRef(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msIncrefCyclic(p: Ptr<void>): void;
+@compilerFunc
+extern function msIncrefCyclic(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msDecrefCyclic(p: Ptr<void>): void;
+@compilerFunc
+extern function msDecrefCyclic(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msDecrefEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
+@compilerFunc
+extern function msDecrefEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
 
-	@compilerFunc
-	extern function msDecrefCyclicEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
+@compilerFunc
+extern function msDecrefCyclicEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
 
-	@compilerFunc
-	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
+@compilerFunc
+extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
 
-	@compilerFunc
-	extern function msOrcDisown(p: Ptr<void>): void;
+@compilerFunc
+extern function msOrcDisown(p: Ptr<void>): void;
 
-	@compilerFunc @builtin("OrcDisownValue")
-	extern function msOrcDisownValue(value: Ptr<void>): void;
+@compilerFunc @builtin("OrcDisownValue")
+extern function msOrcDisownValue(value: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAtomicIncref(p: Ptr<void>): void;
+@compilerFunc
+extern function msAtomicIncref(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAtomicDecref(p: Ptr<void>): void;
+@compilerFunc
+extern function msAtomicDecref(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msPtrWasMoved(p: Ptr<void>): void;
+@compilerFunc
+extern function msPtrWasMoved(p: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msPlainWasMoved(x: Ptr<void>): void;
+@compilerFunc
+extern function msPlainWasMoved(x: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
+@compilerFunc
+extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msHeldCount(p: Ptr<void>): int64;
+@compilerFunc
+extern function msHeldCount(p: Ptr<void>): int64;
 
-	@compilerFunc
-	extern function msDestroyLeftNoRef(p: Ptr<void>, held: int64): void;
+@compilerFunc
+extern function msDestroyLeftNoRef(p: Ptr<void>, held: int64): void;
 
-	@compilerFunc
-	extern function msStringDecref(s: string): void;
+@compilerFunc
+extern function msStringDecref(s: string): void;
 
-	@compilerFunc
-	extern function msStringIncref(s: string): void;
+@compilerFunc
+extern function msStringIncref(s: string): void;
 
-	@compilerFunc
-	extern function msStringWasMoved(s: string): void;
+@compilerFunc
+extern function msStringWasMoved(s: string): void;
 
-	@compilerFunc
-	extern function msStringSink(d: string, v: string): void;
+@compilerFunc
+extern function msStringSink(d: string, v: string): void;
 
-	@compilerFunc
-	extern function msStringCopy(dest: Ptr<void>, src: string): void;
+@compilerFunc
+extern function msStringCopy(dest: Ptr<void>, src: string): void;
 
-	@compilerFunc
-	extern function msStringAppend(dest: Ptr<void>, src: string): void;
+@compilerFunc
+extern function msStringAppend(dest: Ptr<void>, src: string): void;
 
-	@compilerFunc
-	extern function msStringAppendChar(dest: Ptr<void>, ch: char): void;
+@compilerFunc
+extern function msStringAppendChar(dest: Ptr<void>, ch: char): void;
 
-	@compilerFunc
-	extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
+@compilerFunc
+extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
 
-	@compilerFunc
-	extern function msStringConcat(a: string, b: string): string;
+@compilerFunc
+extern function msStringConcat(a: string, b: string): string;
 
-	@compilerFunc
-	extern function msStringCompare(a: string, b: string): int32;
+@compilerFunc
+extern function msStringCompare(a: string, b: string): int32;
 
-	@compilerFunc
-	extern function msStringHash(s: string): int32;
+@compilerFunc
+extern function msStringHash(s: string): int32;
 
-	@compilerFunc
-	extern function msRaiseFieldError(head: string, labels: string, tag: int64): never;
+@compilerFunc
+extern function msRaiseFieldError(head: string, labels: string, tag: int64): never;
 
-	@compilerFunc
-	extern function msStringLength(s: string): int64;
+@compilerFunc
+extern function msStringLength(s: string): int64;
 
-	@compilerFunc
-	extern function msStringByteLength(s: string): int64;
+@compilerFunc
+extern function msStringByteLength(s: string): int64;
 
-	@compilerFunc
-	extern function msStringUnicodeLength(s: string): int64;
+@compilerFunc
+extern function msStringUnicodeLength(s: string): int64;
 
-	@compilerFunc
-	extern function msStringByteAt(s: string, idx: int64): int64;
+@compilerFunc
+extern function msStringByteAt(s: string, idx: int64): int64;
 
-	@compilerFunc
-	extern function msStringToCString(s: string): cstring;
+@compilerFunc
+extern function msStringToCString(s: string): cstring;
 
-	@compilerFunc
-	extern function msStringFromCStr(s: cstring): string;
+@compilerFunc
+extern function msStringFromCStr(s: cstring): string;
 
-	@compilerFunc
-	extern function msBoolToString(value: int32): string;
+@compilerFunc
+extern function msBoolToString(value: int32): string;
 
-	@compilerFunc
-	extern function msIntToString(value: int64): string;
+@compilerFunc
+extern function msIntToString(value: int64): string;
 
-	@compilerFunc
-	extern function msIntToStringRadix(value: int64, radix: float64): string;
+@compilerFunc
+extern function msIntToStringRadix(value: int64, radix: float64): string;
 
-	@compilerFunc
-	extern function msUint64ToString(value: uint64): string;
+@compilerFunc
+extern function msUint64ToString(value: uint64): string;
 
-	@compilerFunc
-	extern function msUint64ToStringRadix(value: uint64, radix: float64): string;
+@compilerFunc
+extern function msUint64ToStringRadix(value: uint64, radix: float64): string;
 
-	@compilerFunc
-	extern function msNumberToString(value: float64): string;
+@compilerFunc
+extern function msNumberToString(value: float64): string;
 
-	@compilerFunc
-	extern function msNumberToStringRadix(value: float64, radix: float64): string;
+@compilerFunc
+extern function msNumberToStringRadix(value: float64, radix: float64): string;
 
-	@compilerFunc
-	extern function msArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayWasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayWasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayNumberWasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayNumberWasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayRefDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayRefDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayRefWasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayRefWasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayStringDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayStringDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayStringWasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayStringWasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayUint8Destroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayUint8Destroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayUint8WasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayUint8WasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayClosureDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayClosureDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayClosureWasMoved(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayClosureWasMoved(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayStringCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayStringCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayUint8Copy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayUint8Copy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayClosureCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayClosureCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayCopyPayload(d: Ptr<void>, s: Ptr<void>): void;
+@compilerFunc
+extern function msArrayCopyPayload(d: Ptr<void>, s: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayNumberSink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayNumberSink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayStringSink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayStringSink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayUint8Sink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayUint8Sink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msArrayClosureSink(d: Ptr<void>, v: Ptr<void>): void;
+@compilerFunc
+extern function msArrayClosureSink(d: Ptr<void>, v: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msNumberArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msNumberArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msRefArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msRefArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msStringArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msStringArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msClosureArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msClosureArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
+@compilerFunc
+extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msNumberArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msNumberArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msStringArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msStringArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msAtomicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msAtomicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+@compilerFunc
+extern function msAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
-	@compilerFunc
-	extern function msRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
+@compilerFunc
+extern function msRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
 
-	@compilerFunc
-	extern function msAtomicRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
+@compilerFunc
+extern function msAtomicRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
 
-	@compilerFunc
-	extern function msRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+@compilerFunc
+extern function msRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAtomicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+@compilerFunc
+extern function msAtomicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+@compilerFunc
+extern function msAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msSliceLen(start: int64, end: int64, len: int64): int64;
+@compilerFunc
+extern function msSliceLen(start: int64, end: int64, len: int64): int64;
 
-	@compilerFunc
-	extern function msSliceLenUnchecked(start: int64, end: int64, len: int64): int64;
+@compilerFunc
+extern function msSliceLenUnchecked(start: int64, end: int64, len: int64): int64;
 
-	@compilerFunc
-	extern function msClosureCopy(c: () => void): void;
+@compilerFunc
+extern function msClosureCopy(c: () => void): void;
 
-	@compilerFunc
-	extern function msClosureDestroy(c: () => void): void;
+@compilerFunc
+extern function msClosureDestroy(c: () => void): void;
 
-	@compilerFunc
-	extern function msClosureWasMoved(c: () => void): void;
+@compilerFunc
+extern function msClosureWasMoved(c: () => void): void;
 
-	@compilerFunc
-	extern function msClosureSink(d: () => void, v: () => void): void;
+@compilerFunc
+extern function msClosureSink(d: () => void, v: () => void): void;
 
-	@compilerFunc
-	extern function msClosureTrace(c: () => void, env: Ptr<void>): void;
+@compilerFunc
+extern function msClosureTrace(c: () => void, env: Ptr<void>): void;
 
-	@compilerFunc
-	extern function msClosureDisown(c: () => void): void;
+@compilerFunc
+extern function msClosureDisown(c: () => void): void;
 
-	@compilerFunc
-	function msSetCard32(v: uint32): int32 {
-		let n: uint32 = v;
-		let c: int32 = 0;
-		while (n != 0) {
-			c += (n & 1) as int32;
-			n = n >> 1;
-		}
-		return c;
+@compilerFunc
+function msSetCard32(v: uint32): int32 {
+	let n: uint32 = v;
+	let c: int32 = 0;
+	while (n != 0) {
+		c += (n & 1) as int32;
+		n = n >> 1;
 	}
-
-	@compilerFunc
-	function msSetHashWord(acc: int64, word: uint32): int64 {
-		let h: uint64 = ((acc as uint64) ^ (word as uint64)) * 2654435761;
-		h = (h ^ (h >> 16)) & 0xFFFFFFFF;
-		if (h == 0) h = 314159265;
-		return h as int64;
-	}
-
-	@compilerFunc
-	extern function msToInt32(x: float64): int32;
-
-	@compilerFunc
-	extern function msCheckRangeI8(v: float64, lo: int64, hi: int64): int8;
-
-	@compilerFunc
-	extern function msCheckRangeU8(v: float64, lo: int64, hi: int64): uint8;
-
-	@compilerFunc
-	extern function msCheckRangeI16(v: float64, lo: int64, hi: int64): int16;
-
-	@compilerFunc
-	extern function msCheckRangeU16(v: float64, lo: int64, hi: int64): uint16;
-
-	@compilerFunc
-	extern function msCheckRangeI32(v: float64, lo: int64, hi: int64): int32;
-
-	@compilerFunc
-	extern function msCheckRangeU32(v: float64, lo: int64, hi: int64): uint32;
-
-	@compilerFunc
-	extern function msCheckRangeI64(v: float64): int64;
-
-	@compilerFunc
-	extern function msCheckRangeI64FromU64(v: uint64): int64;
-	@compilerFunc
-	extern function msCheckRangeI32FromU64(v: uint64, lo: int64, hi: int64): int32;
-
-	@compilerFunc
-	extern function msCheckRangeU64(v: float64): uint64;
-
-	@compilerFunc
-	extern function msDivI32(a: int32, b: int32): int32;
-
-	@compilerFunc
-	extern function msModI32(a: int32, b: int32): int32;
-
-	@compilerFunc
-	extern function msDivI64(a: int64, b: int64): int64;
-
-	@compilerFunc
-	extern function msModI64(a: int64, b: int64): int64;
-
-	@compilerFunc
-	extern function msDivU32(a: uint32, b: uint32): uint32;
-
-	@compilerFunc
-	extern function msModU32(a: uint32, b: uint32): uint32;
-
-	@compilerFunc
-	extern function msDivU64(a: uint64, b: uint64): uint64;
-
-	@compilerFunc
-	extern function msModU64(a: uint64, b: uint64): uint64;
-
-	@compilerFunc
-	extern function msRaiseRangeError(v: int64, lo: int64, hi: int64): never;
-
-	@compilerFunc
-	extern function msRaiseOverflow(): never;
-
-	@inline
-	function powChecked<T>(a: T, b: T, max: T): T {
-		if (b < 0) msRaiseRangeError(b as int64, 0, max as int64);
-		let r: T = 1;
-		let x = a;
-		let y = b;
-		while (true) {
-			if ((y & 1) != 0) r *= x;
-			y >>= 1;
-			if (y == 0) return r;
-			x *= x;
-		}
-	}
-
-	@inline
-	function powWrap<T>(a: T, b: T): T {
-		let r: T = 1;
-		let x = a;
-		let y = b;
-		while (y != 0) {
-			if ((y & 1) != 0) r *= x;
-			y >>= 1;
-			x *= x;
-		}
-		return r;
-	}
-
-	@inline
-	function powWrapNegativeExponent<T>(a: T, b: T): T {
-		return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
-	}
-
-	@compilerFunc @inline
-	function msPowI32(a: int32, b: int32): int32 {
-		return powChecked(a, b, 2147483647);
-	}
-
-	@compilerFunc @inline
-	function msPowI64(a: int64, b: int64): int64 {
-		return powChecked(a, b, 9223372036854775807);
-	}
-
-	@compilerFunc @inline
-	function msPowU32(a: uint32, b: uint32): uint32 {
-		return powWrap(a, b);
-	}
-
-	@compilerFunc @inline
-	function msPowU64(a: uint64, b: uint64): uint64 {
-		return powWrap(a, b);
-	}
-
-	@compilerFunc @inline
-	function msPowWrapU32(a: uint32, b: uint32): uint32 {
-		return powWrap(a, b);
-	}
-
-	@compilerFunc @inline
-	function msPowWrapU64(a: uint64, b: uint64): uint64 {
-		return powWrap(a, b);
-	}
-
-	@compilerFunc @inline
-	function msPowWrapI32(a: int32, b: int32): int32 {
-		if (b < 0) return powWrapNegativeExponent(a, b);
-		return msPowWrapU32(a as uint32, b as uint32) as int32;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapI64(a: int64, b: int64): int64 {
-		if (b < 0) return powWrapNegativeExponent(a, b);
-		return msPowWrapU64(a as uint64, b as uint64) as int64;
-	}
-
-	@compilerFunc @inline
-	function msPowI8(a: int8, b: int8): int8 {
-		const r = msPowI32(a, b);
-		if (r < -128 || r > 127) msRaiseOverflow();
-		return r as int8;
-	}
-
-	@compilerFunc @inline
-	function msPowI16(a: int16, b: int16): int16 {
-		const r = msPowI32(a, b);
-		if (r < -32768 || r > 32767) msRaiseOverflow();
-		return r as int16;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignI8(ref lv: int8, b: int8): int8 {
-		lv = msPowI8(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignI16(ref lv: int16, b: int16): int16 {
-		lv = msPowI16(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignI32(ref lv: int32, b: int32): int32 {
-		lv = msPowI32(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignI64(ref lv: int64, b: int64): int64 {
-		lv = msPowI64(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignU8(ref lv: uint8, b: uint8): uint8 {
-		lv = (msPowU32(lv, b) & 255) as uint8;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignU16(ref lv: uint16, b: uint16): uint16 {
-		lv = (msPowU32(lv, b) & 65535) as uint16;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignU32(ref lv: uint32, b: uint32): uint32 {
-		lv = msPowU32(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowAssignU64(ref lv: uint64, b: uint64): uint64 {
-		lv = msPowU64(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignI8(ref lv: int8, b: int8): int8 {
-		lv = msPowWrapI32(lv, b) as int8;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignI16(ref lv: int16, b: int16): int16 {
-		lv = msPowWrapI32(lv, b) as int16;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignI32(ref lv: int32, b: int32): int32 {
-		lv = msPowWrapI32(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignI64(ref lv: int64, b: int64): int64 {
-		lv = msPowWrapI64(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignU8(ref lv: uint8, b: uint8): uint8 {
-		lv = msPowWrapU32(lv, b) as uint8;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignU16(ref lv: uint16, b: uint16): uint16 {
-		lv = msPowWrapU32(lv, b) as uint16;
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignU32(ref lv: uint32, b: uint32): uint32 {
-		lv = msPowWrapU32(lv, b);
-		return lv;
-	}
-
-	@compilerFunc @inline
-	function msPowWrapAssignU64(ref lv: uint64, b: uint64): uint64 {
-		lv = msPowWrapU64(lv, b);
-		return lv;
-	}
-
-	@compilerFunc
-	extern function msDivAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msModAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msDivAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msModAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msDivAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msModAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msDivAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msModAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msModAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAndAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msOrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msXorAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msShlAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msShrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
-	@compilerFunc
-	extern function msBlockEnd(b: int64, len: int64): int64;
-	@compilerFunc
-	extern function msPowF64(x: float64, y: float64): float64;
-	@compilerFunc
-	extern function msAddI8(a: int8, b: int8): int8;
-	@compilerFunc
-	extern function msAddI16(a: int16, b: int16): int16;
-	@compilerFunc
-	extern function msAddI32(a: int32, b: int32): int32;
-	@compilerFunc
-	extern function msAddI64(a: int64, b: int64): int64;
-	@compilerFunc
-	extern function msSubI8(a: int8, b: int8): int8;
-	@compilerFunc
-	extern function msSubI16(a: int16, b: int16): int16;
-	@compilerFunc
-	extern function msSubI32(a: int32, b: int32): int32;
-	@compilerFunc
-	extern function msSubI64(a: int64, b: int64): int64;
-	@compilerFunc
-	extern function msMulI8(a: int8, b: int8): int8;
-	@compilerFunc
-	extern function msMulI16(a: int16, b: int16): int16;
-	@compilerFunc
-	extern function msMulI32(a: int32, b: int32): int32;
-	@compilerFunc
-	extern function msMulI64(a: int64, b: int64): int64;
-	@compilerFunc
-	extern function msNegI8(a: int8): int8;
-	@compilerFunc
-	extern function msNegI16(a: int16): int16;
-	@compilerFunc
-	extern function msNegI32(a: int32): int32;
-	@compilerFunc
-	extern function msNegI64(a: int64): int64;
-	@compilerFunc
-	extern function msDivI8(a: int8, b: int8): int8;
-	@compilerFunc
-	extern function msDivI16(a: int16, b: int16): int16;
-	@compilerFunc
-	extern function msDivAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msDivAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msAddAssign(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msSubAssign(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msMulAssign(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPostInc(lv: Ptr<void>): int64;
-	@compilerFunc
-	extern function msPostDec(lv: Ptr<void>): int64;
-	@compilerFunc
-	extern function msSumFitsI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumFitsI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msSumAddI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumAddI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msSumSubI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotFitsI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msDotFitsI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msDotFitsI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msDotFitsI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
-	@compilerFunc
-	extern function msDotAddI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotAddI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotAddI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotAddI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotSubI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotSubI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotSubI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-	@compilerFunc
-	extern function msDotSubI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
-
-	@compilerFunc
-	extern function msShrUAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msBoxDouble(v: float64): Ptr<void>;
-
-	@compilerFunc
-	extern function msBoxInt32(v: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msBoxInt64(v: int64): Ptr<void>;
-
-	@compilerFunc
-	extern function msBoxBool(v: boolean): Ptr<void>;
-
-	@compilerFunc
-	extern function msUnboxDouble(p: Ptr<void>): float64;
-
-	@compilerFunc
-	extern function msUnboxInt32(p: Ptr<void>): int32;
-
-	@compilerFunc
-	extern function msUnboxInt64(p: Ptr<void>): int64;
-
-	@compilerFunc
-	extern function msUnboxBool(p: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msUnboxString(p: Ptr<void>): string;
-
-	@compilerFunc
-	extern function msFutureCreate(): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureComplete(fp: Ptr<void>, val: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureCompleteVoid(fp: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureFail(fp: Ptr<void>, err: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureFinished(fp: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msFutureDrcDestroy(f: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msMaybeAccess(m: Ptr<void>, head: string, labels: string): Ptr<void>;
-
-	@compilerFunc
-	extern function msMaybeAccessVal(m: Ptr<void>, head: string, labels: string): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureValueAt(fp: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureBoxAt(fp: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureOwnsValue(fp: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msFutureSetValueDrop(fp: Ptr<void>, drop: () => void): void;
-
-	@compilerFunc
-	extern function msFutureDropUnread(sink fp: Ptr<void>, drop: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureTakeRaw(fp: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureTakeStringRaw(fp: Ptr<void>): string;
-
-	@compilerFunc
-	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msActorSuspendReplyDouble(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspendReplyInt32(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspendReplyInt64(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspendReplyBool(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspendReplyString(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspendReplyPtr(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_doubleWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_int32(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_int32WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_int64(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_int64WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_bool(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_boolWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_msString(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_msStringWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_ptr(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_ptrWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_ref(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThen_refWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_double(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_int32(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_int64(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_bool(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_msString(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatch_ptr(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThenTyped(input: Ptr<void>, onFulfilled: () => void, typeTag: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureThenTypedWithRejected(input: Ptr<void>, onFulfilled: () => void, typeTag: int32, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureCatchTyped(input: Ptr<void>, onRejected: () => void, typeTag: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msPromiseNew(executor: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msPromiseResolve(value: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msAsyncStart(retFut: Ptr<void>, stepper: () => void): void;
-
-	@compilerFunc
-	extern function msWaitForReady(fut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msMonoTimeMs(): int64;
-
-	@compilerFunc
-	extern function msSpawn(fn: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msSpawnSlotSubmit(s: Ptr<void>, slot: int32, fn: () => void): void;
-
-	@compilerFunc
-	extern function msSpawnTaskSubmit(group: Ptr<void>, slot: int32, fn: () => void): void;
-
-	@compilerFunc
-	extern function msSpawnCheckCancel(g: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msAwaitGroupInit(n: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msAwaitGroupBlocking(g: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitGroupFree(g: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitGroupBlockingWithDeadline(g: Ptr<void>, deadlineMs: int64): void;
-
-	@compilerFunc
-	extern function msAwaitGroupArmDeadline(g: Ptr<void>, timeoutMs: int64): void;
-
-	@compilerFunc
-	extern function msAwaitGroupDisarmDeadline(g: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitGroupResult(g: Ptr<void>, slot: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msAwaitGroupSetDoneFut(g: Ptr<void>, fut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitGroupTimedOut(g: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msAwaitSlotCreate(n: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msAwaitSlotRelease(sp: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitSlotWait(sp: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitSlotSettle(sp: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msSpawnHeldCreate(): Ptr<void>;
-
-	@compilerFunc
-	extern function msSpawnHeldSubmit(hp: Ptr<void>, fn: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msSpawnHeldSettle(hp: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>, drop: Ptr<void>): int64;
-
-	@compilerFunc
-	extern function msActorFromPid(pid: int64): Ptr<void>;
-
-	@compilerFunc
-	extern function msActorPin(pid: int64): int32;
-
-	@compilerFunc
-	extern function msActorPinnedState(slot: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msActorUnpin(slot: int32): void;
-
-	@compilerFunc
-	extern function msActorCopyString(s: string): string;
-
-	@compilerFunc
-	extern function msBigIntClone(a: bigint): bigint;
-
-	@compilerFunc
-	extern function msActorPollAll(): boolean;
-
-	@compilerFunc
-	extern function msActorRegister(a: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorCtorEnter(pid: int64): void;
-
-	@compilerFunc
-	extern function msActorCtorLeave(pid: int64): void;
-
-	@compilerFunc
-	extern function msActorSendOrDrop(a: Ptr<void>, msg: Ptr<void>, drop: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSuspend(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorTrapExits(pid: int64, trap: boolean): void;
-
-	@compilerFunc
-	extern function msActorSetOnTerminate(actor: Ptr<void>, fn: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msActorSetSystemMsgHandler(actor: Ptr<void>, fn: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msMsgAllocSized(kind: int32, replyFut: Ptr<void>, argCount: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msMsgKind(msg: Ptr<void>): int32;
-
-	@compilerFunc
-	extern function msMsgReplyFuture(msg: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msMsgGetDouble(m: Ptr<void>, idx: int32): float64;
-
-	@compilerFunc
-	extern function msMsgGetInt32(m: Ptr<void>, idx: int32): int32;
-
-	@compilerFunc
-	extern function msMsgGetInt64(m: Ptr<void>, idx: int32): int64;
-
-	@compilerFunc
-	extern function msMsgGetBool(m: Ptr<void>, idx: int32): boolean;
-
-	@compilerFunc
-	extern function msMsgGetString(m: Ptr<void>, idx: int32): string;
-
-	@compilerFunc
-	extern function msMsgGetPtr(m: Ptr<void>, idx: int32): Ptr<void>;
-
-	@compilerFunc
-	extern function msMsgSetDouble(m: Ptr<void>, idx: int32, val: float64): void;
-
-	@compilerFunc
-	extern function msMsgSetInt32(m: Ptr<void>, idx: int32, val: int32): void;
-
-	@compilerFunc
-	extern function msMsgSetInt64(m: Ptr<void>, idx: int32, val: int64): void;
-
-	@compilerFunc
-	extern function msMsgSetBool(m: Ptr<void>, idx: int32, val: boolean): void;
-
-	@compilerFunc
-	extern function msMsgSetString(m: Ptr<void>, idx: int32, s: string): void;
-
-	@compilerFunc
-	extern function msMsgSetPtr(m: Ptr<void>, idx: int32, val: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msMsgSetPtrShared(m: Ptr<void>, idx: int32, val: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msPrintln(s: string): void;
-
-	@compilerFunc
-	extern function msWarnln(s: string): void;
-
-	@compilerFunc
-	extern function msEprintln(s: string): void;
-
-	@compilerFunc
-	extern function __FILE__(): cstring from "__FILE__";
-
-	@compilerFunc
-	extern function strlen(s: cstring): uint64;
-
-	// ===== Power-assert reporting (runtime/core/test.h) =====
-
-	@compilerFunc
-	extern function __paBegin(source: cstring): void;
-
-	@compilerFunc
-	extern function __paEnd(): void;
-
-	@compilerFunc
-	extern function __paValueStr(col: int32, label: cstring, val: cstring): void;
-
-	@compilerFunc
-	extern function __paValueNum(col: int32, label: cstring, val: float64): void;
-
-	@compilerFunc
-	extern function __paValueInt(col: int32, label: cstring, val: int64): void;
-
-	@compilerFunc
-	extern function __paValueBool(col: int32, label: cstring, val: int32): void;
+	return c;
 }
+
+@compilerFunc
+function msSetHashWord(acc: int64, word: uint32): int64 {
+	let h: uint64 = ((acc as uint64) ^ (word as uint64)) * 2654435761;
+	h = (h ^ (h >> 16)) & 0xFFFFFFFF;
+	if (h == 0) h = 314159265;
+	return h as int64;
+}
+
+@compilerFunc
+extern function msToInt32(x: float64): int32;
+
+@compilerFunc
+extern function msCheckRangeI8(v: float64, lo: int64, hi: int64): int8;
+
+@compilerFunc
+extern function msCheckRangeU8(v: float64, lo: int64, hi: int64): uint8;
+
+@compilerFunc
+extern function msCheckRangeI16(v: float64, lo: int64, hi: int64): int16;
+
+@compilerFunc
+extern function msCheckRangeU16(v: float64, lo: int64, hi: int64): uint16;
+
+@compilerFunc
+extern function msCheckRangeI32(v: float64, lo: int64, hi: int64): int32;
+
+@compilerFunc
+extern function msCheckRangeU32(v: float64, lo: int64, hi: int64): uint32;
+
+@compilerFunc
+extern function msCheckRangeI64(v: float64): int64;
+
+@compilerFunc
+extern function msCheckRangeI64FromU64(v: uint64): int64;
+@compilerFunc
+extern function msCheckRangeI32FromU64(v: uint64, lo: int64, hi: int64): int32;
+
+@compilerFunc
+extern function msCheckRangeU64(v: float64): uint64;
+
+@compilerFunc
+extern function msDivI32(a: int32, b: int32): int32;
+
+@compilerFunc
+extern function msModI32(a: int32, b: int32): int32;
+
+@compilerFunc
+extern function msDivI64(a: int64, b: int64): int64;
+
+@compilerFunc
+extern function msModI64(a: int64, b: int64): int64;
+
+@compilerFunc
+extern function msDivU32(a: uint32, b: uint32): uint32;
+
+@compilerFunc
+extern function msModU32(a: uint32, b: uint32): uint32;
+
+@compilerFunc
+extern function msDivU64(a: uint64, b: uint64): uint64;
+
+@compilerFunc
+extern function msModU64(a: uint64, b: uint64): uint64;
+
+@compilerFunc
+extern function msRaiseRangeError(v: int64, lo: int64, hi: int64): never;
+
+@compilerFunc
+extern function msRaiseOverflow(): never;
+
+@inline
+function powChecked<T>(a: T, b: T, max: T): T {
+	if (b < 0) msRaiseRangeError(b as int64, 0, max as int64);
+	let r: T = 1;
+	let x = a;
+	let y = b;
+	while (true) {
+		if ((y & 1) != 0) r *= x;
+		y >>= 1;
+		if (y == 0) return r;
+		x *= x;
+	}
+}
+
+@inline
+function powWrap<T>(a: T, b: T): T {
+	let r: T = 1;
+	let x = a;
+	let y = b;
+	while (y != 0) {
+		if ((y & 1) != 0) r *= x;
+		y >>= 1;
+		x *= x;
+	}
+	return r;
+}
+
+@inline
+function powWrapNegativeExponent<T>(a: T, b: T): T {
+	return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
+}
+
+@compilerFunc @inline
+function msPowI32(a: int32, b: int32): int32 {
+	return powChecked(a, b, 2147483647);
+}
+
+@compilerFunc @inline
+function msPowI64(a: int64, b: int64): int64 {
+	return powChecked(a, b, 9223372036854775807);
+}
+
+@compilerFunc @inline
+function msPowU32(a: uint32, b: uint32): uint32 {
+	return powWrap(a, b);
+}
+
+@compilerFunc @inline
+function msPowU64(a: uint64, b: uint64): uint64 {
+	return powWrap(a, b);
+}
+
+@compilerFunc @inline
+function msPowWrapU32(a: uint32, b: uint32): uint32 {
+	return powWrap(a, b);
+}
+
+@compilerFunc @inline
+function msPowWrapU64(a: uint64, b: uint64): uint64 {
+	return powWrap(a, b);
+}
+
+@compilerFunc @inline
+function msPowWrapI32(a: int32, b: int32): int32 {
+	if (b < 0) return powWrapNegativeExponent(a, b);
+	return msPowWrapU32(a as uint32, b as uint32) as int32;
+}
+
+@compilerFunc @inline
+function msPowWrapI64(a: int64, b: int64): int64 {
+	if (b < 0) return powWrapNegativeExponent(a, b);
+	return msPowWrapU64(a as uint64, b as uint64) as int64;
+}
+
+@compilerFunc @inline
+function msPowI8(a: int8, b: int8): int8 {
+	const r = msPowI32(a, b);
+	if (r < -128 || r > 127) msRaiseOverflow();
+	return r as int8;
+}
+
+@compilerFunc @inline
+function msPowI16(a: int16, b: int16): int16 {
+	const r = msPowI32(a, b);
+	if (r < -32768 || r > 32767) msRaiseOverflow();
+	return r as int16;
+}
+
+@compilerFunc @inline
+function msPowAssignI8(ref lv: int8, b: int8): int8 {
+	lv = msPowI8(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignI16(ref lv: int16, b: int16): int16 {
+	lv = msPowI16(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignI32(ref lv: int32, b: int32): int32 {
+	lv = msPowI32(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignI64(ref lv: int64, b: int64): int64 {
+	lv = msPowI64(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignU8(ref lv: uint8, b: uint8): uint8 {
+	lv = (msPowU32(lv, b) & 255) as uint8;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignU16(ref lv: uint16, b: uint16): uint16 {
+	lv = (msPowU32(lv, b) & 65535) as uint16;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignU32(ref lv: uint32, b: uint32): uint32 {
+	lv = msPowU32(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowAssignU64(ref lv: uint64, b: uint64): uint64 {
+	lv = msPowU64(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignI8(ref lv: int8, b: int8): int8 {
+	lv = msPowWrapI32(lv, b) as int8;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignI16(ref lv: int16, b: int16): int16 {
+	lv = msPowWrapI32(lv, b) as int16;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignI32(ref lv: int32, b: int32): int32 {
+	lv = msPowWrapI32(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignI64(ref lv: int64, b: int64): int64 {
+	lv = msPowWrapI64(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignU8(ref lv: uint8, b: uint8): uint8 {
+	lv = msPowWrapU32(lv, b) as uint8;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignU16(ref lv: uint16, b: uint16): uint16 {
+	lv = msPowWrapU32(lv, b) as uint16;
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignU32(ref lv: uint32, b: uint32): uint32 {
+	lv = msPowWrapU32(lv, b);
+	return lv;
+}
+
+@compilerFunc @inline
+function msPowWrapAssignU64(ref lv: uint64, b: uint64): uint64 {
+	lv = msPowWrapU64(lv, b);
+	return lv;
+}
+
+@compilerFunc
+extern function msDivAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msModAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msDivAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msModAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msDivAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msModAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msDivAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msModAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msModAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msAndAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msOrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msXorAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msShlAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msShrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
+@compilerFunc
+extern function msBlockEnd(b: int64, len: int64): int64;
+@compilerFunc
+extern function msPowF64(x: float64, y: float64): float64;
+@compilerFunc
+extern function msAddI8(a: int8, b: int8): int8;
+@compilerFunc
+extern function msAddI16(a: int16, b: int16): int16;
+@compilerFunc
+extern function msAddI32(a: int32, b: int32): int32;
+@compilerFunc
+extern function msAddI64(a: int64, b: int64): int64;
+@compilerFunc
+extern function msSubI8(a: int8, b: int8): int8;
+@compilerFunc
+extern function msSubI16(a: int16, b: int16): int16;
+@compilerFunc
+extern function msSubI32(a: int32, b: int32): int32;
+@compilerFunc
+extern function msSubI64(a: int64, b: int64): int64;
+@compilerFunc
+extern function msMulI8(a: int8, b: int8): int8;
+@compilerFunc
+extern function msMulI16(a: int16, b: int16): int16;
+@compilerFunc
+extern function msMulI32(a: int32, b: int32): int32;
+@compilerFunc
+extern function msMulI64(a: int64, b: int64): int64;
+@compilerFunc
+extern function msNegI8(a: int8): int8;
+@compilerFunc
+extern function msNegI16(a: int16): int16;
+@compilerFunc
+extern function msNegI32(a: int32): int32;
+@compilerFunc
+extern function msNegI64(a: int64): int64;
+@compilerFunc
+extern function msDivI8(a: int8, b: int8): int8;
+@compilerFunc
+extern function msDivI16(a: int16, b: int16): int16;
+@compilerFunc
+extern function msDivAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msDivAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msPowAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msAddAssign(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msSubAssign(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msMulAssign(lv: Ptr<void>, b: Ptr<void>): void;
+@compilerFunc
+extern function msPostInc(lv: Ptr<void>): int64;
+@compilerFunc
+extern function msPostDec(lv: Ptr<void>): int64;
+@compilerFunc
+extern function msSumFitsI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumFitsI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumAddI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumAddI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msSumSubI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotFitsI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msDotFitsI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msDotFitsI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msDotFitsI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msDotAddI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotAddI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotAddI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotAddI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotSubI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotSubI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotSubI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+@compilerFunc
+extern function msDotSubI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+
+@compilerFunc
+extern function msShrUAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+@compilerFunc
+extern function msBoxDouble(v: float64): Ptr<void>;
+
+@compilerFunc
+extern function msBoxInt32(v: int32): Ptr<void>;
+
+@compilerFunc
+extern function msBoxInt64(v: int64): Ptr<void>;
+
+@compilerFunc
+extern function msBoxBool(v: boolean): Ptr<void>;
+
+@compilerFunc
+extern function msUnboxDouble(p: Ptr<void>): float64;
+
+@compilerFunc
+extern function msUnboxInt32(p: Ptr<void>): int32;
+
+@compilerFunc
+extern function msUnboxInt64(p: Ptr<void>): int64;
+
+@compilerFunc
+extern function msUnboxBool(p: Ptr<void>): boolean;
+
+@compilerFunc
+extern function msUnboxString(p: Ptr<void>): string;
+
+@compilerFunc
+extern function msFutureCreate(): Ptr<void>;
+
+@compilerFunc
+extern function msFutureComplete(fp: Ptr<void>, val: Ptr<void>): void;
+
+@compilerFunc
+extern function msFutureCompleteVoid(fp: Ptr<void>): void;
+
+@compilerFunc
+extern function msFutureFail(fp: Ptr<void>, err: Ptr<void>): void;
+
+@compilerFunc
+extern function msFutureFinished(fp: Ptr<void>): boolean;
+
+@compilerFunc
+extern function msFutureDrcDestroy(f: Ptr<void>): void;
+
+@compilerFunc
+extern function msMaybeAccess(m: Ptr<void>, head: string, labels: string): Ptr<void>;
+
+@compilerFunc
+extern function msMaybeAccessVal(m: Ptr<void>, head: string, labels: string): Ptr<void>;
+
+@compilerFunc
+extern function msFutureValueAt(fp: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msFutureBoxAt(fp: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msFutureOwnsValue(fp: Ptr<void>): boolean;
+
+@compilerFunc
+extern function msFutureSetValueDrop(fp: Ptr<void>, drop: () => void): void;
+
+@compilerFunc
+extern function msFutureDropUnread(sink fp: Ptr<void>, drop: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureTakeRaw(fp: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msFutureTakeStringRaw(fp: Ptr<void>): string;
+
+@compilerFunc
+extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msActorSuspendReplyDouble(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspendReplyInt32(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspendReplyInt64(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspendReplyBool(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspendReplyString(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspendReplyPtr(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_doubleWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_int32(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_int32WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_int64(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_int64WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_bool(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_boolWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_msString(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_msStringWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_ptr(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_ptrWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_ref(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThen_refWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_double(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_int32(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_int64(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_bool(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_msString(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatch_ptr(input: Ptr<void>, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureFinally(input: Ptr<void>, onSettled: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThenTyped(input: Ptr<void>, onFulfilled: () => void, typeTag: int32): Ptr<void>;
+
+@compilerFunc
+extern function msFutureThenTypedWithRejected(input: Ptr<void>, onFulfilled: () => void, typeTag: int32, onRejected: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msFutureCatchTyped(input: Ptr<void>, onRejected: () => void, typeTag: int32): Ptr<void>;
+
+@compilerFunc
+extern function msPromiseNew(executor: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msPromiseResolve(value: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msAsyncStart(retFut: Ptr<void>, stepper: () => void): void;
+
+@compilerFunc
+extern function msWaitForReady(fut: Ptr<void>): void;
+
+@compilerFunc
+extern function msMonoTimeMs(): int64;
+
+@compilerFunc
+extern function msSpawn(fn: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msSpawnSlotSubmit(s: Ptr<void>, slot: int32, fn: () => void): void;
+
+@compilerFunc
+extern function msSpawnTaskSubmit(group: Ptr<void>, slot: int32, fn: () => void): void;
+
+@compilerFunc
+extern function msSpawnCheckCancel(g: Ptr<void>): boolean;
+
+@compilerFunc
+extern function msAwaitGroupInit(n: int32): Ptr<void>;
+
+@compilerFunc
+extern function msAwaitGroupBlocking(g: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitGroupFree(g: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitGroupBlockingWithDeadline(g: Ptr<void>, deadlineMs: int64): void;
+
+@compilerFunc
+extern function msAwaitGroupArmDeadline(g: Ptr<void>, timeoutMs: int64): void;
+
+@compilerFunc
+extern function msAwaitGroupDisarmDeadline(g: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitGroupResult(g: Ptr<void>, slot: int32): Ptr<void>;
+
+@compilerFunc
+extern function msAwaitGroupSetDoneFut(g: Ptr<void>, fut: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitGroupTimedOut(g: Ptr<void>): boolean;
+
+@compilerFunc
+extern function msAwaitSlotCreate(n: int32): Ptr<void>;
+
+@compilerFunc
+extern function msAwaitSlotRelease(sp: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitSlotWait(sp: Ptr<void>): void;
+
+@compilerFunc
+extern function msAwaitSlotSettle(sp: Ptr<void>): void;
+
+@compilerFunc
+extern function msSpawnHeldCreate(): Ptr<void>;
+
+@compilerFunc
+extern function msSpawnHeldSubmit(hp: Ptr<void>, fn: () => void): Ptr<void>;
+
+@compilerFunc
+extern function msSpawnHeldSettle(hp: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>, drop: Ptr<void>): int64;
+
+@compilerFunc
+extern function msActorFromPid(pid: int64): Ptr<void>;
+
+@compilerFunc
+extern function msActorPin(pid: int64): int32;
+
+@compilerFunc
+extern function msActorPinnedState(slot: int32): Ptr<void>;
+
+@compilerFunc
+extern function msActorUnpin(slot: int32): void;
+
+@compilerFunc
+extern function msActorCopyString(s: string): string;
+
+@compilerFunc
+extern function msBigIntClone(a: bigint): bigint;
+
+@compilerFunc
+extern function msActorPollAll(): boolean;
+
+@compilerFunc
+extern function msActorRegister(a: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorCtorEnter(pid: int64): void;
+
+@compilerFunc
+extern function msActorCtorLeave(pid: int64): void;
+
+@compilerFunc
+extern function msActorSendOrDrop(a: Ptr<void>, msg: Ptr<void>, drop: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSuspend(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorTrapExits(pid: int64, trap: boolean): void;
+
+@compilerFunc
+extern function msActorSetOnTerminate(actor: Ptr<void>, fn: Ptr<void>): void;
+
+@compilerFunc
+extern function msActorSetSystemMsgHandler(actor: Ptr<void>, fn: Ptr<void>): void;
+
+@compilerFunc
+extern function msMsgAllocSized(kind: int32, replyFut: Ptr<void>, argCount: int32): Ptr<void>;
+
+@compilerFunc
+extern function msMsgKind(msg: Ptr<void>): int32;
+
+@compilerFunc
+extern function msMsgReplyFuture(msg: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msMsgGetDouble(m: Ptr<void>, idx: int32): float64;
+
+@compilerFunc
+extern function msMsgGetInt32(m: Ptr<void>, idx: int32): int32;
+
+@compilerFunc
+extern function msMsgGetInt64(m: Ptr<void>, idx: int32): int64;
+
+@compilerFunc
+extern function msMsgGetBool(m: Ptr<void>, idx: int32): boolean;
+
+@compilerFunc
+extern function msMsgGetString(m: Ptr<void>, idx: int32): string;
+
+@compilerFunc
+extern function msMsgGetPtr(m: Ptr<void>, idx: int32): Ptr<void>;
+
+@compilerFunc
+extern function msMsgSetDouble(m: Ptr<void>, idx: int32, val: float64): void;
+
+@compilerFunc
+extern function msMsgSetInt32(m: Ptr<void>, idx: int32, val: int32): void;
+
+@compilerFunc
+extern function msMsgSetInt64(m: Ptr<void>, idx: int32, val: int64): void;
+
+@compilerFunc
+extern function msMsgSetBool(m: Ptr<void>, idx: int32, val: boolean): void;
+
+@compilerFunc
+extern function msMsgSetString(m: Ptr<void>, idx: int32, s: string): void;
+
+@compilerFunc
+extern function msMsgSetPtr(m: Ptr<void>, idx: int32, val: Ptr<void>): void;
+
+@compilerFunc
+extern function msMsgSetPtrShared(m: Ptr<void>, idx: int32, val: Ptr<void>): void;
+
+@compilerFunc
+extern function msPrintln(s: string): void;
+
+@compilerFunc
+extern function msWarnln(s: string): void;
+
+@compilerFunc
+extern function msEprintln(s: string): void;
+
+@compilerFunc
+extern function __FILE__(): cstring from "__FILE__";
+
+@compilerFunc
+extern function strlen(s: cstring): uint64;
+
+// ===== Power-assert reporting (runtime/core/test.h) =====
+
+@compilerFunc
+extern function __paBegin(source: cstring): void;
+
+@compilerFunc
+extern function __paEnd(): void;
+
+@compilerFunc
+extern function __paValueStr(col: int32, label: cstring, val: cstring): void;
+
+@compilerFunc
+extern function __paValueNum(col: int32, label: cstring, val: float64): void;
+
+@compilerFunc
+extern function __paValueInt(col: int32, label: cstring, val: int64): void;
+
+@compilerFunc
+extern function __paValueBool(col: int32, label: cstring, val: int32): void;
 
 // ===== Derived comparison operators (standard library parity) =====
 // Given ==, < and <= for a type, derive !=, > and >= at zero cost.
