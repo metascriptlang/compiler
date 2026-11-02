@@ -3680,6 +3680,7 @@ resetLiftedOps();
 			opMarkAt: 0,
 			head: null,
 		};
+		liftTables.unitClosures.set(modPath, job.opClosure);
 		if (session.keep) {
 			enterModuleOps(modPath, job.opClosure);
 			const earlier = session.lowerClaims.get(modPath);

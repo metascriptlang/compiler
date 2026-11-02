@@ -20,6 +20,7 @@ import { isSinkTypeForParam, isStructType, classDistance, createArray, createFun
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
+import { recordBodyRead } from "../checker/bodyReads";
 
 const ELEMENT_SLOT = "E";
 // An append moves the elements a value borrow copied out, so it can only strand a borrow that
@@ -55,6 +56,7 @@ class WriteSummary {
 	edges: Edge[];
 	forwards: Symbol[];
 	linked: HashSet<Cursor<WriteSummary>>;
+	reads: HashSet<string>;
 	index: int32;
 	low: int32;
 	onStack: boolean;
@@ -87,6 +89,7 @@ export interface WriteSummaries {
 	viewReturnsReach: int32;
 	slotHolders: Type[];
 	slotHolderIds: HashMap<Type, int32>;
+	unitClosures: HashMap<string, HashSet<string>>;
 	stack: WriteSummary[];
 	nextIndex: int32;
 	contracts: HashMap<Symbol, CallbackContract>;
@@ -105,7 +108,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
-		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
+		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
@@ -166,7 +169,7 @@ function notLoweredYet(w: WriteEffects, s: WriteSummary): boolean {
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
 		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false, paramCalls: [], paramsAssigned: new HashSet<Symbol>(),
-		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
+		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), reads: new HashSet<string>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
 
@@ -194,7 +197,28 @@ function routineBody(decl: Node | null): Node | null {
 }
 
 function routineDecl(w: WriteEffects, sym: Symbol): Node | null {
+	readBodyOf(w, bodyUnit(w, sym));
 	return w.tables.routineDecls.decls.get(sym) ?? unpackDecl(sym.declNode);
+}
+
+function bodyUnit(w: WriteEffects, sym: Symbol): string {
+	return w.tables.routineDecls.routineUnits.get(sym) ?? sym.modulePath;
+}
+
+function readBodyOf(w: WriteEffects, unit: string): void {
+	if (unit != w.unit) recordBodyRead(unit);
+}
+
+function readBodies(w: WriteEffects, s: WriteSummary): void {
+	for (const unit of s.reads) readBodyOf(w, unit);
+}
+
+function outsideClosure(w: WriteEffects, s: WriteSummary, override: Symbol): boolean {
+	const viewer = unitOf(w, s);
+	const closure = w.tables.unitClosures.get(viewer);
+	if (closure == null) return false;
+	const unit = bodyUnit(w, override);
+	return unit != viewer && !closure.has(unit);
 }
 
 function summaryDecl(w: WriteEffects, s: WriteSummary): Node | null {
@@ -644,7 +668,10 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 	const entry = dispatchEntryFor(sym!);
 	if (entry != null) {
 		if (entry.overloaded) markUnknown(s);
-		else for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) out.push(routineSummary(w, o.sym));
+		else for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) {
+			if (outsideClosure(w, s, o.sym)) markUnknown(s);
+			else out.push(routineSummary(w, o.sym));
+		}
 	}
 	return out;
 }
@@ -940,6 +967,7 @@ function returnsNewObject(w: WriteEffects, s: WriteSummary, call: Node): boolean
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym) || runsNativeOnC(w, sym!) || dispatchEntryFor(sym!) != null) return false;
 	const callee = w.tables.routineSummaries.get(sym!);
+	if (callee != null) readBodies(w, callee);
 	return callee != null && callee.done && callee.returnsFresh && !reloadsApart(w, s, callee);
 }
 
@@ -1056,6 +1084,7 @@ function link(w: WriteEffects, s: WriteSummary, call: Node | null, callee: Write
 }
 
 function walkSummary(w: WriteEffects, s: WriteSummary): void {
+	if (s.sym != null && s.kind != SummaryKind.Hooks) s.reads.add(bodyUnit(w, s.sym!));
 	if (notLoweredYet(w, s)) {
 		markUnknown(s);
 		return;
@@ -1129,6 +1158,12 @@ function absorb(w: WriteEffects, s: WriteSummary, e: Edge): boolean {
 	const c = e.callee;
 	let changed = false;
 	if (c.unknown && markUnknown(s)) changed = true;
+	for (const unit of c.reads) {
+		if (!s.reads.has(unit)) {
+			s.reads.add(unit);
+			changed = true;
+		}
+	}
 	for (const p of c.paramCalls) {
 		const decl = (s.kind == SummaryKind.Routine || s.kind == SummaryKind.Closure) && (s.sym != null || s.literal != null) ? summaryDecl(w, s) : null;
 		if (decl != null && decl.paramSyms != null && decl.paramSyms!.includes(p)) {
@@ -1179,6 +1214,7 @@ function constructionSummary(w: WriteEffects, cls: Symbol): WriteSummary {
 
 function settled(w: WriteEffects, s: WriteSummary): WriteSummary {
 	if (s.index < 0) visit(w, s);
+	readBodies(w, s);
 	return s;
 }
 
@@ -1221,6 +1257,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
 	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym)) return true;
 	const known = w.tables.retainedParams.get(sym);
+	readBodyOf(w, bodyUnit(w, sym));
 	if (known != null) return (known & (1 << i)) != 0;
 	w.tables.retainedParams.set(sym, -1);
 	const decl = routineDecl(w, sym);
@@ -1281,6 +1318,7 @@ export function viewReturnSlots(w: WriteEffects, call: Node): string[] | null {
 
 function routineReturnSlots(w: WriteEffects, sym: Symbol): string[] | null {
 	const known = w.tables.viewReturns.get(sym);
+	readBodyOf(w, bodyUnit(w, sym));
 	if (known != null) return known;
 	if (w.tables.viewReturnsUnknown.has(sym)) return null;
 	const open = w.tables.viewReturnsOpen.indexOf(sym);

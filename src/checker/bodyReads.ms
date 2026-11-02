@@ -53,7 +53,7 @@ const SITES: ReaderSite[] = [
 	{ file: "transform/lowering/jsPointerLower.ms", readers: 2, records: 0 },
 	{ file: "transform/lowering/methodDispatchLower.ms", readers: 1, records: 0 },
 	{ file: "analyzer/cursors.ms", readers: 1, records: 0 },
-	{ file: "analyzer/writeEffects.ms", readers: 8, records: 0 },
+	{ file: "analyzer/writeEffects.ms", readers: 8, records: 1 },
 ];
 
 function occurrences(text: string, token: string): int32 {
