@@ -84,6 +84,8 @@ function declIndexBuild(programs: Node[], paths: string[]): void {
 let _visitedSet: HashSet<string> = new HashSet<string>();
 let _visitedSyms: HashSet<Symbol> = new HashSet<Symbol>();
 let _markedUnions: HashSet<Type> = new HashSet<Type>();
+let _cellInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
+let _cellDemanders: HashSet<string> = new HashSet<string>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -217,42 +219,51 @@ function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 	}
 }
 
+function markCellDemander(demand: CTypeInfoDemand, modulePath: string): void {
+	const demander = _singleModule != "" ? _singleModule : modulePath;
+	const site = demand.key + "\t" + demander;
+	if (_cellDemanders.has(site)) return;
+	_cellDemanders.add(site);
+	aliveSetAddModule(_aliveSet, demander);
+	if (demand.destroy != null) markReferenced(demand.destroy, demander);
+	if (demand.trace != null) markReferenced(demand.trace, demander);
+	if (demand.custody != null) markReferenced(demand.custody, demander);
+}
+
 function markRefArrayCell(arrT: Type, modulePath: string): void {
 	if (_sourceDependenciesOnly) return;
 	const key = refArrayCellKey(arrT);
-	if (_aliveSet.typeInfoKeys.has(key)) {
-		moveTypeInfoOwnerIntoCore(key, modulePath);
+	const known = _cellInfos.get(key);
+	if (known != null) {
+		markCellDemander(known, modulePath);
 		return;
 	}
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
 	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
 	const custody = refArrayCellOp(arrT, AttachedOp.AttachedCustody);
-	let owner = _singleModule != "" ? _singleModule : modulePath;
-	if (_singleModule == "") {
-		if (!hasFlag(destroy, SymbolFlag.ImportC)) owner = opOwner(destroy, owner);
-		if (trace != null) owner = opOwner(trace, owner);
-		else if (custody != null) owner = opOwner(custody, owner);
-	}
-	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", custody };
-	_aliveSet.typeInfos.push(demand);
-	aliveSetAddModule(_aliveSet, owner);
-	markReferenced(destroy, owner);
-	if (trace != null) markReferenced(trace, owner);
-	if (custody != null) markReferenced(custody, owner);
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner: "", cName: "", destroy, trace, baseKey: "", custody };
+	addCellDemand(demand, modulePath);
 }
 
 function markArcCell(pointee: Type, modulePath: string): void {
 	const key = arcCellKey(pointee);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
+	const known = _cellInfos.get(key);
+	if (known != null) {
+		markCellDemander(known, modulePath);
+		return;
+	}
 	const destroy = arrayElementNeedsCleanup(pointee) ? getOpByKey(pointee, AttachedOp.AttachedDestructor) : null;
-	const owner = _singleModule != "" ? _singleModule : modulePath;
-	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "" };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner: "", cName: "", destroy, trace: null, baseKey: "" };
+	addCellDemand(demand, modulePath);
+}
+
+function addCellDemand(demand: CTypeInfoDemand, modulePath: string): void {
+	if (_aliveSet.typeInfoKeys.has(demand.key)) throw new Error(`internal: cell TypeInfo key ${demand.key} is already demanded as another kind`);
+	_aliveSet.typeInfoKeys.add(demand.key);
 	_aliveSet.typeInfos.push(demand);
-	aliveSetAddModule(_aliveSet, owner);
-	if (destroy != null) markReferenced(destroy, owner);
+	_cellInfos.set(demand.key, demand);
+	markCellDemander(demand, modulePath);
 }
 
 function markPromiseAllResult(resultType: Type, modulePath: string): void {
@@ -668,6 +679,8 @@ export function computeAliveSet(
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
+	_cellInfos = new HashMap<string, CTypeInfoDemand>();
+	_cellDemanders = new HashSet<string>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
@@ -780,6 +793,8 @@ function takeReachability(): AliveSet {
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
+	_cellInfos = new HashMap<string, CTypeInfoDemand>();
+	_cellDemanders = new HashSet<string>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
@@ -798,6 +813,8 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
+	_cellInfos = new HashMap<string, CTypeInfoDemand>();
+	_cellDemanders = new HashSet<string>();
 	_singleModule = modulePath;
 	declIndexBuild([program], [modulePath]);
 	for (const stmt of (program.data as ProgramData).programStmts) {

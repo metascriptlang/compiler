@@ -1260,7 +1260,7 @@ export function typeInfoRef(g: CGen, type: Readonly<Type | null>): string {
 
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	return demandedTypeInfoPointer(g, g.emissionFacts, arcCellKeyIn(g.emissionFacts.moduleNameRoots!, pointeeType), "Arc cell");
+	return cellTypeInfoPointer(g, g.emissionFacts, arcCellKeyIn(g.emissionFacts.moduleNameRoots!, pointeeType), "Arc cell");
 }
 
 export function refArrayCellKeyIn(roots: Readonly<ModuleNameRoots>, arrT: Readonly<Type>): string {
@@ -1301,8 +1301,54 @@ export function hcrTypeInfoRef(g: CGen, cName: string): boolean {
 
 export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const key = refArrayCellKeyIn(g.emissionFacts.moduleNameRoots!, arrT);
-	return demandedTypeInfoPointer(g, g.emissionFacts, key, "ref-array cell");
+	return cellTypeInfoPointer(g, g.emissionFacts, refArrayCellKeyIn(g.emissionFacts.moduleNameRoots!, arrT), "ref-array cell");
+}
+
+function cellTypeInfoPointer(g: CGen, facts: Readonly<CEmissionFacts>, key: string, what: string): string {
+	const cName = demandedCName(facts, key);
+	return cName == "" ? undemandedTypeInfo(g, key, what) : declareCellTypeInfo(g, key, cName, what);
+}
+
+function demandedCName(facts: Readonly<CEmissionFacts>, key: string): string {
+	const info = facts.typeInfos.readonlyGet(key);
+	return info == null ? "" : info.cName;
+}
+
+function declareCellTypeInfo(g: CGen, key: string, cName: string, what: string): string {
+	const name = `${cName}TypeInfo`;
+	const forwKey = "cellTypeInfo:" + cName;
+	if (typeCacheHas(g.forwTypeCache, forwKey)) return `&${name}`;
+	if (g.cellTypeInfosEmitted) {
+		addCGenError(g, `internal: ${what} TypeInfo ${cName} is first demanded in ${g.modulePath} after its cell TypeInfos were defined`, 0, 0);
+		return "NULL";
+	}
+	typeCacheSet(g.forwTypeCache, forwKey, name);
+	g.cellTypeInfos.push(key);
+	const moduleId = g.emissionFacts.hcrModules.readonlyGet(g.modulePath);
+	if (moduleId == null) {
+		addLine(sec(g, CSection.ForwardDecls), `static msTypeInfo ${name};`);
+		return `&${name}`;
+	}
+	const pointer = `_ms_hcr_ti_${cName}`;
+	addLine(sec(g, CSection.ForwardDecls), `static msTypeInfo* ${pointer};`);
+	addLine(sec(g, CSection.ForwardDecls), `#define ${name} (*${pointer})`);
+	addLine(sec(g, CSection.DatInit), `  ${pointer} = (msTypeInfo*)msHcrTypeInfo(${cStringLiteral(moduleId)}, ${cStringLiteral(cName)});`);
+	return `&${name}`;
+}
+
+function emitCellTypeInfos(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean): void {
+	g.cellTypeInfosEmitted = true;
+	g.cellTypeInfos.sort();
+	for (const key of g.cellTypeInfos) emitCellTypeInfo(g, facts, viaRegistry, key);
+}
+
+function emitCellTypeInfo(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean, key: string): void {
+	for (const info of facts.typeInfoOrder) {
+		if (info.key != key) continue;
+		const fields = typeInfoFields(g, facts, info, false);
+		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
+		else addLine(sec(g, CSection.GlobalVars), `static msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+	}
 }
 
 function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
@@ -1380,33 +1426,47 @@ function emitRttiHook(g: CGen, name: string, hook: Readonly<Symbol>, trace: bool
 export function emitOwnedTypeInfos(g: CGen, facts: Readonly<CEmissionFacts>): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	emitTypeInfoTable(g, facts, isHcrImageModule(g, g.modulePath));
+	emitCellTypeInfos(g, facts, isHcrImageModule(g, g.modulePath));
+}
+
+function typeInfoFields(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly<CTypeInfoDemand>, viaRegistry: boolean): string {
+	let destroyName = "NULL";
+	if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
+	let traceName = "NULL";
+	if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
+	const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
+	const finalizer = info.finalize != null && info.release != null
+		? `, .finalizeFn = ${emitRttiHook(g, info.cName + "RttiFinalize", info.finalize, false)}, .releaseFn = ${emitRttiHook(g, info.cName + "RttiRelease", info.release, false)}`
+		: "";
+	let baseRef = "NULL";
+	if (info.baseKey != "") baseRef = demandedTypeInfoPointer(g, facts, info.baseKey, "base class");
+	const label = typeInfoLabel(g, info);
+	const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
+	return `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
+		+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}`
+		+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 }
 
 function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean): void {
+	const owned: string[] = [];
 	for (const info of facts.typeInfoOrder) {
-		if (info.owner != g.modulePath) continue;
-		let destroyName = "NULL";
-		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
-		let traceName = "NULL";
-		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
-		const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
-		const finalizer = info.finalize != null && info.release != null
-			? `, .finalizeFn = ${emitRttiHook(g, info.cName + "RttiFinalize", info.finalize, false)}, .releaseFn = ${emitRttiHook(g, info.cName + "RttiRelease", info.release, false)}`
-			: "";
-		let baseRef = "NULL";
-		if (info.baseKey != "") baseRef = demandedTypeInfoPointer(g, facts, info.baseKey, "base class");
-		const label = typeInfoLabel(g, info);
-		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
-		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}`
-			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
+		if (info.kind == TypeInfoKind.Object && info.owner == g.modulePath) owned.push(info.key);
+	}
+	owned.sort();
+	for (const key of owned) emitOwnedTypeInfo(g, facts, viaRegistry, key);
+}
+
+function emitOwnedTypeInfo(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean, key: string): void {
+	for (const info of facts.typeInfoOrder) {
+		if (info.key != key) continue;
+		const fields = typeInfoFields(g, facts, info, viaRegistry);
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
 			continue;
 		}
 		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
 		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
-		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, facts, info);
+		emitTypeInfoDisplay(g, facts, info);
 	}
 }
 

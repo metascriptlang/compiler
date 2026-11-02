@@ -219,3 +219,52 @@ test "array and ref-array cell hooks two siblings both lift are named by content
 	assert runs(dir, "mainAB") == "4", "mainAB prints fa() + fb()";
 	assert runs(dir, "mainBA") == "4", "mainBA prints fa() + fb()";
 }
+
+function cellProject(name: string, b: string, z: string): string {
+	const dir = `${root}/out/hookHome/${name}`;
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(`${dir}/b.ms`, b);
+	writeFile(`${dir}/z.ms`, z);
+	writeFile(`${dir}/mainB.ms`, "import { fb } from \"./b\";\nconsole.log(await fb());\n");
+	writeFile(`${dir}/mainBZ.ms`, "import { fb } from \"./b\";\nimport { fz } from \"./z\";\nconsole.log(await fb() + await fz());\n");
+	writeFile(`${dir}/mainZB.ms`, "import { fz } from \"./z\";\nimport { fb } from \"./b\";\nconsole.log(await fz() + await fb());\n");
+	return dir;
+}
+
+function definesOwnCell(c: string, stem: string): string {
+	if (c.startsWith("BUILD-FAILED")) return c;
+	for (const line of c.split("\n")) {
+		if (line.startsWith(`static msTypeInfo ${stem}`) && line.contains("TypeInfo = {")) return "";
+	}
+	return `no static ${stem}…TypeInfo definition in:\n${c}`;
+}
+
+function cellTypeInfoChanges(dir: string, stem: string): string {
+	const alone = moduleC(emitted(dir, "mainB"), "b");
+	const bz = moduleC(emitted(dir, "mainBZ"), "b");
+	const zb = moduleC(emitted(dir, "mainZB"), "b");
+	return definesOwnCell(alone, stem)
+		+ sameC("b's C changes when z boxes the same cell after it", alone, bz)
+		+ sameC("b's C changes when z boxes the same cell before it", alone, zb);
+}
+
+test "a ref-array cell TypeInfo is defined by each module that boxes it, so a sibling boxing the same cell leaves the module's C unchanged" {
+	const dir = cellProject("refArrayCell",
+		"export class Item { constructor(public n: string) {} }\nexport async function loadB(): Promise<Item[]> { return [new Item(\"b\")]; }\nexport async function fb(): Promise<number> { const r = await loadB(); return r.length; }\n",
+		"import { Item } from \"./b\";\nexport async function loadZ(): Promise<Item[]> { return [new Item(\"z\")]; }\nexport async function fz(): Promise<number> { const r = await loadZ(); return r.length; }\n");
+	const changes = cellTypeInfoChanges(dir, "msRefArray_");
+	assert changes == "", changes;
+	assert runs(dir, "mainBZ") == "2", "mainBZ prints fb() + fz()";
+	assert runs(dir, "mainZB") == "2", "mainZB prints fz() + fb()";
+}
+
+test "an Arc cell TypeInfo is defined by each module that boxes it, so a sibling boxing the same cell leaves the module's C unchanged" {
+	const dir = cellProject("arcCell",
+		"export struct Payload { s: string; n: int32; }\nexport async function fb(): Promise<int32> { const a: Arc<Payload> = new Arc({ s: \"b\" + String(1), n: 1 }); return a.n; }\n",
+		"import { Payload } from \"./b\";\nexport async function fz(): Promise<int32> { const a: Arc<Payload> = new Arc({ s: \"z\" + String(2), n: 2 }); return a.n; }\n");
+	const changes = cellTypeInfoChanges(dir, "msArcCell_");
+	assert changes == "", changes;
+	assert runs(dir, "mainBZ") == "3", "mainBZ prints fb() + fz()";
+	assert runs(dir, "mainZB") == "3", "mainZB prints fz() + fb()";
+}

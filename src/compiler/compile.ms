@@ -34,7 +34,7 @@ import { RaiserValueKind } from "../raiser/value";
 import { factInlineDecls } from "../codegen/c/forward";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit, TypeInfoKind } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -2682,7 +2682,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
-			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+			if (info.kind == TypeInfoKind.Object && info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
 	for (const module of modules) {

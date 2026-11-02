@@ -768,6 +768,8 @@ export class CGen {
 	errors: CheckerError[];
 	preparingDeclarations: boolean;
 	emittedInstances: HashSet<string>;
+	cellTypeInfos: string[];
+	cellTypeInfosEmitted: boolean;
 	sections: Builder[];       // CSection enum-indexed (11 sections)
 	currentProc: CProc | null;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
@@ -815,6 +817,8 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, al
 		errors: [],
 		preparingDeclarations: false,
 		emittedInstances: new HashSet<string>(),
+		cellTypeInfos: [],
+		cellTypeInfosEmitted: false,
 		currentProc: null,
 		typeCache: createTypeCache(),
 		forwTypeCache: createTypeCache(),

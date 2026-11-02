@@ -59,7 +59,7 @@ test "a foreign type's hooks are defined in its declaring module, not in the mod
 	assert !origin.contains("lib.ms");
 }
 
-test "a Promise.all result is an array cell with one TypeInfo definition however many modules collect into it" {
+test "a Promise.all result is an array cell whose TypeInfo each collecting module defines for itself" {
 	const entries: MapEntry[] = [
 		{ entryPath: "src/tag.ms", entrySource: `
 			export struct Tag { label: string; n: int32; }
@@ -87,7 +87,7 @@ test "a Promise.all result is an array cell with one TypeInfo definition however
 	assert occurrences(c, "MS_PROMISE_ALL_FOR_TI(") == 2;
 	const ti = promiseAllCellTypeInfo(c);
 	assert ti.endsWith("RefCellTypeInfo");
-	assert occurrences(c, "\nmsTypeInfo " + ti + " = ") == 1;
-	assert occurrences(c, "extern msTypeInfo " + ti + ";") >= 1;
+	assert occurrences(c, "\nstatic msTypeInfo " + ti + " = ") == 2;
+	assert !c.contains("extern msTypeInfo " + ti + ";");
 	assert !c.contains("_allArrTI");
 }
