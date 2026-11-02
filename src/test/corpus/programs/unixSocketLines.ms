@@ -20,10 +20,11 @@
 // @stdout: connect to a missing socket: -1
 
 import { argv } from "std/process";
+import { tmpDir } from "std/os";
 import { basename, exists, mkdir, remove, removeAll } from "std/fs";
 import { accept, acceptAsync, bindUnix, close, connectUnix, createUnixSocket, listen, recv, send, setTimeout } from "std/net";
 
-const dir = `/tmp/msUnixSock-${basename(argv[0])}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+const dir = `${tmpDir()}/msUnixSock-${basename(argv[0])}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 mkdir(dir);
 const path = dir + "/s.sock";
 
