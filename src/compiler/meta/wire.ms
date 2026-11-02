@@ -37,7 +37,7 @@ function wireClass(fields: string[]): WireClass {
 }
 
 export const WIRE_LOC: WireClass = wireClass(["line", "column", "endLine", "endColumn"]);
-export const WIRE_SYMBOL: WireClass = wireClass(["name", "symbolKind", "modulePath", "builtinKind"]);
+export const WIRE_SYMBOL: WireClass = wireClass(["name", "symbolKind", "modulePath", "builtinKind", "itemModule", "item", "instantiatedFrom"]);
 export const WIRE_UNION: WireClass = wireClass(["$tag", "$v"]);
 
 export function allocWireObject(objHeap: RaiserObjectHeap, cls: WireClass): int64 {
