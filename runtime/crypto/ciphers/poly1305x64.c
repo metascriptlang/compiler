@@ -14,8 +14,10 @@ typedef uint64_t u64;
 #define MASK44 0xfffffffffffULL
 #define MASK42 0x3ffffffffffULL
 
+/* rp[k] holds r^(k+1) as limbs r0, r1, r2 and the folded multiples s1 = 20 * r1, s2 = 20 * r2. */
 typedef struct {
-	u64 r0, r1, r2, s1, s2, h0, h1, h2;
+	u64 rp[4][5];
+	u64 h0, h1, h2;
 } polyState;
 
 static u64 load64(const uint8_t *p) {
@@ -24,32 +26,54 @@ static u64 load64(const uint8_t *p) {
 	return v;
 }
 
+#define MULACC(d0, d1, d2, a0, a1, a2, p)                                                \
+	d0 += (u128)(a0) * (p)[0] + (u128)(a1) * (p)[4] + (u128)(a2) * (p)[3];               \
+	d1 += (u128)(a0) * (p)[1] + (u128)(a1) * (p)[0] + (u128)(a2) * (p)[4];               \
+	d2 += (u128)(a0) * (p)[2] + (u128)(a1) * (p)[1] + (u128)(a2) * (p)[0]
+
+#define CARRY(d0, d1, d2, h0, h1, h2)                                                    \
+	do {                                                                                 \
+		u64 c = (u64)((d0) >> 44);                                                       \
+		h0 = (u64)(d0) & MASK44;                                                         \
+		(d1) += c;                                                                       \
+		c = (u64)((d1) >> 44);                                                           \
+		h1 = (u64)(d1) & MASK44;                                                         \
+		(d2) += c;                                                                       \
+		c = (u64)((d2) >> 42);                                                           \
+		h2 = (u64)(d2) & MASK42;                                                         \
+		h0 += c * 5;                                                                     \
+		c = h0 >> 44;                                                                    \
+		h0 &= MASK44;                                                                    \
+		h1 += c;                                                                         \
+	} while (0)
+
+/* (h + m[0]) * r^K + m[1] * r^(K-1) + ... + m[K-1] * r: the K products are independent, so only
+ * one carry chain stays serial per K blocks. */
+#define POLY_STEP(K)                                                                     \
+	do {                                                                                 \
+		u128 d0 = 0, d1 = 0, d2 = 0;                                                     \
+		for (int i = 0; i < (K); i++) {                                                  \
+			u64 t0 = load64(m + 16 * i), t1 = load64(m + 16 * i + 8);                    \
+			u64 a0 = t0 & MASK44;                                                        \
+			u64 a1 = ((t0 >> 44) | (t1 << 20)) & MASK44;                                 \
+			u64 a2 = ((t1 >> 24) & MASK42) | ((u64)1 << 40);                             \
+			if (i == 0) {                                                                \
+				a0 += h0;                                                                \
+				a1 += h1;                                                                \
+				a2 += h2;                                                                \
+			}                                                                            \
+			MULACC(d0, d1, d2, a0, a1, a2, st->rp[(K) - 1 - i]);                         \
+		}                                                                                \
+		CARRY(d0, d1, d2, h0, h1, h2);                                                   \
+		m += 16 * (K);                                                                   \
+		blocks -= (K);                                                                   \
+	} while (0)
+
 static void polyBlocks(polyState *st, const uint8_t *m, size_t blocks) {
-	const u64 r0 = st->r0, r1 = st->r1, r2 = st->r2, s1 = st->s1, s2 = st->s2;
 	u64 h0 = st->h0, h1 = st->h1, h2 = st->h2;
-	for (; blocks > 0; blocks--, m += 16) {
-		u64 t0 = load64(m), t1 = load64(m + 8);
-		h0 += t0 & MASK44;
-		h1 += ((t0 >> 44) | (t1 << 20)) & MASK44;
-		h2 += ((t1 >> 24) & MASK42) | ((u64)1 << 40);
-
-		u128 d0 = (u128)h0 * r0 + (u128)h1 * s2 + (u128)h2 * s1;
-		u128 d1 = (u128)h0 * r1 + (u128)h1 * r0 + (u128)h2 * s2;
-		u128 d2 = (u128)h0 * r2 + (u128)h1 * r1 + (u128)h2 * r0;
-
-		u64 c = (u64)(d0 >> 44);
-		h0 = (u64)d0 & MASK44;
-		d1 += c;
-		c = (u64)(d1 >> 44);
-		h1 = (u64)d1 & MASK44;
-		d2 += c;
-		c = (u64)(d2 >> 42);
-		h2 = (u64)d2 & MASK42;
-		h0 += c * 5;
-		c = h0 >> 44;
-		h0 &= MASK44;
-		h1 += c;
-	}
+	while (blocks >= 4) POLY_STEP(4);
+	if (blocks >= 2) POLY_STEP(2);
+	if (blocks >= 1) POLY_STEP(1);
 	st->h0 = h0;
 	st->h1 = h1;
 	st->h2 = h2;
@@ -107,11 +131,22 @@ void msPoly1305Aead(uint8_t mac[16], const uint8_t authKey[32], const uint8_t *a
                     const uint8_t *cipherText, size_t textLen) {
 	polyState st;
 	u64 t0 = load64(authKey), t1 = load64(authKey + 8);
-	st.r0 = t0 & 0xffc0fffffffULL;
-	st.r1 = ((t0 >> 44) | (t1 << 20)) & 0xfffffc0ffffULL;
-	st.r2 = (t1 >> 24) & 0x00ffffffc0fULL;
-	st.s1 = st.r1 * (5 << 2);
-	st.s2 = st.r2 * (5 << 2);
+	st.rp[0][0] = t0 & 0xffc0fffffffULL;
+	st.rp[0][1] = ((t0 >> 44) | (t1 << 20)) & 0xfffffc0ffffULL;
+	st.rp[0][2] = (t1 >> 24) & 0x00ffffffc0fULL;
+	st.rp[0][3] = st.rp[0][1] * (5 << 2);
+	st.rp[0][4] = st.rp[0][2] * (5 << 2);
+	for (int k = 1; k < 4; k++) {
+		u64 *r = st.rp[0], *q = st.rp[k - 1], *o = st.rp[k], h0, h1, h2;
+		u128 d0 = 0, d1 = 0, d2 = 0;
+		MULACC(d0, d1, d2, q[0], q[1], q[2], r);
+		CARRY(d0, d1, d2, h0, h1, h2);
+		o[0] = h0;
+		o[1] = h1;
+		o[2] = h2;
+		o[3] = h1 * (5 << 2);
+		o[4] = h2 * (5 << 2);
+	}
 	st.h0 = st.h1 = st.h2 = 0;
 
 	polyPadded(&st, ad, adLen);
