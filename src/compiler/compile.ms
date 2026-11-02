@@ -1256,9 +1256,6 @@ function resolveCompileSource(cPath: string, moduleDir: string, includePaths: Ha
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
 	if (emitOnlyMode) return [];
 	if (directives == "") return [];
-	// Per-call user-project flag: non-empty only when moduleDir is user code.
-	// Applied to every @compile job this call emits (all share same moduleDir).
-	const upFlag = userProjectFlag(moduleDir, projectRoot, compilerRoot);
 	const memoKey = _directiveMemos != null && compilerRoot != "" && isUnder(moduleDir, join(compilerRoot, "std"))
 		? `${directives}\n${moduleDir}\n${allFlags}\n${mode}\n${ccOption}\n${ccBinary}`
 		: "";
@@ -1309,6 +1306,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				// See cc.ms `markCppCompile` for the why.
 				markCppCompile(fullPath);
 				let probeFlags = allFlags;
+				const upFlag = userProjectFlag(fullPath, projectRoot, compilerRoot);
 				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
 				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary, isCppFile(fullPath));
@@ -2061,7 +2059,7 @@ function hcrSharedNativeDirectives(modules: ProcessedModule[], includePaths: Has
 			const source = canonicalModulePath(resolveCompileSource(entry.slice(0, tab), dir, includePaths, root));
 			for (const shared of HCR_SHARED_NATIVE_SOURCES) {
 				if (source != canonicalModulePath(join(root, shared))) continue;
-				const config = appendFlag(entry.slice(tab + 1, entry.length), userProjectFlag(dir, opts.projectRoot, root));
+				const config = appendFlag(entry.slice(tab + 1, entry.length), userProjectFlag(source, opts.projectRoot, root));
 				const previous = flags.get(shared);
 				if (previous != null && previous != config) {
 					printDiag(`${error("error")}: HCR shared native source '${shared}' has conflicting @compile flags`);
