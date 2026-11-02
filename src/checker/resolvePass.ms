@@ -2288,18 +2288,21 @@ function findPredicateInfix(text: string): int32 {
 }
 
 
-function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclData): boolean {
+// "ambiguous" when the parameters match and the written returns differ, "redefinition" when the
+// parameters match and both declarations have a body, "" otherwise.
+function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclData): string {
 	const a = existing.symbolType;
-	if (a.typeChildren.length != fnType.typeChildren.length) return false;
+	if (a.typeChildren.length != fnType.typeChildren.length) return "";
 	for (let i = 0; i < a.typeChildren.length; i += 1) {
-		if (a.typeNames[i] != fnType.typeNames[i]) return false;
-		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return false;
-		if (isReadonlyView(a.typeChildren[i]) != isReadonlyView(fnType.typeChildren[i])) return false;
+		if (a.typeNames[i] != fnType.typeNames[i]) return "";
+		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return "";
+		if (isReadonlyView(a.typeChildren[i]) != isReadonlyView(fnType.typeChildren[i])) return "";
 	}
 	const ea = existing.declNode != null && existing.declNode.kind == NodeKind.FunctionDecl
 		? existing.declNode.data as FunctionDeclData : null;
-	if (ea == null || ea.fnReturnType == "" || d.fnReturnType == "") return false;
-	return !sameType(a.typeReturn, fnType.typeReturn);
+	if (ea == null) return "";
+	if (ea.fnReturnType != "" && d.fnReturnType != "" && !sameType(a.typeReturn, fnType.typeReturn)) return "ambiguous";
+	return ea.fnBody != null && d.fnBody != null && !hasFlag(existing, SymbolFlag.OverloadSig) ? "redefinition" : "";
 }
 
 function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol, fnType: Type, d: FunctionDeclData): void {
@@ -2321,9 +2324,12 @@ function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol
 		if (cand == sym || cand.symbolKind != SymbolKind.Function) continue;
 		if (cand.modulePath != sym.modulePath) continue;
 		if (isUnresolvedType(cand.symbolType) || cand.symbolType.kind != TypeKind.Function) continue;
-		if (overloadDeclConflict(cand, fnType, d)) {
+		const conflict = overloadDeclConflict(cand, fnType, d);
+		if (conflict == "redefinition" && (hasFlag(sym, SymbolFlag.Borrow) || hasFlag(cand, SymbolFlag.Borrow))) continue;
+		if (conflict != "") {
 			const prev = cand.declNode != null ? cand.declNode.location : node.location;
-			addError(ctx, `overloaded '${d.fnName}' leads to ambiguous calls — previous declaration at line ${prev.line}`, node.location.line, node.location.column);
+			addError(ctx, conflict == "ambiguous" ? `overloaded '${d.fnName}' leads to ambiguous calls — previous declaration at line ${prev.line}`
+				: `redefinition of '${d.fnName}' — previous declaration with the same parameters at line ${prev.line}`, node.location.line, node.location.column);
 			return;
 		}
 	}
