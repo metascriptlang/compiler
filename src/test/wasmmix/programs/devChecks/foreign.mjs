@@ -41,6 +41,8 @@ attempt("bool vec", () => m.countTrue([true, 1]));
 attempt("i64 vec", () => m.bigSum([1n, 2]));
 attempt("span shape", () => m.sumSpan({ base: [1, 2], off: 0.5, len: 1 }));
 attempt("span empty", () => m.sumSpan({ base: [1, 2], off: 7, len: 0 }));
+attempt("alias", () => m.scaledTwice("x"));
+console.log(`internal: ${typeof m.bump} ${typeof m.scaled}`);
 attempt("callback type", () => m.evalCb(1, "nope"));
 attempt("callback result", () => m.evalCb(1, () => "x"));
 attempt("callback bool", () => m.testCb(1, () => 1));

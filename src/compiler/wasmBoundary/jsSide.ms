@@ -26,7 +26,7 @@ export interface JsBindings {
 }
 
 export interface JsBindingOptions {
-	checked: boolean;
+	checked: (bundleName: string) => boolean;
 }
 
 function wireToJsValue(kind: BoundaryKind, expr: string): string {
@@ -361,7 +361,7 @@ function scalarArg(kind: BoundaryKind, expr: string, absent: string): string {
 function wrapperLines(
 	f: BoundaryFunction,
 	bundleName: string,
-	options: JsBindingOptions,
+	checked: boolean,
 ): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
@@ -429,7 +429,7 @@ function wrapperLines(
 			}
 			BoundaryKind.Callback => {
 				let resultAt: string | null = null;
-				if (options.checked) {
+				if (checked) {
 					const what = quoted(`result of callback '${p.name}'`);
 					resultAt = `${quoted(f.name)}, ${what}`;
 				}
@@ -507,7 +507,7 @@ function wrapperLines(
 		},
 	};
 	const out = [`function ${bundleName}(${sig}) {`];
-	if (options.checked) {
+	if (checked) {
 		for (const c of paramChecks(f)) out.push(`	${c}`);
 	}
 	out.push("	__msb.enter();");
@@ -544,6 +544,7 @@ export function jsBindings(
 	let scratch = false;
 	let viewsIn = false;
 	let viewsOut = false;
+	let anyChecked = false;
 	for (const f of m.functions) {
 		if (copiesArgsIn(f)) scratch = true;
 		if (functionSharesViews(f)) viewsIn = true;
@@ -561,7 +562,10 @@ export function jsBindings(
 			lines.push([]);
 			at = modules.length - 1;
 		}
-		for (const l of wrapperLines(f, bundleNameOf(f), options)) {
+		const bundleName = bundleNameOf(f);
+		const checked = options.checked(bundleName);
+		if (checked) anyChecked = true;
+		for (const l of wrapperLines(f, bundleName, checked)) {
 			lines[at].push(l);
 		}
 	}
@@ -569,6 +573,6 @@ export function jsBindings(
 		modules[i].code = lines[i].join("\n") + "\n";
 	}
 	const views = viewHelpers(viewsIn, viewsOut);
-	const prelude = preludeFor(wasmModuleUrl, options.checked, scratch, views);
+	const prelude = preludeFor(wasmModuleUrl, anyChecked, scratch, views);
 	return { prelude, modules };
 }

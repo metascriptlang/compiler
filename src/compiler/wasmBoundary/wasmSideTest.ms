@@ -209,7 +209,7 @@ const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "i
 test "wasm entry: each runtime export is used by the js glue of that function and each use is exported" {
 	for (const name of EVERY_FUNCTION) {
 		const m = manifestOf([name]);
-		const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
+		const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
 		const e = wasmEntrySource(m.functions, (p: string) => "./calc");
 		const allocates = code.includes("__msbEncOwned(") || code.includes("__msbCopyIn(");
 		const readsHeap = allocates || code.includes("__msbDec(") || code.includes("__msbVecOut(");

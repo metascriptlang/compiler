@@ -1657,6 +1657,10 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	return ctxs;
 }
 
+function bundleExportLocal(r: BundleExport): string {
+	return jsBundleReferenceName(r.sym, r.name);
+}
+
 function bundleExportList(names: string[], locals: string[], extra: BundleExport[]): string {
 	const specifiers: string[] = [];
 	let enumObjects = "";
@@ -1664,7 +1668,7 @@ function bundleExportList(names: string[], locals: string[], extra: BundleExport
 	for (let i = 0; i < names.length; i += 1) specifiers.push(exportSpecifier(locals[i], names[i]));
 	for (const r of extra) {
 		if (r.sym.symbolKind != SymbolKind.Enum) {
-			specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
+			specifiers.push(exportSpecifier(bundleExportLocal(r), r.name));
 			continue;
 		}
 		if (r.sym.declNode == null || r.sym.declNode.kind != NodeKind.EnumDecl) throw new Error(`internal: exported enum '${r.name}' has no declaration`);
@@ -1867,6 +1871,7 @@ function placeWasmModules(
 	importerPaths: string[],
 	outStem: string,
 	nameOf: (f: BoundaryFunction, sym: Symbol) => string,
+	reachableFromForeignJs: (bundleName: string) => boolean,
 	opts: CliOptions,
 ): JsBindings {
 	const errors = placedModuleErrors(placed.paths, entryPath, dynamicPlan.lazy);
@@ -1906,7 +1911,7 @@ function placeWasmModules(
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: opts.mode != MODE_DANGER });
+	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName) });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -2043,7 +2048,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
 	let wasmBindings: JsBindings = { prelude: "", modules: [] };
+	let entryReexports: BundleExport[] | null = null;
+	const reexportedLocals = new Set<string>();
 	if (placed.paths.length > 0) {
+		const entryAt = unitPaths.indexOf(entryPath);
+		entryReexports = checkJsBundleExports(unitCtxs[entryAt], unitPrograms[entryAt]);
+		for (const r of entryReexports) {
+			if (r.sym.symbolKind != SymbolKind.Enum) reexportedLocals.add(bundleExportLocal(r));
+		}
 		const outStem = outPath.endsWith(".js")
 			? outPath.slice(0, outPath.length - 3)
 			: outPath;
@@ -2056,6 +2068,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			outStem,
 			(f: BoundaryFunction, sym: Symbol): string =>
 				jsBundleReferenceName(sym, f.name),
+			(bundleName: string): boolean => reexportedLocals.has(bundleName),
 			opts,
 		);
 	}
@@ -2082,7 +2095,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		}
 		refusePointerOpsOnJs(unitCtxs[ui], unitPrograms[ui]);
-		const reexports = modPath == entryPath ? checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]) : [];
+		if (modPath == entryPath && entryReexports == null) entryReexports = checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]);
+		const reexports = modPath == entryPath ? entryReexports! : [];
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true, [], false, null, opts.mode != MODE_DANGER);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
@@ -5192,7 +5206,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			placedTreeNames[at].push(treeName);
 			boundNames.push(bundleName);
 			return bundleName;
-		}, opts);
+		}, (bundleName: string): boolean => true, opts);
 		let bound = bindings.prelude;
 		for (const m of bindings.modules) bound = bound + m.code;
 		bound = `${bound}export { ${boundNames.join(", ")} };\n`;

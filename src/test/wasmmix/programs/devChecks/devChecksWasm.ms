@@ -80,3 +80,13 @@ export function evalCb(value: int32, cb: (x: int32) => int32): int32 {
 export function testCb(value: int32, cb: (x: int32) => boolean): boolean {
 	return cb(value);
 }
+
+@wasm
+export function bump(a: int32): int32 {
+	return a + 1;
+}
+
+@wasm
+export function scaled(a: int32): int32 {
+	return a * 2;
+}

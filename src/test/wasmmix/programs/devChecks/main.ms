@@ -17,6 +17,7 @@
 // @stdout: 0
 // @stdout: 41
 // @stdout: true
+// @stdout: 42
 // @foreign-stdout: exports: ok
 // @foreign-stdout: valid: ok 42
 // @foreign-stdout: string: TypeError: addI32: parameter 'a' expected int32, found string
@@ -41,11 +42,14 @@
 // @foreign-stdout: i64 vec: TypeError: bigSum: parameter 'xs' element 1 expected int64, found number
 // @foreign-stdout: span shape: TypeError: sumSpan: parameter 'xs' expected Span<float32> with integer off and len, got off 0.5 len 1
 // @foreign-stdout: span empty: ok 0
+// @foreign-stdout: alias: TypeError: scaled: parameter 'a' expected int32, found string
+// @foreign-stdout: internal: undefined undefined
 // @foreign-stdout: callback type: TypeError: evalCb: parameter 'cb' expected function, found string
 // @foreign-stdout: callback result: TypeError: evalCb: result of callback 'cb' expected int32, found string
 // @foreign-stdout: callback bool: TypeError: testCb: result of callback 'cb' expected boolean, found number
-import { addI32, lowByte, echo64, echoU64, not, join2, sumVec, countTrue, bigSum, reach, sumSpan, evalCb, testCb } from "./devChecksWasm";
+import { bump, addI32, lowByte, echo64, echoU64, not, join2, sumVec, countTrue, bigSum, reach, sumSpan, evalCb, testCb } from "./devChecksWasm";
 export { addI32, lowByte, echo64, echoU64, not, half, join2, sumVec, countTrue, bigSum, reach, sumSpan, evalCb, testCb } from "./devChecksWasm";
+export { scaled as scaledTwice } from "./devChecksWasm";
 
 console.log(`${addI32(-2147483648, 0)}`);
 console.log(`${addI32(2147483647, 0)}`);
@@ -73,3 +77,4 @@ console.log(`${sumSpan(fv[1..3])}`);
 console.log(`${sumSpan(fv[7..7])}`);
 console.log(`${evalCb(20, (x: int32): int32 => x * 2)}`);
 console.log(`${testCb(3, (x: int32): boolean => x > 2)}`);
+console.log(`${bump(41)}`);

@@ -82,7 +82,7 @@ function manifestOf(names: string[]): Manifest {
 }
 
 function bindingsWith(names: string[], bundleNameOf: (f: BoundaryFunction) => string, checked: boolean = false) {
-	return jsBindings(manifestOf(names), "./app.wasm.mjs", bundleNameOf, { checked: checked });
+	return jsBindings(manifestOf(names), "./app.wasm.mjs", bundleNameOf, { checked: (name) => checked });
 }
 
 function bindingsFor(names: string[], checked: boolean = false) {
@@ -90,7 +90,7 @@ function bindingsFor(names: string[], checked: boolean = false) {
 }
 
 function nullableBindings(names: string[]) {
-	return jsBindings(manifestFrom(NULLABLE, names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
+	return jsBindings(manifestFrom(NULLABLE, names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
 }
 
 test "js side: 64-bit and bool and narrow results are coerced at the boundary" {
@@ -186,7 +186,7 @@ test "js side: a wrapper takes a scratch mark exactly when its function copies a
 	for (const name of EVERY_FUNCTION) {
 		const m = manifestOf([name]);
 		const wants = copiesArgsIn(m.functions[0]);
-		const js = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false });
+		const js = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
 		const code = js.modules[0].code;
 		assert code.includes("const mark = __msbTop;") == wants;
 		assert code.includes("__msbFree(") == (code.includes("__msbCopyIn(") || code.includes("__msbCopyInViews("));
@@ -240,7 +240,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 		}],
 		errors: [],
 	};
-	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: false }).modules[0].code;
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
 }
 
@@ -471,6 +471,27 @@ test "js side: a checked build carries the check glue once" {
 	}
 }
 
+test "js side: argument checks follow the per-function predicate, so a function it rejects carries no check and the glue is emitted only when one is accepted" {
+	const reexported = new Set<string>(["bundled_add64", "bundled_twice"]);
+	const names = ["add64", "twice", "tag", "scale"];
+	const b = jsBindings(manifestOf(names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => reexported.has(name) });
+	const code = b.modules[0].code;
+	for (const name of names) {
+		const body = code.slice(code.indexOf("function bundled_" + name + "("), code.indexOf("__msb.enter();", code.indexOf("function bundled_" + name + "(")));
+		assert (body.includes("__msbWide(") || body.includes("__msbType(") || body.includes("__msbElems(")) == reexported.has("bundled_" + name), name;
+	}
+	assert b.prelude.includes("function __msbBad(");
+	const none = jsBindings(manifestOf(names), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
+	assert !none.prelude.includes("function __msbBad(");
+}
+
+test "js side: a float typed-array base skips the element loop and an integer one does not" {
+	const p = bindingsFor(["scale"], true).prelude;
+	const body = checkGlueBody(p, "__msbElems");
+	assert body.includes("if (k === \"number\" && lo === null && (v instanceof Float32Array || v instanceof Float64Array)) return v;");
+	assert body.indexOf("instanceof Float32Array") < body.indexOf("for (let i");
+}
+
 test "js side: a checked scalar parameter is tested for its JS type and range before the call" {
 	const code = bindingsFor(["add64", "isEven", "flip", "wide", "mul64u"], true).modules[0].code;
 	assert code.includes("function bundled_add64(a0, a1) {\n\t__msbWide(a0, true, \"int64\", \"add64\", \"parameter 'a'\");\n\t__msbWide(a1, true, \"int64\", \"add64\", \"parameter 'b'\");\n\t__msb.enter();\n\treturn __msbMod._msb_calc_add64(a0, a1);\n}");
@@ -507,7 +528,7 @@ test "js side: a checked Span is tested for its shape only, so an empty one past
 	const span = checkGlueBody(p, "__msbSpan");
 	assert span.includes("!Number.isInteger(v.off) || !Number.isInteger(v.len)");
 	assert !span.includes("base.length");
-	assert checkGlueBody(p, "__msbElems").startsWith("function __msbElems(v, off, n, k, lo, hi, t, f, p) {\n\tif (k === \"boolean\" && ArrayBuffer.isView(v)) return v;\n\tconst end = Math.min(off + n, v.length);\n\tfor (let i = Math.max(off, 0); i < end; i++) {\n");
+	assert checkGlueBody(p, "__msbElems").startsWith("function __msbElems(v, off, n, k, lo, hi, t, f, p) {\n\tif (k === \"boolean\" && ArrayBuffer.isView(v)) return v;\n\tif (k === \"number\" && lo === null && (v instanceof Float32Array || v instanceof Float64Array)) return v;\n\tconst end = Math.min(off + n, v.length);\n\tfor (let i = Math.max(off, 0); i < end; i++) {\n");
 }
 
 test "js side: a checked callback is tested before it is pushed and its result is tested on its way into wasm" {
