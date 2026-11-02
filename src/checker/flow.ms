@@ -312,7 +312,7 @@ function postSuperAt(query: PostSuperQuery, start: FlowNode, cached: boolean): b
 			}
 			return true;
 		} else if (flags.has(FlowFlag.LoopLabel)) {
-			flow = flow.antecedents != null ? flow.antecedents.flow : null;
+			flow = preLoopFlow(flow);
 		} else if (flags.has(FlowFlag.ReduceLabel)) {
 			query.reduceLabels.push(flow.reduceLabelData!);
 			const result = postSuperAt(query, flow.antecedent!, false);
@@ -323,6 +323,12 @@ function postSuperAt(query: PostSuperQuery, start: FlowNode, cached: boolean): b
 		}
 	}
 	return false;
+}
+
+function preLoopFlow(loop: FlowNode): FlowNode | null {
+	let list: FlowList | null = loop.antecedents;
+	while (list != null && list.next != null) list = list.next;
+	return list != null ? list.flow : null;
 }
 
 function isSuperCall(node: Node | null): boolean {
