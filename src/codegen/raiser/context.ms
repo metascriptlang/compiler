@@ -5,7 +5,7 @@ import {
 	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, CLOSURE_LAYOUT, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -125,12 +125,22 @@ export interface RaiserCompState {
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
 	receiverReg: int32;
+	hookMovedAt: int32;    // codeLen right after a user move hook took a local, and that local: the user wasMoved hook statement that follows frees its cell
+	hookMovedReg: int32;
+	moveTempAt: int32;
+	moveTempReg: int32;
+	moveTempSource: Node | null;
 	tries: RaiserTryInfo[];
+	cellNodes: Node[];
+	cellRegs: int32[];
+	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
+	argViews: int32[];
 }
 
 export interface RaiserTryInfo {
 	finallyBody: Node | null;
 	routeReg: int32;
+	inFinallyBody: boolean;
 }
 
 export function createCompState(): RaiserCompState {
@@ -141,7 +151,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -171,7 +181,7 @@ export function raiserClassKey(classSym: Symbol): string {
 }
 
 export function resolveGlobal(s: RaiserCompState, sym: Symbol | null): int32 {
-	if (sym == null || !sym.symFlags.has(SymbolFlag.Global)) return -1;
+	if (sym == null || !(sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.Static))) return -1;
 	for (const entry of s.globals.items) {
 		if (entry.symbol == sym) return entry.index;
 	}
@@ -546,11 +556,14 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 
 // --- Closure pair helpers ---
 // The NewObject operand of a typed object that has no class: its layout alone.
-export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
+export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[], name: string = ""): int32 {
 	if (fields.length == 0) return 0;
-	s.classTypes.push(createClassType("", -1, [], fields, kinds));
+	s.classTypes.push(createClassType(name, -1, [], fields, kinds));
 	return s.classTypes.length;
 }
+
+export const RAISER_KIND_CLOSURE: int32 = 64;
+export const RAISER_KIND_PLAIN_OBJECT: int32 = 65;
 
 export const CLOSURE_PAIR: string[] = ["fn", "env"];
 export const CLOSURE_PAIR_KINDS: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Ref];
@@ -566,7 +579,7 @@ export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS), 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, CLOSURE_LAYOUT), 0));
 	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
 	const fnConst = addConst(s, raiserConstString("fn"));

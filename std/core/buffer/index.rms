@@ -1,7 +1,7 @@
 import { Buffer } from "./type";
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
-import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url } from "./codec";
+import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom } from "./codec";
 import { utf8Text } from "../string/bytes";
 export { Buffer } from "./type";
 export { toJSON, inspect } from "./protocols";
@@ -326,13 +326,11 @@ export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: num
 }
 
 export function write(this buf: Buffer, str: string, offset: number, length: number, encoding: string): number {
-	const total = buf.length as int64;
+	const room = writeRoom(buf.length as int64, offset, length);
 	const text = str.asBytes();
 	const size = text.length as int64;
 	const at = offset as int64;
-	if (size == 0 || at < 0 || at >= total) return 0;
-	const limit = length as int64;
-	const room = limit < 0 || limit > total - at ? total - at : limit;
+	if (size == 0) return 0;
 	const codec = textCodec(encoding);
 	if (codec == hexCodec) return writeHex(text, buf, at, room) as number;
 	if (codec == base64Codec) return writeBase64(text, buf, at, room) as number;
@@ -372,10 +370,6 @@ export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: 
 	if (from < to) fillRepeated(buf, from, to, value);
 }
 
-function fits(buf: Buffer, at: int64, width: int64): boolean {
-	return at >= 0 && at <= (buf.length as int64) - width;
-}
-
 function loadField(buf: Buffer, at: int64, width: int64, bigEndian: boolean): int64 {
 	let value: int64 = 0;
 	for (let i: int64 = 0; i < width; i++) {
@@ -398,19 +392,55 @@ function signExtend(value: int64, bits: int64): int64 {
 	return (value ^ sign) - sign;
 }
 
+// A read or write outside the buffer, an integer outside its width and a byteLength outside 1..6
+// throw the RangeError the Node Buffer throws, as on C and JS.
+
+function needBytes(buf: Buffer, offset: number, width: number): void {
+	if (Math.floor(offset) != offset) {
+		throw new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${offset}`);
+	}
+	const max = buf.length - width;
+	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
+	if (!(offset >= 0 && offset <= max)) {
+		throw new RangeError(
+			`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${offset}`,
+		);
+	}
+}
+
+function needValue(value: number, lo: number, hi: number): void {
+	if (!(value >= lo && value <= hi)) {
+		throw new RangeError(
+			`The value of "value" is out of range. It must be >= ${lo} and <= ${hi}. Received ${value}`,
+		);
+	}
+}
+
+function needWidth(byteLength: number): void {
+	if (widthOrZero(byteLength) == 0) badByteLength(byteLength);
+}
+
+function needIntValue(value: number, byteLength: number, isSigned: boolean): void {
+	needWidth(byteLength);
+	let span: number = 1;
+	for (let k = 0; k < byteLength; k += 1) span *= 256;
+	const half = span / 2;
+	if (isSigned) needValue(value, -half, half - 1);
+	else needValue(value, 0, span - 1);
+}
+
 function readField(buf: Buffer, offset: number, width: int64, bigEndian: boolean): int64 {
-	const at = offset as int64;
-	return fits(buf, at, width) ? loadField(buf, at, width, bigEndian) : 0;
+	needBytes(buf, offset, width as number);
+	return loadField(buf, offset as int64, width, bigEndian);
 }
 
 function readSigned(buf: Buffer, offset: number, width: int64, bigEndian: boolean): number {
-	const at = offset as int64;
-	return fits(buf, at, width) ? signExtend(loadField(buf, at, width, bigEndian), width << 3) as number : 0;
+	return signExtend(readField(buf, offset, width, bigEndian), width << 3) as number;
 }
 
 function writeField(buf: Buffer, value: int64, offset: number, width: int64, bigEndian: boolean): number {
+	needBytes(buf, offset, width as number);
 	const at = offset as int64;
-	if (!fits(buf, at, width)) return at as number;
 	storeField(buf, at, width, bigEndian, value);
 	return (at + width) as number;
 }
@@ -521,43 +551,83 @@ export function readDoubleBE(this buf: Buffer, offset: number): number {
 	return floatFromBits(readField(buf, offset, 8, true), float64Mantissa, float64ExponentBits);
 }
 
-export extern function readBigUInt64LE(this buf: Buffer, offset: number): bigint;
-export extern function readBigUInt64BE(this buf: Buffer, offset: number): bigint;
-export extern function readBigInt64LE(this buf: Buffer, offset: number): bigint;
-export extern function readBigInt64BE(this buf: Buffer, offset: number): bigint;
-export extern function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number;
-export extern function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number;
-export extern function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number;
-export extern function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number;
+function bigFromWord(word: int64, isSigned: boolean): bigint {
+	const high = BigInt((word >> 32) & 4294967295);
+	const low = BigInt(word & 4294967295);
+	const whole = (high << 32n) | low;
+	return isSigned ? BigInt.asIntN(64, whole) : whole;
+}
+
+function wordFromBig(value: bigint, isSigned: boolean): int64 {
+	const bits = isSigned ? BigInt.asIntN(64, value) : BigInt.asUintN(64, value);
+	const high = ((bits >> 32n) & 4294967295n) as int64;
+	const low = (bits & 4294967295n) as int64;
+	return (high << 32) | low;
+}
+
+export function readBigUInt64LE(this buf: Buffer, offset: number): bigint {
+	return bigFromWord(readField(buf, offset, 8, false), false);
+}
+export function readBigUInt64BE(this buf: Buffer, offset: number): bigint {
+	return bigFromWord(readField(buf, offset, 8, true), false);
+}
+export function readBigInt64LE(this buf: Buffer, offset: number): bigint {
+	return bigFromWord(readField(buf, offset, 8, false), true);
+}
+export function readBigInt64BE(this buf: Buffer, offset: number): bigint {
+	return bigFromWord(readField(buf, offset, 8, true), true);
+}
+export function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number {
+	return writeField(buf, wordFromBig(value, false), offset, 8, false);
+}
+export function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number {
+	return writeField(buf, wordFromBig(value, false), offset, 8, true);
+}
+export function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number {
+	return writeField(buf, wordFromBig(value, true), offset, 8, false);
+}
+export function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number {
+	return writeField(buf, wordFromBig(value, true), offset, 8, true);
+}
 
 export function writeUInt8(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 255);
 	return writeField(buf, value as int64, offset, 1, false);
 }
 export function writeUInt16LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 65535);
 	return writeField(buf, value as int64, offset, 2, false);
 }
 export function writeUInt16BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 65535);
 	return writeField(buf, value as int64, offset, 2, true);
 }
 export function writeUInt32LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 4294967295);
 	return writeField(buf, value as int64, offset, 4, false);
 }
 export function writeUInt32BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, 0, 4294967295);
 	return writeField(buf, value as int64, offset, 4, true);
 }
 export function writeInt8(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -128, 127);
 	return writeField(buf, value as int64, offset, 1, false);
 }
 export function writeInt16LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -32768, 32767);
 	return writeField(buf, value as int64, offset, 2, false);
 }
 export function writeInt16BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -32768, 32767);
 	return writeField(buf, value as int64, offset, 2, true);
 }
 export function writeInt32LE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -2147483648, 2147483647);
 	return writeField(buf, value as int64, offset, 4, false);
 }
 export function writeInt32BE(this buf: Buffer, value: number, offset: number): number {
+	needValue(value, -2147483648, 2147483647);
 	return writeField(buf, value as int64, offset, 4, true);
 }
 export function writeFloatLE(this buf: Buffer, value: number, offset: number): number {
@@ -623,19 +693,13 @@ function widthOrZero(byteLength: number): int64 {
 function readVariable(buf: Buffer, offset: number, byteLength: number, bigEndian: boolean, signed: boolean): number {
 	const width = widthOrZero(byteLength);
 	if (width == 0) badByteLength(byteLength);
-	const at = offset as int64;
-	if (!fits(buf, at, width)) return 0;
-	const value = loadField(buf, at, width, bigEndian);
+	const value = readField(buf, offset, width, bigEndian);
 	return signed ? signExtend(value, width << 3) as number : value as number;
 }
 
-function writeVariable(buf: Buffer, value: number, offset: number, byteLength: number, bigEndian: boolean): number {
-	const width = widthOrZero(byteLength);
-	if (width == 0) badByteLength(byteLength);
-	const at = offset as int64;
-	if (buf.length == 0 || !fits(buf, at, width)) return at as number;
-	storeField(buf, at, width, bigEndian, value as int64);
-	return (at + width) as number;
+function writeVariable(buf: Buffer, value: number, offset: number, byteLength: number, bigEndian: boolean, signed: boolean): number {
+	needIntValue(value, byteLength, signed);
+	return writeField(buf, value as int64, offset, widthOrZero(byteLength), bigEndian);
 }
 
 export function readUIntLE(this buf: Buffer, offset: number, byteLength: number): number {
@@ -651,14 +715,14 @@ export function readIntBE(this buf: Buffer, offset: number, byteLength: number):
 	return readVariable(buf, offset, byteLength, true, true);
 }
 export function writeUIntLE(this buf: Buffer, value: number, offset: number, byteLength: number): number {
-	return writeVariable(buf, value, offset, byteLength, false);
+	return writeVariable(buf, value, offset, byteLength, false, false);
 }
 export function writeUIntBE(this buf: Buffer, value: number, offset: number, byteLength: number): number {
-	return writeVariable(buf, value, offset, byteLength, true);
+	return writeVariable(buf, value, offset, byteLength, true, false);
 }
 export function writeIntLE(this buf: Buffer, value: number, offset: number, byteLength: number): number {
-	return writeVariable(buf, value, offset, byteLength, false);
+	return writeVariable(buf, value, offset, byteLength, false, true);
 }
 export function writeIntBE(this buf: Buffer, value: number, offset: number, byteLength: number): number {
-	return writeVariable(buf, value, offset, byteLength, true);
+	return writeVariable(buf, value, offset, byteLength, true, true);
 }

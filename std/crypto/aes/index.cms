@@ -33,15 +33,15 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { newOutputBuffer, outputBytes } from "../outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "../outputBuffer";
 
 // C bindings
 extern function msCryptoAesKeyNew(raw: string): int64;
 extern function msCryptoAesKeyGenerate(byteLength: int32): int64;
 extern function msCryptoAesKeyExport(handle: int64): string;
 extern function msCryptoAesKeyFree(handle: int64): void;
-extern function msCryptoAesSealInto(key: int64, plainText: string, aad: string, out: Ptr<uint8>): int64;
-extern function msCryptoAesOpenInto(key: int64, sealed: string, aad: string, out: Ptr<uint8>): int64;
+extern function msCryptoAesSealInto(key: int64, plainText: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
+extern function msCryptoAesOpenInto(key: int64, sealed: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
 extern function msCryptoAesCbcEncrypt(key: int64, plainText: string, iv: string): string;
 extern function msCryptoAesCbcDecrypt(key: int64, cipherText: string, iv: string, ref plainText: string): int64;
 
@@ -102,9 +102,9 @@ function liveHandle(key: AesKey, op: string): int64 {
  */
 export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "seal");
-	const text = rawString(plainTextBytes);
-	const sealed = newOutputBuffer(12 + (text.byteLength as int64) + 16);
-	const status = msCryptoAesSealInto(handle, text, rawString(aadBytes), outputBytes(sealed));
+	const text: Readonly<Span<uint8>> = typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes;
+	const sealed = newUninitOutputBuffer(12 + (text.length as int64) + 16);
+	const status = msCryptoAesSealInto(handle, text, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes, outputBytes(sealed));
 	if (status == -1) {
 		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the OS random source failed"));
 	}
@@ -123,12 +123,12 @@ export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes =
  */
 export function openSync(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "open");
-	const sealed = rawString(sealedBytes);
-	if (sealed.byteLength < 28) {
+	const sealed: Readonly<Span<uint8>> = typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes;
+	if (sealed.length < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
-	const plain = newOutputBuffer((sealed.byteLength as int64) - 28);
-	if (msCryptoAesOpenInto(handle, sealed, rawString(aadBytes), outputBytes(plain)) != 1) {
+	const plain = newUninitOutputBuffer((sealed.length as int64) - 28);
+	if (msCryptoAesOpenInto(handle, sealed, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes, outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(plain);

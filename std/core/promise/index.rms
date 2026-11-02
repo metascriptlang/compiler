@@ -3,17 +3,52 @@
 // any other extern here reaches CallHost and needs a bridge in
 // src/compiler/meta/hostTable.ms.
 
+import { Map } from "../struct";
+
 @builtin("Promise")
 export class Promise<T> {
 
 	@builtin("PromiseThen")
 	extern then(callback: (value: T) => void): Promise<void> from "msFutureThen";
+	async then<U>(callback: (value: T) => Promise<U>): Promise<U> {
+		const value = await this;
+		return callback(value);
+	}
+	async then<U>(callback: (value: T) => U): Promise<U> {
+		const value = await this;
+		return callback(value);
+	}
 	@builtin("PromiseThen")
 	extern then(callback: (value: T) => void, onRejected: (error: Error) => void): Promise<void> from "msFutureThen";
+	async then<U>(callback: (value: T) => U, onRejected: (error: Error) => U): Promise<U> {
+		let fulfilled = false;
+		try {
+			const value = await this;
+			fulfilled = true;
+			return callback(value);
+		} catch (e) {
+			if (fulfilled) throw e;
+			return onRejected(e);
+		}
+	}
+
 	@builtin("PromiseCatch")
 	extern catch(callback: (error: Error) => void): Promise<void> from "msFutureCatch";
-	@builtin("PromiseFinally")
-	extern finally(callback: () => void): Promise<void> from "msFutureFinally";
+	async catch(callback: (error: Error) => T): Promise<T> {
+		try {
+			return await this;
+		} catch (e) {
+			return callback(e);
+		}
+	}
+
+	async finally(callback: () => void): Promise<T> {
+		try {
+			return await this;
+		} finally {
+			callback();
+		}
+	}
 
 	@builtin("PromiseAll")
 	static extern all<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAll";
@@ -40,6 +75,21 @@ extern function msPromisePending<T>(): Promise<T> from "msFutureCreate";
 extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "msFutureCompleteT";
 @builtin("PromiseFail")
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
+
+@compilerFunc
+export function msRaiserAsyncStart(retFut: Promise<void>, stepper: () => Promise<void> | null): void {
+	const next = stepper();
+	if (next == null) return;
+	const resume = (): void => { msRaiserAsyncStart(retFut, stepper); };
+	next.then(resume, resume);
+}
+
+@compilerFunc
+@builtin("PromisePending")
+export extern function msActorReplyNew<T>(): Promise<T> from "msActorReplyNew";
+@compilerFunc
+@builtin("PromiseSettle")
+export extern function msActorReplySettle<T>(promise: Promise<T>, value: T): void from "msActorReplySettle";
 
 @compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: string | Error) => void) => void): Promise<T> {
@@ -70,11 +120,15 @@ export function promiseOfValue<T>(value: T): Promise<T> {
 @compilerFunc
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
-	try {
-		callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
-	} catch (e) {
-		msPromiseFail(promise, e);
-	}
+	const nextJob: Promise<int32> = msPromisePending<int32>();
+	msPromiseSettle<int32>(nextJob, 0);
+	nextJob.then((ready: int32): void => {
+		try {
+			callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		} catch (e) {
+			msPromiseFail<T>(promise, e);
+		}
+	});
 	return promise;
 }
 
@@ -83,6 +137,11 @@ export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
 
 @builtin("SleepAsync")
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";
+
+@builtin("SleepTask")
+extern function sleepTask(ms: number, task: () => void): void from "msSleepTask";
+@builtin("SleepCancel")
+extern function sleepCancel(task: () => void): void from "msSleepCancel";
 
 export function asyncCheck(fut: Promise<void>): void {
 }
@@ -107,4 +166,199 @@ export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
 	msLockedAcquire(cell);
 	defer msLockedRelease(cell);
 	return fn(msLockedLoad(cell));
+}
+
+export enum ExitReason {
+	Normal,
+	Shutdown,
+	Killed,
+	Abnormal,
+}
+
+interface ActorJob {
+	run: (() => void) | null;
+	runAsync: (() => Promise<void>) | null;
+	reply: Promise<void> | null;
+}
+
+class ActorCell {
+	live: boolean = true;
+	busy: boolean = false;
+	head: int32 = 0;
+	jobs: ActorJob[] = [];
+	terminate: ((reason: ExitReason) => void) | null = null;
+}
+
+when (mscBuildsPreludeTables) {
+	function newActorCells(): Map<int64, ActorCell> { return new Map<int64, ActorCell>(); }
+	function newTimersLive(): Map<int64, () => void> { return new Map<int64, () => void>(); }
+} else {
+	function newActorCells(): Map<int64, ActorCell> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser actor table"); }
+	function newTimersLive(): Map<int64, () => void> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser timer table"); }
+}
+
+let actorCellsTable: Map<int64, ActorCell> | null = null;
+
+function actorCells(): Map<int64, ActorCell> {
+	const table = actorCellsTable;
+	if (table != null) return table;
+	const fresh = newActorCells();
+	actorCellsTable = fresh;
+	return fresh;
+}
+let actorNext: int64 = 1;
+
+@compilerFunc
+export function msActorOpen(): int64 {
+	const pid = actorNext;
+	actorNext = actorNext + 1;
+	actorCells().set(pid, new ActorCell());
+	return pid;
+}
+
+@compilerFunc
+export function msActorOnTerminate(pid: int64, hook: (reason: ExitReason) => void): void {
+	const cell = actorCells().get(pid);
+	if (cell != null) cell.terminate = hook;
+}
+
+function actorRefuse(job: ActorJob): void {
+	const reply = job.reply;
+	if (reply != null) msPromiseFail(reply, new Error("noproc"));
+}
+
+function actorKick(cell: ActorCell): void {
+	sleepTask(0, (): void => { actorPump(cell); });
+}
+
+const ACTOR_BATCH: int32 = 64;
+
+async function actorPump(cell: ActorCell): Promise<void> {
+	let ran: int32 = 0;
+	while (cell.head < cell.jobs.length) {
+		if (ran == ACTOR_BATCH) {
+			actorKick(cell);
+			return;
+		}
+		ran = ran + 1;
+		const job = cell.jobs[cell.head];
+		cell.head = cell.head + 1;
+		if (!cell.live) {
+			actorRefuse(job);
+			continue;
+		}
+		try {
+			const sync = job.run;
+			const suspending = job.runAsync;
+			if (suspending != null) await suspending();
+			else if (sync != null) sync();
+		} catch (e) {
+			const reply = job.reply;
+			if (reply == null) {
+				actorKick(cell);
+				throw e;
+			}
+			msPromiseFail(reply, e);
+		}
+	}
+	cell.jobs = [];
+	cell.head = 0;
+	cell.busy = false;
+}
+
+function actorEnqueue(pid: int64, job: ActorJob): void {
+	const cell = actorCells().get(pid);
+	if (cell == null || !cell.live) {
+		actorRefuse(job);
+		return;
+	}
+	cell.jobs.push(job);
+	if (!cell.busy) {
+		cell.busy = true;
+		actorKick(cell);
+	}
+}
+
+@compilerFunc
+export function msActorPost(pid: int64, job: () => void): void {
+	actorEnqueue(pid, { run: job, runAsync: null, reply: null });
+}
+
+@compilerFunc
+export function msActorPostAsync(pid: int64, job: () => Promise<void>): void {
+	actorEnqueue(pid, { run: null, runAsync: job, reply: null });
+}
+
+@compilerFunc
+export function msActorPostCall(pid: int64, job: () => void, reply: Promise<void>): void {
+	actorEnqueue(pid, { run: job, runAsync: null, reply: reply });
+}
+
+@compilerFunc
+export function msActorPostCallAsync(pid: int64, job: () => Promise<void>, reply: Promise<void>): void {
+	actorEnqueue(pid, { run: null, runAsync: job, reply: reply });
+}
+
+export function msActorStop(pid: int64, reason: ExitReason): void {
+	const cell = actorCells().get(pid);
+	if (cell == null || !cell.live) return;
+	cell.live = false;
+	actorCells().delete(pid);
+	const hook = cell.terminate;
+	if (hook != null && reason != ExitReason.Killed) hook(reason);
+}
+
+@compilerFunc
+export function msActorStopLive(): boolean {
+	const live: int64[] = [];
+	actorCells().forEach((cell: ActorCell, pid: int64): void => { if (cell.live) live.push(pid); });
+	for (const pid of live) msActorStop(pid, ExitReason.Shutdown);
+	return live.length > 0;
+}
+
+let timersLiveTable: Map<int64, () => void> | null = null;
+
+function timersLive(): Map<int64, () => void> {
+	const table = timersLiveTable;
+	if (table != null) return table;
+	const fresh = newTimersLive();
+	timersLiveTable = fresh;
+	return fresh;
+}
+let timerNext: int64 = 1;
+
+function timerTick(id: int64, fn: () => void, ms: number, repeat: boolean): void {
+	const task = (): void => {
+		if (!timersLive().has(id)) return;
+		if (repeat) timerTick(id, fn, ms, true);
+		else timersLive().delete(id);
+		fn();
+	};
+	timersLive().set(id, task);
+	sleepTask(ms, task);
+}
+
+function timerStart(fn: () => void, ms: number, repeat: boolean): number {
+	const id = timerNext;
+	timerNext = timerNext + 1;
+	timerTick(id, fn, ms, repeat);
+	return id as number;
+}
+
+@compilerFunc
+export function msTimerSetTimeout(fn: () => void, ms: number): number {
+	return timerStart(fn, ms, false);
+}
+
+@compilerFunc
+export function msTimerSetInterval(fn: () => void, ms: number): number {
+	return timerStart(fn, ms, true);
+}
+
+@compilerFunc
+export function msTimerClear(id: number): void {
+	const task = timersLive().get(id as int64);
+	if (task == null) return;
+	sleepCancel(task);
+	timersLive().delete(id as int64);
 }

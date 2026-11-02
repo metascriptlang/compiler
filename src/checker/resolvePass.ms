@@ -6,12 +6,13 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
+import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { proxyAtExtern } from "./proxy";
@@ -1698,9 +1699,7 @@ function isValidTypeIdentifier(name: string): boolean {
 }
 
 function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, col: int32, mangledName: string): Type {
-	if (line > 0 && isValidTypeIdentifier(name)
-			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
-			&& name != "unknown" && name != "never") {
+	if (line > 0 && isValidTypeIdentifier(name) && name != "unknown" && name != "never") {
 		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
@@ -2544,6 +2543,7 @@ function bindLifecycleHook(ctx: CheckerContext, owner: Symbol, hook: string, hoo
 		return;
 	}
 	setAttachedOp(bound, op, hookSym);
+	bound.typeFlags = bound.typeFlags.incl(TypeFlag.HasAsgn);
 }
 
 function hookObjectOf(t: Type): Type {
@@ -2636,7 +2636,7 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
-function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
+export function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
 	const view = findViewType(fieldType);
 	if (view == null) return;
 	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
@@ -2808,7 +2808,6 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
-	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
 	if (sym.symbolType.kind == TypeKind.Struct) refuseValueRecursion(ctx, node, target, d);
 	// Record each OWN interface field DEF for symbol graph (inherited fields
@@ -2965,7 +2964,6 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
-		if (declaresLifecycleHook(ctx, sym)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)

@@ -20,7 +20,7 @@ import {
 	findEnclosingObjectLiteral, findNodeAtPosition,
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
-import { CheckerContext, findModuleExports, isCancelled } from "../../../checker/context";
+import { CheckerContext, findModuleExports, isCancelled, extensionsOf } from "../../../checker/context";
 import { sharedPreludeOwns } from "../../../checker/checkPass";
 import { completionSources } from "../projectUniverse";
 import { requestCancel, resetCancel } from "../../transam/cancel";
@@ -232,7 +232,7 @@ function lspCrossModuleCandidates(
 		// Build extension name set to filter prelude extensions from standalone suggestions
 		const preludeExtNames: HashSet<string> = new HashSet<string>();
 		if (db.preludeCtx.extensionRegistry != null) {
-			for (const m of db.preludeCtx.extensionRegistry.methods) {
+			for (const m of extensionsOf(db.preludeCtx.extensionRegistry)) {
 				preludeExtNames.add(m.methodName);
 			}
 		}

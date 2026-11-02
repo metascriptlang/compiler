@@ -1,9 +1,9 @@
 import {
 	Node, NodeKind, createNodeAt, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
-	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, SymbolFlag,
+	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, SymbolFlag, SymbolKind, MemberExprData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
-import { walkExpandBlocks } from "../walker";
+import { walkExpandBlocks, walkNode } from "../walker";
 import { literalTakesType } from "../../checker/constFold";
 import { makeAssign, makeMember, makeIdentResolved, makeExprStmt } from "../util";
 import { parseInput, getStmts } from "../testUtil";
@@ -56,7 +56,7 @@ function staticRunBlock(declNode: Node, stmts: Node[]): Node {
 	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, declNode.location);
 }
 
-function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean, reloadable: string[]): void {
+function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean, reloadable: string[], everyInitializerRuns: boolean): void {
 	let write: int32 = 0;
 	for (let read: int32 = 0; read < body.length; read += 1) {
 		const m = body[read];
@@ -71,14 +71,14 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic || pd.propInitializer == null) continue;
-		if (!reevaluated && isDataInitLiteral(pd.propInitializer)) continue;
+		if (!reevaluated && !everyInitializerRuns && isDataInitLiteral(pd.propInitializer)) continue;
 		const assign: Node[] = [staticFieldAssignment(declNode, ownerName, member)];
 		out.push(staticRunBlock(declNode, assign));
 	}
 	body.shrink(write);
 }
 
-function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[]): Node[] {
+function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[], everyInitializerRuns: boolean): Node[] {
 	let target = stmt;
 	if (target.kind == NodeKind.ExportDecl) {
 		target = (target.data as ExportDeclData).exportedDecl;
@@ -88,10 +88,10 @@ function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[]): Node
 	const local = lifted.indexOf(target) >= 0;
 	if (target.kind == NodeKind.ClassDecl) {
 		const cd = target.data as ClassDeclData;
-		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local, reloadable);
+		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local, reloadable, everyInitializerRuns);
 	} else if (target.kind == NodeKind.ActorDecl) {
 		const ad = target.data as ActorDeclData;
-		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local, reloadable);
+		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local, reloadable, everyInitializerRuns);
 	}
 	return out;
 }
@@ -119,7 +119,8 @@ function requireLoweredInPlace(decl: Node): void {
 export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
 	const lifted: Node[] = ctx != null && ctx.checkerCtx != null ? ctx.checkerCtx.liftedLocalTypeDecls : [];
 	const reloadable: string[] = ctx != null ? ctx.reloadableModules : [];
-	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted, reloadable);
+	const everyInitializerRuns = ctx != null && ctx.raiserBackend;
+	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted, reloadable, everyInitializerRuns);
 	const kept: Node[] = [];
 	for (const s of (program.data as ProgramData).programStmts) {
 		if (lifted.indexOf(s) >= 0) {
@@ -134,6 +135,17 @@ export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
 	program.data = { programStmts: kept };
 	for (const d of lifted) requireLoweredInPlace(d);
 	return program;
+}
+
+export function lowerStaticFieldReads(program: Node): Node {
+	return walkNode(program, (n: Node): Node => {
+		if (n.kind != NodeKind.MemberExpr || n.resolvedSym == null) return n;
+		const sym = n.resolvedSym;
+		if (sym.symbolKind != SymbolKind.Variable || !sym.symFlags.has(SymbolFlag.Static)) return n;
+		const ident = makeIdentResolved(sym, n.location);
+		if (n.nodeType != null) ident.nodeType = n.nodeType;
+		return ident;
+	});
 }
 
 // ===== Tests =====

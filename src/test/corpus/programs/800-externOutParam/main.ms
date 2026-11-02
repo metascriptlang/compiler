@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus800SetU32
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // Parity program — an `out` / `ref` parameter of an `extern function` reaches C as one pointer
 // to the caller's location. The transform already takes the implicit address of every argument
 // bound to a Var formal; a second address in codegen hands C a pointer to a temp holding the

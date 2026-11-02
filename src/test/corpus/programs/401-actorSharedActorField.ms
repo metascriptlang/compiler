@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Cannot resolve module 'std/actor'
 // @maxrss: 40
 // @stdout: actor-shared-actor-field done acc=0
 // @serial

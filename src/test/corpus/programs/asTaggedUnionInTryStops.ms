@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: before 3
 // @xfail(danger): --danger drops the union member check
-// @xfail(raiser): fatal VM errors use a different stderr report from C and JS
 
 struct Point { x: int32 }
 struct Other { y: int32 }

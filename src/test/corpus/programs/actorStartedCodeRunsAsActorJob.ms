@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: interval: no tick inside a method: true, ticked: true
 // @stdout: async loop: no tick inside a method: true, ticked: true
 // @stdout: then: no tick inside a method: true, ticked: true
@@ -11,11 +10,10 @@ import { stop, ExitReason } from "std/actor";
 
 class Box { n: int64 = 0; }
 
-const one = new Box();
 
-function burn(): boolean {
+function burn(unit: int64): boolean {
 	const acc = new Box();
-	for (let i = 0; i < 20000000; i++) acc.n += one.n;
+	for (let i = 0; i < 20000000; i++) acc.n += unit;
 	return acc.n == 20000000;
 }
 
@@ -25,9 +23,9 @@ actor IntervalTicker {
 	start(): void {
 		this.id = setInterval(() => { this.ticks = this.ticks + 1; }, 1);
 	}
-	busy(): boolean {
+	busy(unit: int64): boolean {
 		const before = this.ticks;
-		return burn() && this.ticks == before;
+		return burn(unit) && this.ticks == before;
 	}
 	finish(): boolean {
 		clearInterval(this.id);
@@ -47,9 +45,9 @@ actor LoopTicker {
 		};
 		loop();
 	}
-	busy(): boolean {
+	busy(unit: int64): boolean {
 		const before = this.ticks;
-		return burn() && this.ticks == before;
+		return burn(unit) && this.ticks == before;
 	}
 	finish(): boolean {
 		this.running = false;
@@ -62,9 +60,9 @@ actor ThenTicker {
 	start(): void {
 		for (let i = 1; i <= 1000; i++) sleepAsync(i).then(() => { this.ticks = this.ticks + 1; });
 	}
-	busy(): boolean {
+	busy(unit: int64): boolean {
 		const before = this.ticks;
-		return burn() && this.ticks == before;
+		return burn(unit) && this.ticks == before;
 	}
 	finish(): boolean {
 		return this.ticks > 0;
@@ -76,7 +74,6 @@ actor Anchor {
 }
 
 async function main(): Promise<void> {
-	one.n = 1;
 	const a = new Anchor();
 	await a.ping();
 
@@ -87,7 +84,7 @@ async function main(): Promise<void> {
 	});
 	await sleepAsync(10);
 	let itQuiet = true;
-	for (let k = 0; k < 3; k++) itQuiet = (await it.busy()) && itQuiet;
+	for (let k = 0; k < 3; k++) itQuiet = (await it.busy(1)) && itQuiet;
 	await sleepAsync(10);
 	console.log(`interval: no tick inside a method: ${itQuiet}, ticked: ${await it.finish()}`);
 	stop(it.pid, ExitReason.Normal);
@@ -99,7 +96,7 @@ async function main(): Promise<void> {
 	});
 	await sleepAsync(10);
 	let ltQuiet = true;
-	for (let k = 0; k < 3; k++) ltQuiet = (await lt.busy()) && ltQuiet;
+	for (let k = 0; k < 3; k++) ltQuiet = (await lt.busy(1)) && ltQuiet;
 	await sleepAsync(10);
 	console.log(`async loop: no tick inside a method: ${ltQuiet}, ticked: ${await lt.finish()}`);
 	stop(lt.pid, ExitReason.Normal);
@@ -111,7 +108,7 @@ async function main(): Promise<void> {
 	});
 	await sleepAsync(10);
 	let ttQuiet = true;
-	for (let k = 0; k < 3; k++) ttQuiet = (await tt.busy()) && ttQuiet;
+	for (let k = 0; k < 3; k++) ttQuiet = (await tt.busy(1)) && ttQuiet;
 	await sleepAsync(10);
 	console.log(`then: no tick inside a method: ${ttQuiet}, ticked: ${await tt.finish()}`);
 	stop(tt.pid, ExitReason.Normal);

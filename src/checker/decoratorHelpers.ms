@@ -22,7 +22,7 @@ const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
 	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper",
 ];
-const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
+export const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
 
 export function isBuiltinDirective(name: string): boolean {
 	for (const n of passThroughDirectives) {

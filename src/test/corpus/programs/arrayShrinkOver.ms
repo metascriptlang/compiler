@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: value 5 not in range 0 .. 2
-// @xfail(raiser): the Raiser VM reports the defect as its own 'raiser runtime error' on stderr, not the shared 'Error: ' line
 class Item {
 	id: int32 = 0;
 	constructor(i: int32) { this.id = i; }

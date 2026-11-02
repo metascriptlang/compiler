@@ -1,4 +1,3 @@
-// @xfail(raiser): cannot compile 'new' here: no matching constructor in the Raiser function table
 
 struct Point {
 	x: int32;

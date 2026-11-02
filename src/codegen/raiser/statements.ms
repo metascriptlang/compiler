@@ -2,7 +2,7 @@
 // AST statement nodes → bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol,
+	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol, SymbolFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData, ConditionalExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
@@ -11,7 +11,7 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount, immField, FINALLY_LEAVE } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
@@ -24,8 +24,10 @@ import {
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
-import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
+import { compileOwnershipStmt } from "./drcLower";
+import { emitZeroValue, regClassOf, allocFor, zeroIsNil } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
+import { hasFlag } from "../../checker/symbol";
 
 // --- Statement compilation ---
 
@@ -47,12 +49,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				compileExprForEffect(s, d.argument);
 				emitReturnNothing(s);
 			} else if (d.argument != null) {
-				let reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
-				if (s.tries.length > 0) {
-					const held = allocReg(s, classOfReg(s, reg));
-					emitInst(s, raiserABC(RaiserOpcode.Move, held, reg, 0));
-					reg = held;
-				}
+				const reg = compileExpr(s, d.argument);
 				emitRet(s, reg);
 			} else {
 				emitReturnNothing(s);
@@ -64,6 +61,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				const mi = d.expr.data as MacroInvocationData;
 				if (mi.macroName != "emit") { return; }
 			}
+			if (compileOwnershipStmt(s, d.expr)) return;
 			compileExprForEffect(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
@@ -184,23 +182,28 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			}
 		}
 		const isStr = exprIsString(s, d.initializer);
-		const reg = emitValueCopy(s, compileExpr(s, d.initializer), node.nodeType);
+		const reg = compileExpr(s, d.initializer);
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
 		}
 		const declaredClass = node.nodeType == null ? classOfReg(s, reg) : regClassOf(s, node.nodeType);
+		let local = reg;
 		if (regIsFixedLocal(s, reg) || classOfReg(s, reg) != declaredClass) {
-			const slot = allocReg(s, declaredClass);
-			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
-			declareLocal(s, declaredSymbol(node, d.declName), slot, isStr);
-			return;
+			local = allocReg(s, declaredClass);
+			emitInst(s, raiserABC(RaiserOpcode.Move, local, reg, 0));
 		}
-		declareLocal(s, declaredSymbol(node, d.declName), reg, isStr);
+		declareLocal(s, declaredSymbol(node, d.declName), local, isStr);
+		if (isMoveTempFromPlace(node, d.initializer)) {
+			s.moveTempAt = codeLen(s);
+			s.moveTempReg = local;
+			s.moveTempSource = d.initializer;
+		}
 	} else {
-		const reg = emitZeroValue(s, node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
+		if (global >= 0 && zeroIsNil(node.nodeType)) return;
+		const reg = emitZeroValue(s, node.nodeType);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
@@ -214,6 +217,13 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), reg);
 	}
+}
+
+function isMoveTempFromPlace(node: Node, initializer: Node): boolean {
+	const sym = node.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.SinkTemp)) return false;
+	const k = initializer.kind;
+	return k == NodeKind.MemberExpr || k == NodeKind.ArrayAccess || k == NodeKind.HiddenDeref;
 }
 
 // --- If Statement ---
@@ -529,6 +539,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 //   FIN: Finally a=<r>    R[r], R[r+1] = how the finally body was entered
 //   <finally body>
 //   FinallyEnd a=<r>      fall through, re-raise or return, as R[r] says
+//                         (c=FINALLY_LEAVE: a jump out of the finally body drops it)
 //
 // The Finally marker is emitted even when the source has no finally clause,
 // so the normal path always has exactly one place that pops the safepoint;
@@ -538,7 +549,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
 	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
-	s.tries.push({ finallyBody: d.finallyBody, routeReg });
+	s.tries.push({ finallyBody: d.finallyBody, routeReg, inFinallyBody: false });
 	compileStmt(s, d.tryBody);
 	s.tries.pop();
 	const toFinally = emitJumpPlaceholder(s);
@@ -550,9 +561,10 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocDyn(s);
+		if (d.catchName == "") emitInst(s, raiserABC(RaiserOpcode.RcDec, catchReg, 1, 0));
 		if (d.finallyBody != null) {
 			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
-			s.tries.push({ finallyBody: d.finallyBody, routeReg });
+			s.tries.push({ finallyBody: d.finallyBody, routeReg, inFinallyBody: false });
 		}
 		const savedLocals = s.locals.items.length;
 		if (d.catchName != "") declareLocal(s, declaredSymbol(node, d.catchName), catchReg);
@@ -575,14 +587,38 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
 	}
 	patchJumpTo(s, toFinally, finIdx);
-	if (d.finallyBody != null) compileStmt(s, d.finallyBody);
+	if (d.finallyBody != null) {
+		s.tries.push({ finallyBody: null, routeReg, inFinallyBody: true });
+		compileStmt(s, d.finallyBody);
+		s.tries.pop();
+	}
 	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, routeReg, 0, 0));
 	if (d.hasCatchClause && catchGuard < 0) patchJumpTo(s, catchEnd, codeLen(s));
+}
+
+export function compileBodyReleasingOnRaise(s: RaiserCompState, body: Node, owned: int32): void {
+	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
+	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
+	s.tries.push({ finallyBody: null, routeReg, inFinallyBody: false });
+	compileStmt(s, body);
+	s.tries.pop();
+	const finIdx = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.Finally, routeReg, 0, 0));
+	patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
+	emitInst(s, raiserABC(RaiserOpcode.BeqI64Imm, routeReg, immField(1), 1));
+	const skip = emitJumpPlaceholder(s);
+	emitInst(s, raiserABC(RaiserOpcode.RcDec, owned, 1, 0));
+	patchJumpTo(s, skip, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, routeReg, 0, 0));
 }
 
 function leaveTries(s: RaiserCompState, depth: int32): void {
 	const tries = s.tries.slice(0, s.tries.length);
 	for (let j = tries.length - 1; j >= depth; j = j - 1) {
+		if (tries[j].inFinallyBody) {
+			emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, tries[j].routeReg, 0, FINALLY_LEAVE));
+			continue;
+		}
 		emitInst(s, raiserABC(RaiserOpcode.Finally, tries[j].routeReg, 0, 0));
 		const fin = tries[j].finallyBody;
 		if (fin != null) {

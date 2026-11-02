@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: interpretation requires too many iterations (limit 10000000)
 // @serial
 
 import { sleepAsync } from "std/core/promise";

@@ -83,19 +83,9 @@ export function max(this typeof Math, ...values: float64[]): float64 {
 	return best;
 }
 
-@include("time.h");
-extern function time(slot: int64): int64 from "time";
-
-let randState: uint64 = 0;
+@include("runtime/core/random.h");
+extern function msMathRandom(): float64;
 
 export function random(this typeof Math): float64 {
-	if (randState == 0) {
-		randState = ((time(0) as uint64) * 6364136223846793005) | 1;
-	}
-	let x = randState;
-	x = x ^ (x << 13);
-	x = x ^ (x >> 7);
-	x = x ^ (x << 17);
-	randState = x;
-	return ((x >> 11) as float64) / 9007199254740992.0;
+	return msMathRandom();
 }

@@ -11,7 +11,6 @@
 // @stdout: arg 9
 // @exit: 0
 // @serial
-// @xfail(raiser): raiser runs no actors
 // note: an actor method that replies a nullable reference (class, array), as a reply or an argument, delivers that reference itself, and null stays null; a string or struct union is boxed by the reply and unboxed by the await. Old compiler: the reply boxed every union, the await read a nullable reference unboxed, so a null reply arrived as a non-null box address.
 
 class Node { hits: int32 = 0; }

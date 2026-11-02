@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table, and it has no actors
 // @stdout: plain 1
 // @stdout: if-return 2
 // @stdout: loop-fresh 3

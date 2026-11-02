@@ -3,7 +3,7 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, SymbolKind, DeclKind, VariableDeclData, Type, TypeKind,
+	Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, Symbol, SymbolFlag, SymbolKind, DeclKind, VariableDeclData, Type, TypeKind,
 	ExportDeclData, DecoratedDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
@@ -29,15 +29,21 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
-	isScalarClass
+	isScalarClass, allocBool, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen
 } from "./context";
-import { compileStmt } from "./statements";
+import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
+import { bodyIsErrorBlind } from "../../checker/raises";
 import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
-import { ExportedSymInfo } from "../../checker/context";
+import { lowerStaticFieldReads } from "../../transform/lowering/staticLower";
 import { transformForRaiser } from "../../transform/raiserLowering";
+import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destructorLifting";
+import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
+import { analyzeProgram } from "../../analyzer/index";
+import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
+import { CheckerContext, GcMode, ExportedSymInfo } from "../../checker/context";
 import { unboxFloat } from "../../raiser/marshal";
 
 registerCoreParsers();
@@ -71,6 +77,29 @@ export function unwrapToClassDecl(node: Node): Node | null {
 // Two-phase compilation:
 //   Phase 1: Collect FunctionDecl names → assign module indices
 //   Phase 2: Compile each function body + top-level code
+
+export function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: WriteSummaries): Node {
+	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
+	try {
+		ctx.gcMode = GcMode.Drc;
+		return lowerStaticFieldReads(analyzeProgram(program, ctx, tables, true));
+	} finally {
+		leaveCompilerFuncs(outer);
+	}
+}
+
+export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T): T {
+	const outer = swapLiftedOps(lifted);
+	try {
+		return body();
+	} finally {
+		swapLiftedOps(outer);
+	}
+}
+
+export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
+	return underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false), ctx, createWriteSummaries(createRoutineDecls(), [])));
+}
 
 export function generateRaiser(program: Node): RaiserModule {
 	const input: RaiserModuleInput = { modulePath: "main", program: program };
@@ -155,7 +184,8 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | nu
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
-			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
+			if (pd.propIsStatic) continue;
+			const fieldReg = emitZeroValue(s, classBody[ci].nodeType);
 			const nameIdx = addConst(s, raiserConstString(pd.propName));
 			emitInst(s, fieldInst(s, thisType, pd.propName, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, thisReg, nameIdx, fieldReg));
 		}
@@ -213,7 +243,8 @@ function compileClassConstructor(
 
 	// Execute constructor body
 	if (ctorBody != null) {
-		compileStmt(s, ctorBody);
+		if (bodyIsErrorBlind(ctorBody)) compileStmt(s, ctorBody);
+		else compileBodyReleasingOnRaise(s, ctorBody, thisReg);
 	}
 
 	// Always return this
@@ -341,14 +372,14 @@ function hasGlobal(globals: RaiserGlobalMap, symbol: Symbol): boolean {
 }
 
 function collectRaiserGlobals(node: Node, globals: RaiserGlobalMap, nextSlot: int32): int32 {
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null
-			&& node.resolvedSym.symFlags.has(SymbolFlag.Global) && !hasGlobal(globals, node.resolvedSym)) {
-		const d = node.data as VariableDeclData;
+	const isStaticField = node.kind == NodeKind.PropertyDecl && (node.data as PropertyDeclData).propIsStatic;
+	if ((node.kind == NodeKind.VariableDecl || isStaticField) && node.resolvedSym != null
+			&& (node.resolvedSym.symFlags.has(SymbolFlag.Global) || isStaticField) && !hasGlobal(globals, node.resolvedSym)) {
 		const index = nextSlot;
 		nextSlot += 1;
 		let initGuard: int32 = -1;
-		if (node.resolvedSym.symFlags.has(SymbolFlag.StaticLocal)
-			&& d.declKind == DeclKind.Const && d.initializer != null) {
+		if (!isStaticField && node.resolvedSym.symFlags.has(SymbolFlag.StaticLocal)
+			&& (node.data as VariableDeclData).declKind == DeclKind.Const && (node.data as VariableDeclData).initializer != null) {
 			initGuard = nextSlot;
 			nextSlot += 1;
 		}
@@ -389,6 +420,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	const noNodes: Node[] = [];
 	const noSyms: Symbol[] = [];
 	const nullNode = null as unknown as Node;
+	let actorExitStop = -1;
 
 	// Pass 1a: Collect functions + enums (must match Phase 2 compilation order)
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -400,6 +432,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
 				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
 				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode, routine: fnNode.resolvedSym });
+				if (fd.fnName == ACTOR_EXIT_STOP && modules[mi].modulePath.endsWith(ACTOR_RUNTIME_MODULE)) actorExitStop = funcIdx;
 				funcIdx += 1;
 			}
 		}
@@ -493,16 +526,31 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 
 	// --- Pass 3: Compile init functions for each module ---
 	const initIndices: number[] = [];
+	const deinitIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
 		const pd = modules[mi].program.data as ProgramData;
 		setRaiserModulePath(modules[mi].modulePath);
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
 		s.globals = globals;
+		const deinit = createCompState();
+		deinit.funcMap = globalFuncMap;
+		deinit.globals = globals;
 
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			compileStmt(s, pd.programStmts[i]);
-			resetTemps(s);
+			const atExit = pd.programStmts[i].flags.has(NodeFlag.GlobalDestroys);
+			compileStmt(atExit ? deinit : s, pd.programStmts[i]);
+			resetTemps(atExit ? deinit : s);
+		}
+		if (deinit.code.length > 0) {
+			const deinitNil = allocDyn(deinit);
+			emitLoadConst(deinit, deinitNil, raiserNil());
+			emitRet(deinit, deinitNil);
+			const deinitFunc = createRaiserFunction("__deinit_" + mi, deinit.code, deinit.constants, 0, 0, deinit.regClasses.length, deinit.regClasses);
+			deinitFunc.copyPlans = deinit.copyPlans;
+			deinitFunc.classTypes = deinit.classTypes;
+			functions.push(deinitFunc);
+			deinitIndices.push(functions.length - 1);
 		}
 
 		// Post-process: convert Halt → Ret (init functions return to caller)
@@ -537,6 +585,20 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	if (initIndices.length == 0) {
 		emitLoadConst(entryS, allocRef(entryS), raiserNil());
 	}
+	if (deinitIndices.length > 0 || actorExitStop >= 0) emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
+	if (actorExitStop >= 0) {
+		demandBody(actorExitStop);
+		const round = codeLen(entryS);
+		const stopped = allocBool(entryS);
+		emitInst(entryS, raiserABC(RaiserOpcode.Call, stopped, actorExitStop, 0));
+		emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 2, 0));
+		const done = emitBranchIfFalsy(entryS, stopped);
+		patchJumpTo(entryS, emitJumpPlaceholder(entryS), round);
+		patchJumpTo(entryS, done, codeLen(entryS));
+	}
+	for (let di = deinitIndices.length - 1; di >= 0; di -= 1) {
+		emitInst(entryS, raiserABC(RaiserOpcode.Call, allocDyn(entryS), deinitIndices[di], 0));
+	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
 	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses);
 	functions.push(entryFunc);
@@ -566,6 +628,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	return compiled;
 }
 
+const ACTOR_EXIT_STOP = "msActorStopLive";
+const ACTOR_RUNTIME_MODULE = "std/core/promise/index.rms";
+
 function runProgram(program: Node): RaiserContext {
 	const mod = generateRaiser(program);
 	const ctx = createContext();
@@ -582,8 +647,7 @@ function evalRaiser(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	checkProgram(parseResult.value);
-	return runProgram(parseResult.value);
+	return runProgram(lowerForRaiser(parseResult.value, checkProgram(parseResult.value)));
 }
 
 function evalLowered(code: string): RaiserContext {
@@ -593,7 +657,7 @@ function evalLowered(code: string): RaiserContext {
 		return createContext();
 	}
 	const program = parseResult.value;
-	return runProgram(transformForRaiser(program, checkProgram(program), true));
+	return runProgram(lowerForRaiser(program, checkProgram(program)));
 }
 
 // --- Tests ---
@@ -1285,7 +1349,7 @@ test "object as return value" {
 test "nested object config" {
 	const ctx = evalRaiser("return { build: { target: \"native\", outDir: \"out\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
@@ -1296,7 +1360,7 @@ test "nested object config" {
 test "config with array of objects" {
 	const ctx = evalRaiser("return { transforms: [{ name: \"var_hoist\" }] };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const arrField = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "transforms");
+	const arrField = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "transforms");
 	assert arrField.kind == RaiserValueKind.Array;
 	assert heapArrayLen(ctx.arrayHeap, arrField.intVal) == 1;
 	const elem = heapArrayGet(ctx.arrayHeap, arrField.intVal, 0);
@@ -1310,7 +1374,7 @@ test "nested config object" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
@@ -1328,7 +1392,7 @@ test "export default nested object" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "app.ms";
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
@@ -1342,14 +1406,14 @@ test "real: neon/build.ms" {
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// format.tabWidth
-	const fmtHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "format");
+	const fmtHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "format");
 	assert fmtHandle >= 0;
-	const tabWidth = heapObjectGetField(ctx.objectHeap, fmtHandle, "tabWidth");
+	const tabWidth = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, fmtHandle, "tabWidth");
 	assert tabWidth.intVal == 4;
 	// build.targets array
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const targets = heapObjectGetField(ctx.objectHeap, buildHandle, "targets");
+	const targets = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, buildHandle, "targets");
 	assert targets.kind == RaiserValueKind.Array;
 	assert heapArrayLen(ctx.arrayHeap, targets.intVal) == 2;
 	// targets[0].target === "native"
@@ -1412,7 +1476,7 @@ test "real: void/build.ms" {
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// build.target
-	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+	const buildHandle = heapObjectGetObjectHandle(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
 	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
@@ -1483,12 +1547,12 @@ test "arr[i] *= value" {
 }
 
 test "new with constructor sets fields" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.x;");
+	const ctx = evalRaiser("class Point { x: int32; y: int32; constructor(x: int32, y: int32) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.x;");
 	assert ctx.lastResult.intVal == 3;
 }
 
 test "new carries every positional argument" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.y;");
+	const ctx = evalRaiser("class Point { x: int32; y: int32; constructor(x: int32, y: int32) { this.x = x; this.y = y; } } const p = new Point(3, 4); return p.y;");
 	assert ctx.lastResult.intVal == 4;
 }
 
@@ -1503,12 +1567,12 @@ test "new binds this for later method calls" {
 }
 
 test "new nested inside a call argument" {
-	const ctx = evalRaiser("class Box { constructor(v) { this.v = v; } } function take(b) { return b.v; } const r = take(new Box(7)); return r;");
+	const ctx = evalRaiser("class Box { v: int32; constructor(v: int32) { this.v = v; } } function take(b: Box): int32 { return b.v; } const r = take(new Box(7)); return r;");
 	assert ctx.lastResult.intVal == 7;
 }
 
 test "two news are independent objects" {
-	const ctx = evalRaiser("class Box { constructor(v) { this.v = v; } } const a = new Box(1); const b = new Box(2); return a.v + b.v;");
+	const ctx = evalRaiser("class Box { v: int32; constructor(v: int32) { this.v = v; } } const a = new Box(1); const b = new Box(2); return a.v + b.v;");
 	assert ctx.lastResult.intVal == 3;
 }
 
@@ -1553,7 +1617,7 @@ test "one-way link only" {
 }
 
 test "reverse link only" {
-	const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.n = n; return self; } const c = mk(5); return c.n;");
+	const ctx = evalRaiser("class N { n: int32 = 0; ref: N | null = null; } function mk(n: int32): N { const self = new N(); const cl = new N(); cl.ref = self; self.n = n; return self; } const c = mk(5); return c.n;");
 	assert ctx.lastResult.intVal == 5;
 }
 
@@ -1628,7 +1692,7 @@ test "bidir top level" {
 }
 
 test "two objects linked" {
-	const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
+	const ctx = evalRaiser("class N { n: int32 = 0; ref: N | null = null; get: N | null = null; } function mk(n: int32): N { const self = new N(); const cl = new N(); cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
 	assert ctx.lastResult.intVal == 5;
 }
 
@@ -1670,9 +1734,10 @@ test "an extern let or const is refused by its name in a bitwise, arithmetic or 
 	}
 }
 
-test "trap: unsupported node kind errors at runtime" {
+test "a match expression is lowered before the bytecode compiler sees it" {
 	const ctx = evalRaiser("return match (1) { _ => 2 };");
-	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
+	assert ctx.lastError == "", ctx.lastError;
+	assert ctx.lastResult.intVal == 2;
 }
 
 test "update on an index target: postfix yields the old value and stores the new one" {

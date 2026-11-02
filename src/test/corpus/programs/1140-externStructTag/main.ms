@@ -6,7 +6,7 @@
 // and passed to MetaScript and C as a pointer. A struct named by its C typedef takes its size from C the same way.
 //
 // @skip-js: `extern function` binds a C symbol; the JS backend has no C linkage
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus1140MakeDir
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @stdout: dir true | file 6 true | missing|f.txt
 // @stdout: 15 8 2 1 23 800 true true
 // @exit: 0

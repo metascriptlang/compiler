@@ -3,7 +3,6 @@
 // @stdout: actor cleared 3
 // @stdout: worker cleared 4
 // @exit: 0
-// @xfail(raiser): raiser runtime error: Unknown host function: msSetTimeout
 // note: a timer cleared before it fires, armed by a function, an interval, an actor and a pool task, releases its callback's captures by the time the program ends, which is before the timer's delay (old runtime: the program exited only when each delay had passed)
 
 class Box { v: int32; constructor(v: int32) { this.v = v; } }

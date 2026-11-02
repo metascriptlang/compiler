@@ -1,18 +1,19 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
-	heapAllocArray, heapAllocArrayOf, arrayBaseOf, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	heapAllocArray, heapSeqHandles, heapAllocArrayLike, heapArrayUncounted, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	isObjectCell, objectCellClass, objectCellHandle, seqCellOf, handleValue, rcCountOf, OWNED_BY_RECEIVER_RC,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
-	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, raiserFloat, raiserBool, heapStringText, heapAllocStoredString
+	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, heapBoxValue, raiserFloat, raiserBool
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
+import { objectCellNew, objectCellSlot, objectCellSetSlot } from "./objectCell";
 
 export enum RaiserCopyKind {
 	Preserve,
 	Array,
 	Object,
 	Union,
-	Literal,
 }
 
 export interface RaiserCopyPlan {
@@ -42,6 +43,11 @@ function laidChildrenOf(plan: RaiserCopyPlan, cls: RaiserClassType): int32[] {
 	return children;
 }
 
+function holdCopied(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, original: RaiserValue, copied: RaiserValue): void {
+	if (copied.intVal != original.intVal) return;
+	rcIncref(arrays, objects, copied);
+}
+
 // A fully laid object copies slot by slot: word, float and bool slots as their bits, the others through their plan child.
 function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: RaiserObjectData, plans: RaiserCopyPlan[], plan: RaiserCopyPlan): RaiserValue {
 	const cls = source.classType;
@@ -52,15 +58,44 @@ function copyLaid(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: Ra
 	for (let f = 0; f < children.length; f += 1) {
 		const kind = cls.kinds[f];
 		if (kind == RaiserRegClass.Ref || kind == RaiserRegClass.Dyn) {
-			let copied = fieldValueAt(source, f);
-			if (children[f] >= 0) copied = copyTypedValue(arrays, objects, copied, plans, children[f]);
+			const original = fieldValueAt(source, f);
+			let copied = original;
+			if (children[f] >= 0 && !cls.uncounted[f]) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
 			fieldStoreAt(objects.objects[at], f, copied);
-			rcIncref(arrays, objects, copied);
+			if (!cls.uncounted[f]) holdCopied(arrays, objects, original, copied);
 		} else {
 			objects.objects[at].slots[f] = source.slots[f];
 		}
 	}
 	return raiserObject(handle);
+}
+
+// A cell copies like a laid heap object: word, float and bool slots as their bits, the others through their plan child.
+function copyCell(arrays: RaiserArrayHeap, objects: RaiserObjectHeap, source: int64, plans: RaiserCopyPlan[], plan: RaiserCopyPlan): RaiserValue {
+	const cls = objectCellClass(source);
+	const children = laidChildrenOf(plan, cls);
+	const from = seqCellOf(source);
+	const cell = objectCellNew(arrays.mem, cls, OWNED_BY_RECEIVER_RC as int64);
+	for (let f = 0; f < children.length; f += 1) {
+		if (cls.kinds[f] == RaiserRegClass.Ref) {
+			const original = handleValue(objectCellSlot(from, f));
+			let copied = original;
+			if (children[f] >= 0 && !cls.uncounted[f]) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
+			objectCellSetSlot(cell, f, copied.kind == RaiserValueKind.Nil ? 0 : copied.intVal);
+			if (!cls.uncounted[f]) holdCopied(arrays, objects, original, copied);
+		} else if (cls.kinds[f] == RaiserRegClass.Dyn) {
+			const box = objectCellSlot(from, f);
+			if (box == 0) continue;
+			const original = heapBoxValue(arrays, box);
+			let copied = original;
+			if (children[f] >= 0 && !cls.uncounted[f]) copied = copyTypedValue(arrays, objects, original, plans, children[f]);
+			objectCellSetSlot(cell, f, heapAllocBox(arrays, copied));
+			if (!cls.uncounted[f]) holdCopied(arrays, objects, original, copied);
+		} else {
+			objectCellSetSlot(cell, f, objectCellSlot(from, f));
+		}
+	}
+	return raiserObject(objectCellHandle(cell));
 }
 
 export function copyTypedValue(
@@ -75,14 +110,23 @@ export function copyTypedValue(
 	}
 	const plan = plans[index];
 	if (plan.kind == RaiserCopyKind.Array && value.kind == RaiserValueKind.Array) {
-		const handle = heapAllocArrayOf(arrays, arrayBaseOf(arrays, arrays.arrays[handleIndex(value.intVal)]).elemClass);
+		const handle = heapAllocArrayLike(arrays, arrays, value.intVal);
+		const uncounted = heapArrayUncounted(arrays, value.intVal);
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
-			const copied = copyTypedValue(arrays, objects, heapArrayGet(arrays, value.intVal, i), plans, plan.children[0]);
+			const original = heapArrayGet(arrays, value.intVal, i);
+			if (uncounted) {
+				heapArrayPush(arrays, handle, original);
+				continue;
+			}
+			const copied = copyTypedValue(arrays, objects, original, plans, plan.children[0]);
 			heapArrayPush(arrays, handle, copied);
-			rcIncref(arrays, objects, copied);
+			holdCopied(arrays, objects, original, copied);
 		}
 		return raiserArray(handle);
+	}
+	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object && isObjectCell(value.intVal)) {
+		return copyCell(arrays, objects, value.intVal, plans, plan);
 	}
 	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object) {
 		const source = objects.objects[handleIndex(value.intVal)];
@@ -94,20 +138,21 @@ export function copyTypedValue(
 		const count = objectFieldCount(source);
 		for (let f = 0; f < count; f += 1) {
 			const name = fieldNameAt(source, f);
-			let copied = fieldValueAt(source, f);
+			const original = fieldValueAt(source, f);
+			let copied = original;
 			for (let i = 0; i < plan.names.length; i += 1) {
 				if (plan.names[i] == name) {
-					copied = copyTypedValue(arrays, objects, copied, plans, plan.children[i]);
+					copied = copyTypedValue(arrays, objects, original, plans, plan.children[i]);
 					break;
 				}
 			}
 			appendField(objects.objects[handleIndex(handle)], name, copied);
-			rcIncref(arrays, objects, copied);
+			holdCopied(arrays, objects, original, copied);
 		}
 		return raiserObject(handle);
 	}
 	if (plan.kind == RaiserCopyKind.Union && value.kind == RaiserValueKind.Object) {
-		const discriminant = heapObjectGetField(objects, value.intVal, plan.names[0]);
+		const discriminant = heapObjectGetField(arrays, objects, value.intVal, plan.names[0]);
 		if (discriminant.kind != RaiserValueKind.Nil) {
 			for (let i = 0; i < plan.discriminants.length; i += 1) {
 				if (plan.discriminants[i] == discriminant.intVal) {
@@ -116,14 +161,6 @@ export function copyTypedValue(
 			}
 		}
 		throw new Error(`internal: copy of a value union whose '${plan.names[0]}' matches no arm`);
-	}
-	if (plan.kind == RaiserCopyKind.Literal && value.kind == RaiserValueKind.Object) {
-		const tag = heapObjectGetField(objects, value.intVal, plan.names[0]);
-		const text = tag.kind == RaiserValueKind.String ? heapStringText(arrays, tag) : tag.kind == RaiserValueKind.Bool ? (tag.intVal == 1 ? "true" : "false") : "";
-		for (let i = 0; i < plan.children.length; i += 1) {
-			if (plan.names[i + 1] == text) return copyTypedValue(arrays, objects, value, plans, plan.children[i]);
-		}
-		return value;
 	}
 	return value;
 }
@@ -135,11 +172,8 @@ test "typed copy releases owned children and retained shared references" {
 	heapArrayPush(arrays, items.intVal, raiserInt(1));
 	const shared = raiserObject(heapAllocObject(objects));
 	const source = raiserObject(heapAllocObject(objects));
-	heapObjectSetField(objects, source.intVal, "items", items);
-	heapObjectSetField(objects, source.intVal, "shared", shared);
-	rcIncref(arrays, objects, items);
-	rcIncref(arrays, objects, shared);
-	rcIncref(arrays, objects, source);
+	heapObjectSetField(arrays, objects, source.intVal, "items", items);
+	heapObjectSetField(arrays, objects, source.intVal, "shared", shared);
 	const preserve: RaiserCopyPlan = {
 		kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [],
 	};
@@ -153,14 +187,13 @@ test "typed copy releases owned children and retained shared references" {
 		discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [],
 	};
 	const copied = copyTypedValue(arrays, objects, source, [preserve, sequence, plan], 2);
-	rcIncref(arrays, objects, copied);
-	assert heapObjectGetField(objects, copied.intVal, "items").intVal != items.intVal;
-	assert heapObjectGetField(objects, copied.intVal, "shared").intVal == shared.intVal;
+	assert heapObjectGetField(arrays, objects, copied.intVal, "items").intVal != items.intVal;
+	assert heapObjectGetField(arrays, objects, copied.intVal, "shared").intVal == shared.intVal;
 	assert objects.objects[handleIndex(shared.intVal)].rc == 2;
 	rcDecref(arrays, objects, copied);
 	assert objects.objects[handleIndex(shared.intVal)].rc == 1;
 	rcDecref(arrays, objects, source);
-	assert arrays.freeList.length == 2;
+	assert heapSeqHandles(arrays).length == 0;
 	assert objects.freeList.length == 3;
 }
 
@@ -169,8 +202,8 @@ test "union plan copies the arm its discriminant selects" {
 	const objects = createStructHeap();
 	const inner = raiserObject(heapAllocObject(objects));
 	const source = raiserObject(heapAllocObject(objects));
-	heapObjectSetField(objects, source.intVal, "kind", raiserInt(9));
-	heapObjectSetField(objects, source.intVal, "side", inner);
+	heapObjectSetField(arrays, objects, source.intVal, "kind", raiserInt(9));
+	heapObjectSetField(arrays, objects, source.intVal, "side", inner);
 	const preserve: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const left: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["kind", "side"], children: [0, 0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const right: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["kind", "side"], children: [0, 3], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
@@ -178,27 +211,7 @@ test "union plan copies the arm its discriminant selects" {
 	const union: RaiserCopyPlan = { kind: RaiserCopyKind.Union, names: ["kind"], children: [1, 2], discriminants: [5, 9], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const copied = copyTypedValue(arrays, objects, source, [preserve, left, right, struct, union], 4);
 	assert copied.intVal != source.intVal;
-	assert heapObjectGetField(objects, copied.intVal, "side").intVal != inner.intVal;
-}
-
-test "literal plan copies the arm its tag text selects and shares the others" {
-	const arrays = createArrayHeap();
-	const objects = createStructHeap();
-	const inner = raiserObject(heapAllocObject(objects));
-	const copyable = raiserObject(heapAllocObject(objects));
-	heapObjectSetField(objects, copyable.intVal, "kind", heapAllocStoredString(arrays, "s"));
-	heapObjectSetField(objects, copyable.intVal, "side", inner);
-	const shared = raiserObject(heapAllocObject(objects));
-	heapObjectSetField(objects, shared.intVal, "kind", heapAllocStoredString(arrays, "r"));
-	const preserve: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
-	const arm: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["kind", "side"], children: [0, 2], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
-	const struct: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
-	const union: RaiserCopyPlan = { kind: RaiserCopyKind.Literal, names: ["kind", "s", "r"], children: [1, 0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
-	const plans = [preserve, arm, struct, union];
-	const copied = copyTypedValue(arrays, objects, copyable, plans, 3);
-	assert copied.intVal != copyable.intVal;
-	assert heapObjectGetField(objects, copied.intVal, "side").intVal != inner.intVal;
-	assert copyTypedValue(arrays, objects, shared, plans, 3).intVal == shared.intVal;
+	assert heapObjectGetField(arrays, objects, copied.intVal, "side").intVal != inner.intVal;
 }
 
 test "laid struct copies word, float, bool, ref and dyn slots, and a nested struct is a new object" {
@@ -208,7 +221,6 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	const innerClass: RaiserClassType = createClassType("Inner", -1, [], ["n"], [RaiserRegClass.Word]);
 	layOutObject(objects.objects[handleIndex(inner.intVal)], innerClass);
 	objects.objects[handleIndex(inner.intVal)].slots[0] = 7;
-	rcIncref(arrays, objects, inner);
 	const source = raiserObject(heapAllocObject(objects));
 	const outerClass: RaiserClassType = createClassType("Outer", -1, [], ["w", "f", "b", "next", "any"], [RaiserRegClass.Word, RaiserRegClass.Float, RaiserRegClass.Bool, RaiserRegClass.Ref, RaiserRegClass.Dyn]);
 	layOutObject(objects.objects[handleIndex(source.intVal)], outerClass);
@@ -219,26 +231,40 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	fieldStoreAt(objects.objects[at], 2, raiserBool(true));
 	fieldStoreAt(objects.objects[at], 3, inner);
 	fieldStoreAt(objects.objects[at], 4, box);
-	rcIncref(arrays, objects, source);
 	const preserve: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const innerPlan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["n"], children: [0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const outerPlan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["any", "next", "w"], children: [0, 1, 0], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const plans = [preserve, innerPlan, outerPlan];
 	for (let round = 0; round < 2; round += 1) {
 		const copied = copyTypedValue(arrays, objects, source, plans, 2);
-		rcIncref(arrays, objects, copied);
 		assert copied.intVal != source.intVal;
-		assert heapObjectGetField(objects, copied.intVal, "w").intVal == 41;
-		assert heapObjectGetField(objects, copied.intVal, "f").floatVal == 2.5;
-		assert heapObjectGetField(objects, copied.intVal, "b").intVal == 1;
-		const next = heapObjectGetField(objects, copied.intVal, "next");
+		assert heapObjectGetField(arrays, objects, copied.intVal, "w").intVal == 41;
+		assert heapObjectGetField(arrays, objects, copied.intVal, "f").floatVal == 2.5;
+		assert heapObjectGetField(arrays, objects, copied.intVal, "b").intVal == 1;
+		const next = heapObjectGetField(arrays, objects, copied.intVal, "next");
 		assert next.intVal != inner.intVal;
-		assert heapObjectGetField(objects, next.intVal, "n").intVal == 7;
-		const any = heapObjectGetField(objects, copied.intVal, "any");
+		assert heapObjectGetField(arrays, objects, next.intVal, "n").intVal == 7;
+		const any = heapObjectGetField(arrays, objects, copied.intVal, "any");
 		assert any.kind == RaiserValueKind.Box && any.intVal == box.intVal;
 		assert objects.objects[handleIndex(copied.intVal)].classType == outerClass;
 		assert objects.objects[handleIndex(source.intVal)].rc == 1;
 	}
 	assert outerPlan.laid == outerClass;
 	assert outerPlan.laidChildren.length == 5 && outerPlan.laidChildren[0] == 0 && outerPlan.laidChildren[3] == 1 && outerPlan.laidChildren[4] == 0;
+}
+
+test "a typed copy of an object cell copies its words and holds the references it shares" {
+	const arrays = createArrayHeap();
+	const objects = createStructHeap();
+	const cls: RaiserClassType = createClassType("Node", -1, [], ["w", "next"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	const inner = objectCellNew(arrays.mem, cls, 1);
+	const outer = objectCellNew(arrays.mem, cls, 1);
+	objectCellSetSlot(outer, 0, 5);
+	objectCellSetSlot(outer, 1, objectCellHandle(inner));
+	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
+	const copied = copyTypedValue(arrays, objects, raiserObject(objectCellHandle(outer)), [plan], 0);
+	assert copied.intVal != objectCellHandle(outer);
+	assert heapObjectGetField(arrays, objects, copied.intVal, "w").intVal == 5;
+	assert heapObjectGetField(arrays, objects, copied.intVal, "next").intVal == objectCellHandle(inner);
+	assert rcCountOf(arrays, objects, objectCellHandle(inner)) == 2;
 }

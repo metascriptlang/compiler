@@ -118,7 +118,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	let si = 0;
 	while (si < n) {
 		const slot = slots[si];
-		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && (mayHoldCycleRoot(slot.innerType, ctx) || needsBoxing(slot.innerType))) slot.closure = callingThunk(slot.closure, slot.innerType);
+		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && (mayHoldCycleRoot(slot.innerType, ctx) || needsBoxing(slot.innerType, ctx.raiserBackend))) slot.closure = callingThunk(slot.closure, slot.innerType);
 		const thunk = spawnThunk(slot.closure);
 		// Use first non-null timeout found
 		if (slot.timeout != null && groupTimeout == null) {
@@ -143,14 +143,14 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		if (slot.innerType != null) {
 			if (thunk.kind == NodeKind.FunctionExpr) {
 				const fd = thunk.data as FunctionExprData;
-				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType); }
+				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType, ctx.raiserBackend); }
 			} else if (thunk.kind == NodeKind.ArrowFunction) {
 				const ad = thunk.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
-						boxReturns(ad.arrowBody, slot.innerType);
+						boxReturns(ad.arrowBody, slot.innerType, ctx.raiserBackend);
 					} else {
-						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ad.arrowBody.location);
+						ad.arrowBody = boxForType(ad.arrowBody, slot.innerType, ctx.raiserBackend, ad.arrowBody.location);
 					}
 				}
 			}

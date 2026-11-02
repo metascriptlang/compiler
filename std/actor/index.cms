@@ -43,17 +43,9 @@ export extern function setIdleTimeout(pid: int64, ms: number): void from "msActo
 
 // ===== Name Registry (Erlang: register/2, whereis/1, unregister/1) =====
 
-// Hook: wire auto-unregister into actor destroy (ensures same TU owns registry data)
-extern function msActorNameRegistryInit(): void from "msActorNameRegistryInit";
-
 // Register a name for a pid. Returns true on success, false if name taken or pid already named.
 extern function msActorRegisterName(pid: int64, name: string): number from "msActorRegisterName";
-let registryInitialized: boolean = false;
 export function registerName(pid: int64, name: string): boolean {
-	if (!registryInitialized) {
-		msActorNameRegistryInit();
-		registryInitialized = true;
-	}
 	return msActorRegisterName(pid, name) == 1;
 }
 

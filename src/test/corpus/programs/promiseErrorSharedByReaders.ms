@@ -1,7 +1,6 @@
 // A rejected promise keeps its Error for every reader: a combinator or a then/catch
 // output and a later await of the input each see the same message, a second await sees it
 // again, and the Error is destroyed once the last holder lets go, on C and JS.
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs (no host bridge for the combinators and then/catch/finally)
 // @stdout: race no
 // @stdout: all no
 // @stdout: any All promises were rejected

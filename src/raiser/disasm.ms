@@ -127,6 +127,9 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.FutureFail => "FutureFail",
 		RaiserOpcode.FutureCombine => "FutureCombine",
 		RaiserOpcode.LitConv => "LitConv",
+		RaiserOpcode.UnionConv => "UnionConv",
+		RaiserOpcode.FutureThen => "FutureThen",
+		RaiserOpcode.FutureRead => "FutureRead",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",
@@ -157,6 +160,23 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.NeVal => "NeVal",
 		RaiserOpcode.Box => "Box",
 		RaiserOpcode.Unbox => "Unbox",
+		RaiserOpcode.RcInc => "RcInc",
+		RaiserOpcode.RcDec => "RcDec",
+		RaiserOpcode.WasMoved => "WasMoved",
+		RaiserOpcode.DestroyValue => "DestroyValue",
+		RaiserOpcode.SinkValue => "SinkValue",
+		RaiserOpcode.RcHeld => "RcHeld",
+		RaiserOpcode.ArrayPop => "ArrayPop",
+		RaiserOpcode.ArrayShift => "ArrayShift",
+		RaiserOpcode.ArraySplice => "ArraySplice",
+		RaiserOpcode.ArraySplice3 => "ArraySplice3",
+		RaiserOpcode.ArrayReverse => "ArrayReverse",
+		RaiserOpcode.ArraySort => "ArraySort",
+		RaiserOpcode.ArrayFill => "ArrayFill",
+		RaiserOpcode.ArraySliceCopy => "ArraySliceCopy",
+		RaiserOpcode.ArrayConcat => "ArrayConcat",
+		RaiserOpcode.AssignInPlace => "AssignInPlace",
+		RaiserOpcode.RcKeptCheck => "RcKeptCheck",
 	};
 }
 
@@ -193,6 +213,11 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const name = opName(op);
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
+	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved) return `${name} ${ra}`;
+	if (op == RaiserOpcode.DestroyValue) return `${name} ${ra} plan ${inst.c}`;
+	if (op == RaiserOpcode.SinkValue || op == RaiserOpcode.AssignInPlace) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
+	if (op == RaiserOpcode.RcHeld || op == RaiserOpcode.RcKeptCheck) return `${name} ${ra} ${regText(op, 1, inst.b)}`;
+	if (op == RaiserOpcode.RcDec) return inst.b == 1 ? `${name} ${ra} cyclic` : `${name} ${ra}`;
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
 	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
 	if (isBranchI64(op)) return `${name} ${ra} ${isBranchImm(op) ? `#${immValue(inst.b)}` : regText(op, 1, inst.b)} ->${branchOffset(inst.c)}`;
@@ -256,6 +281,20 @@ test "disasmFunc includes constant annotations" {
 	const s = disasmFunc(entry);
 	assert s.length > 0;
 	// Should contain "LoadConst" and the constant value annotation
+}
+
+test "the reference-count opcodes print their register and the cyclic flag" {
+	assert disasmInst(raiserABC(RaiserOpcode.RcInc, 3, 0, 0)) == "RcInc R3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 0, 0)) == "RcDec R3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcDec, 3, 1, 0)) == "RcDec R3 cyclic";
+	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, operandTagged(1, RaiserRegClass.Ref), 0, 0)) == "WasMoved R1";
+	assert disasmInst(raiserABC(RaiserOpcode.WasMoved, operandTagged(2, RaiserRegClass.Word), 0, 0)) == "WasMoved W2";
+	assert disasmInst(raiserABC(RaiserOpcode.DestroyValue, 1, 0, 4)) == "DestroyValue R1 plan 4";
+	assert disasmInst(raiserABC(RaiserOpcode.SinkValue, 1, 2, 4)) == "SinkValue R1 R2 plan 4";
+	assert disasmInst(raiserABC(RaiserOpcode.RcHeld, 1, 3, 0)) == "RcHeld R1 W3";
+	assert disasmInst(raiserABC(RaiserOpcode.ArrayReverse, 1, 0, 0)).startsWith("ArrayReverse R1");
+	assert disasmInst(raiserABC(RaiserOpcode.ArrayConcat, 1, 2, 3)) == "ArrayConcat R1 R2 R3";
+	assert disasmInst(raiserABC(RaiserOpcode.RcKeptCheck, 1, 3, 0)) == "RcKeptCheck R1 W3";
 }
 
 test "immediate operands print as numbers" {

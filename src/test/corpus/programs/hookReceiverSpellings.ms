@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: hooks value=1 ref=2
 
@@ -28,7 +27,7 @@ function onDestroy(this self: Shape): void { shapeCalls += 1; }
 
 function onCopy(this ref dest: WriterRef, src: WriterRef): void { refCopy += 1; dest.id = src.id; dest.name = src.name; }
 function onMove(this ref dest: WriterRef, src: WriterRef): void { refMove += 1; dest.id = src.id; dest.name = src.name; }
-function onMoved(this ref self: WriterRef): void { refMoved += 1; }
+function onMoved(this ref self: WriterRef): void { refMoved += 1; self.name = ""; }
 
 function mkRef(i: int32): WriterRef { return { id: i, name: "r" + i.toString() }; }
 

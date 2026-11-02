@@ -4,10 +4,13 @@
 //   lowerConstFold before lowerMatch (patterns resolved)
 
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
-import { Node } from "../ast/node";
+import { Node, NodeKind, CallExprData } from "../ast/node";
+import { walkNode } from "./walker";
+import { WriteSummaries } from "../analyzer/writeEffects";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
-import { lowerEnumNames } from "./native/builtinLower";
+import { lowerStaticInit } from "./lowering/staticLower";
+import { lowerEnumNames, lowerArrayLengthAssign } from "./native/builtinLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
@@ -22,7 +25,9 @@ import { eraseVoidParamReads } from "./desugar/voidBindLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
-import { lowerObjectSpreadEager } from "./desugar/objectSpreadLower";
+import { lowerTailCall } from "./lowering/tailCallLower";
+import { lowerObjectSpread } from "./desugar/objectSpreadLower";
+import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -30,6 +35,8 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { planModuleTdz, guardModuleTdzRaiser } from "./lowering/moduleTdz";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
+import { lowerActorClasses, registerActorTerminators } from "./lowering/actorClassLower";
+import { lowerRuntimeNames } from "./lowering/timerLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
@@ -41,33 +48,54 @@ import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
+import { lowerParamReassign } from "./lowering/paramReassignLower";
+import { lowerReturnThroughFinally } from "./lowering/returnThroughFinallyLower";
+import { lowerVarHoist } from "./lowering/varHoist";
+import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerValueParamSnapshot } from "./lowering/valueParamSnapshot";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
-import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
+import { lowerStringOps } from "./native/stringOpLower";
+import { lowerStringIndexReads } from "./lowering/stringIndexLower";
+import { lowerBigIntOps } from "./native/bigIntOpLower";
+import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util";
+import { lowerAsync } from "./lowering/asyncDesugar";
+import { lowerAsyncBridge } from "./lowering/asyncBridge";
+import { lowerAwaitSpill } from "./lowering/awaitSpill";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, namesEnums: boolean = false, rangeChecks: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, liftTables: WriteSummaries | null = null, rangeChecks: boolean = true): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
 		ctx.raiserBackend = true;
 		ctx.rangeChecks = rangeChecks;
+		ctx.liftTables = liftTables;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx, namesEnums);
+		return lowerForRaiser(program, ctx, placed, namesEnums);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolean): Node {
-	let result = eraseVoidParamReads(planModuleTdz(program, ctx));
+function dropUnionTextMemberTexts(program: Node): Node {
+	return walkNode(program, (n: Node): Node => {
+		if (n.kind != NodeKind.CallExpr) return n;
+		const kind = callBuiltinKind(n);
+		if (kind == "UnionText" || kind == "UnionDebug") (n.data as CallExprData).arguments.shrink(1);
+		return n;
+	});
+}
+
+function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean): Node {
+	let result = dropUnionTextMemberTexts(eraseVoidParamReads(planModuleTdz(program, ctx)));
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
+	result = lowerStaticInit(result, ctx);
 	result = lowerRestParams(result, ctx);
-	result = lowerObjectSpreadEager(result, ctx);
+	result = lowerObjectSpread(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = materializeMaybeReads(result, ctx);
@@ -84,27 +112,43 @@ function lowerForRaiser(program: Node, ctx: TransformContext, namesEnums: boolea
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
 	result = lowerTypeof(result, ctx);
+	result = lowerArrayLengthAssign(result, ctx);
 	if (namesEnums) result = lowerEnumToString(lowerEnumNames(result, ctx), ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
+	result = lowerTailCall(result, ctx);
+	if (placed) result = lowerParamReassign(result, ctx);
+	if (placed) result = lowerReturnThroughFinally(result, ctx, true);
+	result = lowerActorClasses(result, ctx);
+	result = lowerAwaitSpill(result, ctx);
+	result = lowerAsync(result, ctx);
 	result = lowerCtorInit(result, ctx);
+	result = registerActorTerminators(result, ctx);
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = lowerAsyncBridge(result, ctx);
+	result = lowerRuntimeNames(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = guardModuleTdzRaiser(result, ctx);
+	if (placed) result = lowerVarHoist(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = lowerClosureEqualities(result, ctx);
+	result = lowerConditionalExpr(result, ctx);
 	result = lowerValueParamSnapshot(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
+	result = lowerBigIntOps(result, ctx);
 	result = lowerUnionTags(result, ctx);
+	result = lowerStringIndexReads(result, ctx);
+	if (placed) result = lowerCallHoist(result, ctx);
 	result = unwrapMaybe(result, ctx);
-	result = liftDestructors(result, ctx, false);
+	if (placed) result = lowerStringOps(result, ctx);
+	result = liftDestructors(result, ctx, placed);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
 }
@@ -143,7 +187,7 @@ test "the raiser lowering keeps the enum range check by default and drops it whe
 	const parsed = parseInput("enum Color { Red, Green, Blue }\nfunction raw(): int32 { return 9; }\nconst c = raw() as Color;");
 	assert parsed.ok;
 	const checkerCtx = checkProgram(parsed.value);
-	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false);
+	const lowered = transformForRaiser(parsed.value, checkerCtx, false, false, null, false);
 	let checks = 0;
 	walkNode(lowered, (n: Node): Node => {
 		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks += 1;

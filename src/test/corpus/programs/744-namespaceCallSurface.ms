@@ -1,4 +1,4 @@
-// @xfail(raiser): bigint is not supported on the Raiser VM
+// @xfail(raiser): String(bigint) prints the raw cell text on the Raiser (C and JS print the digits); the lowering for it holds in the transform unit test, so the Raiser call keeps another builtin kind
 // @stdout: namespace call surface done
 
 // One name carries two surfaces: a call (`String(x)`, `BigInt(s)`) and a set of

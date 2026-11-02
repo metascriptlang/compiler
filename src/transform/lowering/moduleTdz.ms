@@ -94,8 +94,10 @@ function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 		if (read != null) return read.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
 		if (n.kind == NodeKind.ExprStmt) {
 			const assign = (n.data as ExprStmtData).expr;
-			if (assign.kind == NodeKind.BinaryExpr && (assign.data as BinaryExprData).operator == "=" && flagOf((assign.data as BinaryExprData).left, ctx) != null) {
-				return guardedWriteStmt(n, assign, ctx);
+			if (assign.kind == NodeKind.BinaryExpr && flagOf(placeRoot((assign.data as BinaryExprData).left), ctx) != null) {
+				const bd = assign.data as BinaryExprData;
+				if (bd.operator == "=" && placeRoot(bd.left) == bd.left) return guardedWriteStmt(n, assign, ctx);
+				if (isEagerAssignOp(bd.operator)) return guardedCompoundStmt(n, assign, ctx);
 			}
 		}
 		const target = writtenBinding(n);
@@ -126,7 +128,15 @@ function writtenBinding(n: Node): Node | null {
 	else if (n.kind == NodeKind.UpdateExpr) target = (n.data as UpdateExprData).updateArg;
 	else if (n.kind == NodeKind.HiddenAddr) target = (n.data as HiddenDerefData).expr;
 	else if (n.kind == NodeKind.OutExpr) target = (n.data as OutExprData).outArg;
-	return target != null && target.kind == NodeKind.Identifier ? target : null;
+	if (target == null) return null;
+	const root = placeRoot(target);
+	return root.kind == NodeKind.Identifier ? root : null;
+}
+
+function placeRoot(place: Node): Node {
+	let n = place;
+	while (n.kind == NodeKind.MemberExpr && moduleBindingRead(n) == null) n = (n.data as MemberExprData).object;
+	return n;
 }
 
 function flagOf(n: Node, ctx: TransformContext): Symbol | null {
@@ -161,6 +171,18 @@ function guarded(use: Node, binding: Node, ctx: TransformContext): Node {
 	const result = makeConditional(makeIdentResolved(flag, use.location), use, fail, use.location);
 	result.nodeType = use.nodeType;
 	return result;
+}
+
+// A compound write reads its binding first, so it throws before its right side runs; the statement stays
+// a statement because a string append lowers to a call that cannot sit inside a conditional expression.
+function guardedCompoundStmt(stmt: Node, assign: Node, ctx: TransformContext): Node {
+	const bd = assign.data as BinaryExprData;
+	bd.right = guardUses(bd.right, true, ctx);
+	const root = placeRoot(bd.left);
+	const fail = failCall(root, ctx);
+	if (fail == null) return stmt;
+	const loc = stmt.location;
+	return makeIf(makeIdentResolved(flagOf(root, ctx)!, loc), makeBlock([stmt], loc), makeBlock([makeExprStmt(fail, loc)], loc), loc);
 }
 
 // A write to a module binding throws after its value is evaluated (ECMAScript PutValue).

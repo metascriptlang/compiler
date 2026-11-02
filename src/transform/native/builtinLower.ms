@@ -12,9 +12,10 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
+import { findAllExtensionsByName, findFirstMatchingExt } from "../../checker/context";
 import { walkNode } from "../walker";
 import {
 	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember,
@@ -75,6 +76,29 @@ function enumTextCall(obj: Node, t: Type, ctx: TransformContext): Node {
 	const call = makeCall(makeTypedIdentResolved(enumToStringSym(ctx, t), null, obj.location), [obj], obj.location);
 	call.nodeType = stringType();
 	return call;
+}
+
+// The call binds the receiver's `setLength` extension, as a written `arr.setLength(n)` resolves to.
+export function lowerArrayLengthAssign(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.BinaryExpr) return node;
+		const d = node.data as BinaryExprData;
+		if (d.operator != "=" || d.left.kind != NodeKind.MemberExpr) return node;
+		const md = d.left.data as MemberExprData;
+		if (md.property != "length" || md.object.nodeType == null) return node;
+		const arrType = peelTransparentInstance(md.object.nodeType);
+		if (arrType.kind != TypeKind.Array) return node;
+		const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.checkerCtx!.extensionRegistry, "setLength"), arrType);
+		if (ext == null || ext.sym == null) throw new Error(`internal: no setLength extension takes the array an assignment to its length resizes`);
+		const method = makeMember(md.object, "setLength", node.location);
+		method.resolvedSym = ext.sym;
+		method.flags = method.flags.incl(NodeFlag.BoundSym);
+		const call = makeCall(method, [d.right], node.location);
+		call.resolvedSym = ext.sym;
+		call.flags = call.flags.incl(NodeFlag.ExtCall);
+		call.nodeType = node.nodeType;
+		return call;
+	});
 }
 
 export function lowerEnumNames(program: Node, ctx: TransformContext): Node {

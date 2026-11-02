@@ -128,7 +128,7 @@ export enum RaiserOpcode {
 	Try,              // ABx: push a safepoint at ip + Bx (a Catch or a Finally)
 	Catch,            // ABx: metadata — handler body follows, Bx = offset past the block
 	Finally,          // ABC: pop the safepoint — reached only when nothing was raised; R[A], R[A+1] = how the finally body was entered
-	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return
+	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return; C = FINALLY_LEAVE drops it instead, for a jump out of the finally body
 	Throw,            // ABC: raise R[A]
 
 	// Compile-time-known-bad site: the bytecode compiler already reported it
@@ -144,7 +144,7 @@ export enum RaiserOpcode {
 	LoadGlobal,
 	StoreGlobal,
 	StrByteLen,
-	Sleep,
+	Sleep,            // ABC: R[A] = a future settled R[B] ms from now; C = 1 instead starts the closure R[A] then, on a strand whose throw is unhandled; C = 2 cancels that start
 	ArraySlice,       // ABC: R[A] = view of R[B] over [R[C], R[C+1]), bounds checked
 	BltU64,           // ABC: if R[A] < R[B] as uint64, skip C
 	BleU64,           // ABC: if R[A] <= R[B] as uint64, skip C
@@ -166,7 +166,7 @@ export enum RaiserOpcode {
 	NarrowS,          // ABC: fatal unless R[A] fits a signed B-bit integer, or an unsigned one when C is 1
 	ModuleImport,     // ABx: R[A] = future of import() of the module record named K[Bx]
 	FutureNew,        // ABC: R[A] = a pending future
-	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
+	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled; C=1 consumes the reference R[B] holds
 	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled
 	LoadInt,          // ABC: R[A] = the immediate in B
 	AddI64Imm,        // ABC: R[A] = R[B] + the immediate in C, stopping on overflow as AddI64 does
@@ -215,19 +215,42 @@ export enum RaiserOpcode {
 	ConcatStrR,       // ABC: refs[A] = refs[B] ++ refs[C], both statically strings
 	StrByteAt,        // ABC: words[A] = byte R[C] of the string refs[B], -1 outside it
 	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
+	RcInc,            // ABC: count +1 on the handle in refs[A]; nil and constant handles stay as they are
+	RcDec,            // ABC: count -1 on refs[A]; the last reference destroys the cell by its dynamic type and nils refs[A]; B = 1 registers a surviving cell with the cycle collector
+	WasMoved,         // ABC: R[A] = nil (Ref or Dyn) or 0 (Word, Float or Bool) without touching any count; B=1 after a user move hook: the sole-held cell R[A] stood on is freed without walking its slots
+	DestroyValue,     // ABC: destroy the aggregate in refs[A] by copy plan C: release its ref slots, destroy its nested aggregates, free its cell, nil refs[A]
+	SinkValue,        // ABC: DestroyValue the aggregate in refs[A] by copy plan C, then refs[A] = refs[B]; a destination that already holds B's handle stays
+	RcHeld,           // ABC: words[B] = the count of the cell in refs[A], 0 for nil
+	RcKeptCheck,      // ABC: fatal when the count of the cell in refs[A] exceeds words[B]: a destroy routine kept its own cell alive
+	ArrayPop,         // ABC: R[A] = R[B].pop(); the element leaves the array with its count; an empty array is fatal like an index past its end
+	ArrayShift,       // ABC: R[A] = R[B].shift(); an empty array gives the zero of its element class, and "" when C = 1 (a string array)
+	ArraySplice,      // ABC: remove R[C+1] elements at R[C] from R[A]; a start outside the array or a count of 0 or less changes nothing
+	ArraySplice3,     // ABC: remove R[C+1] elements at R[C] from R[A], then insert R[B] there; the start clamps into 0..length
+	ArrayReverse,     // ABC: reverse R[A] in place
+	ArraySort,        // ABC: sort R[A] in place, stable: numbers by value, strings by bytes
+	ArrayFill,        // ABC: every element of R[A] becomes R[B], each evicted element released
+	ArraySliceCopy,   // ABC: R[A] = a new array of R[B] over [R[C], R[C+1]); a negative bound counts from the end, both clamp
+	ArrayConcat,      // ABC: R[A] = a new array of the elements of R[B] then those of R[C]
+	AssignInPlace,    // ABC: the aggregate in refs[A] takes the contents of the one in refs[B] and keeps its own cell: its old contents are released by copy plan C, B's cell is emptied and freed, refs[B] = nil; a destination that is B's cell stays
+	UnionConv,        // ABC: fatal unless the member of the union that R[A] holds is marked allowed in the plan K[B] (`+`/`-`, a kind token, `len:display` per member, in match order); the message is K[C] then the held member's display
+	FutureThen,       // ABC: R[A] = a future settled by what R[A+2] (R[A+3] for a rejection) does with the value of the future R[A+1] after the code that registered it, as msFutureThen does; B = 1 makes R[A+2] the rejection handler and passes a fulfilled value through, as msFutureCatch does; C arguments
+	FutureRead,       // ABC: B = 0 reads the settled future R[A+1] into R[A] (a failed one raises its error), 1 raises the error of the settled future R[A+1], 2 sets R[A] to whether R[A+1] is settled; a value that is not a future reads as itself; C arguments
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAt;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.FutureRead;
 
-// How FutureCombine settles its result from its inputs (Promise.all, race, any).
+export const FINALLY_LEAVE: int32 = 1;
+
+// How FutureCombine settles its result from its inputs (Promise.all, race, any, allSettled).
 export enum RaiserCombine {
 	All,
 	Race,
 	Any,
+	AllSettled,
 }
 
-// A register holds one class for the whole function: Word, Float and Bool live in the word file,
-// Ref and Dyn in the ref file. The numbers are the 3-bit class tag of a tagged operand.
+// A register holds one class for the whole function and is one slot of its frame: Word, Float and Bool hold a word,
+// Ref and Dyn a heap handle. The numbers are the 3-bit class tag of a tagged operand.
 export enum RaiserRegClass {
 	Word,
 	Ref,
@@ -271,10 +294,10 @@ export enum RaiserRole {
 	IntLike,  // a Word or Bool register read for its integer payload
 	Float,
 	Bool,
-	Word,     // any register of the word file, class equal to the other operand
+	Word,     // any Word, Float or Bool register, class equal to the other operand
 	Ref,
 	Dyn,
-	Slot,     // any register of the ref file, class equal to the other operand
+	Slot,     // any Ref or Dyn register, class equal to the other operand
 	Any,      // a register of any class, tagged
 	IntPair,  // a Word register followed by the next Word register
 	Route,    // a Word register followed by a Dyn register, the second named by B
@@ -302,7 +325,7 @@ function roleOf(letter: string): RaiserRole {
 export function opRoleLetters(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
-			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv => "x--",
+			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv | RaiserOpcode.UnionConv => "x--",
 		RaiserOpcode.Move => "xx-",
 		RaiserOpcode.MoveW => "ww-",
 		RaiserOpcode.MoveR => "yy-",
@@ -339,6 +362,13 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArrayPush => "rx-",
 		RaiserOpcode.ArraySetLen => "ri-",
 		RaiserOpcode.ArraySlice => "rrp",
+		RaiserOpcode.ArrayPop | RaiserOpcode.ArrayShift => "xr-",
+		RaiserOpcode.ArraySplice => "r-p",
+		RaiserOpcode.ArraySplice3 => "rxp",
+		RaiserOpcode.ArrayReverse | RaiserOpcode.ArraySort => "r--",
+		RaiserOpcode.ArrayFill => "rx-",
+		RaiserOpcode.ArraySliceCopy => "rrp",
+		RaiserOpcode.ArrayConcat => "rrr",
 		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
 		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
 		RaiserOpcode.LoadSlotW => "ir-",
@@ -348,6 +378,11 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
+		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue => "y--",
+		RaiserOpcode.WasMoved => "x--",
+		RaiserOpcode.SinkValue => "yy-",
+		RaiserOpcode.AssignInPlace => "yy-",
+		RaiserOpcode.RcHeld | RaiserOpcode.RcKeptCheck => "yi-",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
@@ -358,7 +393,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.AddrField => "dr-",
 		RaiserOpcode.LoadDeref => "xx-",
 		RaiserOpcode.StoreDeref => "x-x",
-		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
+		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine | RaiserOpcode.FutureThen | RaiserOpcode.FutureRead => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
 		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
@@ -404,7 +439,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.FutureThen || op == RaiserOpcode.FutureRead || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
@@ -549,15 +584,40 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
-// A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
-// an instruction built without a slot makes the array that holds anything.
-export function arrayClassSlot(cls: RaiserRegClass): number {
-	return cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1;
+// A NewArray's slot is 0 for an array of tagged values; otherwise bits 0-2 hold the element class plus one and
+// bits 3-5 the element's storage width (ELEM_*), so an instruction built without a slot makes the array that
+// holds anything and one built without a width holds 8-byte elements.
+// A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
+// An uncounted element (a cursor or a pointer to an uncounted type, the checker's isUncountedElement) adds
+// ARRAY_UNCOUNTED_SLOT: the array borrows its elements, so its destroy and copy never count them.
+export const ARRAY_CYCLIC_SLOT = 64;
+export const ARRAY_UNCOUNTED_SLOT = 128;
+const ARRAY_WIDTH_SHIFT = 3;
+
+// How a Word, Float or Bool element sits in memory: a Word element is a signed or unsigned integer of the
+// width named, a Float element a 64-bit or (F32) 32-bit float, any other element 8 bytes.
+export enum ElemWidth { Wide, I32, I16, I8, U32, U16, U8, F32 }
+
+export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false, width: ElemWidth = ElemWidth.Wide): number {
+	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + ((width as number) << ARRAY_WIDTH_SHIFT) + (cyclic ? ARRAY_CYCLIC_SLOT : 0) + (uncounted ? ARRAY_UNCOUNTED_SLOT : 0);
+}
+
+export function slotArrayCyclic(slot: number): boolean {
+	return (slot & ARRAY_CYCLIC_SLOT) != 0;
+}
+
+export function slotArrayUncounted(slot: number): boolean {
+	return (slot & ARRAY_UNCOUNTED_SLOT) != 0;
 }
 
 export function slotArrayClass(slot: number): RaiserRegClass {
-	if (slot < 0 || slot > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
-	return slot == 0 ? RaiserRegClass.Dyn : (slot - 1) as RaiserRegClass;
+	const base = slot & 7;
+	if (base < 0 || base > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
+	return base == 0 ? RaiserRegClass.Dyn : (base - 1) as RaiserRegClass;
+}
+
+export function slotArrayWidth(slot: number): ElemWidth {
+	return ((slot >> ARRAY_WIDTH_SHIFT) & 7) as ElemWidth;
 }
 
 export function carriesSlot(op: RaiserOpcode): boolean {
@@ -764,8 +824,19 @@ test "the role table agrees with the role letters of every opcode" {
 	}
 }
 
-test "the last opcode has its roles in the table" {
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Int;
+test "the last opcodes have their roles in the table" {
+	assert opRole(RaiserOpcode.StrCharCodeAt, 0) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.StrCharCodeAt, 1) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.StrCharCodeAt, 2) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.DestroyValue, 0) == RaiserRole.Slot;
+	assert opRole(RaiserOpcode.DestroyValue, 2) == RaiserRole.None;
+	assert opRole(RaiserOpcode.WasMoved, 0) == RaiserRole.Any;
+	assert opRole(RaiserOpcode.SinkValue, 1) == RaiserRole.Slot;
+	assert opRole(RaiserOpcode.RcKeptCheck, 0) == RaiserRole.Slot;
+	assert opRole(RaiserOpcode.RcKeptCheck, 1) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.ArrayPop, 0) == RaiserRole.Any && opRole(RaiserOpcode.ArrayPop, 1) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.ArraySplice3, 1) == RaiserRole.Any && opRole(RaiserOpcode.ArraySplice3, 2) == RaiserRole.IntPair;
+	assert opRole(RaiserOpcode.ArrayConcat, 2) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.AssignInPlace, 0) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 1) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 2) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Any && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
 }

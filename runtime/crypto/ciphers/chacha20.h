@@ -23,10 +23,12 @@ int64_t msChacha20KeysLive(void);
 /* Encrypt with XChaCha20-Poly1305 into out, which holds 24 + plainText.len + 16 bytes.
  * Auto-generates the 24-byte nonce. Key: 32 bytes.
  * Writes: nonce(24) || cipherText || mac(16). Returns 1, or 0 when the key or nonce is unusable. */
-int64_t msChacha20SealInto(int64_t keyHandle, msString plainText, msString aad, uint8_t *out);
+int64_t msChacha20SealInto(int64_t keyHandle, const uint8_t *plainText, int64_t plainTextLen,
+		const uint8_t *aad, int64_t aadLen, uint8_t *out);
 
 /* Decrypt an XChaCha20-Poly1305 sealed blob into out, which holds sealed.len - 40 bytes.
  * Input: nonce(24) || cipherText || mac(16). Returns 1, or 0 when the key, size or mac is wrong. */
-int64_t msChacha20OpenInto(int64_t keyHandle, msString sealed, msString aad, uint8_t *out);
+int64_t msChacha20OpenInto(int64_t keyHandle, const uint8_t *sealed, int64_t sealedLen,
+		const uint8_t *aad, int64_t aadLen, uint8_t *out);
 
 #endif /* MS_CRYPTO_CHACHA20_H */

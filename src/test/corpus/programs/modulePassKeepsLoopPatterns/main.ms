@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM cannot evaluate msGenericArrayPush, the rest accumulator (as in 905-destructuringAssignRest)
 // @stdout: map a=1&b=2 | pairs a=1&b=2 | objects a=1&b=2 | nested x12 y34 y56 | rest 1:2 4:0 | defaults 1,2 4,9 | decl 1 5
 // note: a module pass receives every module and returns it through the compile-time VM's node conversion. Here the pass returns the module untouched, so a for-of whose binding is a pattern must come back with that pattern: over a Map, over array pairs, over objects, a pattern loop nested in a pattern loop, a rest element, and a default; a plain destructuring declaration keeps its default too. A lost pattern shows as an undefined name, a lost default as an index out of bounds at run time.
 

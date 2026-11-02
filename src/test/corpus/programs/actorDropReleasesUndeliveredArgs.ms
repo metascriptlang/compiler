@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors and runs no user lifecycle hooks
 // @skip-js: onDestroy runs where the DRC runs; JS has no destructors
 // @stdout: stopped cargo=300
 // @stdout: reaped cargo=300

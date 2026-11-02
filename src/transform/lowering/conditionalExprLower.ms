@@ -38,7 +38,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { callMayRaise, newMayRaise } from "../../checker/raises";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef, resultPlaceholder } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym, makeBinary, makeHiddenStdConv, makeCall, runtimeRef, isValueLayoutType, resultPlaceholder } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType, isNumeric, isIntegerType, int32Type, createPrimitive, isStringLike } from "../../checker/types";
@@ -317,6 +317,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 		return lowered;
 	});
 	if (call) argDepth -= 1;
+	const callee = kids.length > 0 ? kids[0] : null;
 	let i = kids.length - 2;
 	while (i >= 0) {
 		if (ends[i] < hoisted.length && kids[i] != null) {
@@ -335,6 +336,12 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 		}
 		i -= 1;
 	}
+	if (expr.kind == NodeKind.CallExpr && !ctx.jsBackend && kids.length > 1 && kids[0] != null && kids[0] === callee && readsBeforeHoist(kids[0])
+		&& calleeReadMovesPastArgs(kids, ends[0] < hoisted.length)) {
+		const pre: Node[] = [];
+		kids[0] = bindOrdered(kids[0], pre, ctx);
+		hoisted.splice(ends[0], 0, pre[0]);
+	}
 	let k = 0;
 	mapExprChildren(expr, (child: Node): Node => {
 		const next = kids[k];
@@ -343,12 +350,40 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	});
 }
 
+// TS reads the callee of a call before its arguments; C reads a closure value where the call is
+// emitted, after them, so an argument that runs code or writes the callee's storage must not
+// get to change which function the call reaches.
+function calleeReadMovesPastArgs(kids: Node[], laterHoisted: boolean): boolean {
+	if (laterHoisted) return true;
+	const writes: Symbol[] = [];
+	let i = 1;
+	while (i < kids.length) {
+		const arg = kids[i];
+		if (arg != null) {
+			if (holdsCall(arg)) return true;
+			collectWrites(arg, writes);
+		}
+		i += 1;
+	}
+	return readsAnyOf(kids[0], writes);
+}
+
+function bindOrdered(child: Node, pre: Node[], ctx: TransformContext): Node {
+	const loc = child.location;
+	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
+	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
+	pre.push(decl);
+	return makeIdentResolved(sym, loc);
+}
+
 function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
-	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOperand(child, pre, ctx);
+	if (isCallee && parent.kind == NodeKind.CallExpr && readsBeforeHoist(child) && (calls || readsAnyOf(child, writes))) return bindOrdered(child, pre, ctx);
 	const handle = index == 0 && parent.kind == NodeKind.ArrayAccess && !movePathAccesses.has(parent) ? arrayHandleRead(child) : null;
 	if (handle != null && (calls || readsAnyOf(child, writes))) {
-		(child.data as HiddenDerefData).expr = bindOperand(handle, pre, ctx);
+		(child.data as HiddenDerefData).expr = bindOrdered(handle, pre, ctx);
 		return child;
 	}
 	if (isCallee) return child;
@@ -367,23 +402,13 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
 	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
 	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
-	return bindOperand(child, pre, ctx);
+	return bindOrdered(child, pre, ctx);
 }
 
 function bindsRefFormal(parent: Node, arg: int32): boolean {
 	if (parent.kind != NodeKind.CallExpr || arg < 0) return false;
 	const formals = calleeFormals(parent.data as CallExprData);
 	return formals != null && arg < formals.length && formals[arg] != null && formals[arg].kind == TypeKind.Var;
-}
-
-function bindOperand(child: Node, pre: Node[], ctx: TransformContext): Node {
-	const loc = child.location;
-	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
-	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
-	decl.resolvedSym = sym;
-	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
-	pre.push(decl);
-	return makeIdentResolved(sym, loc);
 }
 
 function callVerdict(n: Node): Visit {
@@ -556,7 +581,55 @@ function hasGuardedImpureArrayOp(node: Node, guarded: boolean = false): boolean 
 	return found;
 }
 
+function isCompoundStmt(n: Node): boolean {
+	return n.kind == NodeKind.BlockStmt || n.kind == NodeKind.IfStmt || n.kind == NodeKind.WhileStmt || n.kind == NodeKind.ForStmt
+		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.DoWhileStmt;
+}
+
+function ownExpressionsNeedPass(stmt: Node): boolean {
+	let found = false;
+	forEachChild(stmt, (child: Node): void => {
+		if (found || isCompoundStmt(child)) return;
+		found = expressionNeedsPass(child, false, false);
+	});
+	return found;
+}
+
+function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): boolean {
+	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr) return true;
+	if (isFunctionNode(n)) return false;
+	if (inCall && n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=") return true;
+	if (inLiteral && callMayRaiseValue(n)) return true;
+	if (n.kind == NodeKind.ArrayAccess && handleReadPrecedesCall(n)) return true;
+	const call = inCall || n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr;
+	const literal = inLiteral || n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral;
+	let found = false;
+	forEachChild(n, (child: Node): void => {
+		if (!found) found = expressionNeedsPass(child, call, literal);
+	});
+	return found;
+}
+
+function handleReadPrecedesCall(access: Node): boolean {
+	const kids: Node[] = [];
+	forEachChild(access, (child: Node): void => { kids.push(child); });
+	if (kids.length < 2 || arrayHandleRead(kids[0]) == null) return false;
+	for (let i = 1; i < kids.length; i += 1) {
+		if (holdsCall(kids[i])) return true;
+	}
+	return false;
+}
+
+function isStringAppendOverCall(stmt: Node): boolean {
+	if (stmt.kind != NodeKind.ExprStmt) return false;
+	const expr = (stmt.data as ExprStmtData).expr;
+	if (expr.kind != NodeKind.BinaryExpr) return false;
+	const bd = expr.data as BinaryExprData;
+	return bd.operator == "+=" && isStringLike(bd.left.nodeType) && holdsCall(bd.right);
+}
+
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
+	if (ctx.raiserBackend && !ownExpressionsNeedPass(stmt) && !isStringAppendOverCall(stmt)) return [stmt];
 // On JS, ternaries and short-circuits are native and need no statement
 	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
 	// expression after newExprLower refused it, a guarded impure array op
@@ -588,7 +661,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.initializer != null && d.initializer.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInVar(stmt, ctx);
 			}
-			if (functionDepth > 0 && d.initializer != null && stmt.resolvedSym != null
+			if (functionDepth > 0 && !ctx.raiserBackend && d.initializer != null && stmt.resolvedSym != null
 				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null
 				&& !(d.declKind == DeclKind.Const && readonlyDataConstBinding(stmt))) {
 				return expandAggregateDecl(stmt, ctx);
@@ -737,11 +810,15 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
 	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
+	let rhsCalls = holdsCall(bd.right);
+	for (const s of rhsPre) { if (holdsCall(s)) rhsCalls = true; }
 	const writes: Symbol[] = [];
 	for (const s of rhsPre) { collectWrites(s, writes); }
 	collectWrites(bd.right, writes);
+	if (rhsCalls) collectCalleeWritable(bd.left, writes);
 	const readFirst = compoundReadsTargetFirst(bd, rhsPre, writes, ctx);
-	if (rhsPre.length > 0 || readFirst) bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
+	const callRebinds = rhsCalls && (holdsCall(bd.left) || readsAnyOf(bd.left, writes));
+	if (rhsPre.length > 0 || readFirst || callRebinds) bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
 	if (readFirst) readCompoundTarget(bd, pre, ctx, stmt.location);
 	for (const s of rhsPre) { pre.push(s); }
 	if (guardedWrite) guardWrite(bd, pre, ctx);
@@ -804,18 +881,31 @@ function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformConte
 	}
 	if (target.kind == NodeKind.MemberExpr) {
 		const md = target.data as MemberExprData;
-		md.object = hoistAssignTargetEffects(md.object, pre, ctx, writes);
+		md.object = hoistTargetObject(md.object, pre, ctx, writes);
 		return target;
 	}
 	if (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
 		const hd = target.data as HiddenDerefData;
-		hd.expr = hoistAssignTargetEffects(hd.expr, pre, ctx, writes);
+		hd.expr = target.kind == NodeKind.HiddenDeref ? hoistTargetObject(hd.expr, pre, ctx, writes) : hoistAssignTargetEffects(hd.expr, pre, ctx, writes);
 		return target;
 	}
 	if (target.kind == NodeKind.CallExpr || target.kind == NodeKind.NewExpr) {
 		return hoistRvalueToTemp(target, pre, ctx, writes);
 	}
 	return target;
+}
+
+function hoistTargetObject(object: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
+	return object.kind == NodeKind.Identifier && !isValueLayoutType(object.nodeType) && readsAnyOf(object, writes)
+		? hoistRvalueToTemp(object, pre, ctx, writes)
+		: hoistAssignTargetEffects(object, pre, ctx, writes);
+}
+
+function collectCalleeWritable(n: Node, writes: Symbol[]): void {
+	if (n == null || isFunctionNode(n)) return;
+	if (n.kind == NodeKind.Identifier && n.resolvedSym != null && n.resolvedSym.symFlags.has(SymbolFlag.Mutable)
+		&& (n.resolvedSym.symFlags.has(SymbolFlag.Global) || n.resolvedSym.symFlags.has(SymbolFlag.Static))) writes.push(n.resolvedSym);
+	forEachChild(n, (c: Node): void => collectCalleeWritable(c, writes));
 }
 
 function hoistRvalueToTemp(expr: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {

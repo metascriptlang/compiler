@@ -1,5 +1,4 @@
 // @serial
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: during m-start;m-end 5;
 // @stdout: after m-start;m-end 5;note;y;
 // @stdout: nap m-start;m-end 5;note;y;nap-end;

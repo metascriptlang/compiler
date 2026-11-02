@@ -1,5 +1,4 @@
 // @stdout: 8 9 10 11 hi!
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // note: a const bound to this, directly or through another such const, is the actor's own state: writes through it land, on every backend.
 
 import { stop, ExitReason } from "std/actor";

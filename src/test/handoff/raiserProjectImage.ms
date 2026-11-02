@@ -3,8 +3,7 @@ import { MapEntry, createMapProvider, loadModuleGraph, canonicalModulePath } fro
 import { checkModuleGraph } from "../../checker/orchestrator";
 import { hasErrors } from "../../checker/context";
 import { lookupModuleCtx, lookupModuleProgram } from "../../checker/instantiate";
-import { transformForRaiser } from "../../transform/raiserLowering";
-import { generateRaiserProject, RaiserModuleInput } from "../../codegen/raiser/rgen";
+import { generateRaiserProject, lowerForRaiser, RaiserModuleInput } from "../../codegen/raiser/rgen";
 import { RaiserValueKind, heapObjectGetField } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
@@ -26,7 +25,7 @@ function runProjectImage(codes: string[]): RaiserContext {
 		const program = lookupModuleProgram(path);
 		const modCtx = lookupModuleCtx(path);
 		if (program == null || modCtx == null || hasErrors(modCtx)) { unreachable; return createContext(); }
-		modules.push({ modulePath: path, program: transformForRaiser(program, modCtx) });
+		modules.push({ modulePath: path, program: lowerForRaiser(program, modCtx) });
 	}
 	const raiserMod = generateRaiserProject(modules);
 	const ctx = createContext();
@@ -118,7 +117,7 @@ test "raiserProject: cross-module function with enum" {
 test "raiserProject: entry module export default" {
 	const ctx = runProjectImage(["import { wrap } from \"./b\"; export default wrap(42);", "export interface Wrapped { value: int32; } export function wrap(x: int32): Wrapped { return { value: x }; }"]);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const val = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "value");
+	const val = heapObjectGetField(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "value");
 	assert val.intVal == 42;
 }
 

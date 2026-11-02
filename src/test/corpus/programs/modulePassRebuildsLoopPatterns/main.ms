@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM cannot evaluate msGenericArrayPush, the rest accumulator (as in 905-destructuringAssignRest)
 // @stdout: map a=1&b=2 | objects a=1&b=2 | rest 1:2 4:0 | defaults 1,2 4,9 | names 7
 // note: a module pass that builds a new node for every top-level for-of, and a new array pattern inside it, from the fields it reads off the old one. The pattern, its rest element and its defaults must cross the compile-time VM's node conversion in both directions, so each loop still declares its names and fills an omitted element from its default. A for-of over a single name has no pattern and keeps its binding.
 

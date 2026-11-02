@@ -41,10 +41,12 @@ void msSetActorIdleCap(int ms) { msActorIdleCapMs = ms; }
 
 /* Actor destroy hook: auto-unregister from name registry.
  * Set by the TU that owns the registry. Called from any TU's msActorDestroyWithReason. */
-static void (*msActorDestroyHook)(void* actor) = NULL;
-void msSetActorDestroyHook(void (*hook)(void*)) { msActorDestroyHook = hook; }
+typedef void (*msActorDestroyFn)(void* actor);
+static _Atomic(msActorDestroyFn) msActorDestroyHook = NULL;
+void msSetActorDestroyHook(void (*hook)(void*)) { atomic_store_explicit(&msActorDestroyHook, hook, memory_order_release); }
 void msCallActorDestroyHook(void* actor) {
-	if (msActorDestroyHook != NULL) msActorDestroyHook(actor);
+	msActorDestroyFn hook = atomic_load_explicit(&msActorDestroyHook, memory_order_acquire);
+	if (hook != NULL) hook(actor);
 }
 
 

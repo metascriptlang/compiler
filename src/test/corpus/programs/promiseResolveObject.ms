@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @stdout: fresh 4
 // @stdout: local 5 5
 // @stdout: held 6 6

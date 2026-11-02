@@ -1,7 +1,7 @@
 // @exit: 1
 // @stdout: before 2
 // @stdout: Error: onDestroy kept a reference to the Keeper it destroys
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @skip-js: onDestroy does not run on JS; `extern function` binds a C symbol
 // note: the onDestroy check compares the object's count before and after the hook, at the
 // count's full width. The helper adds 2^32 - 1 references in place of four billion real ones, so

@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: a T[N] copy aliases its source (c3 c3, f6 i3 twice)
 class Item {
 	name: string;
 	constructor(n: string) { this.name = n; }

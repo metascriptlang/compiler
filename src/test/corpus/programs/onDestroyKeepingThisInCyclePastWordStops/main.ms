@@ -1,7 +1,7 @@
 // @exit: 1
 // @stdout: linked 2
 // @stdout: Error: onDestroy kept a reference to the Leaf it destroys
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
+// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @skip-js: onDestroy does not run on JS; `extern function` binds a C symbol
 // note: the collector's free path compares the count before and after the hook at full width too:
 // the helper adds 2^32 - 1 references, so the one the hook keeps brings the count to 2^32, which a

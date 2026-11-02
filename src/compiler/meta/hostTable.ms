@@ -39,8 +39,8 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
-	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual,
+	heapArrayLen, heapArrayGet, heapArraySetLen, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
+	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
@@ -52,7 +52,8 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
-import { isNodeWireMetaField } from "./wire";
+import { isNodeWireMetaField, allocWireObject, wireGet, wireSet, WIRE_UNION } from "./wire";
+import { registerBigIntKernels } from "./bigintHost";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
 import { nodeKindName } from "../../ast/fieldspec";
 import { NodeKind, TypeKind, SymbolKind } from "../../ast/node";
@@ -70,6 +71,7 @@ import { rawString } from "std/core/buffer/bytes";
 import { utf8Text } from "std/core/string/bytes";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
+import { asciiLower, asciiUpper, isSpaceByte, repeat, reverse, equalsIgnoreCase } from "std/core/string/shared";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join, resolve } from "std/fs/path";
 import { registerCompileTimeRead } from "../cache";
@@ -811,16 +813,14 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 // shared between macros can walk nodes without engine-mode flat-field reads.
 // A child slot is any Object field carrying a numeric "kind" (a Node), or
 // each such element of an Array field (recursively, so Node[][] fields like
-// typExprFieldDecorators are reachable), in field-insertion order — the order
-// addKindFields (compiler/meta/expand.ms) wrote them. Metadata fields are
+// typExprFieldDecorators are reachable), in field order. Metadata fields are
 // never children; resolvedSym and nodeType ARE node-shaped, so telling them
-// apart rests on isNodeWireMetaField (wire.ms) — the one list the wire
-// writer and this reader share. childAt returns the live heap ref, not a
-// copy — mutations through it stick.
+// apart rests on isNodeWireMetaField (wire.ms). childAt returns the live heap ref, not a
+// copy — mutations through it stick — and holds it for the caller, as a call result is owned.
 
-function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
+function _isNodeShaped(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	if (v.kind != RaiserValueKind.Object) return false;
-	const kindField = heapObjectGetField(objHeap, v.intVal, "kind");
+	const kindField = wireGet(arrHeap, objHeap, v.intVal, "kind");
 	return kindField.kind == RaiserValueKind.Int || kindField.kind == RaiserValueKind.Float;
 }
 
@@ -828,7 +828,7 @@ function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHea
 	const len = heapArrayLen(arrHeap, arrHandle);
 	for (let j = 0; j < len; j = j + 1) {
 		const el = heapArrayGet(arrHeap, arrHandle, j);
-		if (_isNodeShaped(objHeap, el)) {
+		if (_isNodeShaped(arrHeap, objHeap, el)) {
 			out.push(el);
 		} else if (el.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, el.intVal, out);
@@ -845,10 +845,9 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
-		const name = heapObjectFieldNameAt(objHeap, h, i);
-		if (isNodeWireMetaField(name)) continue;
-		const v = heapObjectFieldValueAt(objHeap, h, i);
-		if (_isNodeShaped(objHeap, v)) {
+		if (isNodeWireMetaField(heapObjectFieldNameAt(objHeap, h, i))) continue;
+		const v = heapObjectFieldValueAt(arrHeap, objHeap, h, i);
+		if (_isNodeShaped(arrHeap, objHeap, v)) {
 			out.push(v);
 		} else if (v.kind == RaiserValueKind.Array) {
 			_pushNodeShapedElems(objHeap, arrHeap, v.intVal, out);
@@ -867,6 +866,10 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 	const slots = _nodeChildSlots(args[0].intVal);
 	const i = unboxInt(args[1]);
 	if (i < 0 || i >= slots.length) return raiserNil();
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) throw new Error("internal: msNodeChildAt called with no active host heap");
+	rcIncref(arrHeap, objHeap, slots[i]);
 	return slots[i];
 }
 
@@ -874,6 +877,26 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 // Bridges exist so `@comptime` code calling `s.trim()` etc. can
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
+
+function _bridgeMsStringTrim(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trim());
+}
+
+function _bridgeMsStringTrimStart(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trimStart());
+}
+
+function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).trimEnd());
+}
+
+function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).toLowerCase());
+}
+
+function bridgeMsStringToUpper(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).toUpperCase());
+}
 
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
 function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
@@ -1001,7 +1024,14 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
 	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
-	const handle = heapAllocArray(heap);
+	const placed = args[0].kind == RaiserValueKind.String;
+	let handle = placed ? stringBytesHandle(heap, args[0]) : 0;
+	if (handle == 0) {
+		handle = heapAllocArray(heap);
+		if (placed) setStringBytesHandle(heap, args[0], handle);
+	} else {
+		heapArraySetLen(heap, handle, 0);
+	}
 	let i = 0;
 	while (i < bytes.length) {
 		heapArrayPush(heap, handle, boxInt(bytes[i]));
@@ -1055,14 +1085,18 @@ function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(performance.now());
 }
 
-function isWireNode(objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
+function _bridgeMsTimeNow(args: RaiserValue[]): RaiserValue {
+	return boxFloat(Date.now());
+}
+
+function isWireNode(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
 	if (n.kind != RaiserValueKind.Object) return false;
-	const k = heapObjectGetField(objHeap, n.intVal, "kind");
+	const k = wireGet(arrHeap, objHeap, n.intVal, "kind");
 	return k.kind == RaiserValueKind.Int && k.intVal == (kind as int64);
 }
 
-function isTypedAsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
-	const t = boundTypeOfObject(objHeap, h);
+function isTypedAsFloat(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: int64): boolean {
+	const t = boundTypeOfObject(arrHeap, objHeap, h);
 	const repr = distinctNumericBase(t) ?? t;
 	return repr != null && (repr.kind == TypeKind.Float32 || repr.kind == TypeKind.Float64 || repr.kind == TypeKind.Number);
 }
@@ -1072,17 +1106,20 @@ function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxBool(isWireNode(objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(objHeap, args[0].intVal) || isTypedAsFloat(objHeap, args[0].intVal)));
+	const arrHeapOrNull = activeHostArrayHeap();
+	if (arrHeapOrNull == null) return boxBool(false);
+	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+	return boxBool(isWireNode(arrHeap, objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(arrHeap, objHeap, args[0].intVal) || isTypedAsFloat(arrHeap, objHeap, args[0].intVal)));
 }
 
-function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
+function wireNodeKindText(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue): string {
 	if (n.kind != RaiserValueKind.Object) return "null";
-	const kind = heapObjectGetField(objHeap, n.intVal, "kind");
+	const kind = wireGet(arrHeap, objHeap, n.intVal, "kind");
 	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
 }
 
-function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
-	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(objHeap, n.intVal) : null;
+function enumMemberOrdinal(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
+	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(arrHeap, objHeap, n.intVal) : null;
 	if (sym == null || sym.symbolKind != SymbolKind.EnumMember || sym.symbolType == null) return raiserNil();
 	const enumType = sym.symbolType.kind == TypeKind.EnumLiteral && sym.symbolType.typeReturn != null ? sym.symbolType.typeReturn : sym.symbolType;
 	const index: int32 = enumType.kind == TypeKind.Enum ? enumType.typeNames.indexOf(sym.name) as int32 : -1;
@@ -1091,64 +1128,67 @@ function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserVal
 
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("intValue needs an integer literal node", true);
 		return raiserInt(0);
 	}
 	const n = args[0];
-	const ordinal = enumMemberOrdinal(objHeap, n);
+	const ordinal = enumMemberOrdinal(arrHeap, objHeap, n);
 	if (ordinal.kind == RaiserValueKind.Int) return ordinal;
-	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
-		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return raiserInt(0);
 	}
-	if (wireLiteralIsFloat(objHeap, n.intVal)) {
+	if (wireLiteralIsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("intValue needs an integer literal, got a float literal; read it with floatValue", true);
 		return raiserInt(0);
 	}
-	const refusal = wireLiteralIntegerRefusal(objHeap, n.intVal);
+	const refusal = wireLiteralIntegerRefusal(arrHeap, objHeap, n.intVal);
 	if (refusal != "") {
 		raiseFromHost("intValue: " + refusal, true);
 		return raiserInt(0);
 	}
-	return raiserInt(wireLiteralInteger(objHeap, n.intVal));
+	return raiserInt(wireLiteralInteger(arrHeap, objHeap, n.intVal));
 }
 
 function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("floatValue needs a float literal node", true);
 		return boxFloat(0.0);
 	}
 	const n = args[0];
-	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
-		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return boxFloat(0.0);
 	}
-	if (!wireLiteralIsFloat(objHeap, n.intVal) && !isTypedAsFloat(objHeap, n.intVal)) {
+	if (!wireLiteralIsFloat(arrHeap, objHeap, n.intVal) && !isTypedAsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("floatValue needs a float literal, got an integer literal; read it with intValue", true);
 		return boxFloat(0.0);
 	}
-	return boxFloat(wireLiteralFloat(objHeap, n.intVal));
+	return boxFloat(wireLiteralFloat(arrHeap, objHeap, n.intVal));
 }
 
 function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args.length < 1) {
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null || args.length < 1) {
 		raiseFromHost("stringValue needs a string literal node", true);
 		return boxString("");
 	}
 	const n = args[0];
-	if (isWireNode(objHeap, n, NodeKind.Identifier)) {
-		const sym = boundSymOfObject(objHeap, n.intVal);
+	if (isWireNode(arrHeap, objHeap, n, NodeKind.Identifier)) {
+		const sym = boundSymOfObject(arrHeap, objHeap, n.intVal);
 		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
-		return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "name")));
+		return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "name")));
 	}
-	if (!isWireNode(objHeap, n, NodeKind.StringLiteral)) {
-		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(objHeap, n), true);
+	if (!isWireNode(arrHeap, objHeap, n, NodeKind.StringLiteral)) {
+		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return boxString("");
 	}
-	return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "value")));
+	return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "value")));
 }
 
 function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
@@ -1243,6 +1283,192 @@ function _bridgeMsMemMismatch(args: RaiserValue[]): RaiserValue {
 	return boxInt(spanMismatch(heap, args[0], 0, args[1], aLen < bLen ? aLen : bLen) as number);
 }
 
+// --- Whole-function callbacks, keyed by the routine's qualified name ---
+// The call site asks for the key before it compiles any body, so these std routines never
+// become VM code; each callback serves every overload of its name (see hostRoutineKey).
+
+function _callbackClampIndex(args: RaiserValue[]): RaiserValue {
+	const i = unboxInt(args[0]);
+	const len = unboxInt(args[1]);
+	return boxInt(i < 0 ? 0 : i > len ? len : i);
+}
+
+function _callbackRepeat(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).repeat(unboxInt(args[1]) as int32));
+}
+
+function _callbackReverse(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).reverse());
+}
+
+function _callbackEqualsIgnoreCase(args: RaiserValue[]): RaiserValue {
+	return boxBool(unboxString(args[0]).equalsIgnoreCase(unboxString(args[1])));
+}
+
+function _callbackAsciiLower(args: RaiserValue[]): RaiserValue {
+	return boxInt(asciiLower(unboxInt(args[0]) as int32));
+}
+
+function _callbackAsciiUpper(args: RaiserValue[]): RaiserValue {
+	return boxInt(asciiUpper(unboxInt(args[0]) as int32));
+}
+
+function _callbackIsSpaceByte(args: RaiserValue[]): RaiserValue {
+	return boxBool(isSpaceByte(unboxInt(args[0]) as int32));
+}
+
+function _callbackByteLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const startIdx = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), startIdx));
+}
+
+function _hostArrayHeap(): RaiserArrayHeap {
+	const heap = activeHostArrayHeap();
+	if (heap == null) throw new Error("internal: an array kernel ran with no active array heap");
+	return heap;
+}
+
+function _arrayArg(v: RaiserValue): int64 {
+	if (v.kind != RaiserValueKind.Array) throw new Error("internal: an array kernel was handed a non-array");
+	return v.intVal;
+}
+
+function _numbersOf(v: RaiserValue): number[] {
+	const heap = _hostArrayHeap();
+	const h = _arrayArg(v);
+	const out: number[] = [];
+	const n = heapArrayLen(heap, h);
+	for (let i = 0; i < n; i = i + 1) out.push(unboxFloat(heapArrayGet(heap, h, i)));
+	return out;
+}
+
+function _stringsOf(v: RaiserValue): string[] {
+	const heap = _hostArrayHeap();
+	const h = _arrayArg(v);
+	const out: string[] = [];
+	const n = heapArrayLen(heap, h);
+	for (let i = 0; i < n; i = i + 1) out.push(heapStringText(heap, heapArrayGet(heap, h, i)));
+	return out;
+}
+
+function _bridgeNumberArrayIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_numbersOf(args[0]).indexOf(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayIncludes(args: RaiserValue[]): RaiserValue {
+	return boxBool(_numbersOf(args[0]).includes(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayCount(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_numbersOf(args[0]).count(unboxFloat(args[1])));
+}
+
+function _bridgeNumberArrayJoin(args: RaiserValue[]): RaiserValue {
+	return boxString(_numbersOf(args[0]).join(unboxString(args[1])));
+}
+
+function _bridgeNumberArrayAt(args: RaiserValue[]): RaiserValue {
+	const xs = _numbersOf(args[0]);
+	const idx = unboxFloat(args[1]);
+	const i = idx < 0.0 ? xs.length + idx : idx;
+	if (i < 0.0 || i >= xs.length) {
+		raiseFromHost(`index ${idx} out of bounds (length ${xs.length})`, true);
+		return boxFloat(0.0);
+	}
+	return boxFloat(xs[i as int32]);
+}
+
+function _bridgeRaiseRange(args: RaiserValue[]): RaiserValue {
+	raiseFromHost(`value ${args[0].intVal} not in range ${args[1].intVal} .. ${args[2].intVal}`, true);
+	return raiserNil();
+}
+
+function _bridgeRaiseField(args: RaiserValue[]): RaiserValue {
+	const labels = unboxString(args[1]).split("|");
+	const tag = unboxInt(args[2]);
+	const label = tag >= 0 && tag < labels.length ? labels[tag as int32] : "";
+	raiseFromHost(`${unboxString(args[0])}${label}'`, true);
+	return raiserNil();
+}
+
+function _bridgeStringArrayIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_stringsOf(args[0]).indexOf(unboxString(args[1])));
+}
+
+function _bridgeStringArrayIncludes(args: RaiserValue[]): RaiserValue {
+	return boxBool(_stringsOf(args[0]).includes(unboxString(args[1])));
+}
+
+function _bridgeStringArrayLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const from = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxFloat(_stringsOf(args[0]).lastIndexOf(unboxString(args[1]), from));
+}
+
+function _bridgeStringArrayCount(args: RaiserValue[]): RaiserValue {
+	return boxFloat(_stringsOf(args[0]).count(unboxString(args[1])));
+}
+
+function _bridgeStringArrayJoin(args: RaiserValue[]): RaiserValue {
+	return boxString(_stringsOf(args[0]).join(unboxString(args[1])));
+}
+
+function _bridgeGenericArrayCheckedIndex(args: RaiserValue[]): RaiserValue {
+	const len = heapArrayLen(_hostArrayHeap(), _arrayArg(args[0]));
+	const idx = unboxFloat(args[1]);
+	const i = idx < 0.0 ? len + idx : idx;
+	if (i < 0.0 || i >= len) {
+		raiseFromHost(`index ${idx} out of bounds (length ${len})`, true);
+		return boxInt(0);
+	}
+	return boxInt(i);
+}
+
+function _bridgeStringLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const start = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxInt(unboxString(args[0]).lastIndexOf(unboxString(args[1]), start));
+}
+
+function registerArrayKernels(): void {
+	registerHostFn("msStringLastIndexOf", _bridgeStringLastIndexOf, HostCapability.Pure);
+	registerHostFn("&msNumberArrayIndexOf", _bridgeNumberArrayIndexOf, HostCapability.Pure);
+	registerHostFn("&msNumberArrayIncludes", _bridgeNumberArrayIncludes, HostCapability.Pure);
+	registerHostFn("&msNumberArrayCount", _bridgeNumberArrayCount, HostCapability.Pure);
+	registerHostFn("&msNumberArrayJoin", _bridgeNumberArrayJoin, HostCapability.Pure);
+	registerHostFn("&msNumberArrayAt", _bridgeNumberArrayAt, HostCapability.Pure);
+	registerHostFn("msRaiseRangeError", _bridgeRaiseRange, HostCapability.Pure);
+	registerHostFn("msRaiseFieldError", _bridgeRaiseField, HostCapability.Pure);
+	registerHostFn("&msStringArrayIndexOf", _bridgeStringArrayIndexOf, HostCapability.Pure);
+	registerHostFn("&msStringArrayIncludes", _bridgeStringArrayIncludes, HostCapability.Pure);
+	registerHostFn("&msStringArrayLastIndexOf", _bridgeStringArrayLastIndexOf, HostCapability.Pure);
+	registerHostFn("&msStringArrayCount", _bridgeStringArrayCount, HostCapability.Pure);
+	registerHostFn("&msStringArrayJoin", _bridgeStringArrayJoin, HostCapability.Pure);
+	registerHostFn("&msGenericArrayCheckedIndex", _bridgeGenericArrayCheckedIndex, HostCapability.Pure);
+}
+
+function registerStringCallbacks(): void {
+	registerHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
+	registerHostFn("std/core/string.trim",                _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("std/core/string.trimStart",           _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("std/core/string.trimEnd",             _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("std/core/string.toLowerCase",         bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("std/core/string.toUpperCase",         bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("msStringTrim",                        _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("msStringTrimStart",                   _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("msStringTrimEnd",                     _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("msStringToLowerCase",                 bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("msStringToUpperCase",                 bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.asciiLower",   _callbackAsciiLower, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.asciiUpper",   _callbackAsciiUpper, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.isSpaceByte",  _callbackIsSpaceByte, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteLastIndexOf", _callbackByteLastIndexOf, HostCapability.Pure);
+}
+
 // --- Registry init ---
 // Idempotent: subsequent calls are no-ops. Phase 5 invokes this on first
 // @comptime block entry.
@@ -1276,13 +1502,13 @@ function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
 	if (objHeap == null || arrHeap == null) return raiserNil();
 	const u = args[0];
 	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
-	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
+	const tag = wireGet(arrHeap, objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
 		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
 		raiseFromHost(unboxString(args[2]) + unboxString(label) + "'", true);
 		return raiserNil();
 	}
-	return heapObjectGetField(objHeap, u.intVal, "$v");
+	return wireGet(arrHeap, objHeap, u.intVal, "$v");
 }
 
 function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
@@ -1314,12 +1540,12 @@ function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
 	return v;
 }
 
-function closureAdaptee(objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
+function closureAdaptee(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
 	let c = closure;
 	while (c.kind == RaiserValueKind.Object) {
-		const env = heapObjectGetField(objHeap, c.intVal, "env");
+		const env = heapObjectGetField(arrHeap, objHeap, c.intVal, "env");
 		if (env.kind != RaiserValueKind.Object) break;
-		const adaptee = heapObjectGetField(objHeap, env.intVal, ADAPTEE_FIELD);
+		const adaptee = heapObjectGetField(arrHeap, objHeap, env.intVal, ADAPTEE_FIELD);
 		if (adaptee.kind != RaiserValueKind.Object) break;
 		c = adaptee;
 	}
@@ -1330,11 +1556,11 @@ function _bridgeMsClosureSame(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	const arrHeap = activeHostArrayHeap();
 	if (objHeap == null || arrHeap == null) throw new Error("internal: msClosureSame called with no active host heap");
-	const a = closureAdaptee(objHeap, args[0]);
-	const b = closureAdaptee(objHeap, args[1]);
+	const a = closureAdaptee(arrHeap, objHeap, args[0]);
+	const b = closureAdaptee(arrHeap, objHeap, args[1]);
 	if (a.kind != RaiserValueKind.Object || b.kind != RaiserValueKind.Object) return boxBool(raiserEqual(arrHeap, a, b));
-	return boxBool(raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "fn"), heapObjectGetField(objHeap, b.intVal, "fn"))
-		&& raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "env"), heapObjectGetField(objHeap, b.intVal, "env")));
+	return boxBool(raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "fn"), heapObjectGetField(arrHeap, objHeap, b.intVal, "fn"))
+		&& raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "env"), heapObjectGetField(arrHeap, objHeap, b.intVal, "env")));
 }
 
 function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
@@ -1345,14 +1571,13 @@ function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
-	const handle = heapAllocObject(objHeap);
-	heapObjectSetField(objHeap, handle, "$tag", args[1]);
-	heapObjectSetField(objHeap, handle, "$v", args[0]);
 	const arrHeap = activeHostArrayHeap();
-	if (arrHeap != null) {
-		rcIncref(arrHeap, objHeap, args[0]);
-		rcIncref(arrHeap, objHeap, args[1]);
-	}
+	if (arrHeap == null) throw new Error("internal: msUnionWrapMaybe called with no active host array heap");
+	const handle = allocWireObject(objHeap, WIRE_UNION);
+	wireSet(arrHeap, objHeap, handle, "$tag", args[1]);
+	wireSet(arrHeap, objHeap, handle, "$v", args[0]);
+	rcIncref(arrHeap, objHeap, args[0]);
+	rcIncref(arrHeap, objHeap, args[1]);
 	return raiserObject(handle);
 }
 
@@ -1448,6 +1673,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
 	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
 	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
+	registerHostFn("msTimeNow",             _bridgeMsTimeNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
@@ -1511,7 +1737,10 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
 	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
-	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
+	registerStringCallbacks();
+	registerArrayKernels();
+	registerBigIntKernels();
+	registerHostFn("msAsString",           _bridgeMsAsString, HostCapability.Pure);
 	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
 	registerHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
@@ -1865,6 +2094,8 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		join(stdPath, "core/string/bytes.rms"),
 		join(stdPath, "core/array/index.rms"),
 		join(stdPath, "process/child.rms"),
+		join(stdPath, "core/buffer/index.rms"),
+		join(stdPath, "core/date/index.rms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [
@@ -1894,4 +2125,49 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		}
 	}
 	assert checked >= 14;
+}
+
+test "cms extern closure: declared externs are bridged, intercepted, or listed unserved" {
+	const root = resolveRuntimeDir();
+	const stdPath = root != "" ? join(root, "std") : "std";
+	const cmsFiles = [
+		join(stdPath, "core/string/index.cms"),
+		join(stdPath, "core/string/bytes.cms"),
+		join(stdPath, "core/array/index.cms"),
+	];
+	const intercepted: string[] = [
+		"msStringEquals", "msStringCompareLt", "msStringCompareLe", "msStringCharAt", "msStringSlice", "msStringCharCodeAt",
+		"&msNumberArrayPush", "&msStringArrayPush", "&msUint8ArrayPush", "&msGenericArrayPush",
+		"&msNumberArraySetLen", "&msStringArraySetLen", "&msGenericArraySetLen",
+	];
+	const unserved: string[] = [
+		"&msGenericArrayCapacity", "&msNumberArrayCapacity", "&msStringArrayCapacity", "msStringCapacity",
+		"&msGenericArrayRotate", "&msGenericArraySwap", "&msGenericArraySwapWith",
+		"&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop",
+		"&msNumberArrayShift", "&msStringArrayShift",
+		"&msNumberArrayConcat", "&msStringArrayConcat",
+		"&msNumberArrayFill", "&msStringArrayFill",
+		"&msNumberArrayReverse", "&msStringArrayReverse",
+		"&msNumberArraySlice", "&msStringArraySlice", "msBytesSlice",
+		"&msNumberArraySort", "&msStringArraySort",
+		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
+		"&msRefArraySplice3", "&msUint8ArraySplice3",
+		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "msStringSetSlice", "&msStringStripInPlace",
+		"msStringNewUninit", "msMemCopyTo", "memcpy",
+	];
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	let checked = 0;
+	for (const f of cmsFiles) {
+		const r = readFile(f);
+		assert r.ok;
+		if (!r.ok) continue;
+		for (const name of scanRmsExternNames(r.value)) {
+			checked = checked + 1;
+			const served = lookupHost(name) != null || nameListed(intercepted, name);
+			assert served || nameListed(unserved, name), `${f}: ${name}`;
+			if (nameListed(unserved, name)) assert lookupHost(name) == null, `${f}: ${name} is bridged now, drop it from the unserved list`;
+		}
+	}
+	assert checked >= 60;
 }

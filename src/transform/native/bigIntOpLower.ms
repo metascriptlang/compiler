@@ -19,15 +19,15 @@
 // to side-effect-free targets; anything else is a diagnostic rather than silent
 // pointer arithmetic in the emitted C.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ConditionalExprData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { addError } from "../../checker/context";
-import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
+import { booleanType, stringType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
 import { isNullExpr } from "../../ast/shape";
 import { nullAccessHead } from "../maybeCarrier";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { isFloatKind } from "../numKinds";
-import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef } from "../util";
+import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef, callBuiltinKind } from "../util";
 import { parseInput, checkedCtx } from "../testUtil";
 import { CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
 import { checkProgram } from "../../checker/checkPass";
@@ -44,6 +44,33 @@ function isBigType(t: Type | null): boolean {
 
 function isBigNode(n: Node | null): boolean {
 	return n != null && isBigType(n.nodeType);
+}
+
+function isStringNode(n: Node): boolean {
+	return n.nodeType != null && n.nodeType.kind == TypeKind.String;
+}
+
+function bigAsText(n: Node): Node {
+	const fn = isBigNode(n) ? "msBigIntToString" : isNullableBigNode(n) ? "msBigIntToStringOrNull" : "";
+	if (fn == "") return n;
+	return bigCall(fn, [n, makeNumber(10, n.location)], n.location, stringType());
+}
+
+function bigTruthiness(cond: Node): Node {
+	if (cond.kind == NodeKind.BinaryExpr) {
+		const d = cond.data as BinaryExprData;
+		if (d.operator == "&&" || d.operator == "||") {
+			d.left = bigTruthiness(d.left);
+			d.right = bigTruthiness(d.right);
+		}
+		return cond;
+	}
+	if (isNullableBigNode(cond)) return bigCall("msBigIntIsTruthy", [cond], cond.location, booleanType());
+	if (!isBigNode(cond)) return cond;
+	const zero = bigCall("msBigIntIsZero", [cond], cond.location, booleanType());
+	const truthy = makeUnary("!", zero, cond.location);
+	truthy.nodeType = booleanType();
+	return truthy;
 }
 
 function isNullableBigNode(n: Node): boolean {
@@ -205,6 +232,47 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 		return fromLit(d.bigintValue, node.location);
 	}
 
+	if (node.kind == NodeKind.CallExpr) {
+		const kind = callBuiltinKind(node);
+		const cd = node.data as CallExprData;
+		if (kind == "Echo") {
+			for (let i = 0; i < cd.arguments.length; i += 1) {
+				const arg = cd.arguments[i];
+				if (isBigNode(arg)) cd.arguments[i] = bigCall("msBigIntToDebugString", [arg], arg.location, stringType());
+				else if (isNullableBigNode(arg)) cd.arguments[i] = bigCall("msBigIntDebugText", [arg], arg.location, stringType());
+			}
+		} else if (kind == "ToString" && cd.arguments.length == 1 && (isBigNode(cd.arguments[0]) || isNullableBigNode(cd.arguments[0]))) {
+			return bigAsText(cd.arguments[0]);
+		}
+		return node;
+	}
+
+	if (node.kind == NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		d.condition = bigTruthiness(d.condition);
+		return node;
+	}
+	if (node.kind == NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		d.whileCondition = bigTruthiness(d.whileCondition);
+		return node;
+	}
+	if (node.kind == NodeKind.DoWhileStmt) {
+		const d = node.data as DoWhileStmtData;
+		d.doCondition = bigTruthiness(d.doCondition);
+		return node;
+	}
+	if (node.kind == NodeKind.ForStmt) {
+		const d = node.data as ForStmtData;
+		if (d.forCondition != null) d.forCondition = bigTruthiness(d.forCondition);
+		return node;
+	}
+	if (node.kind == NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		d.ternaryCondition = bigTruthiness(d.ternaryCondition);
+		return node;
+	}
+
 	if (node.kind == NodeKind.UnaryExpr) {
 		const d = node.data as UnaryExprData;
 		if (d.unaryOp == "!" && isNullableBigNode(d.operand)) {
@@ -261,9 +329,15 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
+	if (d.operator == "+" && (isStringNode(d.left) || isStringNode(d.right))) {
+		d.left = bigAsText(d.left);
+		d.right = bigAsText(d.right);
+		return node;
+	}
 	const nullableOperand = isNullableBigNode(d.left) || isNullableBigNode(d.right);
 	if (nullableOperand && (comparisonOp(d.operator) != "" || arithFn(d.operator) != "")) return nullableBigOperator(node, d, ctx);
 	if (!isBigNode(d.left) && !isBigNode(d.right)) return node;
+	if (comparisonOp(d.operator) != "" && (isNullOperand(d.left) || isNullOperand(d.right))) return node;
 
 	const loc = node.location;
 	const cmp = comparisonOp(d.operator);
@@ -328,6 +402,28 @@ test "bigint to a signed integer checks the true value" {
 test "bigint to an unsigned integer wraps" {
 	assert extractionOf("uint8") == "msBigIntToInt64";
 	assert extractionOf("uint64") == "msBigIntToInt64";
+}
+
+function conversionCallee(source: string): string {
+	const result = parseInput("function f(b: bigint): void { const r = " + source + "; }");
+	if (!result.ok) return "";
+	const ctx = checkedCtx(checkProgram(result.value));
+	lowerBigIntOps(result.value, ctx);
+	let callee = "";
+	walkNode(result.value, (n: Node): Node => {
+		if (n.kind != NodeKind.VariableDecl || (n.data as VariableDeclData).declName != "r") return n;
+		const init = (n.data as VariableDeclData).initializer;
+		if (init.kind == NodeKind.CallExpr) {
+			const fn = (init.data as CallExprData).callee;
+			if (fn.kind == NodeKind.Identifier) callee = (fn.data as IdentifierData).name;
+		}
+		return n;
+	});
+	return callee;
+}
+
+test "String of a bigint asks the runtime for its digits" {
+	assert conversionCallee("String(b)") == "msBigIntToString";
 }
 
 test "bigint to float32 rounds once" {

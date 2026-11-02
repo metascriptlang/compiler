@@ -1,5 +1,4 @@
 // @stdout: ternary:  0 0
-// @xfail(raiser): Raiser keeps the eager spread lowering (no conditional-expression pass), so a spread operand runs first
 let log = "";
 function one(): int32 { log = log + "o"; return 9; }
 interface P { x: int32; y: int32; }

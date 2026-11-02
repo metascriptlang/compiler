@@ -4,7 +4,6 @@
 // @stdout: 4 sleep a resumed
 // @stdout: 5 job from sleep a
 // @stdout: 6 sleep b resumed
-// @xfail(raiser): raiser runtime error: Unknown host function: msSetTimeout
 // note: a callback queued by one expired timer runs before the next expired timer, as in TypeScript, for a setTimeout callback and for an awaited sleep alike.
 
 import { sleepAsync } from "std/core/promise";

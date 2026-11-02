@@ -2973,7 +2973,7 @@ export function declaredTagUnionOf(expr: Node): Type | null {
 	return isSlotUnion(body) ? body : null;
 }
 
-export function isSlotUnion(t: Type): boolean {
+export function isSlotUnion(t: Readonly<Type>): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
 	for (const child of t.typeChildren) {
@@ -3167,11 +3167,25 @@ export function convertUnionToUnion(expr: Node, source: Type, target: Type): Nod
 	return convNode;
 }
 
-function hasSharedDiscriminant(t: Type): boolean {
+function hasSharedDiscriminant(t: Readonly<Type>): boolean {
 	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
 }
 
-export function storesUnionTag(t: Type): boolean {
+function structMemberUnionWithHook(t: Readonly<Type>): boolean {
+	const owner = t.sym != null ? t.sym.symbolType : t;
+	let hooked = false;
+	for (const op of owner.attachedOps) {
+		if (op != null) hooked = true;
+	}
+	if (!hooked) return false;
+	for (const m of t.typeChildren) {
+		if (m.kind != TypeKind.Struct) return false;
+	}
+	return true;
+}
+
+export function storesUnionTag(t: Readonly<Type>): boolean {
+	if (isSlotUnion(t) && structMemberUnionWithHook(t)) return true;
 	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
 	const seenValue: string[] = [];

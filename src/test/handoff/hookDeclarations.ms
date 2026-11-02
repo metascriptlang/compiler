@@ -4,7 +4,7 @@ import { Severity } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { lookupSymbol } from "../../checker/symbol";
 import { hasAsgnFlag } from "../../checker/types";
-import { AttachedOp } from "../../ast/node";
+import { AttachedOp, Type } from "../../ast/node";
 
 const hooks = ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace", "onClone"];
 
@@ -291,6 +291,10 @@ test "hook declarations: an instance hook declared before the generic one is the
 	assert generic != null && generic.instantiatedFrom != null && generic.instantiatedFrom!.location.line == 3, "Box<string> does not take the generic hook";
 }
 
+function managedAsClassified(t: Type): boolean {
+	return hasAsgnFlag(t) || (t.typeReturn != null && hasAsgnFlag(t.typeReturn!));
+}
+
 test "hook declarations: a generic hook declared after an instance is seen still reaches that instance" {
 	const ctx = checkSource("struct Box<T> { v: T; }\n"
 		+ "struct Holder { b: Box<int32>; }\n"
@@ -302,7 +306,41 @@ test "hook declarations: a generic hook declared after an instance is seen still
 	assert ctx != null && ctx.errors.length == 0;
 	const early = lookupSymbol(ctx.table, "use")!.symbolType.typeChildren[0];
 	assert lookupInstanceHook(early, AttachedOp.AttachedDestructor) != null, "Box<int32> seen before the hook never takes it";
-	assert hasAsgnFlag(early), "Box<int32> seen before the hook is not managed";
+	assert managedAsClassified(early), "Box<int32> seen before the hook is not managed";
 	const bag = lookupSymbol(ctx.table, "keep")!.symbolType.typeChildren[0];
 	assert lookupInstanceHook(bag, AttachedOp.AttachedDestructor) != null, "Bag<int32> seen before the hook never takes it";
+}
+
+test "hook declarations: a hook declared in a function or block body binds its type for every receiver kind" {
+	const src = "struct Plain { v: int32; }\n"
+		+ "class Shared { v: int32 = 0; }\n"
+		+ "type Fd = distinct int32;\n"
+		+ "function open(n: int32): Fd { return n as Fd; }\n"
+		+ "function install(): void {\n"
+		+ "\tfunction onDestroy(this x: Plain): void { console.log(\"plain\"); }\n"
+		+ "\t{ function onDestroy(this x: Shared): void { console.log(\"shared\"); } }\n"
+		+ "\tfunction onDestroy(this x: Fd): void { console.log(\"fd\"); }\n"
+		+ "\tstruct Local { v: int32; }\n"
+		+ "\tfunction onDestroy(this x: Local): void { console.log(\"local\"); }\n"
+		+ "\tconst l: Local = { v: 1 };\n"
+		+ "}\n"
+		+ "function use(): void { const p: Plain = { v: 1 }; const s = new Shared(); const f = open(2); console.log(p.v.toString()); }\n"
+		+ "install(); use();\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	assert destroyCallsOf(c.value, "Plain") >= 1, "a struct hook declared in a function body never runs";
+	assert destroyCallsOf(c.value, "Fd") >= 1, "a distinct hook declared in a function body never runs";
+	assert destroyCallsOf(c.value, "Local") >= 1, "a hook of a function-local struct never runs";
+}
+
+test "hook declarations: a hook declared in a function body cannot read that function's frame" {
+	const errors = errorsOf(shapes + "function install(n: int32): void {\n\tlet k = 1;\n"
+		+ "\tfunction onDestroy(this x: S): void { k += n; }\n}\n");
+	assert errors.length == 2, errors.join(" | ");
+	assert errors[0].indexOf("a lifecycle hook cannot read the enclosing local 'k'") >= 0, errors[0];
+	assert errors[1].indexOf("a lifecycle hook cannot read the parameter 'n'") >= 0, errors[1];
+	const problems: string[] = [];
+	expectSecondBindingRefused(problems, "a body hook beside a module hook", "function onDestroy(this x: S): void { }\nfunction f(): void { function onDestroy(this x: S): void { } }\n", "onDestroy", "S");
+	assert problems.length == 0, problems.join("\n");
+	assert errorsOf(shapes + "function install(): void { function onDestroy(this x: S): void { const own = x.id; console.log(own.toString()); } }\n").length == 0;
 }

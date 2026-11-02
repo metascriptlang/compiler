@@ -659,18 +659,41 @@ Instance and static methods fail alike. The checker accepts the read; C lifts th
 module-level functions that have no access to `k`. A static *initializer* reading an enclosing
 local is a check error (`1c7b6c7b`); methods have no such rule and no capture.
 
-## L37. A module-level `let` written from an actor method is not rejected (LIVE, measured 2026-09-19)
+## L37. A module-level `let` written from an actor method is not rejected (FIXED on wt/fix-actor-module-state, not landed; measured 2026-11-01)
 
 ```
 let hits: int32 = 0;
 actor Counter { bump(): void { hits = hits + 1; } read(): int32 { return hits; } }
 // main: c.bump(); c.bump(); console.log(await c.read());
-    build of 98886eb2, C: 2   JS: 2
+    host msc 97e4f6ca592, C: global from actor 2   JS: global from actor 2
+    candidate (main 98676df2eb8 + the fix), C and JS:
+      error: actor 'Counter' runs 'bump' on whichever thread takes its message, but it uses module-level 'hits' at 2:32; module state crosses threads only as a const value, a Locked<T> or an Arc<T>
 ```
 
-The program runs, but the global is shared by every actor thread with no lock. `SymbolFlag.GcSafe`
-is declared in `std/meta/node.ms` but nothing under `src/` or `std/` sets or reads it, so no rule
-tracks which functions touch mutable globals. Only the actor-method write was measured; `spawn` bodies were not.
+Every instance method of an actor, lifecycle hooks included, now runs the module-state reach a
+spawn thunk runs (ULTRALOCK V0; visits run on any pool thread, M1), with seen reach only: a call
+through a function value inside the body is not refused, because the value was classified where it
+crossed into the actor. A closure the actor stores in a field at construction (constructor or field
+initializer) is walked as the actor's own, a declared operator is walked as a call to its routine,
+and constructing an actor walks its constructor and field initializers. Measured refused on C and
+JS on the candidate (2026-11-01): a read of a `let` the main thread writes (`read from actor 5`
+before), a write through a callee, an `onIdle` write, a class's plain static write, a message to an
+actor held by a `let`, an operator `+` or `/=` whose body writes a `let` (in an actor and in a spawn
+thunk, both ran before: `0 1`, `13 1`), a closure stored by the constructor or a field initializer
+that writes a `let` (`1 1` before), and a spawn thunk or actor method that constructs an actor whose
+constructor writes a `let`. Accepted: an actor's own fields, a module `const` scalar, a `static
+readonly` assigned in its static block or built fresh in its initializer (`Readonly<int32[]>`), a
+message to an actor held by a module `const` (bare, `Readonly<A>`, `Readonly<A[]>`) in either
+declaration order, and `Math.random()` in an actor or spawn thunk on C and JS (its state is per
+thread, `runtime/core/random.h`). Pinned by guards `actorModuleStateRefused`,
+`staticReadonlyFromBlockCrossesThreads`, `moduleConstActorMessaged`,
+`moduleConstActorInitOrderRefused`, `userOperatorReachRefused`, `actorConstructionReachRefused`,
+`mathRandomOnAnyThread`, `effectWalkKeepsTypeError` (C and JS). Not covered: a job an actor
+constructor arms (compiler inbox
+`2026-11-01-a-job-armed-by-an-actor-constructor-is-not-walked-for-module-state.md`), and a closure
+passed to an actor constructor (`2026-11-01-a-closure-passed-to-an-actor-constructor-crosses-unchecked.md`).
+Kept conservative, measured refused: a nullable module const actor (`Counter | null`) and an actor
+inside a `Readonly<{ c: Counter }>` const.
 
 ## L38. A static written through a subclass name diverges between backends (LIVE, measured 2026-09-19)
 

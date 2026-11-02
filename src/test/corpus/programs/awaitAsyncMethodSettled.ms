@@ -1,6 +1,5 @@
 // @stdout: sync after run
 // @stdout: run got 7
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs; the Raiser resumes an await of a finished future at once
 // note: an async method awaiting another async method that returns without awaiting resumes after its caller's next statement, as in TypeScript.
 
 class Loader {

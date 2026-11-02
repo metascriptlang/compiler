@@ -1,11 +1,18 @@
-import { Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
+import { userHookOf } from "../../transform/lowering/destructorLifting";
+import { TAG_FIELD, VALUE_FIELD } from "../../transform/lowering/unionTagLower";
+import { getOpByKey } from "../c/types";
+import { isSlotUnion } from "../../checker/fit";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, findSharedBooleanDiscriminant, findSharedStringDiscriminant, isMaybeType, isStructType, needsValueCopy, peelToStruct, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
-import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
+import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
+import { MemKind, memKindOf } from "../../raiser/layout";
+import { RaiserValue, RaiserValueKind, createClassType, CLOSURE_LAYOUT, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isPlainFunctionPointer, isCountedRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
+import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, unwrapRefNullUnion, isPlainFunctionPointer, isCountedRef } from "../../checker/types";
+import { createNameSet } from "../../transform/context";
+import { canFormAcycle } from "../../transform/cycles";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType, layoutOperand } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
@@ -16,6 +23,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	if (valueType != null && (valueType.kind == TypeKind.GenericInstance || isMaybeType(valueType))) {
 		const repr = valueCopyRepr(valueType);
 		if (repr != valueType) return copyPlan(s, repr);
+		if (valueType.typeReturn != null && valueType.typeReturn.kind == TypeKind.Union) return copyPlan(s, valueType.typeReturn);
 	}
 	if (valueType == null) return -1;
 	for (let i = 0; i < s.copyTypes.length; i += 1) {
@@ -25,7 +33,7 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const index = s.copyPlans.length;
 	s.copyTypes.push(valueType);
 	s.copyPlans.push(plan);
-	if (valueType.kind == TypeKind.Array) {
+	if (valueType.kind == TypeKind.Array || valueType.kind == TypeKind.SizedArray) {
 		plan.kind = RaiserCopyKind.Array;
 		plan.children.push(copyPlan(s, valueType.typeReturn));
 	} else if (valueType.kind == TypeKind.Struct) {
@@ -34,14 +42,20 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
-	} else if (isMixedUnion(valueType)) {
-		const field = sharedLiteralField(valueType);
-		plan.kind = RaiserCopyKind.Literal;
-		plan.names.push(field);
+	} else if (valueType.kind == TypeKind.Union && isStructSlotUnion(valueType) && !isDiscriminatedUnion(valueType)) {
+		plan.kind = RaiserCopyKind.Object;
 		for (const arm of valueType.typeChildren) {
-			const shape = peelToStruct(arm)!;
-			plan.names.push(shape.typeChildren[shape.typeNames.indexOf(field)].typeName);
-			plan.children.push(copyPlan(s, arm));
+			if (arm.kind == TypeKind.Function) continue;
+			for (let i = 0; i < arm.typeNames.length; i += 1) {
+				const child = copyPlan(s, arm.typeChildren[i]);
+				const at = plan.names.indexOf(arm.typeNames[i]);
+				if (at < 0) {
+					plan.names.push(arm.typeNames[i]);
+					plan.children.push(child);
+				} else {
+					plan.children[at] = mergeArmPlans(s, valueType, arm.typeNames[i], plan.children[at], child);
+				}
+			}
 		}
 	} else if (valueType.kind == TypeKind.Union && needsValueCopy(valueType)) {
 		plan.kind = RaiserCopyKind.Union;
@@ -54,14 +68,28 @@ function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	return index;
 }
 
-function sharedLiteralField(union: Readonly<Type>): string {
-	const name = findSharedStringDiscriminant(union);
-	return name != "" ? name : findSharedBooleanDiscriminant(union);
-}
-
-function isMixedUnion(t: Readonly<Type>): boolean {
-	if (t.kind != TypeKind.Union || t.typeFlags.has(TypeFlag.ValueUnion) || sharedLiteralField(t) == "") return false;
-	return t.typeChildren.some((c) => needsValueCopy(c));
+function mergeArmPlans(s: RaiserCompState, union: Readonly<Type>, field: string, held: int32, other: int32): int32 {
+	if (held == other || s.copyPlans[other].kind == RaiserCopyKind.Preserve) return held;
+	if (s.copyPlans[held].kind == RaiserCopyKind.Preserve) return other;
+	const left = s.copyPlans[held];
+	const right = s.copyPlans[other];
+	if (left.kind != RaiserCopyKind.Object || right.kind != RaiserCopyKind.Object) {
+		throw new Error(`internal: the arms of union '${union.typeName}' give field '${field}' copy plans of different kinds`);
+	}
+	const merged: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: left.names.slice(), children: left.children.slice(), discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
+	const index = s.copyPlans.length;
+	s.copyTypes.push(union);
+	s.copyPlans.push(merged);
+	for (let i = 0; i < right.names.length; i += 1) {
+		const at = merged.names.indexOf(right.names[i]);
+		if (at < 0) {
+			merged.names.push(right.names[i]);
+			merged.children.push(right.children[i]);
+		} else {
+			merged.children[at] = mergeArmPlans(s, union, right.names[i], merged.children[at], right.children[i]);
+		}
+	}
+	return index;
 }
 
 function armDiscriminant(union: Readonly<Type>, key: string): int64 {
@@ -104,8 +132,7 @@ function valueShape(t: Type | null): Type | null {
 export function emitValueAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): int32 {
 	const t = valueShape(valueType);
 	if (t == null) return source;
-	if (!needsValueAssign(s, t)) return emitValueCopy(s, source, t);
-	const index = copyPlan(s, t);
+	if (!needsValueAssign(s, t)) return source;
 	const result = allocRef(s);
 	const toEnd: int32[] = [];
 	const sourceNil = allocBool(s);
@@ -117,7 +144,7 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	const destinationNil = allocBool(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, destinationNil, destination, RaiserValueKind.Nil as number));
 	const destinationHeld = emitBranchIfFalsy(s, destinationNil);
-	emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
+	emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
 	toEnd.push(emitJumpPlaceholder(s));
 	patchJumpTo(s, destinationHeld, codeLen(s));
 	if (t.kind == TypeKind.Struct) {
@@ -156,6 +183,67 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	return result;
 }
 
+export function isInPlaceCell(s: RaiserCompState, valueType: Type | null): boolean {
+	const t = valueShape(valueType);
+	return t != null && t.kind == TypeKind.Struct && needsValueAssign(s, t);
+}
+
+export function aggregateAssignPlan(s: RaiserCompState, valueType: Type | null): int32 {
+	const t = valueShape(valueType);
+	if (t == null) return -1;
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return copyPlan(s, t);
+	if (t.kind == TypeKind.Union && isUnionCell(t) && userHookOf(t, AttachedOp.AttachedDestructor) == null) return copyPlan(s, t);
+	return -1;
+}
+
+export function emitAggregateAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null, sourceIsFresh: boolean): int32 {
+	const plan = aggregateAssignPlan(s, valueType);
+	if (plan < 0 && !isInPlaceCell(s, valueType)) return -1;
+	const incoming = sourceIsFresh ? source : emitValueCopy(s, source, valueType);
+	if (plan < 0) {
+		emitCellSwap(s, destination, incoming, valueType);
+		emitInst(s, raiserABC(RaiserOpcode.RcDec, incoming, 0, 0));
+		return destination;
+	}
+	emitInst(s, raiserABC(RaiserOpcode.AssignInPlace, destination, incoming, plan));
+	return destination;
+}
+
+export function isNilBranch(s: RaiserCompState, reg: int32): int32 {
+	const isNil = allocBool(s);
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, reg, RaiserValueKind.Nil as number));
+	return emitBranchIfFalsy(s, isNil);
+}
+
+export function emitCellSwap(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): void {
+	const t = valueShape(valueType);
+	if (t == null || t.kind != TypeKind.Struct) throw new Error("internal: Raiser exchanges the cells of a struct only");
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		const fieldType = i < t.typeChildren.length ? t.typeChildren[i] : null;
+		const name = addConst(s, raiserConstString(t.typeNames[i]));
+		const held = allocFor(s, fieldType);
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, destination, name));
+		const next = allocFor(s, fieldType);
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, next, source, name));
+		const toNext: int32[] = [];
+		const toExchange: int32[] = [];
+		if (isInPlaceCell(s, fieldType)) {
+			const heldPresent = isNilBranch(s, held);
+			toExchange.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, heldPresent, codeLen(s));
+			const nextPresent = isNilBranch(s, next);
+			toExchange.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, nextPresent, codeLen(s));
+			emitCellSwap(s, held, next, fieldType);
+			toNext.push(emitJumpPlaceholder(s));
+		}
+		for (const jump of toExchange) patchJumpTo(s, jump, codeLen(s));
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, destination, name, next));
+		emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, source, name, held));
+		for (const jump of toNext) patchJumpTo(s, jump, codeLen(s));
+	}
+}
+
 function zeroShape(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) return zeroShape(t.typeReturn);
@@ -180,8 +268,23 @@ function isValueStruct(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Struct && !t.typeFlags.has(TypeFlag.IsMaybe);
 }
 
+export function structShapeOperand(s: RaiserCompState, t: Type | null, fields: string[], kinds: RaiserRegClass[]): int32 {
+	const body = t != null && t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
+	const destroyOp = t != null && body != null && (body.kind != TypeKind.Union || userHookOf(t, AttachedOp.AttachedDestructor) != null) ? getOpByKey(t, AttachedOp.AttachedDestructor) : null;
+	if (fields.length == 0 && destroyOp == null) return 0;
+	const tagged = fields.length == 0 && body != null && body.kind == TypeKind.Union;
+	const classType = tagged ? createClassType("", -1, [], [TAG_FIELD, VALUE_FIELD], [RaiserRegClass.Word, RaiserRegClass.Dyn]) : createClassType(isClosureValue(t) ? CLOSURE_LAYOUT : "", -1, [], fields, kinds);
+	const cyclic = slotCyclicOf(t);
+	for (let i = 0; i < cyclic.length && i < classType.cyclic.length; i += 1) classType.cyclic[i] = cyclic[i];
+	const uncounted = slotUncountedOf(t);
+	for (let i = 0; i < uncounted.length && i < classType.uncounted.length; i += 1) classType.uncounted[i] = uncounted[i];
+	if (destroyOp != null) classType.destroyFn = resolveRoutine(s, destroyOp);
+	s.classTypes.push(classType);
+	return s.classTypes.length;
+}
+
 function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): int32 {
-	const t = zeroShape(valueType);
+	const t = isAwaitable(valueType) ? null : zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
 		const array = allocRef(s);
 		emitInst(s, newArrayInst(s, array, 0, t.typeReturn));
@@ -192,6 +295,14 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 		}
 		return array;
 	}
+	if (t != null && t.kind == TypeKind.Tuple) {
+		const tuple = allocRef(s);
+		emitInst(s, newArrayInst(s, tuple, 0, getElementType(t)));
+		for (const member of t.typeChildren) {
+			emitInst(s, raiserABC(RaiserOpcode.ArrayPush, tuple, emitZeroOf(s, member, open), 0));
+		}
+		return tuple;
+	}
 	if (t != null && isValueStruct(t)) {
 		for (const outer of open) {
 			if (outer == t) {
@@ -201,7 +312,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 			}
 		}
 		const object = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames, slotClassesOf(s, t)), 0));
+		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, structShapeOperand(s, valueType, t.typeNames, slotClassesOf(s, t)), 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);
@@ -231,6 +342,17 @@ function emitZeroElements(s: RaiserCompState, array: int32, count: int32, elemen
 	patchJumpTo(s, toDone, codeLen(s));
 }
 
+export function nullIsZeroValue(valueType: Type | null): boolean {
+	const t = valueType != null ? zeroShape(unwrapRef(valueType)) : null;
+	return t != null && (t.kind == TypeKind.Tuple || t.kind == TypeKind.SizedArray || isValueStruct(t));
+}
+
+export function zeroIsNil(valueType: Type | null): boolean {
+	const t = isAwaitable(valueType) ? null : zeroShape(valueType);
+	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || isValueStruct(t))) return false;
+	return zeroScalar(t).kind == RaiserValueKind.Nil;
+}
+
 export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32 {
 	return emitZeroOf(s, valueType, []);
 }
@@ -238,6 +360,28 @@ export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32
 export function emitTrapValue(s: RaiserCompState, message: string, valueType: Type | null): int32 {
 	emitTrap(s, message);
 	return emitZeroValue(s, valueType);
+}
+
+export function emitZeroNilElements(s: RaiserCompState, array: int32, arrayType: Type | null): void {
+	const t = zeroArrayType(arrayType);
+	if (t == null || !(nullIsZeroValue(t.typeReturn) || zeroArrayType(t.typeReturn) != null)) return;
+	const count = allocWord(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, count, array, 0));
+	const at = allocWord(s);
+	emitLoadConst(s, at, raiserInt(0));
+	const one = allocWord(s);
+	emitLoadConst(s, one, raiserInt(1));
+	const loopStart = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.BltI64, at, count, 1));
+	const toDone = emitJumpPlaceholder(s);
+	const held = allocDyn(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, array, at));
+	const present = isNilBranch(s, held);
+	emitInst(s, raiserABC(RaiserOpcode.StoreIndex, array, at, emitZeroValue(s, t.typeReturn)));
+	patchJumpTo(s, present, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64, at, at, one));
+	emitInst(s, raiserAx(RaiserOpcode.Jump, loopStart - codeLen(s) - 1));
+	patchJumpTo(s, toDone, codeLen(s));
 }
 
 export function emitZeroFill(s: RaiserCompState, array: int32, count: int32, elementType: Type | null): void {
@@ -268,6 +412,21 @@ export function borrowHoldsReference(t: Type | null): boolean {
 	return b != null && b.kind == TypeKind.Borrow && isCountedRef(b.typeReturn);
 }
 
+function isStructSlotUnion(t: Readonly<Type>): boolean {
+	if (!isSlotUnion(t)) return false;
+	let structs = 0;
+	for (const child of t.typeChildren) {
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind != TypeKind.Function) return false;
+	}
+	return structs > 0;
+}
+
+export function isUnionCell(t: Type): boolean {
+	const body = t.kind == TypeKind.GenericInstance && t.typeReturn != null ? t.typeReturn : t;
+	return body.kind == TypeKind.Union && (body.typeFlags.has(TypeFlag.ValueUnion) || isStructSlotUnion(body));
+}
+
 export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
 	const t = skipModifier(pointee);
 	if (t == null) return false;
@@ -276,6 +435,7 @@ export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolea
 		const body = peelToStructOrUnion(t);
 		if (body != null && body.kind == TypeKind.Struct) return false;
 	}
+	if (isUnionCell(t) || t.kind == TypeKind.SizedArray) return false;
 	return !needsValueAssign(s, t);
 }
 
@@ -294,23 +454,56 @@ export function slotClassesOf(s: RaiserCompState, shape: Type): RaiserRegClass[]
 	return kinds;
 }
 
+function isClosureValue(t: Type | null): boolean {
+	const bare = skipModifier(t);
+	return bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare);
+}
+
 // Every object of a struct, interface or class type holds its fields in the order
 // of `typeNames`, which puts a parent's fields first; a structural match is a prefix
 // of it. A function value is a closure pair. NewObject lays that order out, so the
 // type fixes each field's slot.
 export function layoutOf(t: Type | null): string[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR;
+	if (isClosureValue(t)) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
+}
+
+// Per slot of layoutOf(t): a cursor field borrows its referent.
+export function slotUncountedOf(t: Type | null): boolean[] {
+	const shape = peelToStructOrUnion(t);
+	const flags: boolean[] = [];
+	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && (isUncountedElement(shape.typeChildren[i]) || isViewSlot(shape.typeChildren[i])));
+	return flags;
+}
+
+function isViewSlot(t: Type | null): boolean {
+	if (t == null) return false;
+	const bare = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	return bare != null && bare.kind == TypeKind.Span;
+}
+
+const cyclicTypes = createNameSet();
+const acyclicTypes = createNameSet();
+
+export function isCyclicType(t: Type | null): boolean {
+	return canFormAcycle(t, cyclicTypes, acyclicTypes);
+}
+
+export function slotCyclicOf(t: Type | null): boolean[] {
+	const shape = peelToStructOrUnion(t);
+	const flags: boolean[] = [];
+	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && isCyclicType(shape.typeChildren[i]));
+	return flags;
 }
 
 // The register class each slot of layoutOf(t) holds.
 export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
 	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function && !isPlainFunctionPointer(bare)) return CLOSURE_PAIR_KINDS;
+	if (isClosureValue(t)) return CLOSURE_PAIR_KINDS;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
 }
@@ -324,9 +517,26 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
 }
 
-// An array holds its elements in the register class of their type.
+// An array holds its elements in the register class of their type, each as wide in memory as the type is.
+function elemWidthOf(cls: RaiserRegClass, t: Type | null): ElemWidth {
+	if (t == null || (cls != RaiserRegClass.Word && cls != RaiserRegClass.Float && cls != RaiserRegClass.Bool)) return ElemWidth.Wide;
+	const kind = memKindOf(t);
+	if (cls == RaiserRegClass.Float) return kind == MemKind.F32 ? ElemWidth.F32 : ElemWidth.Wide;
+	if (cls == RaiserRegClass.Bool) return ElemWidth.U8;
+	return match (kind) {
+		MemKind.I32 => ElemWidth.I32,
+		MemKind.I16 => ElemWidth.I16,
+		MemKind.I8 => ElemWidth.I8,
+		MemKind.U32 => ElemWidth.U32,
+		MemKind.U16 => ElemWidth.U16,
+		MemKind.U8 => ElemWidth.U8,
+		_ => ElemWidth.Wide,
+	};
+}
+
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType)));
+	const cls = regClassOf(s, elementType);
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(cls, isCyclicType(elementType), isUncountedElement(elementType), elemWidthOf(cls, elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

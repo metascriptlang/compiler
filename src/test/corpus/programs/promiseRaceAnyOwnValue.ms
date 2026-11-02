@@ -8,7 +8,6 @@
 // @stdout: race read twice fast-f fast-f
 // @stdout: race struct read twice p2 p2
 // @stdout: dropped results settled
-// @xfail(raiser): race picks slow-s, the first input made (an async call runs inline and settles before the next is made, inbox 2026-10-15-raiser-async-call-runs-inline)
 // note: Promise.race and Promise.any complete their result with a value of their own: a winner whose future owns
 //   a string, struct, class or tuple keeps it, and the result copies it, so the result outlives its inputs, reads
 //   twice, and an unread result is released.

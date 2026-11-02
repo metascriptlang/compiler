@@ -588,6 +588,7 @@ static inline void msCDTick(void);
 static inline void msActorRemoveLink(msActor* a, int64_t targetPid);
 static inline void msActorStop(int64_t pid, int32_t reason);
 static inline void msActorUnregisterByPtr(msActor* a);
+static inline void msActorNameRegistryInit(void);
 static inline void msActorDestroyWithReason(msActor* a, int32_t reason);
 
 /* ===== CALL reply completion plumbing (Amendment G / I15 / I16) =====
@@ -715,6 +716,7 @@ extern msNameEntry* msNameRegistry;
 extern int msNameRegistryCap;
 extern int msNameRegistryCount;
 extern pthread_mutex_t msNameRegistryLock;
+extern pthread_once_t msNameRegistryOnce;
 
 /* Lazy init: allocate on first use, zero-cost if name registry is never used */
 static inline void msNameRegistryEnsure(void) {
@@ -1700,6 +1702,7 @@ static inline void msNameRegistryRemoveSlot(uint32_t slot) {
 
 /* Register name → pid. Returns 1.0 (true) on success, 0.0 if name taken or pid already named. */
 static inline double msActorRegisterName(int64_t pid, msString name) {
+    pthread_once(&msNameRegistryOnce, msActorNameRegistryInit);
     msActor* a = msActorFromPid(pid);
     if (a == NULL || msStrLen(name) == 0) {
         if (a != NULL) msHazardClear(a);

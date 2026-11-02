@@ -20,12 +20,11 @@ export interface RaiserFunction {
 	names: string[];      // constants[i] read as text, "" for a non-string; a cache miss in LoadField and StoreField compares it
 	arity: number;
 	localsCount: number;
-	wordRegs: int32;      // registers of the word file the frame holds
-	refRegs: int32;       // registers of the ref file the frame holds
-	paramRefs: int32;     // the leading ref registers that hold its parameters, which are the caller's argument registers
-	regClasses: RaiserRegClass[];   // class of each register in the numbering the function was built with
-	regOps: int32[];      // the tagged operand of each of those registers
-	blocks: int64[];      // site table: word start, ref start, argument count, class signature, then a tagged operand per argument
+	frameSize: int32;     // slots the frame holds: one per register, the parameters first
+	ownRefs: int32[];     // the Ref and Dyn registers that are not parameters, which the frame releases and starts at zero
+	regClasses: RaiserRegClass[];   // class of each register
+	regOps: int32[];      // the tagged operand of each register
+	blocks: int64[];      // site table: the callee's first slot, argument count, class signature, then a tagged operand per argument
 	sigs: int64[];        // sigs[n] is the class signature of the first n registers
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
@@ -82,9 +81,9 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		hostCache.push(null);
 		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
 	}
-	let paramRefs: int32 = 0;
-	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, hostCache, nameIds, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const ownRefs: int32[] = [];
+	for (let r = arity as int32; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 	bindReturns(func);
 	return func;
 }
@@ -103,25 +102,25 @@ function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): voi
 		if (inst.op != RaiserOpcode.Call || inst.b < 0 || inst.b >= functions.length) continue;
 		const callee = functions[inst.b];
 		const site = inst.c as int32;
-		const argc = func.blocks[site + 2];
-		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 3]) continue;
+		const argc = func.blocks[site + 1];
+		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 2]) continue;
 		inst.op = RaiserOpcode.CallDirect;
 		func.packed[pc] = packInstruction(inst);
 	}
 }
 
-// A packed Ret carries what its frame releases: B the first owned ref, C the owned count times two,
+// A packed Ret carries what its frame releases: B the first register that is not a parameter, C the owned ref count times two,
 // plus one when the function opens a handler and the Ret must check for one still open.
 function bindReturns(func: RaiserFunction): void {
 	let opensHandler: int32 = 0;
 	for (const inst of func.code) {
 		if (inst.op == RaiserOpcode.Try) opensHandler = 1;
 	}
-	const owned = func.refRegs - func.paramRefs;
+	const owned = func.ownRefs.length as int32;
 	for (let pc = 0; pc < func.code.length; pc += 1) {
 		const inst = func.code[pc];
 		if (inst.op != RaiserOpcode.Ret) continue;
-		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramRefs, owned * 2 + opensHandler));
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.arity as int32, owned * 2 + opensHandler));
 	}
 }
 
@@ -179,7 +178,7 @@ test "create function" {
 	assert getFuncCodeLen(func) == 1;
 	assert getFuncConstLen(func) == 0;
 	assert func.arity == 0;
-	assert func.wordRegs + func.refRegs == 4;
+	assert func.frameSize == 4;
 }
 
 test "function with constants" {

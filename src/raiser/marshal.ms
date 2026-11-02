@@ -19,8 +19,8 @@ import {
 	raiserNil, raiserBool, raiserInt, raiserFloat, raiserObject, raiserArray,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
-	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet,
-	heapAllocString, heapStringText, handleIndex,
+	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapArrayRc,
+	heapAllocString, heapStringText, handleIndex, handleHeapKind, RaiserHeapKind, stringHandleRc, rcDecrefHandle, heapStringHandles,
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
@@ -143,7 +143,7 @@ export function hostObject(names: string[], values: RaiserHostValue[]): RaiserHo
 	for (let i = 0; i < names.length; i += 1) {
 		const v = values[i];
 		const copied = crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
-		heapObjectSetField(objectHeap, handle, names[i], copied);
+		heapObjectSetField(arrayHeap, objectHeap, handle, names[i], copied);
 	}
 	return { root: raiserObject(handle), arrayHeap, objectHeap };
 }
@@ -168,7 +168,7 @@ export function field(this v: RaiserHostValue, name: string): RaiserHostValue {
 		const kind = v.root.kind.toString();
 		throw new Error(`field '${name}' of a value of kind ${kind}: only an object has fields`);
 	}
-	return part(v, heapObjectGetField(v.objectHeap, v.root.intVal, name));
+	return part(v, heapObjectGetField(v.arrayHeap, v.objectHeap, v.root.intVal, name));
 }
 
 export function length(this v: RaiserHostValue): int32 {
@@ -280,8 +280,8 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	const vmObjects = createStructHeap();
 	const placed = copyToVm(vmArrays, vmObjects, config);
 	assert vmObjects.objects[handleIndex(placed.intVal)].rc == 0;
-	const placedBinds = heapObjectGetField(vmObjects, placed.intVal, "binds");
-	assert vmArrays.arrays[handleIndex(placedBinds.intVal)].rc == 1;
+	const placedBinds = heapObjectGetField(vmArrays, vmObjects, placed.intVal, "binds");
+	assert heapArrayRc(vmArrays, placedBinds.intVal) == 1;
 	assert vmObjects.objects[handleIndex(heapArrayGet(vmArrays, placedBinds.intVal, 1).intVal)].rc == 1;
 	const back = copyToHost(vmArrays, vmObjects, placed);
 	assert back.objectHeap != vmObjects;
@@ -289,6 +289,17 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	assert back.field("binds").at(1).field("text").text() == "home";
 	assert back.field("fontSize").root.kind == RaiserValueKind.Nil;
 	assert back.field("absent").root.kind == RaiserValueKind.Nil;
+}
+
+test "a host string leaves no string live on the strand's heap until it is copied in" {
+	const strandArrays = createArrayHeap();
+	setActiveHostHeaps(createStructHeap(), strandArrays);
+	const taken = hostString("hello");
+	assert taken.text() == "hello";
+	assert heapStringHandles(strandArrays).length == 0;
+	const failure = hostObject(["path", "message"], [hostString("a.txt"), hostString("no such file")]);
+	copyToVm(strandArrays, createStructHeap(), failure);
+	assert heapStringHandles(strandArrays).length == 2;
 }
 
 test "a host value refuses a walk its kind does not have" {
@@ -308,7 +319,7 @@ test "a host string is built on its own heap and never on the heap of a running 
 	const running = createArrayHeap();
 	setActiveHostHeaps(createStructHeap(), running);
 	const key = hostObject(["code"], [hostString("KeyA")]);
-	assert running.strings.texts.length == 0;
+	assert heapStringHandles(running).length == 0;
 	const vmArrays = createArrayHeap();
 	const vmObjects = createStructHeap();
 	const placed = copyToVm(vmArrays, vmObjects, hostArray([key, hostString("日本")]));

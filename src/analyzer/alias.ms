@@ -13,7 +13,7 @@
 
 import { Node, NodeKind, Symbol, Type, TypeKind, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
-import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, isTagCarriedUnion, matchUnionBehindInstance, instantiatedUnionBehind, isCountedRef, isLiteralSet } from "../checker/types";
+import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, isTagCarriedUnion, matchUnionBehindInstance, instantiatedUnionBehind, isCountedRef, isLiteralSet, createRef, createArray } from "../checker/types";
 import { makeHiddenDeref } from "../transform/util";
 import { getBody, makeTestSym, attachSymAll } from "./testSupport";
 
@@ -79,11 +79,13 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 		match (n.kind) {
 			NodeKind.MemberExpr => {
 				const md = n.data as MemberExprData;
-				if (readsUnionDiscriminant(md) || readsThroughReference(md)) return false;
+				if (readsUnionDiscriminant(md) || readsThroughReference(md.object)) return false;
 				n = skipConvDfa(md.object);
 			},
 			NodeKind.ArrayAccess => {
-				n = skipConvDfa((n.data as ArrayAccessData).array);
+				const array = (n.data as ArrayAccessData).array;
+				if (readsThroughReference(array)) return false;
+				n = skipConvDfa(array);
 			},
 			NodeKind.HiddenDeref => { return false; },
 			NodeKind.HiddenAddr => {
@@ -103,8 +105,7 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 	return false;
 }
 
-function readsThroughReference(md: MemberExprData): boolean {
-	const objNode = md.object;
+function readsThroughReference(objNode: Node): boolean {
 	const t: Type | null = objNode.nodeType != null ? objNode.nodeType
 		: (objNode.resolvedSym != null ? objNode.resolvedSym.symbolType : null);
 	if (t == null) return true;
@@ -381,6 +382,15 @@ test "isAnalysableFieldAccess: field behind a deref = false" {
 	const md = n.data as MemberExprData;
 	md.object = makeHiddenDeref(md.object, n.location);
 	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: element of a local reference array = false, of a local value array = true" {
+	const shared = getExpr("x[i];");
+	attachSymAll(shared, "x", makeSymbol("x", SymbolKind.Variable, createRef(createArray(noneType())), false));
+	assert !isAnalysableFieldAccess(shared);
+	const inline = getExpr("x[i];");
+	attachSymAll(inline, "x", makeSymbol("x", SymbolKind.Variable, createArray(noneType()), false));
+	assert isAnalysableFieldAccess(inline);
 }
 
 test "isAnalysableFieldAccess: unresolved root = false" {

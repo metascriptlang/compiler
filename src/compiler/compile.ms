@@ -25,7 +25,7 @@ import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait,
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { stringify, jsonString } from "std/core/json";
 import { createJSHelpers, escapeJSString, JsTreeLayout, createJsTreeLayout, relSpecBetween } from "../codegen/js/emit";
-import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
+import { generateRaiserProject, analyzeForRaiser, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute, RaiserContext } from "../raiser/context";
 import { RaiserModule } from "../raiser/module";
@@ -43,14 +43,13 @@ import { inferRaises, markEveryBodyMayRaise } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
-import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { jsEnumObject } from "../codegen/js/declarations";
 import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps, rankOpModules, enterModuleOps, leaveModuleOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
-import { SymbolFlag, hasFlag } from "../checker/symbol";
+import { SymbolFlag, hasFlag, sealRoutineFlags } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
@@ -86,7 +85,7 @@ import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs,
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -101,10 +100,7 @@ import { VERSION } from "./usage";
 // checker/context → module/graph layering; callbacks pattern). Registered at
 // module load so every later build engages it without an init-order hazard.
 registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
-// Prelude pack shares the object cache's memoized toolchainStamp — one stamp
-// computation per process instead of two (the pack's local fallback would
-// re-hash the 30MB binary + runtime/ + vendor/ every process).
-registerPreludeStampFn(toolchainStamp, stdTreeStamp);
+registerPreludeStampFn(compilerStamp, stdTreeStamp);
 
 // ===== Build Helpers =====
 
@@ -941,6 +937,7 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	let failed = false;
 	sealRuntimeProcs(true);
 	sealHookSyms(true);
+	sealRoutineFlags(true);
 	while (true) {
 		while (!failed && next < order.length && next - head < workers) {
 			const job = jobs[order[next]];
@@ -955,6 +952,7 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	}
 	sealRuntimeProcs(false);
 	sealHookSyms(false);
+	sealRoutineFlags(false);
 	return results;
 }
 
@@ -5302,7 +5300,6 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const checked = graphCheckedModule(graph, modPath, mod, opts);
 		checked.ctx.errors = [];
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
-			refuseBigIntOnRaiser(checked.ctx, checked.program);
 			exitOnCheckerErrors(checked.ctx, modPath, mod.rawSource);
 		}
 		unitPaths.push(modPath);
@@ -5327,6 +5324,10 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	} else {
 		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	}
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
+	const liftTables = createWriteSummaries(createRoutineDecls(), []);
+	liftTables.unloweredWritesAnything = true;
+	const lowered: Node[] = [];
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
@@ -5334,10 +5335,18 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const mod = findModule(graph, unitPaths[i]);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformForRaiser(comptimeResolved, modCtx, true, opts.mode != MODE_DANGER);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, true, true, liftTables, opts.mode != MODE_DANGER);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
+		noteUnitDecls(liftTables, unitPaths[i], transformed);
+		lowered.push(transformed);
+	}
+	for (let i = 0; i < unitPrograms.length; i += 1) {
+		const modCtx = unitCtxs[i];
+		const mod = findModule(graph, unitPaths[i]);
+		const analyzed = analyzeForRaiser(lowered[i], modCtx, writeTables);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
-		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
+		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: analyzed };
 		modules.push(input);
 	}
 
@@ -5359,9 +5368,9 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	return raiserMod;
 }
 
-export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink): RaiserContext {
-	const ctx = createRaiserContext();
-	ctx.gcMode = "orc";
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true): RaiserContext {
+	const ctx = createRaiserContext(false);
+	ctx.auditLedger = auditLedger;
 	ctx.programArgv = programArgv;
 	ctx.printSink = printSink;
 	raiserLoad(ctx, mod);
@@ -5372,15 +5381,17 @@ export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: R
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string = ""): void {
 	const t0 = performance.now();
-	const raiserMod = compileRaiser(filePath, opts);
+	const raiserMod = compileRaiser(filePath, opts, null, false);
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
 	for (const a of opts.extraArgs) programArgv.push(a);
-	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); });
+	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); }, opts.mode != MODE_DANGER);
 
 	if (ctx.lastError != "") {
-		printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
+		const vm = ctx.vm;
+		if (vm == null) throw new Error("internal: a Raiser run reported an error without a VM");
+		console.log(`Error: ${vm.error}`);
 		exit(1);
 	}
 
@@ -5388,7 +5399,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string =
 	// rejection — same contract and exit code as msReportOrphanFailures on C.
 	if (ctx.orphanFailures.length > 0) {
 		for (const msg of ctx.orphanFailures) {
-			console.log(`${error("Error")}: unhandled rejection: ${msg}`);
+			console.log(`Error: unhandled rejection: ${msg}`);
 		}
 		exit(1);
 	}

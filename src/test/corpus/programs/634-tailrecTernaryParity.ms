@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
 // @stdout: tailrec-ternary r=5000000-7500000-2
 // A tail call in a ternary arm is still a tail call. tailCallLower expands the
 // return-position ternary into if/return itself: conditionalExprLower runs after

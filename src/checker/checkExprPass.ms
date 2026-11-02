@@ -18,7 +18,7 @@ import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
-import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes } from "./resolvePass";
+import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes, refuseViewField } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
@@ -2248,7 +2248,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
 		&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
-		checkArcPointeeSendable(ctx, objExpected.typeReturn, (owner: Type): boolean => declaresUserHook(owner, ctx), node.location.line, node.location.column);
+		checkArcPointeeSendable(ctx, objExpected.typeReturn, (owner: Type): boolean => declaresUserHook(owner), node.location.line, node.location.column);
 	}
 	// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 	if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
@@ -2653,6 +2653,9 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			pi = pi + 1;
 		}
 		judgeSpreadFields(ctx, d, null);
+		for (let fi = 0; fi < fieldNames.length && fi < fieldTypes.length; fi += 1) {
+			refuseViewField(ctx, fieldNames[fi], "object literal", fieldTypes[fi], node.location.line, node.location.column);
+		}
 		const anonName = anonStructName(fieldNames, fieldTypes);
 		const built = spelled(createStruct(anonName, fieldNames, fieldTypes, false));
 		if (optionalNames.length > 0) built.optionalFields = optionalNames;
@@ -3555,6 +3558,11 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
+	if (ctx.hookBodyBoundary != null && isFrameValue(sym) && isCapturedAcross(ctx.table, d.name, sym, ctx.hookBodyBoundary)) {
+		const what = sym.symbolKind == SymbolKind.Parameter ? "parameter" : "enclosing local";
+		addError(ctx, "a lifecycle hook cannot read the " + what + " '" + d.name + "' — it runs wherever a value of its type is destroyed, copied or moved, outside the call that declares it", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
 	const crossed = isFrameValue(sym) ? crossesFunction(ctx, d.name, sym) : null;
 	if (crossed != null && crossed) recordCapture(ctx, sym);
 	if (crossed != null && capturesView(ctx, sym, crossed)) {
@@ -4212,9 +4220,9 @@ export function formatTypeBrief(t: Type | null): string {
 	return typeDisplayName(t);
 }
 
-export function refuseBareAsyncReturn(ctx: CheckerContext, routine: BitSet<RoutineFlag>, declared: Type | null, name: string, spelling: string, at: SourceLocation): void {
+export function refuseBareAsyncReturn(ctx: CheckerContext, routine: BitSet<RoutineFlag>, declared: Type | null, written: boolean, name: string, spelling: string, at: SourceLocation): void {
 	if (!routine.has(RoutineFlag.Async) || routine.has(RoutineFlag.Generator)) return;
-	if (declared == null || isUnresolvedType(declared) || declared.kind == TypeKind.Void || isAwaitable(declared)) return;
+	if (!written || declared == null || isUnresolvedType(declared) || isAwaitable(declared)) return;
 	const got = formatTypeBrief(declared);
 	addError(ctx,
 		"async function '" + name + "' must declare return type as Promise<" + got
@@ -4442,8 +4450,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// is not a function or function pointer". `fitNode`'s named-fn → closure
 	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
 	// so it doesn't catch this case for inline expression-form functions.
+	const asyncSpelling = name == "<arrow>" ? "async " : "async function";
+	if (returnTypeAnnotation == "void") refuseBareAsyncReturn(ctx, routine, voidType(), true, name, asyncSpelling, body.location);
 	if (explicitReturnType != null) {
-		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, name, name == "<arrow>" ? "async " : "async function", body.location);
+		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, true, name, asyncSpelling, body.location);
 		const closure = createClosureType(types, params, explicitReturnType);
 		if (predicate != null) closure.typeExtra = predicate.sentinel;
 		return closure;

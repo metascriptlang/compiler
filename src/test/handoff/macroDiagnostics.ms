@@ -9,6 +9,7 @@ test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 		'function reject(n: Node): void { error("rejected input", n); } reject(node);',
 		'function reject(n: Node): Node[] { error("rejected input", n); return []; } const values = reject(node);',
 		'function reject(n: Node): void { error("rejected input", n); } try { reject(node); } catch (e) {}',
+		'function reject(n: Node): void { error("rejected input", n); } function relay(n: Node): void { const spare = [1, 2]; try { reject(n); } catch (e) {} } relay(node);',
 	];
 	for (const body of bodies) {
 		const source = 'import { Node } from "std/meta"; macro requireValid(node: Node): Node { '
@@ -113,11 +114,13 @@ function main(): void {
 main();
 `;
 
-test "macro unsupported evaluation: unbridged externs identify the unavailable host function" {
-	const c = compileToCWithStd(unbridgedCallSource);
-	assert !c.ok;
-	if (!c.ok) {
-		assert c.error.contains("msSetTimeout");
+test "macro unsupported evaluation: a timer a macro starts names the module state the VM cannot read" {
+	for (const timer of ["setTimeout", "setInterval"]) {
+		const c = compileToCWithStd(unbridgedCallSource.replace("setTimeout", timer));
+		assert !c.ok;
+		if (!c.ok) {
+			assert c.error.contains("timerNext"), c.error;
+		}
 	}
 }
 

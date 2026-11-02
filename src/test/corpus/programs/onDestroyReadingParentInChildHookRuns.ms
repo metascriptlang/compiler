@@ -1,5 +1,4 @@
 // @stdout: read ok
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so the hook counter stays 0
 // @skip-js: onDestroy does not run on JS
 // note: a child's onDestroy that only reads the parent it points at, without keeping it, runs clean. Siblings: onDestroyKeepingThisThroughChildHookStops
 

@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: raiser runs no user lifecycle hooks (end n2, end b2)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 struct Res {
 	id: int32;

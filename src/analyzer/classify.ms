@@ -5,10 +5,11 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
+import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
-import { attachedOpSym } from "../transform/util";
+import { attachedOpSym, generatedProcSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp, CallingConvention } from "../ast/node";
 import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
@@ -217,10 +218,6 @@ function isDuVariantHashName(name: string): boolean {
 
 function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
-	// INLINE union-variant payloads (DuVariant, stamped at createUnion): C storage is
-	// the DU machinery's <Union>_vN carrier — msAnon hooks would name a type that
-	// doesn't exist in that TU. The machinery owns their lifecycle; defer.
-	if (t.typeFlags.has(TypeFlag.DuVariant)) return noRcInfo();
 	// Anon structs (typeName "" or checker "__anon" pseudo-name) are named msAnon_<hash>
 	// by codegen (anonTypeName); destructorLifting's field recursion generates their
 	// hooks under that name — resolve identically here (same recipe as fillBody's
@@ -236,10 +233,117 @@ function classifyObject(t: Type, ctx: TransformContext, requireOps: boolean): Rc
 			return makeOpsInfo(RcKind.Named, resolvedName, t, false, requireOps);
 		}
 	}
+	if (ctx.raiserBackend) return isMaybeType(t) && !classifyType(unwrapMaybeType(t), ctx, requireOps).needsCleanup ? noRcInfo() : structCellInfo();
 	return noRcInfo();
 }
 
+// A Raiser union whose members are value structs, beside closures at most, is the member's cell, with no tag beside
+// it; the cell is released and copied through the analyzer's cell rows.
+export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	let structs = 0;
+	for (const child of t.typeChildren) {
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind != TypeKind.Function) return false;
+	}
+	return structs > 0;
+}
+
+// A Raiser union of value structs and class or interface refs, strings or scalars, with no tag beside it, is the
+// member's own value: the released value carries its own kind, so a release by dynamic kind frees the held struct
+// cell or the ref and leaves a scalar alone.
+export function raiserStructSlotUnion(t: Readonly<Type>): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	let structs = 0;
+	for (const child of t.typeChildren) {
+		if (child.kind == TypeKind.Struct) structs += 1;
+		else if (child.kind == TypeKind.Ref) {
+			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && !isPrimitiveKind(child.kind)) {
+			return false;
+		}
+	}
+	return structs > 0;
+}
+
+// A Raiser union whose members are class refs, closures, strings, arrays, tuples or scalars stays the member's own
+// value, with no tag beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
+// A distinct member with no destroy of its own, a brand among them, is held as its body.
+export function raiserBareUnion(t: Type): boolean {
+	if (!isSlotUnion(t) || storesUnionTag(t)) return false;
+	for (const member of t.typeChildren) {
+		let child = member;
+		while (child.kind == TypeKind.Distinct && child.typeReturn != null && getOpByKey(child, AttachedOp.AttachedDestructor) == null) child = child.typeReturn;
+		if (child.kind == TypeKind.Ref) {
+			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function
+				&& child.kind != TypeKind.Array && child.kind != TypeKind.SizedArray && child.kind != TypeKind.Tuple && !isPrimitiveKind(child.kind)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// A Raiser struct is a heap cell until typed memory lays structs inline, so a struct with no hook of its own
+// still has a cell to release, copy and move.
+export function structCellInfo(): RcInfo {
+	return {
+		rcKind: RcKind.Named, typeName: "", needsCleanup: true, seqLike: false,
+		destroyFn: cellOpSym("msStructCellDestroy", AttachedOp.AttachedDestructor),
+		copyFn: cellOpSym("msStructCellCopy", AttachedOp.AttachedAsgn),
+		wasMovedFn: cellOpSym("msStructCellWasMoved", AttachedOp.AttachedWasMoved),
+		sinkFn: cellOpSym("msStructCellSink", AttachedOp.AttachedSink),
+		dupFn: null,
+	};
+}
+
+function cellOpSym(name: string, op: AttachedOp): Symbol {
+	const sym = generatedProcSym(name);
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	return sym;
+}
+
 // ===== Main Classification Entry Point =====
+
+export function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
+	if (gi == null || gi.kind != TypeKind.GenericInstance) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	if (isAwaitable(gi) || peelTransparentInstance(gi) != gi) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	// Lazy-instantiate body when encountering nested generics. Outer instantiation
+	// (instantiateGenericBody at checker types.ms:787) substitutes K/V → concrete types
+	// in the containing struct's fields, but doesn't recursively populate `typeReturn`
+	// on inner GIs. Codegen does the same lazy pattern at types.ms:601 via genericParamsOf.
+	if (gi.typeReturn == null) {
+		const decl = genericParamsOf(gi);
+		if (decl != "") instantiateGenericBody(gi, decl);
+	}
+	if (gi.typeReturn == null) {
+		return { mangledName: "", body: null as unknown as Type };
+	}
+	const mangledName = monoInstanceName(gi);
+	const src = gi.typeReturn;
+	// Preserve src kind: Union bodies (match-type / TS-style DU) must NOT be
+	// wrapped as Struct — `generateHook` dispatches on `objType.kind` to route
+	// Unions through `generateUnionArms` (per-variant tag dispatch). Coercing
+	// to Struct here makes the hook walk `typeNames` (discriminator metadata)
+	// as if they were field names, emitting bogus `dest.ok = src.ok` accesses.
+	let body: Type;
+	if (src.kind == TypeKind.Union) {
+		body = createUnionInOrder(src.typeChildren);
+		body.typeName = mangledName;
+		body.typeNames = src.typeNames;
+		body.typeExtra = src.typeExtra;
+		body.typeFlags = src.typeFlags;
+		spelled(body);
+	} else {
+		body = spelled(createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src)));
+	}
+	return { mangledName, body };
+}
 
 export function classifyType(t: Type | null, ctx: TransformContext, requireOps: boolean = true): RcInfo {
 	if (t == null) return noRcInfo();
@@ -291,10 +395,15 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			if (t.typeName != "") {
 				const bodyHasAsgn = t.typeReturn != null && hasAsgnFlag(t.typeReturn);
 				if (hasAsgnFlag(t) || bodyHasAsgn) {
+					const canonical = unwrapGenericInstance(t);
+					if (canonical.mangledName != "" && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
+						return classifyType(canonical.body, ctx, requireOps);
+					}
 					const mangled = monoInstanceName(t);
 					return makeOpsInfo(RcKind.Named, mangled, t, false, requireOps);
 				}
 			}
+			if (ctx.raiserBackend && (isIteratorResult(t) || (t.typeReturn != null && isStructType(t.typeReturn)))) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.Ptr | TypeKind.Cursor => {
@@ -338,6 +447,12 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			if (isAllStringLiteralUnion(t)) {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
+			if (ctx.raiserBackend && raiserBareUnion(t) && getOpByKey(t, AttachedOp.AttachedDestructor) == null) {
+				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
+				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			}
+			if (ctx.raiserBackend && raiserFlatCellUnion(t)) return structCellInfo();
+			if (ctx.raiserBackend && storesUnionTag(t)) return structCellInfo();
 			if (t.typeName != "" && hasAsgnFlag(t)) {
 				return makeOpsInfo(RcKind.Named, t.typeName, t, false, requireOps);
 			}
@@ -345,10 +460,11 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				const an = anonUnionCName(t);
 				return makeOpsInfo(RcKind.Named, an, t, false, requireOps);
 			}
+			if (ctx.raiserBackend && (t.typeFlags.has(TypeFlag.ValueUnion) || storesUnionTag(t))) return structCellInfo();
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {
-			if (!classifyType(t.typeReturn, ctx, requireOps).needsCleanup) return noRcInfo();
+			if (!classifyType(t.typeReturn, ctx, requireOps).needsCleanup) return ctx.raiserBackend ? structCellInfo() : noRcInfo();
 			const sn = sizedArrayHookName(t);
 			return makeOpsInfo(RcKind.Named, sn, t, false, requireOps);
 		},
@@ -360,9 +476,10 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			for (const child of t.typeChildren) {
 				if (classifyType(child, ctx, requireOps).needsCleanup) { hasRc = true; }
 			}
-			if (!hasRc) return noRcInfo();
+			if (!hasRc) return ctx.raiserBackend ? structCellInfo() : noRcInfo();
 			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false, requireOps);
 		},
+		TypeKind.Set => setRepr(t) != null ? classifyType(setRepr(t), ctx, requireOps) : noRcInfo(),
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
 	};
@@ -397,7 +514,7 @@ export function isFreshExpr(kind: NodeKind): boolean {
 		| NodeKind.StringLiteral | NodeKind.NumberLiteral
 		| NodeKind.BooleanLiteral | NodeKind.NullLiteral
 		| NodeKind.ArrowFunction | NodeKind.FunctionExpr
-		| NodeKind.MoveExpr | NodeKind.ConditionalExpr => true,
+		| NodeKind.MoveExpr | NodeKind.ConditionalExpr | NodeKind.AwaitExpr => true,
 		_ => false,
 	};
 }
@@ -644,6 +761,8 @@ test "isCountedRef agrees with classifyType's Ref arms" {
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
 
+test "await is fresh, as the call it stands for" { assert isFreshExpr(NodeKind.AwaitExpr); }
+
 test "new is fresh" { assert isFreshExpr(NodeKind.NewExpr); }
 
 test "object literal is fresh" { assert isFreshExpr(NodeKind.ObjectLiteral); }
@@ -669,13 +788,25 @@ test "nameless anon struct with RC field → owned msAnon hooks" {
 	assert info.typeName.startsWith("msAnon_");
 }
 
-test "DuVariant-flagged payload defers to the DU machinery" {
+test "nameless DuVariant payload defers to the DU machinery" {
 	const ctx = makeCtx();
 	const v = createStruct("", ["vpay"], [stringType()], false);
 	createUnion([v, numberType()]);
 	assert v.typeFlags.has(TypeFlag.DuVariant);
 	const info = classifyType(v, ctx);
 	assert !info.needsCleanup;
+}
+
+test "named DuVariant arm with RC field → its own lifted ops" {
+	const ctx = makeCtx();
+	const arm = declaredTestStruct(createStruct("Shape.Circle", ["armLabel"], [stringType()], false));
+	markDuVariant(arm);
+	const info = classifyType(liftTestOps(arm, "ShapeCircle"), ctx);
+	assert info.rcKind == RcKind.Named;
+	assert info.needsCleanup;
+	assert (info.destroyFn as Symbol).name == "ShapeCircleDestroy";
+	assert (info.copyFn as Symbol).name == "ShapeCircleCopy";
+	assert (info.sinkFn as Symbol).name == "ShapeCircleSink";
 }
 
 test "structurally-equal copy of a registered variant defers via hash registry" {

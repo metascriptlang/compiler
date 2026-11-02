@@ -15,12 +15,12 @@ import { Buffer } from "std/core/buffer";
 import { rawString } from "std/core/buffer/bytes";
 import { sha256 } from "std/crypto/sha256";
 import { AesKey, open } from "std/crypto/aes";
-import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
 
 extern function msCryptoAesSealWithNonceInto(key: int64, nonce: string, plainText: string, aad: string, out: Ptr<uint8>): int64;
 
 function pattern(count: int32, salt: int32): Buffer {
-	const out = newOutputBuffer(count as int64);
+	const out = newUninitOutputBuffer(count as int64);
 	for (let i: int32 = 0; i < count; i++) out[i] = ((i * 7 + salt) & 255) as uint8;
 	return out;
 }
@@ -37,7 +37,7 @@ async function sweep(keyLength: int32): Promise<string> {
 		const plainText = rawString(plain);
 		for (let aadLength: int32 = 0; aadLength <= 40; aadLength++) {
 			const aad = rawString(pattern(aadLength, 200));
-			const sealed = newOutputBuffer(12 + (len as int64) + 16);
+			const sealed = newUninitOutputBuffer(12 + (len as int64) + 16);
 			if (msCryptoAesSealWithNonceInto(key._handle, nonce, plainText, aad, outputBytes(sealed)) != 1) throw new Error("seal failed");
 			const back = await open(key, sealed, aad);
 			if (!back.ok || back.value.toHex() != plain.toHex()) opened = false;

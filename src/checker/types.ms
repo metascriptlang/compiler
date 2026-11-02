@@ -417,6 +417,11 @@ export function isIterator(t: Readonly<Type | null>): boolean {
 	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Iterator";
 }
 
+export function isIteratorResult(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "IteratorResult";
+}
+
 export function getIteratorNextFnType(t: Type | null): Type | null {
 	if (t == null || !isIterator(t)) return null;
 	return getProperty(t, "next");
@@ -2869,7 +2874,7 @@ export function destrObjectRestType(srcType: Type | null, taken: string[]): Type
 		if (ft == null) return null;
 		types.push(ft);
 	}
-	return spelled(createStruct(anonStructName(names, types), names, types, false));
+	return createRef(spelled(createStruct(anonStructName(names, types), names, types, false)));
 }
 
 // StringLiteral: a specific string value as a type (TypeScript parity).
@@ -3507,14 +3512,14 @@ export function typeofNameMatches(t: Type, name: string): boolean {
 	return isPrimitiveKindName(name) ? primitiveKindName(t) == name : typeofTagOf(t) == name;
 }
 
-export function jsMemberKind(t: Type): string {
+export function jsMemberKind(t: Readonly<Type>): string {
 	if (t.kind == TypeKind.Null) return "null";
 	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
 	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
 	return typeofTagOf(t);
 }
 
-export function jsValueKind(t: Type): string {
+export function jsValueKind(t: Readonly<Type>): string {
 	const v = peelTransparentInstance(t);
 	if (v.kind == TypeKind.Int64 || v.kind == TypeKind.Uint64) return "bigint";
 	return jsMemberKind(t);
@@ -3556,7 +3561,7 @@ export function functionSlotOf(slot: Type | null): Type | null {
 	return fn.kind == TypeKind.Function && fn.typeChildren != null ? fn : null;
 }
 
-export function isArrayShaped(t: Type): boolean {
+export function isArrayShaped(t: Readonly<Type>): boolean {
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return true;
 	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
 }
@@ -3732,6 +3737,18 @@ let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
 let _heldByFieldNames: HashMap<string, HashMap<Type, HeldBeyond>> = new HashMap<string, HashMap<Type, HeldBeyond>>();
 let _speculationDepth: int32 = 0;
 
+export class HeldBeyondState {
+	bySym: HashMap<Symbol, HeldBeyond>;
+	byFieldNames: HashMap<string, HashMap<Type, HeldBeyond>>;
+}
+
+export function swapHeldBeyond(next: HeldBeyondState | null): HeldBeyondState {
+	const prev: HeldBeyondState = { bySym: _heldBySym, byFieldNames: _heldByFieldNames };
+	_heldBySym = next != null ? next.bySym : new HashMap<Symbol, HeldBeyond>();
+	_heldByFieldNames = next != null ? next.byFieldNames : new HashMap<string, HashMap<Type, HeldBeyond>>();
+	return prev;
+}
+
 export function resetHeldBeyond(): void {
 	_heldBySym = new HashMap<Symbol, HeldBeyond>();
 	_heldByFieldNames = new HashMap<string, HashMap<Type, HeldBeyond>>();
@@ -3854,7 +3871,7 @@ function genericHeadKey(roots: Readonly<ModuleNameRoots>, gi: Readonly<Type>): s
 
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
-function typeKey(t: Readonly<Type>): string {
+export function typeKey(t: Readonly<Type>): string {
 	return typeKeyIn(buildModuleNameRoots(), t, []);
 }
 
@@ -4126,6 +4143,14 @@ function genericInstanceClass(gi: Type): Type | null;
 function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null>;
 function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null> {
 	return gi.typeExtra != null && gi.typeExtra.kind == TypeKind.Ref ? gi.typeExtra.typeReturn : gi.typeExtra;
+}
+
+export function sameDeclaredSym(a: Readonly<Symbol>, b: Readonly<Symbol>): boolean {
+	return a == b || (a.modulePath != "" && a.modulePath == b.modulePath
+		&& a.name == b.name && a.symbolKind == b.symbolKind
+		&& a.location.line > 0
+		&& a.location.line == b.location.line
+		&& a.location.column == b.location.column);
 }
 
 export function classParentOf(t: Type | null): Type | null {
@@ -6019,7 +6044,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => 8,
 		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => alignTo(8 + ps, lenPtrAlign(tg)),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Null => ps,
-		TypeKind.Function => ps * 2,
+		TypeKind.Function => isPlainFunctionPointer(t) ? ps : ps * 2,
 		TypeKind.BigInt => ps,
 		_ => SIZE_NOT_COMPUTABLE,
 	};
@@ -6135,7 +6160,26 @@ function sizeOfUnion(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32 {
 		}
 	}
 	const maxAlign = tagAlign > payloadAlign ? tagAlign : payloadAlign;
-	return alignTo(alignTo(tagSize, payloadAlign) + payload, maxAlign);
+	return alignTo(unionPayloadAt(tagSize, payloadAlign) + payload, maxAlign);
+}
+
+function unionPayloadAt(tagSize: int32, payloadAlign: int32): int32 {
+	return alignTo(tagSize, payloadAlign);
+}
+
+export function offsetOfUnionPayload(tg: TargetInfo, t: Readonly<Type>): int32 {
+	if (tg.ptrSize < 4 || t.kind != TypeKind.Union) return SIZE_NOT_COMPUTABLE;
+	const tag = unionTagType(t);
+	const tagSize = tag != null ? sizeOfTypeAt(tg, tag, 1) : 4;
+	if (tagSize < 0) return tagSize;
+	let payloadAlign = 1;
+	if (t.typeChildren != null) {
+		for (const variant of t.typeChildren) {
+			const va = alignOfTypeAt(tg, variant, 1);
+			if (va > payloadAlign) payloadAlign = va;
+		}
+	}
+	return unionPayloadAt(tagSize, payloadAlign);
 }
 
 function alignOfUnion(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32 {
@@ -6660,7 +6704,8 @@ test "sizeOfType primitives 32-bit" {
 	assert sizeOfType(tg, stringType()) == 16;
 	assert sizeOfType(tg, createArray(numberType())) == 16;
 	assert alignOfType(tg, stringType()) == 8;
-	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
+	assert sizeOfType(tg, createClosureType([], [], numberType())) == 8;
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Int64)) == 8;
@@ -6686,9 +6731,12 @@ test "sizeOfType object tail padding" {
 	assert sizeOfType(tg, obj) == 16;
 }
 
-test "sizeOfType function closure" {
+test "sizeOfType of a closure is its fn and env pair, of a plain function pointer one pointer" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createFunction([], [], numberType())) == 16;
+	assert sizeOfType(tg, createClosureType([], [], numberType())) == 16;
+	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
+	const holder = createStruct("FnPair", ["f", "g"], [createFunction([], [], numberType()), createClosureType([], [], numberType())], true);
+	assert sizeOfType(tg, holder) == 24;
 }
 
 test "sizeOfType bigint is a pointer" {

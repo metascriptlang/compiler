@@ -4,14 +4,10 @@
 // modules in EVERY msc process (~150-250 ms after A0). This pack persists the
 // checked symbol table so a warm build starts from the finished scope:
 //
-//   toolStamp = msc binary + runtime/ + vendor/ content (same inputs the
-//               object cache's toolchainStamp uses, recomputed locally — this
-//               module is deliberately self-contained: checker/ must not
-//               import compiler/, only compiler/meta/callbacks-style bridges
-//               are sanctioned)
-//   stdTreeHash = content hash of the whole std/ tree (covers sub-modules,
-//               std-local headers, per-backend variants — over-invalidation
-//               on unused files is accepted for v1)
+//   toolStamp = content hash of the msc binary
+//   stdTreeHash = content hash of the whole std/ tree (covers sub-modules and
+//               per-backend variants — over-invalidation on unused files is
+//               accepted for v1)
 //
 // v2 (2026-09-02): the pack is a SELF-CONTAINED closure — symbols, types AND
 // the AST (declNode/defaultParams/macro bodies) serialize together in ONE
@@ -27,7 +23,7 @@
 
 import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
-import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords } from "./context";
+import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords, extensionsOf } from "./context";
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
@@ -67,9 +63,9 @@ let _toolStamp = "";
 let _toolStampFn: (() => string) | null = null;
 let _stdStampFn: ((stdPath: string) => string) | null = null;
 
-// compile.ms registers compiler/cache.toolchainStamp at load (memoized there
-// — one stamp computation per process shared with the object cache). Without
-// registration (standalone tests) a local equivalent is computed, for the std tree as well.
+// compile.ms registers compiler/cache.compilerStamp and stdTreeStamp at load (memoized
+// there, shared with the object cache). Without registration (standalone tests) a local
+// equivalent is computed.
 export function registerPreludeStampFn(fn: () => string, stdFn: (stdPath: string) => string): void {
 	_toolStampFn = fn;
 	_stdStampFn = stdFn;
@@ -81,13 +77,7 @@ function toolStamp(): string {
 		_toolStamp = _toolStampFn();
 		return _toolStamp;
 	}
-	let acc = hashFile(resolveArgv0(argv[0]));
-	const root = resolveRuntimeDir();
-	if (root != "") {
-		acc = stampTreePack(acc, join(root, "runtime"), "runtime/");
-		acc = stampTreePack(acc, join(root, "vendor"), "vendor/");
-	}
-	_toolStamp = hashContent(acc);
+	_toolStamp = hashFile(resolveArgv0(argv[0]));
 	return _toolStamp;
 }
 
@@ -646,7 +636,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	// and every extension call fails to match on load. Same for converter
 	// payload types.
 	if (ctx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			enqSym(ext.sym, false);
 		}
 	}
@@ -799,7 +789,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	}
 
 	if (ctx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}`);
 		}
 	}
@@ -1824,9 +1814,10 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert loaded.includeDirectives == ctx.includeDirectives;
 		assert loaded.compilerFlags == ctx.compilerFlags;
 		assert loaded.compileDirectives == ctx.compileDirectives;
-		assert loaded.extensionRegistry.methods.length == 1;
-		assert loaded.extensionRegistry.methods[0].methodName == "pkExt";
-		assert loaded.extensionRegistry.methods[0].sym == got;
+		const loadedExts = extensionsOf(loaded.extensionRegistry);
+		assert loadedExts.length == 1;
+		assert loadedExts[0].methodName == "pkExt";
+		assert loadedExts[0].sym == got;
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);

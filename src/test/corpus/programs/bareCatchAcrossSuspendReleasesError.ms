@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM runs no user lifecycle hooks
 // @skip-js: onDestroy runs where the DRC runs; JS has no destructors
 // @stdout: raised caught=100 freed=100
 // @stdout: awaited caught=100 freed=100

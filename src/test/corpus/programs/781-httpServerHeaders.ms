@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @skip-raiser: std/http/server has no Raiser module; the server runs on C
 // Parity program — `std/http/server` type-checks and its response header
 // methods reach the header table: `setHeader` / `hasHeader` / `getHeader` /
 // `removeHeader` are `this` functions that call the `std/http/headers`

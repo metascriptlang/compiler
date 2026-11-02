@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: lend 5 direct 2 loop 9
 // note: a spawn started in an actor method holds the method's env until the task settles;
 // that env is the actor's cell, so its release runs in one of the actor's visits, not on

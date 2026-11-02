@@ -25,15 +25,18 @@ import {
 	FunctionDeclData,
 	MoveExprData, SpreadExprData, NewExprData,
 	ExportDeclData, ProgramData,
-	TypeAssertionData, HiddenStdConvData,
+	TypeAssertionData, HiddenStdConvData, AttachedOp,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
+import { getAttachedOp, unwrapRef, unwrapRefNullUnion } from "../checker/types";
+import { lookupInstanceHook } from "../checker/instantiate";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl, routineFlagSet, RoutineFlag } from "../checker/symbol";
+import { routineFlags } from "../checker/context";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isAwaitable, isReadonlyView, withoutReadonlyView, ownedEdgeOf, isSinkTypeForParam } from "../checker/types";
@@ -354,13 +357,9 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
 		| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral => {},
 
-		// Conversions: recurse into inner expression
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			destMightOwn(p, destIdx, (src.data as HiddenStdConvData).convExpr);
-		},
-		NodeKind.TypeAssertion => {
-			destMightOwn(p, destIdx, (src.data as TypeAssertionData).asExpr);
-		},
+		// Conversions
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => convMightOwn(p, destIdx, src, (src.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => convMightOwn(p, destIdx, src, (src.data as TypeAssertionData).asExpr),
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
@@ -447,6 +446,28 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 // ===== Pass 1: computeLiveRanges =====
 // Walk AST to register variables and compute alive ranges.
 // Must traverse in the same order as pass 2 for consistent abstractTime.
+
+function destroyHookOf(t: Type | null): Symbol | null {
+	if (t == null) return null;
+	const instance = lookupInstanceHook(t, AttachedOp.AttachedDestructor);
+	if (instance != null) return instance;
+	const declared = unwrapRef(t);
+	return declared.sym != null ? getAttachedOp(unwrapRef(declared.sym.symbolType), AttachedOp.AttachedDestructor) : null;
+}
+
+function isClassRef(t: Type | null): boolean {
+	if (t == null) return false;
+	return t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null;
+}
+
+function convMightOwn(p: Partitions, destIdx: int32, conv: Node, operand: Node): void {
+	const made = destroyHookOf(conv.nodeType);
+	if (made != null && !isClassRef(conv.nodeType) && made != destroyHookOf(operand != null ? operand.nodeType : null)) {
+		p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+		return;
+	}
+	destMightOwn(p, destIdx, operand);
+}
 
 function markReassigned(p: Partitions, vid: int32): void {
 	p.vars[vid].flags = p.vars[vid].flags | VF_IS_REASSIGNED;
@@ -732,6 +753,11 @@ function moduleRoutines(body: Node): HashSet<Node> {
 	return own;
 }
 
+function literalSuspends(lit: Node): boolean {
+	const flags = routineFlagSet(routineFlags(lit));
+	return flags.has(RoutineFlag.Async) || flags.has(RoutineFlag.Generator) || lit.flags.has(NodeFlag.WasAsync);
+}
+
 function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: HashSet<Symbol>[]): void {
 	if (body == null || (!top && envEscapes)) return;
 	const moduleScope = top ? moduleRoutines(body) : new HashSet<Node>();
@@ -750,6 +776,7 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: H
 	};
 	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
 	const routine = (lit: Node, holder: Symbol | null): void => {
+		if (literalSuspends(lit)) envEscapes = true;
 		if (top && !moduleScope.has(lit)) {
 			const names = namesOf(lit);
 			closureNames.set(lit, names);
@@ -1108,7 +1135,8 @@ function computeCursorDecisions(w: WriteEffects, p: Partitions, defs: LocalDefs)
 			const g = p.graphs[p.vars[r].con.target];
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
-		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
+		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i].slice(0);
+		if (borrowedSlots[i].length > 0) valueFieldSlots(w, v.sym != null ? v.sym.symbolType : null, slots);
 		if (writtenWhileAlive(w, p, i, slots, defs)) { i += 1; continue; }
 
 		result.push(v.sym);
@@ -1814,4 +1842,19 @@ test "receiver push of a borrow from the same array keeps the call's graph mutat
 test "a value-typed local root keeps the call's graph mutation" {
 	const body = inferredNamed(DOCS + "function f(o: Doc): void { const w: Wrap = { d: o }; const t = w.d; touch(w); use(t.value); }", "f");
 	assert !isCursorNamed(body, "t");
+}
+
+test "a cast into a type whose destroy hook its operand lacks owns the value it makes" {
+	const body = inferredNamed("type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\n"
+		+ "function f(n: int32, g: Fd): void { const lit = 7 as Fd; let fromParam = n as Fd; const same = g as Fd; }", "f");
+	assert !isCursorNamed(body, "lit");
+	assert !isCursorNamed(body, "fromParam");
+	assert isCursorNamed(body, "same");
+}
+
+test "a downcast of a class reference into a hooked class borrows" {
+	const body = inferredNamed("class Base { n: int32 = 1; }\nclass Derived extends Base { m: int32 = 2; }\n"
+		+ "function onDestroy(this x: Derived): void { }\n"
+		+ "function f(b: Base): int32 { const d = b as Derived; return d.m; }", "f");
+	assert isCursorNamed(body, "d");
 }

@@ -97,22 +97,25 @@ export function setIdleTimeout(pid: int64, ms: number): void {}
 
 // ===== Name registry =====
 
-const _names: Map<string, int64> = new Map<string, int64>();
-
 export function registerName(pid: int64, name: string): boolean {
-	if (_names.has(name)) return false;
-	_names.set(name, pid);
-	return true;
+	@emit(`var g = globalThis.__msActors || (globalThis.__msActors = { next: 1n, live: new Map() });
+var names = g.names || (g.names = new Map());
+if (names.has(${name})) return false;
+names.set(${name}, ${pid});
+return true;`);
+	unreachable;
 }
 
 export function whereis(name: string): int64 {
-	const pid = _names.get(name);
-	if (pid == null || pid == undefined) return 0;
-	return pid;
+	@emit(`var g = globalThis.__msActors;
+var pid = g !== undefined && g.names !== undefined ? g.names.get(${name}) : undefined;
+return pid === undefined ? 0n : pid;`);
+	unreachable;
 }
 
 export function unregister(name: string): void {
-	_names.delete(name);
+	@emit(`var g = globalThis.__msActors;
+if (g !== undefined && g.names !== undefined) g.names.delete(${name});`);
 }
 
 export function clockMs(): number {

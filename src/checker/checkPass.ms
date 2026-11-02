@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, stringType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
-import { findAllExtensionsByName, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, noteDefaultSource, stdSymbol, createExportRegistry } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry, createLayeredExtensionRegistry, exportedExtensionLayer, extensionsOf, ExtensionRegistry, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, noteDefaultSource } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -45,9 +45,9 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
-import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
+import { checkActorMethodModuleState, checkActorNonisolatedField, checkActorStoredClosures, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
+import { boundModuleCtx, callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild, literalHeldClosures } from "../ast/visitor";
@@ -466,6 +466,22 @@ function checkExternFunctionStmt(ctx: CheckerContext, node: Node): void {
 	ctx.pendingLocalTypeDecls.push(node);
 }
 
+function declaresLifecycleHook(node: Node): boolean {
+	const d = node.data as FunctionDeclData;
+	return isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "";
+}
+
+function checkLocalHookDecl(ctx: CheckerContext, node: Node): void {
+	collectFunction(ctx, node);
+	resolveFunction(ctx, node);
+	const saved = ctx.hookBodyBoundary;
+	openScope(ctx.table, ScopeKind.Block);
+	ctx.hookBodyBoundary = ctx.table.current;
+	checkFunctionDecl(ctx, node);
+	closeScope(ctx.table);
+	ctx.hookBodyBoundary = saved;
+}
+
 // ===== Statement Checker =====
 
 // A macro in statement position that returned SpliceMany: every element is a
@@ -581,6 +597,8 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 				collectFunction(ctx, node);
 				resolveFunction(ctx, node);
 				declareLocalGeneric(node.resolvedSym!, ctx.table.current);
+			} else if (fdLocal && declaresLifecycleHook(node)) {
+				checkLocalHookDecl(ctx, node);
 			} else if (fdLocal) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
@@ -1067,12 +1085,12 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	}
 
 	// TS-strict: async functions must declare Promise<T> as return type
-	// (or leave it unannotated, which infers to void). An explicit bare type T
+	// (or leave it unannotated, which infers Promise<void>). An explicit bare type T
 	// produces a C signature / body type mismatch in codegen — catch it at the
 	// declaration site with a clear, actionable error. async_generator is exempt
 	// because it returns AsyncIterator<T>, not Promise<T>.
 	if (fnType != null && fnType.kind == TypeKind.Function) {
-		refuseBareAsyncReturn(ctx, routine, fnType.typeReturn, d.fnName, "async function " + d.fnName, d.nameLocation);
+		refuseBareAsyncReturn(ctx, routine, fnType.typeReturn, d.fnReturnType != "", d.fnName, "async function " + d.fnName, d.nameLocation);
 	}
 
 	// Reference parity (semProcAux): generic function bodies are NOT checked at declaration time.
@@ -1133,6 +1151,8 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 		if (ctx.inferredReturn.kind != TypeKind.Inferred) {
 			if (ctx.inferredReturn.kind == TypeKind.Span) {
 				addError(ctx, "function '" + name + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", at.line, at.column);
+			} else {
+				refuseNestedView(ctx, "the return value of '" + name + "'", ctx.inferredReturn, at.line, at.column);
 			}
 			const storedReturn = closureStorageType(ctx.inferredReturn);
 			sym.symbolType.typeReturn = storedReturn;
@@ -1258,18 +1278,12 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	restoreComptimeOuter(outer);
 }
 
-let _boundModuleFn: (modulePath: string) => CheckerContext | null = (modulePath: string): CheckerContext | null => null;
-
-export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext | null): void {
-	_boundModuleFn = fn;
-}
-
 function enterOwnerModule(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
 	if (!isForeign(ctx, sym) || lookupModuleCtx(sym.modulePath) == ctx) return ctx;
 	const owner = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (owner.modulePath == sym.modulePath) return owner;
-	const bound = isEngineCheckMode() ? null : _boundModuleFn(sym.modulePath);
-	if (bound == null || bound.modulePath != sym.modulePath) return null;
+	const bound = boundModuleCtx(sym.modulePath);
+	if (bound == null) return null;
 	const program = lookupModuleProgram(bound.modulePath);
 	if (program != null) enterComptimeOuter(bound, program);
 	return bound;
@@ -1417,6 +1431,7 @@ interface DeclarationState {
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
 	staticInitBoundary: Cursor<Scope>;
+	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;
 	inSwitch: boolean;
@@ -1445,6 +1460,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		staticBlockPending: ctx.staticBlockPending,
 		readonlyBoundary: ctx.readonlyBoundary,
 		staticInitBoundary: ctx.staticInitBoundary,
+		hookBodyBoundary: ctx.hookBodyBoundary,
 		pendingSpawnThunk: ctx.pendingSpawnThunk,
 		inLoop: ctx.inLoop,
 		inSwitch: ctx.inSwitch,
@@ -1470,6 +1486,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.staticBlockPending = [];
 	ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
 	ctx.staticInitBoundary = null as unknown as Cursor<Scope>;
+	ctx.hookBodyBoundary = null as unknown as Cursor<Scope>;
 	ctx.pendingSpawnThunk = false;
 	ctx.inLoop = false;
 	ctx.inSwitch = false;
@@ -1498,6 +1515,7 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.staticBlockPending = saved.staticBlockPending;
 	ctx.readonlyBoundary = saved.readonlyBoundary;
 	ctx.staticInitBoundary = saved.staticInitBoundary;
+	ctx.hookBodyBoundary = saved.hookBodyBoundary;
 	ctx.pendingSpawnThunk = saved.pendingSpawnThunk;
 	ctx.inLoop = saved.inLoop;
 	ctx.inSwitch = saved.inSwitch;
@@ -1850,7 +1868,9 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 		checkActorStaticField(ctx, member);
 		checkActorNonisolatedField(ctx, sym, member);
 		checkActorReplies(ctx, member);
+		checkActorMethodModuleState(d.actorName, member);
 	}
+	checkActorStoredClosures(d.actorName, d.actorBody);
 	ctx.currentActor = prevActor;
 	closeScope(ctx.table);
 
@@ -2106,7 +2126,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const routine = routineFlagSet(d.methodFlags);
 			if (routine.has(RoutineFlag.Async)) setFlag(sym, SymbolFlag.Async);
 			const actorMethod = ctx.currentActor != null && ctx.currentActor.symbolType == classType;
-			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
+			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodReturnType != "", d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			refuseOrphanOverride(ctx, d, className, classType);
 			const overridden = d.methodIsStatic ? null : checkOverride(ctx, d, className, classType);
@@ -2788,7 +2808,7 @@ let _forwardLocals: HashSet<Symbol> = new HashSet<Symbol>();
 
 function isLocalFunctionStmt(node: Node): boolean {
 	if (node.kind != NodeKind.FunctionDecl || node.flags.has(NodeFlag.Converter) || node.flags.has(NodeFlag.WhenDeferred)) return false;
-	return !routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern);
+	return !routineFlagSet((node.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern) && !declaresLifecycleHook(node);
 }
 
 function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
@@ -4183,7 +4203,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		}
 		// Copy parent extensions so sub-module can use string/array methods
 		if (ctx.extensionRegistry != null) {
-			for (const ext of ctx.extensionRegistry.methods) {
+			for (const ext of extensionsOf(ctx.extensionRegistry)) {
 				registerExtension(subCtx.extensionRegistry, ext);
 			}
 		}
@@ -4210,7 +4230,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		// Also register sub-module extensions into parent context
 		if (subCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
-			for (const ext of subCtx.extensionRegistry.methods) {
+			for (const ext of extensionsOf(subCtx.extensionRegistry)) {
 				if (ext.sym != null && isExportedBy(subCtx, ext.sym)) {
 					registerExtension(ctx.extensionRegistry, ext);
 				}
@@ -4284,10 +4304,7 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 	return ctx.table.identCache;
 }
 
-// Inject exported prelude symbols, extensions, and directives into a module context.
-// NOTE: Uses while loops (not for-of) so DRC properly increfs shared symbols.
-// for-of creates cursor bindings that skip RC — pushing cursors into another
-// container creates dangling pointers when the source is destroyed.
+// Inject exported prelude symbols and converters into a module context.
 function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
@@ -4302,19 +4319,6 @@ function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): 
 				ctx.converterTargetTypes.set(sym, ctt);
 				registerConverter(ctx, sym, 2, 0, 0);
 			}
-		}
-	}
-	if (preludeCtx.extensionRegistry != null && ctx.extensionRegistry != null) {
-		const preludeExts = preludeCtx.extensionRegistry.methods;
-		let ei = 0;
-		while (ei < preludeExts.length) {
-			const ext = preludeExts[ei];
-			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
-				// Imported extensions get scope depth 0 (other module).
-				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				registerExtension(ctx.extensionRegistry, reexportExt(ext, ext.methodName, ext.sourcePath, ext.sym!, 0));
-			}
-			ei = ei + 1;
 		}
 	}
 }
@@ -4360,7 +4364,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		if (ctt != null) preludeCtx.converterTargetTypes.set(sym, ctt);
 	}
 	if (ctx.extensionRegistry == null || preludeCtx.extensionRegistry == null) return;
-	const exts = ctx.extensionRegistry.methods;
+	const exts = extensionsOf(ctx.extensionRegistry);
 	let ei = 0;
 	while (ei < exts.length) {
 		const ext = exts[ei];
@@ -4395,7 +4399,7 @@ export function bindModulePassesFrom(modulePath: string, ctx: CheckerContext): s
 
 export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
 	if (ctx.extensionRegistry != null && preludeCtx.extensionRegistry != null) {
-		for (const ext of ctx.extensionRegistry.methods) {
+		for (const ext of extensionsOf(ctx.extensionRegistry)) {
 			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) registerExtension(preludeCtx.extensionRegistry, ext);
 		}
 	}
@@ -4472,6 +4476,14 @@ export interface BoundModule {
 	gensymMark: int32;
 }
 
+// A module reads the exported prelude and globalImports extensions through their shared
+// layers, as an importer reads a module's interface, instead of copying them per bind.
+function importedExtensionRegistry(preludeCtx: CheckerContext, globalImports: CheckerContext | null): ExtensionRegistry {
+	let layer: ExtensionRegistry | null = preludeCtx.extensionRegistry != null ? exportedExtensionLayer(preludeCtx.extensionRegistry, null) : null;
+	if (globalImports != null && globalImports.extensionRegistry != null) layer = exportedExtensionLayer(globalImports.extensionRegistry, layer);
+	return layer != null ? createLayeredExtensionRegistry(layer) : createExtensionRegistry();
+}
+
 export function bindModuleForCheck(
 	program: Node,
 	registry: ExportRegistry | null,
@@ -4488,7 +4500,7 @@ export function bindModuleForCheck(
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
 	const ctx = graph != null && mod != null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
-	ctx.extensionRegistry = createExtensionRegistry();
+	ctx.extensionRegistry = importedExtensionRegistry(preludeCtx, globalImports);
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;

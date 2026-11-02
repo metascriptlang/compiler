@@ -2058,8 +2058,9 @@ const t = move h.f;              // ok: a field moves, and h.f is left empty
 take(move arr[0]);               // ok when `take` has a plain parameter: nothing is copied, arr[0] stays
 ```
 
-Measured on C (msc b899f456). The JS backend does not check element moves yet: it accepts the refused
-lines above and keeps the element.
+Measured on C, JS and the Raiser with a candidate of `21f91dd6c66` (main `fa6dca87101` with this branch,
+2026-11-02): C and the Raiser refuse the two refused lines above; the JS backend does not check element
+moves yet, accepts them and empties the element (`const x = move arr[0]` leaves `arr[0]` as `""`).
 
 A field or element whose type has no default value (a class, an array `T[]`, a struct holding one) cannot
 be moved out, on every backend, because the move would leave it without a value, unless nothing can read
@@ -2081,20 +2082,24 @@ w.leaf.v;                        // with this line the move is refused: 'w' is u
 ```
 
 Where the move hands its value on (a binding, an assignment, a return, a throw, a sink or constructor
-argument, a literal), C and JS both leave the field empty. C keeps a number or plain-struct field's value
-and only lends a field or element passed with `move` to a plain parameter; JS empties those too
-(measured 2026-11-02 on main 786d77d46e5 with this change: C `… | struct :0/7 | borrow s1/2/leaf/4 |
-element a1/1/leaf`, JS `… | struct :0/0 | borrow /0/null/4 | element /0/null`; inbox card
-`2026-11-02-js-move-empties-a-lent-argument-and-a-plain-struct-field-c-keeps`). The Raiser VM still leaves
-a moved field holding its value. The dead-local cases (a field, a `Vec` element, a nested struct
-field, a `Result` payload, a local declared in the loop) compile and the refused ones are rejected through
-the C pipeline (handoff `bindingOwnership`); not run as programs on JS or the Raiser.
+argument, a literal), C, JS and the Raiser all leave the field empty, and all three keep the value of a
+number field or a plain-number struct field (corpus `fieldMoveLeavesZero`, `movedPathEmptiesItsSlot`).
+C and the Raiser only lend a field or element passed with `move` to a plain parameter; JS empties it
+(measured 2026-11-02 on main 786d77d46e5: C `… | borrow s1/2/leaf/4 | element a1/1/leaf`, JS
+`… | borrow /0/null/4 | element /0/null`; on `21f91dd6c66`, `take(move h.f)` with `function take(s: string)`
+leaves `h.f` as `"xxx"` on C and the Raiser and `""` on JS; inbox card
+`2026-11-02-js-move-empties-a-lent-argument-and-a-plain-struct-field-c-keeps`). The dead-local cases (a
+field, a `Vec` element, a nested struct field, a `Result` payload, a local declared in the loop) compile and
+the refused ones are rejected through the C pipeline (handoff `bindingOwnership`); not run as programs on
+JS or the Raiser.
 
 A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
 field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside
-one block; a scope whose calls can raise keeps its destroys in a `finally`, so the pair stays. Hooks run on C only.
-Measured on C drc and orc (tree 1df797bce2240b8279206627046b90b5e5099429): `const t = mk(9); const h = { r: t, tag: "t" }; console.log("end");`
-prints `end`, `destroy R 9`, `destroy R 0`; with `t` a literal and no call in the function it prints `destroy R 4` once.
+one block; a scope whose calls can raise keeps its destroys in a `finally`, so the pair stays. Hooks run on C
+and the Raiser; JS runs none. Measured on the same candidate: `const t = mk(9); const h = { r: t, tag: "t" }; console.log("end");`
+prints `end`, `destroy R 9`, `destroy R 0` on C and `end`, `destroy R 9` on the Raiser, which runs no hook on
+the moved-from zeros (inbox card `2026-11-02-raiser-skips-hook-of-moved-from-value.md`);
+`const h: Holder = { r: mk(8), tag: "t" }` prints `destroy R 8` once on both.
 ```typescript
 // Execute at scope end (LIFO order)
 function process(): void {
@@ -3623,7 +3628,7 @@ struct with only `int32` fields, a generic instance of one and a `distinct int32
 declarations compiled and the hook never ran, and a struct or class holding a string lost its hook
 whenever a generic from another module (`Map<string, T>`) lifted the type first, because the
 per-module extension registry hides a hook from every module but the one that declares it. The
-hook is now found through the declaration of the type (`bindUserHook`, `checker/context.ms`).
+hook is now found through the declaration of the type (`bindLifecycleHook`, `checker/resolvePass.ms`).
 Corpus `userHookReachesEveryLift` prints the hooks that ran, `fd fdArray fdField handle mapClass
 mapShared mapStruct name slot` on C under `--gc=drc` and `--gc=orc`, and nothing on the control
 built from `99d28088c`. A hook on a distinct type replaces the base type's operation for that
@@ -3655,11 +3660,11 @@ Limits, measured on the same tree:
   never reaches the elements; the reference's `seq[Fd]` destroys each one. Binding it needs an array
   identity per distinct type, which the C backend does not have. A struct that holds the `Fd`
   (`FdCell[]`), a `Map<string, Fd>` and a struct field of type `Fd` run the hook. JS accepts the array.
-- A value that was moved from keeps its plain fields, so a hook can see them. Control `./msc`:
-  `const h: Holder = { r: mk(8), tag: "t" }` with a struct `R` whose `onDestroy` prints `id` prints
-  `destroy R 8` twice; the reference (`=destroy` on a `Holder(r: mk(8))`) prints it once, and after
-  `var b = move a` its `a.id` is 0 while ours is untouched (inbox card
-  `2026-10-04-wasmoved-keeps-plain-fields-and-a-hook-runs-twice.md`).
+
+The earlier limit "a value that was moved from keeps its plain fields and its hook runs twice" is gone:
+on a candidate of `21f91dd6c66` (2026-11-02) `const h: Holder = { r: mk(8), tag: "t" }` prints
+`destroy R 8` once on C and the Raiser, and reading `a` after `const b = move a` is refused on every
+backend (`cannot move 'a': variable is still used after this point`).
 
 Not measured: `--hcr` and incremental builds with the new hook table; a hook of a std type restored
 from the prelude pack (the pack rebuilds the extension registry without the collect pass that binds

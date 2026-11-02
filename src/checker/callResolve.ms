@@ -9,7 +9,7 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
-import { callCheckStmt, callReadonlyFieldWrite, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
+import { callCheckStmt, callReadonlyFieldWrite, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot, boundModuleCtx } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, ExtensionRegistry, resolveUserOperator } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
@@ -724,7 +724,8 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 	// `x = defaultResolveSection()`) is visible at cross-module call sites — same
 	// mechanism as generic-body re-check (reference: `graph.ifaces[module]`).
 	// Same-module calls get `ctx` back, preserving existing behavior.
-	const defCtx = pickBodyCtx(definingModulePath, ctx);
+	const picked = pickBodyCtx(definingModulePath, ctx);
+	const defCtx = definingModulePath != "" && picked.modulePath != definingModulePath ? boundModuleCtx(definingModulePath) ?? picked : picked;
 	let argIdx = args.length;
 	while (argIdx < totalParams) {
 		const defIdx = argIdx + defaultOffset;
@@ -1098,7 +1099,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// SHARE pointee rule (PARALOCK Amendment I): the pointee is aliased
 		// across threads, so it must be deep-immutable data.
 		if (pointee != null && pointee.kind != TypeKind.Error) {
-			checkArcPointeeSendable(ctx, pointee, (owner: Type): boolean => declaresUserHook(owner, ctx), d.newCallee.location.line, d.newCallee.location.column);
+			checkArcPointeeSendable(ctx, pointee, (owner: Type): boolean => declaresUserHook(owner), d.newCallee.location.line, d.newCallee.location.column);
 		}
 		const arcType = createArc(pointee);
 			typeNewCallee(ctx, d.newCallee);
@@ -1123,7 +1124,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			const payloadArgType = d.newArguments[0].nodeType;
 			if (payload == null && payloadArgType != null) { payload = payloadArgType; }
 			if (payload != null && payload.kind != TypeKind.Error) {
-				checkLockedPayloadSendable(ctx, payload, (owner: Type): boolean => declaresUserHook(owner, ctx), d.newCallee.location.line, d.newCallee.location.column);
+				checkLockedPayloadSendable(ctx, payload, (owner: Type): boolean => declaresUserHook(owner), d.newCallee.location.line, d.newCallee.location.column);
 			}
 			const lockedType = createLocked(payload);
 			typeNewCallee(ctx, d.newCallee);
@@ -1944,7 +1945,7 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		node.nodeType = booleanType();
 		return node.nodeType;
 	}
-	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner, ctx))
+	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner))
 		: trait.builtinKind == "IsArray" ? isArrayType(asked)
 		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
 		: trait.builtinKind == "IsPlainObject" ? isPlainObjectType(asked)
@@ -4679,12 +4680,12 @@ function firstApplicable(scores: CandidateScore[], syms: Symbol[]): int32 {
 
 function literalSignaturesFirst(syms: Symbol[], count: int32): int32[] {
 	const order: int32[] = [];
+	const rest: int32[] = [];
 	for (let ci = 0; ci < count; ci += 1) {
 		if (ci < syms.length && writesLiteralParam(syms[ci])) order.push(ci);
+		else rest.push(ci);
 	}
-	for (let ci = 0; ci < count; ci += 1) {
-		if (!(ci < syms.length && writesLiteralParam(syms[ci]))) order.push(ci);
-	}
+	for (const ci of rest) order.push(ci);
 	return order;
 }
 
@@ -6501,7 +6502,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// String-specific properties: .byteLength, .unicodeLength
 	// Skip when accessed on a TYPE (e.g., Buffer.byteLength(json)) — that's a static extension call.
 	// Only resolve as property when accessed on an instance (e.g., str.byteLength).
-	if ((d.property == "byteLength" || d.property == "unicodeLength") && resolvedObjType.kind == TypeKind.String) {
+	const isByteArray = resolvedObjType.kind == TypeKind.Array && resolvedObjType.typeReturn != null && resolvedObjType.typeReturn.kind == TypeKind.Uint8;
+	if ((d.property == "byteLength" && (resolvedObjType.kind == TypeKind.String || isByteArray)) || (d.property == "unicodeLength" && resolvedObjType.kind == TypeKind.String)) {
 		const isTypeAccess = d.object.resolvedSym != null
 			&& (d.object.resolvedSym.symbolKind == SymbolKind.TypeAlias
 				|| d.object.resolvedSym.symbolKind == SymbolKind.Class

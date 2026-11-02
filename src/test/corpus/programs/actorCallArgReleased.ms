@@ -11,7 +11,6 @@
 // @stdout: destroyed=6
 // @exit: 0
 // @skip-js: onDestroy runs where the DRC runs; JS has no destructors
-// @xfail(raiser): raiser runs no user lifecycle hooks and has no actors
 // note: an object lent to an awaited actor CALL from an async function is released once, by its owner, after the reply (old compiler: the caller increfed it into the message and nothing released it, one object leaked per call)
 
 class State { count: int32 = 0; }

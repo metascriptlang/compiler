@@ -16,7 +16,7 @@ import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym, ownExtensionCount, extensionsUnsharedWith } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -149,9 +149,20 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 		if (engineCtx != null) return engineCtx;
 	}
 	const defining = lookupModuleCtx(definingModulePath);
-	if (defining != null) return defining;
+	if (defining != null && !preludeModuleDeclares(ctx.preludeCtx != null ? ctx.preludeCtx! : ctx, definingModulePath, owner)) return defining;
 	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx.preludeCtx, definingModulePath);
+	if (ctx.preludeModuleScopes.has(definingModulePath)) return preludeBodyCtx(ctx, definingModulePath);
 	return ctx;
+}
+
+function preludeModuleDeclares(prelude: CheckerContext, modulePath: string, owner: Symbol | null): boolean {
+	if (owner == null) return false;
+	const members = prelude.preludeModuleScopes.get(modulePath);
+	if (members == null) return false;
+	for (const held of members) {
+		if (held == owner || held.overloads.includes(owner)) return true;
+	}
+	return false;
 }
 
 const _preludeBodyCtxs = new HashMap<CheckerContext, HashMap<string, CheckerContext>>();
@@ -180,10 +191,12 @@ export function resetInstantiationState(): void {
 	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[]>();
+	_hookInstanceTypes = new HashMap<Symbol, Type[]>();
 }
 
 export function forgetInstanceHooks(owner: Symbol): void {
 	_hookScannedInstances.delete(owner);
+	_hookInstanceTypes.delete(owner);
 	const hooks = _instanceHooks.get(owner);
 	if (hooks == null) return;
 	const kept: InstanceHook[] = [];
@@ -202,6 +215,7 @@ interface InstanceHook {
 
 let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
 let _hookScannedInstances: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
+let _hookInstanceTypes: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
 
 export function instanceArgsOf(sym: Symbol): Type[] {
 	if (sym.instanceArgs == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
@@ -226,6 +240,11 @@ function instanceHook(owner: Symbol, types: Type[], op: AttachedOp): Symbol | nu
 		if (hook.op == op && sameInstanceArgs(hook.concreteTypes, types)) return hook.sym;
 	}
 	return null;
+}
+
+export function declaresInstanceHooks(owner: Symbol): boolean {
+	const hooks = _instanceHooks.get(owner);
+	return hooks != null && hooks.length > 0;
 }
 
 function recordInstanceHook(owner: Symbol, types: Type[], op: AttachedOp, sym: Symbol): void {
@@ -257,12 +276,14 @@ export function lookupInstanceHook(type: Type, op: AttachedOp): Symbol | null {
 	return null;
 }
 
-export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
-	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (lookupInstanceHook(t, lifecycleHookOp(hookName)) != null) return true;
-	}
+export function declaresUserHook(t: Type): boolean {
 	const owner = nominalTypeSym(t);
-	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner, false), owner);
+	const slot = owner != null ? unwrapRef(owner.symbolType) : null;
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		const op = lifecycleHookOp(hookName);
+		if (lookupInstanceHook(t, op) != null || getAttachedOp(slot, op) != null) return true;
+	}
+	return false;
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -326,8 +347,8 @@ function bindGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Typ
 	if (seen == null) return;
 	for (const instType of seen) {
 		if (instanceHook(genericSym, instType.typeChildren, op) == null) instantiateBoundHook(genericSym, instType, op, hookSym, ctx, at);
-		markInstanceHookType(instType, genericSym);
 	}
+	for (const instType of _hookInstanceTypes.get(genericSym)!) markInstanceHookType(instType, genericSym);
 }
 
 function markInstanceHookType(t: Type, owner: Symbol): void {
@@ -360,7 +381,9 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	if (scanned == null) {
 		scanned = [];
 		_hookScannedInstances.set(owner, scanned);
+		_hookInstanceTypes.set(owner, []);
 	}
+	_hookInstanceTypes.get(owner)!.push(t);
 	for (const seen of scanned) {
 		if (sameInstanceArgs(seen.typeChildren, t.typeChildren)) {
 			markInstanceHookType(t, owner);
@@ -788,8 +811,8 @@ function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
 function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): int32 {
 	if (bodyCtx == ctx) return -1;
 	if (bodyCtx.extensionRegistry == null || ctx.extensionRegistry == null) return -1;
-	const preCount = bodyCtx.extensionRegistry.methods.length;
-	for (const m of ctx.extensionRegistry.methods) registerExtension(bodyCtx.extensionRegistry, m);
+	const preCount = ownExtensionCount(bodyCtx.extensionRegistry);
+	for (const m of extensionsUnsharedWith(ctx.extensionRegistry, bodyCtx.extensionRegistry)) registerExtension(bodyCtx.extensionRegistry, m);
 	return preCount;
 }
 
