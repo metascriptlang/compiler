@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { isSinkTypeForParam, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, isStructType, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -277,8 +277,10 @@ function mayBePartOf(a: Type | null, b: Type | null, depth: int32): boolean {
 
 // A structural holder can be an object of the other type exactly when one is assignable to the
 // other; a class that is extended may hide a subclass that is, and an open type may be anything.
+// A value struct is stored inline, so a place of one is a place of the other only when the types are the same.
 function mayHoldEither(a: Type, b: Type): boolean {
 	if (isExtendedClass(a) || isExtendedClass(b) || a.typeFlags.has(TypeFlag.HasGenericParam) || b.typeFlags.has(TypeFlag.HasGenericParam)) return true;
+	if (isStructType(a) && isStructType(b)) return sameType(a, b);
 	return isAssignable(a, b) || isAssignable(b, a);
 }
 
