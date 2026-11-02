@@ -514,7 +514,7 @@ function sameIndex(a: PlaceStep, b: PlaceStep): boolean {
 }
 
 export function overlap(a: Place, b: Place, lockBias: boolean): Overlap {
-	return overlapIn(a, b, lockBias, true);
+	return overlapIn(a, b, lockBias, !lockBias);
 }
 
 export function structuralOverlap(a: Place, b: Place, lockBias: boolean): Overlap {
@@ -679,6 +679,9 @@ test "places: the lock makes every element of a container overlap" {
 	const free = answers("struct E { f: int32; g: int32; }\nfunction probe(): void {\n\tconst xs: Vec<E> = [{ f: 1, g: 2 }];\n\tconst i: int32 = 0;\n\tconst j: int32 = 0;\n"
 		+ "\tpair(xs[i].f, xs[i].g); pair(xs[i].f, xs[j].g);\n}\n");
 	assert sameList(free, [Overlap.Disjoint, Overlap.Disjoint]), `${free}`;
+	const siblings = answers("class N { key: int32 = 7; left: N | null = null; self: N | null = null; }\nfunction probe(): void {\n\tconst t = new N();\n"
+		+ "\tpair(t.left, t.self); pair(t.left, t.key); pair(t.left, t);\n}\n", true);
+	assert sameList(siblings, [Overlap.Disjoint, Overlap.Disjoint, Overlap.Inside]), `${siblings}`;
 }
 
 test "places: the review's exclusivity shapes x1 to x5 and f12b overlap" {
