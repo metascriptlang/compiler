@@ -23,7 +23,7 @@ import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPo
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { createAliveSet, CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
-import { inferredCallRaises } from "../../checker/raises";
+import { inferredCallRaises, statementCanRaise } from "../../checker/raises";
 import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
@@ -2604,6 +2604,7 @@ function nrvoTempNeedsZero(cType: string): boolean {
 function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.NullLiteral) return;
 	emitStmtsLine(p, `(void)(${arg});`);
+	if (!p.suppressRaiseCheck && statementCanRaise(node)) emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Readonly<Type>, node: Readonly<Node>, ctx: ExprEvalCtx): void {
