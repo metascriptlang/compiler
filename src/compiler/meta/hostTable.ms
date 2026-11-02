@@ -311,6 +311,18 @@ function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
 	return boxString("");
 }
 
+@include("runtime/fs/header.h");
+extern function msFsReadFile(path: string): string;
+extern function msFsLastErrno(): int32;
+
+function _bridgeMsFsReadFileBytes(args: RaiserValue[]): RaiserValue {
+	const path = unboxString(args[0]);
+	const raw = msFsReadFile(path);
+	_lastFsErrno = msFsLastErrno();
+	registerCompileTimeRead(resolve(path, cwd()));
+	return boxString(raw);
+}
+
 function _bridgeMsFsLastErrno(args: RaiserValue[]): RaiserValue {
 	return boxInt(_lastFsErrno);
 }
@@ -1347,6 +1359,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsModifiedTime",   _bridgeMsFsModifiedTime, HostCapability.FileRead);
 	// fs read/write/mutate + errno polling
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
+	registerHostFn("msFsReadFileBytes",  _bridgeMsFsReadFileBytes, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
 	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
