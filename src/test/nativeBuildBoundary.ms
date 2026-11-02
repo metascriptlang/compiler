@@ -2,7 +2,7 @@
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
 import {
 	appendFile, changeStamp, chmod, copyFile, ensureDir, exists, readDir, readFile,
-	remove, removeAll, writeFile,
+	realpath, remove, removeAll, writeFile,
 } from "std/fs";
 import { dirname } from "std/fs/path";
 
@@ -45,8 +45,8 @@ const cacheRootGroups = [
 	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
-	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "byte-order" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-dynamic-import" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, byte-order, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-dynamic-import, reproducible-link, test-timing, windows-cross, or all");
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "byte-order" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-dynamic-import" && group != "support-alias" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, byte-order, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-dynamic-import, support-alias, reproducible-link, test-timing, windows-cross, or all");
 	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
@@ -2025,6 +2025,24 @@ function runTestDynamicImport(): void {
 	recordTrue("a test awaits import() of modules whose own tests run, initialized once before the tests", all.code == 0 && all.stdout.includes("app/main.ms (2)"));
 }
 
+function runSupportAlias(): void {
+	if (windows) return;
+	const dir = `${root}/support-alias`;
+	const support = supportRootOf(realpath(compiler));
+	ensureDir(`${dir}/tc`);
+	ensureDir(`${dir}/app`);
+	need(copyFile(compiler, `${dir}/tc/msc`).ok && chmod(`${dir}/tc/msc`, 493).ok, "toolchain binary");
+	for (const tree of ["std", "runtime", "src", "vendor"]) {
+		need(command(dir, `link-${tree}`, "ln", ["-s", `${support}/${tree}`, `${dir}/tc/${tree}`]).code == 0, `link ${tree}`);
+	}
+	const spellings = [["physical", `${support}/runtime/core/string.h`], ["toolchain", `${dir}/tc/runtime/core/string.h`]];
+	for (const spelling of spellings) {
+		put(`${dir}/app/${spelling[0]}.ms`, `import { msStringFromCStr } from "${spelling[1]}";\nconst seven: int32 = 7;\nconsole.log(seven);\n`);
+		const built = command(`${dir}/app`, `alias-${spelling[0]}`, `${dir}/tc/msc`, ["run", `${spelling[0]}.ms`]);
+		record(`a support header imported by its ${spelling[0]} path through a linked toolchain links its C once`, "0 7", `${built.code} ${built.stdout.trim()}`);
+	}
+}
+
 function runWindowsCross(): void {
 	const dir = `${root}/windows-cross`;
 	ensureDir(dir);
@@ -2080,6 +2098,7 @@ if (group == "argv" || group == "all") runArgv();
 if (group == "reproducible-link" || group == "all") runReproducibleLink();
 if (group == "test-scope" || group == "all") runTestScope();
 if (group == "test-dynamic-import" || group == "all") runTestDynamicImport();
+if (group == "support-alias" || group == "all") runSupportAlias();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "manual-cross-module-throw" || group == "all") runManualCrossModuleThrow();
