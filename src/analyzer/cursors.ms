@@ -1513,6 +1513,26 @@ test "an element store joins the stored object to the array's graph" {
 	assert !isCursorNamed(body, "z");
 }
 
+const ENTRIES = BOXES + "struct Narrow<T> { h: int64; k: T; }\n"
+	+ "struct Wide<K, V> { h: int64; k: K; v: V; }\n"
+	+ "function putNarrow<T>(arr: Narrow<T>[], n: Narrow<T>): void { arr[0] = n; }\n"
+	+ "function putWide<K, V>(arr: Wide<K, V>[], n: Wide<K, V>): void { arr[0] = n; }\n";
+
+test "a callee that stores a whole element of another value struct type keeps the cursor" {
+	const body = inferredNamed(ENTRIES + "function f(src: Wide<string, Box>[], dst: Narrow<string>[], n: Narrow<string>): void { const c = src[0].v; putNarrow(dst, n); show(c.v); }", "f");
+	assert isCursorNamed(body, "c");
+}
+
+test "a whole-element store of another value struct type keeps the cursor" {
+	const body = inferredNamed(ENTRIES + "function f(src: Wide<string, Box>[], dst: Narrow<string>[], n: Narrow<string>): void { const c = src[0].v; dst[0] = n; show(c.v); }", "f");
+	assert isCursorNamed(body, "c");
+}
+
+test "a callee that stores a whole element of the same value struct type ends the cursor" {
+	const body = inferredNamed(ENTRIES + "function f(src: Wide<string, Box>[], dst: Wide<string, Box>[], n: Wide<string, Box>): void { const c = src[0].v; putWide(dst, n); show(c.v); }", "f");
+	assert !isCursorNamed(body, "c");
+}
+
 test "a declaration holding a local joins the local to its graph" {
 	const body = inferredNamed(BOXES + "class Wrap { h: Holder; constructor(h: Holder) { this.h = h; } }\nfunction f(): void { const m = new Holder(\"o\"); const w = new Wrap(m); const z = m.child; w.h.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	assert !isCursorNamed(body, "z");
