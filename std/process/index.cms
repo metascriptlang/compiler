@@ -10,7 +10,7 @@
 
 @include("runtime/process.h");
 
-import { isExecutable } from "../fs";
+import { isExecutable, isFile } from "../fs";
 import { utf8Text } from "../core/string/bytes";
 import {
 	ProcessError, ProcessErrorKind,
@@ -282,17 +282,21 @@ function hasWinExeSuffix(cmd: string): boolean {
 	return false;
 }
 
+function isProgram(path: string): boolean {
+	return isFile(path) && isExecutable(path);
+}
+
 export function findOnPath(cmd: string): string {
 	if (cmd == "") return "";
 	const isWin = platform == "windows";
 
 	// Input with separator → direct lookup only; never fall through to PATH.
 	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {
-		if (isExecutable(cmd)) return cmd;
+		if (isProgram(cmd)) return cmd;
 		if (isWin && !hasWinExeSuffix(cmd)) {
 			for (const ext of WIN_EXE_EXTS) {
 				const candidate = cmd + ext;
-				if (isExecutable(candidate)) return candidate;
+				if (isProgram(candidate)) return candidate;
 			}
 		}
 		return "";
@@ -308,16 +312,16 @@ export function findOnPath(cmd: string): string {
 		if (isWin) {
 			if (alreadyHasExt) {
 				const candidate = dir + "/" + cmd;
-				if (isExecutable(candidate)) return candidate;
+				if (isProgram(candidate)) return candidate;
 			} else {
 				for (const ext of WIN_EXE_EXTS) {
 					const candidate = dir + "/" + cmd + ext;
-					if (isExecutable(candidate)) return candidate;
+					if (isProgram(candidate)) return candidate;
 				}
 			}
 		} else {
 			const candidate = dir + "/" + cmd;
-			if (isExecutable(candidate)) return candidate;
+			if (isProgram(candidate)) return candidate;
 		}
 	}
 	return "";

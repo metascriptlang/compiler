@@ -10,7 +10,7 @@ export {
 	spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, ByteChunk, SpawnOptions,
 } from "./child";
 
-import { isExecutable } from "../fs";
+import { isExecutable, isFile } from "../fs";
 import { startFailed, errnoName } from "./errors";
 
 extern function msProcessCwd(): string from "msProcessCwd";
@@ -142,16 +142,20 @@ function hasWinExeSuffix(cmd: string): boolean {
 	return false;
 }
 
+function isProgram(path: string): boolean {
+	return isFile(path) && isExecutable(path);
+}
+
 export function findOnPath(cmd: string): string {
 	if (cmd == "") return "";
 	const isWin = platform == "windows";
 
 	if (cmd.indexOf("/") >= 0 || cmd.indexOf("\\") >= 0) {
-		if (isExecutable(cmd)) return cmd;
+		if (isProgram(cmd)) return cmd;
 		if (isWin && !hasWinExeSuffix(cmd)) {
 			for (const ext of WIN_EXE_EXTS) {
 				const candidate = cmd + ext;
-				if (isExecutable(candidate)) return candidate;
+				if (isProgram(candidate)) return candidate;
 			}
 		}
 		return "";
@@ -166,16 +170,16 @@ export function findOnPath(cmd: string): string {
 		if (isWin) {
 			if (alreadyHasExt) {
 				const candidate = dir + "/" + cmd;
-				if (isExecutable(candidate)) return candidate;
+				if (isProgram(candidate)) return candidate;
 			} else {
 				for (const ext of WIN_EXE_EXTS) {
 					const candidate = dir + "/" + cmd + ext;
-					if (isExecutable(candidate)) return candidate;
+					if (isProgram(candidate)) return candidate;
 				}
 			}
 		} else {
 			const candidate = dir + "/" + cmd;
-			if (isExecutable(candidate)) return candidate;
+			if (isProgram(candidate)) return candidate;
 		}
 	}
 	return "";
