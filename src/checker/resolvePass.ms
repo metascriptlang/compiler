@@ -9,7 +9,7 @@
 import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -446,7 +446,7 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
 	const view = nestedViewType(t);
 	if (view == null) return;
-	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
+	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + nestedViewShown(t, view)
 		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
 }
 function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
@@ -2639,7 +2639,7 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 export function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
 	const view = findViewType(fieldType);
 	if (view == null) return;
-	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
+	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + viewShown(fieldType, view)
 		+ ": a view borrows memory its source can free while the field still holds it — store " + ownedAlternativeOf(view), line, col);
 }
 
@@ -2792,6 +2792,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
 		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
+		else refuseNestedView(ctx, "field '" + d.interfaceFields[wi] + "' of '" + d.interfaceName + "'", wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -3421,6 +3422,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		// resolveAnnotation handles both "Bar" and "Bar<T>" forms (Phase 1c).
 		const parentType = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(parentType)) {
+			const viewFault = viewTypeArgumentFault(parentType);
+			if (viewFault != "") addError(ctx, viewFault, node.location.line, node.location.column);
 			inner.typeExtra = parentType;
 			propagateGenericParam(inner, parentType);
 			const parentStruct = unwrapToStruct(parentType);

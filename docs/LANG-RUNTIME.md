@@ -326,6 +326,6 @@ The compiler inserts conversions at call sites when a function expects `Span<T>`
 ### Restrictions
 
 - `Span<T>` **cannot be returned** from functions — dangling pointer risk (checker-enforced since 2026-08-28, same rule as the reference model's openArray result ban)
-- `Span<T>` **can be stored** in struct/class/interface fields and globals (probed 2026-08-28; `BsatnReader.bytes` relies on it) — lifetime NOT tracked: the stored view must not outlive its buffer (writer's borrow contract, Zig-slice tier). Object-literal field init from `T[]`/`Vec` lacks the implicit Span coercion (raw C error) — initialize from an already-Span source
+- `Span<T>` **is stored only in a struct field**, and that struct is then a view: a class field or an array element refuses it, and the struct is returned only when its views come from the first parameter, and is never written through a `ref`/`out` parameter (`docs/LANG.md` §3 Zero-Copy String Views, Storage; pins `handoff/viewStructStorage.ms`, `viewStructBorrows.ms` and corpus `viewStructFromFirstParam`, 2026-11-01). An object-literal field takes a `T[]` for a `Readonly<Span<T>>` field without a cast: corpus `viewStructFromFirstParam` builds `{ v: other, n: 1 }` and `{ bytes: this.data, n: 1 }` from `uint8[]` values and prints the same on every lane
 - `T[N]` size must be a **compile-time constant** (literal or const generic)
 - `T[N]` **cannot be resized** — no `push`, `pop`, `splice`
