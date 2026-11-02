@@ -734,6 +734,13 @@ function wireNameClash(params: BoundaryParam[]): string | null {
 	return null;
 }
 
+function hasKind(params: BoundaryParam[], kind: BoundaryKind): boolean {
+	for (const p of params) {
+		if (p.kind == kind) return true;
+	}
+	return false;
+}
+
 function boundaryFunction(
 	c: Collector,
 	key: string,
@@ -796,6 +803,18 @@ function boundaryFunction(
 			`two parameters would become the wasm parameter '${clash}' (a string, `
 				+ "Vec or Span adds Ptr and Len, a nullable adds Some); rename one of "
 				+ "them",
+		);
+		return null;
+	}
+	if (hasKind(params, BoundaryKind.Span) && hasKind(params, BoundaryKind.Callback)) {
+		c.at = nameAt;
+		cannotCross(
+			c,
+			"span-and-callback",
+			"it takes both a Span and a callback, and the callback runs JS while "
+				+ "the Span's copy is live, so a write on either side would be lost; "
+				+ "pass a Vec, which is copied for the call, or take the callback in "
+				+ "a second function",
 		);
 		return null;
 	}

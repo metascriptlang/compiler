@@ -1,3 +1,6 @@
+// @mixed-error: spanLendResizeWasm.ms:2:17
+// @mixed-error: spanLendResizeWasm.ms:7:17
+// @mixed-error: spanLendResizeWasm.ms:12:17
 // @stdout: n=2 [1,2]
 // @stdout: n=2 [true,false]
 // @stdout: n=3 [3,2,3]

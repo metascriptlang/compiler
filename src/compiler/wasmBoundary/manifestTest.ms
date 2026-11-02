@@ -395,3 +395,18 @@ export function fine(x: int32 | null, y: int32 | null): int32 { return 0; }
 	assert m.errors[0].message.includes("'clash'") && m.errors[0].message.includes("'xSome'");
 	assert m.errors[1].message.includes("'clashStr'") && m.errors[1].message.includes("'sPtr'");
 }
+
+test "manifest: a function that takes a Span, writable or read-only, and a callback is refused at its name" {
+	const src = `
+export function mapInto(xs: Span<int32>, cb: (x: int32) => int32): void {}
+export function viewThen(n: int32, xs: Readonly<Span<float32>>, cb: (at: int32) => void): void {}
+export function spanOnly(xs: Span<int32>): void {}
+export function callbackOnly(cb: (xs: Span<int32>) => void): void {}
+`;
+	const names = ["mapInto", "viewThen", "spanOnly", "callbackOnly"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.functions.length == 2 && m.functions[0].name == "spanOnly" && m.functions[1].name == "callbackOnly";
+	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].code == "span-and-callback" && m.errors[0].message.includes("'mapInto'") && m.errors[0].message.includes("pass a Vec");
+	assert m.errors[1].code == "span-and-callback" && m.errors[1].message.includes("'viewThen'");
+}
