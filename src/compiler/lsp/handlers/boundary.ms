@@ -64,6 +64,9 @@ function crossing(
 			? "lent for the call, written back after it"
 			: "lent for the call, read only",
 		BoundaryKind.Callback => "borrowed for the call",
+		BoundaryKind.Handle => resultSide
+			? "an owner handle to release"
+			: "lent by its handle for the call",
 	};
 }
 
@@ -127,6 +130,7 @@ function costRank(p: BoundaryParam): int32 {
 		BoundaryKind.Struct => 3,
 		BoundaryKind.String => 2,
 		BoundaryKind.Callback => 1,
+		BoundaryKind.Handle => 1,
 		BoundaryKind.Bool
 			| BoundaryKind.I8
 			| BoundaryKind.I16
@@ -149,6 +153,7 @@ function costLabel(p: BoundaryParam): string {
 		BoundaryKind.Struct => "flatten struct",
 		BoundaryKind.String => "encode string",
 		BoundaryKind.Callback => "borrow callback",
+		BoundaryKind.Handle => "lend handle",
 		BoundaryKind.Bool
 			| BoundaryKind.I8
 			| BoundaryKind.I16
