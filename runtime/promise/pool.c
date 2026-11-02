@@ -190,17 +190,14 @@ static msThreadPool* gPool = NULL;
 
 /* ===== Actor polling from worker threads (Phase 5: Parallel Actors) =====
  * Pool doesn't include actor.h to avoid static-in-header duplication.
- * Instead, actor.h registers a poll function + scheduler ID setter via hooks. */
+ * Instead, actor.h registers a poll function via a hook. */
 
-/* Set once by the first actor, possibly while workers already run: atomic, the setter
- * published before the poll function a worker checks first. */
+/* Set once by the first actor, possibly while workers already run. */
 typedef bool (*msPoolActorPollHook)(void);
-typedef void (*msPoolSchedIdHook)(int id);
 /* Actor poll hook: called by workers to drain their local actor queues */
 static _Atomic(msPoolActorPollHook) msPoolActorPollFn = NULL;
 
-/* Scheduler ID setter: called once per worker to assign scheduler ID */
-static _Atomic(msPoolSchedIdHook) msPoolSchedIdSetterFn = NULL;
+MS_TLS_EXTERN(int, msMySchedulerID);  /* actor.c */
 
 
 /* Per-worker actor wake flag: set by msPoolWakeWorker, checked in sleep predicate.
@@ -209,9 +206,8 @@ static _Atomic(msPoolSchedIdHook) msPoolSchedIdSetterFn = NULL;
  * The flag survives across the race window and prevents the worker from sleeping. */
 static _Atomic(bool) msPoolActorWake[MS_POOL_MAX_WORKERS] = {false};
 
-/* Called by actor.h to register the poll + ID setter functions */
-void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
-    atomic_store_explicit(&msPoolSchedIdSetterFn, idSetterFn, memory_order_release);
+/* Called by actor.h to register the poll function */
+void msPoolSetActorPollHook(bool (*pollFn)(void)) {
     atomic_store_explicit(&msPoolActorPollFn, pollFn, memory_order_release);
 }
 
@@ -315,9 +311,9 @@ static void* msPoolWorkerLoop(void* arg) {
 	bool spare = ((intptr_t)arg & 1) != 0;
 	msIsPoolWorker = true;
 	msPoolWorkerSchedId = mySchedID;
-	/* A spare takes no actor: its id stays past msSchedulerCount. */
-	msPoolSchedIdHook setSchedId = atomic_load_explicit(&msPoolSchedIdSetterFn, memory_order_acquire);
-	if (!spare && setSchedId != NULL) setSchedId(mySchedID);
+	/* A spare takes no actor. A worker owns its scheduler before it runs any task, so an engine
+	 * it opens registers under the id its loop's wakes use, whenever the first actor comes. */
+	if (!spare) msMySchedulerID = mySchedID;
 
 	extern int msWorkerTimerDelayMs(void);
 	extern bool msWorkerLoopPending(void);
@@ -399,7 +395,6 @@ static void* msPoolWorkerLoop(void* arg) {
 		 * (actor re-enqueue may have added new work during processing). */
 		msPoolActorPollHook poll = spare ? NULL : atomic_load_explicit(&msPoolActorPollFn, memory_order_acquire);
 		if (poll != NULL) {
-			atomic_load_explicit(&msPoolSchedIdSetterFn, memory_order_relaxed)(mySchedID);
 			atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 			bool polled = poll();
 			atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);

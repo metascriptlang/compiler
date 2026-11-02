@@ -1823,7 +1823,7 @@ extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorReadyHook(bool (*hook)(void)); /* dispatch.c */
 static inline bool msActorSystemIdle(void);           /* defined below */
 static inline void msActorShutdownAtExit(void);       /* defined below */
-extern void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));  /* pool.c */
+extern void msPoolSetActorPollHook(bool (*pollFn)(void));  /* pool.c */
 static inline bool msActorPollLocal(void);            /* defined below */
 
 #include "runtime/promise/pool.h"
@@ -1842,11 +1842,6 @@ static inline void msSchedActorsGrow(msSchedActors* sched, int needed) {
     }
     sched->actors = newArr;
     sched->cap = newCap;
-}
-
-/* Scheduler ID setter — called by pool workers via hook to set their TLS scheduler ID */
-static inline void msSetSchedulerID(int id) {
-    msMySchedulerID = id;
 }
 
 static inline void msActorClaimEventLoopScheduler(void) {
@@ -1873,7 +1868,7 @@ static inline void msActorSystemInit(void) {
     msThreadPool* p = msPoolGet();
     int count = (p != NULL ? p->workerCount : 0) + 1;
     msSchedulerCount = count > MS_MAX_SCHEDULERS ? MS_MAX_SCHEDULERS : count;
-    msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
+    msPoolSetActorPollHook(msActorPollLocal);
     msCDInit();
     msSetActorPollHook(msActorPollEventLoop);
     msSetActorIdleHook(msActorSystemIdle);

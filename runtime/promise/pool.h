@@ -119,6 +119,6 @@ void msPoolWakeWorker(int schedulerID);
 void msPoolWakeWorkers(void);
 
 /* Register actor polling hooks (called by actor.h during init) */
-void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));
+void msPoolSetActorPollHook(bool (*pollFn)(void));
 
 #endif /* MS_POOL_H */
