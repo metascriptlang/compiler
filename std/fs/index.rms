@@ -6,6 +6,7 @@
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 import { Buffer } from "../core/buffer";
 import { rawBuffer, rawString } from "../core/buffer/bytes";
+import { utf8Text } from "../core/string/bytes";
 
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
@@ -27,15 +28,20 @@ extern function msFsRename(oldPath: string, newPath: string): number from "msFsR
 extern function msFsSymlink(target: string, path: string): number from "msFsSymlink";
 extern function msFsReadDirEntries(path: string): string from "msFsReadDirEntries";
 
-export function readFile(path: string): Result<string, IoError> {
+function readRaw(path: string): Result<string, IoError> {
 	const raw = msFsReadFile(path);
 	const err = msFsLastErrno();
 	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
 }
 
+export function readFile(path: string): Result<string, IoError> {
+	const raw = try readRaw(path);
+	return Result.ok(utf8Text(raw, false));
+}
+
 export function readFileBytes(path: string): Result<Buffer, IoError> {
-	const raw = try readFile(path);
+	const raw = try readRaw(path);
 	return Result.ok(rawBuffer(raw));
 }
 
