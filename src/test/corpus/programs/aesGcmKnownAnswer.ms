@@ -5,7 +5,6 @@
 // @stdout: sealed by the hand-written implementation opens true
 // @stdout: case2 aes128 opens true tag false body false aad false|case4 aes128 opens true tag false body false aad false|case14 aes256 opens true tag false body false aad false|case16 aes256 opens true tag false body false aad false
 // @exit: 0
-// @skip-js: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.jms
 // @skip-raiser: std/crypto/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 import { Buffer } from "std/core/buffer";

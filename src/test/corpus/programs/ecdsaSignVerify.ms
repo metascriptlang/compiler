@@ -3,8 +3,7 @@
 //
 // @stdout: imported true false|p256 true false|p384 true false
 // @exit: 0
-// @skip-js: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.jms
-// @skip-raiser: std/crypto/ec has only a C backend (index.cms over mbedTLS); there is no ec.rms
+// @skip-raiser: std/crypto/ec has a C and a JS backend and no ec.rms
 
 import { EcCurve, EcPrivateKey, ecdsaSign, ecdsaVerify } from "std/crypto/ec";
 

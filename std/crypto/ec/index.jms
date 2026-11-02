@@ -1,0 +1,295 @@
+/**
+ * ECDSA and ECDH on P-256 and P-384 on the JavaScript backend: the same surface as index.cms.
+ *
+ * Asynchronous calls run on `globalThis.crypto.subtle` (browsers on secure contexts, Node 19 and later); a missing
+ * `crypto.subtle` is a `CryptoError`, never a throw. ECDSA signatures are DER, as on the native backend: WebCrypto
+ * speaks the fixed-width `r || s` form, so each call converts. WebCrypto binds a key to ECDSA or ECDH when it is
+ * imported, so a key object keeps its scalar and public point and imports a `CryptoKey` per use on first call and
+ * reuses it. sha1 signatures are refused, as on the native backend.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { bytesOf } from "../pure/bytes";
+import { pemDecode, pemEncode } from "../pure/pem";
+import {
+	Curve, ownCurve, EcPublicData, EcPrivateData, ecPublicFromSpki, ecPublicToSpki, ecPrivateFromSec1, ecPrivateFromPkcs8,
+	ecPrivateToSec1, ecPrivateToPkcs8, ecdsaDerToRaw, ecdsaRawToDer, ecdsaSignRaw, ecdsaVerifyRaw, ecdhShared, ecPointValid,
+	ecPublicPoint, ecRandomScalar,
+} from "../pure/weierstrass";
+import { hashKind, hashOf } from "../pure/hash";
+import { kindSha224, kindMd5 } from "../pure/state";
+import { p256 } from "../pure/p256";
+import { p384 } from "../pure/p384";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+@emit(`const msEcPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on secure contexts (https or localhost)";
+function msEcPkSubtle() {
+	const c = globalThis.crypto;
+	return c && c.subtle ? c.subtle : null;
+}
+function msEcPkMessage(e) {
+	return String(e && e.message ? e.message : e);
+}
+function msEcPkUnb64url(text) {
+	const padded = text.replace(/-/g, "+").replace(/_/g, "/");
+	return Array.from(atob(padded), (ch) => ch.charCodeAt(0));
+}
+const msEcPkHashes = { sha256: "SHA-256", sha384: "SHA-384", sha512: "SHA-512", sha1: "SHA-1" };
+function msEcPkCache() {
+	return new Map();
+}
+function msEcPkKey(cache, id, make) {
+	let pending = cache.get(id);
+	if (!pending) {
+		pending = make();
+		cache.set(id, pending);
+		pending.catch(() => cache.delete(id));
+	}
+	return pending;
+}
+async function msEcPkRun(job) {
+	const subtle = msEcPkSubtle();
+	if (!subtle) return { value: [], error: msEcPkNoSubtle };
+	try {
+		return { value: Array.from(new Uint8Array(await job(subtle))), error: "" };
+	} catch (e) {
+		return { value: [], error: msEcPkMessage(e) };
+	}
+}
+async function msEcPair(job) {
+	const subtle = msEcPkSubtle();
+	if (!subtle) return { d: [], point: [], error: msEcPkNoSubtle };
+	try {
+		const jwk = await job(subtle);
+		return { d: msEcPkUnb64url(jwk.d), point: [4, ...msEcPkUnb64url(jwk.x), ...msEcPkUnb64url(jwk.y)], error: "" };
+	} catch (e) {
+		return { d: [], point: [], error: msEcPkMessage(e) };
+	}
+}
+function msEcGenerate(web) {
+	return msEcPair(async (s) => {
+		const pair = await s.generateKey({ name: "ECDSA", namedCurve: web }, true, ["sign", "verify"]);
+		return s.exportKey("jwk", pair.privateKey);
+	});
+}
+function msEcComplete(pkcs8, web) {
+	return msEcPair(async (s) => s.exportKey("jwk", await s.importKey("pkcs8", Uint8Array.from(pkcs8), { name: "ECDSA", namedCurve: web }, true, ["sign"])));
+}
+async function msEcCheck(point, web) {
+	const s = msEcPkSubtle();
+	if (!s) return msEcPkNoSubtle;
+	try {
+		await s.importKey("raw", Uint8Array.from(point), { name: "ECDSA", namedCurve: web }, false, ["verify"]);
+		return "";
+	} catch (e) {
+		return msEcPkMessage(e);
+	}
+}
+function msEcSign(cache, pkcs8, web, hash, data) {
+	if (!msEcPkHashes[hash]) return Promise.resolve({ value: [], error: "unsupported hash " + hash });
+	return msEcPkRun(async (s) => {
+		const key = await msEcPkKey(cache, "sign", () => s.importKey("pkcs8", Uint8Array.from(pkcs8), { name: "ECDSA", namedCurve: web }, false, ["sign"]));
+		return s.sign({ name: "ECDSA", hash: msEcPkHashes[hash] }, key, Uint8Array.from(data));
+	});
+}
+async function msEcVerify(cache, point, web, hash, data, raw) {
+	const s = msEcPkSubtle();
+	if (!s || !msEcPkHashes[hash]) return false;
+	try {
+		const key = await msEcPkKey(cache, "verify", () => s.importKey("raw", Uint8Array.from(point), { name: "ECDSA", namedCurve: web }, false, ["verify"]));
+		return await s.verify({ name: "ECDSA", hash: msEcPkHashes[hash] }, key, Uint8Array.from(raw), Uint8Array.from(data));
+	} catch (e) {
+		return false;
+	}
+}
+function msEcDerive(cache, pkcs8, web, peerCache, peerPoint, bits) {
+	return msEcPkRun(async (s) => {
+		const key = await msEcPkKey(cache, "derive", () => s.importKey("pkcs8", Uint8Array.from(pkcs8), { name: "ECDH", namedCurve: web }, false, ["deriveBits"]));
+		const peer = await msEcPkKey(peerCache, "peer", () => s.importKey("raw", Uint8Array.from(peerPoint), { name: "ECDH", namedCurve: web }, false, []));
+		return s.deriveBits({ name: "ECDH", public: peer }, key, bits);
+	});
+}`);
+
+interface Settled {
+	value: Buffer;
+	error: string;
+}
+
+interface Pair {
+	d: Buffer;
+	point: Buffer;
+	error: string;
+}
+
+extern function newCache(): unknown from "msEcPkCache()";
+extern function wcGenerate(web: string): Promise<Pair> from "msEcGenerate(#)";
+extern function wcComplete(pkcs8: Buffer, web: string): Promise<Pair> from "msEcComplete(#, #)";
+extern function wcCheck(point: Buffer, web: string): Promise<string> from "msEcCheck(#, #)";
+extern function wcSign(cache: unknown, pkcs8: Buffer, web: string, hash: string, data: Buffer): Promise<Settled> from "msEcSign(#, #, #, #, #)";
+extern function wcVerify(cache: unknown, point: Buffer, web: string, hash: string, data: Buffer, raw: Buffer): Promise<boolean> from "msEcVerify(#, #, #, #, #, #)";
+extern function wcDerive(cache: unknown, pkcs8: Buffer, web: string, peerCache: unknown, peerPoint: Buffer, bits: number): Promise<Settled> from "msEcDerive(#, #, #, #, #, #)";
+
+export type EcCurve = "p256" | "p384";
+
+function curves(): Curve[] {
+	return [ownCurve(p256), ownCurve(p384)];
+}
+
+function curveNamed(curve: EcCurve): Curve {
+	return ownCurve(curve == "p384" ? p384 : p256);
+}
+
+function publicOfPem(pem: string): EcPublicData | null {
+	const block = pemDecode(pem);
+	if (block == null || block.label != "PUBLIC KEY") return null;
+	return ecPublicFromSpki(block.der, curves());
+}
+
+function privateOfPem(pem: string): EcPrivateData | null {
+	const block = pemDecode(pem);
+	if (block == null) return null;
+	if (block.label == "PRIVATE KEY") return ecPrivateFromPkcs8(block.der, curves());
+	if (block.label == "EC PRIVATE KEY") return ecPrivateFromSec1(block.der, curves());
+	return null;
+}
+
+export class EcPublicKey {
+	_data: EcPublicData;
+	_cache: unknown;
+
+	static async importPem(pem: string): Promise<Result<EcPublicKey, CryptoError>> {
+		const data = publicOfPem(pem);
+		if (data == null || (await wcCheck(data.point as Buffer, data.curve.webName)) != "") {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.importPem", "failed to parse a P-256 or P-384 public key PEM"));
+		}
+		return Result.ok({ _data: data, _cache: newCache() });
+	}
+
+	static importPemSync(pem: string): Result<EcPublicKey, CryptoError> {
+		const data = publicOfPem(pem);
+		if (data == null || !ecPointValid(data.curve, data.point)) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.importPem", "failed to parse a P-256 or P-384 public key PEM"));
+		}
+		return Result.ok({ _data: data, _cache: newCache() });
+	}
+
+	get curve(): EcCurve {
+		return this._data.curve.name == "p384" ? "p384" : "p256";
+	}
+
+	exportPemSync(): Result<string, CryptoError> {
+		return Result.ok(pemEncode("PUBLIC KEY", ecPublicToSpki(this._data)));
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
+}
+
+export class EcPrivateKey {
+	_data: EcPrivateData;
+	_cache: unknown;
+
+	static async generate(curve: EcCurve): Promise<Result<EcPrivateKey, CryptoError>> {
+		const chosen = curveNamed(curve);
+		const done = await wcGenerate(chosen.webName);
+		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "EcPrivateKey.generate", `EC key generation failed for curve ${curve}: ${done.error}`));
+		return Result.ok({ _data: { curve: chosen, d: done.d, point: done.point }, _cache: newCache() });
+	}
+
+	static async importPem(pem: string): Promise<Result<EcPrivateKey, CryptoError>> {
+		const data = privateOfPem(pem);
+		const invalid = cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.importPem", "failed to parse a P-256 or P-384 private key PEM");
+		if (data == null) return Result.err(invalid);
+		const done = await wcComplete(ecPrivateToPkcs8(data) as Buffer, data.curve.webName);
+		if (done.error != "") return Result.err(invalid);
+		return Result.ok({ _data: { curve: data.curve, d: done.d, point: done.point }, _cache: newCache() });
+	}
+
+	static generateSync(curve: EcCurve): Result<EcPrivateKey, CryptoError> {
+		const chosen = curveNamed(curve);
+		const d = ecRandomScalar(chosen);
+		const point = ecPublicPoint(chosen, d);
+		if (point == null) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "EcPrivateKey.generate", `EC key generation failed for curve ${curve}`));
+		return Result.ok({ _data: { curve: chosen, d, point }, _cache: newCache() });
+	}
+
+	static importPemSync(pem: string): Result<EcPrivateKey, CryptoError> {
+		const data = privateOfPem(pem);
+		const point = data == null ? null : ecPublicPoint(data.curve, data.d);
+		if (data == null || point == null) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.importPem", "failed to parse a P-256 or P-384 private key PEM"));
+		}
+		return Result.ok({ _data: { curve: data.curve, d: data.d, point }, _cache: newCache() });
+	}
+
+	get curve(): EcCurve {
+		return this._data.curve.name == "p384" ? "p384" : "p256";
+	}
+
+	exportPemSync(): Result<string, CryptoError> {
+		return Result.ok(pemEncode("EC PRIVATE KEY", ecPrivateToSec1(this._data)));
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
+
+	publicKey(): EcPublicKey {
+		return { _data: { curve: this._data.curve, point: this._data.point }, _cache: newCache() };
+	}
+}
+
+function signFailed(hash: string, reason: string): CryptoError {
+	return cryptoError(CryptoErrorKind.SignatureFailed, "ec.ecdsaSign", `ECDSA signing failed (hash ${hash}; sha1 is refused)${reason}`);
+}
+
+function agreementFailed(reason: string): CryptoError {
+	return cryptoError(CryptoErrorKind.KeyDerivationFailed, "ec.ecdh", `ECDH key agreement failed (are the curves the same?)${reason}`);
+}
+
+// hash is sha256, sha384 or sha512; sha1 signatures are refused. The signature is DER and, here, uses the RFC 6979 nonce.
+export function ecdsaSignSync(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Result<Buffer, CryptoError> {
+	const kind = hashKind(hash);
+	if (hash == "sha1" || kind < 0 || kind == kindSha224 || kind == kindMd5) return Result.err(signFailed(hash, ""));
+	const raw = ecdsaSignRaw(key._data.curve, kind, key._data.d, hashOf(kind, bytesOf(data)));
+	if (raw == null) return Result.err(signFailed(hash, ""));
+	return Result.ok(ecdsaRawToDer(raw) as Buffer);
+}
+
+export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> {
+	if (hash == "sha1") return Result.err(signFailed(hash, ""));
+	const done = await wcSign(key._cache, ecPrivateToPkcs8(key._data) as Buffer, key._data.curve.webName, hash, bytesOf(data));
+	if (done.error != "") return Result.err(signFailed(hash, `: ${done.error}`));
+	return Result.ok(ecdsaRawToDer(done.value) as Buffer);
+}
+
+// False on any failure: a bad signature, a malformed input or an unknown hash.
+export function ecdsaVerifySync(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): boolean {
+	const kind = hashKind(hash);
+	if (kind < 0 || kind == kindSha224 || kind == kindMd5) return false;
+	const raw = ecdsaDerToRaw(bytesOf(signature), key._data.curve.size);
+	if (raw == null) return false;
+	return ecdsaVerifyRaw(key._data.curve, key._data.point, hashOf(kind, bytesOf(data)), raw);
+}
+
+export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> {
+	const raw = ecdsaDerToRaw(bytesOf(signature), key._data.curve.size);
+	if (raw == null) return false;
+	return await wcVerify(key._cache, key._data.point as Buffer, key._data.curve.webName, hash, bytesOf(data), raw as Buffer);
+}
+
+// The two keys must be on the same curve.
+export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Result<Buffer, CryptoError> {
+	const curve = privateKey._data.curve;
+	if (publicKey._data.curve.name != curve.name) return Result.err(agreementFailed(""));
+	const shared = ecdhShared(curve, privateKey._data.d, publicKey._data.point);
+	if (shared == null) return Result.err(agreementFailed(""));
+	return Result.ok(shared as Buffer);
+}
+
+export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> {
+	const curve = privateKey._data.curve;
+	if (publicKey._data.curve.name != curve.name) return Result.err(agreementFailed(""));
+	const done = await wcDerive(privateKey._cache, ecPrivateToPkcs8(privateKey._data) as Buffer, curve.webName, publicKey._cache, publicKey._data.point as Buffer, curve.size * 8);
+	if (done.error != "") return Result.err(agreementFailed(`: ${done.error}`));
+	return Result.ok(done.value);
+}

@@ -10,7 +10,7 @@
 // @stdout: round trip sealed 54 opened true fresh nonce true after 0
 // @stdout: bad length refused true live 0
 // @exit: 0
-// @skip-js: std/crypto/chacha20 has only a C backend (index.cms over Monocypher); there is no chacha20.jms
+// @skip-js: the program counts native key state through msChacha20KeysLive, which only the C backend has; a JS key holds plain words and nothing to free (cryptoJsChacha pins the JS tier)
 // @skip-raiser: std/crypto/chacha20 has only a C backend (index.cms over Monocypher); there is no chacha20.rms
 
 @include("runtime/crypto/ciphers/chacha20.h");

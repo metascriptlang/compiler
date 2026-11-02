@@ -3,8 +3,7 @@
 // @stdout: import1024 false
 // @stdout: sign sha1 false sha256 true
 // @exit: 0
-// @skip-js: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.jms
-// @skip-raiser: std/crypto/rsa has only a C backend (index.cms over mbedTLS); there is no rsa.rms
+// @skip-raiser: std/crypto/rsa has a C and a JS backend and no rsa.rms
 
 import { RsaPrivateKey, sign } from "std/crypto/rsa";
 

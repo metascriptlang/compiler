@@ -3,10 +3,10 @@ import { forEachChild } from "../../ast/visitor";
 import { isRoutineNode } from "../../ast/shape";
 import { TransformContext, freshTempSym } from "../context";
 import { addError } from "../../checker/context";
-import { peelTransparentInstance, unknownType } from "../../checker/types";
-import { walkNode, walkExpandBlocks } from "../walker";
+import { peelTransparentInstance, unknownType, peelToRepr, isIntegerType, isFloatType, isWideInteger } from "../../checker/types";
+import { walkNode, walkWithinStatement, walkExpandBlocks } from "../walker";
 import { isAssignOp } from "../../ast/operators";
-import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
+import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeNumber, makeConditional, jsGlobalRef, makeIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
 import { cloneIfPure } from "../place";
 import { asUnknown } from "./nullishCoalesce";
 
@@ -37,7 +37,7 @@ function checkedCount(node: Node): Node {
 function holdPlacesStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const temps: Node[] = [];
 	holdPlaces(stmt, temps, ctx);
-	temps.push(stmt);
+	temps.push(walkWithinStatement(stmt, (node: Node): Node => inlineIndexCheck(node, temps, ctx)));
 	return temps;
 }
 
@@ -55,6 +55,40 @@ function holdPlaces(node: Node, temps: Node[], ctx: TransformContext): void {
 		const d = node.data as UpdateExprData;
 		d.updateArg = heldPlace(d.updateArg, temps, ctx);
 	}
+}
+
+function inlineIndexCheck(node: Node, temps: Node[], ctx: TransformContext): Node {
+	if (!isRuntimeProcCall(node, "msChkIndex")) return node;
+	const args = (node.data as CallExprData).arguments;
+	const loc = node.location;
+	const repr = peelToRepr(args[0].nodeType);
+	const wide = isWideInteger(repr);
+	if (!wide && !isIntegerType(repr) && !isFloatType(repr)) return node;
+	const len = cloneIfPure(args[1]);
+	const lenAgain = cloneIfPure(args[1]);
+	if (len == null || lenAgain == null) return node;
+	let read: () => Node;
+	let first: Node;
+	if (cloneIfPure(args[0]) != null) {
+		const index = args[0];
+		first = index;
+		read = (): Node => cloneIfPure(index) as Node;
+	} else {
+		const sym = freshTempSym(ctx, "idx", unknownType());
+		const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Var, loc);
+		decl.resolvedSym = sym;
+		decl.nodeType = sym.symbolType;
+		temps.push(decl);
+		first = makeAssign(makeIdentResolved(sym, loc), asUnknown(args[0], loc), loc);
+		first.nodeType = sym.symbolType;
+		read = (): Node => makeIdentResolved(sym, loc);
+	}
+	const inRange = makeBinary(makeBinary(first, ">=", makeNumber(0, loc), loc), "&&", makeBinary(read(), "<", len, loc), loc);
+	const value = wide ? makeCall(jsGlobalRef("Number", loc), [read()], loc) : read();
+	const fail = makeCall(runtimeRef("msIndexFail", loc), [read(), lenAgain], loc);
+	const checked = makeConditional(inRange, value, fail, loc);
+	checked.nodeType = node.nodeType;
+	return checked;
 }
 
 function heldPlace(target: Node, temps: Node[], ctx: TransformContext): Node {

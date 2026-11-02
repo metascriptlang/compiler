@@ -1,0 +1,250 @@
+/**
+ * AES on the JavaScript backend: the same surface and wire format as index.cms (`nonce(12) || cipher text || tag(16)`
+ * for GCM, PKCS#7 for CBC).
+ *
+ * The async forms (`seal`, `open`, `cbcEncrypt`, `cbcDecrypt`) run on `crypto.subtle`, with the WebCrypto key
+ * imported once per `AesKey` and kept on it. Without `crypto.subtle` (a browser outside a secure context) they run
+ * the `*Sync` code instead. The `*Sync` forms run the portable AES in `std/crypto/pure/aes`, which is not
+ * constant-time: its table lookups are indexed by secret bytes, so prefer the async forms on JS. An `AesKey` has no
+ * `onDestroy` here: JS has no deterministic destruction, so the raw bytes and the key schedule live until the
+ * garbage collector frees the object.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { bytesOf } from "../pure/bytes";
+import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt as pureCbcEncrypt, cbcDecrypt as pureCbcDecrypt } from "../pure/aes";
+import { randomBytesSync } from "../index";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+@emit(`function msAesSubtle() {
+	const c = globalThis.crypto;
+	return c && c.subtle ? c.subtle : null;
+}
+function msAesMessage(e) {
+	return String(e && e.message ? e.message : e);
+}
+async function msAesImport(raw, name) {
+	try {
+		return { key: await msAesSubtle().importKey("raw", Uint8Array.from(raw), { name }, false, ["encrypt", "decrypt"]), error: "" };
+	} catch (e) {
+		return { key: null, error: msAesMessage(e) };
+	}
+}
+async function msAesGcmSeal(key, nonce, plain, aad) {
+	try {
+		const iv = Uint8Array.from(nonce);
+		const body = new Uint8Array(await msAesSubtle().encrypt({ name: "AES-GCM", iv, additionalData: Uint8Array.from(aad), tagLength: 128 }, key, Uint8Array.from(plain)));
+		const out = new Uint8Array(12 + body.length);
+		out.set(iv);
+		out.set(body, 12);
+		return { value: Array.from(out), error: "" };
+	} catch (e) {
+		return { value: [], error: msAesMessage(e) };
+	}
+}
+async function msAesGcmOpen(key, sealed, aad) {
+	try {
+		const all = Uint8Array.from(sealed);
+		const plain = await msAesSubtle().decrypt({ name: "AES-GCM", iv: all.subarray(0, 12), additionalData: Uint8Array.from(aad), tagLength: 128 }, key, all.subarray(12));
+		return { value: Array.from(new Uint8Array(plain)), error: "" };
+	} catch (e) {
+		return { value: [], error: msAesMessage(e) };
+	}
+}
+async function msAesCbc(key, iv, data, encrypt) {
+	try {
+		const s = msAesSubtle();
+		const algorithm = { name: "AES-CBC", iv: Uint8Array.from(iv) };
+		const out = encrypt ? await s.encrypt(algorithm, key, Uint8Array.from(data)) : await s.decrypt(algorithm, key, Uint8Array.from(data));
+		return { value: Array.from(new Uint8Array(out)), error: "" };
+	} catch (e) {
+		return { value: [], error: msAesMessage(e) };
+	}
+}`);
+
+interface Imported {
+	key: unknown;
+	error: string;
+}
+
+interface Settled {
+	value: Buffer;
+	error: string;
+}
+
+extern function wcAvailable(): boolean from "msAesSubtle() !== null";
+extern function wcImport(raw: Buffer, name: string): Promise<Imported> from "msAesImport(#, #)";
+extern function wcGcmSeal(key: unknown, nonce: Buffer, plain: Buffer, aad: Buffer): Promise<Settled> from "msAesGcmSeal(#, #, #, #)";
+extern function wcGcmOpen(key: unknown, sealed: Buffer, aad: Buffer): Promise<Settled> from "msAesGcmOpen(#, #, #)";
+extern function wcCbc(key: unknown, iv: Buffer, data: Buffer, encrypt: boolean): Promise<Settled> from "msAesCbc(#, #, #, #)";
+
+// ===== Key =====
+
+/** An AES-128 or AES-256 key: the raw bytes, their key schedule for the `*Sync` forms, and the WebCrypto keys the async forms import on first use. */
+export class AesKey {
+	_raw: Buffer;
+	_enc: uint32[];
+	_dec: uint32[];
+	_gcm: unknown;
+	_cbc: unknown;
+
+	/** From exactly 16 (AES-128) or 32 (AES-256) raw bytes. */
+	static import(raw: Bytes): Result<AesKey, CryptoError> {
+		const bytes = bytesOf(raw);
+		if (bytes.length != 16 && bytes.length != 32) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
+		}
+		return Result.ok({ _raw: bytes.slice(0), _enc: expandKey(bytes), _dec: new Array<uint32>(0), _gcm: null, _cbc: null });
+	}
+
+	/** A random key from the platform source: 128 or 256 bits. */
+	static generate(bits: int32 = 256): Result<AesKey, CryptoError> {
+		if (bits != 128 && bits != 256) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "AesKey.generate", "bits must be 128 or 256"));
+		}
+		const drawn = randomBytesSync(bits / 8);
+		if (!drawn.ok) {
+			return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "AesKey.generate", "the platform random source failed"));
+		}
+		return AesKey.import(drawn.value);
+	}
+
+	/** A copy of the raw key bytes, for the caller that must store it. */
+	exportRaw(): Buffer {
+		return this._raw.slice(0);
+	}
+}
+
+function decryptSchedule(key: AesKey): uint32[] {
+	if (key._dec.length == 0) key._dec = expandKeyDecrypt(key._raw);
+	return key._dec;
+}
+
+// The WebCrypto key of one mode, imported once; null when it imported, else the failure.
+async function subtleKey(key: AesKey, gcm: boolean, operation: string): Promise<CryptoError | null> {
+	if ((gcm ? key._gcm : key._cbc) != null) return null;
+	const done = await wcImport(key._raw, gcm ? "AES-GCM" : "AES-CBC");
+	if (done.error != "") return cryptoError(CryptoErrorKind.InvalidKey, operation, done.error);
+	if (gcm) key._gcm = done.key;
+	else key._cbc = done.key;
+	return null;
+}
+
+// ===== High-Level AEAD (safe by default) =====
+
+/**
+ * Encrypt with AES-GCM. Auto-generates a 12-byte nonce.
+ * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
+ */
+export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+	const nonce = randomBytesSync(12);
+	if (!nonce.ok) {
+		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the platform random source failed"));
+	}
+	return Result.ok(gcmSealWithNonce(key._enc, nonce.value, bytesOf(plainTextBytes), bytesOf(aadBytes)) as Buffer);
+}
+
+export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return sealSync(key, plainTextBytes, aadBytes);
+	const nonce = randomBytesSync(12);
+	if (!nonce.ok) {
+		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the platform random source failed"));
+	}
+	const failed = await subtleKey(key, true, "seal");
+	if (failed != null) return Result.err(failed);
+	const done = await wcGcmSeal(key._gcm, nonce.value, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", done.error));
+	return Result.ok(done.value);
+}
+
+/**
+ * Decrypt AES-GCM sealed blob. Verifies authentication tag.
+ * Input: nonce(12) || cipherText || authTag(16).
+ * Returns plainText or error if authentication fails.
+ */
+export function openSync(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+	const sealed = bytesOf(sealedBytes);
+	if (sealed.length < 28) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
+	}
+	const plain = gcmOpen(key._enc, sealed, bytesOf(aadBytes));
+	if (plain == null) {
+		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
+	}
+	return Result.ok(plain as Buffer);
+}
+
+export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return openSync(key, sealedBytes, aadBytes);
+	const sealed = bytesOf(sealedBytes);
+	if (sealed.length < 28) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
+	}
+	const failed = await subtleKey(key, true, "open");
+	if (failed != null) return Result.err(failed);
+	const done = await wcGcmOpen(key._gcm, sealed, bytesOf(aadBytes));
+	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
+	return Result.ok(done.value);
+}
+
+// ===== CBC Mode (expert use — no authentication) =====
+
+/**
+ * AES-CBC encrypt with PKCS7 padding. IV: must be 16 bytes.
+ * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
+ */
+export function cbcEncryptSync(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+	const iv = bytesOf(ivBytes);
+	if (iv.length != 16) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
+	}
+	return Result.ok(pureCbcEncrypt(key._enc, iv, bytesOf(plainTextBytes)) as Buffer);
+}
+
+export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return cbcEncryptSync(key, plainTextBytes, ivBytes);
+	const iv = bytesOf(ivBytes);
+	if (iv.length != 16) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
+	}
+	const failed = await subtleKey(key, false, "cbcEncrypt");
+	if (failed != null) return Result.err(failed);
+	const done = await wcCbc(key._cbc, iv, bytesOf(plainTextBytes), true);
+	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", done.error));
+	return Result.ok(done.value);
+}
+
+/**
+ * AES-CBC decrypt with PKCS7 unpadding. IV: must be 16 bytes.
+ * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
+ * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
+ */
+export function cbcDecryptSync(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+	const iv = bytesOf(ivBytes);
+	if (iv.length != 16) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
+	}
+	const plain = pureCbcDecrypt(decryptSchedule(key), iv, bytesOf(cipherTextBytes));
+	if (plain == null) {
+		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
+	}
+	return Result.ok(plain as Buffer);
+}
+
+export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return cbcDecryptSync(key, cipherTextBytes, ivBytes);
+	const iv = bytesOf(ivBytes);
+	if (iv.length != 16) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
+	}
+	const cipher = bytesOf(cipherTextBytes);
+	const failed = await subtleKey(key, false, "cbcDecrypt");
+	if (failed != null) return Result.err(failed);
+	const done = cipher.length == 0 || cipher.length % 16 != 0
+		? { value: cipher, error: "ciphertext is not a whole number of blocks" }
+		: await wcCbc(key._cbc, iv, cipher, false);
+	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
+	return Result.ok(done.value);
+}

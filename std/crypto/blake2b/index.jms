@@ -1,0 +1,69 @@
+/**
+ * BLAKE2b on the JavaScript backend: the same surface as index.cms. WebCrypto has no BLAKE2, so every
+ * form runs the portable code in `std/crypto/pure`, and the async forms call the `*Sync` forms.
+ */
+
+import { Buffer } from "std/core/buffer";
+import { Bytes } from "std/core/buffer/bytes";
+import { bytesOf } from "../pure/bytes";
+import { Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, blake2bOf } from "../pure/blake2b";
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+
+function badHashSize(hashSize: int32, op: string): CryptoError | null {
+	if (hashSize < 1 || hashSize > 64) {
+		return cryptoError(CryptoErrorKind.InvalidInput, op, `hashSize must be 1-64, got ${hashSize}`);
+	}
+	return null;
+}
+
+// ===== One-shot Hashing =====
+
+export function blake2bSync(data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	const bad = badHashSize(hashSize, "blake2b");
+	if (bad != null) return Result.err(bad);
+	return Result.ok(blake2bOf(hashSize, [], bytesOf(data)) as Buffer);
+}
+
+export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	const key = bytesOf(keyBytes);
+	if (key.length < 1 || key.length > 64) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
+	}
+	const bad = badHashSize(hashSize, "blake2bKeyed");
+	if (bad != null) return Result.err(bad);
+	return Result.ok(blake2bOf(hashSize, key, bytesOf(data)) as Buffer);
+}
+
+export async function blake2b(data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+	return blake2bSync(data, hashSize);
+}
+
+export async function blake2bKeyed(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+	return blake2bKeyedSync(keyBytes, data, hashSize);
+}
+
+// ===== Streaming (sync only) =====
+
+export class Blake2b {
+	_state: Blake2bState;
+
+	update(data: Bytes): Blake2b {
+		if (this._state.finished) throw new Error("Blake2b.update: the hasher already produced its digest");
+		const bytes = bytesOf(data);
+		updateBlake2b(this._state, bytes, 0, bytes.length as int32);
+		return this;
+	}
+
+	digest(): Buffer {
+		if (this._state.finished) throw new Error("Blake2b.digest: the hasher already produced its digest");
+		return finishBlake2b(this._state) as Buffer;
+	}
+}
+
+export function createBlake2b(hashSize: int32 = 32): Result<Blake2b, CryptoError> {
+	const bad = badHashSize(hashSize, "createBlake2b");
+	if (bad != null) return Result.err(bad);
+	return Result.ok({ _state: newBlake2b(hashSize, []) });
+}

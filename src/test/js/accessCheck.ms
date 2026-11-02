@@ -3,25 +3,25 @@ import { compileToJSBare } from "../helpers";
 test "an array element read is checked" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): int32 { return a[i]; }");
 	assert result.ok;
-	assert result.value.contains("a[msChkIndex(i, a.length)]");
+	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))]");
 }
 
 test "a sized array element read is checked" {
 	const result = compileToJSBare("function f(i: int32): int32 { const a: int32[3] = [1, 2, 3]; return a[i]; }");
 	assert result.ok;
-	assert result.value.contains("a[msChkIndex(i, a.length)]");
+	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))]");
 }
 
 test "a span element read is checked through the view" {
 	const result = compileToJSBare("function f(xs: Span<int32>, i: int32): int32 { return xs[i]; }");
 	assert result.ok;
-	assert result.value.contains("xs.base[(xs.off + msChkIndex(i, xs.len))]");
+	assert result.value.contains("xs.base[(xs.off + (((i >= 0) && (i < xs.len)) ? i : msIndexFail(i, xs.len)))]");
 }
 
 test "a span element write lands in the view's base" {
 	const result = compileToJSBare("function f(xs: Span<int32>, i: int32): void { xs[i] = 5; }");
 	assert result.ok;
-	assert result.value.contains("xs.base[(xs.off + msChkIndex(i, xs.len))] = 5");
+	assert result.value.contains("xs.base[(xs.off + (((i >= 0) && (i < xs.len)) ? i : msIndexFail(i, xs.len)))] = 5");
 }
 
 test "a span length reads the view" {
@@ -57,13 +57,13 @@ test "a slice of a span rebases the view" {
 test "an element write checks the index against the array it writes" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): void { a[i] = 5; }");
 	assert result.ok;
-	assert result.value.contains("a[msChkIndex(i, a.length)] = 5");
+	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] = 5");
 }
 
 test "an element update checks the index" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): void { a[i]++; }");
 	assert result.ok;
-	assert result.value.contains("a[msChkIndex(i, a.length)] = msOverflowI32((a[msChkIndex(i, a.length)] + 1))");
+	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] = msOverflowI32((a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] + 1))");
 }
 
 test "a write into a computed array checks through the array once" {
@@ -80,7 +80,7 @@ test "a write with a computed array and a computed index holds the array in a te
 	assert at >= 4;
 	const place = result.value.slice(at, result.value.indexOf(" ", at));
 	assert result.value.contains("(" + place + " = g");
-	assert result.value.contains(place + ".length)] = 5");
+	assert result.value.contains(place + ".length))] = 5");
 	assert !result.value.contains("msArrayAt(");
 }
 
@@ -119,4 +119,18 @@ test "a string passed as a span is its byte view" {
 	assert result.ok;
 	assert result.value.contains("msSliceSpan(asBytes(s), 1, 2)");
 	assert !result.value.contains("msSpanOf(asBytes(");
+}
+
+test "a computed index is held once in a temporary assigned inside the test" {
+	const result = compileToJSBare("function f(a: int32[], i: int32): int32 { return a[i + 1]; }");
+	assert result.ok;
+	assert result.value.contains("var $idx_");
+	assert result.value.contains(" = msOverflowI32((i + 1))) >= 0)");
+	assert !result.value.contains("msChkIndex(");
+}
+
+test "a 64-bit index is narrowed to a number only on the in-range path" {
+	const result = compileToJSBare("function f(a: int32[], j: int64): int32 { return a[j]; }");
+	assert result.ok;
+	assert result.value.contains("? globalThis.Number(j) : msIndexFail(j, a.length))");
 }
