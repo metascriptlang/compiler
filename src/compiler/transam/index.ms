@@ -68,7 +68,7 @@ import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
+import { headerModuleSource, createTaReadProvider, createFileSystemProvider, moduleIdentity, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { forEachChild } from "../../ast/visitor";
@@ -585,10 +585,12 @@ export function dbResolveImport(db: TransAmDb, basePath: string, importSpec: str
 	return resolveProbing(db, basePath, importSpec, null);
 }
 
+const _identityProvider = createFileSystemProvider();
+
 // `probed` collects the input of each candidate that holds no file, so the check that resolved the import depends on them.
 function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, probed: int32[] | null): string {
-	const candidates = resolveImportWithConfig(importSpec, basePath, db.resolverConfig);
-	for (const c of candidates) {
+	for (const spelled of resolveImportWithConfig(importSpec, basePath, db.resolverConfig)) {
+		const c = moduleIdentity(spelled, db.resolverConfig, _identityProvider);
 		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
 		if (probed != null) probed.push(getInputId(db.fileInput, c, db.revision.value));
