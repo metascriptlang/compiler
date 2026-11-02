@@ -772,6 +772,17 @@ function reachRoutine(
 	if (body != null) visit(body);
 }
 
+export function wasmReachedRoutines(ctx: CheckerContext, program: Node): Node[] {
+	const w: WasmReach = { routines: [], rootOf: [] };
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.DecoratedDecl ? (stmt.data as DecoratedDeclData).decoratedNode : stmt;
+		const fn = decl != null && decl.kind == NodeKind.ExportDecl ? exportedFunctionOf(decl) : null;
+		if (fn == null || fn.resolvedSym == null || !hasFlag(fn.resolvedSym!, SymbolFlag.Wasm)) continue;
+		if ((fn.data as FunctionDeclData).fnBody != null) reachRoutine(ctx, fn, fn, w);
+	}
+	return w.routines;
+}
+
 function stateSites(node: Node | null, out: Node[]): void {
 	if (node == null) return;
 	if (sharedStateRead(node)) out.push(node);

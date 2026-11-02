@@ -112,8 +112,12 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
 	}
 	let hoverDoc = sgFormatHoverDoc(suggest, docComment);
-	const boundary = suggest.kind == SymbolKind.Function ? boundaryHoverSection(suggest.sym, boundaryOverload) : "";
-	if (boundary != "") hoverDoc = hoverDoc == "" ? boundary : hoverDoc + "\n\n" + boundary;
+	const boundary = suggest.kind == SymbolKind.Function
+		? boundaryHoverSection(ctx, suggest.sym, boundaryOverload)
+		: "";
+	if (boundary != "") {
+		hoverDoc = hoverDoc == "" ? boundary : hoverDoc + "\n\n" + boundary;
+	}
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
 	const fileSource = dbGetSource(db, path);
 	const lines = LineIndex.build(fileSource);
@@ -277,15 +281,19 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
 
-	const crossings = collectBoundaryHints(program, startLine, endLine);
-	if (hintsList.length == 0 && crossings.length == 0) return lspResponse(id, "[]");
+	const crossings = collectBoundaryHints(ctx, program, startLine, endLine);
+	if (hintsList.length == 0 && crossings.length == 0) {
+		return lspResponse(id, "[]");
+	}
 
 	const hints: string[] = [];
 	const lines = LineIndex.build(source);
 	const clientLines = LineIndex.buildLsp(source);
 	for (const c of crossings) {
 		const at = lspPositionIn(lines, clientLines, source, c.line, c.col);
-		hints.push(lspFmtInlayHint(at.line, at.character, c.label, 1, false, true));
+		hints.push(
+			lspFmtInlayHint(at.line, at.character, c.label, null, false, true),
+		);
 	}
 	for (const h of hintsList) {
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
