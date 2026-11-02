@@ -332,9 +332,10 @@ Raw commands, results and before/after provenance are in
 `/tmp/crypto-ref-output-validation-aligned6-1793639377/`. Each staged prototype was restored to baseline;
 parent source and all guarded fingerprints remained unchanged during execution.
 
-These results cover Linux clang **LTO off** only. Fresh ARM thin-LTO matrix/DCE, current-toolchain matched
-performance, x86 performance and real-public-API parity remain unverified. Production/vendor selection is
-unchanged, the prototype is still unintegrated, and the speed/DCE readiness gate and Cryptofuzz refusal remain.
+These results cover Linux clang **LTO off** only; the separate ARM matrix/DCE run below is not inferred
+from them. Current-toolchain matched performance, x86 performance and real-public-API parity remain
+unverified. Production/vendor selection is unchanged, the prototype is still unintegrated, and the
+speed/DCE readiness gate and Cryptofuzz refusal remain.
 
 ## Matrix transport failure and local-only repair, 2026-11-02
 
@@ -358,5 +359,47 @@ the callback, and hash-guarded cleanup after a successful synthetic callback. No
 network or remote job ran in these pins. No manifest/identity/assertion/cap was weakened and no server or
 harness configuration changed.
 
-The repaired file transport has **not run on M1**. Its local pin is not matrix/DCE evidence and does not
-relax the readiness gate. Existing Linux results and the unintegrated prototype remain unchanged.
+At that local-pin checkpoint the repaired transport had not run on M1. The subsequent verification below
+is separate execution evidence; the synthetic pin itself is not matrix/DCE evidence or a readiness waiver.
+
+## Fresh prototype M1 matrix and bounded DCE, 2026-11-02
+
+Prototype input tree `4af247d1a4b9410d8a165928f55e5c91b9b1134d` is HEAD
+`8b28519e10d581f7e162b442fb1f2dabe562caa1` / committed tree `047084e3284e6e2c6abed8567615510119a18d12`
+with only the unchanged external pilot SHA `f0b1cc31145fb560bff0e8c86cf21f8a9684532860610885cc6898abf5c3a9c3`
+staged remotely. The parent implementation remained baseline0d; this is not integration.
+
+Strict host `Metacrafts-MacBook-Pro`, Apple M1 Pro, Darwin arm64, macOS 26.5.1; Apple clang 21.0.0,
+SDK 26.5. Copied adjacent compiler SHA `1e57151b011630e1d01bc4f5fdd7f9458b16e0aa1cee8d684e782484e1d2e442`,
+BUILD binary/support `a0f6f1be1e3`. Staged support was the paired current root, not substituted global support.
+Compiler, clang binary, BUILD, source manifest and std/runtime fingerprints were stable; SDK path/version,
+not every SDK file, were recorded.
+
+- **16/16 unique cells, 164/164 executions**, rc0 and no sanitizer finding. The release/thin 11-test consumer
+  ran first in **15.172 s**, once; it was also the slowest cell. Modes were default clang/LTO off;
+  release and danger clang/thin; ASan clang/LTO off with `MS_SLAB_MAX=0` and address sanitizer at link.
+- **Five fresh release/clang/thin DCE builds and consumers passed.** Empty, unused C and unused prototype
+  stdout matched. Every complete `__TEXT` section payload matched byte-for-byte across those three:
+  `__text`, `__stubs`, `__cstring`, `__const`, `__unwind_info`, totaling **26872 bytes**. Whole files were
+  **75704/75704/75712 bytes**; the last signature was 8 bytes larger, not retained crypto text.
+- Used C/prototype passed the fixture's RFC check and equal 8-call digest
+  `76ae388926b717c4b85233f454c9a22f487b6161071cf9402fa7f38a60f64f1c`. File sizes were **110120/110736**;
+  `__text` sizes **41744/39832**. Used X25519 kernels remained; no unrelated named crypto API entries were
+  observed. This is a symbol observation, not proof against inlined/renamed code or retained constants.
+
+The 396588-byte hash-guarded transport file arrived through stock copying; the SSH command was 103 bytes.
+Original validator bytes and the 5663-file manifest were unchanged. All **51 recorded subprocesses** were
+rc0 and below 60 s, totaling **211.006 s**; about **456 s** including staging/fingerprints/evidence return.
+No timing/QUIET/idle claim follows from these verification durations. Successful file transport does not
+prove the sole cause of earlier SSH resets.
+
+Raw argv/log, returned binaries, extracted sections, disassemblies and result data are in
+`/tmp/ref-output-staged-af643cd2cba9/`; `mainAudit.json` records the parent audit. The parent checked all
+51 log hashes, exact counts/flags, current manifest inputs and independently parsed all five Mach-O binaries
+and signatures, comparing returned section bytes as well. Remote baseline restoration, unchanged global
+provenance/support and local/remote transport cleanup were acknowledged; Git was clean afterward.
+
+This accepts the bounded raw-fixture DCE contract and matrix only, not a public-callgraph, constant-time,
+spill-erasure, inherited-proof or full assurance-kit certificate. Current matched ARM/x86 speed and real
+public-API parity remain unmeasured; the prototype stays unintegrated and NOT READY. Production/vendor
+selection and the provider-refused Cryptofuzz exclusion are unchanged.
