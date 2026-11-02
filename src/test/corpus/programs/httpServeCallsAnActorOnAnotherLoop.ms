@@ -1,10 +1,11 @@
 // @xfail(raiser): error: Cannot resolve module 'std/http/server'
-// @stdout: an actor of the main thread called from four serving loops: 8 requests answered, every call under 5 ms on average
+// @stdout: an actor made on each of four serving loops: 8 requests answered, every call under 5 ms on average
+// @stdout: spawn completions on four serving loops: 8 requests answered, every await under 5 ms on average
 // @stdout: spawn completions on the main serving loop: 8 requests answered, every await under 5 ms on average
 // @exit: 0
 // @serial
 // @skip-js: std/http/server is a .cms module, C backend only
-// note: serving loops whose handlers wait on work another thread finishes: CALLs from four serving loops to an actor the main thread owns, then spawns whose completions return to the main thread's serving loop; every wake must reach the loop parked in its I/O engine (old runtime on io_uring: about 10 ms per wait, one driver poll)
+// note: four serving loops, then the main thread's alone, whose handlers wait on actors and spawns: an actor a handler makes belongs to that serving loop (old runtime: to another scheduler, which the loop's CALLs waited on), and every completion another thread posts reaches the serving loop parked in its I/O engine (old runtime on io_uring: about 10 ms per wait, one driver poll); a line for an actor the main thread owns waits on inbox card 2026-11-02-serve-concurrent-async-closure-handler-env-destroyed-after-free
 
 import { HttpRequest, ServerResponse } from "std/http";
 import { AsyncRequestHandler } from "std/http/types";
@@ -71,25 +72,24 @@ function report(what: string, answered: int32, unit: string): void {
 	lockedUpdate(served, (s: Served): Served => ({ n: 0, worstMeanMs: 0.0 }));
 }
 
-function serveUntil(handle: AsyncRequestHandler, requests: int32, threads: int32): int32 {
+function serveUntil(handle: AsyncRequestHandler, requests: int32, threads: int32, parallel: boolean): int32 {
 	const server = createServerAsync(handle);
 	const port = freePort();
 	server.address = "127.0.0.1";
 	server.port = port;
-	const c = spawn(() => threads > 1 ? parallelClients(port) : sequentialClient(port));
+	const c = spawn(() => parallel ? parallelClients(port) : sequentialClient(port));
 	const timer = setInterval(() => { if (lockedRead(served, (s: Served): int32 => s.n) >= requests) stop(server); }, 5);
 	serveConcurrentAsync(server, handle, threads);
 	clearInterval(timer);
 	return await c;
 }
 
-function callsFor(counter: Counter): AsyncRequestHandler {
-	return async (req: HttpRequest, res: ServerResponse): Promise<void> => {
-		const started = Date.now();
-		for (let i: int32 = 0; i < CALLS; i += 1) await counter.bump();
-		sendText(res, "ok;");
-		record((Date.now() - started) / CALLS);
-	};
+async function calls(req: HttpRequest, res: ServerResponse): Promise<void> {
+	const counter = new Counter();
+	const started = Date.now();
+	for (let i: int32 = 0; i < CALLS; i += 1) await counter.bump();
+	sendText(res, "ok;");
+	record((Date.now() - started) / CALLS);
 }
 
 function parallelClients(port: int32): int32 {
@@ -118,5 +118,6 @@ function sequentialClient(port: int32): int32 {
 	return ok;
 }
 
-report("an actor of the main thread called from four serving loops", serveUntil(callsFor(new Counter()), CLIENTS, 4), "call");
-report("spawn completions on the main serving loop", serveUntil(spawns, REQUESTS, 1), "await");
+report("an actor made on each of four serving loops", serveUntil(calls, CLIENTS, 4, true), "call");
+report("spawn completions on four serving loops", serveUntil(spawns, REQUESTS, 4, false), "await");
+report("spawn completions on the main serving loop", serveUntil(spawns, REQUESTS, 1, false), "await");
