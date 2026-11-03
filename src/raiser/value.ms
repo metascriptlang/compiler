@@ -1685,6 +1685,7 @@ export interface RaiserCopyMap {
 	objects: Map<int64, int64>;
 	jobs: RaiserCopyJob[];
 	viewFixups: int64[];
+	sharesHeap: boolean;
 }
 
 export function createCopyMap(): RaiserCopyMap {
@@ -1693,6 +1694,7 @@ export function createCopyMap(): RaiserCopyMap {
 		objects: new Map<int64, int64>(),
 		jobs: [],
 		viewFixups: [],
+		sharesHeap: false,
 	};
 }
 
@@ -1745,6 +1747,7 @@ function copySeqViewShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, view
 
 function copyObjectShell(srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	if (map.objects.has(val.intVal)) return raiserObject(map.objects.get(val.intVal)!);
+	if (map.sharesHeap && !copiesAsValue(heapObjectClass(srcObj, val.intVal))) return val;
 	if (isObjectCell(val.intVal)) {
 		const cellCopy = objectCellHandle(heapNewObjectCell(dstArr.mem, objectCellClass(val.intVal), 0));
 		map.objects.set(val.intVal, cellCopy);
@@ -1764,7 +1767,7 @@ function copyObjectShell(srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstO
 function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	if (val.kind == RaiserValueKind.Array) return copyArrayShell(srcArr, dstArr, val, map);
 	if (val.kind == RaiserValueKind.Object) return copyObjectShell(srcObj, dstArr, dstObj, val, map);
-	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) {
+	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String && !map.sharesHeap) {
 		const text = heapAllocString(dstArr, heapStringText(srcArr, val));
 		disownFresh(dstArr, dstObj, text.intVal);
 		return text;
@@ -1782,16 +1785,27 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
 	const sourceHandle = job.source.intVal;
 	const held = arrayHeldCount(srcArr, sourceHandle);
+	const uncounted = heapArrayUncounted(srcArr, sourceHandle);
 	for (let i = 0; i < held; i = i + 1) {
-		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(srcArr, sourceHandle, i), map);
+		const copied = copyBorrowable(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(srcArr, sourceHandle, i), uncounted, map);
 		heapArrayPush(dstArr, job.dst, copied);
-		rcIncref(dstArr, dstObj, copied);
+		if (!uncounted) rcIncref(dstArr, dstObj, copied);
 	}
+}
+
+function copyBorrowable(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, uncounted: boolean, map: RaiserCopyMap): RaiserValue {
+	if (uncounted && map.sharesHeap) return val;
+	return copyShell(srcArr, srcObj, dstArr, dstObj, val, map);
+}
+
+export function copiesAsValue(layout: RaiserClassType): boolean {
+	return layout.depth < 0 && layout.name != CLOSURE_LAYOUT;
 }
 
 function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
 	if (isObjectCell(job.source.intVal)) {
-		const kinds = objectCellClass(job.source.intVal).kinds;
+		const cls = objectCellClass(job.source.intVal);
+		const kinds = cls.kinds;
 		const from = seqCellOf(job.source.intVal);
 		const to = seqCellOf(job.dst);
 		for (let i = 0; i < kinds.length; i += 1) {
@@ -1808,22 +1822,25 @@ function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: R
 				st64(to + at, ld64(from + at));
 				continue;
 			}
-			const copied = copyShell(srcArr, srcObj, dstArr, dstObj, handleValue(ld64(from + at)), map);
+			const copied = copyBorrowable(srcArr, srcObj, dstArr, dstObj, handleValue(ld64(from + at)), cls.uncounted[i], map);
 			st64(to + at, copied.kind == RaiserValueKind.Nil ? 0 : copied.intVal);
-			rcIncref(dstArr, dstObj, copied);
+			if (!cls.uncounted[i]) rcIncref(dstArr, dstObj, copied);
 		}
 		return;
 	}
 	const source = srcObj.objects[handleIndex(job.source.intVal)];
 	const count = objectFieldCount(source);
+	const uncounted = source.classType.uncounted;
 	for (let i = 0; i < count; i = i + 1) {
-		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, fieldValueAt(source, i), map);
+		const borrows = i < uncounted.length && uncounted[i];
+		const copied = copyBorrowable(srcArr, srcObj, dstArr, dstObj, fieldValueAt(source, i), borrows, map);
 		appendField(dstObj.objects[handleIndex(job.dst)], fieldNameAt(source, i), copied);
-		rcIncref(dstArr, dstObj, copied);
+		if (!borrows) rcIncref(dstArr, dstObj, copied);
 	}
 }
 
 export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	map.sharesHeap = srcArr == dstArr && srcObj == dstObj;
 	const root = copyShell(srcArr, srcObj, dstArr, dstObj, val, map);
 	while (map.jobs.length > 0) {
 		const job = map.jobs.pop()!;
