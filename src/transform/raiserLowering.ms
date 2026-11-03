@@ -88,7 +88,6 @@ function dropUnionTextMemberTexts(program: Node): Node {
 
 function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean): Node {
 	let result = dropUnionTextMemberTexts(eraseVoidParamReads(planModuleTdz(program, ctx)));
-	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
@@ -122,6 +121,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	if (placed) result = lowerReturnThroughFinally(result, ctx, true);
 	result = lowerActorClasses(result, ctx);
 	result = lowerAwaitSpill(result, ctx);
+	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerAsync(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = registerActorTerminators(result, ctx);
