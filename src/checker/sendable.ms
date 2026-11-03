@@ -389,7 +389,7 @@ export function actorCallBorrows(call: Node): int32[] {
 }
 
 function plainFunctionPath(t: Type | null, seen: Type[]): string | null {
-	if (t == null || seen.includes(t)) return null;
+	if (t == null || seen.includes(t) || isActorRef(t)) return null;
 	if (t.kind == TypeKind.Function) return isSendableFunction(t) ? null : "";
 	seen.push(t);
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) {
