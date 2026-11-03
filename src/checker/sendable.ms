@@ -9,7 +9,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding, isPromiseBuiltin } from "./symbol";
-import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName, isUnownedRef, withoutUnowned } from "./types";
+import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName, isUnownedRef, withoutUnowned, getBuiltinKind } from "./types";
 import { recordBodyRead } from "./bodyReads";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
@@ -676,6 +676,15 @@ const WASM_PLACEMENT_SITE =
 export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
 	const roots: Node[] = [];
 	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.ExportDecl) {
+			const placed = exportedFunctionOf(stmt);
+			if (placed != null && placed.resolvedSym != null && hasFlag(placed.resolvedSym!, SymbolFlag.Wasm) && (placed.data as FunctionDeclData).fnBody != null) {
+				refuseKeptWasmCallbacks(ctx, placed);
+				refuseLentHandleUse(ctx, placed);
+				roots.push(placed);
+			}
+			continue;
+		}
 		if (stmt.kind != NodeKind.DecoratedDecl) continue;
 		const dd = stmt.data as DecoratedDeclData;
 		const dec = decoratorNamed(dd.decorators, "wasm");
@@ -694,6 +703,7 @@ export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
 			continue;
 		}
 		refuseKeptWasmCallbacks(ctx, fn);
+		refuseLentHandleUse(ctx, fn);
 		roots.push(fn);
 	}
 	if (roots.length > 0) refuseSharedModuleState(ctx, program, roots);
@@ -961,6 +971,51 @@ function refuseSharedModuleState(
 	if (refuseExportedStateRoutine(ctx, touching, roots)) return;
 	const hit = findJsSideHit(ctx, program, touching, roots);
 	if (hit != null) refuseJsSideHit(ctx, hit, uses);
+}
+
+function isValueReceiver(call: Node, param: Symbol): boolean {
+	const callee = peelView(peelHidden((call.data as CallExprData).callee));
+	if (callee.kind != NodeKind.MemberExpr) return false;
+	const d = callee.data as MemberExprData;
+	if (d.property != "value") return false;
+	const object = peelView(peelHidden(d.object));
+	return object.kind == NodeKind.Identifier && object.resolvedSym == param;
+}
+
+function lentHandleMisuse(node: Node | null, param: Symbol, inClosure: boolean): Node | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym == param ? node : null;
+	if (node.kind == NodeKind.CallExpr && !inClosure && isValueReceiver(node, param)) {
+		for (const a of (node.data as CallExprData).arguments) {
+			const hit = lentHandleMisuse(a, param, inClosure);
+			if (hit != null) return hit;
+		}
+		return null;
+	}
+	const closure = inClosure || node.kind == NodeKind.ArrowFunction
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.FunctionDecl;
+	const found: (Node | null)[] = [null];
+	forEachChild(node, (child: Node): void => {
+		if (found[0] == null) found[0] = lentHandleMisuse(child, param, closure);
+	});
+	return found[0];
+}
+
+function refuseLentHandleUse(ctx: CheckerContext, fn: Node): void {
+	if (fn.paramSyms == null) return;
+	for (const param of fn.paramSyms!) {
+		if (param.symbolType == null || getBuiltinKind(param.symbolType) != "FfiHandle") continue;
+		const site = lentHandleMisuse(routineBody(fn), param, false);
+		if (site == null) continue;
+		const at = param.declNode != null ? param.declNode!.location : fn.location;
+		const name = typeDisplayName(param.symbolType!);
+		addError(
+			ctx,
+			`${name} parameter ${param.name} is lent for the call: use it only as ${param.name}.value()`,
+			at.line,
+			at.column,
+		);
+	}
 }
 
 function refuseKeptWasmCallbacks(ctx: CheckerContext, fn: Node): void {

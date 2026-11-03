@@ -140,3 +140,30 @@ test "const values and unrelated module state stay usable on both sides" {
 		"let count = 0;\nexport function bump(): int32 { count += 1; return count; }\n@wasm\nexport function twice(n: int32): int32 { return n * 2; }\n",
 	) == "";
 }
+
+const HANDLE_SRC = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+export function value<T>(this h: Handle<T>): T { return h.ptr as T; }
+export function retain<T>(this h: Handle<T>): void {}
+export class Counter { n: int32 = 0; }
+`;
+
+function lentError(body: string): string {
+	return checkErrorText(
+		HANDLE_SRC +
+			`@wasm\nexport function keep(h: Handle<Counter>): int32 { ${body} }\n`,
+	);
+}
+
+test "a lent Handle parameter is only read through value()" {
+	const lent =
+		"Handle<Counter> parameter h is lent for the call: use it only as h.value()";
+	assert lentError("return h.value().n;") == "";
+	assert lentError("const c = h.value(); return c.n;") == "";
+	assert lentError("const g = h; return g.value().n;").contains(lent);
+	assert lentError("h.retain(); return 0;").contains(lent);
+	assert lentError("const f = (): int32 => h.value().n; return f();").contains(
+		lent,
+	);
+}
