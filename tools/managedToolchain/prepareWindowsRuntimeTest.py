@@ -290,7 +290,7 @@ class ConfigTest(unittest.TestCase):
         feature = ["-amx-transpose"]
         self.assertEqual(pr.translateFeatures(feature, pw.TARGET, "x86-64", "0.16.0", "22")[0], [])
         for other in (("x86_64-windows-gnu.dll", "x86-64", "0.16.0", "22"), (pw.TARGET, "znver4", "0.16.0", "22"),
-                      (pw.TARGET, "x86-64", "0.17.0", "22"), (pw.TARGET, "x86-64", "0.16.0", "23")):
+                      (pw.TARGET, "x86-64", "0.17.0", "22"), (pw.TARGET, "x86-64", "0.16.0", "24")):
             self.assertEqual(pr.translateFeatures(feature, *other)[0], feature, msg=other)
         self.assertEqual(pr.translateFeatures(["-amx-tile", "+avx512f"], pw.TARGET, "x86-64", "0.16.0", "22")[0],
                          ["-amx-tile", "+avx512f"])
@@ -298,16 +298,17 @@ class ConfigTest(unittest.TestCase):
     def test_the_arm64_removed_features_are_left_out_only_for_this_zig_engine_target_and_cpu(self):
         for feature in ARM_REMOVED:
             self.assertEqual(pr.translateFeatures([feature, "+neon"], pw.ARM64_TARGET, "generic", "0.16.0", "22"),
-                             (["+neon"], [e for e in pr.REMOVED_DISABLED_FEATURES if e["feature"] == feature]))
+                             (["+neon"], [e for e in pr.REMOVED_DISABLED_FEATURES
+                                         if e["feature"] == feature and e["engineMajor"] == "22"]))
             for other in ((pw.TARGET, "generic", "0.16.0", "22"), (pw.ARM64_TARGET, "apple-m1", "0.16.0", "22"),
-                          (pw.ARM64_TARGET, "generic", "0.17.0", "22"), (pw.ARM64_TARGET, "generic", "0.16.0", "23")):
+                          (pw.ARM64_TARGET, "generic", "0.17.0", "22"), (pw.ARM64_TARGET, "generic", "0.16.0", "24")):
                 self.assertEqual(pr.translateFeatures([feature], *other)[0], [feature], msg=(feature, other))
         # an enabled feature of the same names, and a feature the table does not name, stay
         self.assertEqual(pr.translateFeatures(["+tme", "-sve", "-bogus"], pw.ARM64_TARGET, "generic", "0.16.0", "22")[0],
                          ["+tme", "-sve", "-bogus"])
 
     def test_each_arm64_translation_names_pinned_sources_for_both_llvm_versions_and_its_field_default(self):
-        entries = {e["feature"]: e for e in pr.REMOVED_DISABLED_FEATURES if e["target"] == pw.ARM64_TARGET}
+        entries = {e["feature"]: e for e in pr.REMOVED_DISABLED_FEATURES if e["target"] == pw.ARM64_TARGET and e["engineMajor"] == "22"}
         self.assertEqual(sorted(entries), ARM_REMOVED)
         for feature, entry in entries.items():
             sources = "\n".join(entry["sources"])
