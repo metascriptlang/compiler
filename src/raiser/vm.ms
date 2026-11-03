@@ -273,6 +273,7 @@ export interface RaiserVM {
 	suspendedRuns: RaiserRun[];
 	hostArgsAt: int32;
 	hostResult: int32;
+	floorPending: boolean;
 }
 
 interface RaiserRun {
@@ -367,7 +368,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false };
 }
 
 // --- Register access ---
@@ -744,6 +745,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		return raiserNil();
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx);
+	settleFloor(vm);
 	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
 	vm.funcIdx = funcIdx as int32;
 	vm.base = vm.floor as int32;
@@ -809,7 +811,14 @@ function hasFloor(vm: RaiserVM): boolean {
 	return vm.floor > 0;
 }
 
+function settleFloor(vm: RaiserVM): void {
+	if (!vm.floorPending) return;
+	vm.floor = Math.max(1, liveFramesTop(vm));
+	vm.floorPending = false;
+}
+
 export function vmReleaseHeaps(vm: RaiserVM): void {
+	settleFloor(vm);
 	if (hasFloor(vm)) return;
 	clearObjectHeap(vm.objectHeap);
 	clearArrayHeap(vm.arrayHeap);
@@ -5404,8 +5413,9 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	setActiveProgramArgv(vm.programArgv);
 	const outerFloor = vm.floor;
+	const outerPending = vm.floorPending;
 	const suspended = vm.suspendedRuns.length;
-	vm.floor = Math.max(1, liveFramesTop(vm));
+	vm.floorPending = true;
 	let result = raiserNil();
 	if (inPlace >= 0) _inPlaceHostFns[inPlace](vm);
 	else result = fn(args);
@@ -5414,6 +5424,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vm.suspendedRuns.shrink(suspended);
 	}
 	vm.floor = outerFloor;
+	vm.floorPending = outerPending;
 	vm.hostArgsAt = outerArgsAt;
 	vm.hostResult = outerResult;
 	setActiveHostHeaps(prevObjHeap, prevArrHeap);
