@@ -358,6 +358,7 @@ function cellText(rows: Record<string, string[]>, consumer: string, target: stri
 
 function summary(opts: Record<string, string>): void {
 	const out = opts["out"] ?? "";
+	const buildHost = opts["buildHost"] ?? "m1m";
 	const rows: Record<string, string[]> = {};
 	const keys: string[] = [];
 	for (const name of readDir(out)) {
@@ -367,8 +368,11 @@ function summary(opts: Record<string, string>): void {
 		for (const line of text.value.split("\n")) {
 			const f = line.split("\t");
 			if (f.length < 9) { continue; }
+			if (f[3] == "build" && f[4] != buildHost) { continue; }
 			const key = `${f[0]}|${f[1]}|${f[2]}|${f[3]}`;
-			if (rowOf(rows, key).length == 0) { keys.push(key); }
+			const before = rowOf(rows, key);
+			if (before.length == 0) { keys.push(key); }
+			else if (f[5] == "n/a" && before[5] != "n/a") { continue; }
 			rows[key] = f;
 		}
 	}
