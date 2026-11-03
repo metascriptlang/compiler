@@ -1058,7 +1058,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 	const cyclic: boolean[] = [];
 	const uncounted: boolean[] = [];
 	for (let i = 0; i < fields.length; i += 1) {
-		cyclic.push(false);
+		cyclic.push(name == CLOSURE_LAYOUT && fields[i] == "env");
 		uncounted.push(false);
 		const cls = kinds[i];
 		const bit: int64 = i < TYPED_SLOTS ? (1 as int64) << (i as int64) : 0;
@@ -2219,6 +2219,13 @@ test "clearArrayHeap resets storage" {
 	assert heapSeqHandles(heap).length == 0;
 	const h2 = heapAllocArray(heap);
 	assert heapArrayLen(heap, h2) == 0;
+}
+
+test "a closure pair's env slot is cyclic and its fn slot and every other layout's slots are not" {
+	const pair = createClassType(CLOSURE_LAYOUT, -1, [], ["fn", "env"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	assert !pair.cyclic[0] && pair.cyclic[1];
+	const plain = createClassType("Holder", -1, [], ["fn", "env"], [RaiserRegClass.Word, RaiserRegClass.Ref]);
+	assert !plain.cyclic[0] && !plain.cyclic[1];
 }
 
 test "clearObjectHeap resets storage" {
