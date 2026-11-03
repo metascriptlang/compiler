@@ -16,8 +16,11 @@ NEW_DIR receives an overlay of bundle-root-relative paths that `prepareBundle.py
     lib/clang/<major>/lib/<triple>/libclang_rt.<name>.a      Linux, where the clang driver looks for them
     runtime/windows/<target>/libclang_rt.ubsan_standalone.a  Windows: lld resolves the dependent library the driver puts
     runtime/windows/<target>/libclang_rt.ubsan_standalone_cxx.a   in each object by the plain file name in the `-L` the
-                                                             config gives, never in the resource directory
-    runtime/windows/<target>/libsynchronization.a            import library of the three calls the runtime makes
+                                                             config gives, never in the resource directory; the
+                                                             `<target>.cfg` of executables and the `<target>.dll.cfg` of
+                                                             DLLs give different `-L`, so the same archives are in
+                                                             `runtime/windows/<target>.dll/` too
+    runtime/windows/<target>[.dll]/libsynchronization.a      import library of the three calls the runtime makes
     notices/sanitizer-provenance.json, notices/compiler-rt/LICENSE.TXT
 
 glibc Linux gets ASan, TSan, UBSan (standalone and minimal) and their C++ halves, musl Linux UBSan alone (standalone,
@@ -63,12 +66,12 @@ LIMITS = ["the archives are a local build of the release source with the bundle'
 def linuxSpec(cpu, abi, runtimes, sanitizers):
     triple = "%s-unknown-linux-%s" % (cpu, abi)
     return {"triple": triple, "system": "Linux", "processor": cpu, "runtimes": runtimes, "sanitizers": sanitizers,
-            "directory": "lib/clang/%s/lib/" + triple, "windows": False}
+            "directories": ["lib/clang/%s/lib/" + triple], "windows": False}
 
 
 def windowsSpec(cpu, processor, dlltool):
     return {"triple": "%s-w64-windows-gnu" % cpu, "system": "Windows", "processor": processor,
-            "runtimes": WINDOWS_RUNTIMES, "sanitizers": "ubsan_minimal", "directory": "runtime/windows/%s",
+            "runtimes": WINDOWS_RUNTIMES, "sanitizers": "ubsan_minimal", "directories": ["runtime/windows/%s", "runtime/windows/%s.dll"],
             "windows": True, "dlltool": dlltool}
 
 
@@ -146,8 +149,8 @@ def archiveName(name):
     return "libclang_rt.%s.a" % name
 
 
-def overlayDirectory(spec, target, major):
-    return spec["directory"] % (target if spec["windows"] else major)
+def overlayDirectories(spec, target, major):
+    return [d % (target if spec["windows"] else major) for d in spec["directories"]]
 
 
 def buildTarget(cmake, ninja, source, engine, runtime, target, work, jobs):
@@ -186,25 +189,27 @@ def produce(engine, runtime, source, cmake, ninja, targets, output, jobs, work):
     for target in targets:
         spec = TARGETS[target]
         built = buildTarget(cmake, ninja, source, engine, runtime, target, work, jobs)
-        directory = os.path.join(output, overlayDirectory(spec, target, major))
-        os.makedirs(directory)
+        directories = [os.path.join(output, d) for d in overlayDirectories(spec, target, major)]
         files = []
         for name, path in sorted(built.items()):
             problem = archiveProblem(engine, path)
             if problem:
                 raise pe.EngineError("%s %s: %s" % (target, archiveName(name), problem))
-            copy = os.path.join(directory, archiveName(name))
-            shutil.copyfile(path, copy)
-            os.chmod(copy, 0o644)
-            files.append(copy)
+            files.append((archiveName(name), path))
         if spec["windows"]:
-            copy = os.path.join(directory, "libsynchronization.a")
-            importLibrary(engine, spec, work, copy)
-            files.append(copy)
-        records.append({"target": target, "triple": spec["triple"], "directory": os.path.relpath(directory, output),
-                        "runtimes": sorted(spec["runtimes"]),
-                        "files": [{"name": os.path.basename(f), "sha256": pe.sha256File(f), "bytes": os.path.getsize(f)}
-                                  for f in files]})
+            synchronization = os.path.join(work, target + "-libsynchronization.a")
+            importLibrary(engine, spec, work, synchronization)
+            files.append(("libsynchronization.a", synchronization))
+        for directory in directories:
+            os.makedirs(directory)
+            for name, path in files:
+                copy = os.path.join(directory, name)
+                shutil.copyfile(path, copy)
+                os.chmod(copy, 0o644)
+        records.append({"target": target, "triple": spec["triple"],
+                        "directories": [os.path.relpath(d, output) for d in directories], "runtimes": sorted(spec["runtimes"]),
+                        "files": [{"name": name, "sha256": pe.sha256File(path), "bytes": os.path.getsize(path)}
+                                  for name, path in files]})
     return host, version, records
 
 

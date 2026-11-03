@@ -51,13 +51,13 @@ class TargetTest(unittest.TestCase):
             with self.assertRaises(pe.EngineError):
                 ps.selectTargets(bad)
 
-    def test_linux_runtimes_go_where_the_driver_looks_and_windows_ones_beside_the_config_directory(self):
-        self.assertEqual(ps.overlayDirectory(ps.TARGETS["x86_64-linux-gnu.2.31"], "x86_64-linux-gnu.2.31", "22"),
-                         "lib/clang/22/lib/x86_64-unknown-linux-gnu")
-        self.assertEqual(ps.overlayDirectory(ps.TARGETS["aarch64-linux-musl"], "aarch64-linux-musl", "23"),
-                         "lib/clang/23/lib/aarch64-unknown-linux-musl")
-        self.assertEqual(ps.overlayDirectory(ps.TARGETS["aarch64-windows-gnu"], "aarch64-windows-gnu", "22"),
-                         "runtime/windows/aarch64-windows-gnu")
+    def test_linux_runtimes_go_where_the_driver_looks_and_windows_ones_beside_each_config_directory(self):
+        self.assertEqual(ps.overlayDirectories(ps.TARGETS["x86_64-linux-gnu.2.31"], "x86_64-linux-gnu.2.31", "22"),
+                         ["lib/clang/22/lib/x86_64-unknown-linux-gnu"])
+        self.assertEqual(ps.overlayDirectories(ps.TARGETS["aarch64-linux-musl"], "aarch64-linux-musl", "23"),
+                         ["lib/clang/23/lib/aarch64-unknown-linux-musl"])
+        self.assertEqual(ps.overlayDirectories(ps.TARGETS["aarch64-windows-gnu"], "aarch64-windows-gnu", "22"),
+                         ["runtime/windows/aarch64-windows-gnu", "runtime/windows/aarch64-windows-gnu.dll"])
 
 
 class ConfigureTest(unittest.TestCase):
@@ -116,9 +116,9 @@ class ProduceTest(TempCase):
         self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/x86_64-unknown-linux-gnu/libclang_rt.asan.a")))
         self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/aarch64-unknown-linux-musl/libclang_rt.ubsan_minimal.a")))
         self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/aarch64-unknown-linux-musl/libclang_rt.ubsan_standalone.a")))
-        windows = "runtime/windows/aarch64-windows-gnu/"
-        self.assertTrue(os.path.isfile(os.path.join(output, windows + "libclang_rt.ubsan_standalone.a")))
-        self.assertTrue(os.path.isfile(os.path.join(output, windows + "libsynchronization.a")))
+        for windows in ("runtime/windows/aarch64-windows-gnu/", "runtime/windows/aarch64-windows-gnu.dll/"):
+            for name in ("libclang_rt.ubsan_standalone.a", "libclang_rt.ubsan_standalone_cxx.a", "libsynchronization.a"):
+                self.assertTrue(os.path.isfile(os.path.join(output, windows + name)), windows + name)
         self.assertTrue(os.path.isfile(os.path.join(output, ps.LICENSE)))
         with open(os.path.join(output, ps.PROVENANCE)) as f:
             written = json.load(f)
