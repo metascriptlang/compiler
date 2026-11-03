@@ -359,18 +359,6 @@ export function resetTemps(s: RaiserCompState, enclosingRegs: int32 = 0): void {
 	s.nextReg = maxReg + 1;
 }
 
-function holdsLocationType(sym: Symbol): boolean {
-	const t = sym.symbolType;
-	return t != null && (t.kind == TypeKind.Var || t.kind == TypeKind.Borrow || t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr);
-}
-
-// A local that holds a location (a borrow of a by-value argument) reads through registers its statement made,
-// so they stay taken while the local is in scope.
-export function keepRegistersOfLocation(s: RaiserCompState, sym: Symbol | null): void {
-	if (sym == null || !holdsLocationType(sym)) return;
-	s.locals.items[s.locals.items.length - 1].heldThrough = s.nextReg - 1;
-}
-
 // --- Typed emit helpers ---
 
 export function isScalarClass(cls: RaiserRegClass): boolean {
