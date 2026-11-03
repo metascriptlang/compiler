@@ -600,13 +600,28 @@ function moduleImportLines(
 	return lines;
 }
 
+function resultLettersOf(name: string): string {
+	return name == "msb_rv" ? "ii" : name.slice("msb_rs_".length);
+}
+
+function resultImportParams(name: string): string[] {
+	if (name == "msb_rv") return ["...a"];
+	const letters = resultLettersOf(name);
+	const params: string[] = [];
+	for (let i = 0; i < letters.length; i += 1) {
+		for (const n of wireNames(i, letters.slice(i, i + 1))) params.push(n);
+	}
+	return params;
+}
+
 function jsLibraryOf(usage: EntryUsage): string {
 	const signatures = usage.callbacks.map((cb) => cb.signature);
 	const entries: string[] = [];
 	for (const s of signatures) entries.push(callbackImportJs(s));
 	for (const name of usage.resultImports) {
-		const take = `${REGISTRY}.takes.pop()(...a)`;
-		entries.push(guardedImportJs(name, ["...a"], take));
+		const params = resultImportParams(name);
+		const take = `${REGISTRY}.takes.pop()(${params.join(", ")})`;
+		entries.push(guardedImportJs(name, params, take));
 	}
 	const escape = `${REGISTRY}.escape(a0p, a0l)`;
 	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));
@@ -646,8 +661,7 @@ function entryLines(
 		for (const l of callbackLines(cb)) lines.push(l);
 	}
 	for (const name of usage.resultImports) {
-		const letters = name == "msb_rv" ? "ii" : name.slice("msb_rs_".length);
-		for (const l of importLines(name, letters, "v", false)) lines.push(l);
+		for (const l of importLines(name, resultLettersOf(name), "v", false)) lines.push(l);
 	}
 	for (const f of fns) {
 		const alias = aliasOf(f, usage.modules);

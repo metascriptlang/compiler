@@ -116,7 +116,7 @@ test "wasm entry: a string parameter arrives as ptr and len and is adopted witho
 	assert s.includes('extern function msb_rs_s(a0p: uint32, a0l: int32): void from "msb_rs_s";');
 	assert s.includes("void msb_rs_s(uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false && s.includes("msb_ret_len") == false;
-	assert e.jsLibrary.includes("\tmsb_rs_s: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rs_s: (a0p, a0l) => { try { return Module['msb'].takes.pop()(a0p, a0l); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8";
 	const plain = entryFor(["add64"]);
@@ -161,7 +161,7 @@ test "wasm entry: a struct crosses as leaf parameters and returns through one re
 	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrAdopt(l_2Ptr, l_2Len), count: l_3 });");
 	assert s.includes("\tmsb_rs_ddsi(r.at.x, r.at.y, msbStrPtr(r.text), r.text.asBytes().length, r.count);");
 	assert s.split("extern function msb_rs_ddsi").length == 2;
-	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (a0, a1, a2p, a2l, a3) => { try { return Module['msb'].takes.pop()(a0, a1, a2p, a2l, a3); } catch (e) { throw Module['msb'].die(e); } },");
 	assert e.exportedFunctions.join(",") == "_msb_calc_tag,_malloc,_free,_MsMain";
 }
 

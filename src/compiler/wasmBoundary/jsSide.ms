@@ -508,7 +508,7 @@ function wrapperLines(
 		BoundaryKind.String | BoundaryKind.Struct | BoundaryKind.Vec => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
 			lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
-			cleanup.push("__msb.takes.length = d;");
+			cleanup.push("if (__msb.takes.length > d) __msb.takes.length = d;");
 			[guardedCall(""), "if (__msb.dirty) __msb.leave();", "return r;"]
 		},
 		_ => {
