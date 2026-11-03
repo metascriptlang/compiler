@@ -11,6 +11,7 @@ import { RaiserValue, RaiserObjectHeap, RaiserArrayHeap, createStructHeap, creat
 // type-specific marshalling internally.
 export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
 
+
 export enum HostCapability {
 	Unsafe,
 	Pure,
@@ -21,6 +22,7 @@ export enum HostCapability {
 export interface HostEntry {
 	name: string;
 	fn: RaiserHostFn;
+	inPlace: int32;
 	capability: HostCapability;
 	live: boolean;  // false once _resetHostRegistryForTests dropped it, so a call site that cached it resolves again
 }
@@ -44,11 +46,16 @@ export function registerHostFn(
 	if (_registry.entries.has(name)) {
 		const entry = _registry.entries.get(name)!;
 		entry.fn = fn;
+		entry.inPlace = -1;
 		entry.capability = capability;
 		return;
 	}
-	const newEntry: HostEntry = { name, fn, capability, live: true };
+	const newEntry: HostEntry = { name, fn, inPlace: -1, capability, live: true };
 	_registry.entries.set(name, newEntry);
+}
+
+export function setHostEntryInPlace(name: string, slot: int32): void {
+	_registry.entries.get(name)!.inPlace = slot;
 }
 
 export function lookupHost(name: string): HostEntry | null {

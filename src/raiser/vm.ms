@@ -26,8 +26,8 @@ import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, RaiserCopyPlan, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, HostEntry, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
-import { RaiserHostFn, RaiserPrintSink, boxString } from "./marshal";
+import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
+import { RaiserHostFn, RaiserPrintSink, boxString, unboxFloat } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
 @include("runtime/promise/dispatch.h");
@@ -271,6 +271,8 @@ export interface RaiserVM {
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
 	floor: number;
 	suspendedRuns: RaiserRun[];
+	hostArgsAt: int32;
+	hostResult: int32;
 }
 
 interface RaiserRun {
@@ -365,7 +367,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0 };
 }
 
 // --- Register access ---
@@ -5378,14 +5380,21 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		return;
 	}
 	const fn = entry.fn;
+	const inPlace = entry.inPlace;
 
-	const argc = func.blocks[ic + 1] as int32;
 	const args: RaiserValue[] = [];
-	let i = 0;
-	while (i < argc) {
-		args.push(getDyn(vm, func.blocks[ic + 3 + i] as int32));
-		i = i + 1;
+	if (inPlace < 0) {
+		const argc = func.blocks[ic + 1] as int32;
+		let i = 0;
+		while (i < argc) {
+			args.push(getDyn(vm, func.blocks[ic + 3 + i] as int32));
+			i = i + 1;
+		}
 	}
+	const outerArgsAt = vm.hostArgsAt;
+	const outerResult = vm.hostResult;
+	vm.hostArgsAt = ic + 3;
+	vm.hostResult = ia;
 
 	// Save/restore so a bridge that re-enters a nested VM leaves the outer
 	// VM's heaps active when it resumes.
@@ -5397,12 +5406,16 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const outerFloor = vm.floor;
 	const suspended = vm.suspendedRuns.length;
 	vm.floor = Math.max(1, liveFramesTop(vm));
-	const result = fn(args);
+	let result = raiserNil();
+	if (inPlace >= 0) _inPlaceHostFns[inPlace](vm);
+	else result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
 		vm.suspendedRuns.shrink(suspended);
 	}
 	vm.floor = outerFloor;
+	vm.hostArgsAt = outerArgsAt;
+	vm.hostResult = outerResult;
 	setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	setActiveProgramArgv(prevArgv);
 
@@ -5423,7 +5436,47 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		return;
 	}
 
-	setRegConform(vm, ia, result);
+	if (inPlace < 0) setRegConform(vm, ia, result);
+}
+
+export type RaiserInPlaceHostFn = (vm: RaiserVM) => void;
+
+const _inPlaceHostFns: RaiserInPlaceHostFn[] = [];
+
+export function registerInPlaceHostFn(name: string, inPlace: RaiserInPlaceHostFn, fn: RaiserHostFn, capability: HostCapability = HostCapability.Unsafe): void {
+	registerHostFn(name, fn, capability);
+	setHostEntryInPlace(name, _inPlaceHostFns.length as int32);
+	_inPlaceHostFns.push(inPlace);
+}
+
+function hostArgOperand(vm: RaiserVM, i: int32): int32 {
+	return getModuleFunc(vm.mod, vm.funcIdx).blocks[vm.hostArgsAt + i] as int32;
+}
+
+export function hostArg(vm: RaiserVM, i: int32): RaiserValue {
+	return getDyn(vm, hostArgOperand(vm, i));
+}
+
+export function hostArgFloat(vm: RaiserVM, i: int32): number {
+	const t = hostArgOperand(vm, i);
+	return (t & 7) == CLS_FLOAT ? msBitsFloat64(vm.regs.slots[absOf(vm, t)]) : unboxFloat(getDyn(vm, t));
+}
+
+export function hostArgInt(vm: RaiserVM, i: int32): int64 {
+	const t = hostArgOperand(vm, i);
+	return (t & 7) == CLS_WORD ? vm.regs.slots[absOf(vm, t)] : getDyn(vm, t).intVal;
+}
+
+export function hostReturn(vm: RaiserVM, v: RaiserValue): void {
+	setRegConform(vm, vm.hostResult, v);
+}
+
+export function hostReturnFloat(vm: RaiserVM, f: number): void {
+	setRegFloat(vm, vm.hostResult, f);
+}
+
+export function hostReturnInt(vm: RaiserVM, n: int64): void {
+	setRegInt(vm, vm.hostResult, n);
 }
 
 // --- Stack trace ---
@@ -6594,6 +6647,29 @@ test "CallHost two-arg native" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 42;
+}
+
+test "an in-place host call reads its arguments in the caller's registers and writes the call's destination, not its boxed form" {
+	_resetHostRegistryForTests();
+	registerInPlaceHostFn("add", (vm: RaiserVM): void => { hostReturnInt(vm, hostArgInt(vm, 0) + hostArgInt(vm, 1)); }, (args: RaiserValue[]): RaiserValue => raiserInt(-1));
+	registerInPlaceHostFn("sqrt", (vm: RaiserVM): void => { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); }, (args: RaiserValue[]): RaiserValue => raiserFloat(-1.0));
+	const add: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABx(RaiserOpcode.LoadConst, 2, 2),
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 2),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const sum = execModule(makeTestModule(add, [raiserConstString("add"), raiserInt(10), raiserInt(32)]));
+	assert sum.error == "", sum.error;
+	assert sum.exitValue.intVal == 42;
+	const root: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 1),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const r = execModule(makeTestModule(root, [raiserConstString("sqrt"), raiserFloat(2.25)]));
+	assert r.error == "", r.error;
+	assert r.exitValue.floatVal == 1.5;
 }
 
 test "a host call leaves the active host heaps as it found them, none included" {
