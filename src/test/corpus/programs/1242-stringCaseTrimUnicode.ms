@@ -12,9 +12,8 @@
 // @stdout: trim keeps NEL and mongolian vowel separator [5] 85 180e 78 180e 85
 // @stdout: every code point upper 224777 lower 428832 trim 198084
 // @stdout: sigma and mark contexts 621632
-// @skip-raiser: the Raiser prelude trims and converts case on ASCII only
 //
-// trim and the case functions return the ECMAScript result on C and JS: Unicode WhiteSpace and
+// trim and the case functions return the ECMAScript result on C, JS and the Raiser: Unicode WhiteSpace and
 // LineTerminator, the full default case mapping with SpecialCasing, and Final_Sigma. The hashes cover
 // every code point and a fuzz of sigma contexts, and equal what node answers.
 
