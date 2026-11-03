@@ -157,7 +157,7 @@ export function main(): int32 {
 			}
 			// Apply cc section from build.ms: resolve per-target config, CLI flags override
 			if (cfg.valid) {
-				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget);
+				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget, opts.abi);
 				if (resolved.entry != "" && opts.inputFile == "") opts.inputFile = resolved.entry;
 				if (opts.ccBinary == "" && resolved.compiler != "") opts.ccBinary = resolved.compiler;
 				if (opts.passC == "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
