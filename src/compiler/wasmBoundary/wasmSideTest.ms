@@ -58,8 +58,7 @@ function manifestFrom(source: string, names: string[], also: string[] = []): Man
 		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
-	const refused = m.errors.filter((e) => e.code != "handle-not-generated");
-	if (refused.length > 0) throw new Error("internal: " + refused.map((e) => e.message).join("; "));
+	if (m.errors.length > 0) throw new Error("internal: " + m.errors.map((e) => e.message).join("; "));
 	return m;
 }
 

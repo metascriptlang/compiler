@@ -27,6 +27,7 @@ export interface JsBindings {
 
 export interface JsBindingOptions {
 	checked: (bundleName: string) => boolean;
+	dev?: boolean;
 }
 
 function wireToJsValue(kind: BoundaryKind, expr: string): string {
@@ -167,6 +168,10 @@ function paramChecks(f: BoundaryFunction): string[] {
 				const base = `__msbSpan(${x}, ${type}, ${at(label)}).base`;
 				const range = `${x}.off, ${x}.len`;
 				out.push(elementsCheck(base, range, p.element, at(label)));
+			}
+			BoundaryKind.Handle => {
+				const type = quoted(`Handle<${p.handle!}>`);
+				out.push(`__msbType(${x}, "object", ${type}, ${at(label)});`);
 			}
 			_ => {
 				out.push(valueCheck(p.kind, x, at(label)) + ";");
@@ -364,6 +369,7 @@ function wrapperLines(
 	f: BoundaryFunction,
 	bundleName: string,
 	checked: boolean,
+	dev: boolean,
 ): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
@@ -472,6 +478,12 @@ function wrapperLines(
 				const role = written ? "write" : "read";
 				encodeView(`e${i}`, view, "", role, `parameter '${p.name}'`);
 			}
+			BoundaryKind.Handle => {
+				lines.push(`\tlet l${i} = null;`);
+				encodes.push(`\t\tconst p${i} = __msb.lend(a${i}.ptr); l${i} = a${i}.ptr;`);
+				cleanup.push(`if (l${i} !== null) __msb.unlend(l${i});`);
+				argList.push(`p${i}`);
+			}
 			_ => {
 				argList.push(scalarArg(p.kind, `a${i}`, own));
 			}
@@ -501,7 +513,11 @@ function wrapperLines(
 		},
 		_ => {
 			const keep = ["let v;", guardedCall("v = "), "if (__msb.dirty) __msb.leave();"];
-			if (f.resultNullable) {
+			if (f.result == BoundaryKind.Handle) {
+				const type = quoted(`Handle<${f.resultHandle!}>`);
+				const label = quoted(dev ? f.resultLabel : "");
+				keep.push(`return { ptr: __msb.own(v, ${type}, ${label}) };`);
+			} else if (f.resultNullable) {
 				keep.push(
 					"return __msbMod._msb_ret_some() !== 0 ? "
 						+ `${wireToJsValue(f.result, "v")} : null;`,
@@ -551,7 +567,11 @@ export function jsBindings(
 	let viewsIn = false;
 	let viewsOut = false;
 	let anyChecked = false;
+	let handles = false;
+	const dev = options.dev ?? true;
 	for (const f of m.functions) {
+		if (f.result == BoundaryKind.Handle) handles = true;
+		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
 		if (copiesArgsIn(f)) scratch = true;
 		if (functionSharesViews(f)) viewsIn = true;
 		for (const p of f.params) {
@@ -571,7 +591,7 @@ export function jsBindings(
 		const bundleName = bundleNameOf(f);
 		const checked = options.checked(bundleName);
 		if (checked) anyChecked = true;
-		for (const l of wrapperLines(f, bundleName, checked)) {
+		for (const l of wrapperLines(f, bundleName, checked, dev)) {
 			lines[at].push(l);
 		}
 	}
@@ -579,6 +599,6 @@ export function jsBindings(
 		modules[i].code = lines[i].join("\n") + "\n";
 	}
 	const views = viewHelpers(viewsIn, viewsOut);
-	const prelude = preludeFor(wasmModuleUrl, anyChecked, scratch, views);
+	const prelude = preludeFor(wasmModuleUrl, anyChecked, scratch, views, handles);
 	return { prelude, modules };
 }

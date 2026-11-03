@@ -81,7 +81,7 @@ import { DepsSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } fr
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
-import { CliOptions, Target, MODE_DANGER, MODE_RELEASE } from "./options";
+import { CliOptions, Target, MODE_DANGER, MODE_RELEASE, MODE_DEBUG } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
 import { wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
@@ -1924,7 +1924,7 @@ function placeWasmModules(
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName) });
+	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName), dev: opts.mode == MODE_DEBUG });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {

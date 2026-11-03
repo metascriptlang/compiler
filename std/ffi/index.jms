@@ -14,13 +14,19 @@ export function at<T>(this typeof Handle, p: Ptr<void>): Handle<T> {
 }
 
 export function value<T>(this h: Handle<T>): T {
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) throw new Error("Handle.value() on a wasm-owned handle: pass it to a @wasm function");`);
 	return h.ptr as T;
 }
 
 export function take<T>(this h: Handle<T>): T {
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) throw new Error("Handle.take() on a wasm-owned handle: pass it to a @wasm function");`);
 	return h.ptr as T;
 }
 
-export function retain<T>(this h: Handle<T>): void {}
+export function retain<T>(this h: Handle<T>): void {
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.retain(); return; }`);
+}
 
-export function release<T>(this h: Handle<T>): void {}
+export function release<T>(this h: Handle<T>): void {
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.release(); return; }`);
+}

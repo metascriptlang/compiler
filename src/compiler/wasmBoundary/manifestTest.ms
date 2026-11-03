@@ -431,7 +431,7 @@ export function takeOwned(o: Owned): int32 { return 0; }
 	assert errorFor(m.errors, "takeOwned").includes("Owned has no JS/wasm boundary form: it crosses as Handle<Owned>");
 }
 
-test "manifest: a Handle<T> of an exported class is refused as not generated yet while the JS half is missing" {
+test "manifest: a Handle<T> of an exported class crosses with no error as a parameter and a result" {
 	const src = HANDLE + `
 export class Counter { n: int32 = 0; }
 export function open(): Handle<Counter> { return null as unknown as Handle<Counter>; }
@@ -439,8 +439,8 @@ export function use(h: Handle<Counter>): int32 { return 0; }
 `;
 	const names = ["open", "use"];
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", ...names]), names);
-	assert errorFor(m.errors, "open").includes("Handle<Counter> crossing is not generated yet");
-	assert errorFor(m.errors, "use").includes("parameter 'h': Handle<Counter> crossing is not generated yet");
+	assert m.errors.length == 0;
+	assert m.functions.length == 2;
 }
 
 test "manifest: a nullable Handle, a Handle callback parameter or result and an unexported target are refused by name" {

@@ -63,11 +63,19 @@ export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
 export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
 `;
 
-function manifestFrom(source: string, names: string[]): Manifest {
+const HANDLES = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+export class Counter { n: int32 = 0; }
+export function open(start: int32): Handle<Counter> { return null as unknown as Handle<Counter>; }
+export function bump(h: Handle<Counter>, by: int32): int32 { return by; }
+`;
+
+function manifestFrom(source: string, names: string[], also: string[] = []): Manifest {
 	const ctx = checkSource(source);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
-	for (const n of names) {
+	for (const n of [...also, ...names]) {
 		const sym = lookupSymbol(ctx.table, n);
 		if (sym == null) throw new Error("internal: test source lacks " + n);
 		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
@@ -679,4 +687,32 @@ test "js side: a callback that is handed a Span counts the lend around its body 
 	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try {");
 	assert code.includes("} finally { __msb.lent -= 1; } });");
 	assert code.split("__msb.lent").length == 3;
+}
+
+function handleBindings(dev: boolean) {
+	const m = manifestFrom(HANDLES, ["open", "bump"], ["Counter"]);
+	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev });
+}
+
+test "js side: a Handle parameter is lent inside try and unlent in finally behind its null flag" {
+	const code = handleBindings(true).modules[0].code;
+	assert code.includes("function bundled_bump(a0, a1) {\n\t__msb.enter();\n\tlet l0 = null;\n\ttry {\n\t\tconst p0 = __msb.lend(a0.ptr); l0 = a0.ptr;");
+	assert code.includes("_msb_calc_bump(p0, a1)");
+	assert code.includes("} finally {\n\t\tif (l0 !== null) __msb.unlend(l0);\n\t}");
+}
+
+test "js side: a Handle result is owned with its declaration label in a dev bundle and an empty one in a release bundle" {
+	const dev = handleBindings(true).modules[0].code;
+	assert dev.includes("return { ptr: __msb.own(v, \"Handle<Counter>\", \"Handle<Counter> created at ");
+	const release = handleBindings(false).modules[0].code;
+	assert release.includes("return { ptr: __msb.own(v, \"Handle<Counter>\", \"\") };");
+}
+
+test "js side: the prelude holds handle kinds 2 and 3, and release defers instead of throwing while lent" {
+	const p = handleBindings(true).prelude;
+	assert p.includes("hk[i] = 2;") && p.includes("hk[r.i] = 3;");
+	const release = p.slice(p.indexOf("release(r) {"), p.indexOf("release(r) {") + 400);
+	assert !release.includes("lent"), release;
+	assert p.includes("__msb.release(this)") && p.includes("Symbol.for(\"msb.ref\")");
+	assert !bindingsFor(["add64"]).prelude.includes("__msbRef");
 }

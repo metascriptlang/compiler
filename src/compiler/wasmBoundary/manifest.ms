@@ -280,12 +280,6 @@ function checkHandle(
 		return null;
 	}
 	if (!c.handles.includes(target.sym!)) c.handles.push(target.sym!);
-	handleRefusal(
-		c,
-		"handle-not-generated",
-		what,
-		`Handle<${name}> crossing is not generated yet`,
-	);
 	return name;
 }
 

@@ -53,7 +53,7 @@ function accepts(kind: BoundaryKind, at: Position, jsSide: boolean): boolean {
 		BoundaryKind.Callback => at == Position.Param,
 		BoundaryKind.Struct | BoundaryKind.Vec => at == Position.Param || at == Position.Result,
 		BoundaryKind.Span => at == Position.Param || at == Position.CallbackParam,
-		BoundaryKind.Handle => !jsSide && (at == Position.Param || at == Position.Result),
+		BoundaryKind.Handle => (at == Position.Param || at == Position.Result),
 	};
 }
 

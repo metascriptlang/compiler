@@ -266,6 +266,72 @@ const CHECK_GLUE = [
 	"}",
 ];
 
+const SLOT_LIMIT = 0x1000000;
+
+const HANDLE_STATE = [
+	"\tconst hk = [];",
+	"\tconst hv = [];",
+	"\tconst hl = [];",
+	"\tconst hr = [];",
+	"\tconst hu = [];",
+	"\tconst hf = [];",
+	"\tlet hUid = 1;",
+	"\tconst hLive = (r) => r.i < hk.length && hu[r.i] === r.u && hk[r.i] === 2;",
+	"\tconst hFinish = (i) => {",
+	"\t\tconst p = hv[i];",
+	"\t\thk[i] = 0;",
+	"\t\thv[i] = undefined;",
+	"\t\thf.push(i);",
+	"\t\t__msbMod._msb_release(p);",
+	"\t};",
+];
+
+const HANDLE_METHODS = [
+	"\t\town(p, type, label) {",
+	"\t\t\tlet i = hf.pop();",
+	"\t\t\tif (i === undefined) {",
+	`\t\t\t\tif (hk.length >= ${SLOT_LIMIT}) throw new RangeError("boundary slot table full");`,
+	"\t\t\t\ti = hk.length;",
+	"\t\t\t\thk.push(0); hv.push(0); hl.push(0); hr.push(0); hu.push(0);",
+	"\t\t\t}",
+	"\t\t\thk[i] = 2; hv[i] = p; hl[i] = 0; hr[i] = 1; hu[i] = hUid++;",
+	"\t\t\treturn new __msbRef(i, hu[i], label || type);",
+	"\t\t},",
+	"\t\tlive(r) { return hLive(r); },",
+	"\t\tlend(r) {",
+	"\t\t\tif (!(r instanceof __msbRef)) throw new TypeError(\"expected a Handle "
+		+ "returned by a @wasm function\");",
+	"\t\t\tif (!hLive(r)) throw new Error(\"use of \" + r.name + \" after "
+		+ "release\");",
+	"\t\t\thl[r.i]++;",
+	"\t\t\treturn hv[r.i];",
+	"\t\t},",
+	"\t\tunlend(r) { if (--hl[r.i] === 0 && hk[r.i] === 3) hFinish(r.i); },",
+	"\t\tretain(r) {",
+	"\t\t\tif (!hLive(r)) throw new Error(\"use of \" + r.name + \" after "
+		+ "release\");",
+	"\t\t\thr[r.i]++;",
+	"\t\t},",
+	"\t\trelease(r) {",
+	"\t\t\tif (!hLive(r)) throw new Error(\"release of \" + r.name + \": "
+		+ "already released\");",
+	"\t\t\tif (--hr[r.i] !== 0) return;",
+	"\t\t\tif (hl[r.i] > 0) hk[r.i] = 3;",
+	"\t\t\telse hFinish(r.i);",
+	"\t\t},",
+];
+
+const HANDLE_GLUE = [
+	"class __msbRef {",
+	"\tconstructor(i, u, name) { this.i = i; this.u = u; this.name = name; }",
+	"\trelease() { __msb.release(this); }",
+	"\tretain() { __msb.retain(this); return this; }",
+	"\tget released() { return !__msb.live(this); }",
+	"\t[Symbol.dispose]() { __msb.release(this); }",
+	"}",
+	"__msbRef.prototype[Symbol.for(\"msb.ref\")] = true;",
+];
+
 const SCRATCH_BYTES = 16384;
 
 function scratchLines(used: boolean): string[] {
@@ -289,6 +355,7 @@ export function preludeFor(
 	checked: boolean,
 	scratch: boolean,
 	views: string[],
+	handles: boolean,
 ): string {
 	const tableFull = `boundary table full: ${SLOT_CAP} live entries`;
 	const staleSlot = `vals[s] === undefined || gens[s] !== id >>> ${SLOT_BITS}`;
@@ -301,9 +368,10 @@ export function preludeFor(
 	const lentGlue = "a wasm function was called while a Span was lent to a JS "
 		+ "callback: the callback's copy and the wasm side's would diverge, so "
 		+ "call it after the callback returns";
-	const glue = checked
+	const base = checked
 		? GLUE.concat(views).concat(CHECK_GLUE)
 		: GLUE.concat(views);
+	const glue = handles ? base.concat(HANDLE_GLUE) : base;
 	const factory = `(await import(${quoted(wasmModuleUrl)})).default`;
 	return [
 		"const __msb = (() => {",
@@ -314,7 +382,9 @@ export function preludeFor(
 		"\tlet cause;",
 		"\tlet pending = null;",
 		"\tlet escaped = null;",
+		...(handles ? HANDLE_STATE : []),
 		"\treturn {",
+		...(handles ? HANDLE_METHODS : []),
 		"\t\tpush(f) {",
 		"\t\t\tlet s = free.pop();",
 		"\t\t\tif (s === undefined) {",
