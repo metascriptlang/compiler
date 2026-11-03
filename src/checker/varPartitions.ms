@@ -833,19 +833,19 @@ function pendingOfCall(call: Node): PendingLend[] {
 }
 
 function pendingOfRoutine(sym: Symbol): PendingLend[] {
-	if (sym.declNode == null || (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method)) return [];
-	recordBodyRead(sym.modulePath);
-	const own = pendingLends(sym.declNode);
-	const entry = dispatchEntryFor(sym);
-	if (entry == null || entry.overloaded) return own;
+	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) return [];
 	const all: PendingLend[] = [];
-	for (const l of own) { all.push(l); }
-	for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) {
-		if (o.sym.declNode == null) continue;
-		recordBodyRead(o.sym.modulePath);
-		for (const l of pendingLends(o.sym.declNode)) { all.push(l); }
-	}
+	pendingOfBody(sym, all);
+	const entry = dispatchEntryFor(sym);
+	if (entry == null || entry.overloaded) return all;
+	for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) { pendingOfBody(o.sym, all); }
 	return all;
+}
+
+function pendingOfBody(sym: Symbol, out: PendingLend[]): void {
+	if (sym.declNode == null || !isAsyncRoutine(sym.declNode)) return;
+	recordBodyRead(sym.modulePath);
+	for (const l of pendingLends(sym.declNode)) { out.push(l); }
 }
 
 function lentArgument(call: Node, input: int32): Node | null {
