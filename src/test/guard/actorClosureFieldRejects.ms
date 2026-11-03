@@ -5,7 +5,8 @@
 //   one; it may capture module state and would run on the actor's thread.
 //
 // WHAT IT CATCHES: a closure in a field, one level deeper, and in an array element, on an awaited
-//   CALL and on a send.
+//   CALL and on a send; and a closure beside an actor reference in a struct, which still crosses
+//   though the actor's own fields (it crosses as its pid, A6) are not walked.
 //
 // RED MEANS: one of the shapes compiled. An object with only scalar fields still crosses
 //   (actorSendCopiesRun.ms).
@@ -14,17 +15,25 @@
 // GUARD-CHECK-FAIL c.f is a plain function inside a value that crosses to the actor
 // GUARD-CHECK-FAIL o.inner.f is a plain function inside a value that crosses to the actor
 // GUARD-CHECK-FAIL fs[] is a plain function inside a value that crosses to the actor
+// GUARD-CHECK-FAIL h.f is a plain function inside a value that crosses to the actor
 
 import { stop, ExitReason } from "std/actor";
 
 interface Cb { f: () => int32; }
 interface Outer { inner: Cb; }
+class Core { call: () => int32; constructor(call: () => int32) { this.call = call; } }
+actor Inner {
+	core: Core = new Core((): int32 => 7);
+	value(): int32 { return this.core.call(); }
+}
+struct Handle { actor: Inner; f: () => int32; }
 
 actor Reader {
 	call(c: Cb): int32 { return c.f(); }
 	deep(o: Outer): int32 { return o.inner.f(); }
 	each(fs: (() => int32)[]): int32 { return fs[0](); }
 	post(c: Cb): void { c.f(); }
+	beside(h: Handle): int32 { return h.f(); }
 }
 
 let counter: int32 = 0;
@@ -37,4 +46,6 @@ console.log(await r.deep(o)); // GUARD-REFUSED
 console.log(await r.each(fs)); // GUARD-REFUSED
 const sent: Cb = { f: () => { counter = counter + 1; return counter; } };
 r.post(move sent); // GUARD-REFUSED
+const h: Handle = { actor: new Inner(), f: () => { counter = counter + 1; return counter; } };
+console.log(await r.beside(h)); // GUARD-REFUSED
 stop(r.pid, ExitReason.Normal);
