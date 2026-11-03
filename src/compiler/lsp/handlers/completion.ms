@@ -298,7 +298,8 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	}
 
 	// AST-based context detection FIRST — import contexts bypass all caches
-	const kind = jsxSite != null ? SgCompletionKind.MemberAccess : sgDetectCompletionContext(program, pos.line, pos.col + 1);
+	const kind = jsxSite != null ? SgCompletionKind.MemberAccess
+		: sgDetectCompletionContext(program, pos.line, pos.col + 1, source);
 
 	// ImportPath: scan filesystem for matching modules
 	if (kind == SgCompletionKind.ImportPath) {

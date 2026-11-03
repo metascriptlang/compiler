@@ -18,6 +18,8 @@ import { peelToStructOrUnion, positionalFieldsOf, hasGenericParams, createUnifyB
 import { declaringSymOf, fieldDeclarer, aliasObjectBody } from "./visibility";
 import { nonNullMemberOfNullable } from "./compat";
 import { lineOffset, lineText } from "../utils/sourceLines";
+import { lex } from "../lexer/lexer";
+import { Token, TokenKind } from "../lexer/token";
 
 // ===== Data Types =====
 
@@ -1616,36 +1618,57 @@ function isInTypeAnnotation(program: Node, line: int32, col: int32): boolean {
 	return found;
 }
 
+function sgTypeExprContains(te: Node, line: int32, col: int32): boolean {
+	const loc = te.location;
+	return (line == loc.line && col == loc.column)
+		|| ((line > loc.line || (line == loc.line && col >= loc.column))
+			&& (line < loc.endLine || (line == loc.endLine && col < loc.endColumn)));
+}
+
 // Check if a node's typeExpr or typeExprs contains the cursor position.
 function sgCheckTypeExprAt(node: Node, line: int32, col: int32): boolean {
-	// Check typeExpr (return type, variable type, type alias RHS)
-	if (node.typeExpr != null) {
-		const te = node.typeExpr;
-		if (te.location.line == line && te.location.column <= col) {
-			return true;
-		}
+	if (node.typeExpr != null && sgTypeExprContains(node.typeExpr, line, col)) {
+		return true;
 	}
-	// Check typeExprs (per-param type annotations)
 	if (node.typeExprs != null) {
-		const tes = node.typeExprs!;
-		for (let i = 0; i < tes.length; i = i + 1) {
-			const te = tes[i];
-			if (te != null && te.location.line == line && te.location.column <= col) {
-				return true;
-			}
+		for (const te of node.typeExprs!) {
+			if (te != null && sgTypeExprContains(te, line, col)) return true;
 		}
 	}
 	return false;
 }
 
-// ===== Fully AST-Based Completion Context Detection =====
-// Reference: all detection via node kinds, no text scanning.
+function sgTypeContextAt(
+	program: Node, source: string, line: int32, col: int32,
+): boolean {
+	if (isInTypeAnnotation(program, line, col)) return true;
+	if (source == "") return false;
+	const tokens = lex(source);
+	if (!tokens.ok) return false;
+	let previous: Token | null = null;
+	let next: Token | null = null;
+	for (const token of tokens.value) {
+		if (token.kind == TokenKind.Comment) continue;
+		if (token.line > line || (token.line == line && token.column >= col)) {
+			next = token;
+			break;
+		}
+		previous = token;
+	}
+	if (previous == null) return false;
+	if (isInTypeAnnotation(program, previous.line, previous.column)) return true;
+	return (previous.kind == TokenKind.Colon || previous.kind == TokenKind.Assign)
+		&& next != null && isInTypeAnnotation(program, next.line, next.column);
+}
+
 // - ImportDecl → ImportName / ImportPath
 // - MemberExpr → MemberAccess
 // - ObjectLiteral → ObjectField
 // - typeExpr/typeExprs → TypeAnnotation
 
-export function sgDetectCompletionContext(program: Node, line: int32, col: int32): SgCompletionKind {
+export function sgDetectCompletionContext(
+	program: Node, line: int32, col: int32, source: string = "",
+): SgCompletionKind {
 	// Import detection: find ImportDecl on cursor line (ref: findImportStmtOnLine)
 	const importNode = findImportDeclOnLine(program, line);
 	if (importNode != null) {
@@ -1667,7 +1690,7 @@ export function sgDetectCompletionContext(program: Node, line: int32, col: int32
 	}
 
 	// TypeAnnotation: cursor on a typeExpr/typeExprs node (ref: declaration type-position)
-	if (isInTypeAnnotation(program, line, col)) {
+	if (sgTypeContextAt(program, source, line, col)) {
 		return SgCompletionKind.TypeAnnotation;
 	}
 

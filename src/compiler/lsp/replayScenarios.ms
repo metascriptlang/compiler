@@ -2104,20 +2104,31 @@ function queryHistoryKeepsExactAnswers(): LspScenario {
 
 function globalImportClassIdentitySurvivesQueryHistory(): LspScenario {
 	const uri = PROJECT_URI + "use.ms";
-	const edited = SHAPE_USER.replaceAll("new Box(7)", "new Box(8)");
+	const source = SHAPE_USER + "export type Alias = Box;\n";
+	const edited = source.replaceAll("new Box(7)", "new Box(8)");
 	return {
 		name: "a global-import class stays its importer's class after completion, rename and a real edit",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SHAPE_USER))]),
+			frames([notification("textDocument/didOpen", openParams(uri, source))]),
 			frames([
 				request("10", "textDocument/completion", positionParams(uri, 1, 16)),
 				request("11", "textDocument/rename", renameParams(uri, 1, 16, "lspRenamed")),
+				request("12", "textDocument/completion", positionParams(uri, 1, 9)),
+				request("13", "textDocument/completion", positionParams(uri, 4, 20)),
 			]),
 			frames([notification("textDocument/didChange", changeParams(uri, 2, edited))]),
 		],
 		check: (r: LspReplay) => firstFailure([
+			listsCompletion("alias RHS offers its class", r, "n:13", "Box|7|Box"),
+			sameText("alias RHS excludes the factory", "false",
+				"" + completionLabels(r, "n:13").includes("mkBox")),
+			listsCompletion("typed initializer offers its factory", r, "n:10",
+				"mkBox|3|() => Box"),
+			listsCompletion("type annotation offers its class", r, "n:12", "Box|7|Box"),
+			sameText("type annotation excludes the factory", "false",
+				"" + completionLabels(r, "n:12").includes("mkBox")),
 			sameText("use.ms diagnostic counts per publish", "[0,0]", publishedCounts(r, uri)),
 			sameText("use.ms last publish", "[]", lastPublished(r, uri)),
 		]),
