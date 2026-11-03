@@ -192,10 +192,11 @@ function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 		if (target.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = target;
 		checkExpr(ctx, target, null);
 		ctx.initTracker.assignTarget = null;
-		refuseImportWrite(ctx, target);
 		const k = target.kind;
 		if (k != NodeKind.Identifier && k != NodeKind.MemberExpr && k != NodeKind.ArrayAccess && k != NodeKind.ObjectLiteral) {
 			addError(ctx, "a destructuring assignment target must be a variable, a field or an element", target.location.line, target.location.column);
+		} else {
+			refuseTargetWrite(ctx, target, "=", null);
 		}
 		return;
 	}
@@ -262,6 +263,43 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 	}
 	const refusal = writeRefusal(target, WriteSite.Assign);
 	if (refusal != null) addError(ctx, refusal, target.location.line, target.location.column);
+}
+
+function refuseTargetWrite(ctx: CheckerContext, target: Node, operator: string, storedValue: Node | null): boolean {
+	const errorsBefore = ctx.errors.length;
+	if (target.kind == NodeKind.ArrayLiteral || target.kind == NodeKind.ObjectLiteral) {
+		const parts = target.kind == NodeKind.ArrayLiteral ? (target.data as ArrayLiteralData).elements : (target.data as ObjectLiteralData).properties;
+		for (const part of parts) refuseTargetWrite(ctx, part.kind == NodeKind.SpreadExpr ? (part.data as SpreadExprData).spreadArg : part, "=", null);
+		return ctx.errors.length > errorsBefore;
+	}
+	if (!refuseImportWrite(ctx, target)) reportSharedWrite(ctx, target);
+	if (!isLocation(target) && target.nodeType != null && target.nodeType.kind != TypeKind.Error) {
+		addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", target.location.line, target.location.column);
+	}
+	if (target.kind != NodeKind.MemberExpr) return ctx.errors.length > errorsBefore;
+	const md = target.data as MemberExprData;
+	reportReadonlyField(ctx, target);
+	if (md.property == "length" && md.object.nodeType != null) {
+		if (isStringLike(md.object.nodeType) || md.object.nodeType.kind == TypeKind.CString) {
+			addError(ctx, "cannot assign to 'length' on string (strings are immutable)", target.location.line, target.location.column);
+		} else if (md.object.nodeType.kind == TypeKind.SizedArray) {
+			addError(ctx, "cannot modify 'length' on fixed-size array", target.location.line, target.location.column);
+		} else if (md.object.nodeType.kind == TypeKind.Array && operator != "=") {
+			addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + operator.slice(0, operator.length - 1) + " n' instead", target.location.line, target.location.column);
+		}
+		refuseLengthGrowth(ctx, target, operator == "=" ? storedValue : null, md.object.nodeType);
+	}
+	const discUnion = literalDiscriminantOwner(md);
+	if (discUnion != null) {
+		addError(ctx, `cannot assign to '${md.property}': it is the discriminant of '${typeDisplayName(discUnion)}' — assign a whole value of the other variant instead`,
+			target.location.line, target.location.column);
+	}
+	const recvType = md.object.nodeType;
+	if (target.nodeType != null && isUnresolvedType(target.nodeType) && recvType != null
+			&& findAccessor(ctx, recvType, "set_" + md.property) == null && findAccessor(ctx, recvType, "get_" + md.property) != null) {
+		addError(ctx, `Cannot assign to '${md.property}' because it is a read-only property: it has a getter and no setter`, target.location.line, target.location.column);
+	}
+	return ctx.errors.length > errorsBefore;
 }
 
 function literalDiscriminantOwner(md: MemberExprData): Type | null {
@@ -1516,11 +1554,10 @@ function checkHiddenDeref(ctx: CheckerContext, node: Node, expectedType: Type | 
 	return;
 }
 
-function refuseLengthGrowth(ctx: CheckerContext, d: BinaryExprData, arrType: Type): boolean {
-	if (arrType.kind != TypeKind.Array || !requiresInit(ctx, arrType.typeReturn)) return false;
-	if (d.operator == "=" && d.right.kind == NodeKind.NumberLiteral && (d.right.data as NumberLiteralData).value == 0) return false;
-	addError(ctx, `'length' cannot be assigned on an array whose elements have no default value, because it could grow: ${noDefaultReason(ctx, arrType.typeReturn)} — push values to grow, shrink(n) to cut, or length = 0 to empty it`, d.left.location.line, d.left.location.column);
-	return true;
+function refuseLengthGrowth(ctx: CheckerContext, target: Node, value: Node | null, arrType: Type): void {
+	if (arrType.kind != TypeKind.Array || !requiresInit(ctx, arrType.typeReturn)) return;
+	if (value != null && value.kind == NodeKind.NumberLiteral && (value.data as NumberLiteralData).value == 0) return;
+	addError(ctx, `'length' cannot be assigned on an array whose elements have no default value, because it could grow: ${noDefaultReason(ctx, arrType.typeReturn)} — push values to grow, shrink(n) to cut, or length = 0 to empty it`, target.location.line, target.location.column);
 }
 
 function lowerLengthAssignment(ctx: CheckerContext, node: Node, arr: Node, n: Node): boolean {
@@ -1596,34 +1633,12 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 	}
-	if (isAsgn && !refuseImportWrite(ctx, d.left)) { reportSharedWrite(ctx, d.left); }
-	if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
-			&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
-		addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
-	}
-	// Block assignment to read-only properties
-	if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
+	const refused = isAsgn && d.left.kind != NodeKind.ArrayLiteral && refuseTargetWrite(ctx, d.left, d.operator, d.right);
+	if (!refused && d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 		const md = d.left.data as MemberExprData;
-		reportReadonlyField(ctx, d.left);
-		// Built-in readonly: str.length, sized-array.length
-		if (md.property == "length" && md.object.nodeType != null) {
-			if (isStringLike(md.object.nodeType) || md.object.nodeType.kind == TypeKind.CString) {
-				addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
-			} else if (md.object.nodeType.kind == TypeKind.SizedArray) {
-				addError(ctx, "cannot modify 'length' on fixed-size array", d.left.location.line, d.left.location.column);
-			} else if (md.object.nodeType.kind == TypeKind.Array && d.operator != "=") {
-				addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
-			}
-			const refused = refuseLengthGrowth(ctx, d, md.object.nodeType);
-			if (!refused && d.operator == "=" && md.object.nodeType.kind == TypeKind.Array
-					&& evictionNeedsElementHook(md.object.nodeType.typeReturn) && lowerLengthAssignment(ctx, node, md.object, d.right)) {
-				return;
-			}
-		}
-		const discUnion = literalDiscriminantOwner(md);
-		if (discUnion != null) {
-			addError(ctx, `cannot assign to '${md.property}': it is the discriminant of '${typeDisplayName(discUnion)}' — assign a whole value of the other variant instead`,
-				d.left.location.line, d.left.location.column);
+		if (md.property == "length" && md.object.nodeType != null && md.object.nodeType.kind == TypeKind.Array
+				&& evictionNeedsElementHook(md.object.nodeType.typeReturn) && lowerLengthAssignment(ctx, node, md.object, d.right)) {
+			return;
 		}
 	}
 	const rightExpected = storesRight ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
@@ -1682,7 +1697,6 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			node.nodeType = callSetter(ctx, node, d, md); return;
 		}
 		if (recvType != null && findAccessor(ctx, recvType, "get_" + md.property) != null) {
-			addError(ctx, `Cannot assign to '${md.property}' because it is a read-only property: it has a getter and no setter`, d.left.location.line, d.left.location.column);
 			node.nodeType = errorType(); return;
 		}
 	}
