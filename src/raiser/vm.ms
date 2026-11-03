@@ -14,7 +14,7 @@ import {
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
-	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
+	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copiesAsValue, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown, CLOSURE_LAYOUT,
 } from "./value";
 import {
@@ -109,10 +109,6 @@ export interface RaiserFuture {
 	errorObserved: boolean;
 	value: RaiserValue;
 	error: RaiserValue;
-	// The future owns the storage its value lives in, the way MS_FUTURE_STRUCT
-	// makes `value` a field of the future itself (runtime/promise/future.h) —
-	// the producing strand's heap dies with it, so the value is copied in on
-	// completion and copied out into each reader's heap on await.
 	valueArrayHeap: RaiserArrayHeap;
 	valueObjectHeap: RaiserObjectHeap;
 	waiters: number[];   // strand indices blocked on this future
@@ -975,14 +971,13 @@ function vmDrainFutures(vm: RaiserVM): void {
 	}
 }
 
-function futureCarry(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, value: RaiserValue): RaiserValue {
-	const layout = value.kind == RaiserValueKind.Object ? heapObjectClass(srcObj, value.intVal) : RAISER_NO_CLASS;
-	const copiesAsValue = value.kind == RaiserValueKind.Object && layout.depth < 0 && !isClosurePair(layout);
-	if (srcArr == dstArr && srcObj == dstObj && !copiesAsValue) return value;
+function futureCarry(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, value: RaiserValue, moves: boolean = false): RaiserValue {
+	const isValue = value.kind == RaiserValueKind.Object && copiesAsValue(heapObjectClass(srcObj, value.intVal));
+	if (srcArr == dstArr && srcObj == dstObj && (moves || !isValue)) return value;
 	return copyGraph(srcArr, srcObj, dstArr, dstObj, value);
 }
 
-function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
+function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue, moves: boolean = false): void {
 	if (!futureHandleValid(vm, handle)) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
@@ -990,9 +985,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	const f = futureAt(vm, handle);
 	if (f.finished) return;
 	f.finished = true;
-	// Completion runs on the producing strand, whose heap dies with it — the
-	// value graph moves into storage the future owns.
-	const owned = futureCarry(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
+	const owned = futureCarry(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value, moves);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	f.value = owned;
 	futureSettled(vm, handle);
@@ -1049,7 +1042,7 @@ function thenWriteArg(t: RaiserThen, regs: RaiserRegFile, tag: int32, val: Raise
 
 // A callback strand: the pair's function on the heaps of the registering strand, with the settled value
 // as its first argument when the function takes one before its environment, and the output future as its result.
-function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: RaiserValue): void {
+function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, input: RaiserFuture, settled: RaiserValue): void {
 	if (closure.kind != RaiserValueKind.Object) {
 		vmError(vm, "internal: a .then callback is not a closure pair");
 		return;
@@ -1069,7 +1062,12 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, arg: Raise
 		vmError(vm, `internal: .then callback ${callee.name} takes ${params} parameters`);
 		return;
 	}
-	if (params == 1) thenWriteArg(t, regs, callee.regOps[0], arg);
+	let arg = raiserNil();
+	if (params == 1) {
+		arg = futureCarry(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, settled);
+		rcIncref(t.arrayHeap, t.objectHeap, arg);
+		thenWriteArg(t, regs, callee.regOps[0], arg);
+	}
 	if (hasEnv) {
 		if (callee.arity == 0 || (callee.regOps[params] & 7) != CLS_REF) {
 			vmError(vm, `internal: .then callback ${callee.name} does not take the closure environment in a ref register`);
@@ -1123,9 +1121,7 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 			thenRelease(vm, t);
 			return;
 		}
-		const error = futureCarry(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.error);
-		rcIncref(t.arrayHeap, t.objectHeap, error);
-		thenStart(vm, t, t.rejected, error);
+		thenStart(vm, t, t.rejected, input, input.error);
 		return;
 	}
 	if (t.fulfilled.kind == RaiserValueKind.Nil) {
@@ -1133,9 +1129,7 @@ function thenFire(vm: RaiserVM, t: RaiserThen, settled: int64): void {
 		thenRelease(vm, t);
 		return;
 	}
-	const value = futureCarry(input.valueArrayHeap, input.valueObjectHeap, t.arrayHeap, t.objectHeap, input.value);
-	rcIncref(t.arrayHeap, t.objectHeap, value);
-	thenStart(vm, t, t.fulfilled, value);
+	thenStart(vm, t, t.fulfilled, input, input.value);
 }
 
 function vmHandleFutureThen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -1847,7 +1841,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	s.result = value;
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) {
-		futureComplete(vm, s.resultFuture, value);
+		futureComplete(vm, s.resultFuture, value, true);
 		if (value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) releaseMovedOut(vm, value.intVal);
 	}
 	releaseEntryRefs(vm);
@@ -2021,8 +2015,6 @@ function closureStrand(vm: RaiserVM, closure: RaiserValue, starter: string, resu
 // §6.2 needs three await lowerings on C because its async frames are
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
-// Read out of the future's own storage and into the reader's heap. Non-destructive: the affine rules
-// (R1/R2) make a second await a compile error, so there is no read-once slot to clear here.
 function readSettledFuture(vm: RaiserVM, ia: int32, f: RaiserFuture): void {
 	if (f.failed) {
 		raiseFromFuture(vm, f);
@@ -4025,7 +4017,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			setRegConform(vm, ia, raiserFuture(newFuture(vm)));
 		},
 		RaiserOpcode.FutureSettle => {
-			futureComplete(vm, getDyn(vm, ia).intVal, getDyn(vm, ib));
+			futureComplete(vm, getDyn(vm, ia).intVal, getDyn(vm, ib), ic == 1);
 			if (ic == 1) {
 				const consumed = getDyn(vm, ib);
 				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);

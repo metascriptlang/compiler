@@ -72,7 +72,7 @@ extern function msPromiseAny<T>(promises: Promise<T>[], rejection: Error): Promi
 @builtin("PromisePending")
 extern function msPromisePending<T>(): Promise<T> from "msFutureCreate";
 @builtin("PromiseSettle")
-extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "msFutureCompleteT";
+extern function msPromiseSettle<T>(promise: Promise<T>, sink value: T): void from "msFutureCompleteT";
 @builtin("PromiseFail")
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
 
@@ -89,7 +89,7 @@ export function msRaiserAsyncStart(retFut: Promise<void>, stepper: () => Promise
 export extern function msActorReplyNew<T>(): Promise<T> from "msActorReplyNew";
 @compilerFunc
 @builtin("PromiseSettle")
-export extern function msActorReplySettle<T>(promise: Promise<T>, value: T): void from "msActorReplySettle";
+export extern function msActorReplySettle<T>(promise: Promise<T>, sink value: T): void from "msActorReplySettle";
 
 @compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: string | Error) => void) => void): Promise<T> {
