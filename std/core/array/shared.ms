@@ -129,15 +129,3 @@ export function reduce<T>(this arr: Vec<T>, fn: (acc: T, x: T, i: number) => T):
 	}
 	return acc;
 }
-
-export function* values<T>(this arr: T[]): Iterator<T> {
-	for (let i = 0; i < arr.length; i += 1) yield arr[i];
-}
-
-export function* keys<T>(this arr: T[]): Iterator<number> {
-	for (let i = 0; i < arr.length; i += 1) yield i;
-}
-
-export function* entries<T>(this arr: T[]): Iterator<[number, T]> {
-	for (let i = 0; i < arr.length; i += 1) yield [i, arr[i]];
-}

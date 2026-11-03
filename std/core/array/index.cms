@@ -424,6 +424,18 @@ export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
 	return out;
 }
 
+export function* values<T>(this arr: T[]): Iterator<T> {
+	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield arr[i];
+}
+
+export function* keys<T>(this arr: T[]): Iterator<number> {
+	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield i as number;
+}
+
+export function* entries<T>(this arr: T[]): Iterator<[number, T]> {
+	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield [i as number, arr[i]];
+}
+
 export function join<T>(this arr: Vec<T>, sep: string): string {
 	let out = "";
 	let i = 0;
@@ -502,7 +514,7 @@ export function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): b
 	return false;
 }
 
-export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, values, keys, entries, flatMap } from "./shared";
+export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, flatMap } from "./shared";
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): number {

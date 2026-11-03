@@ -295,7 +295,20 @@ export function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): b
 	return false;
 }
 
-export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, values, keys, entries, flatMap } from "./shared";
+export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, flatMap } from "./shared";
+
+export function* values<T>(this arr: T[]): Iterator<T> {
+	for (let i = 0; i < arr.length; i += 1) yield arr[i];
+}
+
+export function* keys<T>(this arr: T[]): Iterator<number> {
+	for (let i = 0; i < arr.length; i += 1) yield i;
+}
+
+export function* entries<T>(this arr: T[]): Iterator<[number, T]> {
+	for (let i = 0; i < arr.length; i += 1) yield [i, arr[i]];
+}
+
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): number {
