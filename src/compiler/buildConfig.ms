@@ -117,15 +117,16 @@ export function defaultCcSection(): CcSection {
 
 // Resolve CcSection for a specific os-cpu target.
 // Priority: explicit per-target config > cc.compiler default.
-// Cross detected via `targetOs !== platform || cpuTarget !== ""`.
-export function resolveCcForTarget(cc: CcSection, targetOs: string, cpuTarget: string): CcTargetSection {
+// Cross detected via `targetOs !== platform || cpuTarget !== ""`. A musl target reads its own
+// `<os>-<cpu>-musl` entry, so a glibc entry never configures it.
+export function resolveCcForTarget(cc: CcSection, targetOs: string, cpuTarget: string, abi: string = ""): CcTargetSection {
 	let entry = "";
 	let compiler = cc.compiler;
 	let flags = cc.flags;
 	let linkFlags = cc.linkFlags;
 
-	if (targetOs != platform || cpuTarget != "") {
-		const key = `${targetOs}-${cpuTarget}`;
+	if (targetOs != platform || cpuTarget != "" || abi == "musl") {
+		const key = `${targetOs}-${cpuTarget}${abi == "musl" ? "-musl" : ""}`;
 		let i = 0;
 		while (i < cc.targetKeys.length) {
 			if (cc.targetKeys[i] == key) {
@@ -1102,4 +1103,17 @@ test "a present empty or unreadable configuration cannot select defaults" {
 	} finally {
 		removeAll(project);
 	}
+}
+
+test "a musl target reads its own build.ms entry, a gnu target never does" {
+	const cc = defaultCcSection();
+	cc.targetKeys.push("linux-amd64");
+	cc.targetValues.push({ entry: "", compiler: "gcc-glibc", flags: [], linkFlags: [] });
+	cc.targetKeys.push("linux-amd64-musl");
+	cc.targetValues.push({ entry: "", compiler: "musl-gcc", flags: [], linkFlags: [] });
+	assert resolveCcForTarget(cc, "linux", "amd64", "musl").compiler == "musl-gcc";
+	assert resolveCcForTarget(cc, "linux", "amd64", "gnu").compiler == "gcc-glibc";
+	assert resolveCcForTarget(cc, "linux", "amd64").compiler == "gcc-glibc";
+	assert resolveCcForTarget(cc, "linux", "", "musl").compiler == "";
+	assert resolveCcForTarget(cc, "linux", "arm64", "musl").compiler == "";
 }
