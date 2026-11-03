@@ -1,7 +1,8 @@
 // The legal neighbours of actorCallLendRefuses.ms: an awaited actor CALL's borrowed argument is
 // read while the call is pending, handed to a callee that takes it as Readonly, lent to two calls
 // joined by one Promise.all, and changed only after the await that consumes the reply; a string or
-// a scalar argument is a copy, so the caller may change its own binding while the call is pending.
+// a scalar argument is a copy, so the caller may change its own binding while the call is pending; an
+// async closure that lends a capture to an actor call is a value the caller may make and call.
 //
 // INVARIANT (ULTRALOCK V6, V4, V1): reads stay legal inside the lend window, the window closes at
 //   the consuming await, and a value copied at the crossing lends nothing.
@@ -17,6 +18,7 @@ class Box { v: int32 = 1; }
 actor Reader {
 	watch(a: int32[]): int32 { return a[0] * 10 + a.length; }
 	see(b: Box): int32 { return b.v; }
+	look(b: Readonly<Box>): int32 { return b.v; }
 	text(s: string): int32 { return s.length; }
 	num(n: int32): int32 { return n; }
 }
@@ -65,6 +67,20 @@ async function copies(r: Reader): Promise<int32> {
 	return await ps + await pn + n - 9 + s.length - 7;
 }
 
+async function closureValue(r: Reader): Promise<int32> {
+	const b = new Box();
+	b.v = 6;
+	const job: Sendable<() => Promise<int32>> = async (): Promise<int32> => await r.look(b);
+	return await job();
+}
+
+async function closureOfRef(r: Reader): Promise<int32> {
+	const b = new Box();
+	b.v = 8;
+	const job = async (): Promise<int32> => await r.look(b);
+	return await job();
+}
+
 async function main(): Promise<void> {
 	const r = new Reader();
 	const a = await awaitFirst(r);
@@ -72,9 +88,11 @@ async function main(): Promise<void> {
 	const c = await boxAfterAwait(r);
 	const d = await twoReaders(r);
 	const e = await copies(r);
+	const f = await closureValue(r);
+	const g = await closureOfRef(r);
 	stop(r.pid, ExitReason.Normal);
-	console.log(`a=${a} b=${b} c=${c} d=${d} e=${e}`);
-	if (a == 12 && b == 28 && c == 2 && d == 62 && e == 7) console.log("GUARD-OK");
+	console.log(`a=${a} b=${b} c=${c} d=${d} e=${e} f=${f} g=${g}`);
+	if (a == 12 && b == 28 && c == 2 && d == 62 && e == 7 && f == 6 && g == 8) console.log("GUARD-OK");
 }
 
 await main();

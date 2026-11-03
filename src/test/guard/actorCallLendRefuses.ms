@@ -10,7 +10,8 @@
 //   through a callee, a branch that skips the await and then writes, a module-level array lent to
 //   the actor, a promise that leaves the frame that owns the argument before its await (pushed into the
 //   caller's list, returned), and
-//   a write while an async helper that awaits the actor call is still pending.
+//   a write while an async helper that awaits the actor call is still pending, and a write after an
+//   async closure that lends a capture to the actor call is made.
 //
 // RED MEANS: the sender writes a buffer the actor reads on another thread at the same time, or a
 //   push reallocates it under the actor's reads, or the frame that owns the argument ends while the
@@ -28,6 +29,7 @@
 // GUARD-CHECK-FAIL 'moduleArr'
 // GUARD-CHECK-FAIL the actor call of 'watch'
 // GUARD-CHECK-FAIL 'asyncArr' is lent to the actor call of 'watch'
+// GUARD-CHECK-FAIL 'closureArr' is lent to the actor call of 'watch'
 
 import { stop, ExitReason } from "std/actor";
 
@@ -112,12 +114,19 @@ async function viaAsync(r: Reader): Promise<int32> {
 	return await p;
 }
 
+async function viaClosure(r: Reader): Promise<int32> {
+	const closureArr: int32[] = [1];
+	const job = async (): Promise<int32> => await r.watch(closureArr); // GUARD-REFUSED
+	closureArr[0] = 5;
+	return await job();
+}
+
 async function main(): Promise<void> {
 	const r = new Reader();
 	const ps: Promise<int32>[] = [];
 	stored(r, ps);
 	const t = await ps[0] + await write(r) + await push(r) + await field(r) + await alias(r) + await callee(r)
-		+ await branch(r, true) + await fromModule(r) + await returned(r) + await viaAsync(r);
+		+ await branch(r, true) + await fromModule(r) + await returned(r) + await viaAsync(r) + await viaClosure(r);
 	stop(r.pid, ExitReason.Normal);
 	console.log(`t=${t}`);
 }
