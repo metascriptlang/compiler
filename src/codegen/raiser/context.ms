@@ -60,6 +60,7 @@ export interface RaiserLocal {
 	sym: Symbol;
 	reg: int32;
 	isString: boolean;
+	heldThrough: int32;
 }
 
 export interface RaiserLocals {
@@ -135,6 +136,7 @@ export interface RaiserCompState {
 	cellRegs: int32[];
 	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
 	argViews: int32[];
+	guardedReturnTop: int32;
 }
 
 export interface RaiserTryInfo {
@@ -151,7 +153,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], guardedReturnTop: -1 };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -350,11 +352,23 @@ export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
 // Using `locals.items.length` would set nextReg=2 and clobber R2 (`k`)
 // on the next statement. Compute max(local.reg)+1 instead.
 export function resetTemps(s: RaiserCompState, enclosingRegs: int32 = 0): void {
-	let maxReg = enclosingRegs - 1;
+	let maxReg = Math.max(enclosingRegs - 1, s.guardedReturnTop);
 	for (const local of s.locals.items) {
-		if (local.reg > maxReg) maxReg = local.reg;
+		if (local.heldThrough > maxReg) maxReg = local.heldThrough;
 	}
 	s.nextReg = maxReg + 1;
+}
+
+function holdsLocationType(sym: Symbol): boolean {
+	const t = sym.symbolType;
+	return t != null && (t.kind == TypeKind.Var || t.kind == TypeKind.Borrow || t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr);
+}
+
+// A local that holds a location (a borrow of a by-value argument) reads through registers its statement made,
+// so they stay taken while the local is in scope.
+export function keepRegistersOfLocation(s: RaiserCompState, sym: Symbol | null): void {
+	if (sym == null || !holdsLocationType(sym)) return;
+	s.locals.items[s.locals.items.length - 1].heldThrough = s.nextReg - 1;
 }
 
 // --- Typed emit helpers ---
@@ -397,7 +411,9 @@ export function emitLoadConst(s: RaiserCompState, reg: int32, value: RaiserValue
 	emitInst(s, inst);
 }
 
+// A Ret inside a guarded region runs again after the finally, reading this register.
 export function emitRet(s: RaiserCompState, reg: int32): void {
+	if (s.tries.length > 0 && reg > s.guardedReturnTop) s.guardedReturnTop = reg;
 	emitInst(s, raiserABC(RaiserOpcode.Ret, reg, 0, 0));
 }
 
@@ -408,7 +424,7 @@ export function emitHalt(s: RaiserCompState): void {
 // --- Locals helpers ---
 
 export function declareLocal(s: RaiserCompState, sym: Symbol, reg: int32, isString: boolean = false): void {
-	const local: RaiserLocal = { sym, reg, isString };
+	const local: RaiserLocal = { sym, reg, isString, heldThrough: reg };
 	s.locals.items.push(local);
 }
 

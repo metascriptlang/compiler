@@ -15,7 +15,7 @@ import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC,
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
-	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps,
+	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps, keepRegistersOfLocation,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
@@ -205,6 +205,7 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			emitInst(s, raiserABC(RaiserOpcode.Move, local, reg, 0));
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), local, isStr);
+		keepRegistersOfLocation(s, node.resolvedSym);
 		if (isMoveTempFromPlace(node, d.initializer)) {
 			s.moveTempAt = codeLen(s);
 			s.moveTempReg = local;
