@@ -264,20 +264,83 @@ function fileSha256(path: string): Result<string, string> {
 	return Result.err(`native toolchain: invalid SHA256 output for ${path}`);
 }
 
-function validateBundleTree(root: string, directory: string, names: HashSet<string>): Result<void, string> {
+let containmentChecks = 0;
+
+const FULL_SCOPE = [""];
+const ENGINE_SCOPE = ["bin", "lib"];
+
+function scopeCovers(scope: string[], relative: string): boolean {
+	for (const prefix of scope) {
+		if (prefix == "" || relative == prefix || relative.startsWith(`${prefix}/`)) return true;
+	}
+	return false;
+}
+
+function scopeLeadsTo(scope: string[], relative: string): boolean {
+	for (const prefix of scope) {
+		if (prefix.startsWith(`${relative}/`)) return true;
+	}
+	return false;
+}
+
+function validateBundleTree(root: string, directory: string, names: HashSet<string>, scope: string[]): Result<void, string> {
 	for (const entry of readDir(join(root, directory))) {
 		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
 		const relative = directory == "" ? name : `${directory}/${name}`;
+		const covered = scopeCovers(scope, relative);
+		if (!covered && !scopeLeadsTo(scope, relative)) continue;
 		if (!bundlePathSafe(relative)) return Result.err(`native toolchain: unsafe payload path ${relative}`);
 		const full = join(root, relative);
 		if (isDir(full)) {
+			containmentChecks++;
 			if (realpath(full).replaceAll("\\", "/") != full) return Result.err(`native toolchain: directory symlink ${relative}`);
-			const children = try validateBundleTree(root, relative, names);
-		} else if (relative != "FILES.sha256" && relative != "IDENTITY" && !names.has(relative)) {
+			const children = try validateBundleTree(root, relative, names, scope);
+		} else if (covered && relative != "FILES.sha256" && relative != "IDENTITY" && !names.has(relative)) {
 			return Result.err(`native toolchain: unlisted payload ${relative}`);
 		}
 	}
 	return Result.ok(null);
+}
+
+function resolveBundlePath(base: string, relative: string): string {
+	const parts = base == "" ? [] : base.split("/");
+	for (const part of relative.split("/")) {
+		if (part == "..") {
+			if (parts.length == 0) return "";
+			parts.pop();
+		} else if (part != "" && part != ".") {
+			parts.push(part);
+		}
+	}
+	return parts.join("/");
+}
+
+// What a build with this target config reads from the runtime: the config and its
+// .cxx/.dll/.so variants, and every path they name relative to their own folder.
+function runtimeScope(root: string, config: string, listed: string[]): Result<string[], string> {
+	const scope = ENGINE_SCOPE.slice(0);
+	if (config == "") return Result.ok(scope);
+	const slash = config.lastIndexOf("/");
+	const folder = slash < 0 ? "" : config.slice(0, slash);
+	const stem = config.slice(0, config.length - 4);
+	if (!listed.includes(config)) return Result.err(`native toolchain: runtime config ${config} is not listed in FILES.sha256`);
+	const marker = "<CFGDIR>/";
+	for (const name of listed) {
+		if (name != config && !(name.startsWith(`${stem}.`) && name.endsWith(".cfg"))) continue;
+		scope.push(name);
+		const text = try bundleText(root, name);
+		let at = text.indexOf(marker, 0);
+		while (at >= 0) {
+			const start = at + marker.length;
+			let end = start;
+			while (end < text.length && " \t\r\n\"'".indexOf(text.charAt(end)) < 0) end++;
+			const resolved = resolveBundlePath(folder, text.slice(start, end));
+			if (resolved == "") return Result.err(`native toolchain: ${name} names a path outside the bundle: ${text.slice(start, end)}`);
+			scope.push(resolved);
+			at = text.indexOf(marker, end);
+		}
+	}
+	return Result.ok(scope);
 }
 
 function readNativeToolchain(path: string): Result<NativeToolchain, string> {
@@ -304,7 +367,10 @@ function readNativeToolchain(path: string): Result<NativeToolchain, string> {
 	return Result.ok({ root, version, identity });
 }
 
-function validateNativeToolchain(path: string, stampRoot: string): Result<NativeToolchain, string> {
+// The seal answers for payload bytes only. Containment is never skipped: it covers the
+// whole payload when the payload is verified, and on a seal hit every file this build can
+// read or execute, the engine and the runtime its target config names.
+function validateNativeToolchain(path: string, stampRoot: string, config: string): Result<NativeToolchain, string> {
 	const bundle = try readNativeToolchain(path);
 	const root = bundle.root;
 	const identity = bundle.identity;
@@ -313,6 +379,7 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 	const manifest = try bundleText(root, "FILES.sha256");
 	if (!manifest.endsWith("\n")) return Result.err("native toolchain: unterminated FILES.sha256");
 	const names = new HashSet<string>();
+	const listed: string[] = [];
 	const lines = manifest.split("\n");
 	for (let i = 0; i < lines.length - 1; i++) {
 		const line = lines[i];
@@ -322,10 +389,20 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 		}
 		if (name == "FILES.sha256" || name == "IDENTITY" || names.has(name)) return Result.err(`native toolchain: duplicate or reserved manifest entry ${name}`);
 		names.add(name);
+		listed.push(name);
+	}
+	const memo = stampRoot == "" ? "" : `${stampRoot}/${bundleDigest(root)}.bundle`;
+	const seal = bundleSeal(root, identity, lines);
+	const sealed = bundleMemoHit(memo, seal);
+	let scope = FULL_SCOPE;
+	if (sealed) scope = try runtimeScope(root, config, listed);
+	for (const name of listed) {
+		if (!scopeCovers(scope, name)) continue;
+		containmentChecks++;
 		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
 		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
 	}
-	const tree = try validateBundleTree(root, "", names);
+	const tree = try validateBundleTree(root, "", names, scope);
 	const suffix = platform == "windows" ? ".exe" : "";
 	for (const name of ["HOST", "VERSION", `bin/clang${suffix}`, `bin/clang++${suffix}`, `bin/llvm-ar${suffix}`, `lib/clang/${components[0]}/include/stddef.h`]) {
 		if (!names.has(name)) return Result.err(`native toolchain: unlisted required payload ${name}`);
@@ -334,9 +411,7 @@ function validateNativeToolchain(path: string, stampRoot: string): Result<Native
 		const name = `bin/${tool}${suffix}`;
 		if (!names.has(name) || !isExecutable(join(root, name))) return Result.err(`native toolchain: missing executable ${name}`);
 	}
-	const memo = stampRoot == "" ? "" : `${stampRoot}/${bundleDigest(root)}.bundle`;
-	const seal = bundleSeal(root, identity, lines);
-	if (!bundleMemoHit(memo, seal)) {
+	if (!sealed) {
 		const verified = try verifyBundlePayload(root, identity, version, lines);
 		if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
 	}
@@ -406,6 +481,102 @@ function settle(root: string, names: string[]): void {
 	}
 }
 
+function scopeBundle(): string {
+	const root = join(cwd(), `out/bundleScopeProbe-${performance.now()}`);
+	if (!ensureDir(root).ok) return "";
+	const real = realpath(root).replaceAll("\\", "/");
+	if (!writeFile(`${real}-outside`, "outside").ok) return "";
+	const linker = platform == "darwin" ? "ld64.lld" : "ld.lld";
+	const names: string[] = [];
+	const texts: string[] = [];
+	const add = (name: string, text: string): void => {
+		names.push(name);
+		texts.push(text);
+	};
+	add("HOST", `${hostKey()}\n`);
+	add("VERSION", "1.2.3\n");
+	for (const tool of ["clang", "clang++", "llvm-ar", linker]) add(`bin/${tool}`, "#!/bin/sh\necho 'clang version 1.2.3'\n");
+	add("lib/clang/1/include/stddef.h", "");
+	for (const target of ["t1", "t2"]) {
+		add(`runtime/${target}.cfg`, `--sysroot=<CFGDIR>/${target}\n-isystem <CFGDIR>/include/${target}\n-isystem <CFGDIR>/../lib/clang/1/include\n`);
+		add(`runtime/include/${target}/h.h`, "");
+		add(`runtime/${target}/a.o`, "a");
+		add(`runtime/${target}/b.o`, "b");
+	}
+	for (let i = 0; i < 28; i++) add(`runtime/t2/x${i}.o`, `${i}`);
+	let manifest = "";
+	for (let i = 0; i < names.length; i++) {
+		const slash = names[i].lastIndexOf("/");
+		if (slash >= 0 && !ensureDir(join(real, names[i].slice(0, slash))).ok) return "";
+		if (!writeFile(join(real, names[i]), texts[i]).ok) return "";
+		manifest = `${manifest}${bundleDigest(texts[i])}  ${names[i]}\n`;
+	}
+	for (const tool of ["clang", "clang++", "llvm-ar", linker]) {
+		if (!execFileCapture("chmod", ["+x", join(real, `bin/${tool}`)]).ok) return "";
+	}
+	if (!writeFile(join(real, "FILES.sha256"), manifest).ok || !writeFile(join(real, "IDENTITY"), `${bundleDigest(manifest)}\n`).ok) return "";
+	names.push("FILES.sha256");
+	names.push("IDENTITY");
+	settle(real, names);
+	return real;
+}
+
+function replaySeal(real: string, stamps: string): boolean {
+	const manifest = try readFile(join(real, "FILES.sha256")) catch "";
+	const seal = bundleSeal(real, bundleDigest(manifest), manifest.split("\n"));
+	return seal != "" && writeFile(`${stamps}/${bundleDigest(real)}.bundle`, seal).ok;
+}
+
+function alias(real: string, name: string): boolean {
+	if (!remove(join(real, name)).ok || !symlink(`${real}-outside`, join(real, name)).ok) return false;
+	settle(real, [name]);
+	return true;
+}
+
+function warmVisits(real: string, stamps: string, config: string): number {
+	containmentChecks = 0;
+	return validateNativeToolchain(real, stamps, config).ok ? containmentChecks : -1;
+}
+
+test "a warm bundle resolve checks containment of the engine and the selected runtime, and the full payload when the seal misses" {
+	if (platform == "windows") return;
+	const real = scopeBundle();
+	assert real != "";
+	const stamps = `${real}-stamps`;
+	assert ensureDir(stamps).ok;
+	const full = warmVisits(real, stamps, "runtime/t1.cfg");
+	assert full > 50;
+	const one = warmVisits(real, stamps, "runtime/t1.cfg");
+	const two = warmVisits(real, stamps, "runtime/t2.cfg");
+	assert one > 0 && one * 2 < full;
+	assert two - one == 28;
+	assert warmVisits(real, stamps, "") > 0 && warmVisits(real, stamps, "") < one;
+
+	assert alias(real, "runtime/t2/a.o");
+	assert replaySeal(real, stamps);
+	assert warmVisits(real, stamps, "runtime/t1.cfg") == one;
+	const other = validateNativeToolchain(real, stamps, "runtime/t2.cfg");
+	assert !other.ok && other.error.contains("escaping payload runtime/t2/a.o");
+
+	assert alias(real, "runtime/t1/a.o");
+	assert replaySeal(real, stamps);
+	const selected = validateNativeToolchain(real, stamps, "runtime/t1.cfg");
+	assert !selected.ok && selected.error.contains("escaping payload runtime/t1/a.o");
+
+	assert removeAll(stamps).ok;
+	const cold = validateNativeToolchain(real, stamps, "runtime/t1.cfg");
+	assert !cold.ok && cold.error.contains("escaping payload");
+	assert removeAll(real).ok;
+	assert remove(`${real}-outside`).ok;
+}
+
+test "a runtime config names its paths relative to its own folder and none may leave the bundle" {
+	assert resolveBundlePath("runtime", "../lib/clang/23/include") == "lib/clang/23/include";
+	assert resolveBundlePath("runtime/windows", "../../bin/ld.lld") == "bin/ld.lld";
+	assert resolveBundlePath("runtime", "x86_64-linux-gnu.2.31/crt1.o") == "runtime/x86_64-linux-gnu.2.31/crt1.o";
+	assert resolveBundlePath("runtime", "../../outside") == "";
+}
+
 test "a bundle seal is withheld for a payload changed within the settle window, whatever its mtime says" {
 	if (platform == "windows") return;
 	const root = sealProbe();
@@ -452,7 +623,7 @@ test "a matching bundle seal never skips payload containment" {
 	assert seal != "";
 	assert ensureDir(stamps).ok;
 	assert writeFile(`${stamps}/${bundleDigest(real)}.bundle`, seal).ok;
-	const validated = validateNativeToolchain(root, stamps);
+	const validated = validateNativeToolchain(root, stamps, "");
 	assert !validated.ok;
 	assert validated.error.contains("escaping payload bin/clang");
 	assert removeAll(root).ok;
@@ -543,6 +714,7 @@ function nativeRuntimeConfig(targetOs: string, cpu: string, abi: string): string
 let pendingBundle: NativeToolchain | null = null;
 let pendingPath = "";
 let pendingStampRoot = "";
+let pendingConfig = "";
 let selectedBundle: NativeToolchain | null = null;
 
 export function selectedNativeToolchain(): NativeToolchain | null {
@@ -553,7 +725,7 @@ function verifySelectedToolchain(): string {
 	const selected = pendingBundle;
 	if (selected == null) return "";
 	pendingBundle = null;
-	const verified = validateNativeToolchain(pendingPath, pendingStampRoot);
+	const verified = validateNativeToolchain(pendingPath, pendingStampRoot, pendingConfig);
 	if (!verified.ok) return verified.error;
 	if (verified.value.root != selected.root || verified.value.identity != selected.identity) return `native toolchain: ${pendingPath} changed after the build selected it`;
 	return "";
@@ -591,6 +763,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	pendingBundle = bundle;
 	pendingPath = path;
 	pendingStampRoot = stampRoot;
+	pendingConfig = "";
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
 	if (opts.targetOs == "bare") return Result.ok(null);
@@ -607,6 +780,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${target} is not installed in ${bundle.root}`);
 	if (opts.targetOs == "windows" && opts.sanitize != "") return Result.err(`native toolchain: --sanitize=${opts.sanitize} on windows needs a libclang_rt sanitizer runtime, and ${bundle.root} ships none for windows\n  → build with --cc=zig, or drop --sanitize`);
 	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
+	pendingConfig = `runtime/${name}`;
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	opts.ccConfigOwnsTarget = true;
 	return Result.ok(null);
