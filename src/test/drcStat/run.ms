@@ -1,6 +1,6 @@
 // Standalone driver, not an inline test: the claim is about a runtime built with -DMS_DRC_STAT, which needs a
 // child `msc build` and a child run. Siblings: src/test/guard/run.ms (same build-and-run shape).
-// Run from the repo root: msc run src/test/perf/drcStatPin.ms   (MSC=<path> names the subject; default ./msc)
+// Run from the repo root: msc run src/test/drcStat/run.ms   (MSC=<path> names the subject; default ./msc)
 // Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes, a
 // collection allocates each of its buffers at most once, and a ledger-only build of the runtime still
 // compiles and runs.
@@ -8,7 +8,7 @@ import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, remove, ensureDir, exists } from "std/fs";
 
 const ROOT = cwd();
-const OUT = `${ROOT}/out/perf/drcStatPin`;
+const OUT = `${ROOT}/out/drcStat`;
 const MSC = env.get("MSC") != "" ? env.get("MSC") : exists("./msc") ? `${ROOT}/msc` : "msc";
 const DEFINE = env.get("DRCSTAT_PIN_PASSC") != "" ? env.get("DRCSTAT_PIN_PASSC") : "-DMS_DRC_STAT";
 const SMALL: int64 = 20000;
@@ -69,7 +69,7 @@ function expect(program: string, small: Map<string, int64>, big: Map<string, int
 ensureDir(OUT);
 for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureVisit"]) {
 	const exe = `${OUT}/${program}`;
-	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
+	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/drcStat/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
 	if (!ok(b)) {
 		console.log(`FAIL build ${program}\n${b.output}${b.errorOutput}`);
 		fails++;
@@ -101,7 +101,7 @@ for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureV
 }
 for (const program of ["collectGraph", "cycleRegister"]) {
 	const exe = `${OUT}/${program}.ledger`;
-	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, "--passC=-DMS_DRC_LEDGER", `--output=${exe}`], OUT);
+	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/drcStat/programs/${program}.ms`, "--passC=-DMS_DRC_LEDGER", `--output=${exe}`], OUT);
 	const r = ok(b) ? execFileResult(exe, [`${SMALL}`]) : b;
 	if (!ok(r)) {
 		console.log(`FAIL ledger build ${program}\n${r.output}${r.errorOutput}`);
