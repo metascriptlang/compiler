@@ -18,6 +18,8 @@ import { forEachChild } from "../../ast/visitor";
 import { isAssignOp } from "../../ast/operators";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { appendLoopTail } from "./forLoopLower";
+import { calleeFormals } from "./jsVarParamLower";
+import { receiverIsPlace } from "./operandOrder";
 import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
@@ -176,11 +178,11 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	// A value iterable reached from a symbol is read at its location each element: a snapshot of a
 	// value is a heap copy whenever the body writes through the same root, and an address taken once
-	// dangles when the body grows an outer array (NIM-REF TR-26). A T[] is a reference, read once.
+	// dangles when the body grows an outer array (NIM-REF TR-26). A T[] or a string is read once.
 	const iterable = d.forOfIterable;
-	const readsLocation = !isRefArray && (iterable.kind == NodeKind.Identifier
+	const readsLocation = !isRefArray && !isString && (iterable.kind == NodeKind.Identifier
 		|| ((iterable.kind == NodeKind.MemberExpr || iterable.kind == NodeKind.ArrayAccess) && isSymbolPath(iterable)));
-	const heldByConst = isRefArray && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym, rebound);
+	const heldByConst = (isRefArray || isString) && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym, rebound);
 
 	const preamble: Node[] = [];
 	if (readsLocation) hoistIndices(iterable, ctx, preamble, loc);
@@ -314,6 +316,13 @@ function collectRebound(node: Node, out: SymSet): void {
 		addTarget((node.data as HiddenDerefData).expr, out);
 	} else if (node.kind == NodeKind.OutExpr) {
 		addTarget((node.data as OutExprData).outArg, out);
+	} else if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const formals = calleeFormals(d);
+		for (let i = 0; i < d.arguments.length; i += 1) {
+			if (formals != null && i < formals.length && formals[i] != null && formals[i].kind == TypeKind.Var) addTarget(d.arguments[i], out);
+		}
+		if (d.callee.kind == NodeKind.MemberExpr && receiverIsPlace(node)) addTarget((d.callee.data as MemberExprData).object, out);
 	}
 	forEachChild(node, (c: Node): void => collectRebound(c, out));
 }

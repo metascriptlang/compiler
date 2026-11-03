@@ -175,7 +175,7 @@ export function lowerOperandList(sp: Spiller, e: Node, pre: Node[]): boolean {
 	return true;
 }
 
-function receiverIsPlace(call: Node): boolean {
+export function receiverIsPlace(call: Node): boolean {
 	if (!call.flags.has(NodeFlag.ExtCall) || call.flags.has(NodeFlag.ExtStatic)) return false;
 	const t = call.resolvedSym != null ? call.resolvedSym.symbolType : null;
 	if (t == null || t.kind != TypeKind.Function || t.typeChildren.length == 0) return true;
