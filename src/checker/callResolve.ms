@@ -4023,6 +4023,10 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			continue;
 		}
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
+			const unsent = arg.nodeType;
+			const sendableArg = hasGenericParams(rawFormal) ? fitSendable(ctx, arg, peelSink(substituted), unsent) : unsent;
+			if (sendableArg == null) continue;
+			if (sendableArg != unsent && pi < argTypes.length) argTypes[pi] = sendableArg;
 			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
 			if (thunkArg != null as unknown as Node) {
 				cd.arguments[pi] = thunkArg;
