@@ -1365,12 +1365,12 @@ export interface SgSignatureContext {
 	calleeName: string;
 	receiverName: string;
 	activeParam: number;
-	callNode: Node;
+	callNode: Node | null;
 }
 
-export function sgGetSignatureContext(program: Node, source: string, line: int32, col: int32): SgSignatureContext {
+export function sgGetSignatureContext(program: Node | null, source: string, line: int32, col: int32): SgSignatureContext {
 	// Primary: AST-based
-	const callNode = findSignatureCall(program, source, line, col);
+	const callNode = program != null ? findSignatureCall(program, source, line, col) : null;
 	if (callNode != null) {
 		return {
 			calleeName: sgGetCalleeFromNode(callNode),
@@ -1384,7 +1384,7 @@ export function sgGetSignatureContext(program: Node, source: string, line: int32
 		calleeName: sgGetCalleeAtCursor(source, line, col),
 		receiverName: sgGetReceiverAtCursor(source, line, col),
 		activeParam: sgCountActiveParam(source, line, col),
-		callNode: null as unknown as Node,
+		callNode: null,
 	};
 }
 
@@ -1392,7 +1392,7 @@ export function sgGetSignatureContext(program: Node, source: string, line: int32
 // Walks each typed arg's nodeType, compares against each candidate's param type,
 // scores by number of exact matches. Returns 0 (primary) if no callNode or no
 // args typed yet. Used by the LSP to set `activeSignature` for signature help.
-export function sgPickActiveOverload(callNode: Node, sym: Symbol): int32 {
+export function sgPickActiveOverload(callNode: Node | null, sym: Symbol): int32 {
 	if (callNode == null || sym == null) return 0;
 	if (sym.overloads == null || sym.overloads.length == 0) return 0;
 	const d = callNode.data as CallExprData;
