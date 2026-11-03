@@ -6,18 +6,10 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, runtimeRef, isRuntimeProcSym } from "../util";
 
-function inverseOf(fn: string): string {
-	return match (fn) {
-		"msStringToCString" => "msStringFromCStr",
-		"msStringFromCStr" => "msStringToCString",
-		_ => "",
-	};
-}
-
-function peelInverse(call: Node, fn: string): Node {
+function peelInverse(call: Node, inverseFn: string): Node {
 	if (call.kind != NodeKind.CallExpr) return call;
 	const cd = call.data as CallExprData;
-	if (!isRuntimeProcSym(cd.callee.resolvedSym, inverseOf(fn))) return call;
+	if (!isRuntimeProcSym(cd.callee.resolvedSym, inverseFn)) return call;
 	if (cd.arguments.length != 1) return call;
 	return cd.arguments[0];
 }
@@ -49,11 +41,12 @@ export function lowerCStringConv(program: Node, ctx: TransformContext): Node {
 		if (ctx.jsBackend) return d.convExpr;
 
 		const fn = matchForward ? "msStringToCString" : "msStringFromCStr";
+		const inverseFn = matchForward ? "msStringFromCStr" : "msStringToCString";
 
 		// Round-trip optimization: `fn(inverse(x))` ≡ `x`. Walker is bottom-up,
 		// so a nested inverse conversion has already been rewritten to its
 		// CallExpr form by the time we get here.
-		const inner = peelInverse(d.convExpr, fn);
+		const inner = peelInverse(d.convExpr, inverseFn);
 		if (inner != d.convExpr) return inner;
 
 		const result = makeCall(runtimeRef(fn, loc), [d.convExpr], loc);
