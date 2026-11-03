@@ -104,6 +104,24 @@ test "a struct holding an owned field is move-only" {
 	assert message.contains("cannot copy 's'"), message;
 }
 
+const HELD = "class N { id: int32 = 0; }\nstruct Plain { n: Owned<N>; }\nstruct Gen<T> { n: Owned<N>; tag: T; }\n";
+
+test "a generic struct instance holding an owned field is move-only" {
+	const message = refused(HELD + "function f(): void {\n\tconst a: Gen<int32> = { n: new N(), tag: 0 };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
+	assert message.contains("cannot copy 'a'"), message;
+}
+
+test "an alias of a struct holding an owned field is move-only" {
+	const plain = refused(HELD + "type W = Plain;\nfunction f(): void {\n\tconst a: W = { n: new N() };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
+	assert plain.contains("cannot copy 'a'"), plain;
+	const generic = refused(HELD + "type G = Gen<int32>;\nfunction f(): void {\n\tconst a: G = { n: new N(), tag: 0 };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
+	assert generic.contains("cannot copy 'a'"), generic;
+}
+
+test "a generic class holding an owned field is copied as a shared reference" {
+	assert refused("class N { id: int32 = 0; }\nclass Box<T> { n: Owned<N> = new N(); tag: T;\n\tconstructor(tag: T) { this.tag = tag; }\n}\nfunction f(): void {\n\tconst a = new Box<int32>(0);\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n") == "compiled";
+}
+
 test "Owned takes a class" {
 	assert refused("const v: Owned<string> = \"x\";\nconsole.log(v);\n").contains("Owned<T> takes a class type");
 	assert refused("struct S { a: int32 }\nconst v: Owned<S> = { a: 1 };\nconsole.log(v.a);\n").contains("Owned<T> takes a class type");
