@@ -123,6 +123,12 @@ export function setGraphCheckTiming(on: boolean): void {
 	setSlowTrace(on);
 }
 
+function keptPrelude(db: TransAmDb): CheckerContext {
+	const held = db.preludeCtx;
+	if (held == null) throw new Error("internal: a kept check session has no prelude context");
+	return held;
+}
+
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
 // targetOs: build target ("macos" / "linux" / "windows" / "bare" / ...). Set on
@@ -139,7 +145,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
 	const holdsPrelude = graphHoldsPrelude(graph);
-	const baseCtx = kept != null ? kept.preludeCtx : holdsPrelude ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
+	const baseCtx = kept != null ? keptPrelude(kept) : holdsPrelude ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
 	const preludeOwned = holdsPrelude ? new HashSet<string>() : preludeClosure(graph, resolverConfig);
 	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;

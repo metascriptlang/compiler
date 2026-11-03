@@ -120,9 +120,15 @@ export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 
 
 export function dbEnsurePrelude(db: TransAmDb): void {
-	if (db.preludeCtx == null && db.stdPath.length > 0) {
-		db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
-	}
+	if (db.stdPath.length > 0) dbPrelude(db);
+}
+
+function dbPrelude(db: TransAmDb): CheckerContext {
+	const held = db.preludeCtx;
+	if (held != null) return held;
+	const made = preludeContextFor(db.stdPath, ".cms");
+	db.preludeCtx = made;
+	return made;
 }
 
 // ===== TransAmDb =====
@@ -138,7 +144,7 @@ export class TransAmDb {
 	exportRegistry: ExportRegistry;
 	stdPath: string;
 	resolverConfig: ResolverConfig;
-	preludeCtx: CheckerContext;
+	preludeCtx: CheckerContext | null;
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 	verifying: HashSet<string>;                // modules whose recorded imports are being rechecked for early cutoff
@@ -171,7 +177,7 @@ interface TaGlobalImportClosures {
 
 interface TaGlobalImportsLayer {
 	checked: CheckerContext[];
-	layer: CheckerContext;
+	layer: CheckerContext | null;
 }
 
 interface BoundCheck {
@@ -202,7 +208,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		exportRegistry: createExportRegistry(),
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
-		preludeCtx: null as unknown as CheckerContext,
+		preludeCtx: null,
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 		verifying: new HashSet<string>(),
@@ -390,7 +396,7 @@ function syncModulePassExempt(db: TransAmDb): void {
 
 function globalImportsLayer(db: TransAmDb, checked: CheckerContext[]): CheckerContext | null {
 	if (checked.length == 0) return null;
-	while (db.globalLayers.length < checked.length) db.globalLayers.push({ checked: [], layer: null as unknown as CheckerContext });
+	while (db.globalLayers.length < checked.length) db.globalLayers.push({ checked: [], layer: null });
 	const held = db.globalLayers[checked.length - 1];
 	if (sameContexts(held.checked, checked)) return held.layer;
 	const layer = buildGlobalImportsLayer(db.preludeCtx!.table.identCache, checked);
@@ -773,11 +779,11 @@ function sameDeclaration(a: Symbol, b: Symbol): boolean {
 
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
 function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerContext {
-	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	const prelude = dbPrelude(db);
 	const ctx = createContext();
 	ctx.modulePath = modulePath;
 	for (const name of intrinsicBuiltins) {
-		const sym = lookupSymbol(db.preludeCtx.table, name);
+		const sym = lookupSymbol(prelude.table, name);
 		if (sym != null) defineSymbolAs(ctx.table, name, sym);
 	}
 	openScope(ctx.table, ScopeKind.Module);
@@ -938,14 +944,14 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		if (at >= 0) graph.modules[at] = mod;
 		else addModule(graph, mod);
 	}
-	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	const prelude = dbPrelude(db);
 	resetCapturedAssignments();
 	registerModuleProgram(filePath, program);
 	db.cache.bound += 1;
 	const adoption = earlyAdoptions(db, filePath);
 	const unit = bindModuleForCheck(
 		program, db.exportRegistry, graph, mod,
-		db.preludeCtx, db.cancelCtx, startVersion,
+		prelude, db.cancelCtx, startVersion,
 		adoption.decls,
 		(stmt: Node): void => adoptStmt(adoption, stmt),
 		true,
