@@ -9,17 +9,6 @@
 // server's exit was observed. A pipe may split a drain, so an "exact" scenario is scored by its
 // checkAnyBatching. Every wait has a deadline; a miss kills the child and names what was missing.
 //
-// A scenario with checkpoints is also differential. After each checkpoint drain the runner asks
-// the warm session hover and definition at every probe, plus documentSymbol and semantic tokens
-// per open document, and compares those answers and the latest publishDiagnostics per document
-// with a fresh `<msc> lsp` that opens the same texts at the same URIs. It then writes the texts
-// to a directory outside any project and compares each document's compiler diagnostics
-// (source "metascript", error or warning) with `<msc> check --colors=off`: start line and byte
-// column, severity and message, in order. Batch output has no end column, so ends are pinned by
-// the scenario oracles only. Every child runs in that neutral directory, because a file outside
-// a project takes its build.ms from the working directory. A scenario with a project is written
-// under the neutral directory first, its documents live there, and batch checks them in place.
-//
 // LSP_PERF=1 times the same scenarios instead, plus a 3-module chain and a pinned real app,
 // over repetitions in alternating order, and prints one JSON line per cell (metric x fixture).
 // A drain is timed from its write: startup from spawn to the initialize answer, an open or
@@ -440,6 +429,17 @@ function drive(
 
 const QUERY_PREFIX = "cp";
 
+function positionWith(p: LspProbe, fields: string): string {
+	const at = positionParams(p.uri, p.line, p.character);
+	return `${at.byteSlice(0, at.byteLength - 1)},${fields}}`;
+}
+
+function wholeRange(text: string): string {
+	const lines = text.split("\n");
+	const last = lines.length - 1;
+	return `{"start":{"line":0,"character":0},"end":{"line":${last},"character":${lines[last].length}}}`;
+}
+
 function queryDrain(snap: Snapshot, checkpoints: LspCheckpoints, taken: int32): string[] {
 	const bodies: string[] = [];
 	let n = 0;
@@ -448,15 +448,28 @@ function queryDrain(snap: Snapshot, checkpoints: LspCheckpoints, taken: int32): 
 		return lspJsonString(`${QUERY_PREFIX}${taken}-${n}`);
 	};
 	for (const p of checkpoints.probes) {
-		bodies.push(request(next(), "textDocument/hover", positionParams(p.uri, p.line, p.character)));
-		bodies.push(request(next(), "textDocument/definition", positionParams(p.uri, p.line, p.character)));
+		const at = positionParams(p.uri, p.line, p.character);
+		bodies.push(request(next(), "textDocument/hover", at));
+		bodies.push(request(next(), "textDocument/definition", at));
+		bodies.push(request(next(), "textDocument/completion", at));
+		bodies.push(request(next(), "textDocument/signatureHelp", at));
+		bodies.push(request(next(), "textDocument/references", positionWith(p, "\"context\":{\"includeDeclaration\":true}")));
+		bodies.push(request(next(), "textDocument/rename", positionWith(p, "\"newName\":\"lspCheckpointRenamed\"")));
+		bodies.push(request(next(), "textDocument/documentHighlight", at));
 	}
-	for (const uri of snap.uris) {
-		const document = `{"textDocument":{"uri":${lspJsonString(uri)}}}`;
+	for (let i = 0; i < snap.uris.length; i++) {
+		const document = `{"textDocument":{"uri":${lspJsonString(snap.uris[i])}}}`;
 		bodies.push(request(next(), "textDocument/documentSymbol", document));
 		bodies.push(request(next(), "textDocument/semanticTokens/full", document));
+		bodies.push(request(next(), "textDocument/inlayHint", `{"textDocument":{"uri":${lspJsonString(snap.uris[i])}},"range":${wholeRange(snap.texts[i])}}`));
 	}
 	return frames(bodies);
+}
+
+function inReverse(drain: string[]): string[] {
+	const out: string[] = [];
+	for (let i = drain.length - 1; i >= 0; i--) out.push(drain[i]);
+	return out;
 }
 
 function isQueryAnswer(m: JsonValue): boolean {
@@ -471,7 +484,7 @@ function queryAnswers(s: Session, drain: string[]): string[] {
 	const out: string[] = [];
 	for (const body of bodies) {
 		const parsed = parseJson(body);
-		if (!parsed.ok) continue;
+		if (!parsed.ok) throw new Error("checkpoint request is not JSON: " + parsed.error);
 		const key = idKey(parsed.value.getDynamicField("id"));
 		const method = textField(parsed.value, "method");
 		let answer = "no answer";
@@ -500,7 +513,7 @@ function publishText(s: Session, uri: string): string {
 	return last == null ? "no publish" : stringify(last);
 }
 
-function freshAnswers(snap: Snapshot, query: string[], name: string): Result<string[], string> {
+function freshAnswers(snap: Snapshot, asked: string[], name: string, sent: string[] | null = null): Result<string[], string> {
 	const started = startSession(`fresh session for ${name}\n`);
 	if (!started.ok) return Result.err(started.error);
 	const fresh = started.value;
@@ -508,7 +521,7 @@ function freshAnswers(snap: Snapshot, query: string[], name: string): Result<str
 	for (let i = 0; i < snap.uris.length; i++) {
 		drains.push(frames([notification("textDocument/didOpen", openParams(snap.uris[i], snap.texts[i]))]));
 	}
-	drains.push(query);
+	for (const frame of sent ?? asked) drains.push([frame]);
 	const driven = drive(fresh, drains);
 	let failure = driven.ok ? "" : driven.error;
 	if (failure == "") {
@@ -522,7 +535,7 @@ function freshAnswers(snap: Snapshot, query: string[], name: string): Result<str
 	if (failure != "") return Result.err(`fresh server: ${failure}`);
 	const out: string[] = [];
 	for (const uri of snap.uris) out.push(`publish ${uri} => ${publishText(fresh, uri)}`);
-	for (const answer of queryAnswers(fresh, query)) out.push(answer);
+	for (const answer of queryAnswers(fresh, asked)) out.push(answer);
 	return Result.ok(out);
 }
 
@@ -613,7 +626,11 @@ function compareCheckpoint(
 	inProject: boolean,
 ): string {
 	const query = queryDrain(snap, checkpoints, taken);
-	const queried = drive(s, [query]);
+	const warmSent = taken % 2 == 0 ? inReverse(query) : query;
+	const freshSent = taken % 2 == 0 ? query : inReverse(query);
+	const warmDrains: string[][] = [];
+	for (const frame of warmSent) warmDrains.push([frame]);
+	const queried = drive(s, warmDrains);
 	if (!queried.ok) return `warm queries: ${queried.error}`;
 	const warm: string[] = [];
 	for (const uri of snap.uris) warm.push(`publish ${uri} => ${publishText(s, uri)}`);
@@ -639,7 +656,7 @@ function compareCheckpoint(
 	for (let i = 0; i < files.length; i++) writeFile(files[i], snap.texts[i]);
 	for (const file of files) checks.push(spawnChild(MSC, ["check", "--colors=off", file], { cwd: NEUTRAL, mergeStderr: true }));
 	const outputs: Result<string, string>[] = [];
-	const fresh = freshAnswers(snap, query, name);
+	const fresh = freshAnswers(snap, query, name, freshSent);
 	for (let i = 0; i < files.length; i++) outputs.push(finishCheck(checks[i], files[i], name));
 	let restoreFailure = "";
 	if (inProject) {
