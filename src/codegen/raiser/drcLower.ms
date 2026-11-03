@@ -1,4 +1,4 @@
-import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, SymbolFlag, AttachedOp, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, SymbolFlag, AttachedOp, Symbol, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
 import { declaresUserHook } from "../../checker/instantiate";
 import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, isPlainDataType, valueCopyRepr, distinctBody, skipModifier, matchUnionBehindInstance } from "../../checker/types";
@@ -275,10 +275,35 @@ function isSizedArrayType(type: Type | null): boolean {
 }
 
 const LIFTED_OPS: AttachedOp[] = [AttachedOp.AttachedDestructor, AttachedOp.AttachedWasMoved, AttachedOp.AttachedAsgn, AttachedOp.AttachedSink];
+const USER_HOOK_OPS: AttachedOp[] = [AttachedOp.AttachedDestructor, AttachedOp.AttachedWasMoved, AttachedOp.AttachedAsgn, AttachedOp.AttachedSink, AttachedOp.AttachedDup, AttachedOp.AttachedTrace];
+
+function hasHookedDistinctLayer(type: Type | null): boolean {
+	for (let layer = skipModifier(type); layer != null && distinctBody(layer) != null; layer = skipModifier(distinctBody(layer))) {
+		for (const op of USER_HOOK_OPS) {
+			if (userHookOf(layer, op) != null) return true;
+		}
+	}
+	return false;
+}
+
+function hookOwnerOf(type: Type): Type {
+	let t = skipModifier(type) ?? type;
+	if (hasHookedDistinctLayer(t)) return t;
+	while (distinctBody(t) != null) t = skipModifier(distinctBody(t)) ?? t;
+	return t;
+}
+
+function userHookAt(type: Type, op: AttachedOp): Symbol | null {
+	return userHookOf(hookOwnerOf(type), op);
+}
+
+function isOpOf(type: Type, op: AttachedOp, sym: Symbol): boolean {
+	return getOpByKey(type, op) == sym || getOpByKey(hookOwnerOf(type), op) == sym;
+}
 
 function runsDistinctHook(call: CallExprData, type: Type | null): boolean {
 	const own = skipModifier(type);
-	if (own == null || distinctBody(own) == null) return false;
+	if (own == null || distinctBody(own) == null || !hasHookedDistinctLayer(own)) return false;
 	for (const op of LIFTED_OPS) {
 		if (getOpByKey(own, op) == call.callee.resolvedSym) return true;
 	}
@@ -297,21 +322,21 @@ function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	return type != null && isCellType(type) && !runsDistinctHook(call, type) && getOpByKey(type, op) == sym;
+	return type != null && isCellType(type) && !runsDistinctHook(call, type) && isOpOf(type, op, sym);
 }
 
 function isSizedArrayCopy(call: CallExprData): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	return type != null && isSizedArrayType(type) && getOpByKey(type, AttachedOp.AttachedAsgn) == sym;
+	return type != null && isSizedArrayType(type) && isOpOf(type, AttachedOp.AttachedAsgn, sym);
 }
 
 function isArraySink(call: CallExprData): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
 	const type = placeOf(call.arguments[0]).nodeType;
-	return type != null && (isSizedArrayType(type) || isArrayType(type)) && !runsDistinctHook(call, type) && getOpByKey(type, AttachedOp.AttachedSink) == sym;
+	return type != null && (isSizedArrayType(type) || isArrayType(type)) && !runsDistinctHook(call, type) && isOpOf(type, AttachedOp.AttachedSink, sym);
 }
 
 function isCopyIntoAggregate(call: CallExprData): boolean {
@@ -326,7 +351,7 @@ function isCopyIntoAggregate(call: CallExprData): boolean {
 
 function isLiftedCellSink(call: CallExprData): boolean {
 	if (isArraySink(call)) return true;
-	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookOf(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
+	return isLiftedCellOp(call, AttachedOp.AttachedSink) && userHookAt(placeOf(call.arguments[0]).nodeType!, AttachedOp.AttachedSink) == null;
 }
 
 function emitMaterialize(s: RaiserCompState, name: string, dest: Node): void {
@@ -338,7 +363,7 @@ function emitMaterialize(s: RaiserCompState, name: string, dest: Node): void {
 
 function isHooklessCellWasMoved(call: CallExprData): boolean {
 	const type = call.arguments.length == 1 ? placeOf(call.arguments[0]).nodeType : null;
-	return isCellHook(call, SymbolFlag.WasMovedOp) && type != null && userHookOf(type, AttachedOp.AttachedWasMoved) == null;
+	return isCellHook(call, SymbolFlag.WasMovedOp) && type != null && userHookAt(type, AttachedOp.AttachedWasMoved) == null;
 }
 
 export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
@@ -371,7 +396,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		emitClear(s, hookName, d.arguments[0], false);
 		return true;
 	}
-	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) && isCopiedAsValue(placeOf(d.arguments[0]).nodeType) && userHookOf(placeOf(d.arguments[0]).nodeType!, AttachedOp.AttachedAsgn) == null) {
+	if (isLiftedCellOp(d, AttachedOp.AttachedAsgn) && isCopiedAsValue(placeOf(d.arguments[0]).nodeType) && userHookAt(placeOf(d.arguments[0]).nodeType!, AttachedOp.AttachedAsgn) == null) {
 		emitCopyValue(s, d.callee.resolvedSym!.name, d.arguments[0], d.arguments[1]);
 		return true;
 	}
@@ -380,7 +405,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		compileExpr(s, call);
 		const source = localOfPlace(s, placeOf(d.arguments[1]));
 		if (source >= 0) {
-			if (userHookOf(placeOf(d.arguments[1]).nodeType!, AttachedOp.AttachedWasMoved) == null) emitInst(s, raiserABC(RaiserOpcode.WasMoved, source, 1, 0));
+			if (userHookAt(placeOf(d.arguments[1]).nodeType!, AttachedOp.AttachedWasMoved) == null) emitInst(s, raiserABC(RaiserOpcode.WasMoved, source, 1, 0));
 			else {
 				s.hookMovedAt = codeLen(s);
 				s.hookMovedReg = source;
