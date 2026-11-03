@@ -145,6 +145,9 @@ function removeMembers(paths: string[], directory: string): void {
 
 function run(): void {
 	when (!windows) { throw new Error("this checks real Windows tool calls"); }
+	runOnWindows();
+}
+function runOnWindows(): void {
 	if (argv.length != 4) {
 		throw new Error("expected absolute clang, llvm-ar and llvm-strip paths");
 	}

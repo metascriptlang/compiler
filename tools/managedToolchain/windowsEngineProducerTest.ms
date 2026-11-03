@@ -322,6 +322,9 @@ function linkRefusal(
 }
 function run(): void {
 	when (!windows) { throw new Error("controlled producer test needs Windows"); }
+	runOnWindows();
+}
+function runOnWindows(): void {
 	const native = fixtureMachine();
 	check((native == 0x8664 && arch == "amd64") ||
 		(native == 0xaa64 && arch == "arm64"),
