@@ -43,6 +43,7 @@ import {
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
+import { RaiserVM, registerInPlaceHostFn, hostArgFloat, hostReturnFloat } from "../../raiser/vm";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
@@ -957,6 +958,7 @@ function _bridgeCeil(args: RaiserValue[]): RaiserValue { return boxFloat(Math.ce
 function _bridgeFloor(args: RaiserValue[]): RaiserValue { return boxFloat(Math.floor(unboxFloat(args[0]))); }
 function _bridgeTrunc(args: RaiserValue[]): RaiserValue { return boxFloat(Math.trunc(unboxFloat(args[0]))); }
 function _bridgeSqrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sqrt(unboxFloat(args[0]))); }
+function _inPlaceSqrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); }
 function _bridgeCbrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cbrt(unboxFloat(args[0]))); }
 function _bridgePow(args: RaiserValue[]): RaiserValue { return boxFloat(Math.pow(unboxFloat(args[0]), unboxFloat(args[1]))); }
 
@@ -1767,7 +1769,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("ceil",  _bridgeCeil, HostCapability.Pure);
 	registerHostFn("floor", _bridgeFloor, HostCapability.Pure);
 	registerHostFn("trunc", _bridgeTrunc, HostCapability.Pure);
-	registerHostFn("sqrt",  _bridgeSqrt, HostCapability.Pure);
+	registerInPlaceHostFn("sqrt", _inPlaceSqrt, _bridgeSqrt, HostCapability.Pure);
 	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
 	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
 	registerHostFn("msPowF64", _bridgePow, HostCapability.Pure);
