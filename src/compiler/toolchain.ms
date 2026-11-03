@@ -392,10 +392,20 @@ function validateNativeToolchain(path: string, stampRoot: string, config: string
 		listed.push(name);
 	}
 	const memo = stampRoot == "" ? "" : `${stampRoot}/${bundleDigest(root)}.bundle`;
-	const seal = bundleSeal(root, identity, lines);
-	const sealed = bundleMemoHit(memo, seal);
 	let scope = FULL_SCOPE;
-	if (sealed) scope = try runtimeScope(root, config, listed);
+	let sealed = false;
+	let scopedMemo = "";
+	let scopedSeal = "";
+	let narrow = ENGINE_SCOPE;
+	if (memo != "") {
+		narrow = try runtimeScope(root, config, listed);
+		scopedMemo = `${stampRoot}/${bundleDigest(root)}-${bundleDigest(config).slice(0, 16)}.bundle`;
+		scopedSeal = sealOf(root, identity, sealNames(listed, narrow));
+		sealed = bundleMemoHit(scopedMemo, scopedSeal);
+	}
+	const seal = sealed ? "" : bundleSeal(root, identity, lines);
+	const fullHit = !sealed && bundleMemoHit(memo, seal);
+	if (sealed || fullHit) scope = narrow;
 	for (const name of listed) {
 		if (!scopeCovers(scope, name)) continue;
 		containmentChecks++;
@@ -412,8 +422,11 @@ function validateNativeToolchain(path: string, stampRoot: string, config: string
 		if (!names.has(name) || !isExecutable(join(root, name))) return Result.err(`native toolchain: missing executable ${name}`);
 	}
 	if (!sealed) {
-		const verified = try verifyBundlePayload(root, identity, version, lines);
-		if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
+		if (!fullHit) {
+			const verified = try verifyBundlePayload(root, identity, version, lines);
+			if (seal != "" && memo != "" && ensureDir(stampRoot).ok) atomicWriteFile(memo, seal);
+		}
+		if (scopedSeal != "" && ensureDir(stampRoot).ok) atomicWriteFile(scopedMemo, scopedSeal);
 	}
 	return Result.ok({ root, version, identity });
 }
@@ -436,6 +449,19 @@ function bundleDigest(text: string): string {
 function bundleSeal(root: string, identity: string, lines: string[]): string {
 	const names = ["IDENTITY", "FILES.sha256"];
 	for (let i = 0; i < lines.length - 1; i++) names.push(lines[i].slice(66));
+	return sealOf(root, identity, names);
+}
+
+// The seal of the files one build reads: a warm resolve stats these and not the whole payload.
+function sealNames(listed: string[], scope: string[]): string[] {
+	const names = ["IDENTITY", "FILES.sha256"];
+	for (const name of listed) {
+		if (scopeCovers(scope, name)) names.push(name);
+	}
+	return names;
+}
+
+function sealOf(root: string, identity: string, names: string[]): string {
 	const settledBefore = nowSeconds() - BUNDLE_SETTLED_SECONDS;
 	const stamps: string[] = [identity];
 	for (const name of names) {
@@ -566,6 +592,32 @@ test "a warm bundle resolve checks containment of the engine and the selected ru
 	assert removeAll(stamps).ok;
 	const cold = validateNativeToolchain(real, stamps, "runtime/t1.cfg");
 	assert !cold.ok && cold.error.contains("escaping payload");
+	assert removeAll(real).ok;
+	assert remove(`${real}-outside`).ok;
+}
+
+test "a warm bundle resolve catches a changed file of the selected runtime and leaves the others to the next build that reads them" {
+	if (platform == "windows") return;
+	const real = scopeBundle();
+	assert real != "";
+	const stamps = `${real}-stamps`;
+	assert ensureDir(stamps).ok;
+	const first = warmVisits(real, stamps, "runtime/t1.cfg");
+	assert first > 0;
+	const warm = warmVisits(real, stamps, "runtime/t1.cfg");
+	assert warm > 0 && warm < first;
+
+	assert writeFile(join(real, "runtime/t2/b.o"), "changed").ok;
+	settle(real, ["runtime/t2/b.o"]);
+	assert warmVisits(real, stamps, "runtime/t1.cfg") == warm;
+	const other = validateNativeToolchain(real, stamps, "runtime/t2.cfg");
+	assert !other.ok && other.error.contains("checksum");
+
+	assert writeFile(join(real, "runtime/t1/b.o"), "changed").ok;
+	settle(real, ["runtime/t1/b.o"]);
+	const selected = validateNativeToolchain(real, stamps, "runtime/t1.cfg");
+	assert !selected.ok && selected.error.contains("checksum");
+	assert removeAll(stamps).ok;
 	assert removeAll(real).ok;
 	assert remove(`${real}-outside`).ok;
 }
