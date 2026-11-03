@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import io
+import json
 import os
 import shutil
 import stat
@@ -12,6 +13,7 @@ from unittest import mock
 
 import prepareEngine as pe
 
+UPSTREAM_LICENSE = pe.UPSTREAM_LICENSE
 HAS_CLANG = sys.platform == "darwin" and os.path.exists("/usr/bin/clang")
 
 
@@ -490,6 +492,77 @@ class SourceRootTest(TempCase):
                 mock.patch.object(pe.platform, "machine", return_value="ppc64"):
             with self.assertRaisesRegex(pe.EngineError, "unsupported macOS machine"):
                 pe.detectHost()
+
+
+class UpstreamEngineTest(TempCase):
+    ARCHIVE = {"name": "LLVM-23.1.4-macOS-ARM64.tar.zst", "url": "https://example.invalid/a.tar.zst", "sha256": "0" * 64}
+    TOOLS = ("llvm-ar", "llvm-nm", "llvm-objcopy", "dsymutil")
+    ALIASES = {"llvm-ranlib": "llvm-ar", "llvm-dlltool": "llvm-ar", "llvm-strip": "llvm-objcopy"}
+
+    def upstream(self):
+        root = self.path("upstream")
+        writeScript(os.path.join(root, "bin", "clang-23"), "clang version 23.1.4")
+        writeScript(os.path.join(root, "bin", "lld"), "LLD 23.1.4")
+        os.symlink("clang-23", os.path.join(root, "bin", "clang"))
+        os.symlink("lld", os.path.join(root, "bin", "ld64.lld"))
+        for tool in self.TOOLS:
+            writeScript(os.path.join(root, "bin", tool), tool)
+        for alias, target in self.ALIASES.items():
+            os.symlink(target, os.path.join(root, "bin", alias))
+        write(os.path.join(root, "lib", "clang", "23", "include", "stddef.h"), "")
+        write(os.path.join(root, "lib", "clang", "23", "lib", "darwin", "libclang_rt.osx.a"), "rt")
+        write(os.path.join(root, UPSTREAM_LICENSE), "Apache-2.0 WITH LLVM-exception\n")
+        return root
+
+    def prepare(self, root, output=None):
+        with mock.patch.object(pe, "detectHost", return_value=("aarch64-macos", 0x0100000C)):
+            return pe.prepareUpstreamEngine(root, self.ARCHIVE, output or self.path("out", "engine"))
+
+    def test_files_are_copied_unchanged_and_the_provenance_names_each_origin(self):
+        root = self.upstream()
+        output, (host, version, _), plan = self.prepare(root)
+        self.assertEqual((host, version), ("aarch64-macos", "23.1.4"))
+        receipt = json.loads(read(os.path.join(output, "notices", "provenance.json")))
+        self.assertEqual(receipt["kind"], "upstream-release-subset")
+        self.assertEqual(receipt["archive"], self.ARCHIVE)
+        origins = {e["path"]: e for e in receipt["files"]}
+        self.assertEqual(origins["bin/lld"]["origin"], "bin/lld")
+        self.assertEqual(origins["bin/lld"]["sha256"], pe.sha256File(os.path.join(root, "bin", "lld")))
+        self.assertEqual(origins["bin/llvm-strip"], {"path": "bin/llvm-strip", "symlinkTo": "llvm-objcopy"})
+        self.assertEqual(os.readlink(os.path.join(output, "bin", "llvm-ranlib")), "llvm-ar")
+        self.assertEqual(os.readlink(os.path.join(output, "bin", "ld64.lld")), "lld")
+        self.assertEqual(read(os.path.join(output, "notices", "llvm-project", "LICENSE.TXT")),
+                         read(os.path.join(root, UPSTREAM_LICENSE)))
+        self.assertEqual(pe.auditUpstream(output, root), len(plan) - len(self.ALIASES) + 1)
+
+    def test_the_audit_names_a_file_that_is_not_the_archives(self):
+        root = self.upstream()
+        output = self.prepare(root)[0]
+        write(os.path.join(root, "bin", "llvm-nm"), "#!/bin/sh\necho changed\n", 0o755)
+        with self.assertRaisesRegex(pe.EngineError, "bin/llvm-nm differs from the provenance in the archive"):
+            pe.auditUpstream(output, root)
+
+    def test_a_symlink_that_leaves_its_directory_or_its_plan_is_refused(self):
+        root = self.upstream()
+        os.remove(os.path.join(root, "bin", "llvm-strip"))
+        os.symlink("../lib/clang/23/include/stddef.h", os.path.join(root, "bin", "llvm-strip"))
+        with self.assertRaisesRegex(pe.EngineError, "not an engine file beside it"):
+            self.prepare(root)
+        self.assertFalse(os.path.lexists(self.path("out")))
+
+    def test_a_missing_license_and_a_lld_of_another_version_are_refused(self):
+        root = self.upstream()
+        os.remove(os.path.join(root, UPSTREAM_LICENSE))
+        with self.assertRaisesRegex(pe.EngineError, "missing license file"):
+            self.prepare(root)
+        writeScript(os.path.join(root, "bin", "lld"), "LLD 22.1.1")
+        with self.assertRaisesRegex(pe.EngineError, "does not match clang"):
+            self.prepare(root)
+
+    def test_another_host_is_refused(self):
+        with mock.patch.object(pe, "detectHost", return_value=("x86_64-macos", 0x01000007)):
+            with self.assertRaisesRegex(pe.EngineError, "unsupported host x86_64-macos"):
+                pe.prepareUpstreamEngine(self.upstream(), self.ARCHIVE, self.path("out", "engine"))
 
 
 @unittest.skipUnless(HAS_CLANG, "needs macOS and /usr/bin/clang")

@@ -2,13 +2,18 @@
 """Prepare a relocatable native clang/lld engine bundle from local LLVM and lld roots.
 
     prepareEngine.py --llvm-root DIR --lld-root DIR --output NEW_DIR
-    prepareEngine.py --verify BUNDLE_DIR
+    prepareEngine.py --upstream-root DIR --archive-name N --archive-url U --archive-sha256 H --output NEW_DIR
+    prepareEngine.py --verify BUNDLE_DIR [--upstream-root DIR]
+
+--upstream-root is the extracted official LLVM release archive of macOS arm64 (clang, lld and the resource directory in
+one root): its files are copied unchanged, and notices/provenance.json names the archive, its sha256 and the archive path
+and sha256 each file came from. --verify with --upstream-root checks every file against the extracted archive.
 
 On Linux x86_64 prepareLinuxEngine.py makes the bundle and on Windows x86_64 prepareWindowsEngine.py; --verify here checks a
 bundle of any host. A Linux or Windows bundle is read by its own bin/llvm-readobj on a native host of its kind and by an
 explicit --inspector elsewhere.
 
-The bundle is a local proof built from installed packages, not an upstream-controlled
+A bundle from --llvm-root is a local proof built from installed packages, not an upstream-controlled
 build; its provenance receipt says so and never certifies redistribution.
 """
 import argparse
@@ -32,6 +37,7 @@ CLANG_ALIASES = ("clang", "clang++")
 LLD_ALIASES = ("ld64.lld", "ld.lld", "lld-link", "wasm-ld")
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/")
 CONTRACT_FILES = ("FILES.sha256", "IDENTITY")
+UPSTREAM_LICENSE = "include/llvm/Support/LICENSE.TXT"
 LICENSE_NAME = re.compile(r"^(LICENSE|LICENCE|COPYING|NOTICE)", re.IGNORECASE)
 RECEIPT_KEYS = ("homebrew_version", "built_as_bottle", "poured_from_bottle", "compiler",
                 "time", "source_modified_time", "arch")
@@ -462,6 +468,28 @@ def containsPath(parent, child):
         child = above
 
 
+def enginePlan(llvmRoot, lldRoot, major):
+    """Destination -> source file of every engine file: the tools and the resource directory."""
+    plan = {"bin/lld": os.path.join(lldRoot, "bin", "lld"),
+            "bin/clang-" + major: os.path.join(llvmRoot, "bin", "clang-" + major)}
+    for tool in LLVM_TOOLS:
+        plan["bin/" + tool] = os.path.join(llvmRoot, "bin", tool)
+    resource = os.path.join(llvmRoot, "lib", "clang", major)
+    if not os.path.isdir(resource):
+        raise EngineError("missing resource directory %s" % resource)
+    for directory, dirnames, filenames in os.walk(resource):
+        for name in dirnames + filenames:
+            if os.path.islink(os.path.join(directory, name)):
+                raise EngineError("symlink in resource directory: %s" % name)
+        for name in filenames:
+            source = os.path.join(directory, name)
+            plan["lib/clang/%s/%s" % (major, os.path.relpath(source, resource))] = source
+    for dest, source in plan.items():
+        if not os.path.isfile(source):
+            raise EngineError("missing source file %s" % source)
+    return plan
+
+
 def prepareEngine(llvmRoot, lldRoot, output):
     host, cpu = detectHost()
     llvmRoot, lldRoot, output = (os.path.abspath(p) for p in (llvmRoot, lldRoot, output))
@@ -480,23 +508,7 @@ def prepareEngine(llvmRoot, lldRoot, output):
         raise EngineError("lld %s does not match clang %s" % (lldVersion, version))
     major = version.split(".")[0]
 
-    plan = {"bin/lld": os.path.join(lldRoot, "bin", "lld"),
-            "bin/clang-" + major: os.path.join(llvmRoot, "bin", "clang-" + major)}
-    for tool in LLVM_TOOLS:
-        plan["bin/" + tool] = os.path.join(llvmRoot, "bin", tool)
-    resource = os.path.join(llvmRoot, "lib", "clang", major)
-    if not os.path.isdir(resource):
-        raise EngineError("missing resource directory %s" % resource)
-    for directory, dirnames, filenames in os.walk(resource):
-        for name in dirnames + filenames:
-            if os.path.islink(os.path.join(directory, name)):
-                raise EngineError("symlink in resource directory: %s" % name)
-        for name in filenames:
-            source = os.path.join(directory, name)
-            plan["lib/clang/%s/%s" % (major, os.path.relpath(source, resource))] = source
-    for dest, source in plan.items():
-        if not os.path.isfile(source):
-            raise EngineError("missing source file %s" % source)
+    plan = enginePlan(llvmRoot, lldRoot, major)
     planClosure(plan, cpu)
     records = collectPackages(plan, [("llvm", realRoots[0], version), ("lld", realRoots[1], version)])
 
@@ -524,6 +536,109 @@ def prepareEngine(llvmRoot, lldRoot, output):
     return output, verified, plan, records
 
 
+def upstreamAliases(plan):
+    """Plan entries that are symlinks to another plan file of the same directory: (alias, target) pairs.
+    Their bytes belong to the target alone."""
+    aliases = {}
+    for dest, source in plan.items():
+        if os.path.islink(source):
+            target = os.readlink(source)
+            if "/" in target or os.path.dirname(dest) + "/" + target not in plan:
+                raise EngineError("%s is a symlink to %s, which is not an engine file beside it" % (source, target))
+            aliases[dest] = target
+    return aliases
+
+
+def prepareUpstreamEngine(root, archive, output):
+    """Copy the engine files of the extracted official archive at root, unchanged, into a new output."""
+    host, cpu = detectHost()
+    if host != HOSTS["arm64"][0]:
+        raise EngineError("the upstream engine is the macOS arm64 release: unsupported host %s" % host)
+    root, output = os.path.abspath(root), os.path.abspath(output)
+    if not os.path.isdir(root):
+        raise EngineError("--upstream-root %s is not a directory" % root)
+    if os.path.lexists(output):
+        raise EngineError("output %s exists; it is never replaced" % output)
+    if containsPath(os.path.realpath(root), os.path.realpath(os.path.dirname(output))):
+        raise EngineError("output must not be inside the upstream root")
+    version = toolVersion(os.path.join(root, "bin", "clang"), r"clang version (\d+\.\d+\.\d+)")
+    if toolVersion(os.path.join(root, "bin", "ld64.lld"), r"LLD (\d+\.\d+\.\d+)") != version:
+        raise EngineError("lld does not match clang %s" % version)
+    major = version.split(".")[0]
+    plan = enginePlan(root, root, major)
+    aliases = upstreamAliases(plan)
+    license = os.path.join(root, UPSTREAM_LICENSE)
+    if not os.path.isfile(license):
+        raise EngineError("missing license file %s" % license)
+    for dest, source in plan.items():
+        if dest in aliases or not machoSlices(source):
+            continue
+        if cpu not in {c for c, _ in machoSlices(source)}:
+            raise EngineError("%s has no arm64 slice" % source)
+        for dep in loadCommands(source)[1]:
+            if not isSystem(dep):
+                raise EngineError("%s loads %s: an upstream engine file may load system libraries only" % (dest, dep))
+
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    try:
+        os.mkdir(output)
+    except FileExistsError:
+        raise EngineError("output %s exists; it is never replaced" % output)
+    files = []
+    for dest in sorted(plan):
+        target = os.path.join(output, dest)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if dest in aliases:
+            os.symlink(aliases[dest], target)
+            files.append({"path": dest, "symlinkTo": aliases[dest]})
+            continue
+        shutil.copyfile(plan[dest], target)
+        os.chmod(target, 0o755 if os.access(plan[dest], os.X_OK) else 0o644)
+        files.append({"path": dest, "origin": os.path.relpath(plan[dest], root), "sha256": sha256File(target)})
+    for alias in CLANG_ALIASES:
+        os.symlink("clang-" + major, os.path.join(output, "bin", alias))
+    for alias in LLD_ALIASES:
+        os.symlink("lld", os.path.join(output, "bin", alias))
+    notice = os.path.join(output, "notices", "llvm-project")
+    os.makedirs(notice)
+    shutil.copyfile(license, os.path.join(notice, "LICENSE.TXT"))
+    files.append({"path": "notices/llvm-project/LICENSE.TXT", "origin": UPSTREAM_LICENSE,
+                  "sha256": sha256File(os.path.join(notice, "LICENSE.TXT"))})
+    receipt = {
+        "kind": "upstream-release-subset",
+        "statement": "Files of the official upstream LLVM release archive named below, copied unchanged; "
+                     "only the files msc uses are kept. Each file's archive path and sha256 are listed.",
+        "redistributionCertified": False,
+        "host": host,
+        "clangVersion": version,
+        "lldVersion": version,
+        "archive": archive,
+        "files": files,
+        "createdAliases": {**{"bin/" + a: "clang-" + major for a in CLANG_ALIASES},
+                           **{"bin/" + a: "lld" for a in LLD_ALIASES}},
+    }
+    writeText(os.path.join(output, "notices", "provenance.json"), json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    writeContract(output, host, version)
+    return output, verifyEngine(output), plan
+
+
+def auditUpstream(bundle, root):
+    """Every file the provenance names is the same bytes in the bundle and in the extracted archive at root."""
+    with open(os.path.join(bundle, "notices", "provenance.json"), encoding="utf-8") as f:
+        receipt = json.load(f)
+    if receipt.get("kind") != "upstream-release-subset":
+        raise EngineError("%s has no upstream provenance (kind %s)" % (bundle, receipt.get("kind")))
+    count = 0
+    for entry in receipt["files"]:
+        if "origin" not in entry:
+            continue
+        for label, path in (("bundle", os.path.join(bundle, entry["path"])), ("archive", os.path.join(root, entry["origin"]))):
+            if sha256File(path) != entry["sha256"]:
+                raise EngineError("%s differs from the provenance in the %s: %s" % (entry["path"], label, path))
+        count += 1
+    return count
+
+
 def sourcePathLiterals(root, sources, isBinary=machoSlices):
     """Count source-root path strings left as data in the binaries of root (not load commands)."""
     needles = [s.encode("utf-8") for s in sources]
@@ -544,6 +659,10 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--llvm-root")
     parser.add_argument("--lld-root")
+    parser.add_argument("--upstream-root")
+    parser.add_argument("--archive-name")
+    parser.add_argument("--archive-url")
+    parser.add_argument("--archive-sha256")
     parser.add_argument("--output")
     parser.add_argument("--verify", metavar="BUNDLE_DIR")
     parser.add_argument("--inspector")
@@ -552,6 +671,21 @@ def main(argv):
         if args.verify:
             host, version, count = verifyEngine(args.verify, args.inspector)
             print("verified host=%s version=%s %s=%d" % (host, version, {LINUX_X64: "elf", WINDOWS_X64: "pe"}.get(host, "macho"), count))
+            if args.upstream_root:
+                print("identical to the upstream archive: files=%d" % auditUpstream(args.verify, args.upstream_root))
+            return 0
+        if args.upstream_root:
+            archive = {"name": args.archive_name, "url": args.archive_url, "sha256": args.archive_sha256}
+            if not (args.output and all(archive.values())) or not re.fullmatch("[0-9a-f]{64}", args.archive_sha256):
+                parser.error("--upstream-root needs --output, --archive-name, --archive-url and a 64-digit --archive-sha256")
+            output, (host, version, macho), plan = prepareUpstreamEngine(args.upstream_root, archive, args.output)
+            with open(os.path.join(output, "IDENTITY"), encoding="utf-8") as f:
+                identity = f.read().strip()
+            print("prepared %s" % output)
+            print("host=%s version=%s identity=%s" % (host, version, identity))
+            print("files=%d macho=%d bytes=%d" % (
+                len(listFiles(output)), macho, sum(os.path.getsize(os.path.join(output, r)) for r in listFiles(output))))
+            print("redistribution NOT certified; unchanged files of %s" % args.archive_name)
             return 0
         if not (args.llvm_root and args.lld_root and args.output):
             parser.error("--llvm-root, --lld-root and --output are required")
