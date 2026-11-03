@@ -4,23 +4,23 @@
 
 A whole-compiler A/B costs 45-60 minutes and names no flow. Every instrument below writes rows
 `<source>\t<flow>\t<metric>\t<value>` (source `msc` `drc` `emit` `proc`; metric `ms` `instr` `count`
-`bytes`), and `src/test/perf/run.ms` turns the rows of a base and a candidate compiler into one table
+`bytes`), and `src/bench/compiler/run.ms` turns the rows of a base and a candidate compiler into one table
 per program, so a change shows its own delta in about a minute.
 
 | Instrument | Measures | Switch on |
 |---|---|---|
 | `msc` rows | the compiler's passes, analyzer steps, phases, emit and cc | env `MSC_FLOWS=<file>` |
 | `drc` rows | allocations, rc operations, cycle registrations and collections of a program | build with `--passC=-DMS_DRC_STAT`, run with env `MS_DRC_STAT=<file>`; an `msc` built that way reports its own runtime flows |
-| `emit` rows | per function counts in emitted C (rc ops, pins, atomics) | `msc run src/test/perf/emitCostScan.ms <emit dir>`, or `--diff A B` for a ranked table |
+| `emit` rows | per function counts in emitted C (rc ops, pins, atomics) | `msc run src/bench/compiler/emitCostScan.ms <emit dir>`, or `--diff A B` for a ranked table |
 | `proc` rows | whole process: instructions retired, wall, max rss | the runner adds them itself |
 
-The runner's environment and program names are the header of `src/test/perf/run.ms`.
+The runner's environment and program names are the header of `src/bench/compiler/run.ms`.
 
 **A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --danger
 --lto=off --output=msc`), keep the previous build as the base, then
 
 ```sh
-MSPERF_BASE=/path/to/previous/msc MSPERF_PROGRAMS=711,self nice -n 10 msc run src/test/perf/run.ms
+MSPERF_BASE=/path/to/previous/msc MSPERF_PROGRAMS=711,self nice -n 10 msc run src/bench/compiler/run.ms
 ```
 
 Check `uptime` first and do not start a second compile beside it. `MSPERF_SELF=1` runs one binary as

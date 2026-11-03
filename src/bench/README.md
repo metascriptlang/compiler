@@ -25,4 +25,4 @@ An ARM number comes from m1m (Apple M1 Pro) only, through `run-remote.sh --mac`,
 `sysctl -n machdep.cpu.brand_string | grep -q "M1 Pro"` first, because a fallback to the local M3 Max gives numbers
 no baseline row is comparable with. `run-remote.sh` copies no `.git`, so pass `MSBENCH_COMMIT=<sha>`.
 
-A compiler build-cost bench is a different question with its own runner: `src/test/perf/run.ms`, `docs/BUILD-PERF.md`.
+A compiler build-cost bench is a different question with its own runner: `src/bench/compiler/`, `docs/BUILD-PERF.md`.

@@ -96,7 +96,7 @@ export default config;
 
 `build.ms` cache fields must be direct string or boolean literals; an empty string, a control
 character, a spread or a computed value is an error naming the field, not a silent default.
-The perf runner (`src/test/perf/run.ms`) disables the global store on purpose to time
+The perf runner (`src/bench/compiler/run.ms`) disables the global store on purpose to time
 compilation itself; keep it so.
 
 ## Collection

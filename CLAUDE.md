@@ -15,7 +15,7 @@ A command reference, not a plan: pick the check from [`src/test/CLAUDE.md`](src/
 msc test src/utils/string.ms --tests-in-dir   # one module's tests; without the flag it also runs every import's tests
 MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # named corpus programs; recipe + traps: docs/TESTING.md
 GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms   # named lifecycle guards
-MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms   # one flow A/B; docs/BUILD-PERF.md "Measuring by flow"
+MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/bench/compiler/run.ms   # one flow A/B; docs/BUILD-PERF.md "Measuring by flow"
 
 # Land gate and release ladder: never mid-edit. Runners test ./msc when it exists, else installed msc; MSC=<path> overrides.
 tools/gate.sh                         # lanes picked from the diff; --dry-run = show the choice, --release = release ladder

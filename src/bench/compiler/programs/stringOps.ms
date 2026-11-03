@@ -3,8 +3,8 @@ import { djb2 } from "std/hash";
 import { hashString } from "std/core/struct";
 
 // Per-operation string cost in ns/op (minimum of RUNS runs), one row per operation and size
-// class. Run alone for the table: `msc run src/test/perf/programs/stringOps.ms [rowPrefix...]`;
-// `rt:stringOps` in src/test/perf/run.ms measures the same binary's instructions.
+// class. Run alone for the table: `msc run src/bench/compiler/programs/stringOps.ms [rowPrefix...]`;
+// `rt:stringOps` in src/bench/compiler/run.ms measures the same binary's instructions.
 // Sizes: bytes of ASCII text, `40u` is 40 bytes of two-byte code points.
 
 let sink: int64 = 0;

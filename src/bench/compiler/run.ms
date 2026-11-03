@@ -1,4 +1,4 @@
-// Flow A/B runner — one table per program from every instrument (msc run src/test/perf/run.ms).
+// Flow A/B runner — one table per program from every instrument (msc run src/bench/compiler/run.ms).
 //
 // Each instrument appends `<source>\t<flow>\t<metric>\t<value>` rows to a file
 // (source msc | drc | emit | proc; metric ms | instr | count | bytes). This runner
@@ -12,7 +12,7 @@
 //                             711        src/test/corpus/programs/711-jsxParseNative.ms
 //                             fmt        src/test/fmt/run.ms
 //                             self       src/index.ms
-//                             rt:<name>  src/test/perf/programs/<name>.ms, built once per
+//                             rt:<name>  src/bench/compiler/programs/<name>.ms, built once per
 //                                        arm with -DMS_DRC_STAT, then the binary is measured
 //                           the first three are measured as `build --emit=c`
 //   MSPERF_RUNS=N           runs per arm (default 5), arms interleaved in shuffled order
@@ -401,7 +401,7 @@ function sourceOf(program: string): string {
 	if (program == "711") { return "src/test/corpus/programs/711-jsxParseNative.ms"; }
 	if (program == "fmt") { return "src/test/fmt/run.ms"; }
 	if (program == "self") { return "src/index.ms"; }
-	if (program.startsWith("rt:")) { return `src/test/perf/programs/${program.slice(3)}.ms`; }
+	if (program.startsWith("rt:")) { return `src/bench/compiler/programs/${program.slice(3)}.ms`; }
 	fail("unknown program " + program + " (711, fmt, self, rt:<name>)");
 	return "";
 }
@@ -501,7 +501,7 @@ function fixtureLine(lines: Line[], flow: string): Line {
 }
 
 function fixtureLines(): Line[] {
-	const dir = "src/test/perf/fixtures";
+	const dir = "src/bench/compiler/fixtures";
 	return compare(loadArm(dir, "fx", "base", 3), loadArm(dir, "fx", "cand", 3), 3);
 }
 
@@ -553,6 +553,6 @@ test "rows rank by instruction delta, then count delta" {
 }
 
 test "coverage counts only leaf flows of phase A, and the phases of the msc total" {
-	const arm = loadArm("src/test/perf/fixtures", "fx", "base", 3);
+	const arm = loadArm("src/bench/compiler/fixtures", "fx", "base", 3);
 	assert coverage(arm) == "leaf flows / phase.A instr 95.0% · phase.* / msc total instr 90.0%";
 }

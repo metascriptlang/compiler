@@ -14,6 +14,7 @@ When measuring TypeScript compatibility, read [`compat/typescript/README.md`](co
 | Phase handoff | `handoff/*.ms` | contracts between adjacent phases |
 | Corpus | `corpus/programs/<invariant>.ms` or `<invariant>/main.ms` | standalone programs byte-compared across lanes — the contract lives in the `// @…` directive head |
 | Lifecycle guard | `guard/*.ms` | one DRC-ledger invariant per file, trusted only after it was proven red (`guard/README.md`) |
+| DRC counter pin | `drcStat/run.ms` + `drcStat/programs/` | exact `MS_DRC_STAT` deltas of a runtime build; a standalone build-and-run driver, run by hand |
 
 - **Register each runnable test module** in its `lang/`, `handoff/`, `c/` or `js/` index. Corpus and lifecycle-guard runners discover standalone entries; imported fixture modules are not entries.
 - **Place new regressions by their invariant and consumer boundary**, not a bug number.
@@ -69,14 +70,14 @@ Build a candidate per compiler edit, in the same `run-remote.sh` call as the che
 | program output, exit status or lifetime | `MSC=./msc MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_RAISER=1` when the diff adds or edits that program, and `MSCORPUS_SAN=1` for its SAN contract | 4–10 s per program; the Raiser cells about 0.25 s each |
 | one lifecycle invariant | `MSC=./msc GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms`; keep its ledger oracle (`guard/README.md`) | 1–5 s per guard |
 | what one program emits | `./msc build <prog.ms> --emit=c`, then read that module's C | seconds |
-| the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/test/perf/run.ms`, read the rows of the flow you changed (`docs/BUILD-PERF.md` §Measuring by flow) | one program per arm |
+| the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/bench/compiler/run.ms`, read the rows of the flow you changed (`docs/BUILD-PERF.md` §Measuring by flow) | one program per arm |
 | formatting | `MSFMT_ROOTS=<dir> msc run src/test/fmt/run.ms` on the directories you changed | 6.6–13.5 s for `src/utils` |
 | LSP behaviour | `msc run src/test/lsp/run.ms` (the replay scenarios) | 37–44 s |
 | Solana, native boundary or HCR | the named failing consumer with its host and backend; recipes in `docs/TESTING.md` | not measured |
 | `std/` or `runtime/` inputs | the checks above, with a candidate beside the changed support trees; `tools/syncLocalBinary.ms` belongs to delivery | as above |
 
 - **`msc test <file>` without `--tests-in-dir` also runs the tests of every module the file imports.** For `src/analyzer/inject.ms` that is 102 test files in 85–122 s, against 7 files with the flag (lc-1, tree 651e100ee).
-- **Split a performance question by flow.** Run one program and one flow per measurement (`MSC_FLOWS`, `MS_DRC_STAT`, `src/test/perf/emitCostScan.ms --diff`, or one program under `perf record`); a whole-compiler A/B waits for the land.
+- **Split a performance question by flow.** Run one program and one flow per measurement (`MSC_FLOWS`, `MS_DRC_STAT`, `src/bench/compiler/emitCostScan.ms --diff`, or one program under `perf record`); a whole-compiler A/B waits for the land.
 - **Measured per-file costs and the checks over budget** are in [`docs/TESTING.md`](../../docs/TESTING.md) §Edit-loop check costs; a check that cannot finish in 60 s is added there with its measurement.
 - **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 

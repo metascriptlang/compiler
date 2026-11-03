@@ -1,13 +1,13 @@
 // Counts the runtime work the compiler emitted per MetaScript function, and ranks what changed between two emits.
-//   msc run src/test/perf/emitCostScan.ms <dir>              rows `emit<TAB>fn@module<TAB>metric<TAB>value`
-//   msc run src/test/perf/emitCostScan.ms --diff <dirA> <dirB>   top 40 by |delta| of increfs, then lines
-//   msc run src/test/perf/emitCostScan.ms --fixtures            rows and diff of src/test/perf/scanFixtures, byte for byte
+//   msc run src/bench/compiler/emitCostScan.ms <dir>              rows `emit<TAB>fn@module<TAB>metric<TAB>value`
+//   msc run src/bench/compiler/emitCostScan.ms --diff <dirA> <dirB>   top 40 by |delta| of increfs, then lines
+//   msc run src/bench/compiler/emitCostScan.ms --fixtures            rows and diff of src/bench/compiler/scanFixtures, byte for byte
 // incref/increfCyclic exclude pins: an incref whose operand is a `dollarborrow` temp is a borrowPin, so the three sum
 // to every incref. decrefCyclic includes msDecrefCyclicEdge. A C name that is no module function keeps its C name and
 // module `?unmapped`.
 import { argv, cwd, exit } from "std/process";
 import { exists, readDir, readFile } from "std/fs";
-import { CProgram, collect, isIdentChar } from "../cScan";
+import { CProgram, collect, isIdentChar } from "../../test/cScan";
 
 const METRICS = ["incref", "decref", "increfCyclic", "decrefCyclic", "borrowPin", "finally", "atomic", "lines"];
 const INCREF = 0;
@@ -24,7 +24,7 @@ const ATOMIC_PREFIXES = ["__atomic_", "atomic_", "msAtomic"];
 const MODULE_EXTENSIONS = ["Ocms", "Oms", "Ots", "Ojs"];
 const UNMAPPED = "?unmapped";
 const TOP = 40;
-const FIXTURES = "src/test/perf/scanFixtures";
+const FIXTURES = "src/bench/compiler/scanFixtures";
 
 class FnCost {
 	key: string;
@@ -288,6 +288,6 @@ else if (args.length == 3 && args[0] == "--diff") {
 	needDir(args[0]);
 	for (const row of rowsOf(scan(args[0]))) console.log(row);
 } else {
-	console.log("usage: msc run src/test/perf/emitCostScan.ms <dir> | --diff <dirA> <dirB> | --fixtures");
+	console.log("usage: msc run src/bench/compiler/emitCostScan.ms <dir> | --diff <dirA> <dirB> | --fixtures");
 	exit(2);
 }
