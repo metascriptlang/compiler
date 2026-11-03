@@ -113,6 +113,7 @@ static void msLedgerDump(void) {
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);
 }
+void msLedgerReport(void) { msLedgerDump(); }
 __attribute__((constructor)) static void msLedgerRegisterDump(void) {
 	if (!gLedgerAtexit) { gLedgerAtexit = 1; atexit(msLedgerDump); }
 }

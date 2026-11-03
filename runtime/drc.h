@@ -122,6 +122,7 @@ static inline void msRcFamilyCheck(void* p, bool wantAtomic, const char* op) {
 #ifdef MS_DRC_LEDGER
 enum { MS_LEDGER_RC_INC, MS_LEDGER_RC_DEC, MS_LEDGER_SHARE_INC, MS_LEDGER_SHARE_DEC, MS_LEDGER_ROOT_REG, MS_LEDGER_THREAD_START, MS_LEDGER_COUNTERS };
 void msLedgerCount(int counter);
+void msLedgerReport(void);
 #define MS_LEDGER_COUNT(counter)   msLedgerCount(counter)
 void msLedgerAlloc(void* p, const msTypeInfo* type);
 void msLedgerDestroy(void* p, const msTypeInfo* type);

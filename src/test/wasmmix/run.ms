@@ -11,7 +11,10 @@
 //   // @mixed-stderr: <substr> -> the mixed run's stderr has a line with it; a
 //                                program without it fails on a `msb leak:` line
 //   // @loads: <n>            -> n loads of the module (not available yet)
-//   // @ledger-balanced: <T>  -> handle ledger of T balanced (not available yet)
+//   // @ledger-balanced: <T>  -> the wasm half's DRC ledger row of T has
+//                                alloc == destroy (mixed build with the ledger)
+//   // @ledger-leaks: <T>     -> the same row has alloc != destroy; pins that
+//                                the oracle bites
 //
 //   MSC=./msc msc run src/test/wasmmix/run.ms
 //   WASMMIX_ONLY=scalars,callback  # select programs
@@ -39,6 +42,10 @@ const PROG_DIR = "src/test/wasmmix/programs/";
 const OUT_DIR = "out/wasmmix/";
 const RUN_PAGE = "src/test/wasmmix/browser/runPage.mjs";
 const SLOTS = "src/test/wasmmix/slotTable.mjs";
+const LEDGER_HOOK = "./src/test/wasmmix/ledgerHook.mjs";
+const LEDGER_FLAGS = [
+	"--passC=-DMS_DRC_LEDGER -DMS_LEDGER_SET_SIZE=65536u",
+];
 const BROWSER = env.get("WASMMIX_BROWSER") == "1";
 const TAIL_LINES: int32 = 12;
 
@@ -94,6 +101,7 @@ function buildAndRun(
 	dir: string,
 	flags: string[],
 	wantWasm: boolean,
+	ledger: boolean = false,
 ): Column {
 	ensureDir(dir);
 	const bundle = dir + "app.js";
@@ -114,7 +122,45 @@ function buildAndRun(
 			);
 		}
 	}
+	if (ledger) return runProcess(label, "node", ["--import", LEDGER_HOOK, bundle]);
 	return runProcess(label, "node", [bundle]);
+}
+
+function ledgerRow(err: string, type: string): string {
+	let row = "";
+	for (const line of err.split("\n")) {
+		if (line.startsWith(`LEDGER ${type} `)) row = line;
+	}
+	return row;
+}
+
+function ledgerCount(row: string, key: string): string {
+	for (const word of row.split(" ")) {
+		if (word.startsWith(key + "=")) return word.slice(key.length + 1, word.length);
+	}
+	return "";
+}
+
+function ledgerProblems(spec: WasmmixSpec, mixed: Column): string[] {
+	if (!mixed.ok) return [];
+	const problems: string[] = [];
+	const wants: string[][] = [
+		...spec.ledgerBalanced.map((t) => [t, "balanced"]),
+		...spec.ledgerLeaks.map((t) => [t, "leaks"]),
+	];
+	for (const want of wants) {
+		const row = ledgerRow(mixed.err, want[0]);
+		if (row == "") {
+			problems.push(`[mixed] no LEDGER row for ${want[0]}:\n${tail(mixed.err)}`);
+			continue;
+		}
+		const alloc = ledgerCount(row, "alloc");
+		const balanced = alloc == ledgerCount(row, "destroy");
+		if (balanced == (want[1] == "balanced")) continue;
+		const verdict = want[1] == "balanced" ? "imbalance" : "no imbalance";
+		problems.push(`[mixed] ledger ${verdict} for ${want[0]}: ${row}`);
+	}
+	return problems;
 }
 
 function judge(spec: WasmmixSpec, cols: Column[]): string[] {
@@ -219,9 +265,6 @@ function runProgram(name: string): boolean {
 	if (spec.loads != 1) {
 		problems.push(`@loads: ${spec.loads} is not available yet`);
 	}
-	for (const type of spec.ledgerBalanced) {
-		problems.push(`@ledger-balanced: ${type} is not available yet`);
-	}
 	if (problems.length > 0) {
 		say(`  FAIL ${name}`);
 		for (const p of problems) say("    " + p);
@@ -253,10 +296,19 @@ function runProgram(name: string): boolean {
 		}
 		for (const p of expectedErrorProblems(spec, dir, entry)) problems.push(p);
 	} else {
-		const mixed = buildAndRun("mixed", entry, dir + "mixed/", [], true);
+		const ledger = spec.ledgerBalanced.length + spec.ledgerLeaks.length > 0;
+		const mixed = buildAndRun(
+			"mixed",
+			entry,
+			dir + "mixed/",
+			ledger ? LEDGER_FLAGS : [],
+			true,
+			ledger,
+		);
 		cols.push(mixed);
 		cols.push(runProcess("tree", MSC, ["run", "--target=js", entry]));
 		for (const p of stderrProblems(spec, mixed)) problems.push(p);
+		for (const p of ledgerProblems(spec, mixed)) problems.push(p);
 		const bundle = dir + "mixed/app.js";
 		if (mixed.ok && wantsForeign && exists(driver)) {
 			for (const p of foreignProblems(spec, driver, bundle)) problems.push(p);

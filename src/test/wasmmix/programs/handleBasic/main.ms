@@ -1,3 +1,4 @@
+// @ledger-balanced: Counter
 // @stdout: 5
 // @stdout: 12
 // @stdout: 20

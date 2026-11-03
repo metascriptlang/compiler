@@ -11,6 +11,7 @@ export interface WasmmixSpec {
 	mixedStderr: string[];
 	loads: int32;
 	ledgerBalanced: string[];
+	ledgerLeaks: string[];
 	unknown: string[];
 }
 
@@ -33,6 +34,7 @@ export function parseSpec(src: string): WasmmixSpec {
 		mixedStderr: [],
 		loads: 1,
 		ledgerBalanced: [],
+		ledgerLeaks: [],
 		unknown: [],
 	};
 	for (const line of src.split("\n")) {
@@ -66,6 +68,8 @@ export function parseSpec(src: string): WasmmixSpec {
 			}
 		} else if (t.startsWith("// @ledger-balanced:")) {
 			spec.ledgerBalanced.push(directiveValue(t, "@ledger-balanced"));
+		} else if (t.startsWith("// @ledger-leaks:")) {
+			spec.ledgerLeaks.push(directiveValue(t, "@ledger-leaks"));
 		} else if (t == "// @slots") {
 			spec.slots = true;
 		} else if (t.startsWith("// @")) {
@@ -183,11 +187,12 @@ test "parseSpec defaults to all three columns and one load" {
 	assert s.loads == 1;
 	assert s.mixedStderr.length == 0;
 	assert s.ledgerBalanced.length == 0;
+	assert s.ledgerLeaks.length == 0;
 }
 
-test "parseSpec reads @columns, @mixed-stderr, @loads and @ledger-balanced" {
+test "parseSpec reads @columns, @mixed-stderr, @loads, @ledger-balanced and @ledger-leaks" {
 	const s = parseSpec(
-		"// @columns: mixed\n// @mixed-stderr: x\n// @loads: 2\n// @ledger-balanced: Counter\nx",
+		"// @columns: mixed\n// @mixed-stderr: x\n// @loads: 2\n// @ledger-balanced: Counter\n// @ledger-leaks: Box\nx",
 	);
 	assert s.columns.length == 1;
 	assert s.columns[0] == "mixed";
@@ -196,6 +201,8 @@ test "parseSpec reads @columns, @mixed-stderr, @loads and @ledger-balanced" {
 	assert s.loads == 2;
 	assert s.ledgerBalanced.length == 1;
 	assert s.ledgerBalanced[0] == "Counter";
+	assert s.ledgerLeaks.length == 1;
+	assert s.ledgerLeaks[0] == "Box";
 	assert s.unknown.length == 0;
 }
 

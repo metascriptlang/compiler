@@ -1,6 +1,7 @@
 import { execPath, execFileResult, cwd } from "std/process";
 import { ensureDir, writeFile, rename, exists, remove } from "std/fs";
 import { basename, isAbsolute, join, normalize } from "std/fs/path";
+import { LEDGER_EXPORT, ledgerEntryLines } from "./wasmSide";
 import { CliOptions, MODE_RELEASE, MODE_DANGER } from "../options";
 
 // Builds the wasm half of a placed program as its own `--os=emcc --app=lib`
@@ -8,18 +9,26 @@ import { CliOptions, MODE_RELEASE, MODE_DANGER } from "../options";
 // and object lists in process-wide state.
 // `exportedSymbols` are the emcc export names as `-sEXPORTED_FUNCTIONS` spells
 // them, leading underscore included.
+// A `--passC` naming `-DMS_DRC_LEDGER` reaches the child, which then exports
+// `msb_ledger()`: the half's exit never runs `atexit`, so the ledger is read
+// by calling it.
 // Writes `<outStem>.wasm.mjs` and `<outStem>.wasm`.
 export function buildWasmHalf(
-	entrySource: string,
-	exportedSymbols: string[],
+	entrySourceBase: string,
+	exportedBase: string[],
 	runtimeMethods: string[],
 	jsLibrary: string,
 	outStem: string,
 	opts: CliOptions,
 ): Result<void, string> {
-	if (exportedSymbols.length == 0) {
+	if (exportedBase.length == 0) {
 		return Result.err("internal: buildWasmHalf got no exported symbols");
 	}
+	const ledger = opts.passC.includes("-DMS_DRC_LEDGER");
+	const entrySource = ledger
+		? entrySourceBase + ledgerEntryLines().join("\n") + "\n"
+		: entrySourceBase;
+	const exportedSymbols = ledger ? [...exportedBase, LEDGER_EXPORT] : exportedBase;
 	const stem = isAbsolute(outStem)
 		? normalize(outStem)
 		: normalize(join(cwd(), outStem));
@@ -62,6 +71,7 @@ export function buildWasmHalf(
 		`--output=${mjs}`,
 		`--passL=${linkFlags}`,
 	];
+	if (opts.passC != "") args.push(`--passC=${opts.passC}`);
 	if (opts.mode == MODE_RELEASE) args.push("--release");
 	if (opts.mode == MODE_DANGER) args.push("--danger");
 	const run = execFileResult(execPath, args, stage);

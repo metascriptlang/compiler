@@ -3,7 +3,7 @@ import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
 import { Manifest, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
-import { wasmEntrySource } from "./wasmSide";
+import { wasmEntrySource, ledgerEntryLines, LEDGER_EXPORT } from "./wasmSide";
 
 const SOURCE = `
 struct Point { x: float64; y: float64; }
@@ -354,4 +354,11 @@ test "wasm entry: no msb_release and no Handle import without a Handle" {
 	const e = handleEntryFor(["ping"]);
 	assert e.source.includes("msb_release") == false && e.source.includes("std/ffi") == false;
 	assert e.exportedFunctions.includes("_msb_release") == false;
+}
+
+test "ledger entry: msb_ledger calls the runtime's one ledger report and is exported" {
+	const text = ledgerEntryLines().join("\n");
+	assert text.includes("extern function msLedgerReport(): void;");
+	assert text.includes('@exportName("msb_ledger")');
+	assert LEDGER_EXPORT == "_msb_ledger";
 }

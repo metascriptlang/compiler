@@ -1,4 +1,5 @@
 // @columns: mixed
+// @ledger-leaks: Counter
 // @stdout: 9
 // @foreign-stdout: leaks tolerated: exit 0
 // @foreign-stdout: MSB_LEAKS=error: exit 1

@@ -644,6 +644,16 @@ function exportedSymbolsOf(
 	return exported;
 }
 
+export const LEDGER_EXPORT = "_msb_ledger";
+
+export function ledgerEntryLines(): string[] {
+	return [
+		"extern function msLedgerReport(): void;",
+		'@exportName("msb_ledger")',
+		"export function msb_ledger(): void { msLedgerReport(); }",
+	];
+}
+
 export function wasmEntrySource(
 	fns: BoundaryFunction[],
 	importPathOf: (modulePath: string) => string,
