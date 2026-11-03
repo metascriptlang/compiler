@@ -62,6 +62,13 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual({pc.VARIANTS[(pc.WINDOWS, k)]["config"] for k in ("exe", "dll")},
                          {"windows/x86_64-windows-gnu.cxx.cfg", "windows/x86_64-windows-gnu.dll.cxx.cfg"})
 
+    def test_a_macos_config_has_no_unwind_header_nor_library_and_its_directory_is_beside_it(self):
+        self.assertEqual(pc.renderConfig(pc.DARWIN_ARM64, "exe", DEFINES).splitlines(), [
+            "-isystem <CFGDIR>/../include/cxx/libcxx", "-isystem <CFGDIR>/../include/cxx/libcxxabi"] + DEFINES + [
+            "-Xlinker -L -Xlinker <CFGDIR>/aarch64-macos.cxx", "$-lc++abi", "$-lc++"])
+        self.assertEqual(pc.VARIANTS[(pc.DARWIN, "exe")]["zigTarget"], "x86_64-macos.11.0")
+        self.assertEqual(pc.VARIANTS[(pc.DARWIN, "exe")]["config"], "darwin/x86_64-macos.cxx.cfg")
+
     def test_a_define_that_would_need_quoting_is_refused(self):
         with self.assertRaisesRegex(pe.EngineError, "quoting"):
             pc.renderConfig(pc.LINUX, "exe", ["-DX=a b"])
@@ -72,7 +79,31 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse("-D__GLIBC_MINOR__=31".startswith(pc.CPP_DEFINES))
 
 
+DARWIN_CXX = ("/z/lib/libcxx/include", "/z/lib/libcxxabi/include", "/z/lib/include", "/z/lib/libc/include/any-darwin-any")
+
+
 class LineTest(TempCase):
+    def test_a_macos_include_order_has_no_libunwind_and_one_with_it_is_refused(self):
+        self.assertEqual(pc.splitIsystem(list(DARWIN_CXX), False), ("/z/lib", ["any-darwin-any"]))
+        for order in (DARWIN_CXX + ("/z/lib/libunwind/include",), DARWIN_CXX[:3]):
+            with self.assertRaisesRegex(pe.EngineError, "include order"):
+                pc.splitIsystem(list(order), False)
+
+    def test_a_zig_ld_line_gives_the_runtime_inputs_the_library_words_and_the_other_archives(self):
+        cache = self.path("cache")
+        for name in ("a/libc++abi.a", "b/libc++.a", "c/libcompiler_rt.a"):
+            write(os.path.join(cache, name))
+        line = ("zig ld -dynamic -platform_version macos 11.0.0 26.4 -dead_strip -e _main -o /w/out %s/x.o %s/a/libc++abi.a "
+                "%s/b/libc++.a -lSystem %s/c/libcompiler_rt.a" % ((cache,) * 4))
+        write(os.path.join(cache, "x.o"))
+        inputs, words, others = pc.parseDarwinLink(line, "/w/out", "x.o", cache, "/w")
+        self.assertEqual([os.path.basename(p) for p in inputs], ["libc++abi.a", "libc++.a", "libcompiler_rt.a"])
+        self.assertEqual((words, [os.path.basename(p) for p in others]), (["-dynamic", "-dead_strip", "-lSystem"][2:], ["libcompiler_rt.a"]))
+        for bad, message in ((line.replace("-o /w/out", "-o /w/other"), "writes"), (line.replace("zig ld", "zig lld"), "not a `zig ld`"),
+                             (line + " /elsewhere/libx.a", "private cache")):
+            with self.assertRaisesRegex(pe.EngineError, message):
+                pc.parseDarwinLink(bad, "/w/out", "x.o", cache, "/w")
+
     def test_zigs_include_order_yields_its_lib_directory_and_the_libc_names(self):
         self.assertEqual(pc.splitIsystem(list(LINUX_CXX)),
                          ("/z/lib", ["x86-linux-gnu", "generic-glibc", "any-linux-any"]))
@@ -115,6 +146,10 @@ class CrossCheckTest(unittest.TestCase):
         for tokens in (["--entry", "_start", "crt1.o", "libm.so.6", "--extra"], ["crt1.o", "--entry"]):
             with self.assertRaisesRegex(pe.EngineError, "link tokens"):
                 pc.crossCheck(variant(linkTokens=tokens), BASE)
+
+    def test_macos_library_lines_compare_as_l_words(self):
+        self.assertEqual(pc.baseTokens("-nostdlib\n-Xlinker <CFGDIR>/aarch64-macos/libcompiler_rt.a\n$-lSystem\n", True),
+                         ["libcompiler_rt.a", "-lSystem"])
 
     def test_windows_library_lines_compare_as_lib_file_names(self):
         self.assertEqual(pc.baseTokens("-Xlinker <CFGDIR>/w/crt2.obj\n$-lzigc\n-Xlinker --image-base=1\n"),
@@ -203,6 +238,20 @@ class OverlayTest(TempCase):
             os.remove(self.path("rt", name))
         for name in ("aarch64-windows-gnu.cfg", "aarch64-windows-gnu.dll.cfg"):
             os.remove(self.path("rt", "windows", name))
+        for name in ("x86_64-linux-musl.cfg", "aarch64-linux-musl.cfg"):
+            write(self.path("rt", name))
+        self.assertEqual(pc.selectTargets(self.path("rt"), []), [pc.LINUX, pc.WINDOWS])
+        self.assertEqual(pc.selectTargets(self.path("rt"), pc.MUSL_TARGETS), pc.MUSL_TARGETS)
+        with self.assertRaisesRegex(pe.EngineError, "prepared apart"):
+            pc.selectTargets(self.path("rt"), [pc.MUSL, pc.LINUX])
+        write(self.path("rt", "darwin", "aarch64-macos.cfg"))
+        self.assertEqual(pc.selectTargets(self.path("rt"), []), [pc.LINUX, pc.WINDOWS])
+        self.assertEqual(pc.selectTargets(self.path("rt"), [pc.DARWIN_ARM64]), [pc.DARWIN_ARM64])
+        with self.assertRaisesRegex(pe.EngineError, "prepared apart"):
+            pc.selectTargets(self.path("rt"), [pc.DARWIN, pc.MUSL])
+        os.remove(self.path("rt", "darwin", "aarch64-macos.cfg"))
+        for name in ("x86_64-linux-musl.cfg", "aarch64-linux-musl.cfg"):
+            os.remove(self.path("rt", name))
         for names, message in ((["wasm32-wasi"], "no C\\+\\+ runtime"), ([pc.LINUX, pc.LINUX], "duplicate")):
             with self.assertRaisesRegex(pe.EngineError, message):
                 pc.selectTargets(self.path("rt"), names)
@@ -286,8 +335,32 @@ class InspectTest(TempCase):
             self.assertEqual(pc.provenancePath(targets), pc.PROVENANCE)
         self.assertNotEqual(pc.PROVENANCE, pc.ARM64_PROVENANCE)
 
+    def test_the_macos_overlay_has_a_receipt_of_its_own_and_a_macho_is_checked_for_its_target(self):
+        self.assertEqual(pc.provenancePath(pc.DARWIN_TARGETS), pc.DARWIN_PROVENANCE)
+        self.assertNotIn(pc.DARWIN_PROVENANCE, (pc.PROVENANCE, pc.ARM64_PROVENANCE, pc.MUSL_PROVENANCE))
+        with mock.patch.object(pc.pd, "readMachO", return_value={"x": 1}), \
+                mock.patch.object(pc.pd, "machOProblem", return_value="is not x86_64") as problem:
+            self.assertEqual(pc.inspectBinary("nm")("b", {"target": pc.DARWIN, "variant": "exe"}), "is not x86_64")
+        problem.assert_called_with({"x": 1}, pc.DARWIN)
+
+    def test_the_musl_overlay_has_a_receipt_of_its_own(self):
+        self.assertEqual(pc.provenancePath(pc.MUSL_TARGETS), pc.MUSL_PROVENANCE)
+        self.assertNotIn(pc.MUSL_PROVENANCE, (pc.PROVENANCE, pc.ARM64_PROVENANCE))
+
+    def test_a_static_musl_executable_needs_no_loader_and_an_unwind_header(self):
+        for target in pc.MUSL_TARGETS:
+            syntheticElf(self.path("x"), needed=())
+            with mock.patch.object(pr, "elfStaticProblem", return_value=None) as static:
+                self.assertIsNone(pc.elfCppProblem(self.path("x"), "nm", target))
+            static.assert_called_with(self.path("x"), target)
+            syntheticElf(self.path("y"), needed=(), ehFrame=False)
+            with mock.patch.object(pr, "elfStaticProblem", return_value=None):
+                self.assertRegex(pc.elfCppProblem(self.path("y"), "nm", target), "PT_GNU_EH_FRAME")
+            with mock.patch.object(pr, "elfStaticProblem", return_value="is not static"):
+                self.assertEqual(pc.elfCppProblem(self.path("x"), "nm", target), "is not static")
+
     def test_every_target_has_archives_a_directory_and_variants(self):
-        for target in pc.TARGETS:
+        for target in pc.TARGETS + pc.MUSL_TARGETS + pc.DARWIN_TARGETS:
             self.assertIn(target, pc.ARCHIVES)
             self.assertIn(target, pc.DIRECTORIES)
             self.assertIn((target, "exe"), pc.VARIANTS)

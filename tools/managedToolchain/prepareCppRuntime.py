@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Prepare the C++ runtime of the glibc Linux and Windows targets of both architectures with a local Zig, then prove it with clang and lld alone.
+"""Prepare the C++ runtime of the glibc Linux, musl Linux, macOS and Windows targets of both architectures with a local Zig, then prove it with clang and lld alone.
 
     prepareCppRuntime.py --zig ZIG --engine ENGINE_DIR --runtime RUNTIME_DIR --output NEW_DIR [--target T ...] [--seed-cache DIR]
     prepareCppRuntime.py --prove --engine ENGINE_DIR --runtime RUNTIME_DIR [--zig ZIG] [--deny PATH ...]
 
 RUNTIME_DIR is a bundle's `runtime/` whose C configs exist (prepareRuntime.py, prepareWindowsRuntime.py); it is
-only read. NEW_DIR receives an overlay of new paths, each relative to RUNTIME_DIR, which prepareBundle.py merges:
+only read. The musl targets and the macOS targets are each prepared apart from the others, like their C runtimes,
+and with no `--target` a run takes every glibc and Windows target whose base config exists. NEW_DIR receives an overlay of new paths, each relative to RUNTIME_DIR, which prepareBundle.py merges:
 
     include/cxx/{libcxx,libcxxabi,libunwind}      the headers, shared by every target
     <target>.cxx/                                 the three archives and the aliases of their other spellings
     <target>.cxx.cfg  <target>.dll.cxx.cfg        one config per base config <name>.cfg (Windows has both)
+    darwin/<target>.cxx{,.cfg}                    macOS: libc++abi and libc++ only, libunwind is libSystem's
     notices/cpp-provenance.json, notices/{libcxx,libcxxabi,libunwind}/LICENSE.TXT
 
 Zig runs once per config on a C++ fixture with a private cache (`--seed-cache` copies the private cache of an
@@ -38,28 +40,46 @@ import subprocess
 import sys
 import tempfile
 
+import prepareDarwinRuntime as pd
 import prepareEngine as pe
 import prepareRuntime as pr
 import prepareWindowsRuntime as pw
 
 LINUX, WINDOWS = "x86_64-linux-gnu.2.31", pw.TARGET
 LINUX_ARM64, WINDOWS_ARM64 = "aarch64-linux-gnu.2.31", pw.ARM64_TARGET
+MUSL, MUSL_ARM64 = "x86_64-linux-musl", "aarch64-linux-musl"
+DARWIN, DARWIN_ARM64 = "x86_64-macos", "aarch64-macos"
 PROVENANCE = "notices/cpp-provenance.json"
 ARM64_PROVENANCE = "notices/cpp-aarch64-provenance.json"
+MUSL_PROVENANCE = "notices/cpp-musl-provenance.json"
+DARWIN_PROVENANCE = "notices/cpp-darwin-provenance.json"
+DARWIN_ZIG_VERSION = ".11.0"
 CXX_STANDARD = "-std=c++20"
 CPP_DEFINES = ("-D_LIBCPP_", "-D_LIBCXXABI_")
 HEADERS = {"libcxx": "libcxx/include", "libcxxabi": "libcxxabi/include", "libunwind": "libunwind/include"}
 SPEC = {"notices": {name: [name + "/LICENSE.TXT"] for name in HEADERS}}
 ARCHIVES = {LINUX: ["libc++abi.a", "libc++.a", "libunwind.a"], WINDOWS: ["c++abi.lib", "c++.lib", "unwind.lib"]}
 ARCHIVES[LINUX_ARM64], ARCHIVES[WINDOWS_ARM64] = ARCHIVES[LINUX], ARCHIVES[WINDOWS]
+ARCHIVES[MUSL], ARCHIVES[MUSL_ARM64] = ARCHIVES[LINUX], ARCHIVES[LINUX]
+ARCHIVES[DARWIN], ARCHIVES[DARWIN_ARM64] = ["libc++abi.a", "libc++.a"], ["libc++abi.a", "libc++.a"]
 LIBRARY_STEMS = ["c++abi", "c++", "unwind"]
 OTHER_SPELLINGS = {"stdc++": "c++", "supc++": "c++abi", "gcc_eh": "unwind", "gcc_s": "unwind"}
-DIRECTORIES = {LINUX: LINUX + ".cxx", LINUX_ARM64: LINUX_ARM64 + ".cxx",
+DARWIN_SPELLINGS = {"stdc++": "c++", "supc++": "c++abi"}
+DIRECTORIES = {LINUX: LINUX + ".cxx", LINUX_ARM64: LINUX_ARM64 + ".cxx", MUSL: MUSL + ".cxx", MUSL_ARM64: MUSL_ARM64 + ".cxx",
+               DARWIN: "darwin/" + DARWIN + ".cxx", DARWIN_ARM64: "darwin/" + DARWIN_ARM64 + ".cxx",
                WINDOWS: "windows/" + WINDOWS + ".cxx", WINDOWS_ARM64: "windows/" + WINDOWS_ARM64 + ".cxx"}
 VARIANTS = {}
 for _target in (LINUX, LINUX_ARM64):
     VARIANTS[(_target, "exe")] = {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": ["-lm", "-lpthread"],
                                   "c": "runtimeLinux.c", "base": _target + ".cfg", "config": _target + ".cxx.cfg"}
+for _target in (MUSL, MUSL_ARM64):
+    VARIANTS[(_target, "exe")] = {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": ["-lm", "-lpthread"],
+                                  "c": "runtimeMusl.c", "base": _target + ".cfg", "config": _target + ".cxx.cfg"}
+for _target in (DARWIN, DARWIN_ARM64):
+    VARIANTS[(_target, "exe")] = {"fixture": "runtimeCppDarwin.cpp", "zigArgs": [], "zigLibraries": [],
+                                  "zigTarget": _target.replace("-macos", "-macos" + DARWIN_ZIG_VERSION),
+                                  "c": "runtimeDarwin.c", "base": "darwin/%s.cfg" % _target,
+                                  "config": "darwin/%s.cxx.cfg" % _target}
 for _target in (WINDOWS, WINDOWS_ARM64):
     VARIANTS[(_target, "exe")] = {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": pw.USER_LIBRARIES,
                                   "c": "runtimeWindows.c", "base": "windows/%s.cfg" % _target,
@@ -68,12 +88,17 @@ for _target in (WINDOWS, WINDOWS_ARM64):
                                   "c": "runtimeWindowsDll.c", "base": "windows/%s.dll.cfg" % _target,
                                   "config": "windows/%s.dll.cxx.cfg" % _target}
 TARGETS = [LINUX, LINUX_ARM64, WINDOWS, WINDOWS_ARM64]
+MUSL_TARGETS = [MUSL, MUSL_ARM64]
+DARWIN_TARGETS = [DARWIN, DARWIN_ARM64]
+APART = [MUSL_TARGETS, DARWIN_TARGETS]
+ELF_TARGETS = [LINUX, LINUX_ARM64] + MUSL_TARGETS
 DRIVER_DEFAULT_CC1_FLAGS = ("-fcxx-exceptions", "-fexceptions", "-exception-model=seh", "-fno-sized-deallocation",
                             "-fno-use-init-array", "-fno-use-cxa-atexit")
 ELF_NEEDED = {"libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1", "libutil.so.1",
               "libresolv.so.2", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1"}
 PE_IMPORTS = {"kernel32.dll", "ntdll.dll", "advapi32.dll", "shell32.dll", "user32.dll", "ws2_32.dll", "bcrypt.dll",
               "mswsock.dll"}
+RESOURCE_INCLUDE = re.compile(r"/lib/clang/\d+/include$")
 SEARCH_LIST = re.compile(r"#include <\.\.\.> search starts here:\n(.*?)End of search list\.", re.S)
 LIMITS = ["no Linux or Windows execution was available: the executables and DLLs are linked and their ELF or PE "
           "headers, imports and exception tables inspected, never run",
@@ -82,13 +107,28 @@ LIMITS = ["no Linux or Windows execution was available: the executables and DLLs
           "that run; the GNU archives are normalized like the C runtime's",
           "archive contents are not measured for bit-reproducibility across Zig caches",
           "the aliases are lower case; Zig ignores case in a Windows library name, the linker here does not",
-          "the C++ config is a pair partner of the base config and is selected by the compiler, never found by the driver"]
+          "the C++ config is a pair partner of the base config and is selected by the compiler, never found by the driver",
+          "the macOS archives are Zig's static libc++ and libc++abi built for macOS 11.0; the exception unwinder is the "
+          "system's libSystem, so macOS has no libunwind archive or header"]
 
 
 def provenancePath(targets):
-    """Where the receipt of an overlay for targets lives: the x86_64 targets' receipt keeps its name, and an overlay of
-    the aarch64 targets alone has its own, so it merges into a runtime that already holds the x86_64 receipt."""
+    """Where the receipt of an overlay for targets lives: the x86_64 targets' receipt keeps its name, an overlay of
+    the aarch64 targets alone has its own, so it merges into a runtime that already holds the x86_64 receipt, and the
+    musl overlay and the macOS overlay have one each."""
+    if any(t in MUSL_TARGETS for t in targets):
+        return MUSL_PROVENANCE
+    if any(t in DARWIN_TARGETS for t in targets):
+        return DARWIN_PROVENANCE
     return PROVENANCE if any(t in (LINUX, WINDOWS) for t in targets) else ARM64_PROVENANCE
+
+
+def libraryStems(target):
+    return LIBRARY_STEMS if hasUnwind(target) else LIBRARY_STEMS[:2]
+
+
+def spellings(target):
+    return DARWIN_SPELLINGS if not hasUnwind(target) else OTHER_SPELLINGS
 
 
 def up(path):
@@ -99,8 +139,12 @@ def up(path):
 def selectTargets(runtime, names):
     chosen = list(names) if names else [t for t in TARGETS if os.path.isfile(os.path.join(runtime, VARIANTS[(t, "exe")]["base"]))]
     for name in chosen:
-        if name not in TARGETS:
-            raise pe.EngineError("target %s has no C++ runtime; allowed: %s" % (name, ", ".join(TARGETS)))
+        if name not in TARGETS + MUSL_TARGETS + DARWIN_TARGETS:
+            raise pe.EngineError("target %s has no C++ runtime; allowed: %s" % (
+                name, ", ".join(TARGETS + MUSL_TARGETS + DARWIN_TARGETS)))
+    for group in APART:
+        if any(t in group for t in chosen) and not all(t in group for t in chosen):
+            raise pe.EngineError("the targets %s are prepared apart from the others: %s" % (", ".join(group), chosen))
     if not chosen or len(set(chosen)) != len(chosen):
         raise pe.EngineError("no C++ target, or a duplicate, in %s" % chosen)
     for key, spec in VARIANTS.items():
@@ -109,16 +153,25 @@ def selectTargets(runtime, names):
     return chosen
 
 
-def splitIsystem(isystem):
-    """(Zig lib directory, libc directory names) of the order libcxx, libcxxabi, builtin, libc..., libunwind."""
+def hasUnwind(target):
+    """Whether the target's C++ runtime ships libunwind: macOS has libSystem's."""
+    return target not in DARWIN_TARGETS
+
+
+def splitIsystem(isystem, unwind=True):
+    """(Zig lib directory, libc directory names) of the order libcxx, libcxxabi, builtin, libc..., libunwind, which
+    has no libunwind for a target without one."""
     zigLib = os.path.dirname(os.path.dirname(isystem[0]))
     expected = [os.path.join(zigLib, HEADERS["libcxx"]), os.path.join(zigLib, HEADERS["libcxxabi"]),
                 os.path.join(zigLib, "include")]
-    if isystem[:3] != expected or len(isystem) < 5 or isystem[-1] != os.path.join(zigLib, HEADERS["libunwind"]):
-        raise pe.EngineError("C++ include order %s is not libcxx, libcxxabi, builtin, libc..., libunwind" % isystem)
+    last = os.path.join(zigLib, HEADERS["libunwind"])
+    if isystem[:3] != expected or len(isystem) < 4 + unwind or (unwind and isystem[-1] != last) or (
+            not unwind and last in isystem):
+        raise pe.EngineError("C++ include order %s is not libcxx, libcxxabi, builtin, libc...%s" % (
+            isystem, ", libunwind" if unwind else ""))
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
-    return zigLib, [os.path.basename(d) for d in isystem[3:-1]]
+    return zigLib, [os.path.basename(d) for d in (isystem[3:-1] if unwind else isystem[3:])]
 
 
 def cc1Flags(stderr, source):
@@ -142,12 +195,12 @@ def runZig(zig, target, variant, work, cache):
     """One Zig C++ compile and link of the variant's fixture in the shared private cache. Returns (stderr, output, directory)."""
     spec = VARIANTS[(target, variant)]
     private = os.path.join(work, target, variant)
-    output = os.path.join(private, "fixture." + ("out" if target in pr.ELF_TARGETS else variant if variant == "dll" else "exe"))
+    output = os.path.join(private, "fixture." + ("out" if target in ELF_TARGETS + DARWIN_TARGETS else variant if variant == "dll" else "exe"))
     os.makedirs(os.path.join(private, "local"))
     environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
                    "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
-    command = [zig, "c++", "-target", target, "-O2", CXX_STANDARD, "-v"] + spec["zigArgs"] + [
+    command = [zig, "c++", "-target", spec.get("zigTarget", target), "-O2", CXX_STANDARD, "-v"] + spec["zigArgs"] + [
         os.path.join(pr.FIXTURES, spec["fixture"])] + spec["zigLibraries"] + ["-o", output]
     try:
         done = subprocess.run(command, cwd=private, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -159,6 +212,38 @@ def runZig(zig, target, variant, work, cache):
     return done.stderr, output, private
 
 
+def parseDarwinLink(line, output, objectName, cacheRoot, directory):
+    """(runtime inputs, -l words, inputs that are not the C++ archives) of the `zig ld` line of a macOS link. Zig
+    prints inputs relative to its working directory, and every runtime input must come from this run's private
+    cache."""
+    tokens = line.split()
+    if tokens[1:2] != ["ld"]:
+        raise pe.EngineError("link line %r is not a `zig ld` line" % line)
+    inputs, words, i = [], [], 2
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "-o":
+            if tokens[i + 1:i + 2] != [output]:
+                raise pe.EngineError("link line writes %s, not %s" % (tokens[i + 1:i + 2], output))
+            i += 2
+        elif token == "-platform_version":
+            i += 4
+        elif token == "-e":
+            i += 2
+        elif token.startswith("-"):
+            words.append(token)
+            i += 1
+        elif os.path.basename(token) == objectName:
+            i += 1
+        else:
+            real = os.path.realpath(os.path.join(directory, token))
+            if not os.path.isfile(real) or os.path.commonpath([cacheRoot, real]) != cacheRoot:
+                raise pe.EngineError("link input %s is not a file of this run's private cache" % token)
+            inputs.append(real)
+            i += 1
+    return inputs, [w for w in words if w.startswith("-l")], [p for p in inputs if os.path.basename(p) not in ARCHIVES[DARWIN]]
+
+
 def produceVariant(zig, target, variant, work, cache):
     """Run Zig for one config. Returns the facts its lines give: defines, libc directories, link tokens, archive paths."""
     spec = VARIANTS[(target, variant)]
@@ -166,7 +251,7 @@ def produceVariant(zig, target, variant, work, cache):
     fixture = os.path.join(pr.FIXTURES, spec["fixture"])
     stem = os.path.splitext(spec["fixture"])[0]
     realCache = os.path.realpath(cache)
-    if target in pr.ELF_TARGETS:
+    if target in ELF_TARGETS:
         compileLine, linkLine = pr.selectLines(stderr, fixture, output)
         linker, items = pr.parseLinkArgv(linkLine, output, stem + ".o", realCache, private)
         if linker != "ld.lld":
@@ -174,6 +259,10 @@ def produceVariant(zig, target, variant, work, cache):
         inputs = [value for kind, value in items if kind == "input"]
         tokens = [value if kind == "arg" else os.path.basename(value) for kind, value in items
                   if kind == "arg" or (kind == "input" and os.path.basename(value) not in ARCHIVES[target])]
+    elif target in DARWIN_TARGETS:
+        compileLine, linkLine = pr.selectLines(stderr, fixture, output)
+        inputs, words, others = parseDarwinLink(linkLine, output, stem + ".o", realCache, private)
+        tokens = [os.path.basename(p) for p in others] + words
     else:
         compileLine, linkLine = pw.selectWindowsLines(stderr, fixture, output)
         link = pw.parseCoffLinkArgv(linkLine, stem + ".obj", realCache, private)
@@ -182,7 +271,7 @@ def produceVariant(zig, target, variant, work, cache):
         inputs = link["inputs"]
         tokens = [os.path.basename(p) for p in inputs if os.path.basename(p) not in ARCHIVES[target]]
     compile_ = pr.parseCompileArgv(compileLine)
-    zigLib, libc = splitIsystem(compile_["isystem"])
+    zigLib, libc = splitIsystem(compile_["isystem"], hasUnwind(target))
     return {"zigLib": zigLib, "libc": libc, "tokens": tokens, "archives": splitArchives(inputs, ARCHIVES[target]),
             "defines": [d for d in compile_["defines"] if d.startswith(CPP_DEFINES)],
             "definesInBase": [d for d in compile_["defines"] if not d.startswith(CPP_DEFINES)],
@@ -195,15 +284,16 @@ def subsequence(wanted, available):
     return all(item in remaining for item in wanted)
 
 
-def baseTokens(text):
-    """What a base config hands the linker, as tokens comparable with Zig's link line: option words, input file names."""
+def baseTokens(text, darwin=False):
+    """What a base config hands the linker, as tokens comparable with Zig's link line: option words, input file names;
+    a library word is `X.lib` for Windows and `-lX` for macOS."""
     tokens = []
     for line in text.splitlines():
         if line.startswith("-Xlinker "):
             value = line[len("-Xlinker "):]
             tokens.append(os.path.basename(value) if value.startswith("<CFGDIR>/") else value)
         elif line.startswith("$-l"):
-            tokens.append(line[3:] + ".lib")
+            tokens.append(line[1:] if darwin else line[3:] + ".lib")
     return tokens
 
 
@@ -218,7 +308,7 @@ def crossCheck(variant, base):
     if missing:
         raise pe.EngineError("%s %s: Zig's C++ line defines %s, the base config does not" % (
             variant["target"], variant["variant"], missing))
-    if not subsequence(variant["linkTokens"], baseTokens(base)):
+    if not subsequence(variant["linkTokens"], baseTokens(base, variant["target"] in DARWIN_TARGETS)):
         raise pe.EngineError("%s %s: Zig's C++ link tokens %s are not in the base config's order" % (
             variant["target"], variant["variant"], variant["linkTokens"]))
 
@@ -229,10 +319,11 @@ def renderConfig(target, variant, defines):
     include = "<CFGDIR>/%sinclude/cxx/" % up(config)
     lines = [pr.configLine(["-isystem", include + "libcxx"]), pr.configLine(["-isystem", include + "libcxxabi"])]
     lines += [pr.configLine([d]) for d in defines]
-    lines.append(pr.configLine(["-stdlib++-isystem", include + "libunwind"]))
+    if hasUnwind(target):
+        lines.append(pr.configLine(["-stdlib++-isystem", include + "libunwind"]))
     lines.append(pr.configLine(["-Xlinker", "-L", "-Xlinker", "<CFGDIR>/" + os.path.relpath(
         DIRECTORIES[target], os.path.dirname(config) or ".")]))
-    lines += ["$" + pr.configLine(["-l" + stem]) for stem in LIBRARY_STEMS]
+    lines += ["$" + pr.configLine(["-l" + stem]) for stem in libraryStems(target)]
     return "\n".join(lines) + "\n"
 
 
@@ -249,18 +340,18 @@ def archiveSymbols(engine, path):
 def copyArchives(engine, target, paths, output):
     """Copy a target's archives in link order, the GNU ones normalized only while their symbols stay the same."""
     records = pr.copyInputs([("input", p) for p in paths], output, DIRECTORIES[target], engine)
-    if target in pr.ELF_TARGETS:
+    if target in ELF_TARGETS + DARWIN_TARGETS:
         for path, record in zip(paths, records):
             if archiveSymbols(engine, path) != archiveSymbols(engine, os.path.join(output, DIRECTORIES[target], record["name"])):
                 raise pe.EngineError("normalizing %s changed its symbols" % record["name"])
     return records
 
 
-def linkAliases(directory, names):
+def linkAliases(directory, names, spellings=OTHER_SPELLINGS):
     """Give each other spelling of a library a relative symlink to its file. Returns [{"alias", "target"}]."""
     files = {n[len("lib"):-len(".a")] if n.endswith(".a") else n[:-len(".lib")]: n for n in names}
     records = []
-    for alias, stem in OTHER_SPELLINGS.items():
+    for alias, stem in spellings.items():
         target = files[stem]
         name = ("lib%s.a" if target.endswith(".a") else "%s.lib") % alias
         if os.path.lexists(os.path.join(directory, name)):
@@ -312,7 +403,8 @@ def produce(zig, engine, targets, work, output, seed):
                 raise pe.EngineError("%s %s links other C++ archives than the executable" % key)
         records = copyArchives(engine, target, first, output)
         archives[target] = {"directory": DIRECTORIES[target], "inputs": records,
-                            "aliases": linkAliases(os.path.join(output, DIRECTORIES[target]), [r["name"] for r in records])}
+                            "aliases": linkAliases(os.path.join(output, DIRECTORIES[target]), [r["name"] for r in records],
+                                                  spellings(target))}
     for (target, variant), facts in produced.items():
         spec = VARIANTS[(target, variant)]
         pe.writeText(os.path.join(output, spec["config"]), renderConfig(target, variant, facts["defines"]))
@@ -372,8 +464,18 @@ def readElf(path):
     return [data[strings + n:data.index(b"\0", strings + n)].decode("ascii") for n in needed], ehFrame
 
 
+def muslCppProblem(path, target):
+    """Why a linked file is not a static musl C++ executable with unwind tables, or None."""
+    problem = pr.elfStaticProblem(path, target)
+    if problem:
+        return problem
+    return None if readElf(path)[1] else "no PT_GNU_EH_FRAME header"
+
+
 def elfCppProblem(path, nm, target=LINUX):
     """Why a linked GNU executable is not a glibc C++ executable with unwind tables, or None."""
+    if target in MUSL_TARGETS:
+        return muslCppProblem(path, target)
     problem = pr.elfProblem(path, target) or pr.elfInterpreterProblem(path, target) or pr.glibcSymbolProblem(nm, path)
     if problem:
         return problem
@@ -446,6 +548,7 @@ def checkVariant(run, merged, work, variant, inspect):
     root = os.path.dirname(merged)
     spec = VARIANTS[(variant["target"], variant["variant"])]
     windows, dll = variant["target"] in pw.TARGETS, variant["variant"] == "dll"
+    darwin = variant["target"] in DARWIN_TARGETS
     pair = ["--no-default-config", "--config=" + os.path.join(merged, spec["config"]),
             "--config=" + os.path.join(merged, spec["base"])]
     clangxx, clang = os.path.join(root, "bin", "clang++"), os.path.join(root, "bin", "clang")
@@ -454,7 +557,7 @@ def checkVariant(run, merged, work, variant, inspect):
     scratch = os.path.join(work, "cpp-%s-%s" % (variant["target"], variant["variant"]))
     os.makedirs(scratch)
     path = lambda name: os.path.join(scratch, name)
-    caller = pw.USER_LIBRARIES if windows else ["-lm", "-lpthread"]
+    caller = pw.USER_LIBRARIES if windows else [] if darwin else ["-lm", "-lpthread"]
     step(run, "C++ compile", [clangxx] + pair + [CXX_STANDARD, "-O2", "-c", fixture, "-o", path("x.o")])
     step(run, "C++ link", [clangxx] + pair + [path("x.o"), "-o", path("plain" + suffix)])
     step(run, "C++ link with the caller's libraries and a written -lc++",
@@ -463,10 +566,11 @@ def checkVariant(run, merged, work, variant, inspect):
     listing = step(run, "include order", [clangxx] + pair + ["-E", "-v", "-x", "c++", "/dev/null"], stderr=True).stderr
     entries = searchList(listing, root)
     cxx = ["$ROOT/runtime/include/cxx/" + n for n in ("libcxx", "libcxxabi")]
-    libc = [e for e in entries if "/include/libc/" in e]
-    order = [entries.index(e) for e in cxx + libc + ["$ROOT/runtime/include/cxx/libunwind"] if e in entries]
-    if len(order) != 3 + len(libc) or order != sorted(order) or order[:2] != [0, 1] or any(
-            not e.startswith("$ROOT/") for e in entries):
+    libc = [e for e in entries if "/include/libc/" in e or (darwin and e.endswith("/runtime/darwin/sysroot/usr/include"))]
+    unwind = ["$ROOT/runtime/include/cxx/libunwind"] if hasUnwind(variant["target"]) else []
+    order = [entries.index(e) for e in cxx + libc + unwind if e in entries]
+    if len(order) != 2 + len(unwind) + len(libc) or (darwin and not libc) or order != sorted(order) or order[:2] != [0, 1] or any(
+            not (e.startswith("$ROOT/") or (darwin and RESOURCE_INCLUDE.search(e))) for e in entries):
         raise pe.EngineError("%s %s include order %s is not libcxx, libcxxabi, libc..., libunwind" % (
             variant["target"], variant["variant"], entries))
     flags = step(run, "exception defaults", [clangxx] + pair + ["-###", "-c", fixture, "-o", path("flags.o")],
@@ -479,11 +583,13 @@ def checkVariant(run, merged, work, variant, inspect):
     if not dll:
         step(run, "archive C++ compile", [clangxx] + pair + [CXX_STANDARD, "-O2", "-c",
                                                              os.path.join(pr.FIXTURES, "cppArchive.cpp"), "-o", path("a.o")])
-        step(run, "archive", [os.path.join(root, "bin", "llvm-ar"), "--format=gnu", "crs", path("libclient.a"), path("a.o")])
+        step(run, "archive", [os.path.join(root, "bin", "llvm-ar"), "--format=" + ("darwin" if darwin else "gnu"), "crs",
+                              path("libclient.a"), path("a.o")])
         step(run, "C client compile", [clang, "--no-default-config", "--config=" + os.path.join(merged, spec["base"]),
                                        "-O2", "-c", os.path.join(pr.FIXTURES, "cppArchiveClient.c"), "-o", path("client.o")])
-        spellings = ["-l" + s for s in ("c++",) + tuple(OTHER_SPELLINGS) + ("c++abi", "unwind")]
-        for name, libraries in (("client", ["-lc++"]), ("client with every spelling", spellings)):
+        every = ["-l" + s for s in ("c++",) + tuple(spellings(variant["target"])) + tuple(libraryStems(variant["target"])[:1])
+                 + tuple(libraryStems(variant["target"])[2:])]
+        for name, libraries in (("client", ["-lc++"]), ("client with every spelling", every)):
             binary = path("client%d%s" % (len(libraries), suffix))
             step(run, "archive-only C " + name, [clang] + pair + [path("client.o"), path("libclient.a")] + libraries
                  + ["-o", binary])
@@ -495,9 +601,16 @@ def checkVariant(run, merged, work, variant, inspect):
     return outputs
 
 
+def machoCppProblem(path, target):
+    """Why a linked file is not a macOS C++ executable of target that needs only libSystem, or None."""
+    return pd.machOProblem(pd.readMachO(path), target)
+
+
 def inspectBinary(nm):
     def inspect(binary, variant):
-        return (elfCppProblem(binary, nm, variant["target"]) if variant["target"] in pr.ELF_TARGETS
+        if variant["target"] in DARWIN_TARGETS:
+            return machoCppProblem(binary, variant["target"])
+        return (elfCppProblem(binary, nm, variant["target"]) if variant["target"] in ELF_TARGETS
                 else peCppProblem(binary, variant["variant"], variant["target"]))
     return inspect
 
@@ -598,7 +711,7 @@ def prove(engine, runtime, denied, zig=None):
     pe.verifyEngine(engine)
     if runtime != os.path.join(engine, "runtime"):
         raise pe.EngineError("runtime %s is not the `runtime` child of engine %s" % (runtime, engine))
-    paths = [p for p in (PROVENANCE, ARM64_PROVENANCE) if os.path.isfile(os.path.join(runtime, p))]
+    paths = [p for p in (PROVENANCE, ARM64_PROVENANCE, MUSL_PROVENANCE, DARWIN_PROVENANCE) if os.path.isfile(os.path.join(runtime, p))]
     if not paths:
         raise pe.EngineError("runtime %s has no C++ receipt %s" % (runtime, PROVENANCE))
     receipt = {"variants": [], "files": []}
