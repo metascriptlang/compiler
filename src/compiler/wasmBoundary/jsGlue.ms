@@ -274,6 +274,7 @@ const HANDLE_STATE = [
 	"\tconst hl = [];",
 	"\tconst hr = [];",
 	"\tconst hu = [];",
+	"\tconst hn = [];",
 	"\tconst hf = [];",
 	"\tlet hUid = 1;",
 	"\tconst hLive = (r) => r.i < hk.length && hu[r.i] === r.u && hk[r.i] === 2;",
@@ -281,6 +282,7 @@ const HANDLE_STATE = [
 	"\t\tconst p = hv[i];",
 	"\t\thk[i] = 0;",
 	"\t\thv[i] = undefined;",
+	"\t\thn[i] = undefined;",
 	"\t\thf.push(i);",
 	"\t\tif (!dead) __msbMod._msb_release(p);",
 	"\t};",
@@ -292,12 +294,21 @@ const HANDLE_METHODS = [
 	"\t\t\tif (i === undefined) {",
 	`\t\t\t\tif (hk.length >= ${SLOT_LIMIT}) throw new RangeError("boundary slot table full");`,
 	"\t\t\t\ti = hk.length;",
-	"\t\t\t\thk.push(0); hv.push(0); hl.push(0); hr.push(0); hu.push(0);",
+	"\t\t\t\thk.push(0); hv.push(0); hl.push(0); hr.push(0); hu.push(0); hn.push(0);",
 	"\t\t\t}",
 	"\t\t\thk[i] = 2; hv[i] = p; hl[i] = 0; hr[i] = 1; hu[i] = hUid++;",
-	"\t\t\treturn new __msbRef(i, hu[i], label || type);",
+	"\t\t\thn[i] = label || type;",
+	"\t\t\treturn new __msbRef(i, hu[i], hn[i]);",
 	"\t\t},",
 	"\t\tlive(r) { return hLive(r); },",
+	"\t\treport() {",
+	"\t\t\tconst out = [];",
+	"\t\t\tfor (let i = 0; i < hk.length; i++) {",
+	"\t\t\t\tif (hk[i] === 2 || hk[i] === 3) out.push(\"msb leak: \" + hn[i] + "
+		+ "\" never released\");",
+	"\t\t\t}",
+	"\t\t\treturn out;",
+	"\t\t},",
 	"\t\tlend(r) {",
 	"\t\t\tif (!(r instanceof __msbRef)) throw new TypeError(\"expected a Handle "
 		+ "returned by a @wasm function\");",
@@ -333,6 +344,14 @@ const HANDLE_GLUE = [
 		+ "__msbRef.prototype.release;",
 ];
 
+const LEAK_EXIT = [
+	"if (typeof process !== \"undefined\") process.on(\"exit\", () => {",
+	"\tfor (const l of __msb.report()) console.error(l);",
+	"\tif (process.env.MSB_LEAKS === \"error\" && __msb.report().length > 0) "
+		+ "process.exitCode = 1;",
+	"});",
+];
+
 const SCRATCH_BYTES = 16384;
 
 function scratchLines(used: boolean): string[] {
@@ -357,6 +376,7 @@ export function preludeFor(
 	scratch: boolean,
 	views: string[],
 	handles: boolean,
+	dev: boolean,
 ): string {
 	const tableFull = `boundary table full: ${SLOT_CAP} live entries`;
 	const staleSlot = `vals[s] === undefined || gens[s] !== id >>> ${SLOT_BITS}`;
@@ -441,6 +461,7 @@ export function preludeFor(
 		glue.join("\n"),
 		`const __msbMod = await ${factory}({ msb: __msb });`,
 		"__msbMod._MsMain();",
+		...(handles && dev ? LEAK_EXIT : []),
 		...scratchLines(scratch),
 		"",
 	].join("\n");

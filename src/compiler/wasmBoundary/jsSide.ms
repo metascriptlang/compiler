@@ -599,6 +599,13 @@ export function jsBindings(
 		modules[i].code = lines[i].join("\n") + "\n";
 	}
 	const views = viewHelpers(viewsIn, viewsOut);
-	const prelude = preludeFor(wasmModuleUrl, anyChecked, scratch, views, handles);
+	const prelude = preludeFor(
+		wasmModuleUrl,
+		anyChecked,
+		scratch,
+		views,
+		handles,
+		dev,
+	);
 	return { prelude, modules };
 }

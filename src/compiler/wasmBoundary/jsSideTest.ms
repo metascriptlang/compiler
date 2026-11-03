@@ -716,3 +716,12 @@ test "js side: the prelude holds handle kinds 2 and 3, and release defers instea
 	assert p.includes("__msb.release(this)") && p.includes("Symbol.for(\"msb.ref\")");
 	assert !bindingsFor(["add64"]).prelude.includes("__msbRef");
 }
+
+test "js side: a dev bundle reports slots of kind 2 or 3 at exit and a release bundle has no exit handler" {
+	const dev = handleBindings(true).prelude;
+	assert dev.includes("process.on(\"exit\"");
+	assert dev.includes("out.push(\"msb leak: \" + hn[i] + \" never released\")");
+	assert dev.includes("process.env.MSB_LEAKS === \"error\"");
+	assert !handleBindings(false).prelude.includes("process.on");
+	assert !bindingsFor(["add64"]).prelude.includes("msb leak");
+}
