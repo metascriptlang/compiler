@@ -50,19 +50,23 @@ actor Reader {
 	maybe(i: Inner | null): int32 { if (i == null) return 0; return await i.value(); }
 }
 
-const holder = new Holder(new Inner());
-console.log(`ctor ${await holder.read()}`);
-const inner = new Inner();
-const reader = new Reader();
-console.log(`arg ${await reader.read(inner)}`);
-reader.keep(inner);
-console.log(`kept ${await reader.readKept()}`);
-let handle: Handle = { actor: new Inner() };
-reader.hold(move handle);
-console.log(`struct ${await reader.readHeld()}`);
-let xs: Inner[] = [new Inner(), new Inner()];
-console.log(`array ${await reader.sum(move xs)}`);
-const maybe: Inner | null = new Inner();
-console.log(`optional ${await reader.maybe(maybe)}`);
-const top = new Top(new Mid(new Inner()));
-console.log(`nested ${await top.read()}`);
+async function main(): Promise<void> {
+	const holder = new Holder(new Inner());
+	console.log(`ctor ${await holder.read()}`);
+	const inner = new Inner();
+	const reader = new Reader();
+	console.log(`arg ${await reader.read(inner)}`);
+	reader.keep(inner);
+	console.log(`kept ${await reader.readKept()}`);
+	let handle: Handle = { actor: new Inner() };
+	reader.hold(move handle);
+	console.log(`struct ${await reader.readHeld()}`);
+	let xs: Inner[] = [new Inner(), new Inner()];
+	console.log(`array ${await reader.sum(move xs)}`);
+	const maybe: Inner | null = new Inner();
+	console.log(`optional ${await reader.maybe(maybe)}`);
+	const top = new Top(new Mid(new Inner()));
+	console.log(`nested ${await top.read()}`);
+}
+
+await main();
