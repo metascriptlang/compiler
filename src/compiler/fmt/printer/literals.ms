@@ -484,36 +484,6 @@ export function printRegexLiteral(node: Node): Doc {
 	return docText(d.regexPattern);
 }
 
-export function writtenCommaBetween(source: string, from: SourceLocation, to: SourceLocation): boolean {
-	let pos = sourceOffset(source, from.line, from.column - 1);
-	const end = sourceOffset(source, to.line, to.column - 1);
-	if (pos < 0 || end < pos) return false;
-	let depth = 0;
-	while (pos < end) {
-		const ch = source.byteAt(pos);
-		const next = pos + 1 < source.byteLength ? source.byteAt(pos + 1) : 0;
-		if (ch == "\"".code || ch == "'".code) { pos = skipQuoted(source, pos); continue; }
-		if (ch == "`".code) { pos = skipTemplate(source, pos); continue; }
-		if (ch == "/".code && next == "/".code) {
-			while (pos < end && source.byteAt(pos) != "\n".code) pos = pos + 1;
-			continue;
-		}
-		if (ch == "/".code && next == "*".code) {
-			pos = pos + 2;
-			while (pos + 1 < end && !(source.byteAt(pos) == "*".code && source.byteAt(pos + 1) == "/".code)) pos = pos + 1;
-			pos = pos + 2;
-			continue;
-		}
-		if (ch == "(".code || ch == "[".code || ch == "{".code || ch == "<".code) depth = depth + 1;
-		if (ch == ")".code || ch == "]".code || ch == "}".code) depth = depth - 1;
-		if (ch == ">".code && !(pos > 0 && source.byteAt(pos - 1) == "=".code)) depth = depth - 1;
-		if (depth == 0 && ch == ",".code) return true;
-		if (depth == 0 && ch == ";".code) return false;
-		pos = pos + 1;
-	}
-	return false;
-}
-
 export function rawThroughBlockAt(source: string, line: int32, column: int32): string {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return "";

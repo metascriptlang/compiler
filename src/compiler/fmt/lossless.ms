@@ -168,7 +168,7 @@ function inTypeLiteral(a: Token[], i: int32): boolean {
 	const open = enclosingOpener(a, i);
 	if (open <= 0 || a[open].kind != TokenKind.LBrace) return false;
 	const before = a[open - 1].kind;
-	if (!isTypePosition(before) && !isTypeSeparator(before) && before != TokenKind.LBracket) return false;
+	if (!isTypePosition(before) && !isTypeSeparator(before) && before != TokenKind.LBracket && !opensFieldList(a, open)) return false;
 	let depth = 0;
 	for (let k = open + 1; k < i; k += 1) {
 		const kind = a[k].kind;
@@ -178,6 +178,15 @@ function inTypeLiteral(a: Token[], i: int32): boolean {
 		else if (depth == 0 && (kind == TokenKind.Let || kind == TokenKind.Const || kind == TokenKind.Var) && a[k + 1].kind != TokenKind.Colon && a[k + 1].kind != TokenKind.Question) return false;
 	}
 	return true;
+}
+
+function opensFieldList(a: Token[], open: int32): boolean {
+	for (let k = open - 1; k >= 0; k -= 1) {
+		const kind = a[k].kind;
+		if (kind == TokenKind.Interface || kind == TokenKind.Struct) return true;
+		if (kind == TokenKind.LBrace || kind == TokenKind.RBrace || kind == TokenKind.LParen || kind == TokenKind.Assign) return false;
+	}
+	return false;
 }
 
 function addsLeadingSeparator(b: Token[], j: int32): boolean {
@@ -500,6 +509,13 @@ test "lossless: an object type member separator may become a semicolon" {
 	assert checkLossless("type T = { a: number, b: string };", "type T = { a: number; b: string };\n").ok;
 	assert !checkLossless("const o = { a: 1, b: 2 };", "const o = { a: 1 b: 2 };\n").ok;
 	assert checkLossless("function f(x: { a: number, b: string }): Array<{ c: number, d: string }> {}", "function f(x: { a: number; b: string }): Array<{ c: number; d: string }> {}\n").ok;
+}
+
+test "lossless: an interface or struct field separator may become a semicolon, a class or block one may not" {
+	assert checkLossless("interface P<T> extends B<T> { x: T, s: string }", "interface P<T> extends B<T> {\n\tx: T;\n\ts: string;\n}\n").ok;
+	assert checkLossless("struct S { a: int32, b: int32 }", "struct S {\n\ta: int32;\n\tb: int32;\n}\n").ok;
+	assert !checkLossless("interface P {}\nfunction f() { g(a, b); }", "interface P {}\nfunction f() { g(a; b); }\n").ok;
+	assert !checkLossless("let a = 1, b = 2;", "let a = 1; b = 2;\n").ok;
 }
 
 test "lossless: a declarator comma never becomes a statement semicolon" {

@@ -18,7 +18,7 @@ import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin,
 import { callPrintNode } from "./callbacks";
 import { structuralType, printTypeAnnotation } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
+import { sourceByteAt, sourceSpan, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
@@ -265,7 +265,6 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		const fieldTypeText = d.interfaceFieldTypes[i] != "" ? (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]) : "";
 		if (d.interfaceFieldTypes[i] != "") field = field + ": ";
 		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] != "") field = d.interfaceFieldVisibility[i] + " " + field;
-		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
 		const lead: Doc[] = [];
 		let startLine = fieldLine;
 		if (i < d.interfaceFieldDecorators.length) {
@@ -281,7 +280,7 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			}
 		}
 		const fieldTypeExpr = node.typeExprs != null && i < node.typeExprs.length ? node.typeExprs[i] : null;
-		lead.push(fieldTypeText != "" ? docGroup([docText(field), printTypeAnnotation(fieldTypeExpr, fieldTypeText, options), docText(sep)]) : docText(field + sep));
+		lead.push(fieldTypeText != "" ? docGroup([docText(field), printTypeAnnotation(fieldTypeExpr, fieldTypeText, options), docText(";")]) : docText(field + ";"));
 		fields.push(lead.length > 1 ? docGroup(lead) : lead[0]);
 		lines.push(fieldLine);
 		starts.push(startLine);
