@@ -120,8 +120,9 @@ expands, class and generic identity, edits reaching users, both visibility cases
 project switch), each compared with `msc check`. A change to `build.ms` itself still needs a server
 restart.
 
-Under `--hcr`, a globalImports module that keeps a module-level `string[]` fails to link, with
-or without a pass (card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
+Under `--hcr`, a globalImports module with a pass that keeps a module-level `string[]` links and
+reloads: `hcrModulePassReload` green on main 7aea56331e2 (2026-11-04) on Linux plain and ASan
+and on Windows plain. Not measured: the same module without a pass, macOS.
 
 ### `lsp` — editor-only target
 
