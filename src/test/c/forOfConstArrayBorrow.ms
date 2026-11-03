@@ -47,7 +47,11 @@ export function viaLet(src: string[], rounds: int32): int32 { let a = src; let n
 export function viaForVar(rows: string[][]): int32 { let n: int32 = 0; for (const row of rows) { for (const t of row) n += t.length as int32; } return n; }
 export function viaItems(a: Item[], rounds: int32): int32 { let n: int32 = 0; for (let k = 0; k < rounds; k++) { for (const t of a) n += t.tag; } return n; }
 export function reassigned(a: string[], b: string[]): int32 { let n: int32 = 0; for (let k = 0; k < 2; k++) { for (const t of a) { n += t.length as int32; a = b; } } return n; }
-console.log(viaParam(["a"], 1), viaLet(["a"], 1), viaForVar([["a"]]), viaItems([new Item()], 1), reassigned(["a"], ["bb"]));
+let ticks = 0;
+function tick(): void { ticks += 1; }
+export function viaRefParam(ref a: string[], rounds: int32): int32 { let n: int32 = 0; for (let k = 0; k < rounds; k++) { for (const t of a) { tick(); n += t.length as int32; } } return n; }
+let held: string[] = ["a"];
+console.log(viaParam(["a"], 1), viaLet(["a"], 1), viaForVar([["a"]]), viaItems([new Item()], 1), reassigned(["a"], ["bb"]), viaRefParam(held, 1));
 `;
 
 function sourceBody(name: string): string {
@@ -87,4 +91,17 @@ test "a for-of whose body assigns the array variable keeps the array it started 
 	const body = sourceBody("reassigned");
 	assert body != "", "reassigned has no definition";
 	assert body.contains("dollariter"), body;
+}
+
+test "a nested for-of over the array it started with borrows each element from it" {
+	const body = sourceBody("reassigned");
+	assert body != "", "reassigned has no definition";
+	assert !body.contains("msStringCopy"), body;
+}
+
+test "a nested for-of over a ref parameter keeps the array it started with and copies no element across a scalar write" {
+	const body = sourceBody("viaRefParam");
+	assert body != "", "viaRefParam has no definition";
+	assert body.contains("dollariter"), body;
+	assert !body.contains("msStringCopy"), body;
 }

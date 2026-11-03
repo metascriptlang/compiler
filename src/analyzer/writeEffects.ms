@@ -27,6 +27,7 @@ const ELEMENT_SLOT = "E";
 // holds an element's address; such a borrow reads APPEND_SLOT besides ELEMENT_SLOT.
 export const APPEND_SLOT = "+E";
 export const ANY_HEAP_SLOT = "*";
+const REF_PARAM_ROOT_SLOT = "&";
 
 enum SummaryKind {
 	Routine,
@@ -89,6 +90,7 @@ export interface WriteSummaries {
 	viewReturnsReach: int32;
 	slotHolders: Type[];
 	slotHolderIds: HashMap<Type, int32>;
+	freesNothingGlobals: HashSet<string>;
 	unitClosures: HashMap<string, HashSet<string>>;
 	stack: WriteSummary[];
 	nextIndex: int32;
@@ -108,7 +110,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
-		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
+		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
@@ -240,7 +242,7 @@ function globalSlot(sym: Symbol): string {
 
 function rootSlot(sym: Symbol): string | null {
 	if (isModuleState(sym)) return globalSlot(sym);
-	return sym.symbolType != null && sym.symbolType.kind == TypeKind.Var ? ANY_HEAP_SLOT : null;
+	return sym.symbolType != null && sym.symbolType.kind == TypeKind.Var ? REF_PARAM_ROOT_SLOT : null;
 }
 
 function fieldSlot(property: string): string {
@@ -431,7 +433,11 @@ function writeTarget(w: WriteEffects, s: WriteSummary, target: Node | null, para
 		NodeKind.Identifier => {
 			const sym = t.resolvedSym;
 			if (sym == null) return false;
-			if (isModuleState(sym)) return addSlot(s, globalSlot(sym));
+			if (isModuleState(sym)) {
+				const slot = globalSlot(sym);
+				if (freesNothing(w, sym.symbolType) && !(w.tables.valueCells && isValueStruct(sym.symbolType))) w.tables.freesNothingGlobals.add(slot);
+				return addSlot(s, slot);
+			}
 			const k = paramIndex(params, sym);
 			if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Var) return false;
 			if (k < 0) return false;
@@ -1466,6 +1472,10 @@ export function runsHooks(w: WriteEffects, target: Node): boolean {
 function mayWriteAny(w: WriteEffects, writes: WriteSummary, slots: string[]): boolean {
 	if (writes.unknown || writes.paramCalls.length > 0) return true;
 	for (const slot of slots) {
+		if (slot == REF_PARAM_ROOT_SLOT) {
+			if (writes.slots.some((written: string): boolean => !w.tables.freesNothingGlobals.has(written))) return true;
+			continue;
+		}
 		if (slot == ANY_HEAP_SLOT ? writes.slots.length > 0 : writes.slotSet.has(slot)) return true;
 		if (slot == ANY_HEAP_SLOT) continue;
 		for (const written of writes.slots) {

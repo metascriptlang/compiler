@@ -49,6 +49,7 @@ const VF_PREVENT_CURSOR: int32 = 2;
 const VF_IS_REASSIGNED: int32 = 4;
 const VF_IS_COND_REASSIGNED: int32 = 8;
 const VF_IS_PARAM: int32 = 16;
+const VF_ASSIGNED: int32 = 32;
 
 let borrowedSlots: string[][] = [];
 let viewSources: int32[][] = [];
@@ -506,6 +507,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 				if (lhs != null) {
 					const vid = variableId(p, lhs);
 					if (vid >= 0) {
+						p.vars[vid].flags = p.vars[vid].flags | VF_ASSIGNED;
 						// Track single reassignment source (for it = it.next pattern)
 						const rhs = getIdentSym(d.right);
 						if (rhs != null && (p.vars[vid].reassignedTo == null || p.vars[vid].reassignedTo == rhs)) {
@@ -833,12 +835,12 @@ function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: H
 function preventCaptures(p: Partitions): void {
 	for (const sym of assignedInClosures) {
 		const id = variableId(p, sym);
-		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR | VF_IS_REASSIGNED;
+		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR | VF_IS_REASSIGNED | VF_ASSIGNED;
 	}
 	if (!envEscapes) return;
 	for (const sym of capturedLocals) {
 		const id = variableId(p, sym);
-		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR;
+		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR | VF_ASSIGNED;
 	}
 }
 
@@ -848,6 +850,11 @@ function preventCaptures(p: Partitions): void {
 // does not prevent the cursor; writtenWhileAlive still refuses it when the body can write the source.
 function lentOwnedElement(sym: Symbol): boolean {
 	return hasFlag(sym, SymbolFlag.ForVar) && ownedEdgeOf(sym.symbolType) != null;
+}
+
+function unassignedTemp(p: Partitions, id: int32): boolean {
+	const v = p.vars[id];
+	return v.sym != null && v.sym.symbolKind == SymbolKind.Temp && (v.flags & VF_ASSIGNED) == 0 && v.reassignedTo == null;
 }
 
 function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): void {
@@ -880,7 +887,7 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 			// Source is reassigned or prevented → can't borrow
-			if ((p.vars[srcId].flags & (VF_IS_REASSIGNED | VF_PREVENT_CURSOR)) != 0) {
+			if ((p.vars[srcId].flags & (VF_IS_REASSIGNED | VF_PREVENT_CURSOR)) != 0 && !(hasFlag(dest!, SymbolFlag.ForVar) && unassignedTemp(p, srcId))) {
 				p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			}
 			// Source reassigned to different target → can't borrow
@@ -963,7 +970,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 						// Also prevent cursor on the variable itself
 						const vid = variableId(p, r);
 						if (vid >= 0) {
-							p.vars[vid].flags = p.vars[vid].flags | VF_PREVENT_CURSOR;
+							p.vars[vid].flags = p.vars[vid].flags | VF_PREVENT_CURSOR | VF_ASSIGNED;
 						}
 					}
 				}
@@ -1031,7 +1038,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 		NodeKind.MoveExpr => {
 			trav(w, p, (node.data as MoveExprData).moveArg);
 			const mid = variableId(p, getIdentSym((node.data as MoveExprData).moveArg));
-			if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR;
+			if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR | VF_ASSIGNED;
 		},
 
 		// Inner functions: skip
