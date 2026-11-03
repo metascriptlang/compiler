@@ -588,6 +588,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	const name = nativeRuntimeConfig(opts.targetOs, cpu);
 	const config = join(bundle.root, `runtime/${name}`);
 	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${opts.targetOs}/${cpu} is not installed in ${bundle.root}`);
+	if (opts.targetOs == "windows" && opts.sanitize != "") return Result.err(`native toolchain: --sanitize=${opts.sanitize} on windows needs a libclang_rt sanitizer runtime, and ${bundle.root} ships none for windows\n  → build with --cc=zig, or drop --sanitize`);
 	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	opts.ccConfigOwnsTarget = true;
@@ -689,6 +690,28 @@ test "prepared runtimes are selected by both OS and CPU" {
 	assert nativeRuntimeConfig("windows", "arm64") == "windows/aarch64-windows-gnu.cfg";
 	assert nativeRuntimeConfig("windows", "arm") == "";
 	assert nativeRuntimeConfig("wasm", "arm64") == "";
+}
+
+test "the prepared Windows runtime refuses every sanitizer on both CPUs because the bundle ships no runtime for it" {
+	const root = selectionProbe(true);
+	assert root != "";
+	for (const cpu of ["x86_64", "arm64"]) {
+		const stem = cpu == "x86_64" ? "x86_64" : "aarch64";
+		assert ensureDir(join(root, "runtime/windows")).ok;
+		assert writeFile(join(root, `runtime/windows/${stem}-windows-gnu.cfg`), "").ok;
+		for (const san of ["undefined", "address"]) {
+			const opts = newCliOptions();
+			opts.targetOs = "windows";
+			opts.cpuTarget = cpu;
+			opts.sanitize = san;
+			const refused = selectNativeToolchain(opts, root, "");
+			assert !refused.ok && refused.error.contains(`--sanitize=${san} on windows`) && refused.error.contains("--cc=zig");
+			opts.sanitize = "";
+			assert selectNativeToolchain(opts, root, "").ok;
+		}
+	}
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
 }
 
 test "bundle checksums require a complete lowercase SHA256" {
