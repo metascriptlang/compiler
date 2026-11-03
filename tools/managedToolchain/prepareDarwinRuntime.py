@@ -10,10 +10,14 @@ against, copied opaquely:
     darwin/sysroot/usr/include/        Zig's include/any-darwin-any
     darwin/sysroot/usr/lib/libSystem.tbd   Zig's libc/darwin stub
     darwin/<target>.cfg                clang --config ... x.c -o x   (Mach-O, linked by the engine's ld64.lld)
+    darwin/<target>/libcompiler_rt.a   the builtins Zig links for that target
 
 A config names its target with the minimum macOS version, `-isysroot` on the sysroot (clang then finds
 the headers and `-lSystem` there and passes the matching `-platform_version` and `-syslibroot` to the
-linker) and the engine's `ld64.lld`. Zig's SDKSettings.json is left out: it holds only a display name and
+linker) and the engine's `ld64.lld`. It also sets `-nostdlib`, then names `-lSystem` and the target's own
+`libcompiler_rt.a` itself, as Zig's link does: the clang driver would otherwise look for `libclang_rt.osx.a` in
+the engine's resource directory, which only a macOS engine has and which is a fat file of its own choosing.
+No Apple SDK, Xcode or `xcrun` is read at any point. Zig's SDKSettings.json is left out: it holds only a display name and
 clang warns that it cannot parse it. Nothing is executed on the producer host: a Mach-O file is linked
 and its load commands read, never run.
 
@@ -50,6 +54,8 @@ LC_BUILD_VERSION = 0x32
 LC_MAIN = 0x80000028
 PLATFORM_MACOS = 1
 LIBSYSTEM = "/usr/lib/libSystem.B.dylib"
+BUILTINS = "libcompiler_rt.a"
+ZIG_TARGET_VERSION = "." + MINIMUM_VERSION
 
 # What differs between the targets: the clang triple architecture and the Mach-O cpu type.
 TARGETS = {
@@ -58,14 +64,19 @@ TARGETS = {
 }
 SPEC = {"notices": {"zig": ["../LICENSE"]}}
 LIMITS = ["no macOS execution was available: the executables are linked and their Mach-O load commands read, never run",
-          "no Apple SDK: only the headers and the libSystem stub Zig ships, so frameworks and the C++ library are not provided",
+          "no Apple SDK: only the headers and the libSystem stub Zig ships, so frameworks are not provided and the C++ "
+          "library comes from prepareCppRuntime.py",
+          "the builtins are Zig's libcompiler_rt.a for each target, not LLVM's libclang_rt.osx.a, which compiler-rt "
+          "builds on Darwin only with xcrun and lipo",
           "the headers carry Apple's own license text in each file; Zig ships no separate license file for them",
           "LTO is exercised by the proof for both targets; C++ is not"]
 FIXTURE = """#include <stdio.h>
 #include <pthread.h>
 #include <math.h>
 static void* f(void* a){ printf("%g\\n", pow(2.0, 10)); return 0; }
-int main(void){ pthread_t t; pthread_create(&t,0,f,0); pthread_join(t,0); puts("hello darwin"); return 0; }
+static unsigned __int128 divide(unsigned __int128 a, unsigned __int128 b){ return a / b; }
+int main(void){ volatile unsigned long x = 7; pthread_t t; pthread_create(&t,0,f,0); pthread_join(t,0);
+  printf("%lu\\n", (unsigned long)divide((unsigned __int128)x << 70, 3 << 3)); puts("hello darwin"); return 0; }
 """
 PROOF_FLAGS = (("-O0",), ("-O2", "-flto=thin"))
 
@@ -81,6 +92,9 @@ def renderDarwinConfig(target):
         pr.configLine(["--target=%s-apple-macos%s" % (arch, MINIMUM_VERSION)]),
         pr.configLine(["-isysroot", "<CFGDIR>/" + SYSROOT]),
         pr.configLine(["--ld-path=<CFGDIR>/%s/bin/ld64.lld" % ENGINE_RELATIVE]),
+        "-nostdlib",
+        pr.configLine(["-Xlinker", "<CFGDIR>/%s/%s" % (target, BUILTINS)]),
+        "$-lSystem",
     ]) + "\n"
 
 
@@ -120,6 +134,49 @@ def copySysroot(zigLib, darwin):
                         "files": len(hashes), "treeSha256": treeDigest(hashes)},
             "stub": {"source": "lib/libc/" + STUB, "path": SYSROOT + "/usr/lib/libSystem.tbd",
                      "sha256": pe.sha256File(stub), "bytes": os.path.getsize(stub)}}
+
+
+def zigBuiltins(zig, target, work):
+    """The libcompiler_rt.a Zig links into a C program of target, found on the `zig ld` line of a run in a private
+    cache."""
+    private = os.path.join(work, "zig-" + target)
+    os.makedirs(os.path.join(private, "local"))
+    source = os.path.join(private, "runtimeDarwin.c")
+    pe.writeText(source, FIXTURE)
+    output = os.path.join(private, "fixture")
+    environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
+                   "ZIG_GLOBAL_CACHE_DIR": os.path.join(private, "global"),
+                   "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"), "ZIG_VERBOSE_LINK": "1"}
+    command = [zig, "cc", "-target", TARGETS[target]["arch"] + "-macos" + ZIG_TARGET_VERSION, "-O2", source, "-o", output]
+    try:
+        done = subprocess.run(command, cwd=private, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, timeout=pr.ZIG_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise pe.EngineError("zig timed out after %d s for %s" % (pr.ZIG_TIMEOUT_SECONDS, target))
+    if done.returncode != 0:
+        raise pe.EngineError("zig failed for %s (%d): %s" % (target, done.returncode, done.stderr.strip()))
+    found = [t for line in done.stderr.splitlines() if line.startswith("zig ld ") for t in line.split()
+             if os.path.basename(t) == BUILTINS]
+    if len(found) != 1 or not os.path.isfile(found[0]):
+        raise pe.EngineError("Zig's link of %s names %d %s: %s" % (target, len(found), BUILTINS, found))
+    return found[0]
+
+
+def copyBuiltins(zig, engine, darwin, targets, work):
+    """Copy each target's builtins to darwin/<target>/ with the debug info and member paths of Zig's cache dropped.
+    Returns their records for the receipt."""
+    records = {}
+    for target in targets:
+        destination = os.path.join(darwin, target, BUILTINS)
+        os.makedirs(os.path.dirname(destination))
+        produced = zigBuiltins(zig, target, work)
+        shutil.copyfile(produced, destination)
+        os.chmod(destination, 0o644)
+        pr.normalizeInput(engine, destination)
+        records[target] = {"path": "%s/%s" % (target, BUILTINS), "producedSha256": pe.sha256File(produced),
+                           "sha256": pe.sha256File(destination),
+                           "bytes": os.path.getsize(destination)}
+    return records
 
 
 def readMachO(path):
@@ -196,7 +253,7 @@ def verifyConfigs(engine, darwin, targets, work):
         checkDarwinConfig(run, os.path.join(root, "bin", "clang"), os.path.join(runtime, "darwin"), scratch, target)
 
 
-def writeProvenance(darwin, zigId, host, engineVersion, targets, sysroot, notices):
+def writeProvenance(darwin, zigId, host, engineVersion, targets, sysroot, builtins, notices):
     receipt = {
         "kind": "local-zig-darwin-runtime-proof",
         "statement": "Produced by copying the macOS libc headers and the libSystem stub of a locally installed Zig, "
@@ -205,6 +262,7 @@ def writeProvenance(darwin, zigId, host, engineVersion, targets, sysroot, notice
         "zig": zigId, "producerHost": host, "engineVersion": engineVersion,
         "targets": targets, "engineRelative": ENGINE_RELATIVE, "minimumMacosVersion": MINIMUM_VERSION,
         "configs": {t: configName(t) for t in targets}, "sysroot": SYSROOT, "sysrootContents": sysroot,
+        "builtins": builtins,
         "zigFilesNotCarried": ["lib/libc/darwin/SDKSettings.json"],
         "notices": notices, "limits": LIMITS,
         "linkerFlavor": "the engine's ld64.lld, named by --ld-path in each config",
@@ -230,11 +288,12 @@ def prepareDarwinRuntime(zig, engine, darwin, targets=None):
     work = tempfile.mkdtemp(prefix="prepareDarwinRuntime-")
     try:
         sysroot = copySysroot(zigLib, partial)
+        builtins = copyBuiltins(zig, engine, partial, targets, work)
         for target in targets:
             pe.writeText(os.path.join(partial, configName(target)), renderDarwinConfig(target))
         notices = pr.copyNotices(partial, zigLib, SPEC)
         verifyConfigs(engine, partial, targets, work)
-        writeProvenance(partial, zigId, host, version, targets, sysroot, notices)
+        writeProvenance(partial, zigId, host, version, targets, sysroot, builtins, notices)
         os.chmod(partial, 0o755)
         pr.renameNoReplace(partial, darwin)
     except BaseException:

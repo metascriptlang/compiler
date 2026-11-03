@@ -78,7 +78,8 @@ class ConfigTest(unittest.TestCase):
         for target, arch in ((pd.TARGET, "aarch64"), (pd.X64_TARGET, "x86_64")):
             self.assertEqual(pd.renderDarwinConfig(target), "\n".join([
                 "--target=%s-apple-macos11.0" % arch, "-isysroot <CFGDIR>/sysroot",
-                "--ld-path=<CFGDIR>/../../bin/ld64.lld"]) + "\n")
+                "--ld-path=<CFGDIR>/../../bin/ld64.lld", "-nostdlib",
+                "-Xlinker <CFGDIR>/%s/libcompiler_rt.a" % target, "$-lSystem"]) + "\n")
 
     def test_the_config_names_no_other_architecture(self):
         self.assertNotIn("x86_64", pd.renderDarwinConfig(pd.TARGET))
@@ -99,9 +100,16 @@ class PipelineTest(TempCase):
         self.engine = self.path("engine")
         os.makedirs(self.engine)
         self.verify = mock.patch.object(pd, "verifyConfigs").start()
+        mock.patch.object(pr, "normalizeInput").start()
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(pr, "engineMajor", return_value=("aarch64-macos", "22.1.1", "22")).start()
         mock.patch.object(pr, "zigIdentity", return_value={"version": "0.16.0", "sha256": "ab"}).start()
+        self.builtins = mock.patch.object(pd, "zigBuiltins", side_effect=self.fakeBuiltins).start()
+
+    def fakeBuiltins(self, zig, target, work):
+        path = self.path("cache", target, pd.BUILTINS)
+        write(path, "builtins " + target + "\n")
+        return path
 
     def receipt(self, out):
         return json.loads(read(os.path.join(out, "notices", pd.PROVENANCE)))
@@ -109,7 +117,9 @@ class PipelineTest(TempCase):
     def test_the_runtime_has_a_sysroot_two_configs_the_zig_notice_and_a_receipt(self):
         out = self.path("rt", "darwin")
         pd.prepareDarwinRuntime(self.zig, self.engine, out)
-        self.assertEqual(sorted(os.listdir(out)), ["aarch64-macos.cfg", "notices", "sysroot", "x86_64-macos.cfg"])
+        self.assertEqual(sorted(os.listdir(out)), ["aarch64-macos", "aarch64-macos.cfg", "notices", "sysroot", "x86_64-macos",
+                                                   "x86_64-macos.cfg"])
+        self.assertEqual(read(os.path.join(out, "x86_64-macos", pd.BUILTINS)), "builtins x86_64-macos\n")
         self.assertEqual(read(os.path.join(out, "sysroot", "usr", "include", "sys", "types.h")), "types\n")
         self.assertEqual(read(os.path.join(out, "sysroot", "usr", "lib", "libSystem.tbd")), "tbd\n")
         self.assertEqual(os.listdir(os.path.join(out, "sysroot")), ["usr"])
@@ -130,12 +140,15 @@ class PipelineTest(TempCase):
                          pe.sha256File(os.path.join(out, "sysroot", "usr", "lib", "libSystem.tbd")))
         self.assertEqual(receipt["zigFilesNotCarried"], ["lib/libc/darwin/SDKSettings.json"])
         self.assertEqual(receipt["notices"], ["notices/zig/LICENSE"])
+        self.assertEqual(receipt["builtins"][pd.TARGET]["sha256"],
+                         pe.sha256File(os.path.join(out, pd.TARGET, pd.BUILTINS)))
         self.assertTrue(any("never run" in limit for limit in receipt["limits"]))
 
     def test_one_target_alone_leaves_the_other_out_and_an_unknown_or_repeated_target_is_refused(self):
         out = self.path("rt", "darwin")
         pd.prepareDarwinRuntime(self.zig, self.engine, out, [pd.X64_TARGET])
         self.assertEqual(sorted(f for f in os.listdir(out) if f.endswith(".cfg")), ["x86_64-macos.cfg"])
+        self.assertFalse(os.path.exists(os.path.join(out, pd.TARGET)))
         self.assertEqual(self.receipt(out)["targets"], [pd.X64_TARGET])
         for bad in (["x86_64-windows-gnu"], [pd.TARGET, pd.TARGET]):
             with self.assertRaisesRegex(pe.EngineError, "unknown or duplicated"):
@@ -177,8 +190,8 @@ class PipelineTest(TempCase):
 
 class RealLinkTest(TempCase):
     """Both targets through a real clang and ld64.lld, at -O0 and -O2 -flto=thin, with the linked files read as Mach-O.
-    Needs MANAGED_TOOLCHAIN_ZIG_LIB=<a Zig lib directory> and MANAGED_TOOLCHAIN_DARWIN_ENGINE=<a directory with
-    bin/clang and bin/ld64.lld>."""
+    Needs MANAGED_TOOLCHAIN_ZIG_LIB=<a Zig lib directory>, MANAGED_TOOLCHAIN_ZIG=<its zig> and
+    MANAGED_TOOLCHAIN_DARWIN_ENGINE=<a directory with bin/clang and bin/ld64.lld>."""
 
     def setUp(self):
         super().setUp()
@@ -188,6 +201,10 @@ class RealLinkTest(TempCase):
         self.darwin = self.path("runtime", "darwin")
         os.makedirs(self.darwin)
         pd.copySysroot(lib, self.darwin)
+        zig = os.environ.get("MANAGED_TOOLCHAIN_ZIG")
+        if not zig:
+            self.skipTest("needs MANAGED_TOOLCHAIN_ZIG beside MANAGED_TOOLCHAIN_ZIG_LIB")
+        pd.copyBuiltins(zig, engine, self.darwin, pd.TARGETS, self.dir)
         for target in pd.TARGETS:
             pe.writeText(os.path.join(self.darwin, pd.configName(target)), pd.renderDarwinConfig(target))
         self.clang = os.path.join(engine, "bin", "clang")
