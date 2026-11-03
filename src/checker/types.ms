@@ -5144,6 +5144,7 @@ function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal == null || concrete == null) return;
 	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
 	if (formal == concrete) return;
+	if (!hasGenericParams(formal)) return;
 	// Depth guard — prevent infinite recursion on recursive types (e.g., JsonValue contains JsonValue[])
 	if (bindings.depth > 20) return;
 	bindings.depth = bindings.depth + 1;
