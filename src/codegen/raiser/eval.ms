@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
@@ -31,7 +31,7 @@ import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, tak
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
 import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
+import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf, instantiateGenericFunction } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage, lowerForRaiser, underLiftedOps, unwrapToFuncDecl } from "./rgen";
 import { LiftedOpsState, freshLiftedOps } from "../../transform/lowering/destructorLifting";
@@ -456,10 +456,11 @@ export function engineRecheckCount(): int32 {
 }
 
 function raiserTierOf(sym: Symbol): Symbol | null {
-	if (!sym.modulePath.endsWith(".cms") || sym.instantiatedFrom != null) return null;
+	if (!sym.modulePath.endsWith(".cms")) return null;
 	const tierPath = sym.modulePath.slice(0, sym.modulePath.byteLength - 4) + ".rms";
 	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
 	if (tier == null) return null;
+	if (sym.instantiatedFrom != null) return tierInstanceOf(sym, tier);
 	for (const head of tier) {
 		if (head.name != sym.name) continue;
 		if (head.overloads.length == 0) return head;
@@ -468,6 +469,49 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 		}
 	}
 	throw new Error(`internal: ${tierPath} has no Raiser tier of '${sym.name}' to run at comptime`);
+}
+
+function tierGenericOf(generic: Symbol, tier: Symbol[]): Symbol | null {
+	const shape = routineShape(generic);
+	let found: Symbol | null = null;
+	for (const head of tier) {
+		if (head.name != generic.name) continue;
+		for (const candidate of [head, ...head.overloads]) {
+			if (!isRoutineSym(candidate) || candidate.typeParams.length == 0 || routineShape(candidate) != shape) continue;
+			if (found != null) return null;
+			found = candidate;
+		}
+	}
+	return found;
+}
+
+let _tierInstanceHost: CheckerContext | null = null;
+
+function tierInstanceOf(inst: Symbol, tier: Symbol[]): Symbol | null {
+	const generic = tierGenericOf(inst.instantiatedFrom!, tier);
+	const at = _tierInstanceHost;
+	if (generic == null || at == null) return null;
+	const params = instanceParamsOf(inst);
+	const args = instanceArgsOf(inst);
+	const types: Type[] = [];
+	for (const p of generic.typeParams) {
+		const i = params.findIndex((q: Type): boolean => q.typeName == p.typeName);
+		if (i < 0) return null;
+		types.push(args[i]);
+	}
+	const errorsBefore = at.errors.length;
+	const tierInst = instantiateGenericFunction(generic, generic.typeParams, types, at, inst.declNode != null ? inst.declNode.location : makeLoc(1, 1));
+	for (let i = errorsBefore; i < at.errors.length; i += 1) {
+		const e = at.errors[i];
+		if (e.severity != Severity.Error) continue;
+		_pendingHelperErrors.push({
+			message: `helper '${inst.name}': ${e.message}`,
+			line: e.line, column: e.column, endLine: e.endLine, endColumn: e.endColumn,
+			fatal: e.fatal, severity: e.severity, tags: e.tags,
+		});
+	}
+	while (at.errors.length > errorsBefore) at.errors.pop();
+	return tierInst;
 }
 
 let _engineBuildLowered: int32 = 0;
@@ -562,6 +606,10 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
+	const outerHost = _tierInstanceHost;
+	const host = engineBodyCtx(sym.modulePath, sym);
+	if (host != null) _tierInstanceHost = host;
+	defer { _tierInstanceHost = outerHost; }
 	const clone = cloneNodeKeepSem(sym.declNode);
 	(clone.data as FunctionDeclData).fnName = "$comptime:helper";
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(sym.declNode.location));
