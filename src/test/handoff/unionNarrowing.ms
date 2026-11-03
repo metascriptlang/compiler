@@ -4,7 +4,7 @@
 // a symbol (resolvedSym) so codegen can emit correct field access.
 // Standard reference parity: lookupInRecordAndBuildCheck searches the record field list directly.
 
-import { checkSource } from "./helpers";
+import { checkSource, hasError, strictErrorCount } from "./helpers";
 import { compileToC } from "../helpers";
 import { hasErrors } from "../../checker/context";
 
@@ -31,4 +31,47 @@ test "E2E C: subset as-cast compiles without type mismatch" {
 	const result = compileToC(src);
 	assert result.ok;
 	// Both functions should compile — no msAnon type mismatch
+}
+
+const structArms = `struct Q { n: int32; }
+struct A { v: int32[]; a: int32; }
+struct B { v: Q; b: string; }
+type AB = A | B;
+`;
+
+test "a union read narrowed to one member is refused into a sibling member's slot by assignment" {
+	assert hasError(structArms + `function run(): void {
+	const one: AB = { v: [1], a: 1 } as A;
+	const two: AB = { v: { n: 5 }, b: "b" } as B;
+	let c1 = one;
+	c1 = two;
+}`, "Type 'B' is not assignable to type 'A'");
+}
+
+test "a union read narrowed to one member is refused into a sibling member's slot by initialization" {
+	assert hasError(structArms + `function run(x: AB): void {
+	if ("b" in x) {
+		const d: A = x;
+	}
+}`, "Type 'B' is not assignable to type 'A'");
+}
+
+test "a scalar union read narrowed to one member is refused into another member's type" {
+	assert hasError(`function run(): void {
+	let w: int32 | string = 3;
+	let s: string = "s";
+	s = w;
+}`, "is not assignable to type 'string'");
+}
+
+test "a union read narrowed to one member still fits its own member's slot and the declared union" {
+	assert strictErrorCount(structArms + `function run(x: AB): void {
+	const two: AB = { v: { n: 5 }, b: "b" } as B;
+	const d: B = two;
+	let c: AB = two;
+	if ("a" in x) {
+		const e: A = x;
+		c = x;
+	}
+}`) == 0;
 }
