@@ -1121,7 +1121,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
 		for (let vi = 0; vi < objType.typeChildren.length; vi += 1) {
 			const variant = inlineVariantStruct(objType.typeChildren[vi]);
-			if (isScalarVariant(objType.typeChildren[vi], variant)) {
+			if (isScalarVariant(objType.typeChildren[vi], variant) || heldWhole(variant, lctx)) {
 				const visited: NameSet = createNameSet();
 				fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
 				if (probe.items.length > 0) return true;
@@ -1350,8 +1350,8 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const h2 = walksCells(hook)
 				? liftSym(lctx, SymbolKind.Variable, s2.name, createPtr(voidType()))
 				: (s2.name == s1.name ? h1 : liftSym(lctx, SymbolKind.Variable, s2.name, s2.symbolType));
-			if (scalar) {
-				buildScalarArmBody(hook, h1, h2, vName, objType.typeChildren[vi], lctx, armBuf, loc);
+			if (scalar || heldWhole(variant, lctx)) {
+				buildMemberArmBody(hook, h1, h2, vName, objType.typeChildren[vi], lctx, armBuf, loc);
 			} else {
 				buildVariantArmBody(hook, objType, h1, h2, vi, vName, variant as Type, isUnary, lctx, armBuf, loc);
 			}
@@ -1435,7 +1435,10 @@ function structRefUnionCopy(objType: Type, x1: Node, x2: Node, lctx: LiftCtx, bu
 		const sourceDecl = makeVarDecl(sourceName, clonePath(x2, loc), DeclKind.Let, loc);
 		sourceDecl.resolvedSym = sourceSym;
 		arm.items.push(sourceDecl);
-		valueCellOp("copy", makeTypedIdentResolved(freshSym, member, loc), makeTypedIdentResolved(sourceSym, member, loc), false, lctx, arm, loc);
+		const freshRef = makeTypedIdentResolved(freshSym, member, loc);
+		const sourceRef = makeTypedIdentResolved(sourceSym, member, loc);
+		if (copiesThroughOwnOp(member, lctx, loc)) namedObjOp("copy", member, freshRef, sourceRef, lctx, arm, loc);
+		else valueCellOp("copy", freshRef, sourceRef, false, lctx, arm, loc);
 		arm.items.push(makeExprStmt(makeAssign(clonePath(x1, loc), makeTypedIdentResolved(freshSym, objType, loc), loc), loc));
 		if (disc == "") {
 			structArms += 1;
@@ -1449,6 +1452,12 @@ function structRefUnionCopy(objType: Type, x1: Node, x2: Node, lctx: LiftCtx, bu
 	}
 	inner.items.push(chain);
 	buf.items.push(makeIf(makeBinary(clonePath(x1, loc), "!==", clonePath(x2, loc), loc), makeBlock(inner.items, loc), null, loc));
+}
+
+function copiesThroughOwnOp(member: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
+	if (member.typeName == "" || isAnonTypeName(member.typeName)) return false;
+	ensureHooks(member.typeName, member, null as unknown as Type, member, false, lctx, loc);
+	return hasAsgnFlag(member) && fieldTypeHasHooks(member, member.typeName, "copy", lctx);
 }
 
 function nonStructArmTest(objType: Type, x2: Node, loc: SourceLocation): Node {
@@ -1494,7 +1503,11 @@ function isScalarVariant(member: Type | null, variant: Type | null): boolean {
 	return member.kind != TypeKind.Null && member.kind != TypeKind.Void;
 }
 
-function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
+function heldWhole(variant: Type | null, lctx: LiftCtx): boolean {
+	return !lctx.raiserBackend && variant != null && variant.typeName != "" && !isAnonTypeName(variant.typeName) && !variant.typeFlags.has(TypeFlag.DuVariant);
+}
+
+function buildMemberArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
 	const x = hookParamDeref(s1, loc);
 	const y = walksCells(hook) ? makeIdentResolved(s2, loc)
 		: (hook == "destroy" || hook == "wasMoved") ? hookParamDeref(s1, loc)
