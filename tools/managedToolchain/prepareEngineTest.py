@@ -344,13 +344,13 @@ class LinuxHostContractTest(TempCase):
     def test_every_producer_and_prover_calls_verify_engine_with_the_engine_root_alone(self):
         directory = os.path.dirname(os.path.abspath(__file__))
         calls = {}
-        for name in ("prepareRuntime", "prepareCppRuntime", "prepareWindowsRuntime", "prepareBundle", "proveCompiler"):
+        for name in ("prepareRuntime", "prepareCppRuntime", "prepareWindowsRuntime", "prepareBundle", "prepareSanitizerRuntime", "proveCompiler"):
             with open(os.path.join(directory, name + ".py"), encoding="utf-8") as f:
                 tree = ast.parse(f.read())
             calls[name] = [(len(n.args), len(n.keywords)) for n in ast.walk(tree) if isinstance(n, ast.Call)
                            and isinstance(n.func, ast.Attribute) and n.func.attr == "verifyEngine"]
         self.assertEqual({k: len(v) for k, v in calls.items()}, {"prepareRuntime": 2, "prepareCppRuntime": 1, "prepareWindowsRuntime": 1,
-                                                                  "prepareBundle": 4, "proveCompiler": 1})
+                                                                  "prepareBundle": 6, "prepareSanitizerRuntime": 1, "proveCompiler": 1})
         self.assertEqual({pair for v in calls.values() for pair in v}, {(1, 0)})
 
     def test_the_source_path_scan_takes_the_binary_test_of_the_host(self):
