@@ -6,7 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, No
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
 import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
@@ -693,6 +693,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		(clone.data as FunctionDeclData).fnName = engineName;
 	}
 	callComptimeHelperPreparer(clone, seedCtx != null ? seedCtx : _engineToken);
+	if (isClass) declareReplica(clone, sym);
+	defer forgetReplica(clone);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	_engineRecheckCount += 1;

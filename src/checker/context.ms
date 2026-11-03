@@ -1901,6 +1901,20 @@ export function isEngineCheckMode(): boolean {
 	return _engineCheckMode;
 }
 
+const _replicaOrigins = new HashMap<Node, Symbol>();
+
+export function declareReplica(decl: Node, origin: Symbol): void {
+	_replicaOrigins.set(decl, origin);
+}
+
+export function forgetReplica(decl: Node): void {
+	_replicaOrigins.delete(decl);
+}
+
+export function replicaOriginOf(decl: Node): Symbol | null {
+	return _replicaOrigins.size == 0 ? null : _replicaOrigins.get(decl);
+}
+
 export function addError(ctx: CheckerContext, msg: string, line: int32, col: int32): void {
 	ctx.errors.push({ message: msg, line, column: col, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }

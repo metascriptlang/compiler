@@ -8,7 +8,7 @@ import { inferredType, noneType, createModuleNamespace, emptyType, createStruct,
 import { builtinKindName, builtinKindNamed, defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, replicaOriginOf, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
 import { isGlobalImport } from "./prelude";
 import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
@@ -525,7 +525,12 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	if (sym.location == null || sym.location.line == 0) sym.location = node.location;
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
-	if (sym.modulePath == "") {
+	const origin = sym.modulePath == "" ? replicaOriginOf(node) : null;
+	if (origin != null) {
+		sym.modulePath = origin.modulePath;
+		sym.disamb = origin.disamb;
+		stampItem(ctx, sym);
+	} else if (sym.modulePath == "") {
 		stampOwner(ctx, sym);
 		const kind = sym.symbolKind;
 		if (kind == SymbolKind.Variable || kind == SymbolKind.Class || kind == SymbolKind.Struct
