@@ -65,9 +65,7 @@ function failWith(tag: string, why: string): void {
 	exit(1);
 }
 
-const PARKED: { name: string, card: string }[] = [
-	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
-];
+const PARKED: { name: string, card: string }[] = [];
 
 const SAN = env.get("MSHCR_SAN") == "1";
 const BUNDLE_COMPILES_SAN = env.get("MSC_NATIVE_TOOLCHAIN") != "" && platform != "windows";
