@@ -10,6 +10,8 @@
 // @exit: 0
 // @skip-raiser: the raiser std/crypto carries only the hash family; no hmac, random or key derivation
 
+@passC("-Werror=incompatible-pointer-types");
+
 import { Buffer } from "std/core/buffer";
 import { CryptoError, fromHex, hkdf, hmac, hmacSync, pbkdf2, randomBytes, randomInt, randomUUID, toHex } from "std/crypto";
 

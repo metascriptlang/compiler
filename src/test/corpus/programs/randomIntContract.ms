@@ -15,6 +15,8 @@
 // @exit: 0
 // @skip-raiser: std/crypto has only a C backend (index.cms over runtime/crypto); there is no raiser random
 
+@passC("-Werror=incompatible-pointer-types");
+
 import { randomIntSync } from "std/crypto";
 
 let minusOne = 0;
