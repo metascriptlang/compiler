@@ -373,6 +373,7 @@ function wrapperLines(
 ): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
+	const backRanges: string[] = [];
 	const lines: string[] = [];
 	const encoded: string[] = [];
 	const encodes: string[] = [];
@@ -474,6 +475,7 @@ function wrapperLines(
 				if (written) {
 					const bool = p.element == BoundaryKind.Bool;
 					copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${bool});`);
+					backRanges.push(`__msbRangeErr(a${i}.base, a${i}.off, a${i}.len)`);
 				}
 				const role = written ? "write" : "read";
 				encodeView(`e${i}`, view, "", role, `parameter '${p.name}'`);
@@ -536,8 +538,41 @@ function wrapperLines(
 		for (const c of paramChecks(f)) out.push(`	${c}`);
 	}
 	out.push("	__msb.enter();");
+	const viewed = f.params.some((p) => {
+		return p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span;
+	}) && !f.params.some((p) => p.kind == BoundaryKind.Handle);
 	if (cleanup.length == 0) {
 		for (const l of body) out.push(`	${l}`);
+	} else if (viewed) {
+		const tail = body[body.length - 1].startsWith("return ")
+			? body.pop()!
+			: "";
+		if (body[0] == "let v;") lines.push(`	${body.shift()!}`);
+		for (const l of lines) out.push(l);
+		const names = encoded.join(", ") + (wasmOwns ? ", sent = false" : "");
+		out.push(`\tlet ${names};`);
+		if (copyBacks.length > 0) out.push("	let ran = false;");
+		out.push("	let thrown = null, failed = false;");
+		out.push("	const mark = __msbTop;");
+		out.push("	try {");
+		for (const l of encodes) out.push(l);
+		if (wasmOwns) out.push("		sent = true;");
+		if (copyBacks.length > 0) out.push("		ran = true;");
+		for (const l of body) out.push(`		${l}`);
+		out.push("	} catch (e) { thrown = e; failed = true; }");
+		if (copyBacks.length > 0) {
+			out.push("	if (ran) {");
+			for (let k = copyBacks.length - 1; k >= 0; k -= 1) {
+				out.push(`		const bad${k} = ${backRanges[k]};`);
+				out.push(`		if (bad${k} === null) ${copyBacks[k]}`);
+				out.push(`		else { thrown = bad${k}; failed = true; }`);
+			}
+			out.push("	}");
+		}
+		out.push("	__msbTop = mark;");
+		for (const c of cleanup) out.push(`	${c}`);
+		out.push("	if (failed) throw thrown;");
+		if (tail != "") out.push(`	${tail}`);
 	} else {
 		for (const l of lines) out.push(l);
 		if (encoded.length > 0) {

@@ -26,11 +26,16 @@ const GLUE = [
 	"function __msbFree(p) {",
 	"\tif (p < __msbBase || p >= __msbEnd) __msbMod._free(p);",
 	"}",
-	"function __msbInRange(a, off, n) {",
-	"\tif (!(off >= 0 && (n === 0 || n >= 0 && off + n <= a.length))) throw new "
+	"function __msbRangeErr(a, off, n) {",
+	"\tif (off >= 0 && (n === 0 || n >= 0 && off + n <= a.length)) return null;",
+	"\treturn new "
 		+ "RangeError(\"Span out of range of its array: offset \" + off + \", "
 		+ "length \" + n + \", array length \" + a.length + \" (was the array "
 		+ "resized while lent?)\");",
+	"}",
+	"function __msbInRange(a, off, n) {",
+	"\tconst e = __msbRangeErr(a, off, n);",
+	"\tif (e !== null) throw e;",
 	"}",
 	"function __msbCopyIn(a, off, n, T) {",
 	"\t__msbInRange(a, off, n);",
