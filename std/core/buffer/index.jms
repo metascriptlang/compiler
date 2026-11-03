@@ -9,7 +9,12 @@
 
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
-import { hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom } from "./codec";
+import {
+	hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom,
+	utf8Encoding, hexEncoding, base64Encoding, base64UrlEncoding, latin1Encoding, asciiEncoding,
+	encodingOf, textEncoding, sliceEncoding, encodedLength, writeText, ucs2Text,
+	needBytes, needValue, storedInt, needWideValue, needBigValue, needWidth,
+} from "./codec";
 
 import { Buffer } from "./type";
 export { Buffer } from "./type";
@@ -22,19 +27,6 @@ export function toString(this b: Buffer): string {
 
 // ===== private native bindings =====
 
-// A read or write outside the buffer, an integer outside its width, or a byteLength outside 1..6 throws
-// the RangeError the Node Buffer throws; the other backends say the same words.
-function need(b: Buffer, o: number, width: number): void {
-	if (Math.floor(o) != o) throw new RangeError(`The value of "offset" is out of range. It must be an integer. Received ${o}`);
-	const max = b.length - width;
-	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
-	if (!(o >= 0 && o <= max)) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${max}. Received ${o}`);
-}
-
-function inRange(v: number, lo: number, hi: number): void {
-	if (!(v >= lo && v <= hi)) throw new RangeError(`The value of "value" is out of range. It must be >= ${lo} and <= ${hi}. Received ${v}`);
-}
-
 @emit(`const msBufWord = new DataView(new ArrayBuffer(8));
 function msBufLoad(b, o, n) {
 	for (let i = 0; i < n; i++) msBufWord.setUint8(i, b[o + i]);
@@ -43,6 +35,10 @@ function msBufLoad(b, o, n) {
 function msBufSet(b, i, v) {
 	i = Math.trunc(i);
 	if (i >= 0 && i < b.length) b[i] = v & 255;
+}
+function msBufAt(b, i) {
+	i = Math.trunc(i);
+	return i >= 0 && i < b.length ? b[i] : -1;
 }
 function msBufStore(b, o, n, put) {
 	put(msBufWord);
@@ -70,55 +66,9 @@ export function allocUnsafe(this typeof Buffer, size: number): Buffer {
 
 export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "Array.from(#, (x) => x & 255)";
 
-// utf8 (or binary/latin1 char codes < 128 — identical bytes) of a string.
-function encodeUtf8(s: string): Buffer {
-	const out = Buffer.alloc(s.byteLength);
-	let i = 0;
-	let j = 0;
-	while (i < s.length) {
-		let cp: int32 = s.charCodeAt(i) as int32;
-		if (cp >= 55296 && cp <= 56319 && i + 1 < s.length) {
-			const lo: int32 = s.charCodeAt(i + 1) as int32;
-			if (lo >= 56320 && lo <= 57343) {
-				cp = 65536 + ((cp - 55296) << 10) + (lo - 56320);
-				i += 1;
-			}
-		}
-		i += 1;
-		if (cp < 128) {
-			out.set(j, cp);
-			j += 1;
-		} else if (cp < 2048) {
-			out.set(j, 192 | (cp >> 6));
-			out.set(j + 1, 128 | (cp & 63));
-			j += 2;
-		} else if (cp < 65536) {
-			out.set(j, 224 | (cp >> 12));
-			out.set(j + 1, 128 | ((cp >> 6) & 63));
-			out.set(j + 2, 128 | (cp & 63));
-			j += 3;
-		} else {
-			out.set(j, 240 | (cp >> 18));
-			out.set(j + 1, 128 | ((cp >> 12) & 63));
-			out.set(j + 2, 128 | ((cp >> 6) & 63));
-			out.set(j + 3, 128 | (cp & 63));
-			j += 4;
-		}
-	}
-	return out;
-}
-
 extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(Uint8Array.from(#.slice(#, #)))";
 
 extern function prefixOf(b: Buffer, length: number): Buffer from "#.slice(0, #)";
-
-function isHex(encoding: string): boolean {
-	return encoding.equalsIgnoreCase("hex");
-}
-
-function isBase64(encoding: string): boolean {
-	return encoding.equalsIgnoreCase("base64") || encoding.equalsIgnoreCase("base64url");
-}
 
 function decodeText(value: string, base64: boolean): Buffer {
 	const text = value.asBytes();
@@ -128,11 +78,14 @@ function decodeText(value: string, base64: boolean): Buffer {
 	return written < capacity ? prefixOf(buf, written as number) : buf;
 }
 
-export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
-	if (isHex(encoding)) return decodeText(value, false);
-	if (isBase64(encoding)) return decodeText(value, true);
-	// utf8 — and every other name takes the same fallback as the C side.
-	return encodeUtf8(value);
+export function fromString(this typeof Buffer, value: string, name: string): Buffer {
+	const encoding = textEncoding(name);
+	if (encoding == hexEncoding) return decodeText(value, false);
+	if (encoding == base64Encoding || encoding == base64UrlEncoding) return decodeText(value, true);
+	const capacity = encodedLength(value, encoding);
+	const buf = Buffer.alloc(capacity);
+	const written = writeText(value.asBytes(), buf, 0, capacity as int64, encoding);
+	return (written as number) < capacity ? prefixOf(buf, written as number) : buf;
 }
 
 export extern function slice(this b: Buffer, start: number = 0, end: number = 9007199254740991): Buffer from "#.slice(#, #)";
@@ -204,28 +157,11 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 }
 
 export function byteLength(this typeof Buffer, str: string, encoding: string = "utf-8"): number {
-	if (encoding == "ascii" || encoding == "latin1" || encoding == "binary") return str.length;
-	if (encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") return str.length * 2;
-	const n = str.byteLength;
-	if (encoding == "hex") return n / 2;
-	if (encoding == "base64" || encoding == "base64url") {
-		let m = n;
-		if (m > 0 && str.byteAt(m - 1) == "=".code) m -= 1;
-		if (m > 1 && str.byteAt(m - 1) == "=".code) m -= 1;
-		return (m * 3) / 4;
-	}
-	return n;
+	return encodedLength(str, encodingOf(encoding));
 }
 
 export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
-	if (encoding == "utf8" || encoding == "utf-8" ||
-			encoding == "hex" || encoding == "ascii" ||
-			encoding == "latin1" || encoding == "binary" ||
-			encoding == "base64" || encoding == "base64url" ||
-			encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") {
-		return true;
-	}
-	return false;
+	return encodingOf(encoding) >= 0;
 }
 
 export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
@@ -242,7 +178,10 @@ export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 
 // ===== Extension Methods =====
 
-export extern function byteAt(this b: Buffer, i: number): int32 from "#[#]";
+extern function byteInBounds(this b: Buffer, i: number): int32 from "msBufAt(#, #)";
+export function byteAt(this b: Buffer, i: number): int32 {
+	return b.byteInBounds(i);
+}
 export extern function byteLength(this b: Buffer): number from "#.length";
 
 extern function setInBounds(this b: Buffer, i: number, v: number): void from "msBufSet(#, #, #)";
@@ -258,28 +197,30 @@ export function toBase64(this b: Buffer): string {
 	return encodeBase64(b);
 }
 
-export function toStringEncoded(this b: Buffer, encoding: string, start: number, end: number): string {
+export function toStringEncoded(this b: Buffer, name: string, start: number, end: number): string {
 	const length = b.length as int64;
 	const first = start as int64;
 	const last = end as int64;
 	const from = first < 0 ? 0 : first;
 	const to = last < 0 || last > length ? length : last;
 	if (from >= to) return "";
-	if (isHex(encoding) || isBase64(encoding)) return encodeRange(b, from, to, encoding);
-	const ascii = encoding.equalsIgnoreCase("ascii");
-	if (ascii || encoding.equalsIgnoreCase("latin1") || encoding.equalsIgnoreCase("binary")) {
-		const mask: int32 = ascii ? 127 : 255;
+	const encoding = sliceEncoding(name);
+	if (encoding == utf8Encoding) return decodeUtf8Range(b, from as number, to as number);
+	if (encoding == asciiEncoding || encoding == latin1Encoding) {
+		const mask: int32 = encoding == asciiEncoding ? 127 : 255;
 		let out = "";
 		for (let i = from; i < to; i++) out = out + String.fromCharCode(b.byteAt(i as number) & mask);
 		return out;
 	}
-	return decodeUtf8Range(b, from as number, to as number);
+	return encodeRange(b, from, to, encoding);
 }
 
-function encodeRange(data: Readonly<Span<uint8>>, from: int64, to: int64, encoding: string): string {
+function encodeRange(data: Readonly<Span<uint8>>, from: int64, to: int64, encoding: int32): string {
 	const range = data[from..to];
-	if (isHex(encoding)) return encodeHex(range);
-	return encoding.equalsIgnoreCase("base64url") ? encodeBase64Url(range) : encodeBase64(range);
+	if (encoding == hexEncoding) return encodeHex(range);
+	if (encoding == base64Encoding) return encodeBase64(range);
+	if (encoding == base64UrlEncoding) return encodeBase64Url(range);
+	return ucs2Text(range);
 }
 
 export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
@@ -333,29 +274,14 @@ export extern function swap16(this b: Buffer): void from "(function (u) { for (v
 export extern function swap32(this b: Buffer): void from "(function (u) { for (var i = 0; i + 3 < u.length; i += 4) { var t = u[i]; u[i] = u[i + 3]; u[i + 3] = t; t = u[i + 1]; u[i + 1] = u[i + 2]; u[i + 2] = t; } })(#)";
 export extern function swap64(this b: Buffer): void from "(function (u) { for (var i = 0; i + 7 < u.length; i += 8) { for (var k = 0; k < 4; k++) { var t = u[i + k]; u[i + k] = u[i + 7 - k]; u[i + 7 - k] = t; } } })(#)";
 
-export function write(this b: Buffer, str: string, offset: number, length: number, encoding: string): number {
-	const room = writeRoom(b.length as int64, offset, length) as number;
-	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
-		let i = 0;
-		while (i < str.length && i < room) {
-			b.set(offset + i, str.charCodeAt(i) & 255);
-			i += 1;
-		}
-		return i;
-	}
-	if (isHex(encoding) || isBase64(encoding)) {
-		if (str.length == 0) return 0;
-		const text = str.asBytes();
-		return (isHex(encoding) ? writeHex(text, b, offset as int64, room as int64) : writeBase64(text, b, offset as int64, room as int64)) as number;
-	}
-	// utf8 fallback.
-	const enc = encodeUtf8(str);
-	let i = 0;
-	while (i < enc.length && i < room) {
-		b.set(offset + i, enc.byteAt(i));
-		i += 1;
-	}
-	return i;
+export function write(this b: Buffer, str: string, offset: number, length: number, name: string): number {
+	const room = writeRoom(b.length as int64, offset, length);
+	const encoding = textEncoding(name);
+	if (str.length == 0) return 0;
+	const text = str.asBytes();
+	if (encoding == hexEncoding) return writeHex(text, b, offset as int64, room) as number;
+	if (encoding == base64Encoding || encoding == base64UrlEncoding) return writeBase64(text, b, offset as int64, room) as number;
+	return writeText(text, b, offset as int64, room, encoding) as number;
 }
 
 export function fillString(this b: Buffer, value: string, start: number, end: number, encoding: string): void {
@@ -382,91 +308,91 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 }
 
 export function readUInt8(this b: Buffer, o: number): int32 {
-	need(b, o, 1);
+	needBytes(b.length, o, 1);
 	return b.byteAt(o);
 }
 export function readUInt16BE(this b: Buffer, o: number): number {
-	need(b, o, 2);
+	needBytes(b.length, o, 2);
 	@emit(`return msBufLoad(${b}, ${o}, 2).getUint16(0, false);`);
 	unreachable;
 }
 export function readUInt16LE(this b: Buffer, o: number): number {
-	need(b, o, 2);
+	needBytes(b.length, o, 2);
 	@emit(`return msBufLoad(${b}, ${o}, 2).getUint16(0, true);`);
 	unreachable;
 }
 export function readUInt32BE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getUint32(0, false);`);
 	unreachable;
 }
 export function readUInt32LE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getUint32(0, true);`);
 	unreachable;
 }
 export function readInt8(this b: Buffer, o: number): number {
-	need(b, o, 1);
+	needBytes(b.length, o, 1);
 	@emit(`return msBufLoad(${b}, ${o}, 1).getInt8(0);`);
 	unreachable;
 }
 export function readInt16BE(this b: Buffer, o: number): number {
-	need(b, o, 2);
+	needBytes(b.length, o, 2);
 	@emit(`return msBufLoad(${b}, ${o}, 2).getInt16(0, false);`);
 	unreachable;
 }
 export function readInt16LE(this b: Buffer, o: number): number {
-	need(b, o, 2);
+	needBytes(b.length, o, 2);
 	@emit(`return msBufLoad(${b}, ${o}, 2).getInt16(0, true);`);
 	unreachable;
 }
 export function readInt32BE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getInt32(0, false);`);
 	unreachable;
 }
 export function readInt32LE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getInt32(0, true);`);
 	unreachable;
 }
 export function readFloatBE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getFloat32(0, false);`);
 	unreachable;
 }
 export function readFloatLE(this b: Buffer, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	@emit(`return msBufLoad(${b}, ${o}, 4).getFloat32(0, true);`);
 	unreachable;
 }
 export function readDoubleBE(this b: Buffer, o: number): number {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getFloat64(0, false);`);
 	unreachable;
 }
 export function readDoubleLE(this b: Buffer, o: number): number {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getFloat64(0, true);`);
 	unreachable;
 }
 export function readBigUInt64LE(this b: Buffer, o: number): bigint {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getBigUint64(0, true);`);
 	unreachable;
 }
 export function readBigUInt64BE(this b: Buffer, o: number): bigint {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getBigUint64(0, false);`);
 	unreachable;
 }
 export function readBigInt64LE(this b: Buffer, o: number): bigint {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getBigInt64(0, true);`);
 	unreachable;
 }
 export function readBigInt64BE(this b: Buffer, o: number): bigint {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	@emit(`return msBufLoad(${b}, ${o}, 8).getBigInt64(0, false);`);
 	unreachable;
 }
@@ -477,25 +403,29 @@ extern function dvSetBigI64LE(this b: Buffer, o: number, v: bigint): void from "
 extern function dvSetBigI64BE(this b: Buffer, o: number, v: bigint): void from "msBufStore(#, #, 8, (w) => w.setBigInt64(0, #, false))";
 
 export function writeBigUInt64LE(this b: Buffer, value: bigint, o: number): number {
-	need(b, o, 8);
+	needBigValue(value, false);
+	needBytes(b.length, o, 8);
 	dvSetBigU64LE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigUInt64BE(this b: Buffer, value: bigint, o: number): number {
-	need(b, o, 8);
+	needBigValue(value, false);
+	needBytes(b.length, o, 8);
 	dvSetBigU64BE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigInt64LE(this b: Buffer, value: bigint, o: number): number {
-	need(b, o, 8);
+	needBigValue(value, true);
+	needBytes(b.length, o, 8);
 	dvSetBigI64LE(b, o, value);
 	return o + 8;
 }
 
 export function writeBigInt64BE(this b: Buffer, value: bigint, o: number): number {
-	need(b, o, 8);
+	needBigValue(value, true);
+	needBytes(b.length, o, 8);
 	dvSetBigI64BE(b, o, value);
 	return o + 8;
 }
@@ -510,100 +440,89 @@ extern function dvSetF64LE(this b: Buffer, o: number, v: number): void from "msB
 extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "msBufStore(#, #, 8, (w) => w.setFloat64(0, #, false))";
 
 export function writeUInt8(this b: Buffer, v: number, o: number): number {
-	inRange(v, 0, 255);
-	need(b, o, 1);
-	b.set(o, v as int32);
+	needValue(v, 0, 255);
+	needBytes(b.length, o, 1);
+	b.set(o, storedInt(v) as int32);
 	return o + 1;
 }
 export function writeUInt16BE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 2);
-	inRange(v, 0, 65535);
+	needValue(v, 0, 65535);
+	needBytes(b.length, o, 2);
 	dvSetU16BE(b, o, v);
 	return o + 2;
 }
 export function writeUInt16LE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 2);
-	inRange(v, 0, 65535);
+	needValue(v, 0, 65535);
+	needBytes(b.length, o, 2);
 	dvSetU16LE(b, o, v);
 	return o + 2;
 }
 export function writeUInt32BE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
-	inRange(v, 0, 4294967295);
+	needValue(v, 0, 4294967295);
+	needBytes(b.length, o, 4);
 	dvSetU32BE(b, o, v);
 	return o + 4;
 }
 export function writeUInt32LE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
-	inRange(v, 0, 4294967295);
+	needValue(v, 0, 4294967295);
+	needBytes(b.length, o, 4);
 	dvSetU32LE(b, o, v);
 	return o + 4;
 }
 export function writeInt8(this b: Buffer, v: number, o: number): number {
-	inRange(v, -128, 127);
-	need(b, o, 1);
-	b.set(o, (v as int32) & 255);
+	needValue(v, -128, 127);
+	needBytes(b.length, o, 1);
+	b.set(o, (storedInt(v) as int32) & 255);
 	return o + 1;
 }
 export function writeInt16BE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 2);
-	inRange(v, -32768, 32767);
-	dvSetU16BE(b, o, (v as int32) & 65535);
+	needValue(v, -32768, 32767);
+	needBytes(b.length, o, 2);
+	dvSetU16BE(b, o, (storedInt(v) as int32) & 65535);
 	return o + 2;
 }
 export function writeInt16LE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 2);
-	inRange(v, -32768, 32767);
-	dvSetU16LE(b, o, (v as int32) & 65535);
+	needValue(v, -32768, 32767);
+	needBytes(b.length, o, 2);
+	dvSetU16LE(b, o, (storedInt(v) as int32) & 65535);
 	return o + 2;
 }
 export function writeInt32BE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
-	inRange(v, -2147483648, 2147483647);
+	needValue(v, -2147483648, 2147483647);
+	needBytes(b.length, o, 4);
 	dvSetU32BE(b, o, v);
 	return o + 4;
 }
 export function writeInt32LE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
-	inRange(v, -2147483648, 2147483647);
+	needValue(v, -2147483648, 2147483647);
+	needBytes(b.length, o, 4);
 	dvSetU32LE(b, o, v);
 	return o + 4;
 }
 export function writeFloatLE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	dvSetF32LE(b, o, v);
 	return o + 4;
 }
 export function writeFloatBE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 4);
+	needBytes(b.length, o, 4);
 	dvSetF32BE(b, o, v);
 	return o + 4;
 }
 export function writeDoubleLE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	dvSetF64LE(b, o, v);
 	return o + 8;
 }
 export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
-	need(b, o, 8);
+	needBytes(b.length, o, 8);
 	dvSetF64BE(b, o, v);
 	return o + 8;
 }
 
-function badByteLength(byteLength: number, rule: string): never {
-	throw new RangeError(
-		`The value of "byteLength" is out of range. It must be ${rule}. Received ${byteLength}`,
-	);
-}
-
-function checkByteLength(byteLength: number): void {
-	if (Math.floor(byteLength) != byteLength) badByteLength(byteLength, "an integer");
-	if (byteLength < 1 || byteLength > 6) badByteLength(byteLength, ">= 1 and <= 6");
-}
-
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	need(b, o, byteLength);
+	needWidth(byteLength);
+	needBytes(b.length, o, byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -613,8 +532,8 @@ export function readUIntLE(this b: Buffer, o: number, byteLength: number): numbe
 	return v;
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	need(b, o, byteLength);
+	needWidth(byteLength);
+	needBytes(b.length, o, byteLength);
 	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
@@ -634,9 +553,8 @@ export function readIntBE(this b: Buffer, o: number, byteLength: number): number
 	return u >= half ? u - half * 2 : u;
 }
 export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	inRange(v, 0, Math.pow(2, byteLength * 8) - 1);
-	need(b, o, byteLength);
+	needWideValue(v, byteLength, false);
+	needBytes(b.length, o, byteLength);
 	let x = v;
 	let k = 0;
 	while (k < byteLength) {
@@ -647,9 +565,8 @@ export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: nu
 	return o + byteLength;
 }
 export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	inRange(v, 0, Math.pow(2, byteLength * 8) - 1);
-	need(b, o, byteLength);
+	needWideValue(v, byteLength, false);
+	needBytes(b.length, o, byteLength);
 	let x = v;
 	let k = byteLength - 1;
 	while (k >= 0) {
@@ -660,14 +577,12 @@ export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: nu
 	return o + byteLength;
 }
 export function writeIntLE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	inRange(v, -Math.pow(2, byteLength * 8 - 1), Math.pow(2, byteLength * 8 - 1) - 1);
+	needWideValue(v, byteLength, true);
 	const bound = Math.pow(2, byteLength * 8);
 	return writeUIntLE(b, v >= 0 ? v : v + bound, o, byteLength);
 }
 export function writeIntBE(this b: Buffer, v: number, o: number, byteLength: number): number {
-	checkByteLength(byteLength);
-	inRange(v, -Math.pow(2, byteLength * 8 - 1), Math.pow(2, byteLength * 8 - 1) - 1);
+	needWideValue(v, byteLength, true);
 	const bound = Math.pow(2, byteLength * 8);
 	return writeUIntBE(b, v >= 0 ? v : v + bound, o, byteLength);
 }

@@ -6,6 +6,191 @@ import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../e
 
 const equalsSign: uint8 = 61;
 
+export const utf8Encoding: int32 = 0;
+export const hexEncoding: int32 = 1;
+export const base64Encoding: int32 = 2;
+export const base64UrlEncoding: int32 = 3;
+export const latin1Encoding: int32 = 4;
+export const asciiEncoding: int32 = 5;
+export const ucs2Encoding: int32 = 6;
+
+export function encodingOf(name: string): int32 {
+	if (name == "utf8") return utf8Encoding;
+	if (name.equalsIgnoreCase("utf8") || name.equalsIgnoreCase("utf-8")) return utf8Encoding;
+	if (name.equalsIgnoreCase("hex")) return hexEncoding;
+	if (name.equalsIgnoreCase("base64")) return base64Encoding;
+	if (name.equalsIgnoreCase("base64url")) return base64UrlEncoding;
+	if (name.equalsIgnoreCase("latin1") || name.equalsIgnoreCase("binary")) return latin1Encoding;
+	if (name.equalsIgnoreCase("ascii")) return asciiEncoding;
+	if (name.equalsIgnoreCase("ucs2") || name.equalsIgnoreCase("ucs-2") ||
+			name.equalsIgnoreCase("utf16le") || name.equalsIgnoreCase("utf-16le")) {
+		return ucs2Encoding;
+	}
+	return -1;
+}
+
+export function textEncoding(name: string): int32 {
+	return name.length == 0 ? utf8Encoding : sliceEncoding(name);
+}
+
+export function sliceEncoding(name: string): int32 {
+	const encoding = encodingOf(name);
+	if (encoding < 0) throw new TypeError(`Unknown encoding: ${name}`);
+	return encoding;
+}
+
+export function encodedLength(text: string, encoding: int32): number {
+	if (encoding == latin1Encoding || encoding == asciiEncoding) return text.length;
+	if (encoding == ucs2Encoding) return text.length * 2;
+	if (encoding == hexEncoding) return Math.floor(text.length / 2);
+	if (encoding == base64Encoding || encoding == base64UrlEncoding) {
+		let n = text.length;
+		if (n > 0 && text.charCodeAt(n - 1) == 61) n -= 1;
+		if (n > 1 && text.charCodeAt(n - 1) == 61) n -= 1;
+		return Math.floor(n * 3 / 4);
+	}
+	return text.byteLength;
+}
+
+@inline
+function isContinuation(byte: uint8): boolean {
+	return (byte & 0xC0) == 0x80;
+}
+
+@inline
+function sequenceWidth(lead: uint8): int64 {
+	if (lead < 0xC0) return 1;
+	if (lead < 0xE0) return 2;
+	return lead < 0xF0 ? 3 : 4;
+}
+
+@inline
+export function isEncodedSurrogate(text: Readonly<Span<uint8>>, at: int64, end: int64): boolean {
+	return text[at] == 0xED && at + 2 < end && (text[at + 1] & 0xE0) == 0xA0;
+}
+
+export function utf8Fit(text: Readonly<Span<uint8>>, limit: int64): int64 {
+	const length = text.length as int64;
+	if (length <= limit) return length;
+	let start = limit;
+	while (start > 0 && limit - start < 3 && isContinuation(text[start])) start -= 1;
+	return start + sequenceWidth(text[start]) <= limit ? limit : start;
+}
+
+function codePointAt(text: Readonly<Span<uint8>>, at: int64, width: int64): int32 {
+	const lead = text[at] as int32;
+	if (width == 1) return lead;
+	const second = (text[at + 1] & 0x3F) as int32;
+	if (width == 2) return ((lead & 0x1F) << 6) | second;
+	const third = (text[at + 2] & 0x3F) as int32;
+	if (width == 3) return ((lead & 0x0F) << 12) | (second << 6) | third;
+	return ((lead & 0x07) << 18) | (second << 12) | (third << 6) | ((text[at + 3] & 0x3F) as int32);
+}
+
+@inline
+function putUnit(bytes: EncodingBytes, at: int64, unit: int32, step: int64): int64 {
+	bytes[at] = (unit & 0xFF) as uint8;
+	if (step == 2) bytes[at + 1] = ((unit >> 8) & 0xFF) as uint8;
+	return at + step;
+}
+
+export function writeText(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64, encoding: int32): int64 {
+	if (encoding == utf8Encoding) {
+		const count = utf8Fit(text, limit);
+		let i: int64 = 0;
+		while (i < count) {
+			if (isEncodedSurrogate(text, i, count)) {
+				bytes[at + i] = 0xEF;
+				bytes[at + i + 1] = 0xBF;
+				bytes[at + i + 2] = 0xBD;
+				i += 3;
+			} else {
+				bytes[at + i] = text[i];
+				i += 1;
+			}
+		}
+		return count;
+	}
+	const step: int64 = encoding == ucs2Encoding ? 2 : 1;
+	const length = text.length as int64;
+	const end = at + limit;
+	let i: int64 = 0;
+	let k = at;
+	while (i < length && k + step <= end) {
+		const natural = sequenceWidth(text[i]);
+		const width = i + natural <= length ? natural : 1;
+		const point = codePointAt(text, i, width);
+		if (point < 0x10000) {
+			k = putUnit(bytes, k, point, step);
+		} else {
+			k = putUnit(bytes, k, 0xD7C0 + (point >> 10), step);
+			if (k + step > end) break;
+			k = putUnit(bytes, k, 0xDC00 | (point & 0x3FF), step);
+		}
+		i += width;
+	}
+	return k - at;
+}
+
+@inline
+function unitAt(data: Readonly<Span<uint8>>, index: int64): int32 {
+	return (data[index << 1] as int32) | ((data[(index << 1) + 1] as int32) << 8);
+}
+
+@inline
+function pairsAt(data: Readonly<Span<uint8>>, index: int64, units: int64): boolean {
+	const unit = unitAt(data, index);
+	return unit >= 0xD800 && unit < 0xDC00 && index + 1 < units && (unitAt(data, index + 1) & 0xFC00) == 0xDC00;
+}
+
+export function ucs2Text(data: Readonly<Span<uint8>>): string {
+	const units = (data.length as int64) >> 1;
+	let size: int64 = 0;
+	let i: int64 = 0;
+	while (i < units) {
+		const unit = unitAt(data, i);
+		if (pairsAt(data, i, units)) {
+			size += 4;
+			i += 2;
+		} else {
+			size += unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3;
+			i += 1;
+		}
+	}
+	let result = newEncodingOutput(size);
+	const bytes = freshEncodingOutputBytes(result);
+	let at: int64 = 0;
+	i = 0;
+	while (i < units) {
+		let point = unitAt(data, i);
+		if (pairsAt(data, i, units)) {
+			point = 0x10000 + ((point - 0xD800) << 10) + (unitAt(data, i + 1) - 0xDC00);
+			bytes[at] = (0xF0 | (point >> 18)) as uint8;
+			bytes[at + 1] = (0x80 | ((point >> 12) & 0x3F)) as uint8;
+			bytes[at + 2] = (0x80 | ((point >> 6) & 0x3F)) as uint8;
+			bytes[at + 3] = (0x80 | (point & 0x3F)) as uint8;
+			at += 4;
+			i += 2;
+		} else if (point < 0x80) {
+			bytes[at] = point as uint8;
+			at += 1;
+			i += 1;
+		} else if (point < 0x800) {
+			bytes[at] = (0xC0 | (point >> 6)) as uint8;
+			bytes[at + 1] = (0x80 | (point & 0x3F)) as uint8;
+			at += 2;
+			i += 1;
+		} else {
+			bytes[at] = (0xE0 | (point >> 12)) as uint8;
+			bytes[at + 1] = (0x80 | ((point >> 6) & 0x3F)) as uint8;
+			bytes[at + 2] = (0x80 | (point & 0x3F)) as uint8;
+			at += 3;
+			i += 1;
+		}
+	}
+	when (c) { return result; } else { return result.asString(); }
+}
+
 function base64Value(byte: uint8): int32 {
 	if (byte >= 65 && byte <= 90) return (byte as int32) - 65;
 	if (byte >= 97 && byte <= 122) return (byte as int32) - 71;
@@ -61,11 +246,103 @@ export function writeRoom(total: int64, offset: number, length: number): int64 {
 }
 
 function needWriteIndex(name: string, value: number, max: number): void {
-	if (Math.floor(value) != value) {
-		throw new RangeError(`The value of "${name}" is out of range. It must be an integer. Received ${value}`);
+	if (Math.floor(value) != value) throw outOfRange(name, "an integer", receivedText(value));
+	if (!(value >= 0 && value <= max)) throw outOfRange(name, `>= 0 && <= ${max}`, receivedText(value));
+}
+
+function outOfRange(name: string, rule: string, received: string): RangeError {
+	return new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${received}`);
+}
+
+function groupedDigits(text: string): string {
+	const start = text.startsWith("-") ? 1 : 0;
+	let end = text.length;
+	let groups = "";
+	while (end >= start + 4) {
+		groups = `_${text.slice(end - 3, end)}${groups}`;
+		end -= 3;
 	}
-	if (!(value >= 0 && value <= max)) {
-		throw new RangeError(`The value of "${name}" is out of range. It must be >= 0 && <= ${max}. Received ${value}`);
+	return `${text.slice(0, end)}${groups}`;
+}
+
+export function receivedText(value: number): string {
+	const text = `${value}`;
+	const wide = (value > 4294967296 || value < -4294967296) && value - value == 0;
+	return wide && Math.floor(value) == value ? groupedDigits(text) : text;
+}
+
+@inline
+export function needBytes(length: number, offset: number, width: number): void {
+	const max = length - width;
+	if (!(offset >= 0 && offset <= max && Math.floor(offset) == offset)) badOffset(offset, max);
+}
+
+@noinline
+function badOffset(offset: number, max: number): never {
+	if (Math.floor(offset) != offset) throw outOfRange("offset", "an integer", receivedText(offset));
+	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
+	throw outOfRange("offset", `>= 0 and <= ${max}`, receivedText(offset));
+}
+
+@inline
+export function needValue(value: number, lo: number, hi: number): void {
+	if (value > hi || value < lo) badValue(`>= ${lo} and <= ${hi}`, value);
+}
+
+@noinline
+function badValue(rule: string, value: number): never {
+	throw outOfRange("value", rule, receivedText(value));
+}
+
+@inline
+export function storedInt(value: number): int64 {
+	return value == value ? value as int64 : 0;
+}
+
+@inline
+export function checkedInt(value: number, lo: number, hi: number): int64 {
+	needValue(value, lo, hi);
+	return storedInt(value);
+}
+
+@noinline
+export function badByteLength(byteLength: number): never {
+	const rule = Math.floor(byteLength) != byteLength ? "an integer" : ">= 1 and <= 6";
+	throw outOfRange("byteLength", rule, receivedText(byteLength));
+}
+
+@inline
+export function widthOrZero(byteLength: number): int64 {
+	if (!(byteLength >= 1 && byteLength <= 6)) return 0;
+	const width = byteLength as int64;
+	return (width as number) == byteLength ? width : 0;
+}
+
+export function needWidth(byteLength: number): void {
+	if (widthOrZero(byteLength) == 0) badByteLength(byteLength);
+}
+
+export function needWideValue(value: number, byteLength: number, isSigned: boolean): void {
+	needWidth(byteLength);
+	const bits = byteLength * 8;
+	const span = Math.pow(2, bits);
+	const lo = isSigned ? -span / 2 : 0;
+	const hi = isSigned ? span / 2 - 1 : span - 1;
+	if (!(value > hi || value < lo)) return;
+	if (byteLength <= 4) badValue(`>= ${lo} and <= ${hi}`, value);
+	badValue(isSigned ? `>= -(2 ** ${bits - 1}) and < 2 ** ${bits - 1}` : `>= 0 and < 2 ** ${bits}`, value);
+}
+
+when (!bare && !solana) {
+	export function needBigValue(value: bigint, isSigned: boolean): void {
+		const fits = isSigned
+			? value >= -9223372036854775808n && value <= 9223372036854775807n
+			: value >= 0n && value <= 18446744073709551615n;
+		if (fits) return;
+		const rule = isSigned ? ">= -(2n ** 63n) and < 2n ** 63n" : ">= 0n and < 2n ** 64n";
+		const text = `${value}`;
+		const wide = value > 4294967296n || value < -4294967296n;
+		throw outOfRange("value", rule, `${wide ? groupedDigits(text) : text}n`);
 	}
 }
 
@@ -156,4 +433,42 @@ export function encodeBase64Url(data: Readonly<Span<uint8>>): string {
 		if (rest == 2) bytes[at + 2] = digits[(b & 15) << 2];
 	}
 	when (c) { return result; } else { return result.asString(); }
+}
+
+test "receivedText groups the digits of an integer beyond 2 ** 32" {
+	assert receivedText(4294967296) == "4294967296";
+	assert receivedText(4294967297) == "4_294_967_297";
+	assert receivedText(-5000000000) == "-5_000_000_000";
+	assert receivedText(1e21) == "1e_+21";
+	assert receivedText(5000000000.5) == "5000000000.5";
+}
+
+test "encodingOf takes Node's names in any case" {
+	assert encodingOf("UTF-8") == utf8Encoding;
+	assert encodingOf("Binary") == latin1Encoding;
+	assert encodingOf("UTF-16LE") == ucs2Encoding;
+	assert encodingOf("Base64Url") == base64UrlEncoding;
+	assert encodingOf("utf9") == -1;
+	assert encodingOf("") == -1;
+}
+
+test "utf8Fit keeps whole characters" {
+	const text = "abé中😀".asBytes();
+	assert utf8Fit(text, 3) == 2;
+	assert utf8Fit(text, 4) == 4;
+	assert utf8Fit(text, 6) == 4;
+	assert utf8Fit(text, 7) == 7;
+	assert utf8Fit(text, 10) == 7;
+	assert utf8Fit(text, 11) == 11;
+	assert utf8Fit(text, 99) == 11;
+}
+
+test "ucs2Text joins a pair and keeps a lone surrogate" {
+	const units: uint8[] = [0x61, 0x00, 0x3D, 0xD8, 0x00, 0xDE, 0x00, 0xD8, 0x62];
+	const text = ucs2Text(units);
+	assert text.length == 4;
+	assert text.charCodeAt(0) == 0x61;
+	assert text.charCodeAt(1) == 0xD83D;
+	assert text.charCodeAt(2) == 0xDE00;
+	assert text.charCodeAt(3) == 0xD800;
 }
