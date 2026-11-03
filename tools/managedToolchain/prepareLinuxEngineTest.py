@@ -598,7 +598,7 @@ class World(TempCase):
         self.elf(os.path.join(self.llvm, "bin", "clang"), **dict(tool, needed=[
             "libclang-cpp.so.21.1", "libLLVM.so.21.1", "libstdc++.so.6", "libm.so.6", "libc.so.6"],
             verneed=[("libstdc++.so.6", ["GLIBCXX_3.4.30"]), LIBC]))
-        for name in ("lld", "llvm-ar", "llvm-ranlib", "llvm-strip", "llvm-objcopy", "llvm-nm", "dsymutil", "llvm-readobj"):
+        for name in ("lld",) + pl.TOOLS:
             self.elf(os.path.join(self.llvm, "bin", name), **tool)
         os.symlink("lld", os.path.join(self.llvm, "bin", "ld.lld"))
         self.elf(os.path.join(self.llvm, "lib", "libclang-cpp.so.21.1"), mode=0o644, soname="libclang-cpp.so.21.1",
