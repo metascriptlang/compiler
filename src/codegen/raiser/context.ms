@@ -136,13 +136,13 @@ export interface RaiserCompState {
 	cellRegs: int32[];
 	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
 	argViews: int32[];
-	guardedReturnTop: int32;
 }
 
 export interface RaiserTryInfo {
 	finallyBody: Node | null;
 	routeReg: int32;
 	inFinallyBody: boolean;
+	returnTop: int32;
 }
 
 export function createCompState(): RaiserCompState {
@@ -153,7 +153,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], guardedReturnTop: -1 };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -352,7 +352,7 @@ export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
 // Using `locals.items.length` would set nextReg=2 and clobber R2 (`k`)
 // on the next statement. Compute max(local.reg)+1 instead.
 export function resetTemps(s: RaiserCompState, enclosingRegs: int32 = 0): void {
-	let maxReg = Math.max(enclosingRegs - 1, s.guardedReturnTop);
+	let maxReg = enclosingRegs - 1;
 	for (const local of s.locals.items) {
 		if (local.heldThrough > maxReg) maxReg = local.heldThrough;
 	}
@@ -413,7 +413,7 @@ export function emitLoadConst(s: RaiserCompState, reg: int32, value: RaiserValue
 
 // A Ret inside a guarded region runs again after the finally, reading this register.
 export function emitRet(s: RaiserCompState, reg: int32): void {
-	if (s.tries.length > 0 && reg > s.guardedReturnTop) s.guardedReturnTop = reg;
+	for (const guarded of s.tries) if (reg > guarded.returnTop) guarded.returnTop = reg;
 	emitInst(s, raiserABC(RaiserOpcode.Ret, reg, 0, 0));
 }
 

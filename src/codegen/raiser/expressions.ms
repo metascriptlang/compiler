@@ -1767,7 +1767,7 @@ function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee
 	if (!any || !mayRaiseAcross(call, args)) return { held, callee, route: -1, tryAt: -1 };
 	const route = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryAt = emitAbxPlaceholder(s, RaiserOpcode.Try);
-	s.tries.push({ finallyBody: null, routeReg: route, inFinallyBody: false });
+	s.tries.push({ finallyBody: null, routeReg: route, inFinallyBody: false, returnTop: -1 });
 	return { held, callee, route, tryAt };
 }
 

@@ -14,7 +14,7 @@ import {
 import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount, immField, FINALLY_LEAVE } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
+	RaiserCompState, RaiserTryInfo, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
 	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps, keepRegistersOfLocation,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
@@ -560,9 +560,11 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
 	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
-	s.tries.push({ finallyBody: d.finallyBody, routeReg, inFinallyBody: false });
+	const guardedTry: RaiserTryInfo = { finallyBody: d.finallyBody, routeReg, inFinallyBody: false, returnTop: -1 };
+	s.tries.push(guardedTry);
 	compileStmt(s, d.tryBody);
 	s.tries.pop();
+	let returnTop = guardedTry.returnTop;
 	const toFinally = emitJumpPlaceholder(s);
 
 	let catchIdx = -1;
@@ -575,13 +577,13 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 		if (d.catchName == "") emitInst(s, raiserABC(RaiserOpcode.RcDec, catchReg, 1, 0));
 		if (d.finallyBody != null) {
 			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
-			s.tries.push({ finallyBody: d.finallyBody, routeReg, inFinallyBody: false });
+			s.tries.push({ finallyBody: d.finallyBody, routeReg, inFinallyBody: false, returnTop: -1 });
 		}
 		const savedLocals = s.locals.items.length;
 		if (d.catchName != "") declareLocal(s, declaredSymbol(node, d.catchName), catchReg);
 		if (d.catchBody != null) compileStmt(s, d.catchBody);
 		s.locals.items.shrink(savedLocals);
-		if (catchGuard >= 0) s.tries.pop();
+		if (catchGuard >= 0) returnTop = Math.max(returnTop, s.tries.pop()!.returnTop);
 		catchEnd = emitJumpPlaceholder(s);
 	}
 
@@ -599,7 +601,8 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	}
 	patchJumpTo(s, toFinally, finIdx);
 	if (d.finallyBody != null) {
-		s.tries.push({ finallyBody: null, routeReg, inFinallyBody: true });
+		if (s.nextReg <= returnTop) s.nextReg = returnTop + 1;
+		s.tries.push({ finallyBody: null, routeReg, inFinallyBody: true, returnTop: -1 });
 		compileStmt(s, d.finallyBody);
 		s.tries.pop();
 	}
@@ -610,7 +613,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 export function compileBodyReleasingOnRaise(s: RaiserCompState, body: Node, owned: int32): void {
 	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
-	s.tries.push({ finallyBody: null, routeReg, inFinallyBody: false });
+	s.tries.push({ finallyBody: null, routeReg, inFinallyBody: false, returnTop: -1 });
 	compileStmt(s, body);
 	s.tries.pop();
 	const finIdx = codeLen(s);
