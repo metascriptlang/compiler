@@ -119,6 +119,7 @@ function buildAndRun(
 
 function judge(spec: WasmmixSpec, cols: Column[]): string[] {
 	const problems: string[] = [];
+	if (cols.length == 0) return problems;
 	const expected = spec.hasStdout ? spec.stdout.join("\n") + "\n" : "";
 	for (const c of cols) {
 		if (!c.ok) {

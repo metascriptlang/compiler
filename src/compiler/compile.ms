@@ -13,7 +13,7 @@ import { isAlphanumeric, isDigit } from "../lexer/chars";
 import { BinaryExprData, ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, MacroInvocationData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
-import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isOutsideResolvedStd, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram, transformProgramHead, transformProgramTail, TransformHead } from "../transform/index";
@@ -88,7 +88,8 @@ import { buildWasmHalf } from "./wasmBoundary/placementBuild";
 import { manifestFor, BoundaryFunction, BoundaryRefusal } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
-import { placedModuleErrors, placedImportErrors } from "./wasmBoundary/refusals";
+import { placedModuleErrors, placedImportErrors, placedHandleReadErrors } from "./wasmBoundary/refusals";
+import { wasmReachedRoutines } from "../checker/sendable";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -1885,6 +1886,7 @@ function placeWasmModules(
 		for (const e of placedImportErrors(importer, mod.imports, placed.paths)) errors.push(e);
 	}
 	const functions: BoundaryFunction[] = [];
+	const handles: Symbol[] = [];
 	for (let i = 0; i < placed.paths.length; i += 1) {
 		const manifest = manifestFor(
 			placed.paths[i],
@@ -1894,6 +1896,17 @@ function placeWasmModules(
 		);
 		for (const e of manifest.errors) errors.push(e);
 		for (const f of manifest.functions) functions.push(f);
+		for (const h of manifest.handles) handles.push(h);
+	}
+	for (const path of importerPaths) {
+		const program = lookupModuleProgram(path);
+		const ctx = lookupModuleCtx(path);
+		if (program == null || ctx == null) continue;
+		if (!isOutsideResolvedStd(ctx, path)) continue;
+		const inWasm = wasmReachedRoutines(ctx, program);
+		for (const e of placedHandleReadErrors(handles, path, program, inWasm)) {
+			errors.push(e);
+		}
 	}
 	if (errors.length > 0) {
 		for (const e of errors) printBoundaryRefusal(graph, e);
