@@ -75,3 +75,14 @@ test "a union read narrowed to one member still fits its own member's slot and t
 	}
 }`) == 0;
 }
+
+test "a destructuring assignment target takes its declared union, not the arm it was narrowed to" {
+	assert strictErrorCount(structArms + `struct Box { p: AB; q: AB; }
+function run(): void {
+	let p: AB = { v: [1], a: 1 } as A;
+	let q: AB = { v: { n: 5 }, b: "b" } as B;
+	[p, q] = [q, p];
+	let box: Box = { p: p, q: q };
+	[box.p, box.q] = [box.q, box.p];
+}`) == 0;
+}

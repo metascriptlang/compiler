@@ -1,9 +1,5 @@
-// Parity program — a union of structs whose arms share a field name of
-// different kinds is copied and reassigned across arms through slots typed as
-// the union, and a read narrowed to one arm fits that arm's own slot; each copy
-// keeps its arm and its payload on every backend.
-//
 // @stdout: A:2:1 B:5:bx B:5:bx A:2:1 1 bx
+// @stdout: A:2:1 B:5:bx
 // @stdout: A:2:1 B:5:bx C:cy:3 B:5:bx C:cy:3 A:2:1
 // @stdout: a:2 b:5:bx b:5:bx a:2
 // @stdout: end
@@ -37,6 +33,8 @@ function twoArms(): void {
 	const keptA: A = one;
 	const keptB: B = two;
 	console.log(show(one), show(two), show(c1), show(c2), keptA.a, keptB.b);
+	[c1, c2] = [c2, c1];
+	console.log(show(c1), show(c2));
 }
 
 function threeArms(): void {
