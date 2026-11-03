@@ -7,7 +7,7 @@ import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, TypeKi
 import { isStringLike, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeMember } from "../util";
+import { makeCall, makeMember, generatedProcSym } from "../util";
 import { isAssignOp } from "../../ast/operators";
 
 function isStringTyped(node: Node): boolean {
@@ -34,7 +34,9 @@ export function lowerStringIndexReads(program: Node, ctx: TransformContext): Nod
 		if (n.kind != NodeKind.ArrayAccess) return n;
 		const d = n.data as ArrayAccessData;
 		if (!isStringTyped(d.array) || isRangeIndex(d.index) || written.includes(n)) return n;
-		const call = makeCall(makeMember(d.array, "charAt", n.location), [d.index], n.location);
+		const callee = makeMember(d.array, "charAt", n.location);
+		callee.resolvedSym = generatedProcSym("msStringCharAt");
+		const call = makeCall(callee, [d.index], n.location);
 		call.nodeType = n.nodeType;
 		return call;
 	});
