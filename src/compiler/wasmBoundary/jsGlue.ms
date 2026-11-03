@@ -42,6 +42,7 @@ const GLUE = [
 	"\t__msbInRange(a, off, n);",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
 	"\tif (ArrayBuffer.isView(a)) v.set(a.subarray(off, off + n));",
+	"\telse if (off === 0 && n === a.length) v.set(a);",
 	"\telse for (let i = 0; i < n; i++) v[i] = a[off + i];",
 	"}",
 	"function __msbCopyBack(p, a, off, n, T, bool) {",
