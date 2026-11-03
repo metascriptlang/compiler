@@ -1,7 +1,6 @@
 // @exit: 1
 // @stdout: linked 2
 // @stdout: Error: onDestroy kept a reference to the Leaf it destroys
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
 // @skip-js: onDestroy does not run on JS
 // note: the collector frees a cycle whose inherited onDestroy stores `this` in a global; the program stops with the freed object's own class named. Sibling: onDestroyKeepingThisStops (the plain free path).
 

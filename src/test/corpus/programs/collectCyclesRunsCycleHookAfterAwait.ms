@@ -1,6 +1,5 @@
 // @stdout: destroy after-await
 // @stdout: got 1 destroyed 1
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so collectCycles finds nothing to run and it prints destroyed 0
 // @skip-js: onDestroy does not run on JS
 // note: collectCycles after an await of a spawned task collects the self-cycle the continuation made and runs its onDestroy before the next line (sibling cycleHookNotRunAtExitAfterAwait).
 

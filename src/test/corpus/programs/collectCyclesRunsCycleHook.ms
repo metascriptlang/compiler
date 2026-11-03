@@ -1,6 +1,5 @@
 // @stdout: destroy self
 // @stdout: destroyed 1
-// @xfail(raiser): the Raiser VM runs no lifecycle hooks, so collectCycles finds nothing to run and it prints destroyed 0
 // @skip-js: onDestroy does not run on JS
 // note: collectCycles collects a garbage self-cycle before exit and runs its onDestroy then, which exit alone never does (sibling cycleHookNotRunAtExit).
 
