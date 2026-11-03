@@ -1,5 +1,7 @@
 import { compileToCWithStd, compileToJSWithStd } from "../helpers";
-import { mkdir, readFile, writeFile, remove, removeAll, exists, fileSize, modifiedTime, changeStamp } from "std/fs";
+import { createInterpreter, evalModule, Evaluation, Diagnostic } from "../../embed/index";
+import { resolveRuntimeDir } from "../../utils/path";
+import { mkdir, ensureDir, readFile, writeFile, remove, removeAll, exists, fileSize, modifiedTime, changeStamp } from "std/fs";
 import { join } from "std/fs/path";
 import { cwd } from "std/process";
 
@@ -228,11 +230,113 @@ test "macro std fs: fileSize, modifiedTime and changeStamp run at comptime with 
 	}
 }
 
-test "macro std fs: a std routine whose body calls C and has no host routine is refused by its C name" {
-	const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; import { cpus } from "std/os"; '
-		+ "macro probe(n: Node): Node { const text = `${cpus().length}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));");
+function stdCallMacro(imports: string, call: string): string {
+	return 'import { Node, NodeKind } from "std/meta"; ' + imports
+		+ " macro probe(n: Node): Node { const text = `${" + call + "}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));";
+}
+
+function refusalsIn(error: string): int32 {
+	return error.split("cannot run on the Raiser").length - 1;
+}
+
+test "macro std tiers: a std routine the Raiser cannot run is refused once at the macro's call, naming the routine, its module, the reason and where it runs" {
+	const cases = [
+		{ imports: 'import { createSocket } from "std/net";', call: "createSocket()", refusal: "'createSocket' from 'std/net' cannot run on the Raiser: no host bridge for 'msNetSocket'; it runs on C" },
+		{ imports: 'import { blake2bSync } from "std/crypto/blake2b";', call: 'blake2bSync("abc").ok', refusal: "'blake2bSync' from 'std/crypto/blake2b' cannot run on the Raiser: no host bridge for 'msBlake2b'; it runs on C and JS" },
+		{ imports: 'import { cpus } from "std/os";', call: "cpus().length", refusal: "'cpus' from 'std/os' cannot run on the Raiser: no host bridge for 'msOsCpuCount' (and 1 more); it runs on C" },
+		{ imports: 'import { randomUUIDSync } from "std/crypto";', call: "randomUUIDSync().ok", refusal: "'randomUUIDSync' from 'std/crypto' cannot run on the Raiser: no host bridge for 'msCryptoRandomUuid'; it runs on C and JS" },
+	];
+	for (const c of cases) {
+		const result = compileToCWithStd(stdCallMacro(c.imports, c.call));
+		assert !result.ok, c.call;
+		if (!result.ok) {
+			assert result.error.contains(c.refusal), result.error;
+			assert refusalsIn(result.error) == 1, result.error;
+		}
+	}
+}
+
+test "macro std tiers: an extern with no host bridge called by a macro or a @comptime block is refused by its name" {
+	const viaMacro = compileToCWithStd(stdCallMacro("extern function msOsHostname(): string;", "msOsHostname().length"));
+	const viaBlock = compileToCWithStd("extern function msOsHostname(): string; const n: number = @comptime { return msOsHostname().length; }; console.log(n);");
+	for (const result of [viaMacro, viaBlock]) {
+		assert !result.ok;
+		if (!result.ok) assert result.error.contains("'msOsHostname' cannot run on the Raiser: no host bridge for 'msOsHostname'"), result.error;
+	}
+}
+
+test "macro std tiers: a std routine its module's Raiser tier lacks is refused once at the macro's call" {
+	const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; import { utf8String } from "std/core/string/bytes";'
+		+ " macro probe(n: Node): Node { const bytes: uint8[] = [104, 105]; const text = utf8String(bytes, false); return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));");
 	assert !result.ok;
-	if (!result.ok) assert result.error.contains("no host bridge for 'msOsCpus'"), result.error;
+	if (!result.ok) {
+		assert result.error.contains("'utf8String' from 'std/core/string/bytes' cannot run on the Raiser: the Raiser tier of std/core/string/bytes does not declare 'utf8String'; it runs on C"), result.error;
+		assert !result.error.contains("cannot evaluate"), result.error;
+		assert !result.error.contains("internal:"), result.error;
+	}
+}
+
+test "macro std tiers: a @comptime block that calls a std routine the Raiser cannot run is refused at the block's call" {
+	const result = compileToCWithStd('import { cpus } from "std/os"; const n: number = @comptime { return cpus().length; }; console.log(n);');
+	assert !result.ok;
+	if (!result.ok) {
+		assert result.error.contains("@comptime block: 'cpus' from 'std/os' cannot run on the Raiser: no host bridge for 'msOsCpuCount'"), result.error;
+		assert refusalsIn(result.error) == 1, result.error;
+	}
+}
+
+function raiserRun(source: string): Result<Evaluation, Diagnostic[]> {
+	const dir = join(cwd(), `out/test/raiserTiers.${performance.now()}`);
+	ensureDir(dir);
+	writeFile(`${dir}/main.ms`, source);
+	const created = createInterpreter(resolveRuntimeDir());
+	if (!created.ok) throw new Error(created.error);
+	const r = evalModule(created.value, `${dir}/main.ms`);
+	removeAll(dir);
+	return r;
+}
+
+function refusedAt(source: string, refusal: string, line: int32): string {
+	const r = raiserRun(source);
+	if (r.ok) return `ran: ${r.value.output}`;
+	for (const d of r.error) {
+		if (d.message.includes(refusal)) return d.line == line ? "" : `refused at line ${d.line}: ${d.message}`;
+	}
+	return r.error.map((d: Diagnostic): string => `${d.line}:${d.column} ${d.message}`).join("\n");
+}
+
+test "raiser run tiers: an import of a module with no Raiser tier is refused at the import, naming what it imports and where it runs" {
+	assert refusedAt('import { blake2bSync } from "std/crypto/blake2b";\nconsole.log(blake2bSync("abc").ok);\n',
+		"'blake2bSync' from 'std/crypto/blake2b' cannot run on the Raiser: the module has no Raiser tier; it runs on C and JS", 1) == "";
+	assert refusedAt('console.log("first");\nimport { createSocket, listen } from "std/net";\nconsole.log(createSocket() >= 0);\n',
+		"'createSocket', 'listen' from 'std/net' cannot run on the Raiser: the module has no Raiser tier; it runs on C", 2) == "";
+	assert refusedAt('import { nothing } from "./noSuchModule";\nconsole.log(nothing);\n', "Cannot resolve module './noSuchModule'", 0) == "";
+}
+
+test "raiser run tiers: a name a module's Raiser tier lacks is refused at the import, naming where it runs, and a name no tier has keeps its message" {
+	assert refusedAt('import { cpus } from "std/os";\nconsole.log(cpus().length > 0);\n',
+		"'cpus' from 'std/os' cannot run on the Raiser: its Raiser tier does not declare it; it runs on C", 1) == "";
+	assert refusedAt('import { sha256Sync, randomUUIDSync } from "std/crypto";\nconsole.log(randomUUIDSync().ok);\n',
+		"'randomUUIDSync' from 'std/crypto' cannot run on the Raiser: its Raiser tier does not declare it; it runs on C and JS", 1) == "";
+	assert refusedAt('import { noSuchRoutine } from "std/os";\nconsole.log(noSuchRoutine);\n', "Module 'std/os' has no export 'noSuchRoutine'", 1) == "";
+}
+
+test "raiser run tiers: a reached call the Raiser cannot run is a compile error at the call, before the program prints" {
+	assert refusedAt('extern function msOsHostname(): string;\nconsole.log("before");\nconsole.log(msOsHostname().length > 0);\n',
+		"'msOsHostname' cannot run on the Raiser: no host bridge for 'msOsHostname'", 3) == "";
+	assert refusedAt('function one(): int32 {\n\tconst v = await spawn((): int32 => 1, { timeout: 100 });\n\treturn v;\n}\nconsole.log(one());\n',
+		"'spawn' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msSpawn'; it runs on C and JS", 2) == "";
+	assert refusedAt('function bump(c: Locked<int32>): void { lockedUpdate(c, (v: int32): int32 => v + 1); }\nconst f = bump;\nconsole.log("before");\n',
+		"'lockedUpdate' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msLockedHeldHere'", 1) == "";
+}
+
+test "raiser run tiers: an unbridged extern in a std body or a user function the program never calls still compiles and runs" {
+	const r = raiserRun('extern function nowhere(): int32;\nfunction unused(): int32 { return nowhere(); }\nconsole.log("ok");\n');
+	assert r.ok, r.ok ? "" : r.error.map((d: Diagnostic): string => d.message).join("\n");
+	if (r.ok) {
+		assert r.value.output == "ok\n", r.value.output;
+		assert r.value.warnings.length == 0, r.value.warnings.map((d: Diagnostic): string => d.message).join("\n");
+	}
 }
 
 const objectCallMacro = `
