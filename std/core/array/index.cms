@@ -412,12 +412,13 @@ export function* values<T>(this arr: T[]): Iterator<T> {
 	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield arr[i];
 }
 
+// The mask lets the C compiler prove the cast exact, so a body that casts the index back folds it to the counter.
 export function* keys<T>(this arr: T[]): Iterator<number> {
-	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield i as number;
+	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield (i & 9007199254740991) as number;
 }
 
 export function* entries<T>(this arr: T[]): Iterator<[number, T]> {
-	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield [i as number, arr[i]];
+	for (let i: int64 = 0; i < (arr.length as int64); i += 1) yield [(i & 9007199254740991) as number, arr[i]];
 }
 
 export function join<T>(this arr: Vec<T>, sep: string): string {
