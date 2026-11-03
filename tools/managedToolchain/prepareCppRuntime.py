@@ -512,11 +512,14 @@ def step(run, name, command, stderr=False):
 
 
 def searchList(text, root):
-    """The include search list of a `-E -v` run with the tree root replaced."""
+    """The include search list of a `-E -v` run with the tree root replaced, and the real root of its engine too: a
+    driver without `-nostdinc` names its resource directory by the realpath of the binary."""
     found = SEARCH_LIST.search(text)
     if not found:
         raise pe.EngineError("no include search list in %s" % text)
-    return [os.path.normpath(line.strip().replace(root, "$ROOT")) for line in found.group(1).splitlines() if line.strip()]
+    real = os.path.dirname(os.path.dirname(os.path.realpath(os.path.join(root, "bin", "clang"))))
+    return [os.path.normpath(line.strip().replace(root, "$ROOT").replace(real, "$ROOT"))
+            for line in found.group(1).splitlines() if line.strip()]
 
 
 def checkControl(run, merged, control, work, variant):

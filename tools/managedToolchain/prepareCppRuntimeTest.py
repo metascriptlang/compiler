@@ -377,6 +377,16 @@ class InspectTest(TempCase):
             self.assertRegex(pc.peCppProblem(path, kind), message)
 
 
+class SearchListTest(TempCase):
+    def test_the_real_root_of_a_symlinked_engine_reads_as_the_tree_root(self):
+        write(self.path("real", "bin", "clang"))
+        os.makedirs(self.path("view"))
+        os.symlink(self.path("real", "bin"), self.path("view", "bin"))
+        text = "#include <...> search starts here:\n %s/rt/a\n %s/lib/clang/22/include\nEnd of search list.\n" % (
+            self.path("view"), self.path("real"))
+        self.assertEqual(pc.searchList(text, self.path("view")), ["$ROOT/rt/a", "$ROOT/lib/clang/22/include"])
+
+
 class ControlTest(TempCase):
     def test_the_c_include_list_object_and_linked_file_must_not_change_with_the_overlay(self):
         listing = "#include <...> search starts here:\n %s/runtime/include/libc/a\nEnd of search list.\n"
