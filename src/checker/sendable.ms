@@ -1971,6 +1971,8 @@ function viewCallbackOf(arg: Node): Node | null {
 	const p = peelHidden(arg);
 	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr) return p;
 	const sym = p.kind == NodeKind.Identifier ? aliasTarget(p.resolvedSym) : null;
+	const bound = constBindingInitializer(sym);
+	if (bound != null) return viewCallbackOf(bound);
 	const decl = sym != null && sym.symbolKind == SymbolKind.Function ? sym.declNode : null;
 	return decl != null && decl.kind == NodeKind.FunctionDecl ? decl : null;
 }

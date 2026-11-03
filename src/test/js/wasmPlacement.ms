@@ -174,8 +174,8 @@ export struct Handle<T> { ptr: Ptr<void>; }
 @builtin("FfiVecBox")
 export class VecBox<T> { items: Vec<T> = []; }
 export function view<T>(this h: Handle<VecBox<T>>, f: (v: Span<T>) => void): void {}
-let kept: Span<int32> | null = null;
-function stash(v: Span<int32>): void { kept = v; }
+const kept: Span<int32>[] = [];
+function stash(v: Span<int32>): void { kept.push(v); }
 `;
 
 function viewError(body: string): string {
@@ -189,6 +189,10 @@ test "a view callback may index and set its Span but not keep it" {
 	const ok = viewError("h.view((v: Span<int32>): void => { v[0] = v[1]; });");
 	assert ok == "", ok;
 	const escapes = "Span v escapes its view";
-	assert viewError("h.view((v: Span<int32>): void => { kept = v; });").contains(escapes);
-	assert viewError("h.view(stash);").contains("Span v escapes its view");
+	const inline = "h.view((v: Span<int32>): void => { kept.push(v); });";
+	assert viewError(inline).contains(escapes), viewError(inline);
+	assert viewError("h.view(stash);").contains(escapes);
+	const bound = "const f = (v: Span<int32>): void => { kept.push(v); }; "
+		+ "h.view(f);";
+	assert viewError(bound).contains(escapes), viewError(bound);
 }
