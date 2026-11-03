@@ -173,3 +173,25 @@ test "readonlyReturn: a receiver call that stores the module const, or a receive
 	assert errors(hostShape + "function open(host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return open(ctx.db, ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 1;
 	assert errors(hostShape + "function look(this b: Box, v: Readonly<Node>): int32 { return v.n; }\nconst w = spawn(() => { const c: Ctx2 = { box: new Box() }; const k = c.box.look(ROOT); const h = new Holder(); h.f = c.box.f; return k; });", "stores the module const 'ROOT' into a field") == 1;
 }
+
+const curKept = "struct CurKept { host: Host; t: Cursor<Readonly<Node>>; }\nstruct GenKept<T> { v: T; t: Cursor<Readonly<Node>>; }\n";
+
+test "readonlyReturn: a module const stored into a Cursor field of an object literal takes no count, while a Readonly field stays a counted store" {
+	assert errors(hostShape + curKept + "function keep(host: Host, t: Readonly<Node>): CurKept { return { host: host, t: t }; }\n" + inTask + "return keep(ctx.db, ROOT).t!.n; });", "stores") == 0;
+	assert errors(hostShape + curKept + inTask + "const k: CurKept = { host: ctx.db, t: ROOT }; return k.t!.n; });", "stores") == 0;
+	assert errors(hostShape + curKept + "function keep<T>(v: T, t: Readonly<Node>): GenKept<T> { return { v: v, t: t }; }\n" + inTask + "return keep(1, ROOT).t!.n; });", "stores") == 0;
+	assert errors(hostShape + curKept + inTask + "const k: Kept = { host: ctx.db, t: ROOT }; return k.t.n; });", "stores the module const 'ROOT' into the field 't' of an object literal") == 1;
+	const byValue = "struct SRow { n: int32; f: Sendable<(k: int32) => int32>; }\nconst SR: Readonly<SRow> = { n: 1, f: (k: int32): int32 => k };\nstruct SKept { s: Cursor<Readonly<SRow>>; }\n";
+	assert errors(hostShape + byValue + inTask + "const k: SKept = { s: SR }; return k.s!.n; });", "stores the module const 'SR' into the field 's' of an object literal") == 1;
+}
+
+const podShapes = "struct Pod { name: string; base: int32; }\nstruct GPod<T> { name: string; base: int32; v: T; }\nstruct Wrap<T> { inner: GPod<T>; }\nclass Cell { n: int32 = 0; }\n";
+const moduleRule = "module state crosses threads only as";
+
+test "readonlyReturn: a module const of a generic struct instance holding only values crosses threads as a value, as its non-generic twin does" {
+	assert errors(podShapes + "const P: Readonly<Pod> = { name: \"p\", base: 1 };\nconst w = spawn((): int32 => P.base);", moduleRule) == 0;
+	assert errors(podShapes + "const P: Readonly<GPod<int32>> = { name: \"p\", base: 1, v: 2 };\nconst w = spawn((): int32 => P.base + P.v);", moduleRule) == 0;
+	assert errors(podShapes + "const P: Readonly<Wrap<string>> = { inner: { name: \"p\", base: 1, v: \"x\" } };\nconst w = spawn((): int32 => P.inner.base);", moduleRule) == 0;
+	assert errors(podShapes + "let P: GPod<int32> = { name: \"p\", base: 1, v: 2 };\nconst w = spawn((): int32 => P.base);", moduleRule) == 1;
+	assert errors(podShapes + "let P: GPod<Cell> = { name: \"p\", base: 1, v: new Cell() };\nconst w = spawn((): int32 => P.base);", moduleRule) == 1;
+}
