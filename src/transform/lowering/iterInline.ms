@@ -4,7 +4,7 @@ import {
 	MemberExprData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
 	TryCatchStmtData, BinaryExprData, UpdateExprData,
 	HiddenDerefData, OutExprData, BreakStmtData, ContinueStmtData, IdentifierData,
-	ArrayPatternData, BlockStmtData, VariableDeclData, ArrowFunctionData, FunctionExprData, isEmptyBlock,
+	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData, isEmptyBlock,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode, mapChildren } from "../walker";
@@ -349,7 +349,7 @@ function inlineStmt(node: Node, st: InlineState): Node {
 		NodeKind.ExprStmt => {
 			const e = (node.data as ExprStmtData).expr;
 			const stored = assignsLocal(e);
-			const call = stored ? (e.data as BinaryExprData).right : e;
+			const call = underProjections(stored ? (e.data as BinaryExprData).right : e);
 			const consumer = matchConsumer(call, st);
 			if (consumer != null && stored && (e.data as BinaryExprData).operator != "=") {
 				const pre: Node[] = [];
@@ -360,7 +360,8 @@ function inlineStmt(node: Node, st: InlineState): Node {
 			if (consumer != null) {
 				const r = expandConsumer(consumer, call.nodeType, st, node.location);
 				if (stored && r.result != null) {
-					(e.data as BinaryExprData).right = makeIdentResolved(r.result, node.location);
+					const b = e.data as BinaryExprData;
+					b.right = replaceUnderProjections(b.right, makeIdentResolved(r.result, node.location));
 					r.stmts.push(node);
 				}
 				return makeBlock(r.stmts, node.location);
@@ -368,10 +369,11 @@ function inlineStmt(node: Node, st: InlineState): Node {
 		},
 		NodeKind.ReturnStmt => {
 			const arg = (node.data as ReturnStmtData).argument;
-			const consumer = arg != null ? matchConsumer(arg, st) : null;
+			const call = arg != null ? underProjections(arg) : null;
+			const consumer = call != null ? matchConsumer(call, st) : null;
 			if (consumer != null) {
-				const r = expandConsumer(consumer, arg!.nodeType, st, node.location);
-				if (r.result != null) (node.data as ReturnStmtData).argument = makeIdentResolved(r.result, node.location);
+				const r = expandConsumer(consumer, call!.nodeType, st, node.location);
+				if (r.result != null) (node.data as ReturnStmtData).argument = replaceUnderProjections(arg!, makeIdentResolved(r.result, node.location));
 				r.stmts.push(node);
 				return makeBlock(r.stmts, node.location);
 			}
@@ -389,6 +391,31 @@ function inlineStmt(node: Node, st: InlineState): Node {
 	return node;
 }
 
+// A cast, or a read of a field of the consumer's result, runs after the consumer and nothing else
+// runs before it, so the consumer expands where it stands and the wrapper reads its result.
+function underProjections(e: Node): Node {
+	if (e.kind == NodeKind.TypeAssertion) return underProjections((e.data as TypeAssertionData).asExpr);
+	if (e.kind == NodeKind.HiddenDeref) return underProjections((e.data as HiddenDerefData).expr);
+	if (e.kind == NodeKind.MemberExpr && !(e.data as MemberExprData).isOptional) return underProjections((e.data as MemberExprData).object);
+	return e;
+}
+
+function replaceUnderProjections(e: Node, result: Node): Node {
+	if (e.kind == NodeKind.TypeAssertion) {
+		const d = e.data as TypeAssertionData;
+		d.asExpr = replaceUnderProjections(d.asExpr, result);
+	} else if (e.kind == NodeKind.HiddenDeref) {
+		const d = e.data as HiddenDerefData;
+		d.expr = replaceUnderProjections(d.expr, result);
+	} else if (e.kind == NodeKind.MemberExpr && !(e.data as MemberExprData).isOptional) {
+		const d = e.data as MemberExprData;
+		d.object = replaceUnderProjections(d.object, result);
+	} else {
+		return result;
+	}
+	return e;
+}
+
 function assignsLocal(e: Node): boolean {
 	if (e.kind != NodeKind.BinaryExpr) return false;
 	const b = e.data as BinaryExprData;
@@ -399,14 +426,14 @@ function assignsLocal(e: Node): boolean {
 function consumerSpiller(call: Node, consumer: InlineCall, st: InlineState): Spiller {
 	return {
 		ctx: st.ctx,
-		has: (n: Node): boolean => n == call,
+		has: (n: Node): boolean => underProjections(n) == call,
 		lower: (n: Node, pre: Node[]): Node => {
-			if (n != call) return n;
+			if (underProjections(n) != call) return n;
 			const r = expandConsumer(consumer, call.nodeType, st, n.location);
 			const res = r.result;
 			if (res == null) throw new Error("internal: a compound assignment from a consumer with no result");
 			for (const s of r.stmts) { pre.push(s); }
-			return makeIdentResolved(res, n.location);
+			return replaceUnderProjections(n, makeIdentResolved(res, n.location));
 		},
 	};
 }
@@ -415,13 +442,14 @@ function spliceConsumerDecls(stmts: Node[], st: InlineState): Node[] {
 	const out: Node[] = [];
 	for (const stmt of stmts) {
 		const init = stmt.kind == NodeKind.VariableDecl ? (stmt.data as VariableDeclData).initializer : null;
-		const consumer = init != null ? matchConsumer(init, st) : null;
+		const call = init != null ? underProjections(init) : null;
+		const consumer = call != null ? matchConsumer(call, st) : null;
 		if (consumer == null) {
 			out.push(stmt);
 			continue;
 		}
-		const r = expandConsumer(consumer, init!.nodeType, st, stmt.location);
-		if (r.result != null) (stmt.data as VariableDeclData).initializer = makeIdentResolved(r.result, stmt.location);
+		const r = expandConsumer(consumer, call!.nodeType, st, stmt.location);
+		if (r.result != null) (stmt.data as VariableDeclData).initializer = replaceUnderProjections(init!, makeIdentResolved(r.result, stmt.location));
 		for (const s of r.stmts) { out.push(s); }
 		out.push(stmt);
 	}

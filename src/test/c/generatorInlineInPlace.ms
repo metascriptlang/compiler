@@ -113,6 +113,12 @@ export function total(it: Iterator<int32>): int32 {
 	return t;
 }
 
+export function collect(it: Iterator<int32>): int32[] {
+	const out: int32[] = [];
+	for (const x of it) out.push(x);
+	return out;
+}
+
 export struct Steps { }
 
 function* stepsLazy(start: int32, end: int32): Iterator<int32> {
@@ -130,13 +136,47 @@ export function upTo(this typeof Steps, start: int32, end: int32): Iterator<int3
 function mainC(consumer: string): string {
 	const entries: MapEntry[] = [
 		{ entryPath: LIB_PATH, entrySource: LIB },
-		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled, firsts, total, Steps, upTo } from "./lib";\n` + consumer },
+		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled, firsts, total, collect, Steps, upTo } from "./lib";\n` + consumer },
 	];
 	const units = compileProjectToC(entries, MAIN_PATH).split("#include <stdint.h>\n");
 	for (const unit of units) {
 		if (unit.contains("ZmainOms__Init000(void) {")) return unit;
 	}
 	return "";
+}
+
+test "E2E C: a consumer under a cast in a compound assignment drives no iterator" {
+	const c = mainC(`
+		let s: int64 = 0;
+		s += (total(count(5))) as int64;
+		console.log(s);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
+}
+
+test "E2E C: a consumer under a cast in a declaration, an assignment and a return drives no iterator" {
+	const c = mainC(`
+		function viaReturn(): int64 { return total(count(4)) as int64; }
+		const a = total(count(5)) as int64;
+		let b: int32 = 0;
+		b = total(count(6)) as int32;
+		console.log(a, b, viaReturn());
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
+}
+
+test "E2E C: a field read of a consumer's result drives no iterator" {
+	const c = mainC(`
+		const n = (collect(count(5))).length;
+		console.log(n);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("collect__");
 }
 
 test "E2E C: a for-of over a static extension from another module drives no iterator" {
