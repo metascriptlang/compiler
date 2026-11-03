@@ -1990,8 +1990,16 @@ function isPodFieldType(t: Readonly<Type | null>, depth: int32): boolean {
 		TypeKind.Distinct | TypeKind.SizedArray | TypeKind.Set | TypeKind.Alias => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
 		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
+		TypeKind.GenericInstance => valueStructBodyOrPhantomDecl(t) != null && isPodFieldType(valueStructBodyOrPhantomDecl(t), depth + 1),
 		_ => false,
 	};
+}
+
+function valueStructBodyOrPhantomDecl(t: Readonly<Type>): Readonly<Type | null> {
+	const decl = t.typeExtra;
+	if (decl == null || decl.kind != TypeKind.Struct || decl.sym == null || decl.sym.symbolKind != SymbolKind.Struct) return null;
+	const body = t.typeReturn != null ? t.typeReturn : decl;
+	return body != t && body.kind == TypeKind.Struct ? body : null;
 }
 
 function structCarriesRef(t: Readonly<Type>, depth: int32): boolean {
