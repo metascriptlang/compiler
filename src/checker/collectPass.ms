@@ -305,7 +305,8 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (exportName != "") sym.exportName = exportName;
 	if (info.throws) setFlag(sym, SymbolFlag.Throws);
 	if (info.pure) {
-		if (declOfStatement(dd.decoratedNode).kind != NodeKind.ExternDecl) addError(ctx, `@pure applies to an extern declaration, and '${declName}' has a body the checker reads`, node.location.line, node.location.column);
+		const decl = declOfStatement(dd.decoratedNode);
+		if (decl.kind != NodeKind.FunctionDecl || (decl.data as FunctionDeclData).fnBody != null) addError(ctx, `@pure applies to an extern declaration, and '${declName}' has a body the checker reads`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.NoSideEffect);
 	}
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
