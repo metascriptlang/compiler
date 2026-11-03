@@ -301,6 +301,16 @@ test "iterator reduce: an empty source fails without an initial value and return
 	assert none.values().reduce((a: int32, x: int32, i: number): int32 => a + x, 7) == 7;
 }
 
+test "iterator reduce: a mapped chain without an initial value indexes from 1 and folds in order" {
+	const idx: number[] = [];
+	const r = [1, 2, 3, 4].values().map((x: int32, i: number): int32 => x * 10).reduce((a: int32, x: int32, i: number): int32 => {
+		idx.push(i);
+		return a * 2 + x;
+	});
+	assert idx.join(",") == "1,2,3";
+	assert r == ((10 * 2 + 20) * 2 + 30) * 2 + 40;
+}
+
 test "iterator reduce: one element is returned without calling back" {
 	let calls = 0;
 	const r = [9].values().reduce((a: int32, x: int32, i: number): int32 => {

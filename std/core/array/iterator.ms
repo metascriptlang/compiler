@@ -108,15 +108,20 @@ export function reduce<T, U>(
 }
 
 export function reduce<T>(this it: Iterator<T>, fn: (acc: T, x: T, i: number) => T): T {
-	const first = it.next();
-	if (first.done) throw new TypeError("Reduce of a done iterator with no initial value");
-	let acc = first.value;
-	let i: number = 1;
+	let acc: T | null = null;
+	let first = true;
+	let i: number = 0;
 	for (const x of it) {
-		acc = fn(acc, x, i);
+		if (first) {
+			acc = x;
+			first = false;
+		} else {
+			acc = fn(acc as T, x, i);
+		}
 		i += 1;
 	}
-	return acc;
+	if (first) throw new TypeError("Reduce of a done iterator with no initial value");
+	return acc as T;
 }
 
 export function toArray<T>(this it: Iterator<T>): T[] {
