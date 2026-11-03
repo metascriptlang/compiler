@@ -117,6 +117,48 @@ test "iterator zip longest: finished sources are padded and never pulled again" 
 	assert log.join(",") == "a.next,b.next,a.next,b.next,b.next";
 }
 
+test "iterator zip: a for-of that keeps every pair in an outer array sees each pair intact" {
+	const kept: int32[][] = [];
+	for (const pair of Iterator.zip<int32>([[1, 2, 3].values(), [10, 20, 30].values()])) kept.push(pair);
+	assert rows(kept) == "1,10|2,20|3,30";
+	const words: string[][] = [];
+	for (const pair of Iterator.zip<string>([["a", "b"].values(), ["x", "y"].values()])) words.push(pair);
+	assert rows(words) == "a,x|b,y";
+}
+
+test "iterator zip: a pair held across the next step keeps its values" {
+	const it = Iterator.zip<int32>([[1, 2, 3].values(), [10, 20, 30].values()]);
+	const r1 = it.next();
+	const r2 = it.next();
+	const r3 = it.next();
+	assert r1.value.join(",") == "1,10";
+	assert r2.value.join(",") == "2,20";
+	assert r3.value.join(",") == "3,30";
+}
+
+test "iterator zip: a pair held after the loop keeps its values" {
+	let held: int32[] = [];
+	let total: int32 = 0;
+	for (const pair of Iterator.zip<int32>([[1, 2, 3].values(), [10, 20, 30].values()])) {
+		if (pair[0] == 2) held = pair;
+		total += pair[0] * pair[1];
+	}
+	assert held.join(",") == "2,20";
+	assert total == 10 + 40 + 90;
+}
+
+test "iterator zip longest: a pair kept from before the padding starts is not overwritten by it" {
+	const kept: int32[][] = [];
+	for (const pair of Iterator.zip<int32>([[1, 2].values(), [10].values()], { mode: "longest", padding: [0, -1] })) kept.push(pair);
+	assert rows(kept) == "1,10|2,-1";
+}
+
+test "iterator zip longest: a consumer that keeps nothing reads padded rows in order" {
+	let seen = "";
+	for (const pair of Iterator.zip<int32>([[1, 2, 3].values(), [10].values()], { mode: "longest", padding: [0, -1] })) seen += pair.join(",") + ";";
+	assert seen == "1,10;2,-1;3,-1;";
+}
+
 test "iterator zip longest: missing padding fails at the call and closes every source in reverse" {
 	const log: string[] = [];
 	assert messageOf((): void => {
