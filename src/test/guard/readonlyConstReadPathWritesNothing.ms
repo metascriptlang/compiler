@@ -1,7 +1,8 @@
 // guard: a deep Readonly module const crosses threads only when nothing a task calls on it can write
 // a cell: a C extern reached from a call that reads the const, through a method receiver or a free
 // call, directly or through a routine with a body, refuses the const on C and JS; a string length
-// and == read of the const are accepted.
+// and == read of the const are accepted, and so is a @pure extern (push) that writes only a fresh
+// local, while the same push into a module `let` stays refused as module state.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent.
 //
@@ -33,11 +34,14 @@ interface Case {
 	name: string;
 	refused: boolean;
 	text: string;
+	mark?: string;
 }
 
 const CELL = "class Cell { n: int32 = 7; }\nconst K: Readonly<Cell> = new Cell();\n";
 const BUMP = "extern function msBumpReadCount(): int32;\n";
 const RUN = "const f = spawn(() => read());\nconsole.log(await f);\n";
+const SHAPE = "struct Slice { offset: int32; }\nstruct Shape { slices: Vec<Slice>; }\n"
+	+ "const shape: Readonly<Shape> = { slices: [{ offset: 1 }, { offset: 2 }] };\n";
 
 const cases: Case[] = [
 	{
@@ -75,6 +79,29 @@ const cases: Case[] = [
 			+ "const K: Readonly<Table> = new Table();\n"
 			+ "function read(): int32 { return (K.tag == \"tag\" ? 1 : 0) + K.tag.length; }\n" + RUN,
 	},
+	{
+		name: "a @pure push into a fresh local Vec of copies of the const's elements",
+		refused: false,
+		text: SHAPE
+			+ "function copies(slices: Readonly<Vec<Slice>>): Vec<Slice> {\n"
+			+ "\tlet out: Vec<Slice> = [];\n\tfor (const slice of slices) { out.push({ offset: slice.offset }); }\n\treturn out;\n}\n"
+			+ "function read(): int32 { return copies(shape.slices).length; }\n" + RUN,
+	},
+	{
+		name: "a @pure push of a scalar into a fresh local inside a method on the const",
+		refused: false,
+		text: SHAPE
+			+ "function firstOffset(this s: Readonly<Shape>): int32 { let out: Vec<int32> = []; out.push(s.slices[0].offset); return out[0]; }\n"
+			+ "function read(): int32 { return shape.firstOffset(); }\n" + RUN,
+	},
+	{
+		name: "a @pure push into a module let inside a routine that reads the const",
+		refused: true,
+		mark: "module-level 'kept'",
+		text: SHAPE + "let kept: Vec<Slice> = [];\n"
+			+ "function copies(slices: Readonly<Vec<Slice>>): int32 { for (const slice of slices) { kept.push({ offset: slice.offset }); } return 0; }\n"
+			+ "function read(): int32 { return copies(shape.slices); }\n" + RUN,
+	},
 ];
 
 let slot = 0;
@@ -87,7 +114,7 @@ for (const c of cases) {
 		const r = execFileResult(msc, ["check", `--target=${target}`, `${dir}/main.ms`]);
 		const out = `${r.output}${r.errorOutput}`;
 		const name = `${c.name} [${target}]`;
-		if (c.refused && (r.exitCode == 0 || !out.includes(WRITES) || !out.includes(MODULE_STATE_RULE))) report(`${name}: not refused: ${out}`);
+		if (c.refused && (r.exitCode == 0 || !out.includes(c.mark ?? WRITES) || !out.includes(MODULE_STATE_RULE))) report(`${name}: not refused: ${out}`);
 		if (!c.refused && r.exitCode != 0) report(`${name}: check failed: ${out}`);
 	}
 }
