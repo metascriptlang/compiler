@@ -1,13 +1,13 @@
 import {
 	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag, SourceLocation, Type, TypeKind,
 	ProgramData, IfStmtData, ForOfStmtData, ForInStmtData, ForStmtData, WhileStmtData, DoWhileStmtData, CallExprData,
-	MemberExprData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
+	MemberExprData, UnaryExprData, NewExprData, ArrayLiteralData, ArrayAccessData, HiddenStdConvData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
 	TryCatchStmtData, BinaryExprData, UpdateExprData,
 	HiddenDerefData, OutExprData, BreakStmtData, ContinueStmtData, IdentifierData,
 	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData, isEmptyBlock,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, newLoweredSym } from "../context";
-import { walkNode, mapChildren } from "../walker";
+import { walkNode, mapChildren, hasEffect } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isLoopKind } from "./jumpRetarget";
@@ -18,7 +18,7 @@ import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
-import { Spiller, lowerAssign } from "./operandOrder";
+import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
 import {
 	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt,
@@ -366,6 +366,11 @@ function inlineStmt(node: Node, st: InlineState): Node {
 				}
 				return makeBlock(r.stmts, node.location);
 			}
+			const pre = hoistFromStatement(e, st);
+			if (pre != null) {
+				pre.push(node);
+				return makeBlock(pre, node.location);
+			}
 		},
 		NodeKind.ReturnStmt => {
 			const arg = (node.data as ReturnStmtData).argument;
@@ -376,6 +381,12 @@ function inlineStmt(node: Node, st: InlineState): Node {
 				if (r.result != null) (node.data as ReturnStmtData).argument = replaceUnderProjections(arg!, makeIdentResolved(r.result, node.location));
 				r.stmts.push(node);
 				return makeBlock(r.stmts, node.location);
+			}
+			if (arg != null && holdsConsumer(arg, st) && orderSafe(arg, st)) {
+				const pre: Node[] = [];
+				(node.data as ReturnStmtData).argument = hoistConsumers(arg, pre, st);
+				pre.push(node);
+				return makeBlock(pre, node.location);
 			}
 		},
 		NodeKind.Program => {
@@ -416,6 +427,133 @@ function replaceUnderProjections(e: Node, result: Node): Node {
 	return e;
 }
 
+// A consumer inside an operand list runs where it stands in the evaluation order: each operand written
+// before it is bound to a temp first (operandOrder), so a call or a read it could change is settled
+// first. A statement whose earlier operand has an effect no temp can hold keeps its closure path.
+function consumerOperand(e: Node, st: InlineState): InlineCall | null {
+	const call = underProjections(e);
+	if (call.kind != NodeKind.CallExpr || call.nodeType == null || call.nodeType.kind == TypeKind.Void) return null;
+	const target = callTarget(call);
+	if (target == null || (!st.ownConsumers.has(target.sym) && !_offerNames.has(target.sym.name))) return null;
+	return matchConsumer(call, st);
+}
+
+function operandsOf(e: Node): Node[] | null {
+	if (e.kind == NodeKind.CallExpr) {
+		const d = e.data as CallExprData;
+		if (d.callee.kind == NodeKind.MemberExpr && (d.callee.data as MemberExprData).isOptional) return null;
+		const ops: Node[] = [d.callee.kind == NodeKind.MemberExpr ? (d.callee.data as MemberExprData).object : d.callee];
+		for (const a of d.arguments) { ops.push(a); }
+		return ops;
+	}
+	if (e.kind == NodeKind.BinaryExpr) {
+		const d = e.data as BinaryExprData;
+		if (isAssignOp(d.operator) || d.operator == "&&" || d.operator == "||" || d.operator == "??") return null;
+		return [d.left, d.right];
+	}
+	if (e.kind == NodeKind.ArrayAccess) return [(e.data as ArrayAccessData).array, (e.data as ArrayAccessData).index];
+	if (e.kind == NodeKind.ArrayLiteral) return (e.data as ArrayLiteralData).elements;
+	if (e.kind == NodeKind.NewExpr) return (e.data as NewExprData).newArguments;
+	return null;
+}
+
+function wrapped(e: Node): Node | null {
+	if (e.kind == NodeKind.TypeAssertion) return (e.data as TypeAssertionData).asExpr;
+	if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) return (e.data as HiddenStdConvData).convExpr;
+	if (e.kind == NodeKind.HiddenDeref) return (e.data as HiddenDerefData).expr;
+	if (e.kind == NodeKind.UnaryExpr) return (e.data as UnaryExprData).operand;
+	if (e.kind == NodeKind.MemberExpr && !(e.data as MemberExprData).isOptional) return (e.data as MemberExprData).object;
+	return null;
+}
+
+function holdsConsumer(e: Node, st: InlineState): boolean {
+	if (consumerOperand(e, st) != null) return true;
+	const ops = operandsOf(e);
+	if (ops != null) {
+		for (const op of ops) {
+			if (op != null && holdsConsumer(op, st)) return true;
+		}
+		return false;
+	}
+	const inner = wrapped(e);
+	return inner != null && holdsConsumer(inner, st);
+}
+
+function bindsItsEffects(e: Node): boolean {
+	if (e.kind == NodeKind.HiddenDeref) return bindsItsEffects((e.data as HiddenDerefData).expr);
+	if (e.kind == NodeKind.CallExpr || e.kind == NodeKind.NewExpr || e.kind == NodeKind.UnaryExpr || e.kind == NodeKind.UpdateExpr) return true;
+	return e.kind == NodeKind.BinaryExpr && !isAssignOp((e.data as BinaryExprData).operator);
+}
+
+function orderSafe(e: Node, st: InlineState): boolean {
+	if (consumerOperand(e, st) != null) return true;
+	const ops = operandsOf(e);
+	if (ops == null) {
+		const inner = wrapped(e);
+		return inner == null || orderSafe(inner, st);
+	}
+	let last = -1;
+	for (let i = 0; i < ops.length; i += 1) {
+		if (ops[i] != null && holdsConsumer(ops[i], st)) last = i;
+	}
+	for (let i = 0; i <= last; i += 1) {
+		const op = ops[i];
+		if (op == null) continue;
+		if (i < last && hasEffect(op) && !bindsItsEffects(op) && !holdsConsumer(op, st)) return false;
+		if (!orderSafe(op, st)) return false;
+	}
+	return true;
+}
+
+function hoistConsumers(e: Node, pre: Node[], st: InlineState): Node {
+	const consumer = consumerOperand(e, st);
+	if (consumer != null) {
+		const call = underProjections(e);
+		const r = expandConsumer(consumer, call.nodeType, st, e.location);
+		const res = r.result;
+		if (res == null) throw new Error("internal: a consumer in an operand has no result");
+		for (const s of r.stmts) { pre.push(s); }
+		return replaceUnderProjections(e, makeIdentResolved(res, e.location));
+	}
+	const sp: Spiller = { ctx: st.ctx, has: (n: Node): boolean => holdsConsumer(n, st), lower: (n: Node, out: Node[]): Node => hoistConsumers(n, out, st) };
+	if (operandsOf(e) != null) {
+		lowerOperandList(sp, e, pre);
+		return e;
+	}
+	if (e.kind == NodeKind.TypeAssertion) {
+		const d = e.data as TypeAssertionData;
+		d.asExpr = hoistConsumers(d.asExpr, pre, st);
+	} else if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) {
+		const d = e.data as HiddenStdConvData;
+		d.convExpr = hoistConsumers(d.convExpr, pre, st);
+	} else if (e.kind == NodeKind.HiddenDeref) {
+		const d = e.data as HiddenDerefData;
+		d.expr = hoistConsumers(d.expr, pre, st);
+	} else if (e.kind == NodeKind.UnaryExpr) {
+		const d = e.data as UnaryExprData;
+		d.operand = hoistConsumers(d.operand, pre, st);
+	} else if (e.kind == NodeKind.MemberExpr && !(e.data as MemberExprData).isOptional) {
+		const d = e.data as MemberExprData;
+		d.object = hoistConsumers(d.object, pre, st);
+	}
+	return e;
+}
+
+function hoistFromStatement(e: Node, st: InlineState): Node[] | null {
+	const pre: Node[] = [];
+	if (e.kind == NodeKind.BinaryExpr && isAssignOp((e.data as BinaryExprData).operator)) {
+		const b = e.data as BinaryExprData;
+		if (b.operator == "&&=" || b.operator == "||=" || b.operator == "??=") return null;
+		if (!holdsConsumer(b.right, st) || !orderSafe(b.right, st)) return null;
+		const sp: Spiller = { ctx: st.ctx, has: (n: Node): boolean => holdsConsumer(n, st), lower: (n: Node, out: Node[]): Node => hoistConsumers(n, out, st) };
+		lowerAssign(sp, e, pre);
+		return pre;
+	}
+	if (!holdsConsumer(e, st) || !orderSafe(e, st)) return null;
+	hoistConsumers(e, pre, st);
+	return pre;
+}
+
 function assignsLocal(e: Node): boolean {
 	if (e.kind != NodeKind.BinaryExpr) return false;
 	const b = e.data as BinaryExprData;
@@ -445,6 +583,11 @@ function spliceConsumerDecls(stmts: Node[], st: InlineState): Node[] {
 		const call = init != null ? underProjections(init) : null;
 		const consumer = call != null ? matchConsumer(call, st) : null;
 		if (consumer == null) {
+			if (init != null && holdsConsumer(init, st) && orderSafe(init, st)) {
+				const pre: Node[] = [];
+				(stmt.data as VariableDeclData).initializer = hoistConsumers(init, pre, st);
+				for (const s of pre) { out.push(s); }
+			}
 			out.push(stmt);
 			continue;
 		}
@@ -1290,8 +1433,15 @@ test "a consumer of an iterator stored in a const read twice stays a call" {
 	assert lastStmtCalls(sumSrc + "function f(): int32 { const it = count(3); const a = total(it); return a + total(it); }") == 3;
 }
 
-test "a consumer call inside a larger expression stays a call" {
-	assert lastStmtCalls(sumSrc + "function f(): int32 { return 1 + total(count(3)); }") == 2;
+test "a consumer call that is an operand of a larger expression is expanded before it" {
+	const stmts = getStmts(lowered(sumSrc + "function f(): int32 { return 1 + total(count(3)); }"));
+	const body = (stmts[stmts.length - 1].data as FunctionDeclData).fnBody;
+	assert countKind(body, NodeKind.CallExpr) == 0;
+	assert countKind(body, NodeKind.ForOfStmt) == 0;
+}
+
+test "a consumer call after an operand whose effect no temp holds stays a call" {
+	assert lastStmtCalls(sumSrc + "function g(): int32 { return 1; }\nfunction f(c: boolean): int32 { return (c ? g() : 0) + total(count(3)); }") == 3;
 }
 
 const fwdSrc = chainSrc

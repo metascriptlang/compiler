@@ -244,13 +244,14 @@ test "E2E C: code inlined from another module is attributed to the line that cal
 	assert maxLineDirective(c) <= 4;
 }
 
-test "E2E C: a consumer of a stored chain inside a larger expression from another module stays a call" {
+test "E2E C: a consumer of a stored chain that is an argument from another module drives no iterator" {
 	const c = mainC(`
 		const it = firsts(count(9), 3);
 		console.log(total(it));
 	`);
 	assert c != "";
-	assert c.contains("total__");
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
 }
 
 test "E2E C: a chain of generators from another module stored in a const and read once drives no iterator" {
@@ -342,4 +343,35 @@ test "E2E C: reduce without an initial value after filter over array values runs
 	assert c != "";
 	assert !c.contains("Iterator_reduce");
 	assert !c.contains(".next.fn");
+}
+
+test "E2E C: a consumer that is an argument of a call drives no iterator" {
+	const c = mainC(`
+		console.log(total(count(10)));
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
+}
+
+test "E2E C: a consumer after an effectful argument and before another drives no iterator" {
+	const c = mainC(`
+		function trace(s: string): int32 { console.log(s); return 1; }
+		function three(a: int32, b: int32[], c: int32[]): int32 { return a + b.length + c.length; }
+		console.log(three(trace("first"), collect(count(4)), collect(count(2))));
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("collect__");
+}
+
+test "E2E C: a consumer after an earlier operand whose effect no temp holds keeps its call" {
+	const c = mainC(`
+		function trace(s: string): int32 { console.log(s); return 1; }
+		function pair(a: int32, b: int32[]): int32 { return a + b.length; }
+		const flag = trace("flag") > 0;
+		console.log(pair(flag ? trace("first") : 0, collect(count(4))));
+	`);
+	assert c != "";
+	assert c.contains("collect__");
 }
