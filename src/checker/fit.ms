@@ -3755,7 +3755,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	if ((formal.kind != TypeKind.Union || isLiteralSet(formal)) && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))) {
 		const projected = narrowUnionToVariant(expr, exprType);
-		if (projected != null as unknown as Node) return projected;
+		if (projected != null as unknown as Node) return fitNode(ctx, projected, formal, projected.nodeType);
 	}
 	const unionFit = fitUnionIntoUnion(expr, exprType, formal);
 	if (unionFit != null) return unionFit;
