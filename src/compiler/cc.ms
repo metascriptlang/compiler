@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove, readFileBytes } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
+import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { cacheRoot } from "./package/cache";
@@ -996,6 +996,10 @@ function targetTriple(args: string[]): string {
 		if (args[i].startsWith("--target=")) triple = args[i].slice(9, args[i].length);
 		else if (args[i] == "-target" && i + 1 < args.length) triple = args[i + 1];
 	}
+	if (triple != "") return triple;
+	for (const arg of args) {
+		if (arg.startsWith("--config=")) triple = basename(arg.slice(9, arg.length));
+	}
 	return triple;
 }
 
@@ -1233,7 +1237,10 @@ export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boo
 	const trail: string[] = [];
 	const flags = appendParsedFlags(command.path, trail, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
-	if (emitsCodeView(command, lead, trail)) lead.push("-gno-codeview-command-line");
+	if (emitsCodeView(command, lead, trail)) {
+		if (ccOption == CC_PREPARED && mode == MODE_DEBUG) lead.push("-gcodeview");
+		lead.push("-gno-codeview-command-line");
+	}
 	return Result.ok({ command, lead, quote: runtimeQuoteDir(), trail });
 }
 
@@ -1610,6 +1617,21 @@ function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, tar
 	return Result.ok({ command, prefix, flagArgs });
 }
 
+// A prepared debug link to Windows writes CodeView into `<out>.pdb` (the lld MinGW driver
+// writes DWARF into the image otherwise); the zig driver rejects `--pdb`, so it keeps DWARF.
+export function pdbLinkArg(mode: number, targetOs: string, ccOption: number, outBinary: string): string {
+	if (mode != MODE_DEBUG || targetOs != "windows" || ccOption != CC_PREPARED) return "";
+	return `-Wl,--pdb=${withoutExtension(outBinary)}.pdb`;
+}
+
+// A prepared debug link to macOS leaves a debug map in the image; `dsymutil` of the bundle turns it
+// into `<out>.dSYM`, the step the clang driver runs after a `-g` link. Returns the argv, or [] for no step.
+export function dsymutilArgv(mode: number, targetOs: string, ccOption: number, compilerPath: string, outBinary: string): string[] {
+	if (mode != MODE_DEBUG || (targetOs != "macos" && targetOs != "darwin") || ccOption != CC_PREPARED) return [];
+	const tool = join(dirname(compilerPath), compilerPath.endsWith(".exe") ? "dsymutil.exe" : "dsymutil");
+	return [tool, outBinary, "-o", `${outBinary}.dSYM`];
+}
+
 export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): void {
 	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
 	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
@@ -1622,6 +1644,8 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	const command = link.value.command;
 	const prefix = link.value.prefix;
 	const flagArgs = link.value.flagArgs;
+	const pdb = pdbLinkArg(mode, targetOs, ccOption, outBinary);
+	if (pdb != "") flagArgs.push(pdb);
 	const bulk: string[] = [];
 	for (const oFile of oFiles) bulk.push(oFile);
 	for (const arg of flagArgs) bulk.push(arg);
@@ -1647,6 +1671,11 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 		r = runCc(command, responseArgs);
 	}
 	if (!r.ok) return Result.err(r.error);
+	const dsym = dsymutilArgv(mode, targetOs, ccOption, command.path, outBinary);
+	if (dsym.length > 0) {
+		const made = execFileCapture(dsym[0], dsym.slice(1, dsym.length));
+		if (!made.ok) return Result.err(made.error);
+	}
 	return Result.ok(null);
 }
 
@@ -1979,4 +2008,37 @@ test "compiling the same C twice leaves byte-identical objects, whatever name th
 	for (let i = 0; i < first.value.byteLength(); i += 1) assert first.value.byteAt(i as int32) == second.value.byteAt(i as int32);
 	for (const name of ["a.c", "a.1.o", "a.2.o", "a.d"]) remove(`${dir}/${name}`);
 	remove(dir);
+}
+
+test "a prepared debug link to macOS runs the bundle's dsymutil, release and other targets do not" {
+	const out = "/w/app";
+	assert dsymutilArgv(0, "macos", CC_PREPARED, "/b/bin/clang", out).join(" ") == "/b/bin/dsymutil /w/app -o /w/app.dSYM";
+	assert dsymutilArgv(0, "darwin", CC_PREPARED, "/b/bin/clang", out).length == 4;
+	for (const mode of [1, 2]) assert dsymutilArgv(mode, "macos", CC_PREPARED, "/b/bin/clang", out).length == 0;
+	for (const os of ["linux", "windows", "wasm"]) assert dsymutilArgv(0, os, CC_PREPARED, "/b/bin/clang", out).length == 0;
+	assert dsymutilArgv(0, "macos", 0, "/usr/bin/clang", out).length == 0;
+}
+
+test "a prepared debug link to Windows asks for a PDB beside the image, nothing else does" {
+	assert pdbLinkArg(0, "windows", CC_PREPARED, "/w/app.exe") == "-Wl,--pdb=/w/app.pdb";
+	assert pdbLinkArg(0, "windows", CC_PREPARED, "/w/lib.dll") == "-Wl,--pdb=/w/lib.pdb";
+	for (const mode of [1, 2]) assert pdbLinkArg(mode, "windows", CC_PREPARED, "/w/app.exe") == "";
+	for (const os of ["linux", "macos"]) assert pdbLinkArg(0, os, CC_PREPARED, "/w/app") == "";
+	assert pdbLinkArg(0, "windows", 0, "/w/app.exe") == "";
+}
+
+test "a prepared debug compile for Windows emits CodeView, release and other targets keep their format" {
+	const win = "/p/clang --no-default-config -target x86_64-unknown-windows-gnu";
+	const debug = objectCompileArgs(CC_PREPARED, win, false, 0, "");
+	assert debug.ok && debug.value.lead.includes("-gcodeview");
+	const release = objectCompileArgs(CC_PREPARED, win, false, 1, "");
+	assert release.ok && !release.value.lead.includes("-gcodeview");
+	const linux = objectCompileArgs(CC_PREPARED, "/p/clang --no-default-config -target x86_64-unknown-linux-gnu", false, 0, "");
+	assert linux.ok && !linux.value.lead.includes("-gcodeview");
+	const config = objectCompileArgs(CC_PREPARED, "/p/clang --no-default-config --config=/p/runtime/windows/x86_64-windows-gnu.cfg", false, 0, "");
+	assert config.ok && config.value.lead.includes("-gcodeview");
+	const configLinux = objectCompileArgs(CC_PREPARED, "/p/clang --no-default-config --config=/p/runtime/x86_64-linux-gnu.2.31.cfg", false, 0, "");
+	assert configLinux.ok && !configLinux.value.lead.includes("-gcodeview");
+	const zig = objectCompileArgs(0, "zig cc -target x86_64-windows-gnu", false, 0, "");
+	assert zig.ok && !zig.value.lead.includes("-gcodeview");
 }
