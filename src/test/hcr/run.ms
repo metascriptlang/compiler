@@ -1657,6 +1657,30 @@ function modulePassReload(): void {
 	]);
 }
 
+function cellReload(): void {
+	const tag = "hcrCellReload";
+	const fixture = "cellReload";
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const name of ["app.ms", "tag.ms", "holder.ms"]) copy(`${FIXTURES}/${fixture}/${name}`, `${dir}/${name}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicPlain.ms", "logicAgain.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/${fixture}/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-CELL", [
+		"HCR-CELL g1: boxed 2",
+		"HCR-CELL g2: reloaded logic plain3 3",
+		"HCR-CELL g3: reloaded logic boxed 4",
+		"HCR-CELL drop holder0",
+		"HCR-CELL drop g1-1",
+		"HCR-CELL drop holder2",
+		"HCR-CELL drop g3-3",
+		"HCR-CELL released 0",
+	]);
+}
+
 function registryVariables(): void {
 	const tag = "hcrRegistryVariables";
 	const dir = buildLogicGenerations(tag, "registryVariables", [
@@ -2640,6 +2664,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrModulePassReload", run: modulePassReload },
+	{ name: "hcrCellReload", run: cellReload },
 	{ name: "hcrLayoutReload", run: layoutReload },
 	{ name: "hcrLayoutVariants", run: layoutVariants },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
