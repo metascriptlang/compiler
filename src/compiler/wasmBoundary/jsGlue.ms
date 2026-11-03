@@ -282,7 +282,7 @@ const HANDLE_STATE = [
 	"\t\thk[i] = 0;",
 	"\t\thv[i] = undefined;",
 	"\t\thf.push(i);",
-	"\t\t__msbMod._msb_release(p);",
+	"\t\tif (!dead) __msbMod._msb_release(p);",
 	"\t};",
 ];
 
@@ -327,9 +327,10 @@ const HANDLE_GLUE = [
 	"\trelease() { __msb.release(this); }",
 	"\tretain() { __msb.retain(this); return this; }",
 	"\tget released() { return !__msb.live(this); }",
-	"\t[Symbol.dispose]() { __msb.release(this); }",
 	"}",
 	"__msbRef.prototype[Symbol.for(\"msb.ref\")] = true;",
+	"if (Symbol.dispose) __msbRef.prototype[Symbol.dispose] = "
+		+ "__msbRef.prototype.release;",
 ];
 
 const SCRATCH_BYTES = 16384;
