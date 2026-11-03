@@ -11,7 +11,8 @@
 //   // @mixed-stderr: <substr> -> the mixed run's stderr has a line with it; a
 //                                program without it fails on a `msb leak:` line
 //   // @loads: <n>            -> n loads of the module (not available yet)
-//   // @ledger-balanced: <T>  -> the wasm half's DRC ledger row of T has
+//   // @ledger-balanced: <T>  -> the wasm half's DRC ledger row of T (of an
+//                                instance of generic T: its last row) has
 //                                alloc == destroy (mixed build with the ledger)
 //   // @ledger-leaks: <T>     -> the same row has alloc != destroy; pins that
 //                                the oracle bites
@@ -129,7 +130,8 @@ function buildAndRun(
 function ledgerRow(err: string, type: string): string {
 	let row = "";
 	for (const line of err.split("\n")) {
-		if (line.startsWith(`LEDGER ${type} `)) row = line;
+		const own = line.startsWith(`LEDGER ${type} `);
+		if (own || line.startsWith(`LEDGER ${type}_`)) row = line;
 	}
 	return row;
 }
