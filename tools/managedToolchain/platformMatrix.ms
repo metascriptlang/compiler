@@ -22,6 +22,7 @@ struct Consumer {
 	kind: string;
 	expect: string;
 	code: int32;
+	report: string;
 }
 
 struct Captured {
@@ -49,21 +50,23 @@ const CRYPTO = "matrix-crypto ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb4
 const THREADS = "matrix-threads 699103 498503 297903";
 
 const CONSUMERS: Consumer[] = [
-	{ name: "hello", source: "hello.ms", flags: "", kind: "exe", expect: HELLO, code: 3 },
-	{ name: "threads", source: "threads.ms", flags: "", kind: "exe", expect: THREADS, code: 0 },
-	{ name: "crypto", source: "crypto.ms", flags: "", kind: "exe", expect: CRYPTO, code: 0 },
-	{ name: "cCompanion", source: "cCompanion.ms", flags: "", kind: "exe", expect: "matrix-c 1428", code: 0 },
-	{ name: "cppCompanion", source: "cppCompanion.ms", flags: "", kind: "exe", expect: "matrix-cpp 48", code: 0 },
-	{ name: "sharedLibrary", source: "sharedLibrary.ms", flags: "--app=lib", kind: "lib", expect: "matrix-lib 42", code: 0 },
-	{ name: "debugLine", source: "debugLine.ms", flags: "", kind: "debug", expect: "matrix-debug 41", code: 0 },
-	{ name: "helloRelease", source: "hello.ms", flags: "--release", kind: "exe", expect: HELLO, code: 3 },
-	{ name: "cryptoRelease", source: "crypto.ms", flags: "--release", kind: "exe", expect: CRYPTO, code: 0 },
-	{ name: "cryptoDanger", source: "crypto.ms", flags: "--danger", kind: "exe", expect: CRYPTO, code: 0 },
-	{ name: "cryptoLtoFull", source: "crypto.ms", flags: "--danger --lto=full", kind: "exe", expect: CRYPTO, code: 0 },
-	{ name: "sanAddress", source: "cCompanion.ms", flags: "--sanitize=address", kind: "exe", expect: "matrix-c 1428", code: 0 },
-	{ name: "sanUndefined", source: "cCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "matrix-c 1428", code: 0 },
-	{ name: "sanThread", source: "threads.ms", flags: "--sanitize=thread", kind: "exe", expect: THREADS, code: 0 },
-	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0 },
+	{ name: "hello", source: "hello.ms", flags: "", kind: "exe", expect: HELLO, code: 3, report: "" },
+	{ name: "threads", source: "threads.ms", flags: "", kind: "exe", expect: THREADS, code: 0, report: "" },
+	{ name: "crypto", source: "crypto.ms", flags: "", kind: "exe", expect: CRYPTO, code: 0, report: "" },
+	{ name: "cCompanion", source: "cCompanion.ms", flags: "", kind: "exe", expect: "matrix-c 1428", code: 0, report: "" },
+	{ name: "cppCompanion", source: "cppCompanion.ms", flags: "", kind: "exe", expect: "matrix-cpp 48", code: 0, report: "" },
+	{ name: "sharedLibrary", source: "sharedLibrary.ms", flags: "--app=lib", kind: "lib", expect: "matrix-lib 42", code: 0, report: "" },
+	{ name: "debugLine", source: "debugLine.ms", flags: "", kind: "debug", expect: "matrix-debug 41", code: 0, report: "" },
+	{ name: "helloRelease", source: "hello.ms", flags: "--release", kind: "exe", expect: HELLO, code: 3, report: "" },
+	{ name: "cryptoRelease", source: "crypto.ms", flags: "--release", kind: "exe", expect: CRYPTO, code: 0, report: "" },
+	{ name: "cryptoDanger", source: "crypto.ms", flags: "--danger", kind: "exe", expect: CRYPTO, code: 0, report: "" },
+	{ name: "cryptoLtoFull", source: "crypto.ms", flags: "--danger --lto=full", kind: "exe", expect: CRYPTO, code: 0, report: "" },
+	{ name: "sanAddress", source: "cCompanion.ms", flags: "--sanitize=address", kind: "exe", expect: "matrix-c 1428", code: 0, report: "" },
+	{ name: "sanUndefined", source: "cCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "matrix-c 1428", code: 0, report: "" },
+	{ name: "sanThread", source: "threads.ms", flags: "--sanitize=thread", kind: "exe", expect: THREADS, code: 0, report: "" },
+	{ name: "ubsanDefault", source: "ubsanCompanion.ms", flags: "", kind: "exe", expect: "", code: 0, report: "overflow" },
+	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub -2147483648", code: 0, report: "" },
+	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0, report: "" },
 ];
 
 const BUILD_LIMIT_MS = 1500000;
@@ -164,7 +167,7 @@ function note(path: string, fields: string[]): void {
 function bundleRefusal(compiler: string, text: string): string {
 	if (compiler != "bundle") { return ""; }
 	if (text.contains("is not installed in")) { return "bundle refuses: its runtime for this target is not installed"; }
-	if (text.contains("needs a libclang_rt sanitizer runtime")) { return "bundle refuses: no sanitizer runtime for windows"; }
+	if (text.contains("is not available on windows")) { return "bundle refuses: mingw has no ASan or TSan runtime (zig fails it as well)"; }
 	return "";
 }
 
@@ -233,9 +236,11 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 		note(results, [consumer.name, target, compiler, "run", host, "FAIL", String(ran.seconds), observed, "timeout"]);
 		return;
 	}
-	const good = ran.code == consumer.code && ran.out.trim() == consumer.expect;
+	const reported = ran.out + ran.err;
+	const good = consumer.report != "" ? ran.code != 0 && (reported.contains(consumer.report)) : ran.code == consumer.code && ran.out.trim() == consumer.expect;
+	const detail = consumer.report != "" ? `${observed}; stderr: ${oneLine(ran.err, 160)}` : observed;
 	const why = good ? "" : `expected rc=${consumer.code} out=${consumer.expect}; stderr: ${oneLine(ran.err, 160)}`;
-	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", String(ran.seconds), observed, why]);
+	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", String(ran.seconds), detail, why]);
 	if (consumer.kind == "debug" && runner == "native") {
 		note(results, [consumer.name, target, compiler, "debug", host, "info", "0", debugKind(artifact, target), ""]);
 		const stop = debuggerStop(artifact, target);
@@ -246,6 +251,10 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 function buildCell(out: string, results: string, cells: string, host: string, hostTarget: string, bundle: string, consumer: Consumer, target: Target, compiler: string): void {
 	if (consumer.kind == "lib" && target.lib == "") {
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no shared library on wasm32-wasi"]);
+		return;
+	}
+	if (consumer.name == "ubsanDefault" && target.os == "wasm") {
+		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "a wasm build is forced to release, with zig as well"]);
 		return;
 	}
 	if (compiler == "bundle" && (bundle == "" || !exists(bundle))) {
