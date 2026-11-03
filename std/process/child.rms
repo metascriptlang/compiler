@@ -20,6 +20,7 @@ import {
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
 import { utf8Text } from "../core/string/bytes";
+import { rawBuffer } from "../core/buffer/bytes";
 import { childEnvironmentPairs } from "./environment";
 
 extern function msProcChildSpawn(
@@ -130,7 +131,7 @@ export class ChildProcess {
 		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
 		if (code == CHILD_OK) {
 			return Result.ok({
-				data: Buffer.fromString(msProcChildTake(this.handle, which), "utf8"),
+				data: rawBuffer(msProcChildTake(this.handle, which)),
 				ended: false,
 			});
 		}
