@@ -58,7 +58,8 @@ function getRangeMinForKind(kind: TypeKind): number {
 		TypeKind.Int8   => -128,
 		TypeKind.Int16  => -32768,
 		TypeKind.Int32  => -2147483648,
-		_ => 0,
+		TypeKind.Uint8 | TypeKind.Char | TypeKind.Uint16 | TypeKind.Uint32 => 0,
+		_ => { throw new Error(`internal: no range check bounds for type kind ${(kind as int32).toString()}`); },
 	};
 }
 
@@ -70,7 +71,7 @@ function getRangeMaxForKind(kind: TypeKind): number {
 		TypeKind.Uint16 => 65535,
 		TypeKind.Int32  => 2147483647,
 		TypeKind.Uint32 => 4294967295,
-		_ => 0,
+		_ => { throw new Error(`internal: no range check bounds for type kind ${(kind as int32).toString()}`); },
 	};
 }
 
@@ -338,3 +339,14 @@ test "cast to an alias of int8 becomes range check" { assert castExprKind("type 
 test "cast to number unchanged" { assert castExprKind(castOf("number")) == NodeKind.TypeAssertion; }
 
 test "cast to string unchanged" { assert castExprKind("function f(v: string): void { const r = v as string; }") == NodeKind.TypeAssertion; }
+
+test "a range check toward a kind with no bounds is an internal error" {
+	const loc = { line: 1, column: 1 } as SourceLocation;
+	let refused = "";
+	try {
+		makeRangeCheckFor("msCheckRangeI32", makeNumber(1, loc), createPrimitive(TypeKind.Float64), loc);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: no range check bounds for type kind " + (TypeKind.Float64 as int32).toString(), refused;
+}
