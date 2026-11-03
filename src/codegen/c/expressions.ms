@@ -468,7 +468,17 @@ function isLvalueNode(node: Readonly<Node>): boolean {
 		|| node.kind == NodeKind.MemberExpr
 		|| node.kind == NodeKind.ArrayAccess
 		|| node.kind == NodeKind.HiddenDeref
-		|| isArrayAccessCall(node);
+		|| isArrayAccessCall(node)
+		|| (node.kind == NodeKind.CallExpr && isRuntimeProcSym((node.data as CallExprData).callee.resolvedSym, "msVariantAccess"))
+		|| isSlotProjection(node);
+}
+
+function isSlotProjection(node: Readonly<Node>): boolean {
+	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
+	const d = node.data as HiddenStdConvData;
+	const source = d.convExpr.nodeType;
+	if (source == null || isMaybeType(source) || isMaybeType(d.convType) || isTagCarriedUnion(matchUnionBehindInstance(d.convType))) return false;
+	return isLvalueNode(d.convExpr);
 }
 
 function isResultSlot(g: CGen, snippet: string, exprNode: Readonly<Node>): boolean {
