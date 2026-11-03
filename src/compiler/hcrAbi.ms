@@ -50,7 +50,7 @@ export struct HcrReloadDecision {
 	subject: string;
 }
 
-export function hcrSignatureKey(t: Type | null): string {
+export function hcrSignatureKey(t: Readonly<Type | null>): string {
 	return monoTypeKey(t);
 }
 

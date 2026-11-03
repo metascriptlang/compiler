@@ -187,7 +187,7 @@ export function lowerHcrIndirection(
 	let bindSlot: int32 = 0;
 	const foreignOps: string[] = [];
 	const foreignOpKeys = new HashMap<string, string>();
-	const foreignOpSymbols = new HashMap<string, Symbol>();
+	const foreignOpSymbols = new HashMap<string, Readonly<Symbol>>();
 	for (const entry of aliveSet.foreignOps.data) {
 		if (entry.hcode == 0 || !entry.value.includes(own.modulePath)) continue;
 		const op = entry.key;
