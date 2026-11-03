@@ -155,11 +155,11 @@ function arrayUse(a: Node, st: LoopCache): boolean {
 	if (a == id && isSpanIdent(id)) return true;
 	const sym = id.resolvedSym;
 	if (sym == null || sym.symbolType == null) return false;
-	const viaDeref = holdsByReference(sym);
-	if (a != id && !viaDeref) return false;
-	const elem = arrayElemOf(sym, viaDeref);
+	const byReference = holdsByReference(sym);
+	if (a != id && !byReference) return false;
+	const elem = arrayElemOf(sym, byReference);
 	if (sym == null || elem == null) return false;
-	if (sym.symbolKind == SymbolKind.Parameter || symSetContains(st.bound, sym)) note(sym, elem, viaDeref, st);
+	if (sym.symbolKind == SymbolKind.Parameter || symSetContains(st.bound, sym)) note(sym, elem, a != id, st);
 	return true;
 }
 
