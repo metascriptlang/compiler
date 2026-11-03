@@ -5,6 +5,7 @@ import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, se
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
 import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx, cellRootIdx } from "./memory";
+import { bigToString, bigIsZero } from "./bigint";
 import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
 
 @include("runtime/core/hashBits.h");
@@ -27,6 +28,7 @@ export enum RaiserValueKind {
 	ElemAddr,   // address of an array element: intVal = array handle, floatVal = index
 	FieldAddr,  // address of an object field: intVal = object handle, floatVal = field name constant handle
 	Box,        // handle into RaiserArrayHeap.boxes: a dynamic value held by a Dyn register
+	BigInt,     // a string cell holding src/raiser/bigint.ms text, BIGINT_TYPE_INDEX in its header
 }
 
 // A heap reference is one word: (index << 3) | heapKind, and 0 is nil. The word names its own heap,
@@ -69,7 +71,8 @@ export function handleKind(handle: int64): RaiserValueKind {
 	when (mode != "danger") { checkHeapKind(handle); }
 	return match (handleHeapKind(handle)) {
 		RaiserHeapKind.None => RaiserValueKind.Nil,
-		RaiserHeapKind.String | RaiserHeapKind.ConstString => RaiserValueKind.String,
+		RaiserHeapKind.String => cellTypeIndex(textAddress(handle)) == BIGINT_TYPE_INDEX ? RaiserValueKind.BigInt : RaiserValueKind.String,
+		RaiserHeapKind.ConstString => RaiserValueKind.String,
 		RaiserHeapKind.Seq => isObjectCell(handle) ? RaiserValueKind.Object : RaiserValueKind.Array,
 		RaiserHeapKind.Object => RaiserValueKind.Object,
 		RaiserHeapKind.Future => RaiserValueKind.Future,
@@ -93,7 +96,8 @@ export function handleAgrees(kind: RaiserValueKind, handle: int64): boolean {
 	return match (kind) {
 		RaiserValueKind.ElemAddr | RaiserValueKind.Array => tag == (RaiserHeapKind.Seq as int64) && !isObjectCell(handle),
 		RaiserValueKind.FieldAddr | RaiserValueKind.Object => tag == (RaiserHeapKind.Object as int64) || (tag == (RaiserHeapKind.Seq as int64) && isObjectCell(handle)),
-		RaiserValueKind.String => tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64),
+		RaiserValueKind.String => (tag == (RaiserHeapKind.String as int64) && !isBigIntCell(handle)) || tag == (RaiserHeapKind.ConstString as int64),
+		RaiserValueKind.BigInt => isBigIntCell(handle),
 		RaiserValueKind.Future => tag == (RaiserHeapKind.Future as int64),
 		RaiserValueKind.Box => tag == (RaiserHeapKind.Box as int64),
 		RaiserValueKind.Nil => handle == 0,
@@ -181,7 +185,7 @@ export function kindFitsClass(kind: RaiserValueKind, cls: RaiserRegClass): boole
 		RaiserValueKind.Float => cls == RaiserRegClass.Float,
 		RaiserValueKind.Bool => cls == RaiserRegClass.Bool,
 		RaiserValueKind.Nil => cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn,
-		RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => cls == RaiserRegClass.Ref,
+		RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future | RaiserValueKind.BigInt => cls == RaiserRegClass.Ref,
 		RaiserValueKind.Box => cls == RaiserRegClass.Dyn,
 		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => false,
 		_ => { throw new Error(`internal: value kind ${kind} has no register class`); },
@@ -209,6 +213,7 @@ function heapTextHandle(at: int64): int64 {
 	return at | (RaiserHeapKind.String as int64);
 }
 
+@inline
 function textAddress(handle: int64): int64 {
 	return handle - handleTag(handle);
 }
@@ -286,6 +291,25 @@ export function heapAllocStoredString(arr: RaiserArrayHeap, text: string): Raise
 	const v = heapAllocString(arr, text);
 	if (!isConstHandle(v.intVal)) setTextRc(textAddress(v.intVal), 1);
 	return v;
+}
+
+export const BIGINT_TYPE_INDEX: int64 = -4;
+
+export function isBigIntCell(handle: int64): boolean {
+	return handleHeapKind(handle) == RaiserHeapKind.String && cellTypeIndex(textAddress(handle)) == BIGINT_TYPE_INDEX;
+}
+
+export function heapAllocBigInt(arr: RaiserArrayHeap, text: string): RaiserValue {
+	return { kind: RaiserValueKind.BigInt, intVal: heapTextHandle(allocHeapText(arr.mem, text, OWNED_BY_RECEIVER_RC as int64, BIGINT_TYPE_INDEX)), floatVal: 0.0 };
+}
+
+export function heapBigIntText(arr: RaiserArrayHeap, v: RaiserValue): string {
+	if (v.kind != RaiserValueKind.BigInt) throw new Error(`internal: a bigint read met a value of kind ${v.kind}`);
+	return textLoad(textAddress(v.intVal));
+}
+
+function bigIntEquals(a: RaiserValue, b: RaiserValue): boolean {
+	return a.intVal == b.intVal || textEquals(textAddress(a.intVal), textAddress(b.intVal));
 }
 
 // A value that is not a String reads as "", the way an unset text field always did.
@@ -430,6 +454,7 @@ export function raiserToBool(arr: RaiserArrayHeap, v: RaiserValue): boolean {
 		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
 		RaiserValueKind.Float => v.floatVal != 0.0 && v.floatVal == v.floatVal,
 		RaiserValueKind.String => heapStringLength(arr, v) > 0,
+		RaiserValueKind.BigInt => !bigIsZero(heapBigIntText(arr, v)),
 		RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => true,
 		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => true,
 	};
@@ -450,6 +475,7 @@ export function raiserEqual(arr: RaiserArrayHeap, left: RaiserValue, right: Rais
 		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Array | RaiserValueKind.Object => a.intVal == b.intVal,
 		RaiserValueKind.Float => a.floatVal == b.floatVal,
 		RaiserValueKind.String => heapStringEquals(arr, a, b),
+		RaiserValueKind.BigInt => bigIntEquals(a, b),
 		_ => false,
 	};
 }
@@ -464,6 +490,7 @@ export function raiserToString(arr: RaiserArrayHeap, v: RaiserValue): string {
 		RaiserValueKind.Int => `${v.intVal}`,
 		RaiserValueKind.Float => `${v.floatVal}`,
 		RaiserValueKind.String => heapStringText(arr, v),
+		RaiserValueKind.BigInt => bigToString(heapBigIntText(arr, v), 10),
 		RaiserValueKind.Array => "[array]",
 		RaiserValueKind.Object => "[object]",
 		_ => "?",
@@ -1772,6 +1799,11 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 		disownFresh(dstArr, dstObj, text.intVal);
 		return text;
 	}
+	if (val.kind == RaiserValueKind.BigInt && !map.sharesHeap) {
+		const big = heapAllocBigInt(dstArr, heapBigIntText(srcArr, val));
+		disownFresh(dstArr, dstObj, big.intVal);
+		return big;
+	}
 	if (val.kind == RaiserValueKind.Box) {
 		const inner = copyShell(srcArr, srcObj, dstArr, dstObj, heapBoxValue(srcArr, val.intVal), map);
 		const copy = heapAllocBox(dstArr, inner);
@@ -2341,7 +2373,8 @@ test "a handle names its heap kind: the kind recomputed from the handle equals t
 	const object = raiserObject(heapAllocObject(obj));
 	const future = raiserFuture(makeHandle(3, RaiserHeapKind.Future));
 	const box: RaiserValue = { kind: RaiserValueKind.Box, intVal: heapAllocBox(arr, raiserInt(5)), floatVal: 0.0 };
-	for (const v of [strand, constant, array, object, future, box]) {
+	const big = heapAllocBigInt(arr, "-ff");
+	for (const v of [strand, constant, array, object, future, box, big]) {
 		assert v.intVal != 0;
 		assert handleKind(v.intVal) == v.kind, `${v.kind}`;
 		assert handleAgrees(v.kind, v.intVal);
@@ -2350,6 +2383,17 @@ test "a handle names its heap kind: the kind recomputed from the handle equals t
 	assert handleHeapKind(constant.intVal) == RaiserHeapKind.ConstString;
 	assert handleKind(0) == RaiserValueKind.Nil && handleAgrees(RaiserValueKind.Nil, 0);
 	assert handleKind(heapAllocString(arr, "").intVal) == RaiserValueKind.String;
+}
+
+test "a bigint cell is its own kind: never equal to the string of its text, equal to a bigint of the same value" {
+	const arr = createArrayHeap();
+	const big = heapAllocBigInt(arr, "-ff");
+	const text = heapAllocString(arr, "-ff");
+	assert big.kind == RaiserValueKind.BigInt && handleKind(text.intVal) == RaiserValueKind.String;
+	assert !handleAgrees(RaiserValueKind.String, big.intVal) && !handleAgrees(RaiserValueKind.BigInt, text.intVal);
+	assert !raiserEqual(arr, big, text) && raiserEqual(arr, big, heapAllocBigInt(arr, "-ff")) && !raiserEqual(arr, big, heapAllocBigInt(arr, "ff"));
+	assert raiserToString(arr, big) == "-255" && raiserToBool(arr, big) && !raiserToBool(arr, heapAllocBigInt(arr, "0"));
+	assert heapStringText(arr, big) == "";
 }
 
 test "a handle that names a different heap than the value's kind disagrees" {
@@ -2373,9 +2417,11 @@ test "a graph copy into another heap keeps each value's kind and the handle that
 	heapObjectSetField(sArr, sObj, holder, "kept", raiserConstString("const"));
 	heapObjectSetField(sArr, sObj, holder, "list", raiserArray(heapAllocArray(sArr)));
 	heapObjectSetField(sArr, sObj, holder, "box", { kind: RaiserValueKind.Box, intVal: heapAllocBox(sArr, heapAllocString(sArr, "boxed")), floatVal: 0.0 });
+	heapObjectSetField(sArr, sObj, holder, "big", heapAllocBigInt(sArr, "1f"));
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(holder));
 	assert copied.kind == RaiserValueKind.Object && handleKind(copied.intVal) == RaiserValueKind.Object;
-	for (const name of ["text", "kept", "list", "box"]) {
+	assert heapBigIntText(dArr, heapObjectGetField(dArr, dObj, copied.intVal, "big")) == "1f";
+	for (const name of ["text", "kept", "list", "box", "big"]) {
 		const field = heapObjectGetField(dArr, dObj, copied.intVal, name);
 		assert handleKind(field.intVal) == field.kind, name;
 	}

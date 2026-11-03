@@ -249,7 +249,7 @@ export function raiserFlatCellUnion(t: Readonly<Type>): boolean {
 	return structs > 0;
 }
 
-// A Raiser union of value structs and class or interface refs, strings or scalars, with no tag beside it, is the
+// A Raiser union of value structs and class or interface refs, strings, bigints or scalars, with no tag beside it, is the
 // member's own value: the released value carries its own kind, so a release by dynamic kind frees the held struct
 // cell or the ref and leaves a scalar alone.
 export function raiserStructSlotUnion(t: Readonly<Type>): boolean {
@@ -259,14 +259,14 @@ export function raiserStructSlotUnion(t: Readonly<Type>): boolean {
 		if (child.kind == TypeKind.Struct) structs += 1;
 		else if (child.kind == TypeKind.Ref) {
 			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
-		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && !isPrimitiveKind(child.kind)) {
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.BigInt && !isPrimitiveKind(child.kind)) {
 			return false;
 		}
 	}
 	return structs > 0;
 }
 
-// A Raiser union whose members are class refs, closures, strings, arrays, tuples or scalars stays the member's own
+// A Raiser union whose members are class refs, closures, strings, bigints, arrays, tuples or scalars stays the member's own
 // value, with no tag beside it: the held value is released by its dynamic kind, and a scalar has nothing to release.
 // A distinct member with no destroy of its own, a brand among them, is held as its body.
 export function raiserBareUnion(t: Type): boolean {
@@ -276,7 +276,7 @@ export function raiserBareUnion(t: Type): boolean {
 		while (child.kind == TypeKind.Distinct && child.typeReturn != null && getOpByKey(child, AttachedOp.AttachedDestructor) == null) child = child.typeReturn;
 		if (child.kind == TypeKind.Ref) {
 			if (isAtomicRef(child) || (child.sym != null && child.sym.symbolKind == SymbolKind.Actor)) return false;
-		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.Function
+		} else if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral && child.kind != TypeKind.BigInt && child.kind != TypeKind.Function
 				&& child.kind != TypeKind.Array && child.kind != TypeKind.SizedArray && child.kind != TypeKind.Tuple && !isPrimitiveKind(child.kind)) {
 			return false;
 		}

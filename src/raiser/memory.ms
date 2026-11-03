@@ -471,6 +471,7 @@ export function setCellRc(cell: int64, rc: int64): void {
 	st64(cell - REF_HEADER_SIZE, rc);
 }
 
+@inline
 export function cellTypeIndex(cell: int64): int64 {
 	return ld64(cell - REF_HEADER_SIZE + 8) - 1;
 }

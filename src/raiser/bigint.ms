@@ -1,8 +1,7 @@
 // Arbitrary-precision integers for the Raiser VM, with the semantics of runtime/bigint/bigint.c.
-// A VM bigint is a string cell holding its canonical text: an optional "-" and lowercase
-// hexadecimal digits without leading zeros ("0" for zero). Strings are the VM's existing
-// counted immutable cell, so copy, destroy and the ledger need nothing new, and every
-// operation here maps text to text.
+// A VM bigint is a string cell marked BIGINT_TYPE_INDEX (value.ms) holding its canonical text:
+// an optional "-" and lowercase hexadecimal digits without leading zeros ("0" for zero), and
+// every operation here maps text to text.
 
 const LIMB_BASE: int64 = 65536;
 const DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";

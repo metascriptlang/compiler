@@ -71,9 +71,10 @@ import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap, handleIndex,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
-	heapAllocObject, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
+	heapAllocObject, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString, heapBigIntText,
 	createStructHeap, createArrayHeap, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldValueAt
 } from "../../raiser/value";
+import { bigToString } from "../../raiser/bigint";
 import { allocWireObject, wireGet, wireSet, WIRE_LOC, WIRE_SYMBOL } from "./wire";
 
 // ===== Synthetic location/token helpers =====
@@ -118,6 +119,12 @@ function elementTypeOf(t: Type | null): Type | null {
 
 export function mkString(val: string, loc: SourceLocation): Node {
 	return createNode(NodeKind.StringLiteral, { value: val }, synthToken(loc));
+}
+
+function mkBigInt(text: string, loc: SourceLocation): Node {
+	const negative = text.startsWith("-");
+	const literal = createNode(NodeKind.BigIntLiteral, { bigintValue: (negative ? text.slice(1, text.length) : text) + "n" }, synthToken(loc));
+	return negative ? createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand: literal }, synthToken(loc)) : literal;
 }
 
 export function mkBool(val: boolean, loc: SourceLocation): Node {
@@ -1777,6 +1784,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 		RaiserValueKind.Float => fromTemplate(mkFloat(val.floatVal, fallbackLoc)),
 		RaiserValueKind.Bool => fromTemplate(mkBool(val.intVal != 0, fallbackLoc)),
 		RaiserValueKind.String => fromTemplate(mkString(heapStringText(arrHeap, val), fallbackLoc)),
+		RaiserValueKind.BigInt => fromTemplate(mkBigInt(bigToString(heapBigIntText(arrHeap, val), 10), fallbackLoc)),
 		RaiserValueKind.Nil => fromTemplate(mkNull(fallbackLoc)),
 		RaiserValueKind.Array => {
 			const handle = val.intVal;

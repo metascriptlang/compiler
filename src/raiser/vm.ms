@@ -451,7 +451,7 @@ function releaseShell(vm: RaiserVM, h: int64): void {
 function innerHandle(vm: RaiserVM, h: int64): int64 {
 	if (h == 0 || !isShell(h)) return h;
 	const inner = heapBoxValue(vm.arrayHeap, h);
-	return inner.kind == RaiserValueKind.String || inner.kind == RaiserValueKind.Array || inner.kind == RaiserValueKind.Object || inner.kind == RaiserValueKind.Future ? inner.intVal : 0;
+	return inner.kind == RaiserValueKind.String || inner.kind == RaiserValueKind.BigInt || inner.kind == RaiserValueKind.Array || inner.kind == RaiserValueKind.Object || inner.kind == RaiserValueKind.Future ? inner.intVal : 0;
 }
 
 function unshell(vm: RaiserVM, abs: int64): void {
@@ -778,9 +778,13 @@ export function vmCallHeld(vm: RaiserVM, funcIdx: number, args: RaiserValue[], s
 	return result;
 }
 
+function holdsHeapText(v: RaiserValue): boolean {
+	return (v.kind == RaiserValueKind.String || v.kind == RaiserValueKind.BigInt) && handleHeapKind(v.intVal) == RaiserHeapKind.String;
+}
+
 function forgetHeapStrings(slots: RaiserValue[]): void {
 	for (let i = 0; i < slots.length; i += 1) {
-		if (slots[i].kind == RaiserValueKind.String && handleHeapKind(slots[i].intVal) == RaiserHeapKind.String) slots[i] = raiserNil();
+		if (holdsHeapText(slots[i])) slots[i] = raiserNil();
 	}
 }
 
@@ -810,7 +814,7 @@ export function vmReleaseHeaps(vm: RaiserVM): void {
 	const calleeBase = vm.callStack.depth > 1 ? vm.callStack.items[1].base : vm.base;
 	forgetHeapStringRefs(vm.regs.slots, getModuleFunc(vm.mod, vm.callStack.depth > 0 ? vm.callStack.items[0].funcIdx : vm.funcIdx), vm.callStack.depth > 0 ? calleeBase as int64 : INT64_HIGH);
 	forgetHeapStrings(vm.globals);
-	if (vm.currentException.kind == RaiserValueKind.String && handleHeapKind(vm.currentException.intVal) == RaiserHeapKind.String) vm.currentException = raiserNil();
+	if (holdsHeapText(vm.currentException)) vm.currentException = raiserNil();
 }
 
 export function vmReleaseRun(vm: RaiserVM): void {
@@ -1285,6 +1289,7 @@ function unionTokenHolds(vm: RaiserVM, held: RaiserValue, token: string): boolea
 	if (head == "b") return held.kind == RaiserValueKind.Bool;
 	if (head == "u") return held.kind == RaiserValueKind.Int || held.kind == RaiserValueKind.Float;
 	if (head == "s") return held.kind == RaiserValueKind.String;
+	if (head == "g") return held.kind == RaiserValueKind.BigInt;
 	if (head == "a") return held.kind == RaiserValueKind.Array;
 	if (head == "o") return held.kind == RaiserValueKind.Object;
 	if (head == "d") return held.kind == RaiserValueKind.Object && discriminantHolds(vm, held, token.substring(1));
@@ -1842,7 +1847,7 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) {
 		futureComplete(vm, s.resultFuture, value, true);
-		if (value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) releaseMovedOut(vm, value.intVal);
+		if (value.kind == RaiserValueKind.String || value.kind == RaiserValueKind.BigInt || value.kind == RaiserValueKind.Array || value.kind == RaiserValueKind.Object) releaseMovedOut(vm, value.intVal);
 	}
 	releaseEntryRefs(vm);
 	if (thenFinished(vm, vm.current)) return true;
@@ -4020,14 +4025,14 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			futureComplete(vm, getDyn(vm, ia).intVal, getDyn(vm, ib), ic == 1);
 			if (ic == 1) {
 				const consumed = getDyn(vm, ib);
-				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
+				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.BigInt || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
 			}
 		},
 		RaiserOpcode.FutureFail => {
 			futureFail(vm, getDyn(vm, ia).intVal, vmExceptionText(vm, getDyn(vm, ib)), getDyn(vm, ib));
 			if (ic == 1) {
 				const consumed = getDyn(vm, ib);
-				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
+				if (consumed.kind == RaiserValueKind.String || consumed.kind == RaiserValueKind.BigInt || consumed.kind == RaiserValueKind.Array || consumed.kind == RaiserValueKind.Object) vmReleaseChild(vm, consumed.intVal, false);
 			}
 		},
 		RaiserOpcode.FutureCombine => {

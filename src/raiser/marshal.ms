@@ -20,7 +20,7 @@ import {
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapArrayRc,
-	heapAllocString, heapStringText, handleIndex, handleHeapKind, RaiserHeapKind, stringHandleRc, rcDecrefHandle, heapStringHandles,
+	heapAllocString, heapStringText, heapAllocBigInt, heapBigIntText, handleIndex, handleHeapKind, handleKind, RaiserHeapKind, stringHandleRc, rcDecrefHandle, heapStringHandles,
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
@@ -41,6 +41,10 @@ function hostStringHeap(): RaiserArrayHeap {
 export function unboxString(v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String) return "";
 	return heapStringText(hostStringHeap(), v);
+}
+
+export function unboxBigInt(v: RaiserValue): string {
+	return heapBigIntText(hostStringHeap(), v);
 }
 
 export function unboxInt(v: RaiserValue): number {
@@ -73,6 +77,10 @@ export function boxVoid(): RaiserValue {
 
 export function boxString(s: string): RaiserValue {
 	return heapAllocString(hostStringHeap(), s);
+}
+
+export function boxBigInt(text: string): RaiserValue {
+	return heapAllocBigInt(hostStringHeap(), text);
 }
 
 export function boxInt(n: number): RaiserValue {
@@ -252,6 +260,14 @@ test "boxString roundtrip keeps non-ASCII bytes" {
 	const v = boxString("hi é 日本");
 	assert v.kind == RaiserValueKind.String;
 	assert unboxString(v) == "hi é 日本";
+}
+
+test "a boxed bigint is its own kind and unboxes to the text it was boxed with" {
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
+	const v = boxBigInt("-1f");
+	assert v.kind == RaiserValueKind.BigInt && handleKind(v.intVal) == RaiserValueKind.BigInt;
+	assert unboxBigInt(v) == "-1f" && unboxString(v) == "";
+	assert handleKind(boxString("-1f").intVal) == RaiserValueKind.String;
 }
 
 test "boxInt roundtrip" {

@@ -990,6 +990,7 @@ function unionMemberToken(m: Type): string {
 	if (kind == "boolean") return "b";
 	if (kind == "number") return "u";
 	if (kind == "string") return "s";
+	if (kind == "bigint") return "g";
 	if (kind == "array") return "a";
 	return "o";
 }
@@ -1475,6 +1476,7 @@ function typeofValueKinds(variant: Type, tag: string): int32[] {
 	return match (tag) {
 		"number" => [RaiserValueKind.Int as int32, RaiserValueKind.Float as int32],
 		"string" => [RaiserValueKind.String as int32],
+		"bigint" => [RaiserValueKind.BigInt as int32],
 		"boolean" => [RaiserValueKind.Bool as int32],
 		"function" => [RAISER_KIND_CLOSURE],
 		"object" => [RAISER_KIND_PLAIN_OBJECT, RaiserValueKind.Array as int32, RaiserValueKind.Future as int32],

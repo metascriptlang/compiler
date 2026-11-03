@@ -1,4 +1,3 @@
-// @skip-raiser: bigint has no Raiser VM representation
 // @stdout: number bigint object|number bigint|number bigint object|number bigint|number bigint int big
 function pick(i: int32): int64 | bigint | null {
 	if (i == 0) return 5 as int64;

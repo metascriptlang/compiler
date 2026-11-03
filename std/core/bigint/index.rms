@@ -1,4 +1,4 @@
-// bigint on the Raiser VM: a value is a string cell holding its canonical text, and every
+// bigint on the Raiser VM: a value is a bigint cell holding its canonical text, and every
 // extern below is a host bridge over src/raiser/bigint.ms (src/compiler/meta/bigintHost.ms).
 // The operator forms are synthesized by src/transform/native/bigIntOpLower.ms.
 

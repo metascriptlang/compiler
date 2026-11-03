@@ -41,9 +41,11 @@ export function allocConstText(text: string): int64 {
 
 export const EMPTY_TEXT: int64 = allocConstText("");
 
-export function allocHeapText(mem: VmMemory, text: string, rc: int64): int64 {
+export const TEXT_TYPE_INDEX: int64 = -1;
+
+export function allocHeapText(mem: VmMemory, text: string, rc: int64, typeIndex: int64 = TEXT_TYPE_INDEX): int64 {
 	const len = text.byteLength as int64;
-	const cell = newCell(mem, STRING_VALUE_SIZE, 8, -1, false);
+	const cell = newCell(mem, STRING_VALUE_SIZE, 8, typeIndex, false);
 	setCellRc(cell, rc);
 	fillText(cell, len == 0 ? 0 : heapAllocUninit(mem, payloadBytes(len)), len, text, 0);
 	return cell;
