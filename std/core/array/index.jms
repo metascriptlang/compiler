@@ -18,7 +18,13 @@ export function isArray<T>(this typeof Array, x: T): x is unknown[] {
 	return holdsArray<T>(x);
 }
 
-export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
+when (mscReadsPureExterns) {
+	@pure
+	export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
+}
+when (!mscReadsPureExterns) {
+	export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
+}
 export function pop<T>(this arr: T[]): T {
 	const last = arr[arr.length - 1];
 	@emit(`${arr}.pop();`);

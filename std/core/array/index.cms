@@ -37,9 +37,21 @@ export function isArray<T>(this typeof Array, x: T): x is unknown[] {
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
+when (mscReadsPureExterns) {
+	@pure
+	export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
+}
+when (!mscReadsPureExterns) {
+	export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
+}
 
-export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
+when (mscReadsPureExterns) {
+	@pure
+	export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
+}
+when (!mscReadsPureExterns) {
+	export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
+}
 
 /**
  * Removes the last element from an array and returns it.
@@ -133,7 +145,13 @@ export extern function splice(this arr: number[], start: number, deleteCount: nu
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
+when (mscReadsPureExterns) {
+	@pure
+	export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
+}
+when (!mscReadsPureExterns) {
+	export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
+}
 
 /**
  * Removes the last element from an array and returns it.
@@ -236,7 +254,13 @@ export extern function splice(this arr: boolean[], start: number, deleteCount: n
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+when (mscReadsPureExterns) {
+	@pure
+	export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+}
+when (!mscReadsPureExterns) {
+	export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
+}
 
 /**
  * Removes the last element from an array and returns it.

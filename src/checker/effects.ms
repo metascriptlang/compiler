@@ -808,7 +808,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!)) return null;
 	const external = isExternalRoutine(sym!);
-	if (e == Effect.WritesCell && external) {
+	if (e == Effect.WritesCell && external && !hasFlag(calledRoutine(call) ?? sym!, SymbolFlag.NoSideEffect)) {
 		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
 	}
 	if (external) {
