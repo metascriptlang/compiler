@@ -256,6 +256,7 @@ export enum SymbolFlag {
 	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 	IteratorHelper, // @iteratorHelper std generator: a close before its first next closes its first parameter, the source iterator
 	ImmutableEnv, // a ClosureEnv whose every captured variable is a const: no field is written after the env is built
+	NoSideEffect, // @pure extern: writes only the operands its signature makes writable (reference: noSideEffect)
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard
@@ -331,6 +332,7 @@ export enum BuiltinKind {
 	PromiseThen,
 	Proxy,
 	PtrBits,
+	pure,
 	Result,
 	ResultErr,
 	ResultOk,

@@ -20,7 +20,10 @@ export interface DefineTable {
 }
 
 export function createDefineTable(): DefineTable {
-	return { symbols: new HashMap<string, string>(), names: [], seeded: [] };
+	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
+	// std marks its extern push @pure only under this symbol: a compiler that predates the decorator refuses it on a declaration, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscReadsPureExterns", "true");
+	return t;
 }
 
 export function normalizeDefineName(name: string): string {

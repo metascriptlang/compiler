@@ -67,6 +67,11 @@ export extern function compilerFunc(): void;
 @builtin("throws")
 export extern function throws(): void;
 
+when (mscReadsPureExterns) {
+	@builtin("pure")
+	export extern function pure(): void;
+}
+
 @builtin("delegate")
 export extern function delegate(): void;
 

@@ -16,13 +16,14 @@ export interface DecoratorInfo {
 	noInline: boolean;
 	acyclic: boolean;
 	iteratorHelper: boolean;
+	pure: boolean;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
 	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper",
 ];
-export const intrinsicBuiltins: BuiltinKind[] = [BuiltinKind.nonisolated, BuiltinKind.compilerFunc, BuiltinKind.throws, BuiltinKind.delegate];
+export const intrinsicBuiltins: BuiltinKind[] = [BuiltinKind.nonisolated, BuiltinKind.compilerFunc, BuiltinKind.throws, BuiltinKind.delegate, BuiltinKind.pure];
 
 export function isBuiltinDirective(name: string): boolean {
 	for (const n of passThroughDirectives) {
@@ -197,6 +198,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 	let keptOutOfLine = false;
 	let prunesCycles = false;
 	let closesSource = false;
+	let writesOnlyOperands = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
@@ -204,6 +206,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		const tag = intrinsicBuiltinOf(ctx, name);
 		if (tag == BuiltinKind.compilerFunc) isCompilerFunc = true;
 		if (tag == BuiltinKind.throws) canThrow = true;
+		if (tag == BuiltinKind.pure) writesOnlyOperands = true;
 		if (tag == BuiltinKind.delegate) borrows = true;
 		if (name == "comptime") atCompileTime = true;
 		if (name == "noinline") keptOutOfLine = true;
@@ -232,5 +235,6 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		noInline: keptOutOfLine,
 		acyclic: prunesCycles,
 		iteratorHelper: closesSource,
+		pure: writesOnlyOperands,
 	};
 }

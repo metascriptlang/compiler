@@ -83,6 +83,11 @@ export extern function compilerFunc(): void;
 @builtin("throws")
 export extern function throws(): void;
 
+when (mscReadsPureExterns) {
+	@builtin("pure")
+	export extern function pure(): void;
+}
+
 @compilerFunc
 function msModuleBindingUninitialized(name: string): never {
 	throw new Error(`Cannot access '${name}' before initialization`);
