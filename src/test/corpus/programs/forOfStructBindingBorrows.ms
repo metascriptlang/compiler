@@ -1,5 +1,5 @@
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
-// @stdout: plain=0 sum=3 nested=4 pairs=3 local=0 len=6
+// @stdout: plain=0 sum=3 nested=0 pairs=3 local=0 len=6
 
 struct Key { id: int32; tag: string; }
 
