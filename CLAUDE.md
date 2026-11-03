@@ -91,7 +91,7 @@ msString msStringConcatMany(int64_t count, ...);              // BAD
 msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 ```
 
-**Call-site emission**: `emitCallExpr` (`src/codegen/c/expressions.ms`) name-matches `msStringConcatArr` / `msStringArrayFromArr` and rewrites the call to a stack-local array fill + pointer pass. A new array-taking runtime helper needs that intercept extended (family: `msBoxStruct`, `msSpawnInto`, `msWaitForStruct`).
+**Call-site emission**: `emitCallExpr` (`src/codegen/c/expressions.ms`) name-matches `msStringConcatArr` / `msStringArrayFromArr` and rewrites the call to a stack-local array fill + pointer pass. A new array-taking runtime helper needs that intercept extended (family: `msSpawnInto`, `msWaitForStruct`).
 
 ## Git Rules
 
