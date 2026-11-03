@@ -263,6 +263,14 @@ function isOwnParam(n: Node | null): boolean {
 	return sym != null && sym.symbolKind == SymbolKind.Parameter && ownParams.includes(sym.name);
 }
 
+function isOwnParamField(n: Node | null, e: Effect): boolean {
+	if (n == null || !reachesModuleState(e)) return false;
+	let cur = peelConv(n);
+	if (cur.kind != NodeKind.MemberExpr) return false;
+	while (cur.kind == NodeKind.MemberExpr) cur = peelConv((cur.data as MemberExprData).object);
+	return isOwnParam(cur);
+}
+
 function peelConv(n: Node): Node {
 	let cur = n;
 	while (cur.kind == NodeKind.HiddenStdConv || cur.kind == NodeKind.HiddenDeref) {
@@ -297,7 +305,7 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 	if (functionSlotOf(arg.nodeType) == null) return null;
 	if (reachesModuleState(e) && isSendableFunction(arg.nodeType)) return null;
 	const a = peelConv(arg);
-	if (isRoutineNode(a) || isOwnParam(a)) return null;
+	if (isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
 	if (a.kind == NodeKind.Identifier && a.resolvedSym != null) {
 		if (isRoutine(a.resolvedSym)) return null;
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
@@ -783,7 +791,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 			if (uncheckedBodiesReported) return null;
 			throw new Error(`internal: the effect walk reached a call at ${call.location.line}:${call.location.column} whose routine body was never checked`);
 		}
-		if (isOwnParam(callee)) return null;
+		if (isOwnParam(callee) || isOwnParamField(callee, e)) return null;
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (reachesModuleState(e) && isSendableFunction(valueType)) return null;
 		if (callee != null && callee.kind == NodeKind.Identifier && boundRoutine(callee.resolvedSym) != null) {
