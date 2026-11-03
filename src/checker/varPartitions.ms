@@ -1997,6 +1997,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			u.p.abstractTime -= 1;
+			if (u.pass == 1 && lendsCapturesToActors(node)) openCaptureLend(u, node);
 			if (u.pass == 2) recordClosure(u, node);
 		},
 		NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.TestDecl => {
@@ -2206,6 +2207,20 @@ function openCallLend(u: BorrowUnit, site: Node): void {
 	pushLend(u, site, roots, [], kept, calleeName(site));
 }
 
+function onlyActorCaptureLends(pending: PendingLend[]): boolean {
+	return pending.length > 0 && pending.every((l: PendingLend): boolean => l.input == CAPTURE_INPUT && isMessageSend(l.task));
+}
+
+function lendsCapturesToActors(node: Node): boolean {
+	return (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) && onlyActorCaptureLends(pendingLends(node));
+}
+
+function openCaptureLend(u: BorrowUnit, fn: Node): void {
+	if (reopenLend(u, fn)) return;
+	const pending = pendingLends(fn);
+	pushLend(u, fn, pending.map((l: PendingLend): Symbol => l.capture!), [], pending.map((l: PendingLend): Node => l.task), "");
+}
+
 function refuseModuleLend(u: BorrowUnit, site: Node, root: Symbol): void {
 	addError(u.ctx, `module-level '${root.name}' cannot be lent to the actor call of '${calleeName(site)}': any code that runs before the reply can change module state while the actor reads it; pass a copy, move a local, or share it through Arc<T> or Locked<T>`, site.location.line, site.location.column);
 }
@@ -2296,6 +2311,7 @@ interface UnitScan {
 
 function scanUnitBody(node: Node | null, scan: UnitScan): void {
 	if (node == null) return;
+	if (lendsCapturesToActors(node)) scan.spawn = true;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
 	if (!scan.spawn && (isSpawnCall(node) || isActorLend(node))) scan.spawn = true;
@@ -2476,7 +2492,7 @@ function refuseLeavingLends(ctx: CheckerContext, node: Node | null, up: Node[]):
 	const asCallee = parent != null && parent.kind == NodeKind.CallExpr && peelConv((parent.data as CallExprData).callee) == node;
 	if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
 		const pending = asCallee ? [] : pendingLends(node);
-		if (pending.length > 0) refuseLendingValue(ctx, node, "this async function value cannot be made", node, pending);
+		if (pending.length > 0 && !onlyActorCaptureLends(pending)) refuseLendingValue(ctx, node, "this async function value cannot be made", node, pending);
 		return;
 	}
 	if (isNestedRoutineNode(node)) return;
