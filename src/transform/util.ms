@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
-import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric } from "../checker/types";
+import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric, peelTransparentInstance } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -901,9 +901,9 @@ export function makeHiddenDeref(inner: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.HiddenDeref, { expr: inner }, syntheticToken(loc));
 	if (inner != null && inner.nodeType != null) {
 		// Deref of Ref<T>/Ptr<T>/Borrow<T> → type is T (Reference: strips through all pointer types)
-		const k = inner.nodeType.kind;
-		if ((k == TypeKind.Ptr || k == TypeKind.Ref || k == TypeKind.Borrow) && inner.nodeType.typeReturn != null) {
-			n.nodeType = inner.nodeType.typeReturn;
+		const t = peelTransparentInstance(inner.nodeType);
+		if ((t.kind == TypeKind.Ptr || t.kind == TypeKind.Ref || t.kind == TypeKind.Borrow) && t.typeReturn != null) {
+			n.nodeType = t.typeReturn;
 		} else {
 			n.nodeType = inner.nodeType;
 		}
