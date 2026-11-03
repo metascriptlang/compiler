@@ -451,7 +451,7 @@ def copyHeaders(isystem, output, zigLib):
 
 
 def parseArchive(data):
-    """Members of a GNU-format ar archive as [(name, bytes)], without its symbol table."""
+    """Members of a GNU or BSD (Darwin) format ar archive as [(name, bytes)], without its symbol table."""
     if data[:8] != b"!<arch>\n":
         raise pe.EngineError("not an ar archive")
     members, longNames, offset = [], b"", 8
@@ -472,6 +472,11 @@ def parseArchive(data):
         if name.startswith("/") and name[1:].isdigit():
             start = int(name[1:])
             name = longNames[start:longNames.index(b"/\n", start)].decode("utf-8")
+        elif name.startswith("#1/") and name[3:].isdigit():
+            length = int(name[3:])
+            name, body = body[:length].rstrip(b"\0").decode("utf-8"), body[length:]
+            if name.startswith("__.SYMDEF"):
+                continue
         elif name.endswith("/"):
             name = name[:-1]
         else:

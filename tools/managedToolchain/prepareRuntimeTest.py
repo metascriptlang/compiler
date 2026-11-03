@@ -848,8 +848,13 @@ class ArchiveTest(unittest.TestCase):
         self.assertEqual(pr.parseArchive(data), [("/private/tmp/cache/abc/closedir.o", b"odd"),
                                                  ("short.o", b"even")])
 
+    def test_bsd_members_carry_their_name_in_the_body_and_the_symbol_table_is_dropped(self):
+        data = (b"!<arch>\n" + arMember("#1/20", b"__.SYMDEF SORTED\0\0\0\0" + b"\0\0\0\0")
+                + arMember("#1/12", b"compiler_rt\0" + b"odd") + arMember("#1/8", b"short.o\0" + b"even"))
+        self.assertEqual(pr.parseArchive(data), [("compiler_rt", b"odd"), ("short.o", b"even")])
+
     def test_unsupported_archives_are_refused(self):
-        for data in (b"not an archive", b"!<arch>\n" + arMember("#1/20", b"x" * 20),
+        for data in (b"not an archive", b"!<arch>\n" + arMember("a.o", b"abc"), b"!<arch>\n" + arMember("#1/x", b"abc"),
                      b"!<arch>\n" + arMember("a.o/", b"abc")[:-2]):
             with self.assertRaises(pe.EngineError):
                 pr.parseArchive(data)
