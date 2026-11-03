@@ -1,5 +1,7 @@
 // guard: a module `const` crosses threads when its declared type is deep Readonly and its value is
-// built in its own initializer; a module `let`, a Readonly const that names a value another
+// built in its own initializer, or when the const rule keeps its type unwritable through every path
+// (a declared struct of scalars, strings, Vec and Sendable functions); a module `let`, a const of a
+// class or of a struct with a T[], tuple, interface or plain function field, a Readonly const that names a value another
 // binding holds, or one returned by a call on a receiver that is not fresh (a method, an extension
 // or a chained receiver that may keep the result), is refused on C and JS, and a write through an
 // alias of the const is refused.
@@ -63,7 +65,90 @@ const FACTORY = "class Factory {\n"
 	+ "function keep(this f: Factory, n: int32): Cell { const c = build(n); f.cache.push(c); return c; }\n"
 	+ "class Outer { inner: Factory = new Factory(); }\n";
 
+const PLAIN = "struct Table { name: string; columns: Vec<string>; keyOf: Sendable<(id: uint32) => uint32>; }\n"
+	+ "function table(name: string, keyOf: Sendable<(id: uint32) => uint32>): Table { return { name: name, columns: [\"id\", \"balance\"], keyOf: keyOf }; }\n";
+const ACTOR = "actor Runner {\n"
+	+ "\tsource: Sendable<() => string>;\n"
+	+ "\tconstructor(source: Sendable<() => string>) { this.source = source; }\n"
+	+ "\trun(): string { return this.source(); }\n"
+	+ "}\n"
+	+ "const runner = new Runner((): string => read());\n"
+	+ "console.log(await runner.run());\n";
+
 const cases: Case[] = [
+	{
+		name: "a plain const struct of strings, a Vec and a Sendable function, read from a spawn",
+		expect: Expect.Clean,
+		text: PLAIN
+			+ "const accounts = table(\"accounts\", (id: uint32): uint32 => id + 1);\n"
+			+ "function read(): string { return accounts.name + String(accounts.columns.length) + String(accounts.keyOf(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a plain const struct of strings, a Vec and a Sendable function, read from an actor",
+		expect: Expect.Clean,
+		text: PLAIN
+			+ "const accounts = table(\"accounts\", (id: uint32): uint32 => id + 1);\n"
+			+ "function read(): string { return accounts.name + String(accounts.columns.length) + String(accounts.keyOf(1)); }\n"
+			+ ACTOR,
+	},
+	{
+		name: "a plain const of a generic struct instance with a Vec<T> field",
+		expect: Expect.Clean,
+		text: GENERIC
+			+ "const r: Rows<Account> = { name: \"r\", rows: [{ id: \"1\" }] };\n"
+			+ "function read(): string { return r.name + r.rows[0].id; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a module let struct read from an actor",
+		expect: Expect.ModuleState,
+		text: PLAIN
+			+ "let accounts = table(\"accounts\", (id: uint32): uint32 => id + 1);\n"
+			+ "function read(): string { return accounts.name; }\n"
+			+ ACTOR,
+	},
+	{
+		name: "a const holding a class instance",
+		expect: Expect.ModuleState,
+		text: CELL + FACTORY
+			+ "const F: Factory = new Factory();\n"
+			+ "function read(): int32 { return F.cache.length; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a const struct with a T[] field, writable through the const",
+		expect: Expect.ModuleState,
+		text: "struct Tagged { name: string; tags: string[]; }\n"
+			+ "const h: Tagged = { name: \"h\", tags: [\"t\"] };\n"
+			+ "function read(): int32 { return h.tags.length; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a const struct with a tuple field, writable through the const",
+		expect: Expect.ModuleState,
+		text: "struct Paired { name: string; pair: [int32, string]; }\n"
+			+ "const h: Paired = { name: \"h\", pair: [1, \"p\"] };\n"
+			+ "function read(): string { return h.pair[1]; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a const struct with a plain function field",
+		expect: Expect.ModuleState,
+		text: "struct Hooked { name: string; f: () => int32; }\n"
+			+ "const h: Hooked = { name: \"h\", f: (): int32 => 1 };\n"
+			+ "function read(): string { return h.name; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a const struct with an interface field, writable through the const",
+		expect: Expect.ModuleState,
+		text: CELL
+			+ "struct Wrap { name: string; cell: Cell; }\n"
+			+ "const h: Wrap = { name: \"h\", cell: build(1) };\n"
+			+ "function read(): string { return h.name; }\n"
+			+ SPAWN,
+	},
 	{
 		name: "Readonly consts built by a literal and by a call",
 		expect: Expect.Clean,

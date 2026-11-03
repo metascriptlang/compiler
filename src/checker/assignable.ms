@@ -10,7 +10,7 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isStringLike } from "./types";
+import { isReadonlyView, isAtomicRef, isStringLike, isNumeric, isSendableFunction } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -57,6 +57,39 @@ function holdsInlineValue(t: Type | null): boolean {
 		TypeKind.SizedArray => true,
 		_ => false,
 	};
+}
+
+export function isFrozenByConst(t: Type | null): boolean {
+	return frozenAt(t, false, 0);
+}
+
+function frozenAt(t: Type | null, inGenericBody: boolean, depth: int32): boolean {
+	if (t == null || depth > 8) return false;
+	if (isNumeric(t)) return true;
+	return match (t.kind) {
+		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.BigInt | TypeKind.Char
+			| TypeKind.String | TypeKind.StringLiteral | TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Null => true,
+		TypeKind.GenericParam => inGenericBody,
+		TypeKind.Function => isSendableFunction(t),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Distinct | TypeKind.Alias => frozenAt(t.typeReturn, inGenericBody, depth + 1),
+		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct && t.typeChildren.every((f: Type): boolean => frozenAt(f, inGenericBody, depth + 1)),
+		TypeKind.GenericInstance => t.typeExtra != null && frozenAt(t.typeExtra, true, depth + 1)
+			&& t.typeChildren.every((a: Type): boolean => frozenAt(a, inGenericBody, depth + 1)),
+		TypeKind.Union => frozenUnion(t, inGenericBody, depth),
+		_ => false,
+	};
+}
+
+function frozenUnion(t: Type, inGenericBody: boolean, depth: int32): boolean {
+	let aggregates = 0;
+	let nulls = 0;
+	for (const m of t.typeChildren) {
+		if (!frozenAt(m, inGenericBody, depth + 1)) return false;
+		if (m.kind == TypeKind.Null) nulls += 1;
+		else if (!isNumeric(m) && m.kind != TypeKind.String && m.kind != TypeKind.StringLiteral && m.kind != TypeKind.Boolean
+				&& m.kind != TypeKind.BooleanLiteral && m.kind != TypeKind.NumberLiteral && m.kind != TypeKind.Enum && m.kind != TypeKind.EnumLiteral) aggregates += 1;
+	}
+	return aggregates == 0 || (aggregates == 1 && nulls == 1 && t.typeChildren.length == 2);
 }
 
 function reachesThroughReference(sym: Symbol): boolean {

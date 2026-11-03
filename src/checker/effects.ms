@@ -8,6 +8,7 @@ import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
 import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
+import { isFrozenByConst } from "./assignable";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
 import { lookupModuleProgram } from "./instantiate";
@@ -387,12 +388,18 @@ function isModuleState(sym: Symbol): boolean {
 	return hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Static) || sym.staticOwner != null;
 }
 
-// A deep Readonly module const built in its own initializer is never written and lives as long as
-// the program, so a borrow of it cannot outlive or race a write.
+// A module const that is deep Readonly and built in its own initializer, or whose type the const
+// rule keeps unwritable through every path, is never written and lives as long as the program, so a
+// borrow of it cannot outlive or race a write.
 export function isImmutableModuleConst(sym: Symbol): boolean {
 	if (!hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
 	const t = sym.symbolType;
-	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && isReadonlyView(t) && builtFresh(sym);
+	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && immutableConstValue(sym, t);
+}
+
+function immutableConstValue(sym: Symbol, t: Type): boolean {
+	if (isReadonlyView(t)) return builtFresh(sym);
+	return sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable) && isFrozenByConst(t) && noTaskStartsBefore(sym, Effect.StartsTask);
 }
 
 function reachesModuleState(e: Effect): boolean {
@@ -411,7 +418,7 @@ function isConstantValue(sym: Symbol, e: Effect): boolean {
 	if (hasFlag(sym, SymbolFlag.Mutable) && !isReadonlyStatic(sym)) return false;
 	if (typeCarriesRef(t)) {
 		if (t != null && t.kind == TypeKind.Ptr) return pointsAtConstantState(sym, e);
-		return reachesModuleState(e) && isReadonlyView(t) && builtFresh(sym);
+		return reachesModuleState(e) && immutableConstValue(sym, t);
 	}
 	return reachesModuleState(e) || !isAtomicRef(t);
 }
