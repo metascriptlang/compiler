@@ -234,8 +234,22 @@ function frameAddress(u: EscapeUnit, node: Node | null): Node | null {
 			}
 			return null;
 		},
+		NodeKind.CallExpr => callFrameAddress(u, node),
 		_ => null,
 	};
+}
+
+function callFrameAddress(u: EscapeUnit, node: Node): Node | null {
+	const d = node.data as CallExprData;
+	if (node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && d.callee.kind == NodeKind.MemberExpr) {
+		const receiver = frameAddress(u, (d.callee.data as MemberExprData).object);
+		if (receiver != null) return receiver;
+	}
+	for (const arg of d.arguments) {
+		const hit = frameAddress(u, arg);
+		if (hit != null) return hit;
+	}
+	return null;
 }
 
 function taint(u: EscapeUnit, sym: Symbol | null, origin: Node): void {
