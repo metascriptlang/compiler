@@ -620,10 +620,16 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	return identity;
 }
 
+function pathUnder(root: string, path: string, caseless: boolean): boolean {
+	const prefix = `${root.replaceAll("\\", "/")}/`;
+	const slashed = path.replaceAll("\\", "/");
+	return caseless ? slashed.toLowerCase().startsWith(prefix.toLowerCase()) : slashed.startsWith(prefix);
+}
+
 // A compiler inside a bundle is identified by the bundle's IDENTITY, which payload
 // verification binds to every file, plus the configuration files the invocation names.
 export function preparedCompilerIdentity(bundle: NativeToolchain, path: string, args: string[]): string {
-	if (!path.startsWith(`${bundle.root}/`)) return "";
+	if (!pathUnder(bundle.root, path, platform == "windows")) return "";
 	let configs = "";
 	for (const arg of args) {
 		if (arg.startsWith("--config=")) configs = `${configs}\n${arg}:${hashFileContent(arg.slice(9))}`;
@@ -3262,4 +3268,13 @@ test "a second identical warm run rewrites no presence memo, even when a walked 
 	forgetPresenceMemory();
 	assert queryPresence(depFile) != first;
 	assert modifiedTime(memo) > Date.now() / 1000 - 60;
+}
+
+test "a compiler path under a bundle root matches whatever separators and drive case the platform spells it with" {
+	assert pathUnder("C:/msc/toolchain", "C:\\msc\\toolchain\\bin\\clang.exe", false);
+	assert pathUnder("C:\\msc\\toolchain", "C:/msc/toolchain/bin/clang.exe", false);
+	assert pathUnder("C:/msc/toolchain", "c:\\MSC\\toolchain\\bin\\clang.exe", true);
+	assert !pathUnder("C:/msc/toolchain", "c:/msc/toolchain/bin/clang.exe", false);
+	assert !pathUnder("C:/msc/toolchain", "C:\\msc\\toolchain-other\\bin\\clang.exe", true);
+	assert !pathUnder("C:/msc/toolchain", "C:\\msc\\toolchain", true);
 }
