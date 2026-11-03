@@ -23,6 +23,23 @@ export function byteEqAt(hay: Readonly<Span<uint8>>, at: int64, needle: Readonly
 
 export extern function byteIsAscii(s: string): boolean from "msStringIsAscii";
 
+/** First index at or after `from` where the non-empty `nb` occurs in `hb`, or -1. */
+export function findBytesFrom(hb: Readonly<Span<uint8>>, nb: Readonly<Span<uint8>>, from: int64): int64 {
+	const limit = hb.length - nb.length;
+	let at = from;
+	while (at <= limit) {
+		if (byteEqAt(hb, at, nb)) return at;
+		at = at + 1;
+	}
+	return -1;
+}
+
+export function stringByteIndexOf(s: string, sub: string, byteStart: int64): int64 {
+	const nb = sub.asBytes();
+	if (nb.length == 0) return byteStart;
+	return findBytesFrom(s.asBytes(), nb, byteStart < 0 ? 0 : byteStart);
+}
+
 export extern function utf8Text(raw: string, surrogates: boolean): string from "msUtf8Text";
 
 export function wellFormedString(data: Readonly<Span<uint8>>): string {
