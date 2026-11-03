@@ -38,6 +38,14 @@ void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
 	return p;
 }
 
+void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
+	if (cap == 0) return NULL;
+	int64_t totalSize = msArrayBytes(cap, elemSize);
+	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc(totalSize);
+	p->cap = cap;
+	return p;
+}
+
 /* A payload whose cap carries string flag bits reached us through the byte-view
    bridge (string literal = static memory, or lazily ASCII-cached heap string).
    It is NOT uniquely owned: copy the live prefix to a fresh payload — never
@@ -84,6 +92,13 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 		q->cap = newCap;
 	}
 	return q;
+}
+
+/* Capacity only: length is unchanged and slots past it are never read. */
+void* msArrayReserve(int64_t len, void* p, int64_t cap, int64_t elemSize) {
+	if (p == NULL) return msArrayPayloadNewUninit(cap, elemSize);
+	if (cap <= len) return p;
+	return msArrayPrepareAdd(len, p, cap - len, elemSize);
 }
 
 /* ===== Number Array ===== */

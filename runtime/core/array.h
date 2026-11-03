@@ -85,6 +85,12 @@ void* msArrayPayloadNew(int64_t cap, int64_t elemSize);
 /* Grow payload if needed. Returns new payload pointer. */
 void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize);
 
+/* Allocate payload without zero-filling. */
+void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize);
+
+/* Ensure capacity >= cap with the length unchanged. */
+void* msArrayReserve(int64_t len, void* p, int64_t cap, int64_t elemSize);
+
 void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t elemSize);
 
 /* ===== Number Array ===== */
@@ -210,6 +216,11 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 	if ((uint64_t)_gi >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(_gx, (arr_ptr)->len); \
 	_gi; \
 })
+
+#define msGenericArrayReserve(arr_ptr, n) do { \
+	(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayReserve( \
+		(arr_ptr)->len, (arr_ptr)->p, (n), sizeof((arr_ptr)->p->data[0])); \
+} while(0)
 
 /* Pop last element. Returns the value. */
 #define msGenericArrayPop(arr_ptr) ({ \
