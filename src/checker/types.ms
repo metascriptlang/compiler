@@ -1959,7 +1959,7 @@ export function isReadonlyView(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
 	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Span
 		&& t.kind != TypeKind.Ptr && t.kind != TypeKind.Struct && t.kind != TypeKind.Union
-		&& t.kind != TypeKind.Unknown && t.kind != TypeKind.GenericParam) return false;
+		&& t.kind != TypeKind.Unknown && t.kind != TypeKind.GenericParam && t.kind != TypeKind.GenericInstance) return false;
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
@@ -2052,7 +2052,8 @@ export function createReadonlyView(t: Type | null): Type {
 	if (t.readonlyView != null) return t.readonlyView;
 	const viewable = t.kind == TypeKind.Array || t.kind == TypeKind.Unknown || t.kind == TypeKind.Span || t.kind == TypeKind.GenericParam
 		|| t.kind == TypeKind.Ptr || (t.kind == TypeKind.Ref && !isAtomicRef(t))
-		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0));
+		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0))
+		|| (t.kind == TypeKind.GenericInstance && typeCarriesRef(t.typeReturn != null ? t.typeReturn : t.typeExtra));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsReadonly);

@@ -1549,7 +1549,7 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		}
 	}
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
-		|| dst.kind == TypeKind.Ptr || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
+		|| dst.kind == TypeKind.Ptr || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union || dst.kind == TypeKind.GenericInstance
 		|| dst.kind == TypeKind.Unknown;
 }
 
