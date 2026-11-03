@@ -38,11 +38,7 @@ export function substring(this s: string, start: int32, end: int32 = 2147483647)
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 
 // ===== Transformation =====
-export extern function split(this s: string, delimiter: string): string[] from "msStringSplit";
-export extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
-export extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
-export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";
-export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
+export { replace, replaceAll, padStart, padEnd, split } from "./editNative";
 
 // ===== Parsing =====
 export function parseFloat(this s: string): number {

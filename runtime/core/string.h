@@ -215,7 +215,7 @@ msString msBoolToString(int value);
 
 /* ===== Splitting & Joining ===== */
 
-/* Join string array with separator; the body is std/core/string/editNative.ms */
+/* Join string array with separator; the body is std/core/string/editNative.cms */
 msString msStringJoin(msStringArray* arr, msString sep);
 
 /* ===== Parsing ===== */

@@ -2111,6 +2111,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const rmsFiles = [
 		join(stdPath, "core/string/index.rms"),
+		join(stdPath, "core/string/editNative.rms"),
 		join(stdPath, "core/string/bytes.rms"),
 		join(stdPath, "core/array/index.rms"),
 		join(stdPath, "process/child.rms"),
