@@ -1,4 +1,5 @@
 when (!bare && !solana) {
+	import "./rangeError";
 	@include("runtime/bigint/bigint.h");
 
 	// mbedTLS bignum only — no PSA/TLS sources are pulled in by this module.
@@ -81,10 +82,8 @@ when (!bare && !solana) {
 	extern function msBigIntFromInt64(v: int64): bigint;
 	@compilerFunc
 	extern function msBigIntFromUint64(v: uint64): bigint;
-	@exportName("msBigIntThrowRange")
-	function throwRange(message: string): void {
-		throw new RangeError(message);
-	}
+	@compilerFunc
+	extern function msBigIntThrowRange(message: string): void;
 	extern function msBigIntParses(s: string): boolean;
 	extern function msBigIntParse(s: string): bigint;
 

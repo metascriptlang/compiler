@@ -1,0 +1,4 @@
+@exportName("msBigIntThrowRange")
+function throwRange(message: string): void {
+	throw new RangeError(message);
+}
