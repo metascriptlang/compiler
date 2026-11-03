@@ -6,8 +6,7 @@ import {
 	TypeAssertionData, HiddenStdConvData, ConditionalExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
 	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData, AwaitExprData, SpreadExprData,
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
-	ObjectPatternPropData, ArrayPatternData, createNodeAt,
-} from "../ast/node";
+	ObjectPatternPropData, ArrayPatternData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
@@ -2103,8 +2102,8 @@ function joinedBy(node: Node): Node[] {
 	const arg = peelConv((node.data as AwaitExprData).awaitArg);
 	if (arg == null) return out;
 	out.push(arg);
-	const kind = arg.kind == NodeKind.CallExpr && arg.resolvedSym != null ? arg.resolvedSym.builtinKind : "";
-	if (kind != "PromiseAll" && kind != "PromiseAllSettled") return out;
+	const kind = arg.kind == NodeKind.CallExpr && arg.resolvedSym != null ? arg.resolvedSym.builtinKind : BuiltinKind.None;
+	if (kind != BuiltinKind.PromiseAll && kind != BuiltinKind.PromiseAllSettled) return out;
 	const args = (arg.data as CallExprData).arguments;
 	const list = args.length > 0 ? peelConv(args[0]) : null;
 	if (list == null || list.kind != NodeKind.ArrayLiteral) return out;
@@ -2448,7 +2447,7 @@ function refuseLendingValue(ctx: CheckerContext, site: Node, what: string, decl:
 
 function isPromiseJoin(node: Node | null): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr || node.resolvedSym == null) return false;
-	return node.resolvedSym.builtinKind == "PromiseAll" || node.resolvedSym.builtinKind == "PromiseAllSettled";
+	return node.resolvedSym.builtinKind == BuiltinKind.PromiseAll || node.resolvedSym.builtinKind == BuiltinKind.PromiseAllSettled;
 }
 
 function heldWhere(up: Node[], call: Node): boolean {

@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
@@ -127,16 +127,16 @@ function walkBody(node: Node, modulePath: string): void {
 	// CallExpr — walk callee and arguments
 	if (k == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
-		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
-		if (magic == "BoxRefArray" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
+		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : BuiltinKind.None;
+		if (magic == BuiltinKind.BoxRefArray && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
 			markRefArrayCell(cd.arguments[0].nodeType, modulePath);
-		} else if (magic == "BoxArc" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
+		} else if (magic == BuiltinKind.BoxArc && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
 			markArcCell(cd.arguments[0].nodeType, modulePath);
-		} else if (magic == "BoxLocked" && node.nodeType != null && node.nodeType.typeReturn != null) {
+		} else if (magic == BuiltinKind.BoxLocked && node.nodeType != null && node.nodeType.typeReturn != null) {
 			markArcCell(node.nodeType.typeReturn, modulePath);
-		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
+		} else if (magic == BuiltinKind.PromiseAllFor && node.nodeType != null) {
 			markPromiseAllResult(node.nodeType, modulePath);
-		} else if (magic == "OrcDisownValue" && cd.arguments.length > 0) {
+		} else if (magic == BuiltinKind.OrcDisownValue && cd.arguments.length > 0) {
 			const custody = valueCustodyOp(cd.arguments[0].nodeType);
 			if (custody != null) markReferenced(custody, modulePath);
 		}
@@ -856,7 +856,7 @@ function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
 	}
 	if (init.kind != NodeKind.CallExpr) return false;
 	const cd = init.data as CallExprData;
-	if (init.resolvedSym == null || init.resolvedSym.builtinKind != "BoxRefArray") return false;
+	if (init.resolvedSym == null || init.resolvedSym.builtinKind != BuiltinKind.BoxRefArray) return false;
 	if (cd.arguments.length != 1) return false;
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
@@ -1136,7 +1136,7 @@ test "source dependencies keep callees without demanding unlifted runtime ops" {
 	const call = (stmt.data as ExprStmtData).expr.data as CallExprData;
 	const callee = makeSymbol("box", SymbolKind.Function, null, false);
 	callee.modulePath = "native.ms";
-	callee.builtinKind = "BoxRefArray";
+	callee.builtinKind = BuiltinKind.BoxRefArray;
 	call.callee.resolvedSym = callee;
 	const element = createStruct("SourceDependencyElement", ["label"], [stringType()], true);
 	element.sym = makeSymbol("SourceDependencyElement", SymbolKind.Interface, element, false);

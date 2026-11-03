@@ -17,7 +17,7 @@
 // std/promise are only observable through one of those three, so widening
 // the surface would only duplicate diagnostics.
 
-import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
+import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc, BuiltinKind } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
 import { makeSymbol, hasFlag, setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
@@ -50,7 +50,7 @@ export function isAsyncFunctionNode(node: Node): boolean {
 export function isSpawnCall(node: Node): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr) return false;
 	if (node.resolvedSym == null) return false;
-	return node.resolvedSym.builtinKind == "PromiseSpawn";
+	return node.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn;
 }
 
 // Is this node an async surface the freestanding runtime cannot carry?

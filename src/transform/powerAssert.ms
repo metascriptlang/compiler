@@ -15,7 +15,7 @@
 // Only transforms AssertStmt nodes found inside TestDecl bodies.
 // Outside test blocks, AssertStmt is left untouched (codegen emits simple abort).
 
-import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, BuiltinKind } from "../ast/node";
 import { isIntegerType } from "../checker/types";
 import { TransformContext, newLoweredSym } from "./context";
 import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken, callBuiltinKind } from "./util";
@@ -255,8 +255,8 @@ function decomposeExpr(
 
 function heldSubjects(call: Node): int32 {
 	const kind = callBuiltinKind(call);
-	if (kind == "UnionText" || kind == "UnionDebug") return 1;
-	if (kind == "UnionEq") return 2;
+	if (kind == BuiltinKind.UnionText || kind == BuiltinKind.UnionDebug) return 1;
+	if (kind == BuiltinKind.UnionEq) return 2;
 	return -1;
 }
 

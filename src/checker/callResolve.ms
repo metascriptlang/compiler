@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
-import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -26,7 +26,7 @@ import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isMetaNodeSym } from "../compiler/meta/nodeSym";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf, builtinKindName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow } from "./types";
@@ -420,8 +420,8 @@ export function markNamesUsed(ctx: CheckerContext, node: Node | null): void {
 		const cd = node.data as CallExprData;
 		const calleeName = cd.callee.kind == NodeKind.Identifier ? (cd.callee.data as IdentifierData).name : "";
 		const callee = calleeName != "" ? lookupSymbol(ctx.table, calleeName) : null;
-		const intrinsic = callee != null ? callee.builtinKind : calleeName != "" ? macroPreludeKind(ctx, calleeName) : "";
-		if (intrinsic == "MetaBindSym"
+		const intrinsic = callee != null ? callee.builtinKind : calleeName != "" ? macroPreludeKind(ctx, calleeName) : BuiltinKind.None;
+		if (intrinsic == BuiltinKind.MetaBindSym
 				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			name = (cd.arguments[0].data as StringLiteralData).value;
 		}
@@ -488,7 +488,7 @@ function deriveCallBindings(
 // reaches the value or the error before inference would bind it from the argument.
 function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, context: UnifyBindings): Type | null {
 	if (calleeSym == null || formal == null || context.names.length == 0) return null;
-	if (calleeSym.builtinKind != "ResultOk" && calleeSym.builtinKind != "ResultErr") return null;
+	if (calleeSym.builtinKind != BuiltinKind.ResultOk && calleeSym.builtinKind != BuiltinKind.ResultErr) return null;
 	const slot = substituteBound(formal, context);
 	return hasGenericParams(slot) ? null : slot;
 }
@@ -844,7 +844,7 @@ function soleMethodCandidate(ctx: CheckerContext, method: Symbol, me: MemberExpr
 }
 
 function isStdPromise(sym: Symbol | null): boolean {
-	return sym != null && sym.builtinKind == "Promise";
+	return sym != null && sym.builtinKind == BuiltinKind.Promise;
 }
 
 function refuseThenable(ctx: CheckerContext, site: string, operand: Node, reason: string): void {
@@ -1083,7 +1083,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// new Arc(value): atomic-refcounted shared box. Pointee type is the explicit
 		// <T> if present, else inferred from the single argument. Represented as a
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.
-		const head = newSym != null ? (isTypeSymbol(newSym) ? newSym.builtinKind : "") : builtinTypeHead(ctx, id.name);
+		const head = newSym != null ? (isTypeSymbol(newSym) ? builtinKindName(newSym.builtinKind) : "") : builtinTypeHead(ctx, id.name);
 		if (head == "Arc" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
@@ -1926,8 +1926,8 @@ export function typeTraitOf(node: Node): Symbol | null {
 	const d = node.data as CallExprData;
 	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
 	if (sym == null) return null;
-	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray"
-		|| sym.builtinKind == "IsObject" || sym.builtinKind == "IsPlainObject" ? sym : null;
+	return sym.builtinKind == BuiltinKind.IsPlainData || sym.builtinKind == BuiltinKind.NeedsCopy || sym.builtinKind == BuiltinKind.IsArray
+		|| sym.builtinKind == BuiltinKind.IsObject || sym.builtinKind == BuiltinKind.IsPlainObject ? sym : null;
 }
 
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
@@ -1945,10 +1945,10 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		node.nodeType = booleanType();
 		return node.nodeType;
 	}
-	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner))
-		: trait.builtinKind == "IsArray" ? isArrayType(asked)
-		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
-		: trait.builtinKind == "IsPlainObject" ? isPlainObjectType(asked)
+	const answer = trait.builtinKind == BuiltinKind.IsPlainData ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner))
+		: trait.builtinKind == BuiltinKind.IsArray ? isArrayType(asked)
+		: trait.builtinKind == BuiltinKind.IsObject ? isAssignable(asked, nonPrimitiveType())
+		: trait.builtinKind == BuiltinKind.IsPlainObject ? isPlainObjectType(asked)
 		: needsValueCopy(asked);
 	node.kind = NodeKind.BooleanLiteral;
 	node.data = { boolValue: answer } as BooleanLiteralData;
@@ -2424,7 +2424,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	for (let ai = 0; ai < d.arguments.length; ai += 1) { argTypes.push(null as unknown as Type); }
 		const spawnCalleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		let spawnMoveKeys: string[] = [];
-		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") {
+		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == BuiltinKind.PromiseSpawn) {
 			spawnMoveKeys = desugarSpawnMoveList(ctx, d);
 			if (d.arguments.length >= 2 && !awaitedWhereWritten(ctx, node)) {
 				addError(ctx, "a spawn with { timeout } must be awaited where it is written, because its deadline is taken at that await; bind the result of 'await spawn(..., { timeout })' instead of the handle", node.location.line, node.location.column);
@@ -2485,7 +2485,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
-		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
+		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == BuiltinKind.PromiseSpawn) ctx.pendingSpawnThunk = true;
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
 		if (paramExpected != null && paramExpected.kind == TypeKind.Varargs) {
 			const restElem = getElementType(unwrapRef(unwrapVarargs(paramExpected)));
@@ -2537,14 +2537,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	const textSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 	if (textSym != null && !isEngineCheckMode()
 		&& (ctx.currentFunction == null || !hasFlag(ctx.currentFunction, SymbolFlag.CompileTime))
-		&& (textSym.builtinKind == "MetaError" || textSym.builtinKind == "MetaWarning"
-			|| textSym.builtinKind == "MetaSplice" || textSym.builtinKind == "MetaGetTypeArg")) {
+		&& (textSym.builtinKind == BuiltinKind.MetaError || textSym.builtinKind == BuiltinKind.MetaWarning
+			|| textSym.builtinKind == BuiltinKind.MetaSplice || textSym.builtinKind == BuiltinKind.MetaGetTypeArg)) {
 		addError(ctx, `'${textSym.name}' can only be called at compile time`, node.location.line, node.location.column);
 		return errorType();
 	}
-	if (textSym != null && (textSym.builtinKind == "Echo" || (textSym.builtinKind == "ToString" && d.arguments.length == 1))) {
+	if (textSym != null && (textSym.builtinKind == BuiltinKind.Echo || (textSym.builtinKind == BuiltinKind.ToString && d.arguments.length == 1))) {
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
-			const text = synthStringify(ctx, d.arguments[ai], textSym.builtinKind == "Echo");
+			const text = synthStringify(ctx, d.arguments[ai], textSym.builtinKind == BuiltinKind.Echo);
 			if (text == null) continue;
 			d.arguments[ai] = text;
 			argTypes[ai] = text.nodeType!;
@@ -2664,7 +2664,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	// that call isAwaitable() still recognize it, and compat.ms upcasts it to Promise<T>
 	// for assignability so existing code (Promise.all, explicit Promise<T> annotations) works.
 	for (const mk of spawnMoveKeys) markConsumedName(ctx.affineTracker, "mv:" + mk);
-	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn"
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn
 		&& argTypes.length >= 1 && argTypes[0] != null && argTypes[0].kind == TypeKind.Function) {
 		const spawnInner = argTypes[0].typeReturn != null ? argTypes[0].typeReturn : voidType();
 		if (isAwaitable(spawnInner)) {
@@ -2706,7 +2706,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 
 	// Check argument types + infer generic return
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
-	const isEchoBuiltin = node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo";
+	const isEchoBuiltin = node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.Echo;
 	if (calleeType.kind == TypeKind.Function && !isEchoBuiltin) {
 		// Rest param detection: last typeChildren entry is wrapped in TypeKind.Varargs
 		// (reference parity: tyVarargs). createFunction installs the wrapper from
@@ -2956,10 +2956,10 @@ function argLabelCap(pi: int32, hasReceiver: boolean): string {
 }
 
 function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Node[], argTypes: Type[], isActorMethodCall: boolean, hasReceiver: boolean = false): void {
-	const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
-	if (builtin == "Echo" || builtin == "ToString") textOfDistinctArgs(ctx, args, argTypes, hasReceiver);
-	if (builtin == "Echo") return;
-	if (builtin == "ToString" && refuseTextlessArgs(ctx, args, hasReceiver)) return;
+	const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : BuiltinKind.None;
+	if (builtin == BuiltinKind.Echo || builtin == BuiltinKind.ToString) textOfDistinctArgs(ctx, args, argTypes, hasReceiver);
+	if (builtin == BuiltinKind.Echo) return;
+	if (builtin == BuiltinKind.ToString && refuseTextlessArgs(ctx, args, hasReceiver)) return;
 	const d = node.data as CallExprData;
 	const lastCT = calleeType.typeChildren.length > 0
 		? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
@@ -3856,7 +3856,7 @@ function fitDefaultToInstance(ctx: CheckerContext, call: Node, callee: Symbol, p
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
 	if (!isGenericFn(flags)) return null as unknown as Type;
 	const sym = node.resolvedSym;
-	if (sym == null || sym.builtinKind != "" || sym.declNode == null) {
+	if (sym == null || sym.builtinKind != BuiltinKind.None || sym.declNode == null) {
 		return null as unknown as Type;
 	}
 	const cd = node.data as CallExprData;
@@ -5244,7 +5244,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 function builtinTextFor(ctx: CheckerContext, name: string, baseArgs: Type[], ret: Type | null): Symbol | null {
 	if (name != "toString" || baseArgs.length != 1 || ret == null || !isStringLike(ret)) return null;
 	const text = stdSymbol(ctx, "String");
-	return text != null && text.builtinKind == "ToString" ? text : null;
+	return text != null && text.builtinKind == BuiltinKind.ToString ? text : null;
 }
 
 function peelDistinctReturn(t: Type | null): Type | null {
@@ -5579,7 +5579,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		callNode.flags = callNode.flags.incl(NodeFlag.ObjCheck);
 	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
-			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
+			&& extWinnerSym.builtinKind == BuiltinKind.None && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
 			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
 		const recvBindings = createUnifyBindings();
 		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
@@ -5591,7 +5591,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 				winnerType = stripReceiverParam(instSym.symbolType);
 			}
 		}
-	} else if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.builtinKind == ""
+	} else if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.builtinKind == BuiltinKind.None
 			&& extWinnerSym.declNode != null && extWinnerSym.declNode.kind == NodeKind.MethodDecl && winnerType.kind == TypeKind.Function) {
 		const recvBindings = createUnifyBindings();
 		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
@@ -5606,7 +5606,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			}
 		}
 	}
-	if (extWinnerSym != null && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == ""
+	if (extWinnerSym != null && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == BuiltinKind.None
 			&& extWinnerSym.declNode != null && declTakesReceiver(extWinnerSym.declNode) && isGenericRoutine(winnerType, extWinnerSym)) {
 		const recvBindings = createUnifyBindings();
 		if (!exts[idx].isStatic) unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
@@ -6571,7 +6571,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// Generic class instance method: monomorphize the method body with the
 				// discovered bindings and point the call at the mono'd symbol (mirrors the
 				// extension-method instantiation path below).
-				if (eb.names.length > 0 && classMethSym.builtinKind == "" && classMethSym.declNode != null && !isGenericInstanceMethod(classMethSym)) {
+				if (eb.names.length > 0 && classMethSym.builtinKind == BuiltinKind.None && classMethSym.declNode != null && !isGenericInstanceMethod(classMethSym)) {
 					const instSym = callInstantiateGeneric(classMethSym, eb.params, eb.types, ctx, node.location);
 					if (instSym != null) {
 						ensureShaped(instSym, ctx);
@@ -6668,7 +6668,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					if (eb.names.length > 0) {
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version
-						if (ext.sym != null && ext.sym.declNode != null && ext.sym.builtinKind == "" && bindingsCoverDecl(eb, ext.sym.declNode)) {
+						if (ext.sym != null && ext.sym.declNode != null && ext.sym.builtinKind == BuiltinKind.None && bindingsCoverDecl(eb, ext.sym.declNode)) {
 							const instSym = callInstantiateGeneric(ext.sym, eb.params, eb.types, ctx, node.location);
 							if (instSym != null) {
 								node.resolvedSym = instSym;
@@ -6764,7 +6764,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			toStrFnType = createFunction([], [], stringType());
 		}
 		const toStrSym = makeSymbol("toString", SymbolKind.Function, toStrFnType, false);
-		toStrSym.builtinKind = "ToStringMethod";
+		toStrSym.builtinKind = BuiltinKind.ToStringMethod;
 		toStrSym.modulePath = ctx.modulePath;
 		stampItem(ctx, toStrSym);
 		toStrSym.state = SymbolState.Shaped;

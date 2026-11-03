@@ -10,8 +10,7 @@ import {
 	ArrowFunctionData, FunctionExprData, FunctionDeclData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
-	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
-} from "../../ast/node";
+	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt, BuiltinKind } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedSafeStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, recordNamespaceImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangleProcName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt, buildModuleNameRoots } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, jsMovedValue, nativeResultCopy } from "./valueCopy";
@@ -499,7 +498,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	if (d.callee.resolvedSym != null && d.callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
+	if (d.callee.resolvedSym != null && d.callee.resolvedSym.builtinKind == BuiltinKind.DynamicImport) {
 		emitDynamicImport(gen, d.callee.resolvedSym.modulePath);
 		return;
 	}
@@ -533,7 +532,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		emit(gen, ")");
 		return;
 	}
-	if (sym != null && sym.builtinKind == "Echo") {
+	if (sym != null && sym.builtinKind == BuiltinKind.Echo) {
 		const method = sym.name;
 		markNamed(gen, calleeOriginNode(d.callee), `console.${method}`);
 		emit(gen, `globalThis.console.${method}(`);

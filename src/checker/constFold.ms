@@ -2,8 +2,7 @@ import {
 	Node, NodeKind, NodeFlag, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Symbol, Type, TypeKind, createNode,
 	BinaryExprData, UnaryExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
-} from "../ast/node";
+	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData, BuiltinKind } from "../ast/node";
 import { isIntegerType, isFloatType, createPrimitive, enumMemberValue } from "./types";
 import { makeNumber, makeFloatNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
 import { int64Bits } from "../utils/stdBackport";
@@ -87,8 +86,8 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 
 function builtinFloatConstant(ident: Node): Node {
 	const sym = ident.resolvedSym;
-	if (sym == null || (sym.builtinKind != "NaN" && sym.builtinKind != "Infinity")) return null as unknown as Node;
-	const n = makeNumber(sym.builtinKind == "NaN" ? NaN : Infinity, ident.location);
+	if (sym == null || (sym.builtinKind != BuiltinKind.NaN && sym.builtinKind != BuiltinKind.Infinity)) return null as unknown as Node;
+	const n = makeNumber(sym.builtinKind == BuiltinKind.NaN ? NaN : Infinity, ident.location);
 	n.nodeType = createPrimitive(TypeKind.Float64);
 	return n;
 }

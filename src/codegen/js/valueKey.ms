@@ -7,7 +7,7 @@
 // the keys are `==` (struct and tuple parts fold field by field, identity for
 // objects and functions, NaN never equal to itself).
 
-import { Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Type, TypeKind, TypeFlag, BuiltinKind } from "../../ast/node";
 import { NewExprData, CallExprData, Node, NodeFlag } from "../../ast/node";
 import { setRepr, isStdCollectionKind } from "../../checker/types";
 import { emit, emitNode, emitJoinedNodes, JSGenerator, jsPropertyAccess, identFromKey } from "./emit";
@@ -153,7 +153,7 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const called = d.newCallee.resolvedSym;
 	const sym = called != null && called.instantiatedFrom != null ? called.instantiatedFrom : called;
 	if (sym == null || !isStdCollectionKind(sym.builtinKind)) return false;
-	const isMap = sym.builtinKind == "IndexableMap";
+	const isMap = sym.builtinKind == BuiltinKind.IndexableMap;
 	const keyType = keyTypeOfCollection(node.nodeType);
 	const shape = valueKeyShape(keyType);
 	const keyOps = node.flags.has(NodeFlag.KeyOps);
@@ -189,7 +189,7 @@ function keyTypeOfCollection(t: Type | null): Type | null {
 export function emitCollectionFromPairs(gen: JSGenerator, node: Node): boolean {
 	const d = node.data as CallExprData;
 	const sym = d.callee.resolvedSym;
-	if (sym == null || sym.builtinKind != "MapFromPairs") return false;
+	if (sym == null || sym.builtinKind != BuiltinKind.MapFromPairs) return false;
 	if (sym.nativeName == null || sym.nativeName == "" || d.arguments.length != 2) return false;
 	const shape = valueKeyShape(keyTypeOfCollection(node.nodeType));
 	if (shape == null) return false;

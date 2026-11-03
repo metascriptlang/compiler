@@ -7,12 +7,12 @@
 // TransAmDb aggregates all stores. dbSetFileText triggers invalidation.
 // dbExecute runs the full pipeline through the red-green engine.
 
-import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, TypeKind, BuiltinKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { TaAbsentProbes, createAbsentProbes, enterCheckProbes, leaveCheckProbes, knownAbsentAt, recordAbsentAt, recordDiskProbe } from "./absentProbes";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf, isCancelled } from "../../checker/context";
-import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs, builtinKindName } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision, nextRevision, TA_REVISION_MAX,
@@ -787,7 +787,8 @@ function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerCon
 	const prelude = dbPrelude(db);
 	const ctx = createContext();
 	ctx.modulePath = modulePath;
-	for (const name of intrinsicBuiltins) {
+	for (const kind of intrinsicBuiltins) {
+		const name = builtinKindName(kind);
 		const sym = lookupSymbol(prelude.table, name);
 		if (sym != null) defineSymbolAs(ctx.table, name, sym);
 	}
@@ -1868,7 +1869,7 @@ test "one module's exports resolve what it imports from std" {
 	const f = findExportedSymbol(db.exportRegistry, "/test/kinds.ms", "kindOf");
 	assert f != null;
 	const param = f.sym.symbolType.typeChildren[0];
-	assert param.sym != null && param.sym.builtinKind == "MetaNodeKind";
+	assert param.sym != null && param.sym.builtinKind == BuiltinKind.MetaNodeKind;
 }
 
 test "a dependency's exported type keeps its declaring module" {

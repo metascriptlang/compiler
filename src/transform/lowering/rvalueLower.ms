@@ -2,7 +2,7 @@
 // addressable in C: an rvalue receiver is hoisted into a peer temp statement. The splice is
 // flat because a block would scope the temp away from the statements that follow.
 
-import { Node, NodeKind, DeclKind, CallExprData, MemberExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, CallExprData, MemberExprData, BuiltinKind } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { noneType } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
@@ -22,7 +22,7 @@ function isAsBytesCallOnRvalue(expr: Node): boolean {
 	if (expr.kind != NodeKind.CallExpr) return false;
 	const call = expr.data as CallExprData;
 	if (call.callee.kind != NodeKind.MemberExpr) return false;
-	if (call.callee.resolvedSym == null || call.callee.resolvedSym.builtinKind != "AsBytes") return false;
+	if (call.callee.resolvedSym == null || call.callee.resolvedSym.builtinKind != BuiltinKind.AsBytes) return false;
 	return isRvalue((call.callee.data as MemberExprData).object);
 }
 

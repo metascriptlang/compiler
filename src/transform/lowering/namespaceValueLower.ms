@@ -1,7 +1,7 @@
 // ECMAScript gives a module record one namespace object (GetModuleNamespace), so
 // the type names the value: a read through it resolves like a qualified `ns.X`.
 
-import { Node, NodeKind, MemberExprData, CallExprData, SymbolKind, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, MemberExprData, CallExprData, SymbolKind, Type, TypeKind, BuiltinKind } from "../../ast/node";
 import { makeSymbol } from "../../checker/symbol";
 import { getSysType } from "../../checker/types";
 import { makeNumber, makeString } from "../../checker/literalNodes";
@@ -28,7 +28,7 @@ function namespaceIdent(t: Type, at: Node): Node {
 function dynamicImportTarget(n: Node): string {
 	if (n.kind != NodeKind.CallExpr) return "";
 	const sym = (n.data as CallExprData).callee.resolvedSym;
-	return sym != null && sym.builtinKind == DYNAMIC_IMPORT ? sym.modulePath : "";
+	return sym != null && sym.builtinKind == BuiltinKind.DynamicImport ? sym.modulePath : "";
 }
 
 function lowerNode(n: Node): Node {

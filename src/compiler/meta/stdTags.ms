@@ -1,4 +1,4 @@
-import { Symbol } from "../../ast/node";
+import { Symbol, BuiltinKind } from "../../ast/node";
 import { ModuleGraph } from "../../module/graph";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { NamedSymbol, moduleScopeSymbols } from "../../checker/symbol";
@@ -9,20 +9,25 @@ export const metaNodeKindType = "$NodeKind";
 export const metaDeclKindType = "$DeclKind";
 export const metaExternKindType = "$ExternKind";
 
-const META_TYPE_TAGS: string[][] = [
-	[metaNodeType, "MetaNode"],
-	[metaNodeKindType, "MetaNodeKind"],
-	[metaDeclKindType, "MetaDeclKind"],
-	[metaExternKindType, "MetaExternKind"],
+interface MetaTypeTag {
+	seed: string;
+	tag: BuiltinKind;
+}
+
+const META_TYPE_TAGS: MetaTypeTag[] = [
+	{ seed: metaNodeType, tag: BuiltinKind.MetaNode },
+	{ seed: metaNodeKindType, tag: BuiltinKind.MetaNodeKind },
+	{ seed: metaDeclKindType, tag: BuiltinKind.MetaDeclKind },
+	{ seed: metaExternKindType, tag: BuiltinKind.MetaExternKind },
 ];
 
 export function isMetaSeedName(name: string): boolean {
-	for (const entry of META_TYPE_TAGS) if (entry[0] == name) return true;
+	for (const entry of META_TYPE_TAGS) if (entry.seed == name) return true;
 	return false;
 }
 
 // One pass over the module scopes of the graph; a tag nothing in the graph carries stays null.
-export function metaTagged(graph: ModuleGraph, tags: string[]): (Symbol | null)[] {
+export function metaTagged(graph: ModuleGraph, tags: BuiltinKind[]): (Symbol | null)[] {
 	const found: (Symbol | null)[] = [];
 	for (let i = 0; i < tags.length; i += 1) found.push(null);
 	let missing = tags.length;
@@ -30,7 +35,7 @@ export function metaTagged(graph: ModuleGraph, tags: string[]): (Symbol | null)[
 		const ctx = lookupModuleCtx(path);
 		if (ctx == null) continue;
 		for (const sym of moduleScopeSymbols(ctx.table)) {
-			if (sym.builtinKind == "") continue;
+			if (sym.builtinKind == BuiltinKind.None) continue;
 			const at = tags.indexOf(sym.builtinKind);
 			if (at < 0 || found[at] != null) continue;
 			found[at] = sym;
@@ -45,23 +50,23 @@ export function metaTagged(graph: ModuleGraph, tags: string[]): (Symbol | null)[
 // names the compiler writes; a user spelling of Node, NodeKind or DeclKind never reaches them.
 export function metaTypeSeeds(graph: ModuleGraph | null, ctx: CheckerContext | null): NamedSymbol[] {
 	const seeds: NamedSymbol[] = [];
-	const tags: string[] = [];
-	for (const entry of META_TYPE_TAGS) tags.push(entry[1]);
-	const found = graph != null ? metaTagged(graph, tags) : tags.map((_: string): Symbol | null => null);
+	const tags: BuiltinKind[] = [];
+	for (const entry of META_TYPE_TAGS) tags.push(entry.tag);
+	const found = graph != null ? metaTagged(graph, tags) : tags.map((_: BuiltinKind): Symbol | null => null);
 	if (ctx != null) fillFromPreludeModules(ctx, tags, found);
 	if (ctx != null && ctx.preludeCtx != null) fillFromPreludeModules(ctx.preludeCtx, tags, found);
 	for (let i = 0; i < META_TYPE_TAGS.length; i += 1) {
 		const sym = found[i];
-		if (sym != null) seeds.push({ name: META_TYPE_TAGS[i][0], sym: sym });
+		if (sym != null) seeds.push({ name: META_TYPE_TAGS[i].seed, sym: sym });
 	}
 	return seeds;
 }
 
 // A compilation outside any module graph reaches std/meta through the prelude's module scopes.
-function fillFromPreludeModules(ctx: CheckerContext, tags: string[], found: (Symbol | null)[]): void {
+function fillFromPreludeModules(ctx: CheckerContext, tags: BuiltinKind[], found: (Symbol | null)[]): void {
 	for (const scope of ctx.preludeModuleScopes.values()) {
 		for (const sym of scope) {
-			const at = sym.builtinKind == "" ? -1 : tags.indexOf(sym.builtinKind);
+			const at = sym.builtinKind == BuiltinKind.None ? -1 : tags.indexOf(sym.builtinKind);
 			if (at >= 0 && found[at] == null) found[at] = sym;
 		}
 	}

@@ -1,11 +1,11 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { expandParamProperties, hasParamProperties, isParamProperty } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
-import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
+import { builtinKindName, builtinKindNamed, defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
 import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
@@ -163,8 +163,8 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			if (sym != null) {
 				const info = extractDecoratorInfo(ctx, node);
 				if (info.nativeName != "" && sym.nativeName == "") sym.nativeName = formatExternName(ctx, "declaration", sym.name, info.nativeName, node.location);
-				const kind = stdBuiltinKind(ctx, info.builtinKind, node);
-				if (kind != "") sym.builtinKind = kind;
+				const kind = stdBuiltinKind(ctx, info.builtinName, node);
+				if (kind != BuiltinKind.None) sym.builtinKind = kind;
 			}
 		},
 		NodeKind.VariableDecl => {
@@ -299,8 +299,8 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const info = extractDecoratorInfo(ctx, node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
-	const kind = stdBuiltinKind(ctx, info.builtinKind, node);
-	if (kind != "") sym.builtinKind = kind;
+	const kind = stdBuiltinKind(ctx, info.builtinName, node);
+	if (kind != BuiltinKind.None) sym.builtinKind = kind;
 	if (exportName != "") sym.exportName = exportName;
 	if (info.throws) setFlag(sym, SymbolFlag.Throws);
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
@@ -334,10 +334,15 @@ function iteratorHelperMisuse(ctx: CheckerContext, dd: DecoratedDeclData): strin
 	return "";
 }
 
-function stdBuiltinKind(ctx: CheckerContext, kind: string, decl: Node): string {
-	if (kind == "" || ctx.modulePath == "" || !isOutsideResolvedStd(ctx, ctx.modulePath)) return kind;
-	addError(ctx, `@builtin("${kind}") is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`, decl.location.line, decl.location.column);
-	return "";
+function stdBuiltinKind(ctx: CheckerContext, name: string, decl: Node): BuiltinKind {
+	if (name == "") return BuiltinKind.None;
+	if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) {
+		addError(ctx, `@builtin("${name}") is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`, decl.location.line, decl.location.column);
+		return BuiltinKind.None;
+	}
+	const kind = builtinKindNamed(name);
+	if (kind == null) addError(ctx, `@builtin("${name}") names no compiler builtin`, decl.location.line, decl.location.column);
+	return kind ?? BuiltinKind.None;
 }
 
 function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
@@ -382,7 +387,7 @@ function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): vo
 
 function borrowDecorator(ctx: CheckerContext, decorators: Node[]): Node {
 	for (const dec of decorators) {
-		if (dec.kind == NodeKind.MacroInvocation && intrinsicBuiltinOf(ctx, (dec.data as MacroInvocationData).macroName) == "delegate") return dec;
+		if (dec.kind == NodeKind.MacroInvocation && intrinsicBuiltinOf(ctx, (dec.data as MacroInvocationData).macroName) == BuiltinKind.delegate) return dec;
 	}
 	return decorators[0];
 }
@@ -798,7 +803,7 @@ export function mintActor(ctx: CheckerContext, node: Node): void {
 		let nonisolated = false;
 		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
-			nonisolated = hasIntrinsicDecorator(ctx, dd.decorators, "nonisolated");
+			nonisolated = hasIntrinsicDecorator(ctx, dd.decorators, BuiltinKind.nonisolated);
 			if (dd.decoratedNode != null) member = dd.decoratedNode;
 		}
 		if (member.kind == NodeKind.PropertyDecl) {
@@ -912,7 +917,7 @@ function signatureNamesAny(routine: Node, names: string): boolean {
 
 function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
-	let builtinKind = "";
+	let builtinKind = BuiltinKind.None;
 	let throws = false;
 	let methodNode: Node | null = null;
 	if (member.kind == NodeKind.MethodDecl) {
@@ -922,7 +927,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.MethodDecl) {
 			methodNode = dd.decoratedNode;
 			const info = extractDecoratorInfo(ctx, member);
-			builtinKind = stdBuiltinKind(ctx, info.builtinKind, member);
+			builtinKind = stdBuiltinKind(ctx, info.builtinName, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
 			acceptsInline(ctx, dd);
@@ -988,8 +993,8 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	if (methodNative != "") {
 		fnType.typeName = methodNative;
 	}
-	if (builtinKind != "") {
-		fnType.typeName = builtinKind;
+	if (builtinKind != BuiltinKind.None) {
+		fnType.typeName = builtinKindName(builtinKind);
 	}
 	const mangledName = className + "_" + md.methodName;
 	const methodSym = declSymbol(ctx, member, mangledName, SymbolKind.Function, fnType, false);
@@ -1000,7 +1005,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		methodSym.nativeName = methodNative;
 		refuseJsPatternOffJs(ctx, "method", md.methodName, methodNative, md.nameLocation);
 	}
-	if (builtinKind != "") {
+	if (builtinKind != BuiltinKind.None) {
 		methodSym.builtinKind = builtinKind;
 	}
 	if (throws) setFlag(methodSym, SymbolFlag.Throws);
@@ -1032,7 +1037,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	}
 	if (md.methodIsStatic) methodSym.staticOwner = classSym;
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", md.methodIsStatic, methodSym, 1));
-	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
+	if (!md.methodIsStatic && !isExternClass && builtinKind == BuiltinKind.None) {
 		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}
 }
@@ -2082,42 +2087,60 @@ test "extern function from sets nativeName" {
 }
 
 test "decorator @builtin sets builtinKind" {
-	const ctx = collectFromSource("@builtin(\"LengthStr\") function len(s: string): number { return 0; }");
+	const ctx = collectFromSource("@builtin(\"Echo\") function len(s: string): number { return 0; }");
 	const sym = lookupSymbol(ctx.table, "len");
 	assert sym != null;
 	if (sym != null) {
-		assert sym.builtinKind == "LengthStr";
+		assert sym.builtinKind == BuiltinKind.Echo;
 	}
 }
 
+test "a @builtin name no member of BuiltinKind carries is an error at the decorator, on a function and on a method" {
+	const fn = collectFromSource("@builtin(\"NoSuchBuiltin\") function f(): int32 { return 0; }");
+	const method = collectFromSource("class C {\n\t@builtin(\"Nonexistent\") m(): int32 { return 1; }\n}");
+	for (const ctx of [fn, method]) {
+		let named = 0;
+		for (const e of ctx.errors) if (e.message.indexOf("names no compiler builtin") >= 0) named += 1;
+		assert named == 1;
+	}
+	assert lookupSymbol(fn.table, "f")!.builtinKind == BuiltinKind.None;
+}
+
+test "every BuiltinKind member parses back from its own name, and None is not a name" {
+	for (let k = (BuiltinKind.None as int32) + 1; k <= (BuiltinKind.WaitForStruct as int32); k += 1) {
+		assert builtinKindNamed(builtinKindName(k as BuiltinKind)) == k as BuiltinKind;
+	}
+	assert builtinKindNamed("None") == null && builtinKindNamed("") == null;
+}
+
 test "overloaded @builtin routes to correct overload" {
-	const ctx = collectFromSource("function len(s: string): number { return 0; }\n@builtin(\"LengthArr\") function len(arr: number[]): number { return 0; }");
+	const ctx = collectFromSource("function len(s: string): number { return 0; }\n@builtin(\"IsArray\") function len(arr: number[]): number { return 0; }");
 	const sym = lookupSymbol(ctx.table, "len");
 	assert sym != null;
 	if (sym != null) {
 		// Primary (first len) should NOT have builtinKind
-		assert sym.builtinKind == "";
+		assert sym.builtinKind == BuiltinKind.None;
 		// Overload (second len) should have builtinKind
 		assert sym.overloads.length == 1;
 		if (sym.overloads.length > 0) {
-			assert sym.overloads[0].builtinKind == "LengthArr";
+			assert sym.overloads[0].builtinKind == BuiltinKind.IsArray;
 		}
 	}
 }
 
 test "the local collect tags the decorated overload, not the same-named primary" {
 	const ctx = createContext();
-	const pr = parseSource("function len(s: string): number { return 0; }\n@builtin(\"LengthArr\") function len(arr: number[]): number { return 0; }");
+	const pr = parseSource("function len(s: string): number { return 0; }\n@builtin(\"IsArray\") function len(arr: number[]): number { return 0; }");
 	assert pr.ok;
 	if (!pr.ok) return;
 	collectTopLevelLocal(ctx, pr.value);
 	const sym = lookupSymbol(ctx.table, "len");
 	assert sym != null;
 	if (sym != null) {
-		assert sym.builtinKind == "";
+		assert sym.builtinKind == BuiltinKind.None;
 		assert sym.overloads.length == 1;
 		if (sym.overloads.length > 0) {
-			assert sym.overloads[0].builtinKind == "LengthArr";
+			assert sym.overloads[0].builtinKind == BuiltinKind.IsArray;
 		}
 	}
 }
@@ -2127,7 +2150,7 @@ test "@builtin on extern function sets both builtinKind and nativeName" {
 	const sym = lookupSymbol(ctx.table, "ok");
 	assert sym != null;
 	if (sym != null) {
-		assert sym.builtinKind == "ResultOk";
+		assert sym.builtinKind == BuiltinKind.ResultOk;
 		assert sym.nativeName == "msResultOk";
 		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
@@ -2138,7 +2161,7 @@ test "@builtin on generic extern function" {
 	const sym = lookupSymbol(ctx.table, "ok");
 	assert sym != null;
 	if (sym != null) {
-		assert sym.builtinKind == "ResultOk";
+		assert sym.builtinKind == BuiltinKind.ResultOk;
 		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
@@ -2159,7 +2182,7 @@ test "no decorator leaves fields empty" {
 	assert sym != null;
 	if (sym != null) {
 		assert sym.nativeName == "";
-		assert sym.builtinKind == "";
+		assert sym.builtinKind == BuiltinKind.None;
 	}
 }
 

@@ -19,7 +19,7 @@
 // to side-effect-free targets; anything else is a diagnostic rather than silent
 // pointer arithmetic in the emitted C.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ConditionalExprData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ConditionalExprData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, BuiltinKind } from "../../ast/node";
 import { addError } from "../../checker/context";
 import { booleanType, stringType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
 import { isNullExpr } from "../../ast/shape";
@@ -235,13 +235,13 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.CallExpr) {
 		const kind = callBuiltinKind(node);
 		const cd = node.data as CallExprData;
-		if (kind == "Echo") {
+		if (kind == BuiltinKind.Echo) {
 			for (let i = 0; i < cd.arguments.length; i += 1) {
 				const arg = cd.arguments[i];
 				if (isBigNode(arg)) cd.arguments[i] = bigCall("msBigIntToDebugString", [arg], arg.location, stringType());
 				else if (isNullableBigNode(arg)) cd.arguments[i] = bigCall("msBigIntDebugText", [arg], arg.location, stringType());
 			}
-		} else if (kind == "ToString" && cd.arguments.length == 1 && (isBigNode(cd.arguments[0]) || isNullableBigNode(cd.arguments[0]))) {
+		} else if (kind == BuiltinKind.ToString && cd.arguments.length == 1 && (isBigNode(cd.arguments[0]) || isNullableBigNode(cd.arguments[0]))) {
 			return bigAsText(cd.arguments[0]);
 		}
 		return node;

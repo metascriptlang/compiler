@@ -4,11 +4,10 @@ import {
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, VariableDeclData, DestructuringDeclData,
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, MatchCaseData,
 	IdentifierData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	EnumDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, TypeAliasDeclData, CallExprData, MemberExprData,
-} from "../ast/node";
+	EnumDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, TypeAliasDeclData, CallExprData, MemberExprData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
-import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, isFrameValue, ScopeKind } from "./symbol";
+import { isMetaBuiltin, makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, isFrameValue, ScopeKind } from "./symbol";
 import { CheckerContext, findExportedSymbol, macroPreludeSym, stampItem } from "./context";
 
 class BindScope {
@@ -64,12 +63,12 @@ function boundUnlessLeftToPreludes(b: NameBinder, name: string): Symbol | null {
 	const scope = scopeDefining(b.ctx.table, b.metaDefiner, name);
 	if (scope == null) return null;
 	const sym = lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name);
-	return scope.scopeKind == ScopeKind.Global && !sym.builtinKind.startsWith("Meta") ? null : sym;
+	return scope.scopeKind == ScopeKind.Global && !isMetaBuiltin(sym.builtinKind) ? null : sym;
 }
 
 function writtenSymbol(b: NameBinder, name: string): Symbol | null {
 	const sym = lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name);
-	return sym == null || sym.builtinKind.startsWith("Meta") || isFrameValue(sym) ? null : sym;
+	return sym == null || isMetaBuiltin(sym.builtinKind) || isFrameValue(sym) ? null : sym;
 }
 
 function bindIdentifier(b: NameBinder, node: Node): void {
@@ -368,11 +367,11 @@ export function bindContainerNames(ctx: CheckerContext, params: string[], body: 
 	return b.keys;
 }
 
-export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | null>, callee: Node): string {
+export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | null>, callee: Node): BuiltinKind {
 	const sym = bound.get(callee);
 	if (sym != null) return sym.builtinKind;
-	if (callee.kind != NodeKind.Identifier) return "";
-	return macroPreludeSym(ctx, (callee.data as IdentifierData).name)?.builtinKind ?? "";
+	if (callee.kind != NodeKind.Identifier) return BuiltinKind.None;
+	return macroPreludeSym(ctx, (callee.data as IdentifierData).name)?.builtinKind ?? BuiltinKind.None;
 }
 
 export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node, quoted: Map<Node, Symbol>): Map<Node, Symbol | null> {

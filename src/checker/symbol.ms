@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind, BuiltinKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, findIdentId, getIdentId, identName } from "./idents";
@@ -98,6 +98,39 @@ export enum RoutineFlag {
 }
 
 const decodedRoutineFlags: HashMap<string, BitSet<RoutineFlag>> = new HashMap<string, BitSet<RoutineFlag>>();
+
+const builtinKindsByName: HashMap<string, BuiltinKind> = new HashMap<string, BuiltinKind>();
+
+export function builtinKindNamed(name: string): BuiltinKind | null {
+	if (builtinKindsByName.size == 0) {
+		for (let k = (BuiltinKind.None as int32) + 1; k <= (BuiltinKind.WaitForStruct as int32); k += 1) builtinKindsByName.set(`${k as BuiltinKind}`, k as BuiltinKind);
+	}
+	return builtinKindsByName.get(name) ?? null;
+}
+
+export function builtinKindName(kind: BuiltinKind): string {
+	return kind == BuiltinKind.None ? "" : `${kind}`;
+}
+
+export function isPromiseBuiltin(kind: BuiltinKind): boolean {
+	return match (kind) {
+		BuiltinKind.Promise | BuiltinKind.PromiseAll | BuiltinKind.PromiseAllFor | BuiltinKind.PromiseAllSettled
+			| BuiltinKind.PromiseAny | BuiltinKind.PromiseAnyFor | BuiltinKind.PromiseCatch | BuiltinKind.PromiseFail
+			| BuiltinKind.PromiseFinally | BuiltinKind.PromisePending | BuiltinKind.PromiseRace | BuiltinKind.PromiseRaceFor
+			| BuiltinKind.PromiseReject | BuiltinKind.PromiseResolve | BuiltinKind.PromiseSettle | BuiltinKind.PromiseSpawn
+			| BuiltinKind.PromiseThen => true,
+		_ => false,
+	};
+}
+
+export function isMetaBuiltin(kind: BuiltinKind): boolean {
+	return match (kind) {
+		BuiltinKind.MetaBindSym | BuiltinKind.MetaCreateNode | BuiltinKind.MetaCreateNodeAt | BuiltinKind.MetaDeclKind
+			| BuiltinKind.MetaError | BuiltinKind.MetaExternKind | BuiltinKind.MetaGetTypeArg | BuiltinKind.MetaGetTypeImpl
+			| BuiltinKind.MetaNode | BuiltinKind.MetaNodeKind | BuiltinKind.MetaSplice | BuiltinKind.MetaWarning => true,
+		_ => false,
+	};
+}
 
 let _routineFlagsSealed = false;
 
@@ -466,7 +499,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		overloads: [],
 		nativeName: "",
 		exportName: "",
-		builtinKind: "",
+		builtinKind: BuiltinKind.None,
 		symFlags: mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>),
 		defaultParams: [],
 		modulePath: "",
@@ -504,7 +537,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.overloads = [];
 	sym.nativeName = "";
 	sym.exportName = "";
-	sym.builtinKind = "";
+	sym.builtinKind = BuiltinKind.None;
 	sym.defaultParams = [];
 	sym.symFlags = mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>);
 	sym.modulePath = "";

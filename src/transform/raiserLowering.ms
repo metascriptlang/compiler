@@ -4,7 +4,7 @@
 //   lowerConstFold before lowerMatch (patterns resolved)
 
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
-import { Node, NodeKind, CallExprData } from "../ast/node";
+import { Node, NodeKind, CallExprData, BuiltinKind } from "../ast/node";
 import { walkNode } from "./walker";
 import { WriteSummaries } from "../analyzer/writeEffects";
 import { CheckerContext } from "../checker/context";
@@ -81,7 +81,7 @@ function dropUnionTextMemberTexts(program: Node): Node {
 	return walkNode(program, (n: Node): Node => {
 		if (n.kind != NodeKind.CallExpr) return n;
 		const kind = callBuiltinKind(n);
-		if (kind == "UnionText" || kind == "UnionDebug") (n.data as CallExprData).arguments.shrink(1);
+		if (kind == BuiltinKind.UnionText || kind == BuiltinKind.UnionDebug) (n.data as CallExprData).arguments.shrink(1);
 		return n;
 	});
 }

@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode, BuiltinKind } from "../../ast/node";
 import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots, joinBranchTypes } from "../../checker/fit";
 import { isLiteralSet, isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, nullType, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
@@ -8,7 +8,7 @@ import { memberLabels, accessHead } from "../native/unionProjectLower";
 
 export const TAG_FIELD = "$tag";
 export const VALUE_FIELD = "$v";
-const ECHO_BUILTIN_KINDS = ["Echo", "ToString", "UnionText", "UnionDebug"];
+const ECHO_BUILTIN_KINDS: BuiltinKind[] = [BuiltinKind.Echo, BuiltinKind.ToString, BuiltinKind.UnionText, BuiltinKind.UnionDebug];
 
 export function lowerUnionTags(program: Node, ctx: TransformContext): Node {
 	return lowerNode(program, "", ctx);

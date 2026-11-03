@@ -27,8 +27,7 @@ import {
 	AwaitExprData, ArrayLiteralData, CallExprData, FunctionDeclData, MethodDeclData,
 	FunctionExprData, ArrowFunctionData,
 	VariableDeclData, ExprStmtData, ReturnStmtData,
-	Type, TypeKind,
-} from "../../ast/node";
+	Type, TypeKind, BuiltinKind } from "../../ast/node";
 import { TransformContext, ModuleFact, noteFact } from "../context";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
@@ -68,7 +67,7 @@ function getMultiSpawnSlots(awaitArg: Node): SpawnSlot[] {
 	if (awaitArg == null || awaitArg.kind != NodeKind.CallExpr) return [] as SpawnSlot[];
 	const cd = awaitArg.data as CallExprData;
 	const sym = awaitArg.resolvedSym != null ? awaitArg.resolvedSym : cd.callee.resolvedSym;
-	if (sym == null || sym.builtinKind != "PromiseAll") return [] as SpawnSlot[];
+	if (sym == null || sym.builtinKind != BuiltinKind.PromiseAll) return [] as SpawnSlot[];
 	if (cd.arguments.length < 1 || cd.arguments[0].kind != NodeKind.ArrayLiteral) return [] as SpawnSlot[];
 	const ad = cd.arguments[0].data as ArrayLiteralData;
 	if (ad.elements.length < 2) return [] as SpawnSlot[];

@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData, BuiltinKind } from "../../ast/node";
 import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase, isDiscriminatedUnion, getDiscriminantName } from "../../checker/types";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead, brandArrayBase } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
@@ -54,7 +54,7 @@ function targetMembers(target: Type): Type[] {
 
 function lowerConversion(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) return lowerComparison(node, ctx);
-	if (node.kind == NodeKind.CallExpr && callBuiltinKind(node) == "UnionEq") return lowerHeldEquality(node, ctx);
+	if (node.kind == NodeKind.CallExpr && callBuiltinKind(node) == BuiltinKind.UnionEq) return lowerHeldEquality(node, ctx);
 	if (!ctx.jsBackend && !ctx.raiserBackend) storeNarrowedReads(node, ctx);
 	if (!ctx.jsBackend && !ctx.raiserBackend && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) buildArm(node, ctx);
 	const pair = unionPair(node);

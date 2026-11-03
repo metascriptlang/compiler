@@ -1,5 +1,5 @@
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
-import { makeSymbol, symbolKey } from "../../checker/symbol";
+import { makeSymbol, symbolKey, builtinKindName } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
 import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod } from "../../checker/context";
 import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceText } from "./hash";
@@ -103,7 +103,7 @@ function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
 	out = putFlags(out, sym.symFlags.excl(SymbolFlag.Used).excl(SymbolFlag.Consumed).excl(SymbolFlag.OverloadValidated));
 	out = putString(out, sym.nativeName);
 	out = putString(out, sym.exportName);
-	out = putString(out, sym.builtinKind);
+	out = putString(out, builtinKindName(sym.builtinKind));
 	out = putString(out, sym.headerPath);
 	out = putString(out, sym.jsModulePath);
 	out = putInt(out, sym.mutatedParams);

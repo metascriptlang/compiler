@@ -1,4 +1,4 @@
-import { Node, NodeKind, CallExprData, StringLiteralData, SymbolKind, Type } from "../ast/node";
+import { Node, NodeKind, CallExprData, StringLiteralData, SymbolKind, Type, BuiltinKind } from "../ast/node";
 import { CheckerContext, addError } from "./context";
 import { createPromise, createModuleNamespace, createFunction, errorType } from "./types";
 import { makeSymbol } from "./symbol";
@@ -37,7 +37,7 @@ export function checkImportCall(ctx: CheckerContext, node: Node): Type {
 	autoPropagateModuleExtensions(ctx, modulePath, false);
 	const promise = createPromise(createModuleNamespace(modulePath));
 	const sym = makeSymbol("import", SymbolKind.Function, createFunction([], [], promise), false);
-	sym.builtinKind = DYNAMIC_IMPORT;
+	sym.builtinKind = BuiltinKind.DynamicImport;
 	sym.modulePath = modulePath;
 	d.callee.resolvedSym = sym;
 	d.callee.nodeType = sym.symbolType;

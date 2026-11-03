@@ -2,8 +2,7 @@ import { env } from "std/process";
 import {
 	Node, NodeKind, NodeFlag,
 	FunctionDeclData, MethodDeclData, FunctionExprData, ArrowFunctionData,
-	MemberExprData, BinaryExprData, SwitchStmtData, CallExprData,
-} from "../ast/node";
+	MemberExprData, BinaryExprData, SwitchStmtData, CallExprData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isLogicalAssignOp } from "../ast/operators";
 import { RoutineFlag, routineFlagSet } from "../checker/symbol";
@@ -30,7 +29,7 @@ function lowersAsNullish(op: string): boolean {
 
 function isSpawnCall(node: Node): boolean {
 	const sym = node.resolvedSym != null ? node.resolvedSym : (node.data as CallExprData).callee.resolvedSym;
-	return sym != null && (sym.builtinKind == "PromiseSpawn" || isRuntimeProcSym(sym, "msSpawn"));
+	return sym != null && (sym.builtinKind == BuiltinKind.PromiseSpawn || isRuntimeProcSym(sym, "msSpawn"));
 }
 
 function factIf(holds: boolean, f: ModuleFact): BitSet<ModuleFact> {

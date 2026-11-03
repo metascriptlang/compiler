@@ -1,7 +1,7 @@
 // console.log(a, b) becomes msPrintln(str(a) + " " + str(b)); a value type or class
 // arrives already converted by the checker's std dump call.
 
-import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind, BuiltinKind } from "../../ast/node";
 import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull } from "../util";
@@ -125,7 +125,7 @@ function callTextRoutine(sym: Symbol, param: Symbol, paramType: Type, text: Node
 }
 
 function isJsonValueData(t: Type): boolean {
-	return getBuiltinKind(t) == "JsonValueData";
+	return getBuiltinKind(t) == BuiltinKind.JsonValueData;
 }
 
 function resolveDbgIdent(name: string, loc: SourceLocation): Node {
@@ -147,9 +147,9 @@ function buildJsonValueDebug(arg: Node, loc: SourceLocation): Node {
 }
 
 function echoSym(node: Node): Symbol | null {
-	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo") return node.resolvedSym;
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.Echo) return node.resolvedSym;
 	const callee = (node.data as CallExprData).callee;
-	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == "Echo" ? callee.resolvedSym : null;
+	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == BuiltinKind.Echo ? callee.resolvedSym : null;
 }
 
 export function rewriteEcho(node: Node, ctx: TransformContext): Node {

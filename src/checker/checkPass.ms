@@ -3,7 +3,7 @@
 
 import { iterateThroughProxy } from "./proxy";
 import { isSuperReceiver, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData, BuiltinKind } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, stringType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, viewShown, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam } from "./types";
@@ -174,7 +174,7 @@ function detectSequentialAwaitSpawn(ctx: CheckerContext, node: Node): void {
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			if (d.awaitArg != null && d.awaitArg.kind == NodeKind.CallExpr
-				&& d.awaitArg.resolvedSym != null && d.awaitArg.resolvedSym.builtinKind == "PromiseSpawn") {
+				&& d.awaitArg.resolvedSym != null && d.awaitArg.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn) {
 				addWarning(ctx, "sequential 'await spawn(...)' inside a loop — each iteration blocks before the next spawn starts; collect handles first, then 'await Promise.all(handles)' after the loop (PARALOCK E40/E41)", node.location.line, node.location.column);
 			}
 			forEachChild(node, (child: Node): void => { detectSequentialAwaitSpawn(ctx, child); });
@@ -652,7 +652,7 @@ function checkStmtKind(ctx: CheckerContext, node: Node): void {
 			// dangle and the result would be silently dropped. For fire-and-forget,
 			// users should bind and await. For fire-and-forget, use actor SEND.
 			if (d.expr.kind == NodeKind.CallExpr && d.expr.resolvedSym != null
-				&& d.expr.resolvedSym.builtinKind == "PromiseSpawn") {
+				&& d.expr.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn) {
 				addError(ctx, "spawn result is discarded — every affine Promise must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
 			}
 		},
@@ -3715,7 +3715,7 @@ function reportUnusedSymbols(ctx: CheckerContext, program: Node): void {
 		if (hasFlag(sym, SymbolFlag.Exported)) continue;
 		if (sym.name.length == 0) continue;
 		if (sym.name.charAt(0) == "_") continue;
-		if (sym.builtinKind != "") continue;
+		if (sym.builtinKind != BuiltinKind.None) continue;
 		// Reference parity skip list: for-vars, params, methods, enum fields, generic params
 		if (sym.symbolKind == SymbolKind.Parameter) continue;
 		if (sym.symbolKind == SymbolKind.Method) continue;
@@ -3982,11 +3982,11 @@ export function stampJsModulePaths(ctx: CheckerContext): void {
 function defineBuiltinConstants(ctx: CheckerContext): void {
 	const nanSym = makeSymbol("NaN", SymbolKind.Variable, float64Type(), false);
 	nanSym.state = SymbolState.Checked;
-	nanSym.builtinKind = "NaN";
+	nanSym.builtinKind = BuiltinKind.NaN;
 	defineSymbol(ctx.table, nanSym);
 	const infSym = makeSymbol("Infinity", SymbolKind.Variable, float64Type(), false);
 	infSym.state = SymbolState.Checked;
-	infSym.builtinKind = "Infinity";
+	infSym.builtinKind = BuiltinKind.Infinity;
 	defineSymbol(ctx.table, infSym);
 }
 

@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -96,7 +96,7 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 let hookRegistry: ExtensionRegistry | null = null;
 const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
-const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "Float64FromBits", "HiXorLo", "MapFatal", "LoadLE64", "LoadLE32", "AsBytes", "ResultOk", "ResultErr", "Swap"];
+const BUILTINS_WRITING_NOTHING: BuiltinKind[] = [BuiltinKind.PtrBits, BuiltinKind.Float64Bits, BuiltinKind.Float64FromBits, BuiltinKind.HiXorLo, BuiltinKind.MapFatal, BuiltinKind.LoadLE64, BuiltinKind.LoadLE32, BuiltinKind.AsBytes, BuiltinKind.ResultOk, BuiltinKind.ResultErr, BuiltinKind.Swap];
 
 function tableFor(e: Effect): EffectTable {
 	return match (e) {
@@ -782,7 +782,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	if (isSuperCall(callee)) return null;
 	if ((e == Effect.Suspends || e == Effect.StartsTask || e == Effect.RunsElsewhere) && isSpawnCall(call)) return cause(call, "spawns");
-	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
+	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == BuiltinKind.DynamicImport) {
 		return e == Effect.SideEffect || e == Effect.WritesCell ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
 	}
 	const sym = call.resolvedSym;

@@ -28,8 +28,7 @@
 // REPROMISE T3 Stage A. See docs/PARALOCK.md §6.3 for the AwaitGroup lifecycle.
 
 import {
-	BlockStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData, TestDeclData,
-} from "../../ast/node";
+	BlockStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData, TestDeclData, BuiltinKind } from "../../ast/node";
 import {
 	Node, NodeKind, NodeFlag, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
@@ -64,7 +63,7 @@ function isBuiltinSpawnCall(init: Node): boolean {
 	const si = getSpawnInfo(init);
 	const initSym = init.resolvedSym != null ? init.resolvedSym
 		: (init.kind == NodeKind.CallExpr ? (init.data as CallExprData).callee.resolvedSym : null);
-	return si.closure != null && si.timeout == null && initSym != null && initSym.builtinKind == "PromiseSpawn";
+	return si.closure != null && si.timeout == null && initSym != null && initSym.builtinKind == BuiltinKind.PromiseSpawn;
 }
 
 function scanHandleUses(n: Node | null, nested: boolean, decls: SymSet, others: SymSet): void {
@@ -177,7 +176,7 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 	if (node == null || node.kind != NodeKind.CallExpr) return { closure: null, timeout: null };
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
-	if (sym == null || (sym.builtinKind != "PromiseSpawn" && !isRuntimeProcSym(sym, "msSpawn"))) return { closure: null, timeout: null };
+	if (sym == null || (sym.builtinKind != BuiltinKind.PromiseSpawn && !isRuntimeProcSym(sym, "msSpawn"))) return { closure: null, timeout: null };
 	if (cd.arguments.length < 1) return { closure: null, timeout: null };
 	const closure = cd.arguments[0];
 	let timeout: Node | null = null;
@@ -675,7 +674,7 @@ let _heldUsed = false;
 function isSpawnNode(n: Node): boolean {
 	if (n.kind != NodeKind.CallExpr) return false;
 	const sym = n.resolvedSym != null ? n.resolvedSym : (n.data as CallExprData).callee.resolvedSym;
-	return sym != null && sym.builtinKind == "PromiseSpawn";
+	return sym != null && sym.builtinKind == BuiltinKind.PromiseSpawn;
 }
 
 function isRoutineNode(n: Node): boolean {
@@ -760,7 +759,7 @@ function joinedLendingList(s: Node): Node | null {
 	const join = peelConvNode((a.data as AwaitExprData).awaitArg);
 	if (join == null || join.kind != NodeKind.CallExpr) return null;
 	const sym = join.resolvedSym != null ? join.resolvedSym : (join.data as CallExprData).callee.resolvedSym;
-	if (sym == null || (sym.builtinKind != "PromiseAll" && sym.builtinKind != "PromiseAllSettled")) return null;
+	if (sym == null || (sym.builtinKind != BuiltinKind.PromiseAll && sym.builtinKind != BuiltinKind.PromiseAllSettled)) return null;
 	const args = (join.data as CallExprData).arguments;
 	const list = args.length > 0 ? peelConvNode(args[0]) : null;
 	if (list == null || list.kind != NodeKind.ArrayLiteral) return null;

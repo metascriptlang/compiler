@@ -21,13 +21,13 @@
 // reference Sym/Type/Node rows by index, the reader materializes the whole
 // graph eagerly, and object identity falls out of "one row = one object".
 
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BuiltinKind } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords, extensionsOf } from "./context";
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
-import { makeSymbolState, setFlag, hasFlag } from "./symbol";
+import { makeSymbolState, setFlag, hasFlag, builtinKindName, builtinKindNamed } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { globalCacheRoot } from "../utils/cachePaths";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -771,7 +771,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const dp = idxs(s.defaultParams);
 		const tps: int32[] = [];
 		for (const tp of s.typeParams) tps.push(idxType(tp));
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}\t${idxSym(s.typeParamOwner)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}\t${idxSym(s.typeParamOwner)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1416,7 +1416,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			s.location = makeLocRange(l, c, el, ec);
 			s.modulePath = unescapeP(rd.str());
 			s.nativeName = unescapeP(rd.str());
-			s.builtinKind = unescapeP(rd.str());
+			s.builtinKind = packedBuiltinKind(unescapeP(rd.str()));
 			s.headerPath = unescapeP(rd.str());
 			s.jsModulePath = unescapeP(rd.str());
 			symTypeIdx.push(rd.int() as int32);
@@ -1659,6 +1659,13 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 
 	if (packDebug) console.log(`[pack:r] done ms=${performance.now() - _r0}`);
 	return ctx;
+}
+
+function packedBuiltinKind(name: string): BuiltinKind {
+	if (name == "") return BuiltinKind.None;
+	const kind = builtinKindNamed(name);
+	if (kind == null) throw new Error(`internal: the prelude pack names builtin '${name}', which this compiler does not know`);
+	return kind;
 }
 
 // ===== Tests =====

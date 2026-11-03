@@ -5,7 +5,7 @@
 // This transform only does the structural AST rewrite (MemberExpr → direct call).
 // No registry re-lookup needed — follows reference pattern where sem resolves UFCS.
 
-import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation, BuiltinKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
 import { makeTypedIdentResolved, makeCall, makeMember, makeHiddenSubConv } from "../util";
@@ -35,8 +35,8 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// fires. Mangled-name backends (C) MUST still rewrite to the direct-call form
 	// that member codegen depends on — so this skip is gated on that capability.
 	if (ctx.keepBuiltinMemberCalls) {
-		if (sym != null && sym.builtinKind == "Echo") return node;
-		if (sym != null && sym.nativeName != "" && sym.builtinKind == "") return node;
+		if (sym != null && sym.builtinKind == BuiltinKind.Echo) return node;
+		if (sym != null && sym.nativeName != "" && sym.builtinKind == BuiltinKind.None) return node;
 	}
 
 	// JS backend keeps class instance methods as native member calls.

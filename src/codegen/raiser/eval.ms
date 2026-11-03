@@ -2,13 +2,13 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc, BuiltinKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath, isMetaNodeSym } from "../../compiler/meta/nodeSym";
 import { createCompState } from "./context";
@@ -555,7 +555,7 @@ function blockedForm(node: Node, afterTransform: boolean): string {
 	if (node.kind == NodeKind.QuoteExpr || node.kind == NodeKind.MacroInvocation) return "macro form";
 	if (!afterTransform) {
 		const sym = node.resolvedSym;
-		if (sym != null && (sym.builtinKind.startsWith("Meta") || isMetaNodeSym(sym))) return "meta builtin";
+		if (sym != null && (isMetaBuiltin(sym.builtinKind) || isMetaNodeSym(sym))) return "meta builtin";
 	}
 	if (node.kind == NodeKind.FunctionDecl) {
 		for (const dflt of (node.data as FunctionDeclData).fnDefaults) {
@@ -2429,10 +2429,10 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	const wire = lookupSymbol(ctx.table, "Wire");
 	const plain = lookupSymbol(ctx.table, "Plain");
 	assert layoutOf(wire.symbolType).join(",") == "kind,name" && layoutOf(plain.symbolType).join(",") == "kind";
-	wire.builtinKind = "MetaNode";
+	wire.builtinKind = BuiltinKind.MetaNode;
 	assert layoutOf(wire.symbolType).length == 0 && slotKindsOf(createCompState(), wire.symbolType).length == 0;
 	assert layoutOf(plain.symbolType).join(",") == "kind";
-	wire.builtinKind = "";
+	wire.builtinKind = BuiltinKind.None;
 	wire.modulePath = metaNodeModulePath();
 	assert layoutOf(wire.symbolType).length == 0;
 	const opaque = lookupSymbol(ctx.table, "Opaque");

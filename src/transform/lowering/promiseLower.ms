@@ -21,7 +21,7 @@
 // — shared by asyncBridge, builtinLower, and promiseLower. Keeping it in any one
 // of them would create a circular import.
 
-import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, SymbolKind, BuiltinKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName, literalBase } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
@@ -110,7 +110,7 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 // read input.value via the correct typed struct cast, preserving msString
 // (16B) and primitive widths on pass-through. Struct/array/void/unknown
 // fall back to the legacy tag-dispatch path.
-function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: SourceLocation, raiser: boolean): Node {
+function lowerPromiseThenCatchFinally(node: Node, builtinKind: BuiltinKind, loc: SourceLocation, raiser: boolean): Node {
 	const cd = node.data as CallExprData;
 	const receiverFirst = cd.callee.kind != NodeKind.MemberExpr;
 	if (cd.arguments.length < (receiverFirst ? 2 : 1)) return node;
@@ -120,7 +120,7 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 	const innerType = awaitedType(receiver.nodeType);
 	const cb = handlers[0];
 	return match (builtinKind) {
-		"PromiseThen" => {
+		BuiltinKind.PromiseThen => {
 			const onRejected = handlers.length > 1 ? handlers[1] : null;
 			const typedFn = futureThenFnForInner(innerType);
 			if (typedFn != "") {
@@ -134,7 +134,7 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 			if (onRejected != null) return mkTypedCall("msFutureThenTypedWithRejected", [receiver, cb, tag, onRejected], node.nodeType, loc);
 			return mkTypedCall("msFutureThenTyped", [receiver, cb, tag], node.nodeType, loc);
 		},
-		"PromiseCatch" => {
+		BuiltinKind.PromiseCatch => {
 			const typedFn = futureCatchFnForInner(innerType);
 			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
 			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(0, loc)], node.nodeType, loc);
@@ -241,24 +241,24 @@ function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext)
 	if (typedFn == "") return node;
 	const typedCallee = makeTypedIdentResolved(generatedProcSym(typedFn), null, loc);
 	const typedSym = typedCallee.resolvedSym;
-	if (typedSym.builtinKind != "" && typedSym.builtinKind != "PromiseAllFor") {
+	if (typedSym.builtinKind != BuiltinKind.None && typedSym.builtinKind != BuiltinKind.PromiseAllFor) {
 		throw new Error(`internal: typed Promise.all '${typedFn}' is already the builtin '${typedSym.builtinKind}'`);
 	}
-	typedSym.builtinKind = "PromiseAllFor";
+	typedSym.builtinKind = BuiltinKind.PromiseAllFor;
 	const typedCall = makeCall(typedCallee, [cd.arguments[0], makeValueShareFn(innerT!, ctx, loc)], loc);
 	typedCall.nodeType = node.nodeType;
 	return typedCall;
 }
 
-function lowerPromiseFirst(node: Node, builtinKind: string, loc: SourceLocation, ctx: TransformContext): Node {
+function lowerPromiseFirst(node: Node, builtinKind: BuiltinKind, loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
 	const innerT = awaitedType(node.nodeType);
 	if (innerT == null || innerT.kind == TypeKind.Void || innerT.kind == TypeKind.Never || innerT.kind == TypeKind.Array) return node;
-	const kind = builtinKind + "For";
+	const kind = builtinKind == BuiltinKind.PromiseRace ? BuiltinKind.PromiseRaceFor : BuiltinKind.PromiseAnyFor;
 	const typedCallee = makeTypedIdentResolved(generatedProcSym("ms" + kind), null, loc);
 	const typedSym = typedCallee.resolvedSym;
-	if (typedSym.builtinKind != "" && typedSym.builtinKind != kind) {
+	if (typedSym.builtinKind != BuiltinKind.None && typedSym.builtinKind != kind) {
 		throw new Error(`internal: typed ${builtinKind} 'ms${kind}' is already the builtin '${typedSym.builtinKind}'`);
 	}
 	typedSym.builtinKind = kind;
@@ -275,18 +275,18 @@ function lowerPromiseFirst(node: Node, builtinKind: string, loc: SourceLocation,
 // Caller pattern (builtinLower.ms):
 //   const promiseRewrite = tryLowerPromiseBuiltin(node, builtinKind, ctx);
 //   if (promiseRewrite !== null) return promiseRewrite;
-export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: TransformContext): Node {
+export function tryLowerPromiseBuiltin(node: Node, builtinKind: BuiltinKind, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return null as unknown as Node;
 	const loc = node.location;
-	if (builtinKind == "PromiseThen" || builtinKind == "PromiseCatch" || builtinKind == "PromiseFinally") {
+	if (builtinKind == BuiltinKind.PromiseThen || builtinKind == BuiltinKind.PromiseCatch || builtinKind == BuiltinKind.PromiseFinally) {
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc, ctx.raiserBackend);
 	}
-	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
-	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc, ctx.raiserBackend), ctx, loc);
-	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
-	if (builtinKind == "PromiseRace" || builtinKind == "PromiseAny") return lowerPromiseFirst(node, builtinKind, loc, ctx);
-	if (builtinKind == "PromisePending") return promisePendingAlloc(node, ctx.raiserBackend);
-	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;
+	if (builtinKind == BuiltinKind.PromiseResolve) return lowerPromiseResolve(node, loc, ctx);
+	if (builtinKind == BuiltinKind.PromiseSpawn) return dropUnreadResult(lowerPromiseSpawn(node, loc, ctx.raiserBackend), ctx, loc);
+	if (builtinKind == BuiltinKind.PromiseAll) return lowerPromiseAll(node, loc, ctx);
+	if (builtinKind == BuiltinKind.PromiseRace || builtinKind == BuiltinKind.PromiseAny) return lowerPromiseFirst(node, builtinKind, loc, ctx);
+	if (builtinKind == BuiltinKind.PromisePending) return promisePendingAlloc(node, ctx.raiserBackend);
+	if (builtinKind == BuiltinKind.PromiseSettle || builtinKind == BuiltinKind.PromiseFail) return node;
 	return null as unknown as Node;
 }
 

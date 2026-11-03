@@ -6,7 +6,7 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData, BuiltinKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
 import { isPlainFunctionPointer, skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
@@ -1114,9 +1114,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	if (kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		ensureDrcProto(g, d.name, node.resolvedSym);
-		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
-		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
-		if (builtin == "Infinity") { ctx.results.push("INFINITY"); return; }
+		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : BuiltinKind.None;
+		if (builtin == BuiltinKind.NaN) { ctx.results.push("NAN"); return; }
+		if (builtin == BuiltinKind.Infinity) { ctx.results.push("INFINITY"); return; }
 		// Ensure cross-module enum constants are emitted (Reference parity: enum definitions per module)
 		if (node.nodeType != null && node.nodeType.kind == TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);
@@ -2725,23 +2725,23 @@ function closureFunctionSym(node: Readonly<Node>): Readonly<Symbol | null> {
 }
 
 function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
-	if (sym == null || sym.builtinKind == "") return CallMagic.None;
+	if (sym == null || sym.builtinKind == BuiltinKind.None) return CallMagic.None;
 	return match (sym.builtinKind) {
-		"StringConcatArr" => CallMagic.StringConcatArr,
-		"StringArrayFromArr" => CallMagic.StringArrayFromArr,
-		"StringAppendArr" => CallMagic.StringAppendArr,
-		"SinkBoxStruct" => CallMagic.SinkBoxStruct,
-		"UnboxStruct" => CallMagic.UnboxStruct,
-		"BoxRefArray" => CallMagic.BoxRefArray,
-		"BoxArc" => CallMagic.BoxArc,
-		"BoxLocked" => CallMagic.BoxLocked,
-		"LockedLoad" => CallMagic.LockedLoad,
-		"LockedStore" => CallMagic.LockedStore,
-		"FutureCreateInline" => CallMagic.FutureCreateInline,
-		"SpawnInto" => CallMagic.SpawnInto,
-		"WaitForStruct" => CallMagic.WaitForStruct,
-		"FutureThenBoxed" => CallMagic.FutureThenBoxed,
-		"OrcDisownValue" => CallMagic.OrcDisownValue,
+		BuiltinKind.StringConcatArr => CallMagic.StringConcatArr,
+		BuiltinKind.StringArrayFromArr => CallMagic.StringArrayFromArr,
+		BuiltinKind.StringAppendArr => CallMagic.StringAppendArr,
+		BuiltinKind.SinkBoxStruct => CallMagic.SinkBoxStruct,
+		BuiltinKind.UnboxStruct => CallMagic.UnboxStruct,
+		BuiltinKind.BoxRefArray => CallMagic.BoxRefArray,
+		BuiltinKind.BoxArc => CallMagic.BoxArc,
+		BuiltinKind.BoxLocked => CallMagic.BoxLocked,
+		BuiltinKind.LockedLoad => CallMagic.LockedLoad,
+		BuiltinKind.LockedStore => CallMagic.LockedStore,
+		BuiltinKind.FutureCreateInline => CallMagic.FutureCreateInline,
+		BuiltinKind.SpawnInto => CallMagic.SpawnInto,
+		BuiltinKind.WaitForStruct => CallMagic.WaitForStruct,
+		BuiltinKind.FutureThenBoxed => CallMagic.FutureThenBoxed,
+		BuiltinKind.OrcDisownValue => CallMagic.OrcDisownValue,
 		_ => CallMagic.None,
 	};
 }
@@ -3090,16 +3090,16 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 	// dedups across repeat calls.
 	let finalCallee = callee;
 	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType != null
-		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "PromiseAllFor") {
+		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == BuiltinKind.PromiseAllFor) {
 		let resultArr = node.nodeType != null ? awaitedType(node.nodeType) : null;
 		if (resultArr != null && resultArr.kind == TypeKind.Ref) resultArr = resultArr.typeReturn;
 		if (resultArr == null || resultArr.kind != TypeKind.Array) throw new Error(`internal: typed Promise.all call does not resolve to an array: ${typeDisplayNameUnprofiled(node.nodeType)}`);
 		const typedName = ensurePromiseAllInstance(g, resultArr);
 		if (typedName != "") finalCallee = typedName;
 	}
-	const firstKind = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
-	if ((firstKind == "PromiseRaceFor" || firstKind == "PromiseAnyFor") && node.nodeType != null) {
-		finalCallee = ensurePromiseFirstInstance(g, node.nodeType) + (firstKind == "PromiseRaceFor" ? "Race" : "Any");
+	const firstKind = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : BuiltinKind.None;
+	if ((firstKind == BuiltinKind.PromiseRaceFor || firstKind == BuiltinKind.PromiseAnyFor) && node.nodeType != null) {
+		finalCallee = ensurePromiseFirstInstance(g, node.nodeType) + (firstKind == BuiltinKind.PromiseRaceFor ? "Race" : "Any");
 	}
 
 	emitNrvoOrValueCall(g, p, ctx, node, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));

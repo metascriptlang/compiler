@@ -1,7 +1,7 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
 import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric } from "../checker/types";
@@ -305,10 +305,10 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, r
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").
 // Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
-export function callBuiltinKind(call: Node): string {
-	if (call.resolvedSym != null && call.resolvedSym.builtinKind != "") return call.resolvedSym.builtinKind;
+export function callBuiltinKind(call: Node): BuiltinKind {
+	if (call.resolvedSym != null && call.resolvedSym.builtinKind != BuiltinKind.None) return call.resolvedSym.builtinKind;
 	const callee = (call.data as CallExprData).callee;
-	return callee.resolvedSym != null ? callee.resolvedSym.builtinKind : "";
+	return callee.resolvedSym != null ? callee.resolvedSym.builtinKind : BuiltinKind.None;
 }
 
 export function receiverKind(t: Type | null): TypeKind {

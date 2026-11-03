@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { BlockStmtData, ForStmtData, ForOfStmtData, ArrowFunctionData, FunctionExprData, TryCatchStmtData } from "../ast/node";
+import { BlockStmtData, ForStmtData, ForOfStmtData, ArrowFunctionData, FunctionExprData, TryCatchStmtData, BuiltinKind } from "../ast/node";
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, DecoratedDeclData, MacroDeclData, TestDeclData, ExternDeclData, ExternKind, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, NodeFlag, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getMinArity, typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
@@ -3004,7 +3004,7 @@ function isKeywordRecord(rec: SgSymRecord): boolean {
 function recordModifiers(rec: SgSymRecord, sym: Symbol): int32 {
 	let mods: int32 = rec.isDecl ? 1 : 0;
 	if (rec.kind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) mods = mods | 4;
-	if (sym.builtinKind.length > 0) mods = mods | 16;
+	if (sym.builtinKind != BuiltinKind.None) mods = mods | 16;
 	return mods;
 }
 

@@ -15,8 +15,7 @@ import {
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
-	createNodeAt
-} from "../../ast/node";
+	createNodeAt, BuiltinKind } from "../../ast/node";
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
@@ -27,7 +26,7 @@ import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
-import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol } from "../../checker/symbol";
+import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol, builtinKindName } from "../../checker/symbol";
 import { isCtorSignature } from "../../checker/ctorRoutine";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
@@ -609,12 +608,12 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			}
 			const reg = resolveLocal(s, node.resolvedSym);
 			if (reg >= 0) return reg;
-			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.NaN) {
 				const nanReg = allocFloat(s);
 				emitLoadConst(s, nanReg, raiserFloat(NaN));
 				return nanReg;
 			}
-			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Infinity") {
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.Infinity) {
 				const infinityReg = allocFloat(s);
 				emitLoadConst(s, infinityReg, raiserFloat(Infinity));
 				return infinityReg;
@@ -2874,7 +2873,7 @@ function isLoweredArrayPush(callee: Node): boolean {
 // carries the one it resolved to, and only the universal builtin is the text of the receiver.
 function isToStringCall(call: Node): boolean {
 	const sym = memberCallSym(call);
-	if (sym != null) return sym.builtinKind == "ToStringMethod";
+	if (sym != null) return sym.builtinKind == BuiltinKind.ToStringMethod;
 	const callee = (call.data as CallExprData).callee;
 	return callee.kind == NodeKind.MemberExpr && (callee.data as MemberExprData).property == "toString";
 }
@@ -2990,7 +2989,7 @@ function combineOf(builtinKind: string): int32 {
 }
 
 function failTakesTheReason(callee: Symbol | null, asyncKind: string): boolean {
-	return asyncKind == "PromiseFail" && (callee == null || callee.builtinKind != "PromiseFail");
+	return asyncKind == "PromiseFail" && (callee == null || callee.builtinKind != BuiltinKind.PromiseFail);
 }
 
 function settleValueIsSunk(callee: Symbol | null): boolean {
@@ -3012,10 +3011,10 @@ function futureRuntimeKind(sym: Symbol | null): string {
 }
 
 function callBuiltinKind(node: Node): string {
-	if (node.resolvedSym != null && node.resolvedSym.builtinKind != "") return node.resolvedSym.builtinKind;
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind != BuiltinKind.None) return builtinKindName(node.resolvedSym.builtinKind);
 	const d = node.data as CallExprData;
 	if (d.callee.resolvedSym != null) {
-		if (d.callee.resolvedSym.builtinKind != "") return d.callee.resolvedSym.builtinKind;
+		if (d.callee.resolvedSym.builtinKind != BuiltinKind.None) return builtinKindName(d.callee.resolvedSym.builtinKind);
 		return futureRuntimeKind(d.callee.resolvedSym);
 	}
 	return "";

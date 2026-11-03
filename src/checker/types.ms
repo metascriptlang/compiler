@@ -5,7 +5,7 @@ import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLitera
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
 import { isAssignable, sameNominal, sameType } from "./compat";
-import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, BuiltinKind } from "../ast/node";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -2039,7 +2039,7 @@ export function isNodeGraphType(t: Type | null): boolean {
 	}
 	if (base.kind == TypeKind.Array) return isNodeGraphType(base.typeReturn);
 	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
-	return base.sym != null && base.sym.builtinKind == "MetaNode";
+	return base.sym != null && base.sym.builtinKind == BuiltinKind.MetaNode;
 }
 
 export function propagateReadonlyView(t: Type | null): Type {
@@ -2885,7 +2885,7 @@ export function isPlainObjectType(t: Type | null): boolean {
 	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
 	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
 	if (held.kind == TypeKind.GenericInstance && distinctBody(held) != null) {
-		return getBuiltinKind(held.typeExtra) != "Proxy" && isPlainObjectType(distinctBody(held));
+		return getBuiltinKind(held.typeExtra) != BuiltinKind.Proxy && isPlainObjectType(distinctBody(held));
 	}
 	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
 	const body = peelToStructOrUnion(held);
@@ -4201,7 +4201,7 @@ export function unknownRefusal(t: Type | null): UnknownRefusal {
 function isClassOrInterfaceObject(ref: Type): boolean {
 	if (isAtomicRef(ref)) return false;
 	const builtin = getBuiltinKind(ref);
-	if (builtin != "" && builtin != "MetaNode") return false;
+	if (builtin != BuiltinKind.None && builtin != BuiltinKind.MetaNode) return false;
 	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
 	const body = ref.typeReturn;
 	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
@@ -4370,7 +4370,7 @@ function classDepth(t: Type | null, cls: Symbol | null): int32 {
 
 // Whether a value of `t` is an instance of some instantiation of the class `cls`.
 export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
-	if (isAwaitable(t)) return cls.builtinKind == "Promise";
+	if (isAwaitable(t)) return cls.builtinKind == BuiltinKind.Promise;
 	return classDepth(t, cls) >= 0;
 }
 
@@ -5997,12 +5997,12 @@ function namelessObjectShape(t: Readonly<Type>, open: Cursor<Readonly<Type>>[], 
 // Returns "" if the type has no builtin annotation. Walks transparent wrappers
 // (Sink/Lent/Var/Distinct/Ref/Ptr) and GenericInstance → base class, mirroring
 // typeNameOf's unwrap policy so `sink m: Map<K,V>` still registers as IndexableMap.
-export function getBuiltinKind(t: Type | null): string {
+export function getBuiltinKind(t: Type | null): BuiltinKind {
 	let cur: Type | null = t;
 	let _g = 0;
 	while (cur != null && _g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
-		if (cur.sym != null && cur.sym.builtinKind != "") return cur.sym.builtinKind;
+		if (cur.sym != null && cur.sym.builtinKind != BuiltinKind.None) return cur.sym.builtinKind;
 		if (cur.kind == TypeKind.GenericInstance && cur.typeExtra != null) {
 			cur = cur.typeExtra;
 			continue;
@@ -6017,18 +6017,18 @@ export function getBuiltinKind(t: Type | null): string {
 		}
 		break;
 	}
-	return "";
+	return BuiltinKind.None;
 }
 
 // isIndexableMapType — true when t is a class tagged @builtin("IndexableMap").
 // Used by subscript lowering (m[k] → m.get(k) / m.set(k, v)) and m[k] element typing.
 // Both Map<K,V> and HashMap<K,V> in std/core/struct.ms carry this tag.
 export function isIndexableMapType(t: Type | null): boolean {
-	return getBuiltinKind(t) == "IndexableMap";
+	return getBuiltinKind(t) == BuiltinKind.IndexableMap;
 }
 
-export function isStdCollectionKind(kind: string): boolean {
-	return kind == "IndexableMap" || kind == "StdSet";
+export function isStdCollectionKind(kind: BuiltinKind): boolean {
+	return kind == BuiltinKind.IndexableMap || kind == BuiltinKind.StdSet;
 }
 
 export function isStdCollection(t: Type | null): boolean {

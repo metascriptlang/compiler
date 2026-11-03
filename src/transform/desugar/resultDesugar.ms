@@ -18,7 +18,7 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, BlockStmtData, ReturnStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, BlockStmtData, ReturnStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind, BuiltinKind } from "../../ast/node";
 import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType, createResult, numberType, stringType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { newSym } from "../../checker/context";
@@ -108,8 +108,8 @@ function rewriteResultCall(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
 	const kind = callBuiltinKind(node);
-	const isOk = kind == "ResultOk";
-	if (!isOk && !(kind == "ResultErr" && cd.arguments.length == 1)) return node;
+	const isOk = kind == BuiltinKind.ResultOk;
+	if (!isOk && !(kind == BuiltinKind.ResultErr && cd.arguments.length == 1)) return node;
 	const resType = node.nodeType;
 	if (resType == null) throw new Error("internal: a Result constructor call reached lowering untyped");
 	return isOk ? makeResultOk(cd.arguments, resType, node.location) : makeResultErr(cd.arguments[0], resType, node.location);

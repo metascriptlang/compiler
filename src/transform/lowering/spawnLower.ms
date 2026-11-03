@@ -5,7 +5,7 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, SymbolKind, DeclKind, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, SymbolKind, DeclKind, createNode, BuiltinKind } from "../../ast/node";
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
 import { GcMode } from "../../checker/context";
 import { TransformContext, freshOwnedSym, newLoweredSym } from "../context";
@@ -286,7 +286,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		if (node.kind != NodeKind.CallExpr) return node;
 		const cd = node.data as CallExprData;
 		const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
-		const isSpawn = sym != null && (sym.builtinKind == "PromiseSpawn" || isRuntimeProcSym(sym, "msSpawn"));
+		const isSpawn = sym != null && (sym.builtinKind == BuiltinKind.PromiseSpawn || isRuntimeProcSym(sym, "msSpawn"));
 		if (!isSpawn || cd.arguments.length < 1) return node;
 
 		let closureArg = cd.arguments[0];

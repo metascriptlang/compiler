@@ -3,7 +3,7 @@
 
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
-import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp, BuiltinKind } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -1271,7 +1271,7 @@ function refuseVoidArmAsValue(ctx: CheckerContext, d: ConditionalExprData) {
 }
 
 function isSpawnCall(n: Node): boolean {
-	return n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.builtinKind == "PromiseSpawn";
+	return n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn;
 }
 
 // `await Promise.all([...])` waits with a timed spawn's deadline only when every
@@ -1280,7 +1280,7 @@ function refuseMixedTimedGroup(ctx: CheckerContext, arg: Node): void {
 	if (arg.kind != NodeKind.CallExpr) return;
 	const cd = arg.data as CallExprData;
 	const sym = arg.resolvedSym != null ? arg.resolvedSym : cd.callee.resolvedSym;
-	if (sym == null || sym.builtinKind != "PromiseAll") return;
+	if (sym == null || sym.builtinKind != BuiltinKind.PromiseAll) return;
 	const args = cd.arguments;
 	if (args.length != 1 || args[0].kind != NodeKind.ArrayLiteral) return;
 	const els = (args[0].data as ArrayLiteralData).elements;
@@ -2226,7 +2226,7 @@ function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Ty
 		const entry = d.properties[i];
 		if (d.keys[i] != "..." || entry.kind != NodeKind.SpreadExpr) continue;
 		const operand = (entry.data as SpreadExprData).spreadArg.nodeType;
-		if (getBuiltinKind(operand) != "") {
+		if (getBuiltinKind(operand) != BuiltinKind.None) {
 			addError(ctx, `cannot spread a ${typeDisplayName(operand!)} into an object literal: its contents are not fields; copy the entries with a loop`,
 				entry.location.line, entry.location.column);
 			continue;

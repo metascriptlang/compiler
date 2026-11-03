@@ -13,8 +13,7 @@
 import {
 	Node, NodeKind, NodeFlag, NodeData, Type, TypeKind,
 	CallExprData, IdentifierData, NewExprData, TypeAssertionData,
-	createNode,
-} from "../../ast/node";
+	createNode, BuiltinKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
@@ -28,7 +27,7 @@ export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 }
 
 function isConsoleLogCallee(callee: Node): boolean {
-	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == "Echo";
+	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == BuiltinKind.Echo;
 }
 
 function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
@@ -96,7 +95,7 @@ function lowerRest(node: Node): Node {
 	let sym = node.flags.has(NodeFlag.ExtCall) && node.resolvedSym != null ? node.resolvedSym : named.resolvedSym;
 	if (sym == null) return node;
 	sym = overloadRoutine(sym, d.resolvedOverloadIdx);
-	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
+	if (sym.builtinKind != BuiltinKind.None || hasFlag(sym, SymbolFlag.ImportC)) return node;
 	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return node;
 	const fnType = functionSlotOf(sym.symbolType);
 	if (fnType == null) return node;

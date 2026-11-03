@@ -3,7 +3,7 @@
 // the target when H declares none (docs/LANG.md "Proxy"). The trap call is built at the use
 // site, so the handler's methods resolve as any method call written there would.
 
-import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt, BuiltinKind } from "../ast/node";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
 import { CheckerContext, addError, assignTemp, boundRead, findAllExtensionsByName, findFirstMatchingExt, hoistedTemp } from "./context";
@@ -12,7 +12,7 @@ import { peelTransparentInstance, errorType, isArrayType, isNumeric, peelToStruc
 import { declaringSymOf } from "./visibility";
 
 function isStdProxy(sym: Symbol | null): boolean {
-	return sym != null && sym.builtinKind == "Proxy";
+	return sym != null && sym.builtinKind == BuiltinKind.Proxy;
 }
 
 // The target and handler types of a `Proxy<T, H>`, null for any other type.

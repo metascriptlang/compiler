@@ -59,8 +59,7 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 	// JSX (compile-time only — needs round-trip through macro VM)
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
-} from "../../ast/node";
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, BuiltinKind } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
@@ -801,7 +800,7 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap, arrHeap: RaiserAr
 	setStr(objHeap, arrHeap, handle, "name", sym.name);
 	wireSet(arrHeap, objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as int64));
 	setStr(objHeap, arrHeap, handle, "modulePath", sym.modulePath);
-	setStr(objHeap, arrHeap, handle, "builtinKind", sym.builtinKind);
+	wireSet(arrHeap, objHeap, handle, "builtinKind", raiserInt(sym.builtinKind as int64));
 	wireSet(arrHeap, objHeap, handle, "itemModule", raiserInt(sym.itemModule as int64));
 	wireSet(arrHeap, objHeap, handle, "item", raiserInt(sym.item as int64));
 	if (sym.instantiatedFrom != null && sym.instantiatedFrom != sym) {
@@ -4264,7 +4263,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		overloads: [],
 		nativeName: "",
 		exportName: "",
-		builtinKind: "",
+		builtinKind: BuiltinKind.None,
 		symFlags: 0 as BitSet<SymbolFlag>,
 		defaultParams: [],
 		modulePath: "",

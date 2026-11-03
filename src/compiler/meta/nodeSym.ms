@@ -1,8 +1,8 @@
-import { Symbol, SymbolKind } from "../../ast/node";
+import { Symbol, SymbolKind, BuiltinKind } from "../../ast/node";
 import { resolveRuntimeDir } from "../../utils/path";
 
 export function isMetaNodeSym(sym: Symbol | null): boolean {
-	return sym != null && sym.symbolKind == SymbolKind.Class && sym.builtinKind == "MetaNode";
+	return sym != null && sym.symbolKind == SymbolKind.Class && sym.builtinKind == BuiltinKind.MetaNode;
 }
 
 let _metaNodeModule = "";
@@ -21,31 +21,31 @@ export function isMetaWireSym(sym: Symbol | null): boolean {
 
 import { makeSymbol } from "../../checker/symbol";
 
-function nodeSymIn(builtinKind: string, kind: SymbolKind): Symbol {
+function nodeSymIn(builtinKind: BuiltinKind, kind: SymbolKind): Symbol {
 	const sym = makeSymbol("Node", kind, null, false);
 	sym.builtinKind = builtinKind;
 	return sym;
 }
 
 test "the macro Node is the class std/meta tags as MetaNode, not any class spelled Node" {
-	assert isMetaNodeSym(nodeSymIn("MetaNode", SymbolKind.Class));
-	assert !isMetaNodeSym(nodeSymIn("", SymbolKind.Class));
-	assert !isMetaNodeSym(nodeSymIn("MetaNode", SymbolKind.Function));
+	assert isMetaNodeSym(nodeSymIn(BuiltinKind.MetaNode, SymbolKind.Class));
+	assert !isMetaNodeSym(nodeSymIn(BuiltinKind.None, SymbolKind.Class));
+	assert !isMetaNodeSym(nodeSymIn(BuiltinKind.MetaNode, SymbolKind.Function));
 	assert !isMetaNodeSym(null);
 }
 
 test "a class of the macro module is a wire class, one of another module is not" {
-	const inMeta = nodeSymIn("", SymbolKind.Class);
+	const inMeta = nodeSymIn(BuiltinKind.None, SymbolKind.Class);
 	inMeta.modulePath = metaNodeModulePath();
 	assert isMetaWireSym(inMeta);
-	const lookalike = nodeSymIn("", SymbolKind.Class);
+	const lookalike = nodeSymIn(BuiltinKind.None, SymbolKind.Class);
 	lookalike.modulePath = "/app/std/meta/node.ms";
 	assert !isMetaWireSym(lookalike);
-	const iface = nodeSymIn("", SymbolKind.Interface);
+	const iface = nodeSymIn(BuiltinKind.None, SymbolKind.Interface);
 	iface.modulePath = metaNodeModulePath();
 	assert isMetaWireSym(iface);
 	iface.symbolKind = SymbolKind.Function;
 	assert !isMetaWireSym(iface);
-	assert !isMetaWireSym(nodeSymIn("", SymbolKind.Class));
+	assert !isMetaWireSym(nodeSymIn(BuiltinKind.None, SymbolKind.Class));
 	assert !isMetaWireSym(null);
 }

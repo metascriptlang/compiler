@@ -12,7 +12,7 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind, BuiltinKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { findAllExtensionsByName, findFirstMatchingExt } from "../../checker/context";
@@ -38,9 +38,9 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		if (node.kind == NodeKind.ExprStmt) {
 			const expr = (node.data as ExprStmtData).expr;
-			const kind = expr.kind == NodeKind.CallExpr && expr.resolvedSym != null && !ctx.jsBackend ? expr.resolvedSym.builtinKind : "";
-			if (kind == "PromiseSettle") return promiseSettleStmts(expr, ctx);
-			if (kind == "PromiseFail") return promiseFailStmts(expr, ctx);
+			const kind = expr.kind == NodeKind.CallExpr && expr.resolvedSym != null && !ctx.jsBackend ? expr.resolvedSym.builtinKind : BuiltinKind.None;
+			if (kind == BuiltinKind.PromiseSettle) return promiseSettleStmts(expr, ctx);
+			if (kind == BuiltinKind.PromiseFail) return promiseFailStmts(expr, ctx);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
@@ -122,7 +122,7 @@ export function lowerEnumNames(program: Node, ctx: TransformContext): Node {
 		}
 		if (node.kind != NodeKind.CallExpr) return node;
 		const cd = node.data as CallExprData;
-		if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "Echo") {
+		if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == BuiltinKind.Echo) {
 			for (let i = 0; i < cd.arguments.length; i += 1) {
 				const t = namedEnumType(cd.arguments[i].nodeType);
 				if (t != null) cd.arguments[i] = enumTextCall(cd.arguments[i], t, ctx);
@@ -146,12 +146,12 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const sym = node.resolvedSym;
 	if (sym != null) {
 		// @builtin("Name") → inline expansion
-		if (sym.builtinKind != "") {
+		if (sym.builtinKind != BuiltinKind.None) {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
 	// Check callee resolvedSym for builtins the call node missed
-	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind != "") {
+	if (cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind != BuiltinKind.None) {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
 	if (cd.callee.kind == NodeKind.MemberExpr) {
@@ -292,22 +292,18 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 // file. `isStructLikeType` moved to `../util` to break a circular import with
 // promiseLower (asyncBridge + builtinLower + promiseLower all need it).
 
-function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext): Node {
+function lowerBuiltinCall(node: Node, builtinKind: BuiltinKind, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
-	if (builtinKind == "LengthStr" && cd.arguments.length == 1) {
-		return makeCall(runtimeRef("msStringLength", loc), cd.arguments, loc);
-	}
-
-	if (builtinKind == "AsBytes") {
+	if (builtinKind == BuiltinKind.AsBytes) {
 		return ctx.jsBackend ? node : rewriteZeroCopyBridge(node);
 	}
 
-	if (builtinKind == "ResultOk") {
+	if (builtinKind == BuiltinKind.ResultOk) {
 		return rewriteResultToLiteral(node, true, ctx);
 	}
-	if (builtinKind == "ResultErr") {
+	if (builtinKind == BuiltinKind.ResultErr) {
 		return rewriteResultToLiteral(node, false, ctx);
 	}
 
@@ -316,15 +312,15 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	const promiseRewrite = tryLowerPromiseBuiltin(node, builtinKind, ctx);
 	if (promiseRewrite != null) return promiseRewrite;
 
-	if (builtinKind == "Echo") {
+	if (builtinKind == BuiltinKind.Echo) {
 		return rewriteEcho(node, ctx);
 	}
 
-	if (builtinKind == "UnionText" || builtinKind == "UnionDebug") {
+	if (builtinKind == BuiltinKind.UnionText || builtinKind == BuiltinKind.UnionDebug) {
 		return selectUnionText(node, ctx);
 	}
 
-	if (builtinKind == "ToStringMethod" && cd.callee.kind == NodeKind.MemberExpr) {
+	if (builtinKind == BuiltinKind.ToStringMethod && cd.callee.kind == NodeKind.MemberExpr) {
 		const member = cd.callee.data as MemberExprData;
 		if (member.object.nodeType != null) {
 			return lowerToString(node, member.object, peelTransparentInstance(member.object.nodeType), loc, ctx);
@@ -332,7 +328,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	// String(x) → x.toString() → leverages existing .toString() infrastructure
-	if (builtinKind == "ToString" && cd.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.ToString && cd.arguments.length == 1) {
 		const arg = cd.arguments[0];
 		const argType = arg.nodeType != null ? peelTransparentInstance(arg.nodeType) : null;
 		// String identity: String("hello") → "hello"

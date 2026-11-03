@@ -1,6 +1,6 @@
 // String(x) becomes x.toString().
 
-import { Node, NodeKind, CallExprData } from "../../ast/node";
+import { Node, NodeKind, CallExprData, BuiltinKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeCall, callBuiltinKind } from "../util";
@@ -14,7 +14,7 @@ function lowerCoercionNode(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	const d = node.data as CallExprData;
 
-	if (callBuiltinKind(node) != "ToString") return node;
+	if (callBuiltinKind(node) != BuiltinKind.ToString) return node;
 	if (d.arguments.length != 1) return node;
 
 	const loc = node.location;

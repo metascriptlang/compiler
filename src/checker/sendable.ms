@@ -1,13 +1,13 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
+import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding, isPromiseBuiltin } from "./symbol";
 import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName } from "./types";
 import { recordBodyRead } from "./bodyReads";
 
@@ -179,7 +179,7 @@ function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, meth
 			checkReplyBindingSoleOwner(ctx, p.resolvedSym!, result, p.location, method);
 			return null;
 		},
-		NodeKind.CallExpr when (p.resolvedSym != null && (p.resolvedSym!.builtinKind == "ResultOk" || p.resolvedSym!.builtinKind == "ResultErr")) =>
+		NodeKind.CallExpr when (p.resolvedSym != null && (p.resolvedSym!.builtinKind == BuiltinKind.ResultOk || p.resolvedSym!.builtinKind == BuiltinKind.ResultErr)) =>
 			firstSharedReplyPart(ctx, (p.data as CallExprData).arguments, result, method),
 		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
 	};
@@ -1064,11 +1064,11 @@ function holdsAwaitable(t: Type | null, seen: Type[]): boolean {
 function isBorrowingSpawn(f: HandleFrame, p: Node): boolean {
 	if (!f.ownSpawns || p.kind != NodeKind.CallExpr) return false;
 	if (p.flags.has(NodeFlag.LendsPastCall)) return true;
-	return p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn" && !p.flags.has(NodeFlag.Isolated);
+	return p.resolvedSym != null && p.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn && !p.flags.has(NodeFlag.Isolated);
 }
 
 function keepsArgumentsInFrame(call: Node): boolean {
-	return call.resolvedSym != null && call.resolvedSym.builtinKind.startsWith("Promise");
+	return call.resolvedSym != null && isPromiseBuiltin(call.resolvedSym.builtinKind);
 }
 
 function anyCarriesHandle(f: HandleFrame, nodes: Node[]): boolean {
@@ -1715,7 +1715,7 @@ function walkActorSpawnRules(ctx: CheckerContext, node: Node | null, reportedKey
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			const nestedSpawn = node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn";
+			const nestedSpawn = node.resolvedSym != null && node.resolvedSym.builtinKind == BuiltinKind.PromiseSpawn;
 			walkActorSpawnRules(ctx, d.callee, reportedKeys);
 			let ai = 0;
 			for (const arg of d.arguments) {

@@ -1,12 +1,12 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData, BuiltinKind } from "../ast/node";
 import { markUsedIn, CheckerContext, sgRecordSym, addError, findExportedSymbol } from "./context";
 import { lookupSymbol } from "./symbol";
 import { findChar } from "../utils/string";
 
 export interface DecoratorInfo {
-	builtinKind: string;
+	builtinName: string;
 	nativeName: string;
 	exportName: string;
 	compilerFunc: boolean;
@@ -22,7 +22,7 @@ const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
 	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper",
 ];
-export const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
+export const intrinsicBuiltins: BuiltinKind[] = [BuiltinKind.nonisolated, BuiltinKind.compilerFunc, BuiltinKind.throws, BuiltinKind.delegate];
 
 export function isBuiltinDirective(name: string): boolean {
 	for (const n of passThroughDirectives) {
@@ -31,9 +31,9 @@ export function isBuiltinDirective(name: string): boolean {
 	return false;
 }
 
-export function intrinsicBuiltinOf(ctx: CheckerContext, name: string, at: Node | null = null): string {
+export function intrinsicBuiltinOf(ctx: CheckerContext, name: string, at: Node | null = null): BuiltinKind {
 	const sym = lookupSymbol(ctx.table, name);
-	if (sym == null || sym.builtinKind == "") return "";
+	if (sym == null || sym.builtinKind == BuiltinKind.None) return BuiltinKind.None;
 	for (const n of intrinsicBuiltins) {
 		if (n != sym.builtinKind) continue;
 		markUsedIn(ctx, sym);
@@ -44,12 +44,12 @@ export function intrinsicBuiltinOf(ctx: CheckerContext, name: string, at: Node |
 		}
 		return sym.builtinKind;
 	}
-	return "";
+	return BuiltinKind.None;
 }
 
 export function isIntrinsicDecorator(ctx: CheckerContext, name: string, at: Node | null = null): boolean {
 	if (isBuiltinDirective(name)) return true;
-	return intrinsicBuiltinOf(ctx, name, at) != "";
+	return intrinsicBuiltinOf(ctx, name, at) != BuiltinKind.None;
 }
 
 export function intrinsicOnly(ctx: CheckerContext, decorators: Node[]): Node[] {
@@ -123,7 +123,7 @@ export function stripIntrinsicMemberWrappers(ctx: CheckerContext, sym: Symbol, b
 	}
 }
 
-export function hasIntrinsicDecorator(ctx: CheckerContext, decorators: Node[], kind: string): boolean {
+export function hasIntrinsicDecorator(ctx: CheckerContext, decorators: Node[], kind: BuiltinKind): boolean {
 	for (const dec of decorators) {
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		if (intrinsicBuiltinOf(ctx, (dec.data as MacroInvocationData).macroName) == kind) return true;
@@ -177,7 +177,7 @@ function exportNameOf(dec: Node, decorated: Node): string {
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
 export function extractDecoratorInfo(ctx: CheckerContext, node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
-	let btKind = "";
+	let builtinName = "";
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind == NodeKind.MacroInvocation) {
@@ -185,7 +185,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 			if (md.macroName == "builtin" && md.macroArgs.length > 0) {
 				const arg = md.macroArgs[0];
 				if (arg.kind == NodeKind.StringLiteral) {
-					btKind = (arg.data as StringLiteralData).value;
+					builtinName = (arg.data as StringLiteralData).value;
 				}
 			}
 		}
@@ -202,9 +202,9 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		const name = (dec.data as MacroInvocationData).macroName;
 		const tag = intrinsicBuiltinOf(ctx, name);
-		if (tag == "compilerFunc") isCompilerFunc = true;
-		if (tag == "throws") canThrow = true;
-		if (tag == "delegate") borrows = true;
+		if (tag == BuiltinKind.compilerFunc) isCompilerFunc = true;
+		if (tag == BuiltinKind.throws) canThrow = true;
+		if (tag == BuiltinKind.delegate) borrows = true;
 		if (name == "comptime") atCompileTime = true;
 		if (name == "noinline") keptOutOfLine = true;
 		if (name == "acyclic") prunesCycles = true;
@@ -222,7 +222,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 	};
 	if (natName == null) natName = "";
 	return {
-		builtinKind: btKind,
+		builtinName: builtinName,
 		nativeName: natName,
 		exportName: exportName,
 		compilerFunc: isCompilerFunc,

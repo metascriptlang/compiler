@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, HiddenDerefData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, HiddenStdConvData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, HiddenDerefData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, HiddenStdConvData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData, BuiltinKind } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams, closureIntoCPointerReason } from "./compat";
@@ -902,7 +902,7 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	const me = d.callee.data as MemberExprData;
 	if (me.property != "toString") return;
 	const sym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
-	if (sym == null || sym.builtinKind != "ToStringMethod" || sym.declNode != null) return;
+	if (sym == null || sym.builtinKind != BuiltinKind.ToStringMethod || sym.declNode != null) return;
 	const receiver = me.object;
 	const t = receiver.nodeType;
 	if (t == null) return;

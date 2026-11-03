@@ -1,10 +1,10 @@
 import { platform } from "std/process";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
+import { isMetaBuiltin, Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp, BuiltinKind } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -82,7 +82,7 @@ function macroPreludeScoped(prelude: CheckerContext, name: string): Symbol | nul
 	for (const path of prelude.preludeModuleScopes.keys()) {
 		if (!path.endsWith(MACRO_PRELUDE_MODULE)) continue;
 		for (const s of prelude.preludeModuleScopes.get(path)!) {
-			if (s.name == name && s.builtinKind.startsWith("Meta")) return s;
+			if (s.name == name && isMetaBuiltin(s.builtinKind)) return s;
 		}
 	}
 	return null;
@@ -93,13 +93,13 @@ function macroPreludeIn(registry: ExportRegistry | null, name: string): Symbol |
 	for (const mod of registry.entries) {
 		if (!mod.modulePath.endsWith(MACRO_PRELUDE_MODULE)) continue;
 		const e = findExportedSymbol(registry, mod.modulePath, name);
-		if (e != null && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym;
+		if (e != null && e.sym != null && isMetaBuiltin(e.sym.builtinKind)) return e.sym;
 	}
 	return null;
 }
 
-export function macroPreludeKind(ctx: CheckerContext, name: string): string {
-	return macroPreludeSym(ctx, name)?.builtinKind ?? "";
+export function macroPreludeKind(ctx: CheckerContext, name: string): BuiltinKind {
+	return macroPreludeSym(ctx, name)?.builtinKind ?? BuiltinKind.None;
 }
 
 // The std scope is the injected prelude, except where std's prelude is itself being checked:

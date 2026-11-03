@@ -4,8 +4,7 @@ import {
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
 	MacroInvocationData, MacroDeclData, MethodDeclData, PropertyDeclData, FunctionDeclData,
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
-	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
-} from "../../ast/node";
+	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData, BuiltinKind } from "../../ast/node";
 import { markUsedIn, CheckerContext, Severity, addError, createContext, sgSortRecords } from "../../checker/context";
 import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -1068,7 +1067,7 @@ test "intrinsic decorator definitions survive function and distinct wrapper cons
 }
 
 test "an intrinsic member wrapper is consumed into the method symbol before the apply pass" {
-	const pr = parseSource("class Calc {\n\t@builtin(\"CalcLoud\") loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
+	const pr = parseSource("class Calc {\n\t@builtin(\"Echo\") loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");
 	assert pr.ok;
 	const ctx = createContext();
 	collectTopLevel(ctx, pr.value);
@@ -1078,11 +1077,11 @@ test "an intrinsic member wrapper is consumed into the method symbol before the 
 	const body = (cls.data as ClassDeclData).classBody;
 	assert body[0].kind == NodeKind.MethodDecl;
 	assert body[0].resolvedSym != null;
-	assert body[0].resolvedSym.builtinKind == "CalcLoud";
+	assert body[0].resolvedSym.builtinKind == BuiltinKind.Echo;
 }
 
 test "an intrinsic member wrapper beside a user decorator is consumed by the fill after the apply pass" {
-	const pr = parseSource("macro keep(value: Node): Node { return value; }\n@keep\nclass Calc {\n\t@builtin(\"CalcLoud\") loud(): int32 { return 1; }\n}\n");
+	const pr = parseSource("macro keep(value: Node): Node { return value; }\n@keep\nclass Calc {\n\t@builtin(\"Echo\") loud(): int32 { return 1; }\n}\n");
 	assert pr.ok;
 	const ctx = createContext();
 	collectTopLevel(ctx, pr.value);
@@ -1098,7 +1097,7 @@ test "an intrinsic member wrapper beside a user decorator is consumed by the fil
 	const body = (inner.data as ClassDeclData).classBody;
 	assert body[0].kind == NodeKind.MethodDecl;
 	assert body[0].resolvedSym != null;
-	assert body[0].resolvedSym.builtinKind == "CalcLoud";
+	assert body[0].resolvedSym.builtinKind == BuiltinKind.Echo;
 }
 
 test "an intrinsic field wrapper is recorded on the class symbol before it is stripped" {

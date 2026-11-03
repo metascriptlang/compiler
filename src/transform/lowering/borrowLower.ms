@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, Symbol, BuiltinKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
@@ -51,7 +51,7 @@ function lowerBorrowNode(node: Node): Node {
 	if (landed == null) landed = borrowTarget(node.resolvedSym);
 	if (landed == null) return node;
 	node.resolvedSym = landed;
-	if (landed.builtinKind == "ToString") textAtBase(d, landed);
+	if (landed.builtinKind == BuiltinKind.ToString) textAtBase(d, landed);
 	return node;
 }
 

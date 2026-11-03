@@ -53,6 +53,7 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
+import { BuiltinKind } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames, macroPreludeSym } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
@@ -116,8 +117,8 @@ function leaveMetaScope(outer: MetaScope): void {
 	_metaDefiner = outer.definer;
 }
 
-function metaKind(n: Node | null): string {
-	if (n == null || _metaScope == null) return "";
+function metaKind(n: Node | null): BuiltinKind {
+	if (n == null || _metaScope == null) return BuiltinKind.None;
 	return metaIntrinsicOf(_metaScope!, _metaBound, n);
 }
 
@@ -131,7 +132,7 @@ function isSpliceCall(node: Node | null): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr) return false;
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length != 1) return false;
-	return node.flags.has(NodeFlag.QuoteSplice) || metaKind(cd.callee) == "MetaSplice";
+	return node.flags.has(NodeFlag.QuoteSplice) || metaKind(cd.callee) == BuiltinKind.MetaSplice;
 }
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
@@ -503,7 +504,7 @@ function quotedSymbolOf(node: Node): Symbol | null {
 
 function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
 	if (declCtx.moduleGraph == null) return null;
-	const bindSym = metaTagged(declCtx.moduleGraph, ["MetaBindSym"])[0];
+	const bindSym = metaTagged(declCtx.moduleGraph, [BuiltinKind.MetaBindSym])[0];
 	const metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
 	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
 }
@@ -1478,7 +1479,7 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	const c = node.data as CallExprData;
 	if (c.callee == null) return node;
 	const intrinsic = metaKind(c.callee);
-	if (intrinsic != "MetaCreateNodeAt" && intrinsic != "MetaCreateNode") return node;
+	if (intrinsic != BuiltinKind.MetaCreateNodeAt && intrinsic != BuiltinKind.MetaCreateNode) return node;
 	if (c.arguments.length != 3) return node;
 
 	const kindArg = peelHiddenConv(c.arguments[0]);
@@ -1541,7 +1542,7 @@ let _raisingCalls: HashSet<Node> = new HashSet<Node>();
 function tryRewriteMacroError(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr || _raisingCalls.has(node)) return node;
 	const cd = node.data as CallExprData;
-	if (cd.callee == null || metaKind(cd.callee) != "MetaError") return node;
+	if (cd.callee == null || metaKind(cd.callee) != BuiltinKind.MetaError) return node;
 	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
 	const loc = node.location;
 	let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
@@ -1574,7 +1575,7 @@ function tryRewriteCompileWarning(node: Node): Node {
 	const ed = node.data as ExprStmtData;
 	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return node;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null || metaKind(cd.callee) != "MetaWarning") return node;
+	if (cd.callee == null || metaKind(cd.callee) != BuiltinKind.MetaWarning) return node;
 	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
 	const loc = node.location;
 	const msgArg = cd.arguments[0];
@@ -1720,7 +1721,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		// NodeFlag.BoundSym and skips the user-scope lookup — no imports needed,
 		// no user-local name capture.
 		const intrinsic = metaKind(cd.callee);
-		if (intrinsic == "MetaBindSym" && cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
+		if (intrinsic == BuiltinKind.MetaBindSym && cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
@@ -1742,7 +1743,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			}
 			return bindSymCall(hostSym, symName, boundSym, node.location);
 		}
-		if (intrinsic == "MetaGetTypeImpl"
+		if (intrinsic == BuiltinKind.MetaGetTypeImpl
 				&& cd.arguments.length == 1
 				&& cd.arguments[0].kind == NodeKind.Identifier) {
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
@@ -1779,7 +1780,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		// argument, so one compiled body serves every T; invokeMacro resolves T in
 		// the CALL SITE scope per call, unlike getTypeImpl which resolves in the
 		// macro's own module.
-		if (intrinsic == "MetaGetTypeArg" && cd.arguments.length == 0) {
+		if (intrinsic == BuiltinKind.MetaGetTypeArg && cd.arguments.length == 0) {
 			if (!hasTypeArg) {
 				addError(ctx, `Macro '${macroName}': getTypeArg() needs an explicit type argument at the call site — write ${macroName}<T>(...)`, node.location.line, node.location.column);
 				return node;
@@ -2469,10 +2470,10 @@ import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
 import { recordBodyRead } from "../../checker/bodyReads";
 
-function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
+function metaTestScope(createNodeAtKind: BuiltinKind = BuiltinKind.MetaCreateNodeAt): CheckerContext {
 	const ctx = createContext();
 	const nodeKind = makeSymbol("NodeKind", SymbolKind.Enum, noneType(), false);
-	nodeKind.builtinKind = "MetaNodeKind";
+	nodeKind.builtinKind = BuiltinKind.MetaNodeKind;
 	defineSymbol(ctx.table, nodeKind);
 	const create = makeSymbol("createNodeAt", SymbolKind.Function, noneType(), false);
 	create.builtinKind = createNodeAtKind;
@@ -2622,7 +2623,7 @@ test "tryRewriteCreateNodeAt leaves a call to a user function named createNodeAt
 		isDirectCall: true,
 		resolvedOverloadIdx: 0,
 	}, synthToken(loc));
-	const outer = enterMetaScope(metaTestScope(""), "", [], call);
+	const outer = enterMetaScope(metaTestScope(BuiltinKind.None), "", [], call);
 	const result = tryRewriteCreateNodeAt(call);
 	leaveMetaScope(outer);
 	assert result == call;

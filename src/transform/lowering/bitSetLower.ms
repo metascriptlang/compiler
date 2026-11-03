@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, DeclKind, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, VariableDeclData, ExprStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, DeclKind, createNodeAt, BuiltinKind } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren, mapExprChildrenWith } from "../walker";
@@ -49,19 +49,19 @@ enum SetOp { Has, Incl, Excl, IsEmpty, Size, Hash, Union, Intersection, Differen
 function setOpOf(callee: Node): SetOp | null {
 	if (callee.kind != NodeKind.Identifier || callee.resolvedSym == null) return null;
 	return match (callee.resolvedSym.builtinKind) {
-		"SetHas" => SetOp.Has,
-		"SetIncl" => SetOp.Incl,
-		"SetExcl" => SetOp.Excl,
-		"SetIsEmpty" => SetOp.IsEmpty,
-		"SetSize" => SetOp.Size,
-		"SetHash" => SetOp.Hash,
-		"SetUnion" => SetOp.Union,
-		"SetIntersection" => SetOp.Intersection,
-		"SetDifference" => SetOp.Difference,
-		"SetSymmetricDifference" => SetOp.SymmetricDifference,
-		"SetIsSubsetOf" => SetOp.IsSubsetOf,
-		"SetIsSupersetOf" => SetOp.IsSupersetOf,
-		"SetIsDisjointFrom" => SetOp.IsDisjointFrom,
+		BuiltinKind.SetHas => SetOp.Has,
+		BuiltinKind.SetIncl => SetOp.Incl,
+		BuiltinKind.SetExcl => SetOp.Excl,
+		BuiltinKind.SetIsEmpty => SetOp.IsEmpty,
+		BuiltinKind.SetSize => SetOp.Size,
+		BuiltinKind.SetHash => SetOp.Hash,
+		BuiltinKind.SetUnion => SetOp.Union,
+		BuiltinKind.SetIntersection => SetOp.Intersection,
+		BuiltinKind.SetDifference => SetOp.Difference,
+		BuiltinKind.SetSymmetricDifference => SetOp.SymmetricDifference,
+		BuiltinKind.SetIsSubsetOf => SetOp.IsSubsetOf,
+		BuiltinKind.SetIsSupersetOf => SetOp.IsSupersetOf,
+		BuiltinKind.SetIsDisjointFrom => SetOp.IsDisjointFrom,
 		_ => null,
 	};
 }

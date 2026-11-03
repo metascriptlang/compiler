@@ -3,7 +3,7 @@
 // the exact kind. A single static type folds; a union asks a routine that cases
 // on the held member, one routine per union and table.
 
-import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, CallExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
+import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, CallExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData, BuiltinKind } from "../../ast/node";
 import { isArrayType, unwrapRefNullUnion, peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
 import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
 import { declaresProperty } from "../../checker/compat";
@@ -133,7 +133,7 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 }
 
 function lowerHoldsArray(node: Node, ctx: TransformContext): Node | null {
-	if (callBuiltinKind(node) != "HoldsArray") return null;
+	if (callBuiltinKind(node) != BuiltinKind.HoldsArray) return null;
 	const args = (node.data as CallExprData).arguments;
 	const operand = lowerNode(args[0], ctx);
 	const t = operand.nodeType;
