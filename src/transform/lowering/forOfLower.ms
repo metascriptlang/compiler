@@ -27,7 +27,7 @@ import {
 	makeIdentResolved, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	makeIf, makeString, runtimeRef, extractBodyStmts, boolToDeclKind, counterType, makeCounterStep,
-	makeBool, makeNull, makeTryCatch, makeTryFinally, makeCatchSym,
+	makeBool, makeNull, makeBreak, makeTryCatch, makeTryFinally, makeCatchSym,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -62,8 +62,10 @@ function forOfVisitor(ctx: TransformContext, program: Node): (node: Node) => Nod
 
 // ===== Iterator For-Of (function* generators) =====
 // for (const x of iter) { body }
-// → { const $iter = iter; let $r = $iter.next();
-//     while (!$r.done) { const x = $r.value; body; $r = $iter.next(); } }
+// → { const $iter = iter;
+//     while (true) { const $r = $iter.next(); if ($r.done) break; const x = $r.value; body } }
+// The result is local to one step, so it is released before the next call, as the reference lowers
+// a closure iterator's loop.
 
 function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLocation): Node {
 	const step = makeMember(makeIdentResolved(iterSym, loc), "next", loc);
@@ -84,14 +86,14 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 	const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 	iterDecl.resolvedSym = iterSym;
 	stmts.push(iterDecl);
-	const rDecl = makeVarDecl(rSym.name, makeNextCallSym(iterSym, resultType, loc), DeclKind.Let, loc);
+	const rDecl = makeVarDecl(rSym.name, makeNextCallSym(iterSym, resultType, loc), DeclKind.Const, loc);
 	rDecl.resolvedSym = rSym;
 	if (resultType != null) rDecl.nodeType = resultType;
 
-	const cond = makeUnary("!", makeMember(makeIdentResolved(rSym, loc), "done", loc), loc);
 	const liveSym = freshTempSym(ctx, "live", booleanType());
 	const setLive = (on: boolean): Node => makeExprStmt(makeAssign(makeIdentResolved(liveSym, loc), makeBool(on, loc), loc), loc);
-	const bodyStmts: Node[] = [setLive(true)];
+	const finished = makeIf(makeMember(makeIdentResolved(rSym, loc), "done", loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc);
+	const bodyStmts: Node[] = [setLive(false), rDecl, finished, setLive(true)];
 	const itemType = resultType != null && resultType.typeChildren != null && resultType.typeChildren.length > 0 ? resultType.typeChildren[0] : null;
 	const itemDk = boolToDeclKind(d.forOfIsConst);
 	const patKind = d.forOfPattern != null ? d.forOfPattern.kind : NodeKind.Identifier;
@@ -115,17 +117,13 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 		if (itemType != null) itemDecl.nodeType = itemType;
 		bodyStmts.push(itemDecl);
 	}
-	const userStmts = extractBodyStmts(d.forOfBody);
-	const next = makeBlock([setLive(false), makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc)], loc);
-	const tail = appendLoopTail(userStmts, next, ctx, loc);
-	for (const s of tail.tailStmts) { bodyStmts.push(s); }
+	for (const s of extractBodyStmts(d.forOfBody)) { bodyStmts.push(s); }
 
-	const loop = makeWhile(cond, makeBlock(bodyStmts, loc), loc);
-	(loop.data as WhileStmtData).whileLabel = tail.tailLabel;
+	const loop = makeWhile(makeBool(true, loc), makeBlock(bodyStmts, loc), loc);
 	const liveDecl = makeVarDecl(liveSym.name, makeBool(false, loc), DeclKind.Let, loc);
 	liveDecl.resolvedSym = liveSym;
 	stmts.push(liveDecl);
-	stmts.push(closeOnAbruptExit(makeBlock([rDecl, loop], loc), iterSym, liveSym, ctx, loc));
+	stmts.push(closeOnAbruptExit(makeBlock([loop], loc), iterSym, liveSym, ctx, loc));
 	return makeBlock(stmts, loc);
 }
 

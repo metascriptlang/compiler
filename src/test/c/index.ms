@@ -72,6 +72,7 @@ import "./pointerAddress";
 import "./noinlinePragma";
 import "./trimLineDirective";
 import "./forOfCounterEmit";
+import "./forOfIteratorResultScope";
 import "./finallyScaffoldEmit";
 import "./loweredCatchStdError";
 import "./computedGoto";
