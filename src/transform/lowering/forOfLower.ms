@@ -11,9 +11,11 @@
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
-	ArrayAccessData, NumberLiteralData, TryCatchStmtData, BinaryExprData,
+	ArrayAccessData, NumberLiteralData, TryCatchStmtData, BinaryExprData, UpdateExprData, OutExprData,
 } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, freshTempSym } from "../context";
+import { forEachChild } from "../../ast/visitor";
+import { isAssignOp } from "../../ast/operators";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { appendLoopTail } from "./forLoopLower";
 import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
@@ -32,11 +34,12 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } fro
 // ===== Main Entry Point =====
 
 export function lowerForOf(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, forOfVisitor(ctx));
+	return walkNode(program, forOfVisitor(ctx, program));
 }
 
 // Closure-returning visitor to capture ctx
-function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
+function forOfVisitor(ctx: TransformContext, program: Node): (node: Node) => Node {
+	const rebound = new Rebound(program);
 	return (node: Node): Node => {
 		if (node.kind != NodeKind.ForOfStmt) return node;
 		const d = node.data as ForOfStmtData;
@@ -53,7 +56,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		}
 
 		// Array/String: index-based pattern
-		return lowerArrayForOf(d, ctx, loc, bindingSym);
+		return lowerArrayForOf(d, ctx, loc, bindingSym, rebound);
 	};
 }
 
@@ -159,7 +162,7 @@ function makeBareCatch(tryBody: Node, loc: SourceLocation): Node {
 
 // ===== Array/String For-Of =====
 
-function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
+function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null, rebound: Rebound): Node {
 	const indexType = counterType(ctx);
 	const idxSym = freshTempSym(ctx, "idx", indexType);
 	const lenSym = freshTempSym(ctx, "len", indexType);
@@ -179,7 +182,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const iterable = d.forOfIterable;
 	const readsLocation = !isRefArray && (iterable.kind == NodeKind.Identifier
 		|| ((iterable.kind == NodeKind.MemberExpr || iterable.kind == NodeKind.ArrayAccess) && isSymbolPath(iterable)));
-	const heldByConst = isRefArray && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym);
+	const heldByConst = isRefArray && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym, rebound);
 
 	const preamble: Node[] = [];
 	if (readsLocation) hoistIndices(iterable, ctx, preamble, loc);
@@ -277,9 +280,49 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	return makeBlock(preamble, loc);
 }
 
-function cannotRebind(sym: Symbol | null): boolean {
-	return sym != null && sym.symbolKind == SymbolKind.Variable
-		&& !hasFlag(sym, SymbolFlag.Mutable) && !hasFlag(sym, SymbolFlag.ForVar);
+// The local variables and parameters some statement of the module assigns, whole or by address.
+class Rebound {
+	program: Node;
+	syms: SymSet | null = null;
+	constructor(program: Node) { this.program = program; }
+}
+
+function reboundSyms(r: Rebound): SymSet {
+	if (r.syms == null) {
+		const out = createSymSet();
+		collectRebound(r.program, out);
+		r.syms = out;
+	}
+	return r.syms!;
+}
+
+// A symbol no statement assigns holds one array for the whole routine, so reading it at each
+// element is the once-evaluated read of the iterable: a closure that assigns it counts, as the
+// assignment is found wherever it sits in the module.
+function cannotRebind(sym: Symbol | null, rebound: Rebound): boolean {
+	if (sym == null || (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter)) return false;
+	if (hasFlag(sym, SymbolFlag.Global) && hasFlag(sym, SymbolFlag.Mutable)) return false;
+	return !symSetContains(reboundSyms(rebound), sym);
+}
+
+function collectRebound(node: Node, out: SymSet): void {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const b = node.data as BinaryExprData;
+		if (isAssignOp(b.operator)) addTarget(b.left, out);
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		addTarget((node.data as UpdateExprData).updateArg, out);
+	} else if (node.kind == NodeKind.HiddenAddr) {
+		addTarget((node.data as HiddenDerefData).expr, out);
+	} else if (node.kind == NodeKind.OutExpr) {
+		addTarget((node.data as OutExprData).outArg, out);
+	}
+	forEachChild(node, (c: Node): void => collectRebound(c, out));
+}
+
+function addTarget(target: Node, out: SymSet): void {
+	if (target.kind == NodeKind.ArrayAccess || target.kind == NodeKind.MemberExpr) return;
+	if (target.kind == NodeKind.Identifier && target.resolvedSym != null) symSetAdd(out, target.resolvedSym);
+	forEachChild(target, (c: Node): void => addTarget(c, out));
 }
 
 function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
@@ -423,33 +466,66 @@ test "a reference array is read once into a temp" {
 	assert ((len.data as MemberExprData).object.data as IdentifierData).name != "arr";
 }
 
-function refArrayHeldBy(sym: Symbol): Node[] {
-	const parsed = parseInput("for (const x of arr) { use(x); }");
+function refArrayHeldBy(sym: Symbol, source: string = "for (const x of arr) { use(x); }"): Node[] {
+	const parsed = parseInput(source);
 	if (!parsed.ok) throw new Error(parsed.error);
-	const iter = (getStmts(parsed.value)[0].data as ForOfStmtData).forOfIterable;
+	const stmts = getStmts(parsed.value);
+	walkNode(parsed.value, (n: Node): Node => {
+		if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "arr") n.resolvedSym = sym;
+		return n;
+	});
+	const iter = (stmts[0].data as ForOfStmtData).forOfIterable;
 	iter.nodeType = createRef(createArray(int32Type()));
-	iter.resolvedSym = sym;
 	return (getStmts(lowerForOf(parsed.value, makeCtx()))[0].data as BlockStmtData).statements;
 }
 
-test "a reference array held by a const is read through the const, with no temp" {
-	const stmts = refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, false));
-	assert stmts.length == 3;
+function readsThroughArr(stmts: Node[]): boolean {
+	if (stmts.length != 3) return false;
 	const len = (stmts[1].data as VariableDeclData).initializer;
-	assert ((len.data as MemberExprData).object.data as IdentifierData).name == "arr";
+	return ((len.data as MemberExprData).object.data as IdentifierData).name == "arr";
 }
 
-test "a reference array held by a let is read once into a temp" {
-	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, true)).length == 4;
+const REASSIGNED = "for (const x of arr) { arr = other; }";
+
+test "a reference array held by a const is read through the const, with no temp" {
+	assert readsThroughArr(refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, false)));
 }
 
-test "a reference array held by a parameter is read once into a temp" {
-	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Parameter, null, false)).length == 4;
+test "a reference array held by a let nothing assigns is read through the let, with no temp" {
+	assert readsThroughArr(refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, true)));
 }
 
-test "a reference array held by an outer loop binding is read once into a temp" {
+test "a reference array held by a parameter nothing assigns is read through the parameter, with no temp" {
+	assert readsThroughArr(refArrayHeldBy(makeSymbol("arr", SymbolKind.Parameter, null, false)));
+}
+
+test "a reference array held by an outer loop binding nothing assigns is read through the binding, with no temp" {
 	const sym = makeSymbol("arr", SymbolKind.Variable, null, false);
 	setFlag(sym, SymbolFlag.ForVar);
+	assert readsThroughArr(refArrayHeldBy(sym));
+}
+
+test "a reference array held by a let the body assigns is read once into a temp" {
+	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Variable, null, true), REASSIGNED).length == 4;
+}
+
+test "a reference array held by a parameter the body assigns is read once into a temp" {
+	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Parameter, null, false), REASSIGNED).length == 4;
+}
+
+test "a reference array held by an outer loop binding the body assigns is read once into a temp" {
+	const sym = makeSymbol("arr", SymbolKind.Variable, null, true);
+	setFlag(sym, SymbolFlag.ForVar);
+	assert refArrayHeldBy(sym, REASSIGNED).length == 4;
+}
+
+test "a reference array held by a parameter that a later statement assigns is read once into a temp" {
+	assert refArrayHeldBy(makeSymbol("arr", SymbolKind.Parameter, null, false), "for (const x of arr) { use(x); } arr = other;").length == 4;
+}
+
+test "a reference array held by a mutable module variable is read once into a temp" {
+	const sym = makeSymbol("arr", SymbolKind.Variable, null, true);
+	setFlag(sym, SymbolFlag.Global);
 	assert refArrayHeldBy(sym).length == 4;
 }
 
