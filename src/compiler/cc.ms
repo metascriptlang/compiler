@@ -461,7 +461,7 @@ function normalizeCpu(cpu: string): string {
 // clang/gcc uses "--target=x86_64-pc-windows-gnu".
 // Caller is responsible for only invoking when actually cross-compiling
 // (targetOs !== platform || cpuTarget !== "").
-export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
+export function crossTargetFlag(targetOs: string, cpuTarget: string, abi: string, useZig: boolean): string {
 	const cpu = normalizeCpu(buildCpu(targetOs, cpuTarget));
 	if (targetOs == "bare" && cpu == "wasm32") {
 		return useZig ? "-target wasm32-freestanding" : "--target=wasm32-unknown-unknown";
@@ -471,7 +471,7 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 		let zigOs = targetOs;
 		if (targetOs == "macos" || targetOs == "darwin") zigOs = "macos";
 		if (targetOs == "windows") return `-target ${cpu}-windows-gnu`;
-		if (targetOs == "linux") return `-target ${cpu}-linux-gnu`;
+		if (targetOs == "linux") return `-target ${cpu}-linux-${abi == "musl" ? "musl" : "gnu"}`;
 		if (targetOs == "android") return `-target ${cpu}-linux-android`;
 		return `-target ${cpu}-${zigOs}`;
 	}
@@ -482,7 +482,7 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 	// clang/gcc target format: cpu-vendor-os[-abi]
 	let triple = cpu;
 	if (targetOs == "linux") {
-		triple = `${cpu}-unknown-linux-gnu`;
+		triple = `${cpu}-unknown-linux-${abi == "musl" ? "musl" : "gnu"}`;
 	} else if (targetOs == "macos" || targetOs == "darwin") {
 		triple = `${cpu}-apple-darwin`;
 	} else if (targetOs == "windows") {
@@ -698,7 +698,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	}
 	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
 		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
-		flags = appendFlag(flags, crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig));
+		flags = appendFlag(flags, crossTargetFlag(opts.targetOs, opts.cpuTarget, opts.abi, useZig));
 		flags = appendFlag(flags, "-ffreestanding -fno-builtin -DMS_FREESTANDING_LIBC");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		const rtDir = resolveRuntimeDir();
@@ -713,9 +713,9 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// clang/gcc: --target=cpu-vendor-os-abi
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
-	if (!opts.ccConfigOwnsTarget && ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "")) {
+	if (!opts.ccConfigOwnsTarget && ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "" || opts.abi == "musl")) {
 		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
-		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig);
+		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, opts.abi, useZig);
 		if (ct != "") flags = appendFlag(flags, ct);
 	}
 	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
@@ -1820,8 +1820,23 @@ test "an emcc link runs the build mode's optimizer, as emcc optimizes the wasm o
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {
 	const other = platform == "linux" ? "windows" : "linux";
 	const abi = other == "linux" ? "linux-gnu" : "windows-gnu";
-	assert crossTargetFlag(other, "", true) == `-target x86_64-${abi}`;
-	assert crossTargetFlag(other, "arm64", true) == `-target aarch64-${abi}`;
+	assert crossTargetFlag(other, "", "", true) == `-target x86_64-${abi}`;
+	assert crossTargetFlag(other, "arm64", "", true) == `-target aarch64-${abi}`;
+}
+
+test "musl names the third part of a linux target triple for zig and for clang" {
+	assert crossTargetFlag("linux", "", "musl", true) == "-target x86_64-linux-musl";
+	assert crossTargetFlag("linux", "arm64", "musl", true) == "-target aarch64-linux-musl";
+	assert crossTargetFlag("linux", "arm64", "gnu", true) == "-target aarch64-linux-gnu";
+	assert crossTargetFlag("linux", "amd64", "musl", false) == "--target=x86_64-unknown-linux-musl";
+	assert crossTargetFlag("linux", "arm64", "musl", false) == "--target=aarch64-unknown-linux-musl";
+	assert crossTargetFlag("linux", "arm64", "", false) == "--target=aarch64-unknown-linux-gnu";
+}
+
+test "--abi=musl asks for a target flag even where os and cpu match the host" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["build", "a.ms", "--os=linux", "--abi=musl", "--cc=zig cc"], 0).ok;
+	assert cliCompileFlags(opts).contains("-linux-musl");
 }
 
 test "the object cache key names every argument compileCFile passes but the file names" {

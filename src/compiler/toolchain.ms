@@ -513,7 +513,12 @@ function verifyBundlePayload(root: string, identity: string, version: string, li
 	return Result.ok(null);
 }
 
-function nativeRuntimeConfig(targetOs: string, cpu: string): string {
+function nativeRuntimeConfig(targetOs: string, cpu: string, abi: string): string {
+	if (targetOs == "linux" && abi == "musl") {
+		if (cpu == "amd64" || cpu == "x86_64") return "x86_64-linux-musl.cfg";
+		if (cpu == "arm64" || cpu == "aarch64") return "aarch64-linux-musl.cfg";
+		return "";
+	}
 	if (targetOs == "wasm" && cpu == "wasm32") return "wasm32-wasi.cfg";
 	if (targetOs == "linux" && (cpu == "amd64" || cpu == "x86_64")) return "x86_64-linux-gnu.2.31.cfg";
 	if (targetOs == "linux" && (cpu == "arm64" || cpu == "aarch64")) return "aarch64-linux-gnu.2.31.cfg";
@@ -585,9 +590,10 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 		return Result.ok(null);
 	}
 	const cpu = buildCpu(opts.targetOs, opts.cpuTarget);
-	const name = nativeRuntimeConfig(opts.targetOs, cpu);
+	const name = nativeRuntimeConfig(opts.targetOs, cpu, opts.abi);
 	const config = join(bundle.root, `runtime/${name}`);
-	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${opts.targetOs}/${cpu} is not installed in ${bundle.root}`);
+	const target = opts.abi == "musl" ? `${opts.targetOs}-musl/${cpu}` : `${opts.targetOs}/${cpu}`;
+	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${target} is not installed in ${bundle.root}`);
 	if (opts.targetOs == "windows" && opts.sanitize != "") return Result.err(`native toolchain: --sanitize=${opts.sanitize} on windows needs a libclang_rt sanitizer runtime, and ${bundle.root} ships none for windows\n  → build with --cc=zig, or drop --sanitize`);
 	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
@@ -678,18 +684,38 @@ test "the macOS SDK memo answers only for the developer directory it was taken u
 }
 
 test "prepared runtimes are selected by both OS and CPU" {
-	assert nativeRuntimeConfig("wasm", "wasm32") == "wasm32-wasi.cfg";
-	assert nativeRuntimeConfig("linux", "amd64") == "x86_64-linux-gnu.2.31.cfg";
-	assert nativeRuntimeConfig("linux", "x86_64") == "x86_64-linux-gnu.2.31.cfg";
-	assert nativeRuntimeConfig("linux", "arm64") == "aarch64-linux-gnu.2.31.cfg";
-	assert nativeRuntimeConfig("darwin", "arm64") == "darwin/aarch64-macos.cfg";
-	assert nativeRuntimeConfig("macos", "x86_64") == "darwin/x86_64-macos.cfg";
-	assert nativeRuntimeConfig("linux", "aarch64") == "aarch64-linux-gnu.2.31.cfg";
-	assert nativeRuntimeConfig("linux", "arm") == "";
-	assert nativeRuntimeConfig("windows", "amd64") == "windows/x86_64-windows-gnu.cfg";
-	assert nativeRuntimeConfig("windows", "arm64") == "windows/aarch64-windows-gnu.cfg";
-	assert nativeRuntimeConfig("windows", "arm") == "";
-	assert nativeRuntimeConfig("wasm", "arm64") == "";
+	assert nativeRuntimeConfig("wasm", "wasm32", "") == "wasm32-wasi.cfg";
+	assert nativeRuntimeConfig("linux", "amd64", "") == "x86_64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "x86_64", "") == "x86_64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "arm64", "") == "aarch64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("darwin", "arm64", "") == "darwin/aarch64-macos.cfg";
+	assert nativeRuntimeConfig("macos", "x86_64", "") == "darwin/x86_64-macos.cfg";
+	assert nativeRuntimeConfig("linux", "aarch64", "") == "aarch64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "arm", "") == "";
+	assert nativeRuntimeConfig("windows", "amd64", "") == "windows/x86_64-windows-gnu.cfg";
+	assert nativeRuntimeConfig("windows", "arm64", "") == "windows/aarch64-windows-gnu.cfg";
+	assert nativeRuntimeConfig("windows", "arm", "") == "";
+	assert nativeRuntimeConfig("wasm", "arm64", "") == "";
+	assert nativeRuntimeConfig("linux", "amd64", "gnu") == "x86_64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "x86_64", "musl") == "x86_64-linux-musl.cfg";
+	assert nativeRuntimeConfig("linux", "arm64", "musl") == "aarch64-linux-musl.cfg";
+	assert nativeRuntimeConfig("linux", "arm", "musl") == "";
+}
+
+test "a bundle without the musl runtime refuses --abi=musl naming it, and with it selects it" {
+	const root = selectionProbe(true);
+	assert root != "";
+	const opts = linuxOptions();
+	opts.abi = "musl";
+	const refused = selectNativeToolchain(opts, root, "");
+	assert !refused.ok && refused.error.contains("prepared runtime for linux-musl/x86_64 is not installed");
+	assert writeFile(join(root, "runtime/x86_64-linux-musl.cfg"), "").ok;
+	const chosen = linuxOptions();
+	chosen.abi = "musl";
+	assert selectNativeToolchain(chosen, root, "").ok;
+	assert chosen.ccBinary.contains("x86_64-linux-musl.cfg") && !chosen.ccBinary.contains("gnu.2.31");
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
 }
 
 test "the prepared Windows runtime refuses every sanitizer on both CPUs because the bundle ships no runtime for it" {

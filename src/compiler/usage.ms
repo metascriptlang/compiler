@@ -44,6 +44,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--target") + "=<c|js>       Target backend " + dim("(default: c)"));
 	console.log("  " + cyan("--os") + "=<os>             Target OS " +
 		dim("(bare|solana|wasm|emcc|linux|macos|windows|ios|android; default: host)"));
+	console.log("  " + cyan("--abi") + "=<abi>           libc of a linux target " + dim("(gnu|musl; default: gnu; musl links statically)"));
 	console.log("  " + cyan("--output") + "=<file>       Output file path");
 	console.log("  " + cyan("-t") + ", " + cyan("--time") + "            Show compilation timing");
 	console.log("  " + cyan("--verbose") + "             Verbose phase output");

@@ -54,6 +54,7 @@ export interface CliOptions {
 	                           // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                           // Cross-compile detected by callsites via `targetOs !== platform`.
 	cpuTarget: string;         // --cpu=<x86_64|arm64|...>: target CPU (cross-compile)
+	abi: string;               // --abi=<gnu|musl>: libc of a linux target; "" = gnu
 	targetInfo: TargetInfo;
 	genDeps: boolean;
 	forceRebuild: boolean;
@@ -165,6 +166,7 @@ export function newCliOptions(): CliOptions {
 		ccConfigOwnsTarget: false,
 		targetOs: platform,
 		cpuTarget: "",
+		abi: "",
 		targetInfo: hostTargetInfo(),
 		genDeps: false,
 		forceRebuild: false,
@@ -426,6 +428,11 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			opts.targetOs = osVal;
 		} else if (arg.startsWith("--cpu=")) {
 			opts.cpuTarget = arg.slice(6, arg.length);
+		} else if (arg.startsWith("--abi=")) {
+			opts.abi = arg.slice(6, arg.length);
+			if (opts.abi != "gnu" && opts.abi != "musl") {
+				return Result.err(`unknown --abi: "${opts.abi}"\n  Valid values: gnu, musl`);
+			}
 		} else if (arg == "--gendeps") {
 			opts.genDeps = true;
 		} else if (arg == "--force" || arg == "-f") {
@@ -565,6 +572,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			return Result.err(`unknown option '${arg}'`);
 		}
 		i += 1;
+	}
+	if (opts.abi != "" && opts.targetOs != "linux") {
+		return Result.err(`--abi=${opts.abi} is refused with --os=${opts.targetOs}: --abi picks the libc of a linux target\n  → add --os=linux, or drop --abi`);
 	}
 	if (opts.targetOs == "solana" && opts.mode == MODE_DANGER) {
 		return Result.err("--danger is refused on --os=solana: it drops the bound, range, object and division checks that guard a program fed adversarial input\n  → use --release, which links with LTO on this target");
@@ -778,6 +788,21 @@ test "an unknown --os target is an error result, not a silent stop" {
 	const opts = newCliOptions();
 	const r = applyArgs(opts, ["build", "a.ms", "--os=plan9"], 0);
 	assert !r.ok;
+}
+
+test "--abi picks the libc of a linux target and is refused on every other os" {
+	for (const os of ["linux", "windows", "macos", "freebsd", "android", "wasm", "bare"]) {
+		for (const abi of ["gnu", "musl"]) {
+			const parsed = applyArgs(newCliOptions(), ["build", "a.ms", `--os=${os}`, `--abi=${abi}`], 0);
+			assert parsed.ok == (os == "linux");
+			if (!parsed.ok) assert parsed.error.contains(`--abi=${abi} is refused with --os=${os}`);
+		}
+	}
+	const unknown = applyArgs(newCliOptions(), ["build", "a.ms", "--os=linux", "--abi=uclibc"], 0);
+	assert !unknown.ok && unknown.error.contains("uclibc");
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["build", "a.ms", "--abi=musl", "--os=linux"], 0).ok && opts.abi == "musl";
+	assert newCliOptions().abi == "";
 }
 
 test "cache directory switches accept equals and separate path forms" {
