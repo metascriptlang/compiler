@@ -25,6 +25,9 @@ def read(path):
         return f.read()
 
 
+CPP_TARGETS = ["x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31", "x86_64-windows-gnu", "aarch64-windows-gnu"]
+
+
 class BundleCase(unittest.TestCase):
     runtimeReceipt = {"kind": "runtime"}
 
@@ -114,18 +117,17 @@ class BundleTest(BundleCase):
         for name in (receipt["runtimeProvenance"], receipt["windowsRuntimeProvenance"]):
             self.assertTrue(os.path.isfile(os.path.join(out, name)))
 
-    def test_every_runtime_gets_the_cpp_overlay_of_its_x86_64_targets_and_the_receipt_names_the_c_only_ones(self):
+    def test_every_runtime_gets_the_cpp_overlay_of_its_glibc_and_windows_targets_and_the_receipt_names_the_c_only_ones(self):
         out = self.path("bundle")
         pb.prepareBundle(self.engine, "/z/zig", out, [])
         zig, source, runtime, targets, present = self.cppCalls[0]
-        self.assertEqual((zig, source, targets), ("/z/zig", self.engine, ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"]))
+        self.assertEqual((zig, source, targets), ("/z/zig", self.engine, CPP_TARGETS))
         self.assertEqual((os.path.basename(runtime), present), ("runtime", ["darwin", "notices", "wasm32-wasi", "windows", "x86_64-linux-gnu.2.31",
                                                                            "x86_64-linux-gnu.2.31.cfg"]))
         receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
         self.assertEqual(receipt["cppRuntimeProvenance"], "runtime/notices/cpp-provenance.json")
-        self.assertEqual(receipt["cppTargets"], ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"])
-        self.assertEqual(receipt["cOnlyTargets"], ["wasm32-wasi", "aarch64-linux-gnu.2.31", "aarch64-windows-gnu",
-                                                   "aarch64-macos", "x86_64-macos"])
+        self.assertEqual(receipt["cppTargets"], CPP_TARGETS)
+        self.assertEqual(receipt["cOnlyTargets"], ["wasm32-wasi", "aarch64-macos", "x86_64-macos"])
         listed = [l.split("  ", 1)[1] for l in read(os.path.join(out, "FILES.sha256")).splitlines()]
         for rel in ("runtime/x86_64-linux-gnu.2.31.cxx.cfg", "runtime/notices/cpp-provenance.json"):
             self.assertIn(rel, listed)
@@ -139,9 +141,10 @@ class BundleTest(BundleCase):
 
     def test_the_cpp_overlay_follows_the_selected_targets_only(self):
         for requested, cpp, cOnly in ((["x86_64-windows-gnu"], ["x86_64-windows-gnu"], []),
-                                      (["x86_64-linux-gnu.2.31", "aarch64-windows-gnu"], ["x86_64-linux-gnu.2.31"],
-                                       ["aarch64-windows-gnu"]),
-                                      (["wasm32-wasi"], None, None), (["aarch64-windows-gnu"], None, None)):
+                                      (["x86_64-linux-gnu.2.31", "aarch64-windows-gnu"],
+                                       ["x86_64-linux-gnu.2.31", "aarch64-windows-gnu"], []),
+                                      (["wasm32-wasi", "aarch64-linux-gnu.2.31"], ["aarch64-linux-gnu.2.31"], ["wasm32-wasi"]),
+                                      (["wasm32-wasi"], None, None)):
             self.cppCalls.clear()
             out = self.path("bundle-" + "-".join(requested))
             pb.prepareBundle(self.engine, "/z/zig", out, requested)
@@ -709,6 +712,58 @@ class AugmentBundleTest(AugmentCase):
             with self.assertRaisesRegex(pe.EngineError, "hash mismatch"):
                 pb.augmentBundle(self.bundle, [overlay], self.path("out"))
         self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("out")], [])
+
+
+class OverlayBundleTest(AugmentCase):
+    def folder(self, name, files):
+        for relative, text in files.items():
+            write(os.path.join(self.path(name), relative), text)
+        return self.path(name)
+
+    def test_a_runtime_overlay_and_a_bundle_overlay_land_under_their_roots_and_are_listed(self):
+        runtime = self.folder("ov-runtime", {"musl.cfg": "-static\n", "notices/runtime-musl-provenance.json": "{}\n"})
+        root = self.folder("ov-root", {"lib/clang/22/lib/t/libclang_rt.a": "rt\n"})
+        out = pb.overlayBundle(self.bundle, [runtime], [root], self.path("out"))
+        self.assertEqual(read(os.path.join(out, "runtime", "musl.cfg")), "-static\n")
+        self.assertEqual(read(os.path.join(out, "lib", "clang", "22", "lib", "t", "libclang_rt.a")), "rt\n")
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertEqual([(o["root"], o["files"]) for o in receipt["overlays"]], [("runtime", 2), (".", 1)])
+        self.assertEqual(receipt["overlays"][0]["receipts"], ["runtime/notices/runtime-musl-provenance.json"])
+        self.assertEqual(receipt["baseBundleIdentity"], read(os.path.join(self.bundle, "IDENTITY")).strip())
+        self.assertEqual(read(os.path.join(out, "IDENTITY")), pe.readLine(out, "IDENTITY", "[0-9a-f]{64}") + "\n")
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+    def test_a_file_the_bundle_has_is_kept_when_the_bytes_agree_and_refused_when_they_differ(self):
+        have = os.path.join(self.bundle, "runtime", "include", "libc", "shared.h")
+        write(have, "same\n")
+        pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+        base = self.hashes(self.bundle)
+        same = self.folder("same", {"include/libc/shared.h": "same\n", "new.txt": "n\n"})
+        out = pb.overlayBundle(self.bundle, [same], [], self.path("out"))
+        self.assertEqual(read(os.path.join(out, "runtime", "new.txt")), "n\n")
+        other = self.folder("other", {"include/libc/shared.h": "different\n"})
+        with self.assertRaisesRegex(pe.EngineError, "already has"):
+            pb.overlayBundle(self.bundle, [other], [], self.path("out2"))
+        self.assertFalse(os.path.exists(self.path("out2")))
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+        self.assertEqual(self.hashes(self.bundle), base)
+
+    def test_an_empty_or_repeated_overlay_or_an_output_inside_the_bundle_is_refused(self):
+        full = self.folder("full", {"a.txt": "a\n"})
+        os.makedirs(self.path("empty"))
+        for runtime, root, output, pattern in (([], [], "o1", "at least one"), ([full, full], [], "o2", "once"),
+                                               ([self.path("empty")], [], "o3", "not a directory with files"),
+                                               ([full], [], os.path.join(self.bundle, "o4"), "inside the bundle")):
+            with self.assertRaisesRegex(pe.EngineError, pattern):
+                pb.overlayBundle(self.bundle, runtime, root, self.path(output) if not os.path.isabs(output) else output)
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+    def test_overlays_cannot_be_mixed_with_shared_runtimes_on_the_command_line(self):
+        full = self.folder("full", {"a.txt": "a\n"})
+        x64 = self.overlay("x64")
+        self.assertEqual(pb.main(["--bundle", self.bundle, "--runtime-overlay", full, "--output", self.path("out")]), 0)
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            pb.main(["--bundle", self.bundle, "--runtime-overlay", full, "--shared-runtime", x64, "--output", self.path("o")])
 
 
 class BundleCommandLineTest(AugmentCase):

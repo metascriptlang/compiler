@@ -3,6 +3,7 @@
 
     prepareBundle.py --engine ENGINE_DIR --zig ZIG --output NEW_DIR [--target T ...]
     prepareBundle.py --bundle BUNDLE_DIR --shared-runtime OVERLAY_DIR [--shared-runtime ...] --output NEW_DIR
+    prepareBundle.py --bundle BUNDLE_DIR [--runtime-overlay DIR ...] [--bundle-overlay DIR ...] --output NEW_DIR
 
 The engine is the verified component from prepareEngine.py. The bundle keeps its contents at the
 root (bin/, lib/, notices/) and adds `runtime/`, the payload prepareRuntime.py writes with the
@@ -11,13 +12,19 @@ prepareWindowsRuntime.py, with the engine reached by `../..`; the aarch64-macos 
 prepareDarwinRuntime.py, with the engine reached by `../..` too. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
 the bundle, and the source engine's identity is recorded in notices/bundle-provenance.json.
 
-The x86_64-linux-gnu.2.31 and x86_64-windows-gnu runtimes also get the C++ overlay of prepareCppRuntime.py merged
-into `runtime/`; the aarch64 and wasm32-wasi runtimes stay C only, and the receipt names them under `cOnlyTargets`.
+The glibc Linux and Windows runtimes of both architectures also get the C++ overlay of prepareCppRuntime.py merged
+into `runtime/`; the macOS and wasm32-wasi runtimes stay C only, and the receipt names them under `cOnlyTargets`.
 
 `--bundle` adds the GNU shared-object profiles of prepareRuntime.py --shared to a prepared bundle without preparing
 anything again: NEW_DIR is a clone of BUNDLE_DIR (never changed) plus the `<target>.so.cfg` and `<target>.so/` of each
 OVERLAY_DIR under `runtime/`, one `runtime/notices/runtime-shared-provenance.json` that joins the overlays' receipts,
 and a contract rewritten over every file. Every overlay must name the bundle's own runtime receipt, Zig and engine.
+
+`--runtime-overlay` and `--bundle-overlay` add the files of a producer's overlay (the C++ runtime of prepareCppRuntime.py,
+the musl runtime of prepareRuntime.py, the sanitizer runtimes of prepareSanitizerRuntime.py) to a clone of a prepared
+bundle, the first under `runtime/` and the second at the bundle root. A file the bundle already has is kept when the bytes
+are the same (headers two producers both copy) and refused otherwise; the receipts the overlays carry stay in
+`notices/`, `bundle-provenance.json` lists each overlay, and the contract is rewritten over every file.
 
 The bundle is a local proof, not an upstream-controlled build, and never certifies redistribution.
 """
@@ -253,6 +260,47 @@ def augmentBundle(bundle, overlays, output):
     return output
 
 
+def overlayBundle(bundle, runtimeOverlays, bundleOverlays, output):
+    """Clone the verified bundle with each overlay merged at its root. Returns the output path."""
+    bundle, output = os.path.abspath(bundle), os.path.abspath(output)
+    overlays = [("runtime", os.path.abspath(o)) for o in runtimeOverlays] + [(".", os.path.abspath(o)) for o in bundleOverlays]
+    if not overlays or len({o for _, o in overlays}) != len(overlays):
+        raise pe.EngineError("--runtime-overlay and --bundle-overlay need each overlay once, at least one")
+    if os.path.lexists(output):
+        raise pe.EngineError("output %s exists; it is never replaced" % output)
+    if pe.containsPath(bundle, output):
+        raise pe.EngineError("output %s is inside the bundle" % output)
+    host, version, _ = pe.verifyEngine(bundle)
+    for _, overlay in overlays:
+        if not os.path.isdir(overlay) or not pc.overlayFiles(overlay):
+            raise pe.EngineError("overlay %s is not a directory with files" % overlay)
+    with open(os.path.join(bundle, "notices", "bundle-provenance.json"), encoding="utf-8") as f:
+        receipt = json.load(f)
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    clone = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
+    try:
+        shutil.copytree(bundle, clone, symlinks=True, dirs_exist_ok=True)
+        added = []
+        for root, overlay in overlays:
+            target = os.path.normpath(os.path.join(clone, root))
+            files = pc.overlayFiles(overlay)
+            pc.mergeOverlay(overlay, target)
+            added.append({"root": root, "overlay": os.path.basename(overlay), "files": len(files),
+                          "receipts": [os.path.normpath(os.path.join(root, f)) for f in files
+                                       if f.startswith("notices/") and f.endswith("provenance.json")]})
+        receipt.update({"baseBundleIdentity": receipt.get("baseBundleIdentity") or pe.readLine(bundle, "IDENTITY", "[0-9a-f]{64}"),
+                        "overlays": receipt.get("overlays", []) + added})
+        pe.writeText(os.path.join(clone, "notices", "bundle-provenance.json"), json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        pe.writeContract(clone, host, version)
+        pe.verifyEngine(clone)
+        os.chmod(clone, 0o755)
+        pr.renameNoReplace(clone, output)
+    except BaseException:
+        shutil.rmtree(clone, ignore_errors=True)
+        raise
+    return output
+
+
 def prepareBundle(engine, zig, output, targets):
     engine, output = os.path.abspath(engine), os.path.abspath(output)
     if os.path.lexists(output):
@@ -307,14 +355,20 @@ def main(argv):
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--bundle")
     parser.add_argument("--shared-runtime", action="append", default=[])
+    parser.add_argument("--runtime-overlay", action="append", default=[])
+    parser.add_argument("--bundle-overlay", action="append", default=[])
     args = parser.parse_args(argv)
+    overlays = args.runtime_overlay or args.bundle_overlay
     if args.bundle:
-        if args.engine or args.zig or args.target or not args.shared_runtime:
-            parser.error("--bundle takes --shared-runtime and --output only")
-    elif args.shared_runtime or not (args.engine and args.zig):
-        parser.error("--engine and --zig are required, and --shared-runtime needs --bundle")
+        if args.engine or args.zig or args.target or bool(args.shared_runtime) == bool(overlays) or (
+                args.shared_runtime and overlays):
+            parser.error("--bundle takes either --shared-runtime or overlays (--runtime-overlay, --bundle-overlay), and --output")
+    elif args.shared_runtime or overlays or not (args.engine and args.zig):
+        parser.error("--engine and --zig are required, and --shared-runtime and the overlays need --bundle")
     try:
-        if args.bundle:
+        if args.bundle and overlays:
+            output = overlayBundle(args.bundle, args.runtime_overlay, args.bundle_overlay, args.output)
+        elif args.bundle:
             output = augmentBundle(args.bundle, args.shared_runtime, args.output)
         else:
             output = prepareBundle(args.engine, args.zig, args.output, args.target)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the C++ runtime of x86_64-linux-gnu.2.31 and x86_64-windows-gnu with a local Zig, then prove it with clang and lld alone.
+"""Prepare the C++ runtime of the glibc Linux and Windows targets of both architectures with a local Zig, then prove it with clang and lld alone.
 
     prepareCppRuntime.py --zig ZIG --engine ENGINE_DIR --runtime RUNTIME_DIR --output NEW_DIR [--target T ...] [--seed-cache DIR]
     prepareCppRuntime.py --prove --engine ENGINE_DIR --runtime RUNTIME_DIR [--zig ZIG] [--deny PATH ...]
@@ -43,41 +43,52 @@ import prepareRuntime as pr
 import prepareWindowsRuntime as pw
 
 LINUX, WINDOWS = "x86_64-linux-gnu.2.31", pw.TARGET
+LINUX_ARM64, WINDOWS_ARM64 = "aarch64-linux-gnu.2.31", pw.ARM64_TARGET
 PROVENANCE = "notices/cpp-provenance.json"
+ARM64_PROVENANCE = "notices/cpp-aarch64-provenance.json"
 CXX_STANDARD = "-std=c++20"
 CPP_DEFINES = ("-D_LIBCPP_", "-D_LIBCXXABI_")
 HEADERS = {"libcxx": "libcxx/include", "libcxxabi": "libcxxabi/include", "libunwind": "libunwind/include"}
 SPEC = {"notices": {name: [name + "/LICENSE.TXT"] for name in HEADERS}}
 ARCHIVES = {LINUX: ["libc++abi.a", "libc++.a", "libunwind.a"], WINDOWS: ["c++abi.lib", "c++.lib", "unwind.lib"]}
+ARCHIVES[LINUX_ARM64], ARCHIVES[WINDOWS_ARM64] = ARCHIVES[LINUX], ARCHIVES[WINDOWS]
 LIBRARY_STEMS = ["c++abi", "c++", "unwind"]
 OTHER_SPELLINGS = {"stdc++": "c++", "supc++": "c++abi", "gcc_eh": "unwind", "gcc_s": "unwind"}
-DIRECTORIES = {LINUX: LINUX + ".cxx", WINDOWS: "windows/" + WINDOWS + ".cxx"}
-VARIANTS = {
-    (LINUX, "exe"): {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": ["-lm", "-lpthread"],
-                     "c": "runtimeLinux.c", "base": LINUX + ".cfg", "config": LINUX + ".cxx.cfg"},
-    (WINDOWS, "exe"): {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": pw.USER_LIBRARIES,
-                       "c": "runtimeWindows.c", "base": "windows/%s.cfg" % WINDOWS,
-                       "config": "windows/%s.cxx.cfg" % WINDOWS},
-    (WINDOWS, "dll"): {"fixture": "runtimeCppDll.cpp", "zigArgs": ["-shared"], "zigLibraries": pw.USER_LIBRARIES,
-                       "c": "runtimeWindowsDll.c", "base": "windows/%s.dll.cfg" % WINDOWS,
-                       "config": "windows/%s.dll.cxx.cfg" % WINDOWS},
-}
-TARGETS = [LINUX, WINDOWS]
+DIRECTORIES = {LINUX: LINUX + ".cxx", LINUX_ARM64: LINUX_ARM64 + ".cxx",
+               WINDOWS: "windows/" + WINDOWS + ".cxx", WINDOWS_ARM64: "windows/" + WINDOWS_ARM64 + ".cxx"}
+VARIANTS = {}
+for _target in (LINUX, LINUX_ARM64):
+    VARIANTS[(_target, "exe")] = {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": ["-lm", "-lpthread"],
+                                  "c": "runtimeLinux.c", "base": _target + ".cfg", "config": _target + ".cxx.cfg"}
+for _target in (WINDOWS, WINDOWS_ARM64):
+    VARIANTS[(_target, "exe")] = {"fixture": "runtimeCpp.cpp", "zigArgs": [], "zigLibraries": pw.USER_LIBRARIES,
+                                  "c": "runtimeWindows.c", "base": "windows/%s.cfg" % _target,
+                                  "config": "windows/%s.cxx.cfg" % _target}
+    VARIANTS[(_target, "dll")] = {"fixture": "runtimeCppDll.cpp", "zigArgs": ["-shared"], "zigLibraries": pw.USER_LIBRARIES,
+                                  "c": "runtimeWindowsDll.c", "base": "windows/%s.dll.cfg" % _target,
+                                  "config": "windows/%s.dll.cxx.cfg" % _target}
+TARGETS = [LINUX, LINUX_ARM64, WINDOWS, WINDOWS_ARM64]
 DRIVER_DEFAULT_CC1_FLAGS = ("-fcxx-exceptions", "-fexceptions", "-exception-model=seh", "-fno-sized-deallocation",
                             "-fno-use-init-array", "-fno-use-cxa-atexit")
 ELF_NEEDED = {"libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1", "libutil.so.1",
-              "libresolv.so.2", "ld-linux-x86-64.so.2"}
+              "libresolv.so.2", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1"}
 PE_IMPORTS = {"kernel32.dll", "ntdll.dll", "advapi32.dll", "shell32.dll", "user32.dll", "ws2_32.dll", "bcrypt.dll",
               "mswsock.dll"}
 SEARCH_LIST = re.compile(r"#include <\.\.\.> search starts here:\n(.*?)End of search list\.", re.S)
 LIMITS = ["no Linux or Windows execution was available: the executables and DLLs are linked and their ELF or PE "
           "headers, imports and exception tables inspected, never run",
-          "x86_64-linux-gnu.2.31 and x86_64-windows-gnu only: the aarch64 and wasm32-wasi runtimes stay C only",
+          "the wasm32-wasi runtime stays C only: libc++ does not build for it",
           "the Windows archives are copied as Zig produced them, so their member names hold the private cache paths of "
           "that run; the GNU archives are normalized like the C runtime's",
           "archive contents are not measured for bit-reproducibility across Zig caches",
           "the aliases are lower case; Zig ignores case in a Windows library name, the linker here does not",
           "the C++ config is a pair partner of the base config and is selected by the compiler, never found by the driver"]
+
+
+def provenancePath(targets):
+    """Where the receipt of an overlay for targets lives: the x86_64 targets' receipt keeps its name, and an overlay of
+    the aarch64 targets alone has its own, so it merges into a runtime that already holds the x86_64 receipt."""
+    return PROVENANCE if any(t in (LINUX, WINDOWS) for t in targets) else ARM64_PROVENANCE
 
 
 def up(path):
@@ -131,7 +142,7 @@ def runZig(zig, target, variant, work, cache):
     """One Zig C++ compile and link of the variant's fixture in the shared private cache. Returns (stderr, output, directory)."""
     spec = VARIANTS[(target, variant)]
     private = os.path.join(work, target, variant)
-    output = os.path.join(private, "fixture." + ("out" if target == LINUX else variant if variant == "dll" else "exe"))
+    output = os.path.join(private, "fixture." + ("out" if target in pr.ELF_TARGETS else variant if variant == "dll" else "exe"))
     os.makedirs(os.path.join(private, "local"))
     environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
@@ -155,7 +166,7 @@ def produceVariant(zig, target, variant, work, cache):
     fixture = os.path.join(pr.FIXTURES, spec["fixture"])
     stem = os.path.splitext(spec["fixture"])[0]
     realCache = os.path.realpath(cache)
-    if target == LINUX:
+    if target in pr.ELF_TARGETS:
         compileLine, linkLine = pr.selectLines(stderr, fixture, output)
         linker, items = pr.parseLinkArgv(linkLine, output, stem + ".o", realCache, private)
         if linker != "ld.lld":
@@ -238,7 +249,7 @@ def archiveSymbols(engine, path):
 def copyArchives(engine, target, paths, output):
     """Copy a target's archives in link order, the GNU ones normalized only while their symbols stay the same."""
     records = pr.copyInputs([("input", p) for p in paths], output, DIRECTORIES[target], engine)
-    if target == LINUX:
+    if target in pr.ELF_TARGETS:
         for path, record in zip(paths, records):
             if archiveSymbols(engine, path) != archiveSymbols(engine, os.path.join(output, DIRECTORIES[target], record["name"])):
                 raise pe.EngineError("normalizing %s changed its symbols" % record["name"])
@@ -313,14 +324,25 @@ def produce(zig, engine, targets, work, output, seed):
     return variants, archives, {"zigLib": zigLib, "notices": pr.copyNotices(output, zigLib, SPEC)}
 
 
+def sameFile(a, b):
+    """Two paths that are both regular files of equal bytes, or both links to the same name."""
+    if os.path.islink(a) or os.path.islink(b):
+        return os.path.islink(a) and os.path.islink(b) and os.readlink(a) == os.readlink(b)
+    return os.path.isfile(a) and os.path.isfile(b) and pe.sha256File(a) == pe.sha256File(b)
+
+
 def mergeOverlay(overlay, runtime):
-    """Copy every file of overlay into runtime at its relative path; a path runtime already has is refused."""
+    """Copy every file of overlay into runtime at its relative path. A path runtime already has is skipped when it is
+    the same file and refused otherwise, before any file is copied."""
     files = overlayFiles(overlay)
-    taken = [f for f in files if os.path.lexists(os.path.join(runtime, f))]
+    taken = [f for f in files if os.path.lexists(os.path.join(runtime, f))
+             and not sameFile(os.path.join(overlay, f), os.path.join(runtime, f))]
     if taken:
         raise pe.EngineError("%s already has %s" % (runtime, taken))
     for relative in files:
         target = os.path.join(runtime, relative)
+        if os.path.lexists(target):
+            continue
         os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.copy2(os.path.join(overlay, relative), target, follow_symlinks=False)
 
@@ -350,9 +372,9 @@ def readElf(path):
     return [data[strings + n:data.index(b"\0", strings + n)].decode("ascii") for n in needed], ehFrame
 
 
-def elfCppProblem(path, nm):
+def elfCppProblem(path, nm, target=LINUX):
     """Why a linked GNU executable is not a glibc C++ executable with unwind tables, or None."""
-    problem = pr.elfProblem(path, LINUX) or pr.elfInterpreterProblem(path, LINUX) or pr.glibcSymbolProblem(nm, path)
+    problem = pr.elfProblem(path, target) or pr.elfInterpreterProblem(path, target) or pr.glibcSymbolProblem(nm, path)
     if problem:
         return problem
     needed, ehFrame = readElf(path)
@@ -361,12 +383,12 @@ def elfCppProblem(path, nm):
     return None if ehFrame else "no PT_GNU_EH_FRAME header"
 
 
-def peCppProblem(path, variant):
-    """Why a linked file is not an x86_64 Windows executable or DLL on the C runtime with an exception table, or None."""
+def peCppProblem(path, variant, target=WINDOWS):
+    """Why a linked file is not a Windows executable of target or DLL on the C runtime with an exception table, or None."""
     info = pw.readPe(path)
     imports = {n.lower() for n in info["imports"]}
-    if info["machine"] != pw.MACHINE_AMD64 or bool(info["characteristics"] & pw.DLL_CHARACTERISTIC) != (variant == "dll"):
-        return "machine %#x characteristics %#x are not an x86_64 %s" % (info["machine"], info["characteristics"], variant)
+    if info["machine"] != pw.TARGETS[target]["machine"] or bool(info["characteristics"] & pw.DLL_CHARACTERISTIC) != (variant == "dll"):
+        return "machine %#x characteristics %#x are not a %s %s" % (info["machine"], info["characteristics"], target, variant)
     if variant == "exe" and info["subsystem"] != pw.SUBSYSTEM_CONSOLE:
         return "subsystem %d is not console" % info["subsystem"]
     if variant == "dll" and "cppSum" not in info["exports"]:
@@ -409,7 +431,7 @@ def checkControl(run, merged, control, work, variant):
         fixture = os.path.join(pr.FIXTURES, spec["c"])
         listing = step(run, "C include list", [clang] + config + ["-E", "-v", "-x", "c", "/dev/null"], stderr=True).stderr
         step(run, "C compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj])
-        step(run, "C link", [clang] + config + (["-Wl,--no-insert-timestamp"] if variant["target"] == WINDOWS else [])
+        step(run, "C link", [clang] + config + (["-Wl,--no-insert-timestamp"] if variant["target"] in pw.TARGETS else [])
              + [obj, "-o", out])
         with open(obj, "rb") as f, open(out, "rb") as g:
             results.append((searchList(listing, os.path.dirname(root)), f.read(), g.read()))
@@ -423,7 +445,7 @@ def checkVariant(run, merged, work, variant, inspect):
     the outputs. Returns {name: path of each linked file}."""
     root = os.path.dirname(merged)
     spec = VARIANTS[(variant["target"], variant["variant"])]
-    windows, dll = variant["target"] == WINDOWS, variant["variant"] == "dll"
+    windows, dll = variant["target"] in pw.TARGETS, variant["variant"] == "dll"
     pair = ["--no-default-config", "--config=" + os.path.join(merged, spec["config"]),
             "--config=" + os.path.join(merged, spec["base"])]
     clangxx, clang = os.path.join(root, "bin", "clang++"), os.path.join(root, "bin", "clang")
@@ -475,7 +497,8 @@ def checkVariant(run, merged, work, variant, inspect):
 
 def inspectBinary(nm):
     def inspect(binary, variant):
-        return elfCppProblem(binary, nm) if variant["target"] == LINUX else peCppProblem(binary, variant["variant"])
+        return (elfCppProblem(binary, nm, variant["target"]) if variant["target"] in pr.ELF_TARGETS
+                else peCppProblem(binary, variant["variant"], variant["target"]))
     return inspect
 
 
@@ -503,8 +526,9 @@ def writeProvenance(overlay, zigId, host, engineVersion, targets, variants, arch
         "notices": sources["notices"], "archives": archives, "variants": variants,
         "files": overlayFiles(overlay), "limits": LIMITS,
     }
-    os.makedirs(os.path.join(overlay, os.path.dirname(PROVENANCE)), exist_ok=True)
-    pe.writeText(os.path.join(overlay, PROVENANCE), json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    path = provenancePath(targets)
+    os.makedirs(os.path.join(overlay, os.path.dirname(path)), exist_ok=True)
+    pe.writeText(os.path.join(overlay, path), json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     return receipt
 
 
@@ -574,8 +598,15 @@ def prove(engine, runtime, denied, zig=None):
     pe.verifyEngine(engine)
     if runtime != os.path.join(engine, "runtime"):
         raise pe.EngineError("runtime %s is not the `runtime` child of engine %s" % (runtime, engine))
-    with open(os.path.join(runtime, PROVENANCE), encoding="utf-8") as f:
-        receipt = json.load(f)
+    paths = [p for p in (PROVENANCE, ARM64_PROVENANCE) if os.path.isfile(os.path.join(runtime, p))]
+    if not paths:
+        raise pe.EngineError("runtime %s has no C++ receipt %s" % (runtime, PROVENANCE))
+    receipt = {"variants": [], "files": []}
+    for path in paths:
+        with open(os.path.join(runtime, path), encoding="utf-8") as f:
+            part = json.load(f)
+        receipt["variants"] += part["variants"]
+        receipt["files"] += part["files"]
     work = os.path.realpath(tempfile.mkdtemp(prefix="cpp-runtime-proof-"))
     root = os.path.join(work, "relocated tree")
     shutil.copytree(engine, root, symlinks=True)
@@ -590,7 +621,7 @@ def prove(engine, runtime, denied, zig=None):
     controlRoot = os.path.join(work, "control tree")
     controlRuntime = os.path.join(controlRoot, "runtime")
     shutil.copytree(os.path.join(root, "runtime"), controlRuntime, symlinks=True)
-    for relative in receipt["files"] + [PROVENANCE]:
+    for relative in sorted(set(receipt["files"])) + paths:
         os.remove(os.path.join(controlRuntime, relative))
     engineView = os.path.join(work, "engine view")
     os.makedirs(engineView)

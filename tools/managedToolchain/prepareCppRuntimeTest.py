@@ -10,6 +10,7 @@ from unittest import mock
 import prepareCppRuntime as pc
 import prepareEngine as pe
 import prepareRuntime as pr
+import prepareWindowsRuntime as pw
 from prepareWindowsRuntimeTest import syntheticPe
 
 LINUX_CXX = ("/z/lib/libcxx/include", "/z/lib/libcxxabi/include", "/z/lib/include", "/z/lib/libc/include/x86-linux-gnu",
@@ -155,6 +156,13 @@ class OverlayTest(TempCase):
         self.assertFalse(os.path.exists(self.path("runtime", "fresh")))
         self.assertEqual(read(self.path("runtime", "a", "old.txt")), "old")
 
+    def test_merging_skips_a_path_the_runtime_already_has_with_the_same_bytes(self):
+        write(self.path("overlay", "include", "shared.h"), "same")
+        write(self.path("overlay", "new.txt"), "new")
+        write(self.path("runtime", "include", "shared.h"), "same")
+        pc.mergeOverlay(self.path("overlay"), self.path("runtime"))
+        self.assertEqual(read(self.path("runtime", "new.txt")), "new")
+
     def test_a_normalized_archive_whose_symbols_changed_is_refused(self):
         archive = self.path("cache", "libc++abi.a")
         write(archive)
@@ -186,7 +194,16 @@ class OverlayTest(TempCase):
             write(self.path("rt", "windows", name))
         self.assertEqual(pc.selectTargets(self.path("rt"), []), [pc.LINUX, pc.WINDOWS])
         self.assertEqual(pc.selectTargets(self.path("rt"), [pc.WINDOWS]), [pc.WINDOWS])
-        for names, message in ((["aarch64-linux-gnu.2.31"], "no C\\+\\+ runtime"), ([pc.LINUX, pc.LINUX], "duplicate")):
+        for name in ("aarch64-linux-gnu.2.31.cfg",):
+            write(self.path("rt", name))
+        for name in ("aarch64-windows-gnu.cfg", "aarch64-windows-gnu.dll.cfg"):
+            write(self.path("rt", "windows", name))
+        self.assertEqual(pc.selectTargets(self.path("rt"), []), [pc.LINUX, pc.LINUX_ARM64, pc.WINDOWS, pc.WINDOWS_ARM64])
+        for name in ("aarch64-linux-gnu.2.31.cfg",):
+            os.remove(self.path("rt", name))
+        for name in ("aarch64-windows-gnu.cfg", "aarch64-windows-gnu.dll.cfg"):
+            os.remove(self.path("rt", "windows", name))
+        for names, message in ((["wasm32-wasi"], "no C\\+\\+ runtime"), ([pc.LINUX, pc.LINUX], "duplicate")):
             with self.assertRaisesRegex(pe.EngineError, message):
                 pc.selectTargets(self.path("rt"), names)
         os.remove(self.path("rt", "windows", "x86_64-windows-gnu.dll.cfg"))
@@ -249,8 +266,35 @@ class InspectTest(TempCase):
         self.assertIsNone(pc.peCppProblem(self.pe("exe", exports=()), "exe"))
         self.assertIsNone(pc.peCppProblem(self.pe("dll", dll=True, exports=("cppSum",)), "dll"))
 
+    def test_an_arm64_windows_file_passes_for_its_target_and_fails_for_the_other(self):
+        path = self.pe("arm", exports=(), machine=pw.MACHINE_ARM64)
+        self.assertIsNone(pc.peCppProblem(path, "exe", pc.WINDOWS_ARM64))
+        self.assertRegex(pc.peCppProblem(path, "exe", pc.WINDOWS), "not a x86_64-windows-gnu exe")
+
+    def test_an_arm64_glibc_executable_is_checked_against_its_own_loader(self):
+        syntheticElf(self.path("x"))
+        with mock.patch.object(pr, "elfProblem", return_value=None) as machine, \
+                mock.patch.object(pr, "elfInterpreterProblem", return_value=None) as loader, \
+                mock.patch.object(pr, "glibcSymbolProblem", return_value=None):
+            self.assertIsNone(pc.elfCppProblem(self.path("x"), "nm", pc.LINUX_ARM64))
+        machine.assert_called_with(self.path("x"), pc.LINUX_ARM64)
+        loader.assert_called_with(self.path("x"), pc.LINUX_ARM64)
+
+    def test_the_aarch64_overlay_has_a_receipt_of_its_own_beside_the_x86_64_one(self):
+        self.assertEqual(pc.provenancePath([pc.LINUX_ARM64, pc.WINDOWS_ARM64]), pc.ARM64_PROVENANCE)
+        for targets in ([pc.LINUX], [pc.WINDOWS], pc.TARGETS, [pc.LINUX_ARM64, pc.WINDOWS]):
+            self.assertEqual(pc.provenancePath(targets), pc.PROVENANCE)
+        self.assertNotEqual(pc.PROVENANCE, pc.ARM64_PROVENANCE)
+
+    def test_every_target_has_archives_a_directory_and_variants(self):
+        for target in pc.TARGETS:
+            self.assertIn(target, pc.ARCHIVES)
+            self.assertIn(target, pc.DIRECTORIES)
+            self.assertIn((target, "exe"), pc.VARIANTS)
+        self.assertEqual({t for t, v in pc.VARIANTS if v == "dll"}, {pc.WINDOWS, pc.WINDOWS_ARM64})
+
     def test_a_wrong_kind_missing_export_foreign_runtime_or_missing_exception_table_is_a_problem(self):
-        cases = [(self.pe("a", exports=()), "dll", "not an x86_64 dll"), (self.pe("b", dll=True, exports=("cppSum",)), "exe", "not an x86_64 exe"),
+        cases = [(self.pe("a", exports=()), "dll", "not a x86_64-windows-gnu dll"), (self.pe("b", dll=True, exports=("cppSum",)), "exe", "not a x86_64-windows-gnu exe"),
                  (self.pe("c", dll=True), "dll", "lack cppSum"),
                  (self.pe("d", exports=(), imports=(("KERNEL32.dll", ["x"]), ("libc++.dll", ["y"]))), "exe", "unexpected"),
                  (self.pe("e", exports=(), imports=(("KERNEL32.dll", ["x"]),)), "exe", "universal C runtime"),
