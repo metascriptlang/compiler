@@ -1,7 +1,7 @@
 // @stdout: timeout 0: 300 of 300 settled, 0 silent defaults
 // @stdout: timeout 1: 300 of 300 settled, 0 silent defaults
 // @exit: 0
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
+// @xfail(raiser): raiser error: 'spawn' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msSpawn'; it runs on C and JS
 // note: a timed spawn awaited in an async routine either returns the child's value or throws; a child the deadline skipped before it started is never read as the type's default (a candidate that compared the settle time with `>` returned the default 292 times in 300 at timeout 0)
 
 function slow(): int32 {

@@ -3,7 +3,7 @@
 // @stdout: void done
 // @stdout: group 499500 499500
 // @exit: 0
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
+// @xfail(raiser): raiser error: 'spawn' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msSpawn'; it runs on C and JS
 // note: an async routine awaits a timed spawn by yielding until it settles, as a value, a returned await, a discarded void result and in Promise.all (old compiler: the C build failed, msSpawn given two arguments)
 
 function spin(): int32 {

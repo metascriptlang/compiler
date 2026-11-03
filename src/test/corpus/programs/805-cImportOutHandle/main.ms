@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus805New
+// @xfail(raiser): raiser error: 'corpus805New' cannot run on the Raiser: no host bridge for 'corpus805New'
 // Parity program — a C constructor that returns a handle through `T*` binds as `out p: T`, and
 // a const struct pointer imports as a nullable `Ptr<S>`, so `NULL` and a real config both pass.
 // Axes: typedef'd handle and bare `struct S**`; the config param given null and a struct; each

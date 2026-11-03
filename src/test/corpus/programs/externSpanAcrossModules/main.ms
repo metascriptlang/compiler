@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser error: Cannot resolve module './lib' (an extern C module)
+// @xfail(raiser): error: 'sumOf', 'fillFrom' from './lib' cannot run on the Raiser: the module has no Raiser tier; it runs on C
 // Parity program — an exported `extern function` with a Span parameter is called from another module
 // with the span's data pointer and length, the C ABI it is declared with, as a call in its own module is.
 // Axes: a module const sized array, a filled sized array, a Vec, an empty array, a slice; a Readonly

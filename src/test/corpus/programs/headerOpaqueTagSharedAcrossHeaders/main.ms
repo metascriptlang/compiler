@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: makeRes
+// @xfail(raiser): raiser error: 'readRes' cannot run on the Raiser: no host bridge for 'readRes'
 // Parity program — an incomplete C struct or union that two headers name is one type, so a
 // handle one header returns is the handle the other header takes.
 // Axes: a struct and a union tag, named through a typedef in one header and bare in the other;

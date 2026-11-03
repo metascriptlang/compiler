@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: nodeVal
+// @xfail(raiser): raiser error: 'nodeVal' cannot run on the Raiser: no host bridge for 'nodeVal'
 // Parity program — a struct or union tag that its header only mentions inside prototypes is one
 // type in the importer's C too, so a function of the importer that names the tag takes the handle
 // the header returns.

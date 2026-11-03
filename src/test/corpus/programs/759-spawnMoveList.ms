@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
+// @xfail(raiser): raiser error: 'spawn' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msSpawn'; it runs on C and JS
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: moved v=9 cfg=8
 // @stdout: timeout v=6

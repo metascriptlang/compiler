@@ -3,7 +3,7 @@
 // Axes: the result held in a local and iterated, stored in a struct field, and the plain array return beside it.
 //
 // @skip-js: `extern function` binds a C symbol; the JS backend has no C linkage
-// @xfail(raiser): raiser runtime error: Unknown host function: corpusBrandMake
+// @xfail(raiser): raiser error: 'corpusBrandMake' cannot run on the Raiser: no host bridge for 'corpusBrandMake'
 // @stdout: 4 3 10
 // @stdout: 2 5
 // @stdout: 3 6

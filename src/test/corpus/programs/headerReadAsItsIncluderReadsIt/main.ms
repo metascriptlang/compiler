@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: twice
+// @xfail(raiser): raiser error: 'twice' cannot run on the Raiser: no host bridge for 'twice'
 // Parity program — a header is read as the header that includes it reads it, as one C
 // translation unit reads every header it includes.
 // Axes: a typedef of a typedef, declared and used in an included header, leaves the declarations

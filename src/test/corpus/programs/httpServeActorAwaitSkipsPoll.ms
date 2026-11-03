@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @xfail(raiser): error: 'createServerAsync', 'sendText', 'serveConcurrentAsync', 'stop' from 'std/http/server' cannot run on the Raiser: the module has no Raiser tier; it runs on C
 // @stdout: one await: 50 awaits under 200 ms
 // @stdout: two nested awaits: 50 awaits under 200 ms
 // @exit: 0

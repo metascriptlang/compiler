@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus807Sum
+// @xfail(raiser): raiser error: 'corpus807Bump' cannot run on the Raiser: no host bridge for 'corpus807Bump'
 // Parity program — a struct value passed to an imported `const S*` / `S*` parameter reaches C as
 // exactly `S*`, so it builds with incompatible pointer types as an error (GCC 14's default).
 // Axes: anonymous and tagged typedef struct, const and mutable pointee, null, a write the caller sees.

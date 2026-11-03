@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpusRowMake
+// @xfail(raiser): raiser error: 'corpusRowMake' cannot run on the Raiser: no host bridge for 'corpusRowMake'
 // Parity program — a fixed C array, a struct field or a global, imports as a sized array of its
 // element and is read and written as the C array it is.
 // Axes: a scalar element, a struct element, a byte element, a global; read, write, a write C

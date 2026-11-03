@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus890FillI32
+// @xfail(raiser): raiser error: 'corpus890FillI32' cannot run on the Raiser: no host bridge for 'corpus890FillI32'
 // Parity program — a local passed to an imported `T*` or `void*` parameter reaches C as its own
 // address, so the C writes land in the local (NIM-REF CK-102, Nim's `addr`).
 // Axes: int32, uint16, double, bool and enum pointees; `void*` given a uint16, an enum and a

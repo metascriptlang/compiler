@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/http/server'
+// @xfail(raiser): error: 'createServerAsync', 'sendText', 'serveConcurrentAsync', 'stop' from 'std/http/server' cannot run on the Raiser: the module has no Raiser tier; it runs on C
 // @stdout: an actor made on each of four serving loops: 8 requests answered, every call under 5 ms on average
 // @stdout: spawn completions on four serving loops: 8 requests answered, every await under 5 ms on average
 // @stdout: spawn completions on the main serving loop: 8 requests answered, every await under 5 ms on average

@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus808New
+// @xfail(raiser): raiser error: 'corpus808New' cannot run on the Raiser: no host bridge for 'corpus808New'
 // Parity program — a C header's pointer to an incomplete struct or union imports as `Ptr<Tag>`
 // over an opaque `extern struct` carrying the C spelling, so every local and out-param reaches C
 // with the prototype's own pointer type and `-Werror=incompatible-pointer-types` holds.

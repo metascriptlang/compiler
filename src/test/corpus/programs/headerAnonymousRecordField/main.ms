@@ -5,7 +5,7 @@
 // unnamed union, a copy taken before the writes, and the struct passed back to C by pointer.
 //
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
-// @xfail(raiser): raiser runtime error: Unknown host function: corpusAnonMake
+// @xfail(raiser): raiser error: 'corpusAnonMake' cannot run on the Raiser: no host bridge for 'corpusAnonMake'
 // @stdout: 3 4 5 6 8 7
 // @stdout: 227 29
 // @exit: 0

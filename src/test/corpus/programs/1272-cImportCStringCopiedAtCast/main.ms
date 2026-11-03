@@ -1,5 +1,5 @@
 // @stdout: name:a name:b|kept|name:c name:d
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus1272Name — a C header import has no host bridge on the Raiser
+// @xfail(raiser): raiser error: 'corpus1272Name' cannot run on the Raiser: no host bridge for 'corpus1272Name' — a C header import has no host bridge on the Raiser
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // A `const char *` a C function returns imports as cstring, a pointer the C side keeps. It becomes
 // a string only where `as string` copies it, so a later call that rewrites the buffer, or a free,

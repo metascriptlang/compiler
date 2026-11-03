@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Cannot resolve module 'std/net' (std/net and std/http/client are .cms modules, C backend only)
+// @xfail(raiser): error: 'createSocket', 'bind', 'listen', 'accept', 'send', 'recv', 'close' from 'std/net' cannot run on the Raiser: the module has no Raiser tier; it runs on C
 // @stdout: slow chunks | ok 200 30 bytes
 // @stdout: stalled past timeout | error body shorter than Content-Length: 10 of 30 bytes
 // @stdout: closed early | error body shorter than Content-Length: 10 of 30 bytes

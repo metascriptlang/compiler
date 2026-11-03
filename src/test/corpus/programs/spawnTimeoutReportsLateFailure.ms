@@ -1,5 +1,5 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
+// @xfail(raiser): raiser error: 'lockedRead' from 'std/core/promise' cannot run on the Raiser: no host bridge for 'msLockedHeldHere' (and 4 more); it runs on C and JS
 // @serial
 // @stdout: fused caught await timeout
 // @stdout: group caught await timeout

@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: valOf
+// @xfail(raiser): raiser error: 'valOf' cannot run on the Raiser: no host bridge for 'valOf'
 // Parity program — a C variable of a header's type holds that type and does not name it, so the
 // type keeps its own C name wherever the header is imported.
 // Axes: a const of an anonymous typedef struct the program never reads, and a variable of a

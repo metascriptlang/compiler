@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: sumBytes
+// @xfail(raiser): raiser error: 'sumBytes' cannot run on the Raiser: no host bridge for 'sumBytes'
 // Parity program — a module that imports a C header includes it in its C, so a C declaration the
 // module writes itself compiles even when the program reaches no name imported from the header.
 // Axes: an `extern function` with a `Span` parameter the header importer cannot map, and an

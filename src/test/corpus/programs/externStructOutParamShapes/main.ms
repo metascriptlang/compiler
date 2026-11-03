@@ -5,7 +5,7 @@
 // and the nested value passed on as a pointer.
 //
 // @skip-js: `extern function` binds a C symbol; the JS backend has no C linkage
-// @xfail(raiser): raiser runtime error: Unknown host function: corpus1181Make
+// @xfail(raiser): raiser error: 'corpus1181Make' cannot run on the Raiser: no host bridge for 'corpus1181Make'
 // @stdout: 3,4|1,2,30,40,0.5|9,12
 // @exit: 0
 
