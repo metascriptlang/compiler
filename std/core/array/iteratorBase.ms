@@ -53,9 +53,29 @@ function advance<T>(iters: Iterator<T>[], open: boolean[], i: number, out: T[]):
 
 when (c) {
 	extern function reserve<T>(this arr: T[], n: int64): void from "&msGenericArrayReserve";
+	extern function msHeldCount(p: Ptr<void>): int64;
+	function isUnique<T>(arr: Array<T>): boolean {
+		return msHeldCount(arr as Ptr<void>) == 0;
+	}
+}
+when (!js) {
+	function pairBuffer<T>(count: int64): Array<T> {
+		const buffer = new Array<T>();
+		buffer.reserve(count);
+		return buffer;
+	}
+}
+when (js) {
+	function pairBuffer<T>(count: int64): Array<T> {
+		@emit("return [];");
+		unreachable;
+	}
 }
 when (!c) {
 	function reserve<T>(this arr: T[], n: int64): void {}
+	function isUnique<T>(arr: Array<T>): boolean {
+		return false;
+	}
 }
 
 function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterator<T[]> {
@@ -64,10 +84,9 @@ function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterato
 	const open: boolean[] = [];
 	for (let i = 0; i < count; i++) open.push(true);
 	let live = count;
+	let results = pairBuffer<T>(count);
 	try {
 		while (true) {
-			const results: T[] = [];
-			results.reserve(count);
 			for (let i = 0; i < count; i++) {
 				if (!open[i]) {
 					results.push(padding[i]);
@@ -102,6 +121,11 @@ function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterato
 				}
 			}
 			yield results;
+			if (isUnique(results)) {
+				results.length = 0;
+			} else {
+				results = pairBuffer<T>(count);
+			}
 		}
 	} finally {
 		closeAll(iters, open, false);
