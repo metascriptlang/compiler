@@ -1505,13 +1505,9 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 	newKeys.push("kind");
 	newProps.push(kindArg);
 	newKeys.push("line");
-	newProps.push(createNodeAt(NodeKind.MemberExpr, {
-		object: locSource, property: "line", isOptional: false,
-	}, node.location));
+	newProps.push(mkMemberOfOwnCopy(locSource, "line", node.location));
 	newKeys.push("column");
-	newProps.push(createNodeAt(NodeKind.MemberExpr, {
-		object: locSource, property: "column", isOptional: false,
-	}, node.location));
+	newProps.push(mkMemberOfOwnCopy(locSource, "column", node.location));
 	for (const k of dataLit.keys) newKeys.push(k);
 	for (const p of dataLit.properties) newProps.push(p);
 
@@ -1523,6 +1519,10 @@ function tryRewriteCreateNodeAt(node: Node): Node {
 // Builds a MemberExpr: `obj.prop`
 function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
+}
+
+function mkMemberOfOwnCopy(obj: Node, prop: string, loc: SourceLocation): Node {
+	return mkMember(cloneNodeKeepSem(obj), prop, loc);
 }
 
 // `console` as the std declaration the engine checks against, so a user binding of the name cannot capture the warning's log call.
@@ -1555,7 +1555,7 @@ function tryRewriteMacroError(node: Node): Node {
 				operator: "+", left: payload, right: mkString("\t", loc),
 			}, loc);
 			payload = createNodeAt(NodeKind.BinaryExpr, {
-				operator: "+", left: payload, right: mkMember(cd.arguments[1], f, loc),
+				operator: "+", left: payload, right: mkMemberOfOwnCopy(cd.arguments[1], f, loc),
 			}, loc);
 		}
 	}
@@ -1592,13 +1592,13 @@ function tryRewriteCompileWarning(node: Node): Node {
 			operator: "+", left: warnPayload, right: mkString("\t", loc),
 		}, loc);
 		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
-			operator: "+", left: warnPayload, right: mkMember(locNode, "line", loc),
+			operator: "+", left: warnPayload, right: mkMemberOfOwnCopy(locNode, "line", loc),
 		}, loc);
 		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
 			operator: "+", left: warnPayload, right: mkString("\t", loc),
 		}, loc);
 		warnPayload = createNodeAt(NodeKind.BinaryExpr, {
-			operator: "+", left: warnPayload, right: mkMember(locNode, "column", loc),
+			operator: "+", left: warnPayload, right: mkMemberOfOwnCopy(locNode, "column", loc),
 		}, loc);
 	}
 	const logCallee = mkMember(
@@ -2592,6 +2592,29 @@ test "tryRewriteCreateNodeAt strips x.location to x" {
 	assert lineMember.property == "line";
 	assert lineMember.object.kind == NodeKind.Identifier;
 	assert (lineMember.object.data as IdentifierData).name == "x";
+}
+
+test "tryRewriteCreateNodeAt gives the line and the column read each its own location operand" {
+	const loc = makeLoc(1, 0);
+	const xIdent = createNode(NodeKind.Identifier, { name: "x" }, synthToken(loc));
+	const xDotLoc = createNode(NodeKind.MemberExpr, {
+		object: xIdent, property: "location", isOptional: false,
+	}, synthToken(loc));
+	const call = createNode(NodeKind.CallExpr, {
+		callee: createNode(NodeKind.Identifier, { name: "createNodeAt" }, synthToken(loc)),
+		arguments: [mkNumber(0, loc), createNode(NodeKind.ObjectLiteral, { properties: [], keys: [], keyLocations: [] }, synthToken(loc)), xDotLoc],
+		isDirectCall: true,
+		resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(), "", [], call);
+	const result = tryRewriteCreateNodeAt(call);
+	leaveMetaScope(outer);
+	const od = result.data as ObjectLiteralData;
+	const lineRoot = (od.properties[1].data as MemberExprData).object;
+	const columnRoot = (od.properties[2].data as MemberExprData).object;
+	assert lineRoot !== columnRoot;
+	assert (lineRoot.data as IdentifierData).name == "x";
+	assert (columnRoot.data as IdentifierData).name == "x";
 }
 
 test "tryRewriteCreateNodeAt leaves call alone when D is not ObjectLiteral" {
