@@ -953,14 +953,13 @@ function _bridgeMsStringParseFloat(args: RaiserValue[]): RaiserValue {
 
 // --- Math bridges ---
 
-function _bridgeFabs(args: RaiserValue[]): RaiserValue { return boxFloat(Math.abs(unboxFloat(args[0]))); }
-function _bridgeCeil(args: RaiserValue[]): RaiserValue { return boxFloat(Math.ceil(unboxFloat(args[0]))); }
-function _bridgeFloor(args: RaiserValue[]): RaiserValue { return boxFloat(Math.floor(unboxFloat(args[0]))); }
-function _bridgeTrunc(args: RaiserValue[]): RaiserValue { return boxFloat(Math.trunc(unboxFloat(args[0]))); }
-function _bridgeSqrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sqrt(unboxFloat(args[0]))); }
-function _inPlaceSqrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); }
-function _bridgeCbrt(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cbrt(unboxFloat(args[0]))); }
-function _bridgePow(args: RaiserValue[]): RaiserValue { return boxFloat(Math.pow(unboxFloat(args[0]), unboxFloat(args[1]))); }
+function _bridgeFabs(vm: RaiserVM): void { hostReturnFloat(vm, Math.abs(hostArgFloat(vm, 0))); }
+function _bridgeCeil(vm: RaiserVM): void { hostReturnFloat(vm, Math.ceil(hostArgFloat(vm, 0))); }
+function _bridgeFloor(vm: RaiserVM): void { hostReturnFloat(vm, Math.floor(hostArgFloat(vm, 0))); }
+function _bridgeTrunc(vm: RaiserVM): void { hostReturnFloat(vm, Math.trunc(hostArgFloat(vm, 0))); }
+function _bridgeSqrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); }
+function _bridgeCbrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.cbrt(hostArgFloat(vm, 0))); }
+function _bridgePow(vm: RaiserVM): void { hostReturnFloat(vm, Math.pow(hostArgFloat(vm, 0), hostArgFloat(vm, 1))); }
 
 function _powOverflow(): RaiserValue {
 	raiseFromHost("over- or underflow", true);
@@ -1006,27 +1005,27 @@ function _bridgePowUnsigned(args: RaiserValue[], mask: uint64): RaiserValue {
 function _bridgeMsPowU64(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 18446744073709551615); }
 function _bridgeMsPowU32(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 4294967295); }
 
-function _bridgeExp(args: RaiserValue[]): RaiserValue { return boxFloat(Math.exp(unboxFloat(args[0]))); }
-function _bridgeExpm1(args: RaiserValue[]): RaiserValue { return boxFloat(Math.expm1(unboxFloat(args[0]))); }
-function _bridgeLog(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log(unboxFloat(args[0]))); }
-function _bridgeLog1p(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log1p(unboxFloat(args[0]))); }
-function _bridgeLog2(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log2(unboxFloat(args[0]))); }
-function _bridgeLog10(args: RaiserValue[]): RaiserValue { return boxFloat(Math.log10(unboxFloat(args[0]))); }
-function _bridgeHypot(args: RaiserValue[]): RaiserValue { return boxFloat(Math.hypot(unboxFloat(args[0]), unboxFloat(args[1]))); }
-function _bridgeSin(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sin(unboxFloat(args[0]))); }
-function _bridgeCos(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cos(unboxFloat(args[0]))); }
-function _bridgeTan(args: RaiserValue[]): RaiserValue { return boxFloat(Math.tan(unboxFloat(args[0]))); }
-function _bridgeAsin(args: RaiserValue[]): RaiserValue { return boxFloat(Math.asin(unboxFloat(args[0]))); }
-function _bridgeAcos(args: RaiserValue[]): RaiserValue { return boxFloat(Math.acos(unboxFloat(args[0]))); }
-function _bridgeAtan(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atan(unboxFloat(args[0]))); }
-function _bridgeAtan2(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atan2(unboxFloat(args[0]), unboxFloat(args[1]))); }
-function _bridgeSinh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.sinh(unboxFloat(args[0]))); }
-function _bridgeCosh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.cosh(unboxFloat(args[0]))); }
-function _bridgeTanh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.tanh(unboxFloat(args[0]))); }
-function _bridgeAsinh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.asinh(unboxFloat(args[0]))); }
-function _bridgeAcosh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.acosh(unboxFloat(args[0]))); }
-function _bridgeAtanh(args: RaiserValue[]): RaiserValue { return boxFloat(Math.atanh(unboxFloat(args[0]))); }
-function _bridgeFmod(args: RaiserValue[]): RaiserValue { return boxFloat(unboxFloat(args[0]) % unboxFloat(args[1])); }
+function _bridgeExp(vm: RaiserVM): void { hostReturnFloat(vm, Math.exp(hostArgFloat(vm, 0))); }
+function _bridgeExpm1(vm: RaiserVM): void { hostReturnFloat(vm, Math.expm1(hostArgFloat(vm, 0))); }
+function _bridgeLog(vm: RaiserVM): void { hostReturnFloat(vm, Math.log(hostArgFloat(vm, 0))); }
+function _bridgeLog1p(vm: RaiserVM): void { hostReturnFloat(vm, Math.log1p(hostArgFloat(vm, 0))); }
+function _bridgeLog2(vm: RaiserVM): void { hostReturnFloat(vm, Math.log2(hostArgFloat(vm, 0))); }
+function _bridgeLog10(vm: RaiserVM): void { hostReturnFloat(vm, Math.log10(hostArgFloat(vm, 0))); }
+function _bridgeHypot(vm: RaiserVM): void { hostReturnFloat(vm, Math.hypot(hostArgFloat(vm, 0), hostArgFloat(vm, 1))); }
+function _bridgeSin(vm: RaiserVM): void { hostReturnFloat(vm, Math.sin(hostArgFloat(vm, 0))); }
+function _bridgeCos(vm: RaiserVM): void { hostReturnFloat(vm, Math.cos(hostArgFloat(vm, 0))); }
+function _bridgeTan(vm: RaiserVM): void { hostReturnFloat(vm, Math.tan(hostArgFloat(vm, 0))); }
+function _bridgeAsin(vm: RaiserVM): void { hostReturnFloat(vm, Math.asin(hostArgFloat(vm, 0))); }
+function _bridgeAcos(vm: RaiserVM): void { hostReturnFloat(vm, Math.acos(hostArgFloat(vm, 0))); }
+function _bridgeAtan(vm: RaiserVM): void { hostReturnFloat(vm, Math.atan(hostArgFloat(vm, 0))); }
+function _bridgeAtan2(vm: RaiserVM): void { hostReturnFloat(vm, Math.atan2(hostArgFloat(vm, 0), hostArgFloat(vm, 1))); }
+function _bridgeSinh(vm: RaiserVM): void { hostReturnFloat(vm, Math.sinh(hostArgFloat(vm, 0))); }
+function _bridgeCosh(vm: RaiserVM): void { hostReturnFloat(vm, Math.cosh(hostArgFloat(vm, 0))); }
+function _bridgeTanh(vm: RaiserVM): void { hostReturnFloat(vm, Math.tanh(hostArgFloat(vm, 0))); }
+function _bridgeAsinh(vm: RaiserVM): void { hostReturnFloat(vm, Math.asinh(hostArgFloat(vm, 0))); }
+function _bridgeAcosh(vm: RaiserVM): void { hostReturnFloat(vm, Math.acosh(hostArgFloat(vm, 0))); }
+function _bridgeAtanh(vm: RaiserVM): void { hostReturnFloat(vm, Math.atanh(hostArgFloat(vm, 0))); }
+function _bridgeFmod(vm: RaiserVM): void { hostReturnFloat(vm, hostArgFloat(vm, 0) % hostArgFloat(vm, 1)); }
 
 function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
 	return boxString(fromCodePoint(unboxInt(args[0])));
@@ -1765,39 +1764,39 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msAsString",           _bridgeMsAsString, HostCapability.Pure);
 	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
-	registerHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
-	registerHostFn("ceil",  _bridgeCeil, HostCapability.Pure);
-	registerHostFn("floor", _bridgeFloor, HostCapability.Pure);
-	registerHostFn("trunc", _bridgeTrunc, HostCapability.Pure);
-	registerInPlaceHostFn("sqrt", _inPlaceSqrt, _bridgeSqrt, HostCapability.Pure);
-	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
-	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
-	registerHostFn("msPowF64", _bridgePow, HostCapability.Pure);
+	registerInPlaceHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
+	registerInPlaceHostFn("ceil",  _bridgeCeil, HostCapability.Pure);
+	registerInPlaceHostFn("floor", _bridgeFloor, HostCapability.Pure);
+	registerInPlaceHostFn("trunc", _bridgeTrunc, HostCapability.Pure);
+	registerInPlaceHostFn("sqrt",  _bridgeSqrt, HostCapability.Pure);
+	registerInPlaceHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
+	registerInPlaceHostFn("pow",   _bridgePow, HostCapability.Pure);
+	registerInPlaceHostFn("msPowF64", _bridgePow, HostCapability.Pure);
 	registerHostFn("msPowI64", _bridgeMsPowI64, HostCapability.Pure);
 	registerHostFn("msPowI32", _bridgeMsPowI32, HostCapability.Pure);
 	registerHostFn("msPowU64", _bridgeMsPowU64, HostCapability.Pure);
 	registerHostFn("msPowU32", _bridgeMsPowU32, HostCapability.Pure);
-	registerHostFn("exp",   _bridgeExp, HostCapability.Pure);
-	registerHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
-	registerHostFn("log",   _bridgeLog, HostCapability.Pure);
-	registerHostFn("log1p", _bridgeLog1p, HostCapability.Pure);
-	registerHostFn("log2",  _bridgeLog2, HostCapability.Pure);
-	registerHostFn("log10", _bridgeLog10, HostCapability.Pure);
-	registerHostFn("hypot", _bridgeHypot, HostCapability.Pure);
-	registerHostFn("sin",   _bridgeSin, HostCapability.Pure);
-	registerHostFn("cos",   _bridgeCos, HostCapability.Pure);
-	registerHostFn("tan",   _bridgeTan, HostCapability.Pure);
-	registerHostFn("asin",  _bridgeAsin, HostCapability.Pure);
-	registerHostFn("acos",  _bridgeAcos, HostCapability.Pure);
-	registerHostFn("atan",  _bridgeAtan, HostCapability.Pure);
-	registerHostFn("atan2", _bridgeAtan2, HostCapability.Pure);
-	registerHostFn("sinh",  _bridgeSinh, HostCapability.Pure);
-	registerHostFn("cosh",  _bridgeCosh, HostCapability.Pure);
-	registerHostFn("tanh",  _bridgeTanh, HostCapability.Pure);
-	registerHostFn("asinh", _bridgeAsinh, HostCapability.Pure);
-	registerHostFn("acosh", _bridgeAcosh, HostCapability.Pure);
-	registerHostFn("atanh", _bridgeAtanh, HostCapability.Pure);
-	registerHostFn("fmod",  _bridgeFmod, HostCapability.Pure);
+	registerInPlaceHostFn("exp",   _bridgeExp, HostCapability.Pure);
+	registerInPlaceHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
+	registerInPlaceHostFn("log",   _bridgeLog, HostCapability.Pure);
+	registerInPlaceHostFn("log1p", _bridgeLog1p, HostCapability.Pure);
+	registerInPlaceHostFn("log2",  _bridgeLog2, HostCapability.Pure);
+	registerInPlaceHostFn("log10", _bridgeLog10, HostCapability.Pure);
+	registerInPlaceHostFn("hypot", _bridgeHypot, HostCapability.Pure);
+	registerInPlaceHostFn("sin",   _bridgeSin, HostCapability.Pure);
+	registerInPlaceHostFn("cos",   _bridgeCos, HostCapability.Pure);
+	registerInPlaceHostFn("tan",   _bridgeTan, HostCapability.Pure);
+	registerInPlaceHostFn("asin",  _bridgeAsin, HostCapability.Pure);
+	registerInPlaceHostFn("acos",  _bridgeAcos, HostCapability.Pure);
+	registerInPlaceHostFn("atan",  _bridgeAtan, HostCapability.Pure);
+	registerInPlaceHostFn("atan2", _bridgeAtan2, HostCapability.Pure);
+	registerInPlaceHostFn("sinh",  _bridgeSinh, HostCapability.Pure);
+	registerInPlaceHostFn("cosh",  _bridgeCosh, HostCapability.Pure);
+	registerInPlaceHostFn("tanh",  _bridgeTanh, HostCapability.Pure);
+	registerInPlaceHostFn("asinh", _bridgeAsinh, HostCapability.Pure);
+	registerInPlaceHostFn("acosh", _bridgeAcosh, HostCapability.Pure);
+	registerInPlaceHostFn("atanh", _bridgeAtanh, HostCapability.Pure);
+	registerInPlaceHostFn("fmod",  _bridgeFmod, HostCapability.Pure);
 	markHostRegistryInitialized();
 }
 

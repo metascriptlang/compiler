@@ -5443,8 +5443,13 @@ export type RaiserInPlaceHostFn = (vm: RaiserVM) => void;
 
 const _inPlaceHostFns: RaiserInPlaceHostFn[] = [];
 
-export function registerInPlaceHostFn(name: string, inPlace: RaiserInPlaceHostFn, fn: RaiserHostFn, capability: HostCapability = HostCapability.Unsafe): void {
-	registerHostFn(name, fn, capability);
+function boxedCallOfInPlace(args: RaiserValue[]): RaiserValue {
+	raiseFromHost("internal: an in-place host function was called with boxed arguments", true);
+	return raiserNil();
+}
+
+export function registerInPlaceHostFn(name: string, inPlace: RaiserInPlaceHostFn, capability: HostCapability = HostCapability.Unsafe): void {
+	registerHostFn(name, boxedCallOfInPlace, capability);
 	setHostEntryInPlace(name, _inPlaceHostFns.length as int32);
 	_inPlaceHostFns.push(inPlace);
 }
@@ -6649,10 +6654,10 @@ test "CallHost two-arg native" {
 	assert vm.exitValue.intVal == 42;
 }
 
-test "an in-place host call reads its arguments in the caller's registers and writes the call's destination, not its boxed form" {
+test "an in-place host call reads its arguments in the caller's registers and writes the call's destination" {
 	_resetHostRegistryForTests();
-	registerInPlaceHostFn("add", (vm: RaiserVM): void => { hostReturnInt(vm, hostArgInt(vm, 0) + hostArgInt(vm, 1)); }, (args: RaiserValue[]): RaiserValue => raiserInt(-1));
-	registerInPlaceHostFn("sqrt", (vm: RaiserVM): void => { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); }, (args: RaiserValue[]): RaiserValue => raiserFloat(-1.0));
+	registerInPlaceHostFn("add", (vm: RaiserVM): void => { hostReturnInt(vm, hostArgInt(vm, 0) + hostArgInt(vm, 1)); });
+	registerInPlaceHostFn("sqrt", (vm: RaiserVM): void => { hostReturnFloat(vm, Math.sqrt(hostArgFloat(vm, 0))); });
 	const add: RaiserInstruction[] = [
 		raiserABx(RaiserOpcode.LoadConst, 1, 1),
 		raiserABx(RaiserOpcode.LoadConst, 2, 2),
