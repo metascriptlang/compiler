@@ -35,12 +35,12 @@ class TempCase(unittest.TestCase):
 
 
 class TargetTest(unittest.TestCase):
-    def test_glibc_gets_every_sanitizer_musl_only_the_minimal_ubsan_and_windows_only_the_standalone_one(self):
+    def test_glibc_gets_every_sanitizer_musl_both_ubsans_and_windows_only_the_standalone_one(self):
         self.assertEqual(ps.TARGETS["aarch64-linux-gnu.2.31"]["triple"], "aarch64-unknown-linux-gnu")
         self.assertEqual([c[0] for c in ps.casesOf("aarch64-linux-gnu.2.31")],
                          ["address", "undefined", "undefined-abort", "thread", "undefined-minimal"])
         for target in ("x86_64-linux-musl", "aarch64-linux-musl"):
-            self.assertEqual([c[0] for c in ps.casesOf(target)], ["undefined-minimal"], msg=target)
+            self.assertEqual([c[0] for c in ps.casesOf(target)], ["undefined", "undefined-abort", "undefined-minimal"], msg=target)
         for target in ("x86_64-windows-gnu", "aarch64-windows-gnu"):
             self.assertEqual([c[0] for c in ps.casesOf(target)], ["undefined", "undefined-abort"], msg=target)
         self.assertNotIn("ubsan_minimal", ps.TARGETS["x86_64-windows-gnu"]["runtimes"])
@@ -115,6 +115,7 @@ class ProduceTest(TempCase):
         output, receipt = self.prepare()
         self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/x86_64-unknown-linux-gnu/libclang_rt.asan.a")))
         self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/aarch64-unknown-linux-musl/libclang_rt.ubsan_minimal.a")))
+        self.assertTrue(os.path.isfile(os.path.join(output, "lib/clang/22/lib/aarch64-unknown-linux-musl/libclang_rt.ubsan_standalone.a")))
         windows = "runtime/windows/aarch64-windows-gnu/"
         self.assertTrue(os.path.isfile(os.path.join(output, windows + "libclang_rt.ubsan_standalone.a")))
         self.assertTrue(os.path.isfile(os.path.join(output, windows + "libsynchronization.a")))

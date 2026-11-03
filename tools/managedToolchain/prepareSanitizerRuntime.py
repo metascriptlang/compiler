@@ -20,9 +20,10 @@ NEW_DIR receives an overlay of bundle-root-relative paths that `prepareBundle.py
     runtime/windows/<target>/libsynchronization.a            import library of the three calls the runtime makes
     notices/sanitizer-provenance.json, notices/compiler-rt/LICENSE.TXT
 
-glibc Linux gets ASan, TSan, UBSan (standalone and minimal) and their C++ halves, musl Linux only the minimal UBSan
-(the standalone one calls `_Unwind_Backtrace`, which only a C++ runtime provides and musl has none) and Windows the
-standalone UBSan (Zig offers neither ASan nor TSan on either). Windows has no minimal runtime: compiler-rt does not
+glibc Linux gets ASan, TSan, UBSan (standalone and minimal) and their C++ halves, musl Linux UBSan alone (standalone,
+its C++ half and minimal; the standalone one calls `_Unwind_Backtrace`, which the musl C++ config's libunwind provides, so
+a standalone link takes the `<target>.cxx.cfg` pair) and Windows the standalone UBSan (Zig offers neither ASan nor TSan
+on either). Windows has no minimal runtime: compiler-rt does not
 build it for mingw and the MinGW driver names the standalone one for `-fsanitize-minimal-runtime` too.
 
 `--prove` links and, where the host is Linux of the target's machine or Windows, runs a clean, a faulting and a racing
@@ -47,15 +48,15 @@ PROVENANCE = "notices/sanitizer-provenance.json"
 LICENSE = "notices/compiler-rt/LICENSE.TXT"
 GLIBC_RUNTIMES = ["asan", "asan_static", "asan_cxx", "tsan", "tsan_cxx", "ubsan_standalone", "ubsan_standalone_cxx",
                   "ubsan_minimal"]
-MUSL_RUNTIMES = ["ubsan_minimal"]
+MUSL_RUNTIMES = ["ubsan_standalone", "ubsan_standalone_cxx", "ubsan_minimal"]
 WINDOWS_RUNTIMES = ["ubsan_standalone", "ubsan_standalone_cxx"]
 SYNCHRONIZATION_DEFINITION = ("LIBRARY api-ms-win-core-synch-l1-2-0.dll\nEXPORTS\nWaitOnAddress\nWakeByAddressAll\n"
                               "WakeByAddressSingle\n")
 LIMITS = ["the archives are a local build of the release source with the bundle's clang, not an upstream binary, and "
           "are not measured for bit-reproducibility",
           "Windows ASan and TSan are not built: compiler-rt has no mingw support for them and Zig offers neither",
-          "musl ASan, TSan and the standalone UBSan are not built: Zig offers neither sanitizer for musl, and the "
-          "standalone UBSan needs a C++ runtime that no musl config has",
+          "musl ASan and TSan are not built: Zig offers neither for musl",
+          "the standalone UBSan of musl links only with the C++ config of its target, which holds libunwind",
           "the shared runtimes (libclang_rt.*.so, .dll) are not built, only the static archives the driver links"]
 
 
