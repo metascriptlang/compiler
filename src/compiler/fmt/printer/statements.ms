@@ -87,10 +87,6 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 	return docGroup(parts);
 }
 
-function lastLineOf(node: Node): int32 {
-	return node.location.endLine > 0 ? node.location.endLine : node.location.line;
-}
-
 let _structAccessors: Node[] = [];
 let _listDeclarators: Node[] = [];
 
@@ -275,9 +271,7 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 			parts.push(docHardLine());
 			parts.push(docSourceText(c.text));
 		}
-		const braceless = bracelessStatement(d.consequent, options);
-		const elseOnOwnLine = beforeElse.length > 0
-			|| (braceless != null && alt.location.line > lastLineOf(braceless));
+		const elseOnOwnLine = beforeElse.length > 0 || bracelessStatement(d.consequent, options) != null;
 		parts.push(elseOnOwnLine ? docGroup([docHardLine(), docText("else")]) : docText(" else"));
 		if (alt.kind == NodeKind.IfStmt) {
 			parts.push(docText(" "));
