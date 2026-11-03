@@ -239,6 +239,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void,
 		}],
 		errors: [],
+		handles: [],
 	};
 	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");

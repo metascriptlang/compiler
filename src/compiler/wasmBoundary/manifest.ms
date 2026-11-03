@@ -97,6 +97,7 @@ export interface BoundaryRefusal {
 export interface Manifest {
 	functions: BoundaryFunction[];
 	errors: BoundaryRefusal[];
+	handles: Symbol[];
 }
 
 interface Collector {
@@ -105,6 +106,7 @@ interface Collector {
 	modulePath: string;
 	at: SourceLocation;
 	exports: ExportedSymInfo[];
+	handles: Symbol[];
 }
 
 export function copiesArgsIn(f: BoundaryFunction): boolean {
@@ -211,18 +213,24 @@ function refuse(
 	cannotCross(c, code, `${what} has type '${describe(t)}', ${why}`);
 }
 
-function isHandleType(t: Type): boolean {
+export function isHandleType(t: Type): boolean {
 	return getBuiltinKind(t) == "FfiHandle";
 }
 
-function handleTarget(t: Type): Type {
+export function handleTarget(t: Type): Type | null {
 	if (t.kind != TypeKind.GenericInstance || t.typeChildren.length != 1) {
-		throw new Error(`internal: Handle type '${describe(t)}' has no one type argument`);
+		return null;
 	}
 	const arg = peeled(t.typeChildren[0]);
 	return arg.kind == TypeKind.Ref && arg.typeReturn != null
 		? peeled(arg.typeReturn!)
 		: arg;
+}
+
+function isNominalTarget(target: Type): boolean {
+	return target.sym != null
+		&& (target.sym!.symbolKind == SymbolKind.Class
+			|| target.sym!.symbolKind == SymbolKind.Struct);
 }
 
 function isExportedTarget(c: Collector, target: Type): boolean {
@@ -254,12 +262,20 @@ function checkHandle(
 		return;
 	}
 	const target = handleTarget(t);
+	if (target == null || !isNominalTarget(target)) {
+		const shown = describe(t);
+		const text = `${shown}: T must be an exported class or struct, `
+			+ "as in Handle<Counter>";
+		handleRefusal(c, "handle-target", what, text);
+		return;
+	}
 	const name = describe(target);
 	if (!isExportedTarget(c, target)) {
 		const text = `Handle<${name}>: ${name} must be exported to cross`;
 		handleRefusal(c, "handle-unexported", what, text);
 		return;
 	}
+	if (!c.handles.includes(target.sym!)) c.handles.push(target.sym!);
 	handleRefusal(
 		c,
 		"handle-not-generated",
@@ -1024,7 +1040,7 @@ export function manifestFor(
 ): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
 	const at = makeLoc(0, 0);
-	const c: Collector = { errors: [], fnName: "", modulePath, at, exports };
+	const c: Collector = { errors: [], fnName: "", modulePath, at, exports, handles: [] };
 	const functions: BoundaryFunction[] = [];
 	const locs: SourceLocation[] = [];
 	const seen: string[] = [];
@@ -1059,5 +1075,5 @@ export function manifestFor(
 			);
 		}
 	}
-	return { functions, errors: c.errors };
+	return { functions, errors: c.errors, handles: c.handles };
 }

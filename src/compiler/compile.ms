@@ -1911,7 +1911,7 @@ function placeWasmModules(
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName) });
+	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName) });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
