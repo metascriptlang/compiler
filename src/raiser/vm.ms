@@ -158,7 +158,7 @@ export interface RaiserTimers {
 }
 
 // The module records of the modules import() reaches, evaluated on a task strand that
-// shares the main strand's globals and heap, the way runtime/promise/moduleEval.c
+// shares the main strand's globals and heap, the way std/core/promise/moduleEval.cms
 // evaluates them on the loop thread. A body with a top-level await runs on a strand of
 // its own that shares them too, so its await parks only that strand.
 export enum RaiserModuleStatus {

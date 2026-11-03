@@ -1,7 +1,7 @@
 // A module reached only through import() whose body has a top-level await evaluates as an
 // async routine: the body moves into `async function $moduleBody()`, the module's own
 // bindings stay module globals assigned from inside it, and the module init hands the
-// routine's promise to the module evaluator (runtime/promise/moduleEval.c).
+// routine's promise to the module evaluator (std/core/promise/moduleEval.cms).
 
 import {
 	Node, NodeKind, NodeFlag, SymbolKind,
