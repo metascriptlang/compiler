@@ -2003,6 +2003,130 @@ function configuredEntryFixesTheNavigationUniverse(): LspScenario {
 	};
 }
 
+const SUM_URI = "file:///lspwire/sum.ms";
+const SUM_TEXT = "function sum(a: int32, b: int32): int32 {\n\treturn a + b;\n}\nconst total = sum(1, 2);\nconst again = sum(total, 3);\nconsole.log(again);\n";
+const SUM_TEXT_WITH_ERROR = SUM_TEXT + "export const bad: int32 = \"x\";\n";
+const SUM_DECLARATION_AND_CALLS = `${SUM_URI} 0:9-0:12; ${SUM_URI} 3:14-3:17; ${SUM_URI} 4:14-4:17`;
+const SUM_COMPLETION_ROW = "sum|3|(a: int32, b: int32) => int32";
+
+function inlayParams(uri: string, startLine: int32, endLine: int32, endCharacter: int32): string {
+	return `{"textDocument":{"uri":${lspJsonString(uri)}},"range":{"start":{"line":${startLine},"character":0},"end":{"line":${endLine},"character":${endCharacter}}}}`;
+}
+
+function highlightRows(r: LspReplay, key: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no highlights: " + render(result);
+	const rows: string[] = [];
+	for (const highlight of result.items) rows.push(spanOf(highlight));
+	return rows.join("; ");
+}
+
+function inlayRows(r: LspReplay, key: string): string {
+	const result = answerResult(r, key);
+	if (result.kind != JsonKind.Array) return "no hints: " + render(result);
+	const rows: string[] = [];
+	for (const hint of result.items) {
+		const position = hint.getDynamicField("position");
+		rows.push(position.getDynamicField("line").asInt32(-1) + ":" + position.getDynamicField("character").asInt32(-1)
+			+ " " + scalarText(hint.getDynamicField("label")));
+	}
+	return rows.join("; ");
+}
+
+function listsCompletion(what: string, r: LspReplay, key: string, row: string): string {
+	return completionRows(r, key).includes(row) ? "" : what + ": no completion row " + row;
+}
+
+function sumSignature(activeParameter: int32): string {
+	return "signatures 1, activeSignature 0, activeParameter " + activeParameter
+		+ ", label sum(a: int32, b: int32): int32, parameters [a: int32, b: int32]";
+}
+
+function queryHistoryKeepsExactAnswers(): LspScenario {
+	const uri = SUM_URI;
+	return {
+		name: "a function, its calls and an inferred const answer exactly through every query family and real edits",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SUM_TEXT))]),
+			frames([
+				request("10", "textDocument/completion", positionParams(uri, 3, 14)),
+				request("11", "textDocument/rename", renameParams(uri, 3, 14, "add")),
+				request("12", "textDocument/signatureHelp", positionParams(uri, 3, 18)),
+				request("13", "textDocument/signatureHelp", positionParams(uri, 3, 21)),
+				request("14", "textDocument/references", referenceParams(uri, 3, 14, true)),
+				request("15", "textDocument/references", referenceParams(uri, 0, 9, true)),
+				request("16", "textDocument/references", referenceParams(uri, 3, 6, true)),
+				request("17", "textDocument/rename", renameParams(uri, 4, 18, "grand")),
+			]),
+			frames([request("18", "textDocument/documentHighlight", positionParams(uri, 3, 6))]),
+			frames([request("19", "textDocument/documentHighlight", positionParams(uri, 3, 14))]),
+			frames([request("20", "textDocument/inlayHint", inlayParams(uri, 0, 5, 19))]),
+			frames([request("21", "textDocument/inlayHint", inlayParams(uri, 3, 3, 24))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, SUM_TEXT_WITH_ERROR))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 3, SUM_TEXT))]),
+			frames([
+				request("30", "textDocument/references", referenceParams(uri, 3, 14, true)),
+				request("31", "textDocument/rename", renameParams(uri, 3, 14, "add")),
+				request("32", "textDocument/completion", positionParams(uri, 3, 14)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("diagnostic counts per publish", "[0,1,0]", publishedCounts(r, uri)),
+			containsText("publish 1 message", NOT_ASSIGNABLE, publishedAt(r, uri, 1)),
+			containsText("publish 1 line", "[6:", publishedAt(r, uri, 1)),
+			listsCompletion("completion at the callee", r, "n:10", SUM_COMPLETION_ROW),
+			sameText("rename of a call edits the declaration and each call", "0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add", renameRows(r, "n:11", uri)),
+			sameText("signature in the 1st argument", sumSignature(0), signatureSummary(r, "n:12")),
+			sameText("signature in the 2nd argument", sumSignature(1), signatureSummary(r, "n:13")),
+			sameText("references at a call", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:14")),
+			sameText("references at the declaration", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:15")),
+			sameText("references of the inferred const", `${uri} 3:6-3:11; ${uri} 4:18-4:23`, referenceRows(r, "n:16")),
+			sameText("rename at a use of the inferred const", "3:6-3:11 grand; 4:18-4:23 grand", renameRows(r, "n:17", uri)),
+			sameText("highlight of the inferred const", "3:6-3:11; 4:18-4:23", highlightRows(r, "n:18")),
+			sameText("highlight of the function at a call", "0:9-0:12; 3:14-3:17; 4:14-4:17", highlightRows(r, "n:19")),
+			containsText("inlay hint of the first inferred const", "3:11 : int32", inlayRows(r, "n:20")),
+			containsText("inlay hint of the second inferred const", "4:11 : int32", inlayRows(r, "n:20")),
+			sameText("inlay hints of line 3 alone", "3:11 : int32; 3:18 a:; 3:21 b:", inlayRows(r, "n:21")),
+			sameText("references after the edits", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:30")),
+			sameText("rename after the edits", "0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add", renameRows(r, "n:31", uri)),
+			listsCompletion("completion after the edits", r, "n:32", SUM_COMPLETION_ROW),
+		]),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [6, 7, 8],
+			probes: [{ uri, line: 3, character: 14 }, { uri, line: 3, character: 6 }, { uri, line: 3, character: 21 }],
+		},
+		project: null,
+	};
+}
+
+function globalImportClassIdentitySurvivesQueryHistory(): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	const edited = SHAPE_USER.replaceAll("new Box(7)", "new Box(8)");
+	return {
+		name: "a global-import class stays its importer's class after completion, rename and a real edit",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SHAPE_USER))]),
+			frames([
+				request("10", "textDocument/completion", positionParams(uri, 1, 16)),
+				request("11", "textDocument/rename", renameParams(uri, 1, 16, "lspRenamed")),
+			]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, edited))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("use.ms diagnostic counts per publish", "[0,0]", publishedCounts(r, uri)),
+			sameText("use.ms last publish", "[]", lastPublished(r, uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [2, 3], probes: [{ uri, line: 1, character: 16 }, { uri, line: 1, character: 9 }] },
+		project: MAKERS_PROJECT,
+	};
+}
+
 function entryEditsMoveTheNavigationUniverse(): LspScenario {
 	return {
 		name: "an entry edit that drops an unopened importer drops it from references and rename, and undo restores it",
@@ -2588,6 +2712,8 @@ export function lspScenarios(): LspScenario[] {
 		closedDocumentIsNotRepublished(),
 		lastContentChangeWins(),
 		signatureHelpCountsCommas(),
+		queryHistoryKeepsExactAnswers(),
+		globalImportClassIdentitySurvivesQueryHistory(),
 		closingAnOverlayRestoresDiskMembers(),
 	];
 }
