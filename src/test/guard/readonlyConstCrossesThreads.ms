@@ -45,7 +45,11 @@ const CELL = "interface Cell { n: int32; tag: string; }\n"
 const TABLE = CELL
 	+ "struct Table { name: string; keyOf: Sendable<(c: Cell) => int32>; }\n"
 	+ "function table(name: string, keyOf: Sendable<(c: Cell) => int32>): Table { return { name, keyOf }; }\n";
-const SPAWN ="async function main(): Promise<void> {\n"
+const GENERIC = "struct Account { id: string; }\n"
+	+ "struct Table<T> { name: string; columns: Vec<string>; }\n"
+	+ "struct Rows<T> { name: string; rows: Vec<T>; }\n"
+	+ "type Either<T> = { kind: \"a\"; v: Vec<string> } | { kind: \"b\"; w: T };\n";
+const SPAWN = "async function main(): Promise<void> {\n"
 	+ "\tconst f = spawn(() => read());\n"
 	+ "\tconsole.log(await f);\n"
 	+ "}\n"
@@ -181,6 +185,24 @@ const cases: Case[] = [
 			+ "const made: Readonly<Plain> = plain(\"t\", (c: Cell): int32 => c.n);\n"
 			+ "function read(): int32 { return made.name.length; }\n"
 			+ SPAWN,
+	},
+	{
+		name: "Readonly consts of generic instances: a struct, a Vec<T> field and a union",
+		expect: Expect.Clean,
+		text: GENERIC
+			+ "const t: Readonly<Table<Account>> = { name: \"accounts\", columns: [\"id\"] };\n"
+			+ "const r: Readonly<Rows<Account>> = { name: \"r\", rows: [{ id: \"1\" }] };\n"
+			+ "const e: Readonly<Either<Account>> = { kind: \"a\", v: [\"x\"] };\n"
+			+ "function read(): string { return t.name + String(t.columns.length) + r.rows[0].id + e.kind; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a write through a let alias of a Readonly const of a generic instance",
+		expect: Expect.WriteRefused,
+		text: GENERIC
+			+ "const t: Readonly<Table<Account>> = { name: \"accounts\", columns: [\"id\"] };\n"
+			+ "function poke(): void { let alias = t; alias.name = \"x\"; }\n"
+			+ "poke();\n",
 	},
 	{
 		name: "a write through an alias of a Readonly const",

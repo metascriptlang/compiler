@@ -43,6 +43,30 @@ test "readonly-annotation: readonly without an array suffix is refused" {
 	assert ctx.errors.length == before + 1;
 }
 
+const GENERIC_TABLE = "struct Account { id: string; }\nstruct Table<T> { name: string; columns: Vec<string>; }\nstruct Pair<T> { a: int32; b: int32; }\n";
+
+test "readonly-annotation: Readonly over a generic instance whose body carries a ref is a view, over a pod body a value" {
+	const ctx = checkOnly(GENERIC_TABLE + "const probe = 1;").ctx;
+	const view = resolveAnnotation("Readonly<Table<Account>>", ctx, 1, 1);
+	assert isReadonlyView(view), typeDisplayName(view);
+	const pod = resolveAnnotation("Readonly<Pair<Account>>", ctx, 1, 1);
+	assert !isReadonlyView(pod), typeDisplayName(pod);
+}
+
+test "readonly-annotation: a write through Readonly over a generic instance is refused" {
+	const decl = "let t: Readonly<Table<Account>> = { name: \"a\", columns: [\"id\"] };";
+	for (const write of [
+		"function f(): void { " + decl + " t.name = \"x\"; }\n",
+		"function f(): void { " + decl + " t.columns.push(\"y\"); }\n",
+		"function f(): void { " + decl + " let c = t.columns; c.push(\"y\"); }\n",
+		"function m(ref t: Table<Account>): void {}\nfunction f(): void { " + decl + " m(t); }\n",
+		"function f(t: Readonly<Table<Account>>): Table<Account> { return t; }\n",
+	]) {
+		const text = checkOnly(GENERIC_TABLE + write).errors.join("\n");
+		assert text.contains("read-only view"), write + " -> " + text;
+	}
+}
+
 test "utility-type: ReadonlyArray<T> is Readonly<T[]>" {
 	assert viewMismatch("ReadonlyArray<int32>", "Readonly<int32[]>") == "", viewMismatch("ReadonlyArray<int32>", "Readonly<int32[]>");
 	assert viewMismatch("ReadonlyArray<int32 | string>", "Readonly<(int32 | string)[]>") == "", viewMismatch("ReadonlyArray<int32 | string>", "Readonly<(int32 | string)[]>");
