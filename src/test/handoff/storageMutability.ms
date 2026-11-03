@@ -85,6 +85,36 @@ test "an array receiver declared T[] writes the value storage it is called on, V
 	assert !js.startsWith("ERROR:"), js;
 }
 
+test "a ref array receiver is the write a ref argument is, through every field path of a const" {
+	const head = "struct Inner { columns: Vec<string>; n: int32; }\nstruct Account { name: string; columns: Vec<string>; inner: Inner; }\nclass Box { items: Vec<string> = []; }\nfunction grow(this ref v: Vec<string>): void { v.push(\"x\"); }\nfunction bump(this ref i: Inner): void { i.n = i.n + 1; }\nconst accounts: Account = { name: \"a\", columns: [\"id\"], inner: { columns: [\"id\"], n: 1 } };\n";
+	const refused = [
+		"accounts.columns.grow();",
+		"accounts.inner.columns.grow();",
+		"accounts.inner.bump();",
+		"const cols: Vec<string> = [\"id\"]; cols.grow();",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: source }], "test/receiver.ms");
+		assert !c.ok && c.error.contains("to a 'ref' parameter") && c.error.contains("is const (use 'let')"), body;
+		assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+	}
+	const ro = head + "function f(r: Readonly<Account>): void { r.columns.grow(); }";
+	const cr = compileToCWithStd(ro);
+	assert !cr.ok && cr.error.contains("a read-only view never converts back to the mutable type"), cr.ok ? "accepted" : cr.error;
+	const legal = head + `function run(): void {
+	let mine: Account = { name: "b", columns: ["id"], inner: { columns: [], n: 1 } };
+	mine.columns.grow(); mine.inner.columns.grow(); mine.inner.bump();
+	const box = new Box(); box.items.grow();
+	console.log(mine.columns.length, mine.inner.columns.length, mine.inner.n, box.items.length);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: legal }], "test/receiver.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "a read-only array view refuses a receiver declared T[] or Span<T>" {
 	const head = "function zero(this arr: int32[]): void { arr[0] = 0; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nfunction firstOf<T>(this arr: Vec<T>): T { return arr[0]; }\n";
 	const refused = [

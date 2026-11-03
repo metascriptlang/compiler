@@ -2814,7 +2814,22 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 	for (let ti = 0; ti < argTypes.length; ti += 1) argTypes[ti] = types[ti + 1];
 }
 
+function reportRefArgWrite(ctx: CheckerContext, lvArg: Node, paramType: Type): void {
+	const ro = readonlyRootType(lvArg);
+	const refusal = writeThroughArc(lvArg)
+		? "cannot pass an argument to a 'ref' or 'out' parameter through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)"
+		: ro != null
+		? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
+		: writeRefusal(lvArg, paramType.typeReturn != null && paramType.typeReturn.kind == TypeKind.Span ? WriteSite.View : WriteSite.RefArg);
+	if (refusal != null) addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
+	else if (lvArg.kind == NodeKind.MemberExpr) callReadonlyFieldWrite(ctx, lvArg);
+}
+
 function reportArrayReceiverWrite(ctx: CheckerContext, me: MemberExprData, recvFormal: Type): void {
+	if (recvFormal.kind == TypeKind.Var) {
+		reportRefArgWrite(ctx, me.object, recvFormal);
+		return;
+	}
 	const formal = skipModifier(recvFormal) ?? recvFormal;
 	const refusal = formal.kind == TypeKind.Span ? viewRefusal(me.object, formal)
 		: writesThroughReceiver(formal) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : null;
@@ -3164,14 +3179,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": " + (isOutParam(paramType) ? "out" : "ref") + " parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
-					const ro = readonlyRootType(lvArg);
-					const refusal = writeThroughArc(lvArg)
-						? "cannot pass an argument to a 'ref' or 'out' parameter through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)"
-						: ro != null
-						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
-						: writeRefusal(lvArg, paramType.typeReturn != null && paramType.typeReturn.kind == TypeKind.Span ? WriteSite.View : WriteSite.RefArg);
-					if (refusal != null) addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
-					else if (lvArg.kind == NodeKind.MemberExpr) callReadonlyFieldWrite(ctx, lvArg);
+					reportRefArgWrite(ctx, lvArg, paramType);
 					const written = paramType.typeReturn;
 					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {
 						addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": an out parameter of type " + typeDisplayName(written)
