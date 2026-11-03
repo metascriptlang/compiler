@@ -320,6 +320,17 @@ test "iterator reduce: one element is returned without calling back" {
 	assert r == 9 && calls == 0;
 }
 
+test "iterator reduce: without an initial value folds strings from a mapped chain" {
+	const r = ["x", "yy", "zzz"].values().map((s: string, i: number): string => s + "!").reduce((a: string, s: string, i: number): string => a + s);
+	assert r == "x!yy!zzz!";
+}
+
+test "iterator reduce: without an initial value keeps a null first element as the accumulator" {
+	const xs: (string | null)[] = [null, "p", null];
+	const r = xs.values().reduce((a: string | null, s: string | null, i: number): string | null => a ?? s);
+	assert r == "p";
+}
+
 test "iterator toArray and forEach: drain a finite chain" {
 	const seen: string[] = [];
 	counter("h", 2, seen).forEach((x: int32, i: number): void => {
