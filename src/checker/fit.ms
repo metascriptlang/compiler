@@ -1384,12 +1384,12 @@ function hiddenFnConv(expr: Node, formal: Type): Node {
 }
 
 export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type, ctx: CheckerContext | null = null): Node {
-	if (expr.kind == NodeKind.NullLiteral || exprType.kind == TypeKind.Null) {
+	if (expr.kind == NodeKind.NullLiteral || (exprType.kind == TypeKind.Null && isNullAssertion(expr))) {
 		expr.nodeType = formal;
 		return expr;
 	}
 	let payload = expr;
-	if (formal.typeReturn != null) {
+	if (exprType.kind != TypeKind.Null && formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType, ctx);
 		if (thunk != null as unknown as Node) payload = thunk;
 		const payloadUnion = instantiatedUnionBehind(formal.typeReturn);

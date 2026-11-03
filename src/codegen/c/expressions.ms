@@ -2251,6 +2251,11 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		truncResults(ctx, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
+		if (d.convExpr.nodeType != null && d.convExpr.nodeType.kind == TypeKind.Null && isMaybeType(d.convType)) {
+			dropVoidArg(p, inner, d.convExpr);
+			ctx.results.push(`(${targetC})${zeroInit(d.convType)}`);
+			return;
+		}
 		if (kind == NodeKind.HiddenSubConv && node.variantSlot > 0 && !isMaybeType(d.convType)
 			&& unwrapRefNullUnion(d.convType) != null && d.convExpr.nodeType != null && isMaybeType(d.convExpr.nodeType)) {
 			const rvi = node.variantSlot - 1;

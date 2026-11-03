@@ -27,6 +27,7 @@ function lowerImplicitConvNode(node: Node, ctx: TransformContext, adapterDecls: 
 	const d = node.data as HiddenStdConvData;
 	if (isMaybeType(d.convType)) {
 		if (d.convExpr.nodeType != null && isMaybeType(d.convExpr.nodeType)) return d.convExpr;
+		if (d.convExpr.nodeType != null && d.convExpr.nodeType.kind == TypeKind.Null) return node;
 		return wrapMaybeValue(d.convExpr, d.convType, node.location);
 	}
 	if (d.convType.kind == TypeKind.Borrow) {
