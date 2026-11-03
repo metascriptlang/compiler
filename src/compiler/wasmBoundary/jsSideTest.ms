@@ -442,7 +442,7 @@ test "js side: a Span is range-checked before its copy is allocated, so a throw 
 test "js side: the registry poisons itself on the first exception that crossed the wasm frames and every later wrapper call refuses" {
 	const p = bindingsFor(["add64"]).prelude;
 	assert p.includes("\tlet dead = false;\n\tlet cause;\n");
-	assert p.includes("\t\tenter() {\n\t\t\tif (dead) throw new Error(\"the wasm half cannot run again: a trap or a host error left its frames unfinished\", { cause });\n\t\t\tif (this.lent !== 0) throw new Error(\"a wasm function was called while a Span was lent to a JS callback: the callback's copy and the wasm side's would diverge, so call it after the callback returns\");\n\t\t},\n");
+	assert p.includes("\t\tenter() {\n\t\t\tif (dead) throw new Error(\"the wasm half cannot run again: a trap or a host error left its frames unfinished\", { cause });\n\t\t\tif (this.lent !== 0) {\n\t\t\t\tconst top = vw[vw.length - 1];\n\t\t\t\tif (top !== undefined && top[0] === this.lent) {\n\t\t\t\t\tthrow new Error(\"boundary call while a view of \" + top[1] + \" is open: the call could grow wasm memory\");\n\t\t\t\t}\n\t\t\t\tthrow new Error(\"a wasm function was called while a Span was lent to a JS callback: the callback's copy and the wasm side's would diverge, so call it after the callback returns\");\n\t\t\t}\n\t\t},\n");
 	assert p.includes("\t\tlent: 0,\n");
 	assert p.includes("\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },\n");
 }
@@ -725,4 +725,24 @@ test "js side: a dev bundle reports slots of kind 2 or 3 at exit and a release b
 	assert dev.includes("if (!process.exitCode) process.exitCode = 1;");
 	assert !handleBindings(false).prelude.includes("process.on");
 	assert !bindingsFor(["add64"]).prelude.includes("msb leak");
+}
+
+const VIEWS = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+@builtin("FfiVecBox")
+export class VecBox<T> { items: Vec<T> = []; }
+export function make(n: int32): Handle<VecBox<float32>> { return null as unknown as Handle<VecBox<float32>>; }
+`;
+
+test "js side: a VecBox result is owned with its typed array and a view reports the open view when a call enters" {
+	const b = jsBindings(manifestFrom(VIEWS, ["make"]), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
+	assert b.modules[0].code.includes("__msb.own(v, \"Handle<VecBox<float32>>\", \"Handle<VecBox<float32>> created at ");
+	assert b.modules[0].code.includes(", [\"float32\", Float32Array]) };");
+	assert b.prelude.includes("\t\tview(r, f) {");
+	assert b.prelude.includes("new T(__msbMod.HEAPU8.buffer, ptr, len)");
+	assert b.prelude.includes("\"boundary call while a view of \" + top[1] + \" is open: the call could grow wasm memory\"");
+	assert b.prelude.includes("if (this.lent !== 0) {");
+	const plain = bindingsFor(["add64"]);
+	assert plain.prelude.includes("view(r, f)") == false;
 }

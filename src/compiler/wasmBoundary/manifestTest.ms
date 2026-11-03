@@ -497,3 +497,33 @@ export function use(h: Handle<Counter>): int32 { return 0; }
 	assert use.params[0].kind == BoundaryKind.Handle && use.params[0].handle == "Counter";
 	assert use.resultHandle == null && use.resultLabel == "";
 }
+
+const VEC_BOX = HANDLE + `
+@builtin("FfiVecBox")
+export class VecBox<T> { items: Vec<T> = []; }
+export function make(): Handle<VecBox<float32>> { return null as unknown as Handle<VecBox<float32>>; }
+export function sum(h: Handle<VecBox<int32>>): int32 { return 0; }
+export function strings(h: Handle<VecBox<string>>): int32 { return 0; }
+export function flags(h: Handle<VecBox<boolean>>): int32 { return 0; }
+export function plain(h: Handle<Vec<float32>>): int32 { return 0; }
+`;
+
+test "manifest: a Handle of a VecBox of a scalar crosses unexported and carries its element kind" {
+	const names = ["make", "sum"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(VEC_BOX, names), names);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	const make = m.functions[0];
+	assert make.resultHandle == "VecBox<float32>" && make.resultElement == BoundaryKind.F32;
+	assert make.resultLabel == "Handle<VecBox<float32>> created at calc/core.ms:" + 7, make.resultLabel;
+	const sum = m.functions[1];
+	assert sum.params[0].handle == "VecBox<int32>" && sum.params[0].element == BoundaryKind.I32;
+}
+
+test "manifest: a Handle of a VecBox of a non-scalar, a bool or a bare Vec keeps the target refusal" {
+	const names = ["strings", "flags", "plain"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(VEC_BOX, names), names);
+	assert m.functions.length == 0;
+	for (const n of names) {
+		assert errorFor(m.errors, n).includes("T must be an exported class or struct, as in Handle<Counter>"), n;
+	}
+}

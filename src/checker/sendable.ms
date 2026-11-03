@@ -1957,6 +1957,39 @@ export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): v
 	});
 }
 
+function isViewCall(call: Node): boolean {
+	const callee = peelView((call.data as CallExprData).callee);
+	if (callee == null || callee.kind != NodeKind.MemberExpr) return false;
+	const m = callee.data as MemberExprData;
+	if (m.property != "view" || m.object.nodeType == null) return false;
+	const handle = peelThrough(m.object.nodeType!, PEEL_ALIAS);
+	if (getBuiltinKind(handle) != "FfiHandle" || handle.typeChildren.length != 1) return false;
+	return getBuiltinKind(handle.typeChildren[0]) == "FfiVecBox";
+}
+
+function viewCallbackOf(arg: Node): Node | null {
+	const p = peelHidden(arg);
+	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr) return p;
+	const sym = p.kind == NodeKind.Identifier ? aliasTarget(p.resolvedSym) : null;
+	const decl = sym != null && sym.symbolKind == SymbolKind.Function ? sym.declNode : null;
+	return decl != null && decl.kind == NodeKind.FunctionDecl ? decl : null;
+}
+
+export function refuseKeptView(ctx: CheckerContext, call: Node): void {
+	if (call.kind != NodeKind.CallExpr || !isViewCall(call)) return;
+	const args = (call.data as CallExprData).arguments;
+	if (args.length == 0) return;
+	deferEffectCheck(call, "keptView", (ctx: CheckerContext): void => {
+		const callback = viewCallbackOf(args[args.length - 1]);
+		if (callback == null || callback.paramSyms == null || callback.paramSyms!.length == 0) return;
+		const param = callback.paramSyms![0];
+		const body = routineParamsAndBody(callback).body;
+		const site = findKeptSite(body, { lent: [param], held: [], seen: [callback] });
+		if (site == null) return;
+		addError(ctx, `Span ${param.name} escapes its view: it ${keptSiteAction(site)} at ${site.location.line}:${site.location.column}, but a view is only lent until its callback returns\ncopy the elements you need, or finish with them inside the callback`, site.location.line, site.location.column);
+	});
+}
+
 
 function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string, via: Node[] = []): void {
 	const parts = routineParamsAndBody(closure);

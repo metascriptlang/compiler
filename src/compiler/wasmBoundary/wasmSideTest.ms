@@ -362,3 +362,30 @@ test "ledger entry: msb_ledger calls the runtime's one ledger report and is expo
 	assert text.includes('@exportName("msb_ledger")');
 	assert LEDGER_EXPORT == "_msb_ledger";
 }
+
+const VIEWS = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+@builtin("FfiVecBox")
+export class VecBox<T> { items: Vec<T> = []; }
+export function make(n: int32): Handle<VecBox<float32>> { return null as unknown as Handle<VecBox<float32>>; }
+export function sum(h: Handle<VecBox<float32>>): float64 { return 0; }
+export function ping(): int32 { return 1; }
+`;
+
+function viewEntryFor(names: string[]) {
+	return wasmEntrySource(manifestFrom(VIEWS, names).functions, (p: string) => "./calc");
+}
+
+test "wasm entry: a Handle of a VecBox is typed in place and its view exports appear only when one is in the manifest" {
+	const e = viewEntryFor(["make", "sum"]);
+	assert e.source.includes("import { Handle, VecBox } from \"std/ffi\";");
+	assert e.source.includes("import { make as msbm0_make, sum as msbm0_sum } from \"./calc\";");
+	assert e.source.includes("Handle.at<VecBox<float32>>(h as uint64 as Ptr<void>)");
+	assert e.source.includes("export function msb_vec_ptr_float32(p: uint32): uint32 {");
+	assert e.source.includes("export function msb_vec_len_float32(p: uint32): int32 {");
+	assert e.exportedFunctions.includes("_msb_vec_ptr_float32") && e.exportedFunctions.includes("_msb_vec_len_float32");
+	assert e.runtimeMethods.includes("HEAPU8");
+	const none = handleEntryFor(["open", "bump"]);
+	assert none.source.includes("msb_vec_ptr_") == false && none.exportedFunctions.includes("_msb_vec_ptr_float32") == false;
+}

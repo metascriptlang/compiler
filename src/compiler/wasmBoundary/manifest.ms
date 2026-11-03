@@ -237,6 +237,17 @@ function isNominalTarget(target: Type): boolean {
 			|| target.sym!.symbolKind == SymbolKind.Struct);
 }
 
+export function vecBoxElement(target: Type): BoundaryKind | null {
+	if (getBuiltinKind(target) != "FfiVecBox") return null;
+	if (target.typeChildren.length != 1) return null;
+	const k = scalarKind(peeled(target.typeChildren[0]));
+	return k == BoundaryKind.Bool ? null : k;
+}
+
+function isVecBox(target: Type): boolean {
+	return getBuiltinKind(target) == "FfiVecBox";
+}
+
 function isExportedTarget(c: Collector, target: Type): boolean {
 	if (target.sym == null) return false;
 	for (const e of c.exports) {
@@ -266,7 +277,10 @@ function checkHandle(
 		return null;
 	}
 	const target = handleTarget(t);
-	if (target == null || !isNominalTarget(target)) {
+	const box = target != null && isVecBox(target);
+	const usable = target != null
+		&& (box ? vecBoxElement(target) != null : isNominalTarget(target));
+	if (target == null || !usable) {
 		const shown = describe(t);
 		const text = `${shown}: T must be an exported class or struct, `
 			+ "as in Handle<Counter>";
@@ -274,13 +288,18 @@ function checkHandle(
 		return null;
 	}
 	const name = describe(target);
-	if (!isExportedTarget(c, target)) {
+	if (!box && !isExportedTarget(c, target)) {
 		const text = `Handle<${name}>: ${name} must be exported to cross`;
 		handleRefusal(c, "handle-unexported", what, text);
 		return null;
 	}
-	if (!c.handles.includes(target.sym!)) c.handles.push(target.sym!);
+	const sym = box ? target.typeExtra!.sym! : target.sym!;
+	if (!c.handles.includes(sym)) c.handles.push(sym);
 	return name;
+}
+
+function handleElementOf(t: Type): BoundaryKind {
+	return vecBoxElement(handleTarget(t)!) ?? BoundaryKind.Void;
 }
 
 function callbackParamKind(pt: Type): BoundaryKind | null {
@@ -741,6 +760,7 @@ function paramOf(
 		const kind = BoundaryKind.Handle;
 		const param = plainParam(name, kind, false, BoundaryMode.Borrowed);
 		param.handle = target;
+		param.element = handleElementOf(t);
 		return param;
 	}
 	const errorsBefore = c.errors.length;
@@ -792,6 +812,7 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		if (target == null) return null;
 		const shape = plainShape(BoundaryKind.Handle, false);
 		shape.handle = target;
+		shape.element = handleElementOf(t);
 		return shape;
 	}
 	const errorsBefore = c.errors.length;

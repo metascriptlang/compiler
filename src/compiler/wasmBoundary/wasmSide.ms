@@ -275,12 +275,31 @@ function guardedExport(
 	return lines;
 }
 
+const VEC_BOX = "VecBox<";
+
 function handleAliasOf(
 	modules: string[],
 	f: BoundaryFunction,
 	name: string,
 ): string {
+	if (name.startsWith(VEC_BOX)) return name;
 	return `msbm${modules.indexOf(f.modulePath)}_${name}`;
+}
+
+function viewLines(element: BoundaryKind): string[] {
+	const t = valueTypeOf(element);
+	const box = `Handle.at<VecBox<${t}>>(p as uint64 as Ptr<void>).value()`;
+	return [
+		`@exportName("msb_vec_ptr_${t}")`,
+		`export function msb_vec_ptr_${t}(p: uint32): uint32 {`,
+		`	const b = ${box};`,
+		`	return ((b.items as Span<${t}>) as Ptr<void> as uint64) as uint32;`,
+		"}",
+		`@exportName("msb_vec_len_${t}")`,
+		`export function msb_vec_len_${t}(p: uint32): int32 {`,
+		`	return ${box}.items.length as int32;`,
+		"}",
+	];
 }
 
 function releaseLines(alias: string): string[] {
@@ -451,11 +470,20 @@ interface EntryUsage {
 	resultImports: string[];
 	callbacks: BoundaryCallback[];
 	handles: string[];
+	viewElements: BoundaryKind[];
 }
 
-function addHandle(usage: EntryUsage, f: BoundaryFunction, name: string): void {
+function addHandle(
+	usage: EntryUsage,
+	f: BoundaryFunction,
+	name: string,
+	element: BoundaryKind,
+): void {
 	const key = `${f.modulePath}\n${name}`;
 	if (!usage.handles.includes(key)) usage.handles.push(key);
+	if (element != BoundaryKind.Void && !usage.viewElements.includes(element)) {
+		usage.viewElements.push(element);
+	}
 }
 
 function usageOf(fns: BoundaryFunction[]): EntryUsage {
@@ -469,6 +497,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		resultImports: [],
 		callbacks: [],
 		handles: [],
+		viewElements: [],
 	};
 	let hasVecResult = false;
 	const addResultImport = (name: string): void => {
@@ -488,7 +517,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		) {
 			usage.hasScalarSome = true;
 		}
-		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!);
+		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!, f.resultElement);
 		if (f.result == BoundaryKind.Vec) {
 			usage.readsHeap = true;
 			hasVecResult = true;
@@ -499,7 +528,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			addResultImport("msb_rs_" + letters);
 		}
 		for (const p of f.params) {
-			if (p.handle != null) addHandle(usage, f, p.handle!);
+			if (p.handle != null) addHandle(usage, f, p.handle!, p.element);
 			if (p.kind == BoundaryKind.String) {
 				usage.hasString = true;
 				usage.copiesIn = true;
@@ -562,6 +591,7 @@ function moduleImportLines(
 			const at = key.indexOf("\n");
 			if (key.slice(0, at) != modulePath) continue;
 			const name = key.slice(at + 1);
+			if (name.startsWith(VEC_BOX)) continue;
 			names.push(`${name} as msbm${modules.indexOf(modulePath)}_${name}`);
 		}
 		const from = importPathOf(modulePath);
@@ -596,7 +626,10 @@ function entryLines(
 ): string[] {
 	const { modules, handles } = usage;
 	const lines = moduleImportLines(fns, modules, handles, importPathOf);
-	if (handles.length > 0) lines.push('import { Handle } from "std/ffi";');
+	if (handles.length > 0) {
+		const box = usage.viewElements.length > 0 ? ", VecBox" : "";
+		lines.push(`import { Handle${box} } from "std/ffi";`);
+	}
 	for (const l of unsignedWireLines()) lines.push(l);
 	if (usage.hasString) for (const l of stringHelperLines()) lines.push(l);
 	if (usage.hasScalarSome) {
@@ -623,9 +656,14 @@ function entryLines(
 	if (usage.handles.length > 0) {
 		const key = usage.handles[0];
 		const at = key.indexOf("\n");
-		const first = `msbm${usage.modules.indexOf(key.slice(0, at))}_`
-			+ key.slice(at + 1);
+		const name = key.slice(at + 1);
+		const first = name.startsWith(VEC_BOX)
+			? name
+			: `msbm${usage.modules.indexOf(key.slice(0, at))}_${name}`;
 		for (const l of releaseLines(first)) lines.push(l);
+		for (const k of usage.viewElements) {
+			for (const l of viewLines(k)) lines.push(l);
+		}
 	}
 	return lines;
 }
@@ -637,6 +675,10 @@ function exportedSymbolsOf(
 	const exported = fns.map((f) => "_" + f.exportSymbol);
 	if (usage.hasScalarSome) exported.push("_msb_ret_some");
 	if (usage.handles.length > 0) exported.push("_msb_release");
+	for (const k of usage.viewElements) {
+		exported.push("_msb_vec_ptr_" + valueTypeOf(k));
+		exported.push("_msb_vec_len_" + valueTypeOf(k));
+	}
 	if (usage.callbacks.length > 0) exported.push("_msb_fail");
 	if (usage.copiesIn || usage.callbacks.length > 0) exported.push("_malloc");
 	if (usage.copiesIn) exported.push("_free");
@@ -663,6 +705,9 @@ export function wasmEntrySource(
 		source: entryLines(fns, usage, importPathOf).join("\n") + "\n",
 		exportedFunctions: exportedSymbolsOf(fns, usage),
 		jsLibrary: jsLibraryOf(usage),
-		runtimeMethods: usage.hasString || usage.readsHeap ? ["HEAPU8"] : [],
+		runtimeMethods: usage.hasString || usage.readsHeap
+			|| usage.viewElements.length > 0
+			? ["HEAPU8"]
+			: [],
 	};
 }

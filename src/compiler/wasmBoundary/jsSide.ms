@@ -516,7 +516,10 @@ function wrapperLines(
 			if (f.result == BoundaryKind.Handle) {
 				const type = quoted(`Handle<${f.resultHandle!}>`);
 				const label = quoted(dev ? f.resultLabel : "");
-				keep.push(`return { ptr: __msb.own(v, ${type}, ${label}) };`);
+				const element = f.resultElement;
+				const vec = element == BoundaryKind.Void ? "" : `, `
+					+ `[${quoted(msTypeOf(element))}, ${typedArrayOf(element)}]`;
+				keep.push(`return { ptr: __msb.own(v, ${type}, ${label}${vec}) };`);
 			} else if (f.resultNullable) {
 				keep.push(
 					"return __msbMod._msb_ret_some() !== 0 ? "

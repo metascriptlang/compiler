@@ -30,3 +30,13 @@ export function retain<T>(this h: Handle<T>): void {
 export function release<T>(this h: Handle<T>): void {
 	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.release(); return; }`);
 }
+
+@builtin("FfiVecBox")
+export class VecBox<T> {
+	items: Vec<T> = [];
+}
+
+export function view<T>(this h: Handle<VecBox<T>>, f: (v: Span<T>) => void): void {
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.view(${f}); return; }`);
+	f((h.ptr as VecBox<T>).items);
+}

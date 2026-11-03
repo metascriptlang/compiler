@@ -167,3 +167,28 @@ test "a lent Handle parameter is only read through value()" {
 		lent,
 	);
 }
+
+const VIEW_SRC = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+@builtin("FfiVecBox")
+export class VecBox<T> { items: Vec<T> = []; }
+export function view<T>(this h: Handle<VecBox<T>>, f: (v: Span<T>) => void): void {}
+let kept: Span<int32> | null = null;
+function stash(v: Span<int32>): void { kept = v; }
+`;
+
+function viewError(body: string): string {
+	return checkErrorText(
+		VIEW_SRC +
+			`export function run(h: Handle<VecBox<int32>>): void { ${body} }\n`,
+	);
+}
+
+test "a view callback may index and set its Span but not keep it" {
+	const ok = viewError("h.view((v: Span<int32>): void => { v[0] = v[1]; });");
+	assert ok == "", ok;
+	const escapes = "Span v escapes its view";
+	assert viewError("h.view((v: Span<int32>): void => { kept = v; });").contains(escapes);
+	assert viewError("h.view(stash);").contains("Span v escapes its view");
+}
