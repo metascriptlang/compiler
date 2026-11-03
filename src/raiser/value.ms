@@ -2032,6 +2032,43 @@ test "copyGraph keeps a shared element and a cycle through an array of objects" 
 	assert heapObjectGetField(dArr, dObj, first.intVal, "owner").intVal == copied.intVal;
 }
 
+function structOwningAndViewing(arr: RaiserArrayHeap, obj: RaiserObjectHeap): int64 {
+	const instance = heapAllocObject(obj);
+	layOutObject(obj.objects[handleIndex(instance)], createClassType("T", 0, [1], ["n"], [RaiserRegClass.Word]));
+	const shape = createClassType("S", -1, [], ["own", "view"], [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+	shape.uncounted[1] = true;
+	const holder = heapAllocObject(obj);
+	layOutObject(obj.objects[handleIndex(holder)], shape);
+	fieldStoreAt(obj.objects[handleIndex(holder)], 0, raiserObject(instance));
+	fieldStoreAt(obj.objects[handleIndex(holder)], 1, raiserObject(instance));
+	rcIncref(arr, obj, raiserObject(instance));
+	return holder;
+}
+
+test "copyGraph within one heap copies the struct and shares the class instance it owns and views" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const holder = structOwningAndViewing(arr, obj);
+	const instance = heapObjectGetField(arr, obj, holder, "own").intVal;
+	const counted = rcCountOf(arr, obj, instance);
+	const copied = copyGraph(arr, obj, arr, obj, raiserObject(holder));
+	assert copied.intVal != holder;
+	assert heapObjectGetField(arr, obj, copied.intVal, "own").intVal == instance;
+	assert heapObjectGetField(arr, obj, copied.intVal, "view").intVal == instance;
+	assert rcCountOf(arr, obj, instance) == counted + 1;
+}
+
+test "copyGraph across heaps counts the copy of a class instance once for the slot that owns it, not for the one that views it" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(structOwningAndViewing(sArr, sObj)));
+	const own = heapObjectGetField(dArr, dObj, copied.intVal, "own").intVal;
+	assert heapObjectGetField(dArr, dObj, copied.intVal, "view").intVal == own;
+	assert rcCountOf(dArr, dObj, own) == 1;
+}
+
 // --- ORC refcount tests ---
 test "rc incref/decref frees at zero" {
 	const arr = createArrayHeap();
