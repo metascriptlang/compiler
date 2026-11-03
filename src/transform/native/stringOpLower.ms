@@ -186,7 +186,7 @@ function targetReads(w: WriteEffects, n: Node, slots: string[], roots: Symbol[])
 	if (root != null) {
 		roots.push(root!);
 		const t = root!.symbolType;
-		if (t != null && (t.kind == TypeKind.Var || t.kind == TypeKind.Ptr)) slots.push(ANY_HEAP_SLOT);
+		if (t != null && t.kind == TypeKind.Ptr) slots.push(ANY_HEAP_SLOT);
 	}
 	let cur: Node | null = n;
 	while (cur != null) {

@@ -238,6 +238,11 @@ function globalSlot(sym: Symbol): string {
 	return `G:${sym.modulePath}|${sym.name}|${sym.disamb}`;
 }
 
+function rootSlot(sym: Symbol): string | null {
+	if (isModuleState(sym)) return globalSlot(sym);
+	return sym.symbolType != null && sym.symbolType.kind == TypeKind.Var ? ANY_HEAP_SLOT : null;
+}
+
 function fieldSlot(property: string): string {
 	return "F:" + property;
 }
@@ -1418,7 +1423,7 @@ function pathFromParams(w: WriteEffects, n: Node, params: Symbol[] | null, d: Lo
 
 export function stepSlot(w: WriteEffects, n: Node): string | null {
 	match (n.kind) {
-		NodeKind.Identifier => { return n.resolvedSym != null && isModuleState(n.resolvedSym!) ? globalSlot(n.resolvedSym!) : null; },
+		NodeKind.Identifier => { return n.resolvedSym != null ? rootSlot(n.resolvedSym!) : null; },
 		NodeKind.MemberExpr => { return heldSlot(w, fieldSlot((n.data as MemberExprData).property), (n.data as MemberExprData).object.nodeType); },
 		NodeKind.ArrayAccess => { return heldSlot(w, ELEMENT_SLOT, (n.data as ArrayAccessData).array.nodeType); },
 		_ => { return null; },
@@ -1475,7 +1480,8 @@ export function pathSlots(w: WriteEffects, n: Node, out: string[]): Symbol | nul
 	match (t.kind) {
 		NodeKind.Identifier => {
 			const sym = t.resolvedSym;
-			if (sym != null && isModuleState(sym)) out.push(globalSlot(sym));
+			const slot = sym != null ? rootSlot(sym) : null;
+			if (slot != null) out.push(slot!);
 			return sym;
 		},
 		NodeKind.MemberExpr => {

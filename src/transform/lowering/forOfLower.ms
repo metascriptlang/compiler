@@ -300,6 +300,7 @@ function reboundSyms(r: Rebound): SymSet {
 function cannotRebind(sym: Symbol | null, rebound: Rebound): boolean {
 	if (sym == null || (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter)) return false;
 	if (hasFlag(sym, SymbolFlag.Global) && hasFlag(sym, SymbolFlag.Mutable)) return false;
+	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Var) return false;
 	return !symSetContains(reboundSyms(rebound), sym);
 }
 
