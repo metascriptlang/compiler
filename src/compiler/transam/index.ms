@@ -9,6 +9,7 @@
 
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
+import { TaAbsentProbes, createAbsentProbes, enterCheckProbes, leaveCheckProbes, knownAbsentAt, recordAbsentAt, recordDiskProbe } from "./absentProbes";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf, isCancelled } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs } from "../../checker/symbol";
@@ -145,6 +146,7 @@ export class TransAmDb {
 	stdPath: string;
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext | null;
+	absent: TaAbsentProbes;
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 	verifying: HashSet<string>;                // modules whose recorded imports are being rechecked for early cutoff
@@ -209,6 +211,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null,
+		absent: createAbsentProbes(),
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 		verifying: new HashSet<string>(),
@@ -632,12 +635,14 @@ const _identityProvider = createFileSystemProvider();
 // `probed` collects the input of each candidate that holds no file, so the check that resolved the import depends on them.
 function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, probed: int32[] | null): string {
 	for (const c of resolveImportWithConfig(importSpec, basePath, db.resolverConfig)) {
-		if (getFileId(db.fileInput, c) < 0) {
+		if (getFileId(db.fileInput, c) < 0 && !knownAbsentAt(db.absent, c, db.revision.value)) {
+			recordDiskProbe(db.absent);
 			const identity = moduleIdentity(c, db.resolverConfig, _identityProvider);
 			if (identity != c && getFileId(db.fileInput, identity) >= 0) return identity;
+			dbEnsureFileLoaded(db, c);
 		}
-		dbEnsureFileLoaded(db, c);
 		if (getFileId(db.fileInput, c) >= 0) return c;
+		recordAbsentAt(db.absent, c, db.revision.value);
 		if (probed != null) probed.push(getInputId(db.fileInput, c, db.revision.value));
 	}
 	return "";
@@ -1033,6 +1038,15 @@ function forgetClientsOfDiscardedUnit(db: TransAmDb, fileId: int32): void {
 
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext | null {
+	enterCheckProbes(db.absent);
+	try {
+		return typeCheckQuery(db, filePath);
+	} finally {
+		leaveCheckProbes(db.absent);
+	}
+}
+
+function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -3054,6 +3068,23 @@ test "a transform and an analysis of a graph-bound header parse the text the loa
 	assert dbTransform(db, "/g/api.h") != null;
 	assert dbAnalyze(db, "/g/api.h") != null;
 	assert dbAnalyze(db, "/g/main.ms") != null;
+}
+
+test "a check probes each absent candidate once and a resolution outside a check finds a file created since" {
+	const dir = resolveTmpDir("absent");
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dir + "/a.ms", "import { m } from \"./missing\";\nimport { n } from \"./missing\";\nexport const a: int32 = 1;\n");
+	const candidates = resolveImportWithConfig("./missing", dir + "/a.ms", db.resolverConfig).length;
+	dbTypeCheck(db, dir + "/a.ms");
+	const inCheck = db.absent.diskProbes;
+	assert dbResolveImport(db, dir + "/a.ms", "./missing") == "";
+	const outside = db.absent.diskProbes - inCheck;
+	writeFile(dir + "/missing.ms", "export const m: int32 = 3;\n");
+	const created = dbResolveImport(db, dir + "/a.ms", "./missing");
+	removeAll(dir);
+	assert inCheck == candidates, `${inCheck} probes for ${candidates} candidates`;
+	assert outside == candidates, `${outside} probes for ${candidates} candidates`;
+	assert created == dir + "/missing.ms", created;
 }
 
 test "an empty file on disk is a module an import resolves to" {
