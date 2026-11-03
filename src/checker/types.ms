@@ -5,7 +5,7 @@ import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLitera
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
 import { isAssignable, sameNominal, sameType } from "./compat";
-import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, BuiltinKind } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, SymbolState, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, BuiltinKind } from "../ast/node";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -2727,7 +2727,21 @@ function pendingBody(gi: Readonly<Type>, declaredParams: string): boolean {
 	const names = splitTopLevel(genericParamNamesOf(declaredParams), ",");
 	if (names.length == 0 || names.length > gi.typeChildren.length) return false;
 	const phantom = isDeclaredStruct(innerBase) && !innerBase.typeFlags.has(TypeFlag.HasGenericParam);
-	return !(phantom && bodyWouldShareTheDeclaration(innerBase, names, gi.typeChildren));
+	return !(phantom && !phantomShaped(innerBase) && bodyWouldShareTheDeclaration(innerBase, names, gi.typeChildren));
+}
+
+function fieldsResolved(base: Readonly<Type>): boolean {
+	const state = base.sym.state;
+	return state == SymbolState.Shaped || state == SymbolState.Checking || state == SymbolState.Checked;
+}
+
+function phantomShaped(base: Readonly<Type>): boolean {
+	if (base.kind != TypeKind.Struct || base.sym == null || base.sym.symbolKind != SymbolKind.Struct) return false;
+	if (base.typeFlags.has(TypeFlag.HasGenericParam) || !fieldsResolved(base)) return false;
+	for (const field of base.typeChildren) {
+		if (hasGenericParams(field)) return false;
+	}
+	return true;
 }
 
 export function instantiateGenericBody(gi: Type, declaredParams: string): void {
@@ -2760,10 +2774,14 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 			_sessionInstances.length = 0;
 		}
 	}
-	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
+	let instBody = body;
+	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) {
+		if (innerBase == null || !phantomShaped(innerBase)) return;
+		instBody = instanceStructOf(innerBase, innerBase.typeChildren.slice());
+	}
 	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
 	// Re-wrap in Ref if the base was Ref<Struct>
-	gi.typeReturn = isRefWrapped ? createRef(body) : body;
+	gi.typeReturn = isRefWrapped ? createRef(instBody) : instBody;
 	_instantiatedBodies = _instantiatedBodies + 1;
 }
 
@@ -5067,6 +5085,10 @@ function substituteStructAll(t: Type, params: Type[], concretes: Type[], seen: C
 	if (t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return createMaybeType(newFieldTypes[0]);
 	}
+	return instanceStructOf(t, newFieldTypes);
+}
+
+function instanceStructOf(t: Type, newFieldTypes: Type[]): Type {
 	const newNames: string[] = [];
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		newNames.push(t.typeNames[ni]);
