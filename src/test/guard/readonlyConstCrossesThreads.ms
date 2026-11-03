@@ -49,6 +49,8 @@ const GENERIC = "struct Account { id: string; }\n"
 	+ "struct Table<T> { name: string; columns: Vec<string>; }\n"
 	+ "struct Rows<T> { name: string; rows: Vec<T>; }\n"
 	+ "type Either<T> = { kind: \"a\"; v: Vec<string> } | { kind: \"b\"; w: T };\n";
+const GENERIC_CALL = "struct Keyed<T> { name: string; keyOf: Sendable<(row: T) => int32>; }\n"
+	+ "function keyed<T>(name: string, keyOf: Sendable<(row: T) => int32>): Keyed<T> { return { name: name, keyOf: keyOf }; }\n";
 const SPAWN = "async function main(): Promise<void> {\n"
 	+ "\tconst f = spawn(() => read());\n"
 	+ "\tconsole.log(await f);\n"
@@ -194,6 +196,24 @@ const cases: Case[] = [
 			+ "const r: Readonly<Rows<Account>> = { name: \"r\", rows: [{ id: \"1\" }] };\n"
 			+ "const e: Readonly<Either<Account>> = { kind: \"a\", v: [\"x\"] };\n"
 			+ "function read(): string { return t.name + String(t.columns.length) + r.rows[0].id + e.kind; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "Readonly consts built by generic calls whose Sendable formal names the type parameter",
+		expect: Expect.Clean,
+		text: CELL + GENERIC_CALL
+			+ "const made: Readonly<Keyed<Cell>> = keyed<Cell>(\"t\", (c: Cell): int32 => c.n + 1);\n"
+			+ "const guessed: Readonly<Keyed<Cell>> = keyed(\"t\", (c: Cell): int32 => c.n);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)) + guessed.keyOf(build(2)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a closure at a generic Sendable formal that captures a module let",
+		expect: Expect.CaptureRefused,
+		text: CELL + GENERIC_CALL
+			+ "let base: int32[] = [1];\n"
+			+ "const made: Readonly<Keyed<Cell>> = keyed<Cell>(\"t\", (c: Cell): int32 => c.n + base[0]);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
 			+ SPAWN,
 	},
 	{

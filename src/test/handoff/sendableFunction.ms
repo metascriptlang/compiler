@@ -227,3 +227,21 @@ test "sendableFunction: a function reached through a field of a parameter is jud
 		"async function f(): Promise<int32> { return await spawn(() => lookup({ get: (k: int32): int32 => { hits = hits + k; return hits; } })); }";
 	assert hasError(built, "uses module-level 'hits'"), "a field function built by the caller reaches module state";
 }
+
+const GENERIC_SENDABLE = `
+struct Rows<T> { name: string; keyOf: Sendable<(row: T) => int32>; }
+function rows<T>(name: string, keyOf: Sendable<(row: T) => int32>): Rows<T> { return { name: name, keyOf: keyOf }; }
+function count<T>(keyOf: Sendable<(row: T) => int32>, row: T): int32 { return keyOf(row); }
+`;
+
+test "sendableFunction: a closure meets a Sendable formal spelled with a type parameter through the same capture check" {
+	const capturing = [
+		GENERIC_SENDABLE + "function f(): int32 {\n\tlet counter: int32 = 0;\n\tconst r = rows<int32>(\"r\", (n: int32): int32 => { counter = counter + n; return counter; });\n\treturn r.keyOf(1);\n}",
+		GENERIC_SENDABLE + "function f(): int32 {\n\tlet counter: int32 = 0;\n\treturn count((n: int32): int32 => { counter = counter + n; return counter; }, 1);\n}",
+	];
+	for (const source of capturing) {
+		assert hasError(source, "mutable variable 'counter' cannot be captured by a Sendable function"), source;
+	}
+	const clean = GENERIC_SENDABLE + "const base: int32 = 2;\nconst r = rows<int32>(\"r\", (n: int32): int32 => n + base);\nconst k = count((n: int32): int32 => n * base, 3);";
+	assert strictErrorCount(clean) == 0;
+}
