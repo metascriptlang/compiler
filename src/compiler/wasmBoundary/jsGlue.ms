@@ -346,9 +346,10 @@ const HANDLE_GLUE = [
 
 const LEAK_EXIT = [
 	"if (typeof process !== \"undefined\") process.on(\"exit\", () => {",
-	"\tfor (const l of __msb.report()) console.error(l);",
-	"\tif (process.env.MSB_LEAKS === \"error\" && __msb.report().length > 0) "
-		+ "process.exitCode = 1;",
+	"\tconst leaks = __msb.report();",
+	"\tfor (const l of leaks) console.error(l);",
+	"\tif (process.env.MSB_LEAKS !== \"error\" || leaks.length === 0) return;",
+	"\tif (!process.exitCode) process.exitCode = 1;",
 	"});",
 ];
 
