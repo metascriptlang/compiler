@@ -11,7 +11,7 @@ import { join, normalize } from "std/fs/path";
 import { mkdir, removeAll, writeFile } from "std/fs";
 import { tmpDir, resolveRuntimeDir, physicalPath } from "../../utils/path";
 
-function staticImportSources(program: Node): string[] {
+function staticImportSources(program: Node | null): string[] {
 	const sources: string[] = [];
 	if (program == null || program.kind != NodeKind.Program) return sources;
 	for (const stmt of (program.data as ProgramData).programStmts) {

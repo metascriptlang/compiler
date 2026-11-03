@@ -3688,6 +3688,7 @@ resetLiftedOps();
 				reuseOps(earlier.ops);
 			}
 			const tree = dbLower(session.check.db!, modPath, transformModuleA2, job);
+			if (tree == null) throw new Error(`internal: ${modPath} has no lowered tree after its graph check`);
 			if (job.ran) {
 				staged.push({ at, job, tree });
 				noteUnitDecls(liftTables, modPath, tree);

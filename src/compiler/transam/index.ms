@@ -182,12 +182,12 @@ interface BoundCheck {
 
 const ABSENT_ENTRY: int32 = -1;
 
-function dbTree(db: TransAmDb, key: int32): Node {
-	return db.trees.get(key) ?? null as unknown as Node;
+function dbTree(db: TransAmDb, key: int32): Node | null {
+	return db.trees.get(key) ?? null;
 }
 
-function dbContext(db: TransAmDb, key: int32): CheckerContext {
-	return db.contexts.get(key) ?? null as unknown as CheckerContext;
+function dbContext(db: TransAmDb, key: int32): CheckerContext | null {
+	return db.contexts.get(key) ?? null;
 }
 
 export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): TransAmDb {
@@ -525,9 +525,9 @@ function refreshInput(db: TransAmDb, key: TaQueryKey): boolean {
 }
 
 // The tree of a file's parse, before any check took it.
-export function dbParse(db: TransAmDb, filePath: string): Node {
+export function dbParse(db: TransAmDb, filePath: string): Node | null {
 	const parsed = dbParsed(db, filePath);
-	if (parsed == null) return null as unknown as Node;
+	if (parsed == null) return null;
 	if (db.handedToCheck != null && db.handedToCheck.has(getFileId(db.fileInput, filePath))) throw new Error(`internal: the parse tree of ${filePath} was handed to its check`);
 	if (parsed.consumedBy != "") throw new Error(`internal: dbParse read the parse of ${filePath} after ${parsed.consumedBy} took it`);
 	return parsed.program;
@@ -593,9 +593,9 @@ function preCheckParse(db: TransAmDb, filePath: string, reader: string): ParsedM
 
 // The tree a check of filePath mutates. A module outside the loaded graph is checked on a clone,
 // because the LSP reads its parse after the check and rechecks it after an edit elsewhere.
-function treeForCheck(db: TransAmDb, filePath: string, reader: string): Node {
+function treeForCheck(db: TransAmDb, filePath: string, reader: string): Node | null {
 	const parsed = preCheckParse(db, filePath, reader);
-	if (parsed == null) return null as unknown as Node;
+	if (parsed == null) return null;
 	if (db.handedToCheck == null && (db.graph == null || findModule(db.graph, filePath) == null)) return cloneNodeForCheck(parsed.program);
 	parsed.consumedBy = reader;
 	return parsed.program;
@@ -1026,9 +1026,9 @@ function forgetClientsOfDiscardedUnit(db: TransAmDb, fileId: int32): void {
 }
 
 // Execute type check query. Returns CheckerContext.
-export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
+export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as CheckerContext;
+	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordGlobalImportEdges(db, filePath, fileId);
 
@@ -1042,7 +1042,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const globals = checkGlobalImports(db, filePath, unchecked);
 
 	const parsed = dbParsed(db, filePath);
-	if (parsed == null) return null as unknown as CheckerContext;
+	if (parsed == null) return null;
 	const implText = db.handedToCheck == null ? implDigest(parsed.program) : "";
 
 	const startVersion = getCancelVersion(db.cancelCtx);
@@ -1053,6 +1053,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	const bound = reusableBound(db, filePath);
 	const program = bound != null ? bound.program : treeForCheck(db, filePath, "dbTypeCheck");
+	if (program == null) throw new Error(`internal: ${filePath} has a parse but no tree to check`);
 
 	const depth = db.depStack.frames.length;
 	const entryDb = _checkingDb;
@@ -1202,9 +1203,9 @@ function recheckImports(db: TransAmDb, key: TaQueryKey): boolean {
 
 // Get the checked program (has resolvedSym/nodeType on AST nodes).
 // Falls back to raw parse if no checked version is cached.
-export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
+export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as Node;
+	if (fileId < 0) return null;
 	const checked = dbTree(db, checkNodeKey(fileId));
 	if (checked != null) return checked;
 	return dbParse(db, filePath);
@@ -1229,15 +1230,16 @@ function checkedUnlessCancelled(db: TransAmDb, filePath: string): CheckerContext
 	return ctx;
 }
 
-export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node {
+export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Node, ctx: CheckerContext, arg: T) => Node, arg: T): Node | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as Node;
+	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
 	if (dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const ctx = checkedUnlessCancelled(db, filePath);
-	if (ctx == null) return null as unknown as Node;
+	if (ctx == null) return null;
 	if (recheckImports(db, key) && dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
+	if (checked == null) throw new Error(`internal: ${filePath} is lowered from a check that kept no tree`);
 	pushFrame(db.depStack, key);
 	const checkKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, checkKey);
@@ -1287,9 +1289,9 @@ function recordSourceAndImplClosure(db: TransAmDb, fileId: int32): void {
 }
 
 // Execute full pipeline: parse → check → transform → analyze
-export function dbAnalyze(db: TransAmDb, filePath: string): Node {
+export function dbAnalyze(db: TransAmDb, filePath: string): Node | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as Node;
+	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Analyze, fileId);
 
 	if (dbMarkGreen(db, key)) {
@@ -1297,15 +1299,15 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	}
 
 	// Ensure upstream queries are computed
-	if (dbParsed(db, filePath) == null) return null as unknown as Node;
+	if (dbParsed(db, filePath) == null) return null;
 	const checkerCtx = checkedUnlessCancelled(db, filePath);
-	if (checkerCtx == null) return null as unknown as Node;
+	if (checkerCtx == null) return null;
 
 	// Fresh parse for transform — checker already mutated its own copy
 	// (enum MemberExpr → Identifier), and transforms also mutate the AST.
 	const analyzeParse = parseSource(dbPreprocess(db, filePath));
-	const program = analyzeParse.ok ? analyzeParse.value : null as unknown as Node;
-	if (program == null) return null as unknown as Node;
+	if (!analyzeParse.ok) return null;
+	const program = analyzeParse.value;
 
 	pushFrame(db.depStack, key);
 	const ckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -1320,23 +1322,23 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 }
 
 // Execute transform query: parse → check → transform (no analyzer)
-export function dbTransform(db: TransAmDb, filePath: string): Node {
+export function dbTransform(db: TransAmDb, filePath: string): Node | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as Node;
+	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Transform, fileId);
 
 	if (dbMarkGreen(db, key)) {
 		return dbTree(db, transformNodeKey(fileId));
 	}
 
-	if (dbParsed(db, filePath) == null) return null as unknown as Node;
+	if (dbParsed(db, filePath) == null) return null;
 	const checkerCtx = checkedUnlessCancelled(db, filePath);
-	if (checkerCtx == null) return null as unknown as Node;
+	if (checkerCtx == null) return null;
 
 	// Fresh parse — checker mutates AST, transforms also mutate
 	const txParse = parseSource(dbPreprocess(db, filePath));
-	const program = txParse.ok ? txParse.value : null as unknown as Node;
-	if (program == null) return null as unknown as Node;
+	if (!txParse.ok) return null;
+	const program = txParse.value;
 
 	pushFrame(db.depStack, key);
 	const tckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -1352,14 +1354,14 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 // ===== High-Level Compile API =====
 
 // Compile source through full pipeline (C backend): parse → check → transform → analyze
-export function dbCompileSource(db: TransAmDb, source: string): Node {
+export function dbCompileSource(db: TransAmDb, source: string): Node | null {
 	const filePath = "__inline__.ms";
 	dbSetFileText(db, filePath, source);
 	return dbAnalyze(db, filePath);
 }
 
 // Compile source for JS backend: parse → check → transform (no analyzer)
-export function dbCompileToJS(db: TransAmDb, source: string): Node {
+export function dbCompileToJS(db: TransAmDb, source: string): Node | null {
 	const filePath = "__inline__.ms";
 	dbSetFileText(db, filePath, source);
 	return dbTransform(db, filePath);
@@ -1707,7 +1709,7 @@ test "position edits and undo refresh checked spans and lower once per revision"
 	dbSetFileText(db, "/reuse/other.ms", "export const other: int32 = 7;");
 	const count: LowerCount = { n: 0 };
 	const first = dbLower(db, path, countLowering, count);
-	const firstCtx = dbTypeCheck(db, path);
+	const firstCtx = dbTypeCheck(db, path)!;
 	const initialRevision = db.revision.value;
 	const fileId = getFileId(db.fileInput, path);
 	const kinds: TaQueryKind[] = [TaQueryKind.Parse, TaQueryKind.TypeCheck, TaQueryKind.Lower];
@@ -1741,7 +1743,7 @@ test "position edits and undo refresh checked spans and lower once per revision"
 		dbSetFileText(db, path, snapshots[i]);
 		const revision = db.revision.value;
 		const lowered = dbLower(db, path, countLowering, count);
-		const ctx = dbTypeCheck(db, path);
+		const ctx = dbTypeCheck(db, path)!;
 		assert ctx.errors.length == 0;
 		assert localTypeName(ctx, "value") == "int32";
 		const decl = (lowered.data as ProgramData).programStmts[0];
@@ -1922,7 +1924,7 @@ export const observed = fa(2);');
 			dbSetFileText(db, paths[1], sourcesB[i]);
 			for (const path of paths) dbParse(db, path);
 			for (const j of indices) {
-				const ctx = dbTypeCheck(db, paths[j]);
+				const ctx = dbTypeCheck(db, paths[j])!;
 				assert ctx.errors.length == 0;
 				const expectedType = j == 3 ? "int32" : types[i];
 				const sym = lookupLocal(ctx.table, names[j]);
@@ -2024,9 +2026,9 @@ import { typeDisplayName } from "../../checker/types";
 
 function checkChain(db: TransAmDb, paths: string[]): CheckerContext {
 	for (const path of paths) dbParse(db, path);
-	let last = null as unknown as CheckerContext;
+	let last: CheckerContext | null = null;
 	for (const path of paths) last = dbTypeCheck(db, path);
-	return last;
+	return last!;
 }
 
 function localTypeName(ctx: CheckerContext, name: string): string {
@@ -2085,7 +2087,7 @@ export const mirrored = observed;');
 		for (const path of paths) dbParse(db, path);
 		const expectedTypes = ["Reading", types[i], types[i], "int32"];
 		for (let j = 0; j < paths.length; j++) {
-			const ctx = dbTypeCheck(db, paths[j]);
+			const ctx = dbTypeCheck(db, paths[j])!;
 			assert ctx.errors.length == 0;
 			assert localTypeName(ctx, names[j]) == expectedTypes[j];
 			const lowered = dbLower(db, paths[j], countLowering, counts[j]);
@@ -2517,7 +2519,7 @@ function oneShotDb(kept: boolean): TransAmDb {
 
 test "a db that is not kept checks its parse tree without cloning it" {
 	const db = oneShotDb(false);
-	const parsed = dbParse(db, "/o/dep.ms");
+	const parsed = dbParse(db, "/o/dep.ms")!;
 	assert typedNodeCount(parsed) == 0;
 	assert checkMessages(db, "/o/dep.ms") == "";
 	assert dbGetCheckedProgram(db, "/o/dep.ms") == parsed;
@@ -2526,7 +2528,7 @@ test "a db that is not kept checks its parse tree without cloning it" {
 
 test "a kept db clones its parse tree and leaves it clean" {
 	const db = oneShotDb(true);
-	const parsed = dbParse(db, "/o/dep.ms");
+	const parsed = dbParse(db, "/o/dep.ms")!;
 	assert checkMessages(db, "/o/dep.ms") == "";
 	assert dbGetCheckedProgram(db, "/o/dep.ms") != parsed;
 	assert typedNodeCount(parsed) == 0;
@@ -2702,14 +2704,14 @@ test "an edit to a high-durability module reaches the check of its importer" {
 	dbSetFileText(db, user, 'import { shared } from "./dep";\nexport const seen = shared;');
 	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, user), getFileId(db.fileInput, dep));
 	setFileDurability(db.fileInput, getFileId(db.fileInput, dep), TaDurability.High, db.revision.value);
-	const first = dbTypeCheck(db, user);
+	const first = dbTypeCheck(db, user)!;
 	assert localTypeName(first, "seen") == "int32";
 	dbSetFileText(db, "/highDep/other.ms", "export const other = 1;");
 	assert dbTypeCheck(db, user) == first;
 	dbSetFileText(db, dep, 'export const shared: string = "s";');
-	assert localTypeName(dbTypeCheck(db, user), "seen") == "string";
+	assert localTypeName(dbTypeCheck(db, user)!, "seen") == "string";
 	dbSetFileText(db, dep, "export const shared: int32 = 1;");
-	assert localTypeName(dbTypeCheck(db, user), "seen") == "int32";
+	assert localTypeName(dbTypeCheck(db, user)!, "seen") == "int32";
 }
 
 const GENERATED_MAC = 'import { Node, NodeKind, DeclKind } from "std/meta";\nexport macro pair(): Node {\n\treturn { kind: NodeKind.SpliceMany, line: 0, column: 0, spliceNodes: [{ kind: NodeKind.ExportDecl, line: 0, column: 0, exportedDecl: { kind: NodeKind.VariableDecl, line: 0, column: 0, declName: "a", declType: "int32", initializer: { kind: NodeKind.NumberLiteral, line: 0, column: 0, value: 1, isFloat: false }, declKind: DeclKind.Const, nameLocation: { line: 0, column: 0 } } }] };\n}\n';
@@ -3002,7 +3004,7 @@ function keepLowering(checked: Node, ctx: CheckerContext, arg: int32): Node {
 	return checked;
 }
 
-function requestWhileCancelled(db: TransAmDb, path: string, query: int32): Node {
+function requestWhileCancelled(db: TransAmDb, path: string, query: int32): Node | null {
 	db.cancelCtx.inputPending = () => true;
 	const tree = query == 0 ? dbTransform(db, path) : query == 1 ? dbAnalyze(db, path) : dbLower(db, path, keepLowering, 0);
 	db.cancelCtx.inputPending = null;

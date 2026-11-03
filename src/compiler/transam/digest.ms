@@ -166,9 +166,9 @@ const USE = "/dg/use.ms";
 const USE_TEXT = 'import { f } from "./dep";\nexport function g(): int32 { return f(1); }';
 
 function measure(db: TransAmDb): string[] {
-	const dep = ifaceDigest(dbTypeCheck(db, DEP));
-	const use = ifaceDigest(dbTypeCheck(db, USE));
-	return [dep, use, implDigest(dbParse(db, DEP)), implDigest(dbParse(db, USE))];
+	const dep = ifaceDigest(dbTypeCheck(db, DEP)!);
+	const use = ifaceDigest(dbTypeCheck(db, USE)!);
+	return [dep, use, implDigest(dbParse(db, DEP)!), implDigest(dbParse(db, USE)!)];
 }
 
 function digests(depText: string, useText: string = USE_TEXT): string[] {
@@ -319,12 +319,12 @@ test "checking importers leaves the exporter digest unchanged" {
 	dbSetFileText(db, DEP, dep);
 	dbSetFileText(db, USE, use);
 	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, USE), getFileId(db.fileInput, DEP));
-	const depCtx = dbTypeCheck(db, DEP);
+	const depCtx = dbTypeCheck(db, DEP)!;
 	const before = ifaceDigest(depCtx);
-	const beforeImpl = implDigest(dbParse(db, DEP));
-	assert errorCount(dbTypeCheck(db, USE)) == 0;
+	const beforeImpl = implDigest(dbParse(db, DEP)!);
+	assert errorCount(dbTypeCheck(db, USE)!) == 0;
 	assert ifaceDigest(depCtx) == before;
-	assert implDigest(dbParse(db, DEP)) == beforeImpl;
+	assert implDigest(dbParse(db, DEP)!) == beforeImpl;
 }
 
 test "a foreign type reference is keyed by its symbol" {
@@ -334,7 +334,7 @@ test "a foreign type reference is keyed by its symbol" {
 	owner.sym = sym;
 	const db = createTransAmDb(100);
 	dbSetFileText(db, DEP, "export class Near { x: int32 = 1; }");
-	const ctx = dbTypeCheck(db, DEP);
+	const ctx = dbTypeCheck(db, DEP)!;
 	const here = ifaceDigest(ctx);
 	const near = ctx.interf[0];
 	near.symbolType.typeChildren.push(owner);
@@ -353,7 +353,7 @@ test "an anonymous foreign symbol has no key" {
 	owner.sym = sym;
 	const db = createTransAmDb(100);
 	dbSetFileText(db, DEP, "export class Near { x: int32 = 1; }");
-	const ctx = dbTypeCheck(db, DEP);
+	const ctx = dbTypeCheck(db, DEP)!;
 	ctx.interf[0].symbolType.typeChildren.push(owner);
 	ctx.interf[0].symbolType.typeNames.push("far");
 	let message = "";

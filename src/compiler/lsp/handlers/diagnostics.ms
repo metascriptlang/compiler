@@ -231,7 +231,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 // ===== Dependency Recording =====
 
 // Record import edges for a file. Called after parsing on didOpen/didChange.
-export function recordImportsForFile(db: TransAmDb, path: string, program: Node): void {
+export function recordImportsForFile(db: TransAmDb, path: string, program: Node | null): void {
 	const fileId = getFileId(db.fileInput, path);
 	if (fileId < 0) return;
 	// Clear stale edges for this file
@@ -355,7 +355,7 @@ test "synthetic checker spans keep both UTF-16 endpoints" {
 	for (let i = 0; i < sources.length; i++) {
 		const db = createTransAmDb(8);
 		dbSetFileText(db, path, sources[i]);
-		const ctx = dbTypeCheck(db, path);
+		const ctx = dbTypeCheck(db, path)!;
 		assert ctx.errors.length == 0;
 		addErrorRange(ctx, messages[0], 1, 3, 9);
 		addErrorFullRange(ctx, messages[1], 1, 9, 2, 3);

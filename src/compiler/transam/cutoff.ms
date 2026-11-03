@@ -238,7 +238,7 @@ test "a module-level extern variable re-exported by another module digests under
 	check(db, [DEP, USER]);
 	const dep = dbTypeCheck(db, DEP);
 	assert symbolKey(lookupLocal(dep.table, "errnoLike")!) == `errnoLike.0.${DEP}`;
-	assert ifaceDigest(dbTypeCheck(db, USER)).contains(`errnoLike.0.${DEP}`);
+	assert ifaceDigest(dbTypeCheck(db, USER)!).contains(`errnoLike.0.${DEP}`);
 }
 
 const SHAPES = "/cut/shapes.ms";

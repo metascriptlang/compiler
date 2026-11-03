@@ -51,7 +51,7 @@ function snapshot(db: TransAmDb, project: Project): string {
 	const lines: string[] = [];
 	for (const path of project.order) dbParse(db, path);
 	for (const path of project.order) {
-		const ctx: CheckerContext = dbTypeCheck(db, path);
+		const ctx = dbTypeCheck(db, path)!;
 		lines.push(`${path}: ${ctx.errors.map((e: CheckerError): string => e.message).join(" | ")}`);
 	}
 	for (const c of project.classes) {

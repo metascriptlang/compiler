@@ -1170,7 +1170,7 @@ test "completion cache: a computation cancelled or overtaken by an input change 
 	resetCancel(db.cancelCtx);
 	fillCompletionCache(cache, snapshot, pos, 0, "", ["{}"]);
 	assert cache.snapshot == null && cache.items.length == 0;
-	const beforeEdit = completionSnapshotOf(db, dbTypeCheck(db, path));
+	const beforeEdit = completionSnapshotOf(db, dbTypeCheck(db, path)!);
 	dbSetFileText(db, path, "const stoptwo = 1;\n");
 	fillCompletionCache(cache, beforeEdit, pos, 0, "", ["{}"]);
 	assert cache.snapshot == null && cache.items.length == 0;
