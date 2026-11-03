@@ -296,7 +296,7 @@ class World(TempCase):
         write(os.path.join(self.llvm, "lib", "clang", "22", "include", "stddef.h"), "stddef\n")
         write(os.path.join(self.llvm, "lib", "clang", "22", "lib", "windows", "clang_rt.builtins-x86_64.lib"), "!<arch>\n")
         self.license = self.path("licenses", "LLVM license.txt")
-        write(self.license, "Apache-2.0 WITH LLVM-exception\n")
+        write(self.license, "The LLVM Project is under the Apache License v2.0 with LLVM Exceptions\n")
         self.versions = {"clang.exe": "22.1.1", "ld.lld.exe": "22.1.1", "llvm-readobj.exe": "22.1.1"}
         self.inspector = os.path.join(self.bin, "llvm-readobj.exe")
         self.patchers = (mock.patch.object(pw, "detectHost", return_value=pe.WINDOWS_X64),
@@ -799,7 +799,7 @@ class CommandLineTest(World):
         self.assertEqual(pw.main(["--llvm-root", self.llvm, "--license", self.license, "--output", out]), 1)
         with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
             self.assertEqual(pe.main(["--verify", out]), 0)
-        self.assertEqual(printed.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=14\n")
+        self.assertEqual(printed.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=14\nnotices match the receipts: files=1\n")
 
     def test_the_license_is_required_on_the_command_line_and_a_missing_one_is_named(self):
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:

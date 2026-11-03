@@ -1274,7 +1274,7 @@ class CommandLineTest(World):
                                   "--library-dir", root]), 0)
         with mock.patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
             self.assertEqual(pe.main(["--verify", out]), 0)
-        self.assertRegex(printed.getvalue(), r"^verified host=x86_64-linux version=21\.1\.8 elf=\d+\n$")
+        self.assertRegex(printed.getvalue(), r"^verified host=x86_64-linux version=21\.1\.8 elf=\d+\nnotices match the receipts: files=\d+\n$")
 
 
 if __name__ == "__main__":

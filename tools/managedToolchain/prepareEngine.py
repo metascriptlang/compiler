@@ -11,7 +11,8 @@ and sha256 each file came from. --verify with --upstream-root checks every file 
 
 On Linux x86_64 prepareLinuxEngine.py makes the bundle and on Windows x86_64 prepareWindowsEngine.py; --verify here checks a
 bundle of any host. A Linux or Windows bundle is read by its own bin/llvm-readobj on a native host of its kind and by an
-explicit --inspector elsewhere.
+explicit --inspector elsewhere. --verify also runs prepareNotices.py: every third-party component the bundle's receipts
+name has its license in a `notices/` directory and every notice belongs to such a component.
 
 A bundle from --llvm-root is a local proof built from installed packages, not an upstream-controlled
 build; its provenance receipt says so and never certifies redistribution.
@@ -671,6 +672,8 @@ def main(argv):
         if args.verify:
             host, version, count = verifyEngine(args.verify, args.inspector)
             print("verified host=%s version=%s %s=%d" % (host, version, {LINUX_X64: "elf", WINDOWS_X64: "pe"}.get(host, "macho"), count))
+            import prepareNotices
+            prepareNotices.report(args.verify)
             if args.upstream_root:
                 print("identical to the upstream archive: files=%d" % auditUpstream(args.verify, args.upstream_root))
             return 0

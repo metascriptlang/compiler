@@ -284,9 +284,11 @@ class WindowsHostContractTest(TempCase):
 
     def test_the_verify_command_names_the_binary_kind_of_a_windows_bundle(self):
         with mock.patch.object(pe, "verifyEngine", return_value=("x86_64-windows", "22.1.1", 13)) as verify, \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
-            self.assertEqual(pe.main(["--verify", self.bundle(), "--inspector", "/x/llvm-readobj"]), 0)
+                mock.patch("prepareNotices.report") as notices, mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            bundle = self.bundle()
+            self.assertEqual(pe.main(["--verify", bundle, "--inspector", "/x/llvm-readobj"]), 0)
         self.assertEqual(out.getvalue(), "verified host=x86_64-windows version=22.1.1 pe=13\n")
+        notices.assert_called_once_with(bundle)
 
 
 class LinuxHostContractTest(TempCase):
@@ -336,7 +338,7 @@ class LinuxHostContractTest(TempCase):
         root = self.linuxBundle()
         for host, count, label in (("x86_64-linux", 4, "elf=4"), ("aarch64-macos", 5, "macho=5")):
             with mock.patch.object(pe, "verifyEngine", return_value=(host, "1.2.3", count)) as verify, \
-                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                    mock.patch("prepareNotices.report"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 self.assertEqual(pe.main(["--verify", root, "--inspector", "/x/llvm-readobj"]), 0)
             self.assertEqual(out.getvalue(), "verified host=%s version=1.2.3 %s\n" % (host, label))
             verify.assert_called_with(root, "/x/llvm-readobj")
