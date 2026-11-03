@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
-import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
+import { functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
@@ -1106,13 +1106,31 @@ function scanFlows(node: Node | null): void {
 		if (n.kind == NodeKind.CallExpr) {
 			const recv = receiverOf(n);
 			const root = recv != null ? pathRoot(recv) : null;
-			if (isLocalBinding(root)) {
+			if (isLocalBinding(root) && mayStoreIntoReceiver(n)) {
 				for (const a of (n.data as CallExprData).arguments) addSource(heldSources, root!, peelConv(a));
 			}
 		}
 		forEachChild(n, visit);
 	};
 	visit(node);
+}
+
+function mayStoreIntoReceiver(call: Node): boolean {
+	if (!call.flags.has(NodeFlag.ExtCall)) return true;
+	const sig = calledRoutineType(call);
+	const formal = sig != null && sig.typeChildren.length > 0 ? sig.typeChildren[0] : null;
+	return formal == null || formal.kind == TypeKind.Var || formal.kind == TypeKind.Sink || holdsPointerByValue(formal, 0);
+}
+
+function holdsPointerByValue(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 8) return true;
+	if (isPrimitiveKind(t.kind)) return false;
+	return match (t.kind) {
+		TypeKind.String | TypeKind.BigInt | TypeKind.Function => false,
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => t.typeChildren.some((c: Type): boolean => holdsPointerByValue(c, depth + 1)),
+		TypeKind.SizedArray => holdsPointerByValue(t.typeReturn, depth + 1),
+		_ => true,
+	};
 }
 
 function storeCause(site: Node, what: BorrowSource, into: string): EffectCause {

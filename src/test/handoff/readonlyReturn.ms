@@ -158,3 +158,18 @@ test "readonlyReturn: a const for-of element of a view parameter borrows that pa
 	assert errors(node + "function f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (let k of t.kids) { k = new Node(); return k; }\n\treturn null;\n}", "escapes its stack frame") == 1;
 	assert errors(node + "function mk(): Node[] { return [new Node()]; }\nfunction f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (const k of mk()) { return k; }\n\treturn null;\n}", "escapes its stack frame") == 1;
 }
+
+const hostShape = node + "struct Host { get: (k: int32) => int32; }\nstruct Ctx { db: Host; }\nstruct Handle { host: Host; n: int32; }\nstruct Kept { host: Host; t: Readonly<Node>; }\nclass Box { f: Readonly<Node> | null = null; }\nstruct Ctx2 { box: Box; }\nclass Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\n";
+const inTask = "const w = spawn(() => { const ctx: Ctx = { db: { get: (k: int32): int32 => k } }; ";
+
+test "readonlyReturn: a by-value receiver holding only function values keeps no argument of a call on it" {
+	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Handle { return { host: host, n: t.n }; }\n" + inTask + "return ctx.db.open(ROOT).n; });", "stores") == 0;
+	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Host { return { ...host }; }\n" + inTask + "const h = ctx.db.open(ROOT); return 0; });", "stores") == 0;
+	assert errors(hostShape + "struct G<T> { host: Host; v: T; }\nfunction open<T>(this host: Host, t: Readonly<Node>, v: T): G<T> { return { host: host, v: v }; }\n" + inTask + "return ctx.db.open(ROOT, 1).v; });", "stores") == 0;
+}
+
+test "readonlyReturn: a receiver call that stores the module const, or a receiver that holds a reference, stays refused" {
+	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return ctx.db.open(ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 1;
+	assert errors(hostShape + "function open(host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return open(ctx.db, ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 1;
+	assert errors(hostShape + "function look(this b: Box, v: Readonly<Node>): int32 { return v.n; }\nconst w = spawn(() => { const c: Ctx2 = { box: new Box() }; const k = c.box.look(ROOT); const h = new Holder(); h.f = c.box.f; return k; });", "stores the module const 'ROOT' into a field") == 1;
+}
