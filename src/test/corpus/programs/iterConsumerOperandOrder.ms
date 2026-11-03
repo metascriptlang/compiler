@@ -1,4 +1,4 @@
-// @stdout: trail a,gen-b,c,gen-d,gen-e,gen-f,gen-g,gen-h,6 | values 5 4 21 4 | v 31
+// @stdout: trail a,gen-b,c,gen-d,gen-e,gen-f,gen-g,gen-i,gen-j,gen-h,6 | values 5 4 21 4 8 11 | v 31
 
 const trail: string[] = [];
 let v: int32 = 1;
@@ -34,6 +34,19 @@ function totalBump(it: Iterator<int32>): int32 {
 	return t;
 }
 
+const cell: int32[] = [5];
+const box = { n: 1 };
+
+function totalSet(it: Iterator<int32>): int32 {
+	let t: int32 = 0;
+	for (const x of it) {
+		t += x;
+		cell[0] = 1000;
+		box.n = 7;
+	}
+	return t;
+}
+
 function pair(a: int32, b: int32[]): int32 {
 	return a + b.length;
 }
@@ -51,5 +64,8 @@ const flag = trail.length > 0;
 const r2 = pair(flag ? mark("c") : 0, collect(gen("d", 3)));
 const r3 = two(collect(gen("e", 2)), collect(gen("f", 1)));
 const r4 = third(v, totalBump(gen("g", 3)), 0);
+const r5 = cell[0] + totalSet(gen("i", 3));
+box.n = 1;
+const r6 = box.n * 10 + totalSet(gen("j", 2));
 trail.push(String(total(gen("h", 4))));
-console.log(`trail ${trail.join(",")} | values ${r1} ${r2} ${r3} ${r4} | v ${v}`);
+console.log(`trail ${trail.join(",")} | values ${r1} ${r2} ${r3} ${r4} ${r5} ${r6} | v ${v}`);
