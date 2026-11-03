@@ -617,6 +617,7 @@ export function isFreshValue(n: Node | null, s: FreshScope): boolean {
 		NodeKind.ArrayLiteral => allStoredFresh((p.data as ArrayLiteralData).elements, s),
 		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, s),
 		NodeKind.NewExpr => allFresh((p.data as NewExprData).newArguments, s) && s.buildsAlone(p),
+		NodeKind.ArrowFunction | NodeKind.FunctionExpr => p.flags.has(NodeFlag.SendableClosure),
 		NodeKind.CallExpr => {
 			const d = p.data as CallExprData;
 			if (isValueOnlyType(p.nodeType)) return true;
