@@ -5958,6 +5958,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 		return "[" + parts.join(", ") + "]";
 	}
 	if (name != "") return name;
+	if (t.kind == TypeKind.Alias && t.typeName != "") return t.typeName;
 	if (t.kind == TypeKind.Ptr && t.typeReturn != null) return "Ptr<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (t.kind == TypeKind.Cursor && t.typeReturn != null) return "Cursor<" + typeDisplayNameInner(t.typeReturn, 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	return match (t.kind) {
@@ -7214,4 +7215,12 @@ test "an optional of a type holding one copy of a generic parameter is never the
 		assert second != first && second.typeReturn == secondPayload, `depth ${depth}: the second copy got the first copy's optional`;
 		assert createMaybeType(secondPayload) == second, `depth ${depth}: the same payload is not interned`;
 	}
+}
+
+test "an alias displays by its declared name" {
+	const w = emptyType();
+	w.kind = TypeKind.Alias;
+	w.typeName = "W";
+	w.typeReturn = createStruct("Plain", [], [], false);
+	assert typeDisplayName(w) == "W", typeDisplayName(w);
 }
