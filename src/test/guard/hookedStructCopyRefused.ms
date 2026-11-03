@@ -6,7 +6,7 @@
 // onCopy has its copy marked so by default (a forced divergence: a field-wise copy would
 // run onDestroy once per copy, so a handle would be closed twice).
 //
-// RED MEANS a copy of such a struct or distinct type, of a struct or tuple holding one, or into
+// RED MEANS a copy of such a struct or distinct type, of a struct, tuple or union holding one, or into
 // a sink position (push, a literal field) compiles again; on the parent this program closes 1,
 // 2 and 4 twice, 6 three times and releases 9 twice. An array assignment shares the array and
 // copies no element.
@@ -17,6 +17,7 @@
 // GUARD-CHECK-FAIL cannot copy 'kept'
 // GUARD-CHECK-FAIL 'Fd' declares onDestroy and no onCopy
 // GUARD-CHECK-FAIL cannot copy 'h'
+// GUARD-CHECK-FAIL cannot copy 'fds[0]'
 
 struct Fd { n: int32; }
 function onDestroy(this f: Fd): void { console.log(`close ${f.n}`); }
@@ -26,6 +27,7 @@ function onDestroy(this h: Handle): void { console.log(`release ${h as int32}`);
 function grab(n: int32): Handle { return n as Handle; }
 
 struct Owner { fd: Fd; tag: int32; }
+type FdOr = Fd | int32;
 
 function run(): void {
 	const a: Fd = { n: 1 };
@@ -49,6 +51,10 @@ function run(): void {
 	const h = grab(9);
 	const g = h; // GUARD-REFUSED
 	console.log(`${h as int32} ${g as int32}`);
+
+	const fds: FdOr[] = [{ n: 10 }, 11];
+	const first = fds[0]; // GUARD-REFUSED
+	console.log(`${fds.length} ${typeof first}`);
 }
 
 run();
