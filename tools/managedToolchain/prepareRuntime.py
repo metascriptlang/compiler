@@ -19,6 +19,14 @@ receipt records it and verification refuses an archive that is not empty. The en
 (`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
 the engine root, as in a full bundle.
 
+`--target x86_64-linux-musl` and `--target aarch64-linux-musl` add the static musl profile of a target, which no run
+without `--target` produces and which is prepared apart from other targets (its receipt is
+`notices/runtime-musl-provenance.json`): `crt1.o`, `libc.a` and `libcompiler_rt.a` of Zig's default musl link, a config that
+links with `-static` (no loader), and the empty archives musl's install makes for `-lm -lpthread -ldl -lrt` and the other
+libraries its `libc.a` already holds. Production refuses a Zig run that names another target or carries a loader, PIE or
+shared-object argument; verification refuses a linked file that is not a static executable of the target's machine and
+runs it when the producer host executes that machine. There is no shared-object or dynamic musl profile.
+
 `--shared` adds the shared-object profile of each glibc target to a prepared RUNTIME_DIR, which is only read. NEW_DIR
 receives an overlay of new paths: `<target>.so.cfg` (`clang --config RUNTIME/T.so.cfg -c x.c`, then `... x.o -o libx.so`),
 the `<target>.so/` directory of the link inputs of Zig's `-shared` link line, and
@@ -34,6 +42,7 @@ import errno
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -141,6 +150,10 @@ REMOVED_DISABLED_FEATURES += [{
 REMOVED_DISABLED_FEATURES_AARCH64_LINUX = [dict(e, target="aarch64-linux-gnu.2.31") for e in REMOVED_DISABLED_FEATURES
                                            if e["target"] == "aarch64-windows-gnu"]
 
+REMOVED_DISABLED_FEATURES_MUSL = [dict(e, target=musl) for musl, source in (
+    ("x86_64-linux-musl", "x86_64-linux-gnu.2.31"), ("aarch64-linux-musl", "aarch64-windows-gnu"))
+    for e in REMOVED_DISABLED_FEATURES if e["target"] == source]
+
 GNU_LINUX = {
     "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
     "driverFlags": ["-no-pie"],
@@ -157,6 +170,24 @@ TARGETS = {
     "x86_64-linux-gnu.2.31": GNU_LINUX,
     "aarch64-linux-gnu.2.31": GNU_LINUX,
 }
+# The static musl profile of a target, which a run without --target does not produce: Zig's default musl link has `crt1.o`,
+# `libc.a` and `libcompiler_rt.a`, and musl's install makes empty archives for the libraries its `libc.a` already holds.
+MUSL_EMPTY_ARCHIVES = ["libm.a", "librt.a", "libpthread.a", "libutil.a", "libresolv.a", "libdl.a", "libcrypt.a", "libxnet.a"]
+MUSL_STATIC = {
+    "fixture": "runtimeMusl.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
+    "driverFlags": ["-static"], "emptyArchives": MUSL_EMPTY_ARCHIVES, "linkage": "static",
+    "requiredInputs": ["crt1.o", "libc.a"], "refusedLinkArgs": ("--dynamic-linker", "-pie", "--pie", "-shared"),
+    "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"]},
+}
+MUSL_TARGETS = {
+    "x86_64-linux-musl": dict(MUSL_STATIC, tripleArch="x86_64", machine=62, machineName="x86_64"),
+    "aarch64-linux-musl": dict(MUSL_STATIC, tripleArch="aarch64", machine=183, machineName="aarch64"),
+}
+PRODUCIBLE_TARGETS = dict(TARGETS, **MUSL_TARGETS)
+MUSL_OUTPUT = "ok sum=9 sqrt=1.414 wide=120 eps=1 tls=7 pow=1024\n"
+HOST_MACHINES = {"x86_64": ("x86_64", "amd64"), "aarch64": ("aarch64", "arm64")}
+MUSL_RECEIPT = "notices/runtime-musl-provenance.json"
+RECEIPT = "notices/runtime-provenance.json"
 # What a linked glibc executable of each GNU target must be: ELF machine and the loader it names.
 # The loader's soname is `.so.2` on x86_64 and `.so.1` on aarch64, so each target spells its own.
 ELF_TARGETS = {
@@ -171,6 +202,7 @@ SHARED_TARGETS = {target: GNU_SHARED for target in ELF_TARGETS}
 SHARED_PROVENANCE = "notices/runtime-shared-provenance.json"
 # Executable startup on a link line of a shared object, and the soname of the fixture.
 SHARED_REFUSED = ("--dynamic-linker", "--no-dynamic-linker", "--entry", "-pie", "-soname")
+PT_DYNAMIC = 2
 PT_INTERP = 3
 ET_DYN = 3
 
@@ -263,14 +295,36 @@ def selectLines(stderr, fixture, output):
     return compile_[0], link[0]
 
 
-def selectTargets(names, allowed=TARGETS):
-    chosen = list(names) if names else list(allowed)
+def selectTargets(names, allowed=None):
+    defaults = TARGETS if allowed is None else allowed
+    allowed = PRODUCIBLE_TARGETS if allowed is None else allowed
+    chosen = list(names) if names else list(defaults)
     for name in chosen:
         if name not in allowed:
             raise pe.EngineError("target %s is not supported; allowed: %s" % (name, ", ".join(allowed)))
     if len(set(chosen)) != len(chosen):
         raise pe.EngineError("duplicate target in %s" % chosen)
+    if any(t in MUSL_TARGETS for t in chosen) and not all(t in MUSL_TARGETS for t in chosen):
+        raise pe.EngineError("a musl target is prepared apart from the glibc, Windows and wasm targets: %s" % chosen)
     return chosen
+
+
+def receiptPath(targets):
+    return MUSL_RECEIPT if all(t in MUSL_TARGETS for t in targets) else RECEIPT
+
+
+def checkLinkage(target, spec, compile_, items):
+    """A static target's Zig run names this target's triple, carries no loader, PIE or shared-object argument, and
+    links the startup file and the libc the config will name."""
+    if not re.match(r"^%s-[a-z]+-linux[0-9.]*-musl$" % spec["tripleArch"], compile_["target"]):
+        raise pe.EngineError("%s: Zig compiled for %s, not a %s musl target" % (target, compile_["target"], spec["tripleArch"]))
+    refused = [v for kind, v in items if kind == "arg" and v in spec["refusedLinkArgs"]]
+    if refused:
+        raise pe.EngineError("%s: a static link line carries %s" % (target, ", ".join(refused)))
+    names = [os.path.basename(v) for kind, v in items if kind == "input"]
+    missing = [n for n in spec["requiredInputs"] if n not in names]
+    if missing:
+        raise pe.EngineError("%s: the link line has no %s among %s" % (target, ", ".join(missing), names))
 
 
 def checkName(name):
@@ -295,7 +349,7 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     engine = "%s/%s" % (here, engineRelative)
     lines = [configLine(["-target", spec.get("clangTarget") or compile_["target"]]),
              configLine(["-Xclang", "-target-cpu", "-Xclang", compile_["cpu"]])]
-    if target in ELF_TARGETS:
+    if target in ELF_TARGETS or target in MUSL_TARGETS:
         lines.append(configLine(["--sysroot=%s/%s" % (here, directory)]))
     lines += [configLine(["-Xclang", "-target-feature", "-Xclang", f]) for f in compile_["features"]]
     if compile_["pic"]:
@@ -323,6 +377,7 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
     carried, notCarried = [], []
     for feature in features:
         entry = next((e for e in REMOVED_DISABLED_FEATURES + REMOVED_DISABLED_FEATURES_AARCH64_LINUX
+                      + REMOVED_DISABLED_FEATURES_MUSL
                       if e["feature"] == feature
                       and (e["zig"], e["engineMajor"], e["target"], e["cpu"]) == (
                           zigVersion, engineMajor, target, cpu)), None)
@@ -335,7 +390,7 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
 
 def runZig(zig, target, work, spec=None, directory=None):
     """One Zig compile and link of the target's fixture. Returns (stderr, cacheRoot, output)."""
-    spec = spec or TARGETS[target]
+    spec = spec or PRODUCIBLE_TARGETS[target]
     private = os.path.join(work, directory or target)
     cache = os.path.join(private, "global")
     output = os.path.join(private, "fixture.out")
@@ -587,7 +642,7 @@ def copyTargetHeaders(isystem, output, zigLib, copied):
 
 
 def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative, major, copied):
-    spec = TARGETS[target]
+    spec = PRODUCIBLE_TARGETS[target]
     stderr, cacheRoot, out = runZig(zig, target, work)
     fixture = os.path.join(FIXTURES, spec["fixture"])
     compileLine, linkLine = selectLines(stderr, fixture, out)
@@ -596,6 +651,8 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
     linker, items = parseLinkArgv(linkLine, out, objectName, cacheRoot, os.path.dirname(out))
     if linker != spec["linker"]:
         raise pe.EngineError("%s linked with %s, expected %s" % (target, linker, spec["linker"]))
+    if spec.get("linkage"):
+        checkLinkage(target, spec, compile_, items)
     zigLib = os.path.dirname(compile_["isystem"][0])
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
@@ -621,6 +678,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
         "notices": notices,
         "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags",
         "inputsNormalized": "debug sections stripped, stub symbol tables stripped; archive members renamed NNNN-name and the archive rebuilt deterministically",
+        **({"linkage": spec["linkage"]} if spec.get("linkage") else {}),
     }
 
 
@@ -636,7 +694,7 @@ def writeProvenance(output, zigId, host, engineVersion, engineRelative, records)
                        "(Linux uapi headers) or the glibc stub inputs beyond libc/glibc/LICENSES"],
     }
     os.makedirs(os.path.join(output, "notices"), exist_ok=True)
-    pe.writeText(os.path.join(output, "notices", "runtime-provenance.json"),
+    pe.writeText(os.path.join(output, receiptPath([r["target"] for r in records])),
                  json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
 
@@ -886,7 +944,7 @@ def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries
     -l<name> for each of libraries. Any nonzero exit or any stderr (an unhonored CPU feature
     warns) is an error. The fixture is the target's executable one unless spec names a profile,
     and name keeps the profile's files apart from the target's. Returns the linked binary."""
-    fixture = os.path.join(FIXTURES, (spec or TARGETS[target])["fixture"])
+    fixture = os.path.join(FIXTURES, (spec or PRODUCIBLE_TARGETS[target])["fixture"])
     name = name or target
     obj, binary = os.path.join(work, name + ".o"), os.path.join(work, name + ".bin")
     steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
@@ -945,10 +1003,14 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
                                          stderr=subprocess.PIPE, universal_newlines=True)
     for record in records:
         prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
-        checkConfig(run, os.path.join(link, "bin", "clang"),
-                    ["--config", os.path.join(copy, record["target"] + ".cfg")],
-                    record["target"], work, prefixes,
-                    libraryNames(record["libraryAliases"], record["emptyArchives"]))
+        binary = checkConfig(run, os.path.join(link, "bin", "clang"),
+                             ["--config", os.path.join(copy, record["target"] + ".cfg")],
+                             record["target"], work, prefixes,
+                             libraryNames(record["libraryAliases"], record["emptyArchives"]))
+        if record["target"] in MUSL_TARGETS:
+            problem, record["ranOnProducer"] = staticProblem(binary, record["target"], work)
+            if problem:
+                raise pe.EngineError("%s: %s" % (record["target"], problem))
 
 
 def libraryNames(aliases, archives=()):
@@ -964,7 +1026,7 @@ def sandboxed(profile, work, command):
 
 
 def elfProblem(path, target="x86_64-linux-gnu.2.31"):
-    expected = ELF_TARGETS[target]
+    expected = dict(ELF_TARGETS, **{t: {"machine": m["machine"], "name": m["machineName"]} for t, m in MUSL_TARGETS.items()})[target]
     with open(path, "rb") as f:
         head = f.read(20)
     machine = int.from_bytes(head[18:20], "little")
@@ -990,6 +1052,43 @@ def elfInterpreterProblem(path, target):
     return None
 
 
+def elfStaticProblem(path, target):
+    """The ELF is a loadable executable of target with no PT_INTERP and no PT_DYNAMIC: it names no loader and no
+    shared library."""
+    problem = elfProblem(path, target)
+    if problem:
+        return problem
+    with open(path, "rb") as f:
+        data = f.read()
+    offset, size, count = (int.from_bytes(data[a:a + n], "little") for a, n in ((32, 8), (54, 2), (56, 2)))
+    if not count or size != 56 or offset + size * count > len(data):
+        return "invalid program header table"
+    kinds = [int.from_bytes(data[offset + i * size:offset + i * size + 4], "little") for i in range(count)]
+    if 1 not in kinds:
+        return "has no loadable segment"
+    dynamic = [k for k in kinds if k in (PT_INTERP, PT_DYNAMIC)]
+    return "is not static: program headers %s" % dynamic if dynamic else None
+
+
+def runProblem(binary, target, work):
+    """Run a static musl executable where the host runs its machine and compare the output. Returns (problem or
+    None, whether it ran); another host does not run it."""
+    name = MUSL_TARGETS[target]["machineName"]
+    if not (sys.platform.startswith("linux") and platform.machine().lower() in HOST_MACHINES[name]):
+        return None, False
+    ran = subprocess.run([binary], cwd=work, env={}, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         universal_newlines=True, timeout=60)
+    if ran.returncode != 0 or ran.stdout != MUSL_OUTPUT or ran.stderr:
+        return "run gave %d %r %r, not %r" % (ran.returncode, ran.stdout, ran.stderr, MUSL_OUTPUT), True
+    return None, True
+
+
+def staticProblem(binary, target, work):
+    """The static check and, where the host can, the run of a musl executable. Returns (problem or None, ran)."""
+    problem = elfStaticProblem(binary, target)
+    return (problem, False) if problem else runProblem(binary, target, work)
+
+
 def glibcSymbolProblem(nm, path, limit=(2, 31), requiredSymbol="printf"):
     needed = [l.split()[-1] for l in pe.run([nm, "-D", path]).splitlines() if "@GLIBC_" in l]
     versions = [tuple(int(n) for n in re.search(r"@GLIBC_([\d.]+)", s).group(1).split(".")) for s in needed]
@@ -1007,7 +1106,7 @@ def prove(engine, runtime, denied, zig=None, targets=None):
     engine, runtime = os.path.realpath(engine), os.path.realpath(runtime)
     pe.verifyEngine(engine)
     targets = selectTargets(targets)
-    with open(os.path.join(runtime, "notices", "runtime-provenance.json")) as f:
+    with open(os.path.join(runtime, receiptPath(targets))) as f:
         receipt = json.load(f)
     depth = checkEngineRelative(receipt["engineRelative"])
     work = os.path.realpath(tempfile.mkdtemp(prefix="runtime-proof-"))
@@ -1065,6 +1164,12 @@ def prove(engine, runtime, denied, zig=None, targets=None):
                     raise pe.EngineError("%s run of %s: %r %r" % (target, os.path.basename(program),
                                                                   ran.stdout, ran.stderr))
             print("%s: linked and ran (also with -l%s): %s" % (target, " -l".join(libraries), EXPECTED_OUTPUT.strip()))
+        elif target in MUSL_TARGETS:
+            problem, ran = staticProblem(binary, target, work)
+            if problem:
+                raise pe.EngineError("%s: %s" % (target, problem))
+            print("%s: linked, static ELF checked; %s" % (target, "ran: " + MUSL_OUTPUT.strip() if ran
+                                                         else "not run (host cannot execute this machine)"))
         else:
             problem = elfProblem(binary, target) or elfInterpreterProblem(binary, target) or glibcSymbolProblem(nm, binary)
             if problem:

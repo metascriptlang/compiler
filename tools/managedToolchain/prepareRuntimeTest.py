@@ -124,10 +124,37 @@ class TargetAndConfigTest(unittest.TestCase):
         self.assertEqual(pr.selectTargets([]), ["wasm32-wasi", "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
         self.assertEqual(pr.selectTargets(["wasm32-wasi"]), ["wasm32-wasi"])
         self.assertEqual(pr.selectTargets(["aarch64-linux-gnu.2.31"]), ["aarch64-linux-gnu.2.31"])
-        for bad in (["aarch64-linux-gnu"], ["aarch64-linux-gnu.2.30"], ["aarch64-linux-musl"], ["x86_64-linux-gnu"],
-                    ["wasm32-wasi", "wasm32-wasi"]):
+        for bad in (["aarch64-linux-gnu"], ["aarch64-linux-gnu.2.30"], ["x86_64-linux-gnu"], ["wasm32-wasi", "wasm32-wasi"],
+                    ["x86_64-linux-musl", "wasm32-wasi"], ["x86_64-linux-musl", "x86_64-linux-musl"]):
             with self.assertRaises(pe.EngineError):
                 pr.selectTargets(bad)
+
+    def test_a_musl_target_is_named_to_be_prepared_and_has_its_own_receipt(self):
+        self.assertEqual(pr.selectTargets(["x86_64-linux-musl", "aarch64-linux-musl"]), ["x86_64-linux-musl", "aarch64-linux-musl"])
+        self.assertEqual(pr.receiptPath(["aarch64-linux-musl"]), "notices/runtime-musl-provenance.json")
+        self.assertEqual(pr.receiptPath(["wasm32-wasi", "x86_64-linux-gnu.2.31"]), "notices/runtime-provenance.json")
+
+    def test_a_musl_link_is_static_names_its_own_triple_and_carries_no_loader_or_pie(self):
+        spec = pr.MUSL_TARGETS["x86_64-linux-musl"]
+        items = [("input", "/c/crt1.o"), ("input", "/c/libc.a"), ("arg", "-static")]
+        pr.checkLinkage("x86_64-linux-musl", spec, {"target": "x86_64-unknown-linux-musl"}, items)
+        for compile_, bad, message in (({"target": "aarch64-unknown-linux-musl"}, items, "not a x86_64 musl"),
+                                       ({"target": "x86_64-unknown-linux-gnu"}, items, "not a x86_64 musl"),
+                                       ({"target": "x86_64-unknown-linux-musl"}, items + [("arg", "--dynamic-linker")], "carries"),
+                                       ({"target": "x86_64-unknown-linux-musl"}, items + [("arg", "-pie")], "carries"),
+                                       ({"target": "x86_64-unknown-linux-musl"}, items[:1], "no libc.a")):
+            with self.assertRaisesRegex(pe.EngineError, message):
+                pr.checkLinkage("x86_64-linux-musl", spec, compile_, bad)
+
+    def test_a_musl_config_links_static_with_the_sysroot_and_the_target_directory(self):
+        spec = pr.MUSL_TARGETS["aarch64-linux-musl"]
+        compile_ = {"target": "aarch64-unknown-linux-musl", "cpu": "generic", "features": [], "pic": [], "defines": []}
+        items = [("arg", "-static"), ("input", "/c/crt1.o"), ("input", "/c/libc.a")]
+        lines = pr.renderConfig("aarch64-linux-musl", spec, compile_, items, ["generic-musl"], "..", "22").splitlines()
+        self.assertIn("--sysroot=<CFGDIR>/aarch64-linux-musl", lines)
+        self.assertEqual(lines[lines.index("-nostdlib") + 1], "-static")
+        self.assertIn("-Xlinker <CFGDIR>/aarch64-linux-musl/libc.a", lines)
+        self.assertFalse([l for l in lines if "dynamic-linker" in l or "-pie" in l])
 
     def test_config_refuses_tokens_that_would_need_quoting(self):
         for bad in ("a b", 'a"b', "a'b", "a\\b", "a;b", "$HOME", ""):
@@ -203,11 +230,14 @@ class FeatureTranslationTest(unittest.TestCase):
             for other in ((arm, "apple-m1", "0.16.0", "22"), (arm, "generic", "0.17.0", "22"),
                           (arm, "generic", "0.16.0", "21"), (arm, "generic", "0.16.0", "24"),
                           ("aarch64-linux-gnu", "generic", "0.16.0", "22"),
-                          ("aarch64-linux-musl", "generic", "0.16.0", "22"),
                           ("x86_64-linux-gnu.2.31", "generic", "0.16.0", "22")):
                 self.assertEqual(pr.translateFeatures([feature], *other)[0], [feature], msg=(feature, other))
         self.assertEqual(pr.translateFeatures(["+tme", "-sve", "-bogus"], arm, "generic", "0.16.0", "22")[0],
                          ["+tme", "-sve", "-bogus"])
+
+    def test_the_musl_targets_leave_out_the_features_their_glibc_and_windows_twins_do(self):
+        self.assertEqual(pr.translateFeatures(["-amx-transpose", "+sse2"], "x86_64-linux-musl", "x86-64", "0.16.0", "22")[0], ["+sse2"])
+        self.assertEqual(pr.translateFeatures(["-zcz", "+neon"], "aarch64-linux-musl", "generic", "0.16.0", "22")[0], ["+neon"])
 
     def test_an_engine_23_leaves_out_what_it_no_longer_defines_and_keeps_the_rest(self):
         self.assertEqual(self.split(["-amx-tf32", "-amx-transpose", "-false-deps-lzcnt-tzcnt", "-amx-tile", "+sse2"],
@@ -1135,6 +1165,41 @@ class ProofHelperTest(TempCase):
                                            ("noNul", [b"/lib/ld-linux-aarch64.so.1"], arm),
                                            ("longer", [b"/lib/ld-linux-aarch64.so.1x\0"], arm)):
             self.assertIn("interpreter is", pr.elfInterpreterProblem(self.elf(name, interpreters), target), msg=name)
+
+    def segments(self, name, kinds, machine=62):
+        """A little-endian ELF64 whose program headers have the given types."""
+        body = bytearray(64 + 56 * len(kinds))
+        body[:20] = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little")
+        body[32:40] = (64).to_bytes(8, "little")
+        body[54:58] = (56).to_bytes(2, "little") + len(kinds).to_bytes(2, "little")
+        for index, kind in enumerate(kinds):
+            body[64 + 56 * index:68 + 56 * index] = kind.to_bytes(4, "little")
+        with open(self.path(name), "wb") as f:
+            f.write(body)
+        return self.path(name)
+
+    def test_a_static_musl_executable_has_load_segments_and_no_interpreter_or_dynamic_section(self):
+        musl = "x86_64-linux-musl"
+        self.assertIsNone(pr.elfStaticProblem(self.segments("ok", [1, 1, 4]), musl))
+        self.assertIn("not static", pr.elfStaticProblem(self.segments("interp", [3, 1]), musl))
+        self.assertIn("not static", pr.elfStaticProblem(self.segments("dynamic", [1, 2]), musl))
+        self.assertIn("no loadable", pr.elfStaticProblem(self.segments("empty", [4]), musl))
+        self.assertIsNone(pr.elfStaticProblem(self.segments("arm", [1], 183), "aarch64-linux-musl"))
+        self.assertIn("aarch64", pr.elfStaticProblem(self.segments("wrong", [1], 62), "aarch64-linux-musl"))
+
+    def test_a_static_musl_run_happens_only_on_a_host_of_its_machine_and_compares_the_output(self):
+        musl = "aarch64-linux-musl"
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertEqual(pr.runProblem("/x", musl, self.dir), (None, False))
+        with mock.patch.object(sys, "platform", "linux"), mock.patch.object(pr.platform, "machine", return_value="x86_64"):
+            self.assertEqual(pr.runProblem("/x", musl, self.dir), (None, False))
+        done = lambda out, rc=0: mock.Mock(returncode=rc, stdout=out, stderr="")
+        with mock.patch.object(sys, "platform", "linux"), mock.patch.object(pr.platform, "machine", return_value="aarch64"):
+            with mock.patch.object(pr.subprocess, "run", return_value=done(pr.MUSL_OUTPUT)):
+                self.assertEqual(pr.runProblem("/x", musl, self.dir), (None, True))
+            with mock.patch.object(pr.subprocess, "run", return_value=done("other\n")):
+                problem, ran = pr.runProblem("/x", musl, self.dir)
+                self.assertTrue(ran and "run gave 0" in problem)
 
     def test_glibc_symbol_oracle_matches_the_consumer_without_loosening_the_limit(self):
         with mock.patch.object(pe, "run", return_value=" U __libc_start_main@GLIBC_2.17\n U fputs@GLIBC_2.17\n"):
