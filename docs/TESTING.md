@@ -314,11 +314,11 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   reported inside `std/**` means the builder is older than the commit that
   introduced it (`git log -S'<Name>' -- src/checker`); rebuild `./msc` with the
   installed `msc`.
-- **Bootstrap-only std guards:** keep a capability guard such as
-  `when (mscReturnsBorrowedReference)` until one sync
-  cycle after the compiler change lands and every builder can read the guarded
-  declarations. The capability is defined in `src/compiler/defines.ms`; the
-  guarded runtime declarations are not optional behavior for the new compiler.
+- **Bootstrap-only std guards:** when std needs a compiler change the previous
+  builder lacks, guard it with a capability symbol `when (msc<Capability>)`,
+  defined in `createDefineTable` (`src/compiler/defines.ms`), and drop the
+  guard once every builder carries the change. The guarded declarations are not
+  optional behavior for the new compiler.
 - **A source-matched binary can still carry its builder's codegen bugs.** When
   the change fixes codegen or lowering used by the compiler itself, build stage 1
   with the previous builder, then build the candidate with stage 1. Keep both
