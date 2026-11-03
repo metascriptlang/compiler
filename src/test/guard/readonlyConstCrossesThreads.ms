@@ -18,6 +18,7 @@ const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const MODULE_STATE_RULE = "module state crosses threads only as";
 const WRITE_RULE = "cannot write through Readonly";
+const CAPTURE_RULE = "cannot be captured by a Sendable function";
 
 let failed = 0;
 
@@ -31,7 +32,7 @@ if (!isFile(msc)) {
 	exit(1);
 }
 
-enum Expect { Clean, ModuleState, WriteRefused }
+enum Expect { Clean, ModuleState, CaptureRefused, WriteRefused }
 
 interface Case {
 	name: string;
@@ -41,7 +42,10 @@ interface Case {
 
 const CELL = "interface Cell { n: int32; tag: string; }\n"
 	+ "function build(n: int32): Cell { return { n: n, tag: \"t\" }; }\n";
-const SPAWN = "async function main(): Promise<void> {\n"
+const TABLE = CELL
+	+ "struct Table { name: string; keyOf: Sendable<(c: Cell) => int32>; }\n"
+	+ "function table(name: string, keyOf: Sendable<(c: Cell) => int32>): Table { return { name, keyOf }; }\n";
+const SPAWN ="async function main(): Promise<void> {\n"
 	+ "\tconst f = spawn(() => read());\n"
 	+ "\tconsole.log(await f);\n"
 	+ "}\n"
@@ -126,6 +130,59 @@ const cases: Case[] = [
 			+ SPAWN,
 	},
 	{
+		name: "a Readonly const built by a call that takes a Sendable closure literal",
+		expect: Expect.Clean,
+		text: TABLE
+			+ "const made: Readonly<Table> = table(\"t\", (c: Cell): int32 => c.n + 1);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const literal holding a Sendable function expression",
+		expect: Expect.Clean,
+		text: TABLE
+			+ "const made: Readonly<Table> = { name: \"t\", keyOf: function (c: Cell): int32 { return c.n; } };\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Sendable closure literal that captures a Readonly module const",
+		expect: Expect.Clean,
+		text: TABLE
+			+ "const base: Readonly<int32[]> = [1];\n"
+			+ "const made: Readonly<Table> = table(\"t\", (c: Cell): int32 => c.n + base[0]);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Sendable closure literal that captures a module let",
+		expect: Expect.CaptureRefused,
+		text: TABLE
+			+ "let base: int32[] = [1];\n"
+			+ "const made: Readonly<Table> = table(\"t\", (c: Cell): int32 => c.n + base[0]);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Sendable closure literal that reads a mutable class a module const holds",
+		expect: Expect.ModuleState,
+		text: TABLE + FACTORY
+			+ "const F: Factory = new Factory();\n"
+			+ "const made: Readonly<Table> = table(\"t\", (c: Cell): int32 => c.n + F.cache.length);\n"
+			+ "function read(): int32 { return made.keyOf(build(1)); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const holding a plain closure literal",
+		expect: Expect.ModuleState,
+		text: CELL
+			+ "struct Plain { name: string; keyOf: (c: Cell) => int32; }\n"
+			+ "function plain(name: string, keyOf: (c: Cell) => int32): Plain { return { name, keyOf }; }\n"
+			+ "const made: Readonly<Plain> = plain(\"t\", (c: Cell): int32 => c.n);\n"
+			+ "function read(): int32 { return made.name.length; }\n"
+			+ SPAWN,
+	},
+	{
 		name: "a write through an alias of a Readonly const",
 		expect: Expect.WriteRefused,
 		text: CELL
@@ -152,6 +209,9 @@ for (const c of cases) {
 			},
 			Expect.ModuleState => {
 				if (r.exitCode == 0 || !out.includes(MODULE_STATE_RULE)) report(`${name}: module state not refused: ${out}`);
+			},
+			Expect.CaptureRefused => {
+				if (r.exitCode == 0 || !out.includes(CAPTURE_RULE)) report(`${name}: mutable capture not refused: ${out}`);
 			},
 			Expect.WriteRefused => {
 				if (r.exitCode == 0 || !out.includes(WRITE_RULE)) report(`${name}: write not refused: ${out}`);
