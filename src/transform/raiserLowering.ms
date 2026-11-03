@@ -93,17 +93,16 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerStaticInit(result, ctx);
-	result = lowerRestParams(result, ctx);
 	result = lowerObjectSpread(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = materializeMaybeReads(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
+	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerForLoop(result, ctx);
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
-	result = lowerNamespaceValues(result);
 	// Result.ok/err are `static extern` (no body, no nativeName) — Raiser
 	// cannot dispatch via either funcMap or CallHost. Desugar to ObjectLiteral
 	// here, matching the JS-backend pattern (transform/index.ms:91). Without
@@ -121,6 +120,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	if (placed) result = lowerReturnThroughFinally(result, ctx, true);
 	result = lowerActorClasses(result, ctx);
 	result = lowerAwaitSpill(result, ctx);
+	result = lowerNamespaceValues(result);
 	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerAsync(result, ctx);
 	result = lowerCtorInit(result, ctx);
