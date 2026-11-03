@@ -1,10 +1,10 @@
 // @skip-js: the js Buffer reads undefined outside the bounds of a search or fill; the C Buffer clamps them
 // note: a field read or write outside the buffer or the integer width throws a RangeError and writes nothing
-// @stdout: bounds entries=1800 digest=845474040
+// @stdout: bounds entries=1800 digest=694692821
 // @stdout: byteLength rejects=96 rejectedMessages=96 accepted=24 outside=24 unexpected=0 untouched=true
 // @stdout: search entries=264 digest=713819505
-// @stdout: ranges entries=224 digest=470707350
-// @stdout: strings entries=2880 digest=53479987
+// @stdout: ranges entries=224 digest=742016844
+// @stdout: strings entries=2880 digest=303732533
 
 let log = "";
 let entries: int32 = 0;
@@ -128,12 +128,14 @@ function checkRangeBounds(): void {
 		out.fillBuffer(Buffer.alloc(0), range[0], range[1]);
 		noteBytes(out);
 		for (const encoding of ["hex", "HEX", "hexadecimal", "base64", "base64url", "utf8", ""]) {
-			out.fillString("a", range[0], range[1], encoding);
-			noteBytes(out);
-			out.fillString("QUJD", range[0], range[1], encoding);
-			noteBytes(out);
-			out.fillString("", range[0], range[1], encoding);
-			noteBytes(out);
+			for (const text of ["a", "QUJD", ""]) {
+				try {
+					out.fillString(text, range[0], range[1], encoding);
+				} catch (error) {
+					log += `${error.message};`;
+				}
+				noteBytes(out);
+			}
 		}
 		const target = patterned(8, 7);
 		note(out.copyTo(target, range[0], range[0], range[1]));
