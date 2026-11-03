@@ -444,7 +444,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		for (const ov of info.sym.overloads) declared.push(ov);
 		for (const sym of declared) {
 			const idx = globalFuncMap.symbolIndices.get(sym);
-			if (idx != null) exports.push({ name: info.name, funcIdx: idx, arity: projectDecls[idx].paramSyms.length as int32 });
+			if (idx == null) continue;
+			const arity = projectDecls[idx].paramSyms.length;
+			const sinks: boolean[] = [];
+			for (let i = 0; i < arity; i += 1) sinks.push(i < sym.symbolType.typeChildren.length && sym.symbolType.typeChildren[i].kind == TypeKind.Sink);
+			exports.push({ name: info.name, funcIdx: idx, arity: arity as int32, sinks });
 		}
 	}
 

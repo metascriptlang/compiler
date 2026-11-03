@@ -49,6 +49,7 @@ export interface RaiserExport {
 	name: string;
 	funcIdx: int32;
 	arity: int32;
+	sinks: boolean[];
 }
 
 export interface RaiserModule {

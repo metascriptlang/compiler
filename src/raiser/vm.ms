@@ -257,6 +257,7 @@ export interface RaiserVM {
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
+	hostHeld: RaiserValue[];  // the arguments a host call holds a count on through the run, which the host releases after it
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
@@ -368,7 +369,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false };
 }
 
 // --- Register access ---
@@ -739,7 +740,7 @@ export function execModule(mod: RaiserModule, comptime: boolean = true): RaiserV
 	return vm;
 }
 
-export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[]): RaiserValue {
+export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[], runDropped: boolean = false): RaiserValue {
 	if (funcIdx < 0 || funcIdx >= vm.mod.functions.length) {
 		vmError(vm, `vmCallFunction: function index out of bounds: ${funcIdx}`);
 		return raiserNil();
@@ -762,8 +763,23 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		setRegConform(vm, callee.regOps[i], args[i]);
 		i = i + 1;
 	}
+	if (runDropped && vm.dropped.length > 0) vmDrain(vm);
 	execLoop(vm);
 	return vm.exitValue;
+}
+
+export function vmCallHeld(vm: RaiserVM, funcIdx: number, args: RaiserValue[], sinks: boolean[]): RaiserValue {
+	const outer = vm.hostHeld;
+	const held: RaiserValue[] = [];
+	for (let i = 0; i < args.length; i += 1) {
+		rcIncref(vm.arrayHeap, vm.objectHeap, args[i]);
+		if (!sinks[i]) held.push(args[i]);
+	}
+	vm.hostHeld = held;
+	const result = vmCallFunction(vm, funcIdx, args, true);
+	for (const arg of held) vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, arg);
+	vm.hostHeld = outer;
+	return result;
 }
 
 function forgetHeapStrings(slots: RaiserValue[]): void {
@@ -799,6 +815,13 @@ export function vmReleaseHeaps(vm: RaiserVM): void {
 	forgetHeapStringRefs(vm.regs.slots, getModuleFunc(vm.mod, vm.callStack.depth > 0 ? vm.callStack.items[0].funcIdx : vm.funcIdx), vm.callStack.depth > 0 ? calleeBase as int64 : INT64_HIGH);
 	forgetHeapStrings(vm.globals);
 	if (vm.currentException.kind == RaiserValueKind.String && handleHeapKind(vm.currentException.intVal) == RaiserHeapKind.String) vm.currentException = raiserNil();
+}
+
+export function vmReleaseRun(vm: RaiserVM): void {
+	vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, vm.exitValue);
+	vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, vm.currentException);
+	vm.exitValue = raiserNil();
+	vm.currentException = raiserNil();
 }
 
 function runSuspendedAt(vm: RaiserVM): boolean {
@@ -1887,6 +1910,7 @@ function vmProgramLedger(vm: RaiserVM): void {
 	const ev = vm.sched.modules;
 	const extra: RaiserValue[] = [vm.exitValue];
 	const names: string[] = ["the program's result"];
+	for (const arg of vm.hostHeld) { extra.push(arg); names.push("an argument the host holds"); }
 	for (const st of ev.states) { extra.push(st.error); names.push("module state error"); }
 	for (const job of ev.pending) { extra.push(job.error); names.push("module state error"); }
 	const sharing: RaiserStrand[] = [main];

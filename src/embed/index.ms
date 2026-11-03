@@ -8,7 +8,7 @@ import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
 import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
-import { vmCallFunction, vmDumpStack } from "../raiser/vm";
+import { vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -131,6 +131,13 @@ export function selectRoutine(interp: Interpreter, name: string): Result<Routine
 	return Result.ok(found);
 }
 
+function sinkParams(routine: Routine): boolean[] {
+	for (const exported of routine.mod.exports) {
+		if (exported.funcIdx == routine.funcIdx) return exported.sinks;
+	}
+	throw new Error(`internal: '${routine.name}' is not an export of its module`);
+}
+
 export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): Result<RaiserHostValue, string> {
 	const run = interp.run;
 	if (run == null || run.mod != routine.mod) return Result.err(`'${routine.name}' was selected before the last evalModule; select it again`);
@@ -138,9 +145,15 @@ export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserH
 	const vm = run.vm!;
 	const passed: RaiserValue[] = [];
 	for (const arg of args) passed.push(copyToVm(vm.arrayHeap, vm.objectHeap, arg));
-	const result = vmCallFunction(vm, routine.funcIdx, passed);
-	if (vm.error != "") return Result.err(`raiser runtime error in '${routine.name}': ${vm.error}\n${vmDumpStack(vm)}`);
-	return Result.ok(copyToHost(vm.arrayHeap, vm.objectHeap, result));
+	const result = vmCallHeld(vm, routine.funcIdx, passed, sinkParams(routine));
+	if (vm.error != "") {
+		const failure = `raiser runtime error in '${routine.name}': ${vm.error}\n${vmDumpStack(vm)}`;
+		vmReleaseRun(vm);
+		return Result.err(failure);
+	}
+	const copied = copyToHost(vm.arrayHeap, vm.objectHeap, result);
+	vmReleaseRun(vm);
+	return Result.ok(copied);
 }
 
 export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
