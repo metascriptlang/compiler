@@ -2,7 +2,7 @@ import { argv, cwd, env, platform, exit, spawn, ChildStream, ProcessErrorKind } 
 import { appendFile, ensureDir, exists, readFile, readDir, removeAll } from "std/fs";
 import { join } from "std/fs/path";
 
-// msc run tools/managedToolchain/platformMatrix.ms build --out=<dir> --host=<name> --hostTarget=<target> [--bundle=<dir>] [--targets=a,b] [--consumers=x,y] [--compilers=zig,bundle]
+// msc run tools/managedToolchain/platformMatrix.ms build --out=<dir> --host=<name> --hostTarget=<target> [--bundle=<dir>] [--targets=a,b] [--consumers=x,y] [--compilers=zig,bundle] [--debuggerPath=<dir put first on PATH for lldb/gdb>]
 // msc run tools/managedToolchain/platformMatrix.ms run --out=<dir with art/ and cells.tsv> --host=<name> --hostTarget=<target>
 // msc run tools/managedToolchain/platformMatrix.ms summary --out=<dir of *.tsv>
 
@@ -12,7 +12,7 @@ struct Target {
 	cpu: string;
 	exe: string;
 	lib: string;
-	selector: boolean;
+	abi: string;
 }
 
 struct Consumer {
@@ -33,14 +33,15 @@ struct Captured {
 }
 
 const TARGETS: Target[] = [
-	{ name: "macos-arm64", os: "macos", cpu: "arm64", exe: "", lib: "dylib", selector: true },
-	{ name: "macos-x64", os: "macos", cpu: "amd64", exe: "", lib: "dylib", selector: true },
-	{ name: "linux-glibc-x86_64", os: "linux", cpu: "amd64", exe: "", lib: "so", selector: true },
-	{ name: "linux-glibc-arm64", os: "linux", cpu: "arm64", exe: "", lib: "so", selector: true },
-	{ name: "linux-musl-x86_64", os: "", cpu: "", exe: "", lib: "so", selector: false },
-	{ name: "windows-x64", os: "windows", cpu: "amd64", exe: ".exe", lib: "dll", selector: true },
-	{ name: "windows-arm64", os: "windows", cpu: "arm64", exe: ".exe", lib: "dll", selector: true },
-	{ name: "wasm32-wasi", os: "wasm", cpu: "", exe: ".wasm", lib: "", selector: true },
+	{ name: "macos-arm64", os: "macos", cpu: "arm64", exe: "", lib: "dylib", abi: "" },
+	{ name: "macos-x64", os: "macos", cpu: "amd64", exe: "", lib: "dylib", abi: "" },
+	{ name: "linux-glibc-x86_64", os: "linux", cpu: "amd64", exe: "", lib: "so", abi: "" },
+	{ name: "linux-glibc-arm64", os: "linux", cpu: "arm64", exe: "", lib: "so", abi: "" },
+	{ name: "linux-musl-x86_64", os: "linux", cpu: "amd64", exe: "", lib: "so", abi: "musl" },
+	{ name: "linux-musl-arm64", os: "linux", cpu: "arm64", exe: "", lib: "so", abi: "musl" },
+	{ name: "windows-x64", os: "windows", cpu: "amd64", exe: ".exe", lib: "dll", abi: "" },
+	{ name: "windows-arm64", os: "windows", cpu: "arm64", exe: ".exe", lib: "dll", abi: "" },
+	{ name: "wasm32-wasi", os: "wasm", cpu: "", exe: ".wasm", lib: "", abi: "" },
 ];
 
 const HELLO = "matrix-hello 42";
@@ -160,6 +161,13 @@ function note(path: string, fields: string[]): void {
 	if (!wrote.ok) { throw new Error(`cannot write ${path}`); }
 }
 
+function bundleRefusal(compiler: string, text: string): string {
+	if (compiler != "bundle") { return ""; }
+	if (text.contains("is not installed in")) { return "bundle refuses: its runtime for this target is not installed"; }
+	if (text.contains("needs a libclang_rt sanitizer runtime")) { return "bundle refuses: no sanitizer runtime for windows"; }
+	return "";
+}
+
 function runnerFor(hostTarget: string, target: string): string {
 	if (target == hostTarget) { return "native"; }
 	if (hostTarget == "macos-arm64" && target == "macos-x64") { return "rosetta"; }
@@ -170,7 +178,7 @@ function runnerFor(hostTarget: string, target: string): string {
 function runnerReason(hostTarget: string, target: string): string {
 	if (target == "linux-glibc-x86_64") { return "built, not run (rtx offline)"; }
 	if (target == "windows-arm64") { return "built, not run (no windows arm64 host)"; }
-	if (target == "linux-musl-x86_64") { return "no CLI selector"; }
+	if (target == "linux-musl-x86_64") { return "built, not run (rtx offline)"; }
 	return `built, not run (not runnable on ${hostTarget})`;
 }
 
@@ -186,9 +194,25 @@ function debugKind(artifact: string, target: string): string {
 		if (table.code == 0 && table.out.contains(" OSO ")) { return "debug-map-only (no dSYM)"; }
 		return "none";
 	}
+	if (target.startsWith("windows") && exists(artifact.slice(0, artifact.length - 4) + ".pdb")) { return present(artifact, "RSDS") ? "CodeView+pdb" : "pdb file, exe without RSDS"; }
 	if (present(artifact, "\\.debug_info")) { return "DWARF"; }
-	if (present(artifact, "RSDS")) { return "CodeView"; }
 	return "none";
+}
+
+function debuggerStop(artifact: string, target: string): string {
+	const lldb = ["--batch", "-o", "b debugLine.ms:3", "-o", "run", "-o", "process status", "-o", "frame info", "-o", "quit", artifact];
+	const gdb = ["-batch", "-ex", "break debugLine.ms:3", "-ex", "run", "-ex", "frame", artifact];
+	const order = target.startsWith("linux") ? ["gdb", "lldb"] : ["lldb", "gdb"];
+	let verdict = "no debugger on host";
+	for (const name of order) {
+		if (capture(name, ["--version"], 60000).code != 0) { continue; }
+		const ran = capture(name, name == "gdb" ? gdb : lldb, 120000);
+		const text = ran.out + ran.err;
+		const stopped = text.contains("at debugLine.ms:3") && (name == "gdb" ? text.contains("Breakpoint 1, ") : text.contains("stop reason = breakpoint"));
+		if (stopped) { return `${name}: stopped at debugLine.ms:3`; }
+		verdict = `${name}: no stop at debugLine.ms:3: ${oneLine(text, 200)}`;
+	}
+	return verdict;
 }
 
 function runArtifact(consumer: Consumer, artifact: string, runner: string, target: string): Captured {
@@ -214,14 +238,12 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", String(ran.seconds), observed, why]);
 	if (consumer.kind == "debug" && runner == "native") {
 		note(results, [consumer.name, target, compiler, "debug", host, "info", "0", debugKind(artifact, target), ""]);
+		const stop = debuggerStop(artifact, target);
+		note(results, [consumer.name, target, compiler, "debugstop", host, stop.contains("stopped at") ? "ok" : stop == "no debugger on host" ? "n/a" : "FAIL", "0", stop, ""]);
 	}
 }
 
 function buildCell(out: string, results: string, cells: string, host: string, hostTarget: string, bundle: string, consumer: Consumer, target: Target, compiler: string): void {
-	if (!target.selector) {
-		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no CLI selector"]);
-		return;
-	}
 	if (consumer.kind == "lib" && target.lib == "") {
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no shared library on wasm32-wasi"]);
 		return;
@@ -245,6 +267,7 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 	if (!native) {
 		args.push(`--os=${target.os}`);
 		if (target.cpu != "") { args.push(`--cpu=${target.cpu}`); }
+		if (target.abi != "") { args.push(`--abi=${target.abi}`); }
 	}
 	if (compiler == "zig") { args.push("--cc=zig"); env.delete("MSC_NATIVE_TOOLCHAIN"); }
 	else { env.set("MSC_NATIVE_TOOLCHAIN", bundle); }
@@ -258,6 +281,11 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 		return;
 	}
 	if (built.code != 0 || !exists(artifact)) {
+		const refused = bundleRefusal(compiler, built.err + built.out);
+		if (refused != "") {
+			note(results, [consumer.name, target.name, compiler, "build", host, "n/a", String(built.seconds), "", refused]);
+			return;
+		}
 		note(results, [consumer.name, target.name, compiler, "build", host, "FAIL", String(built.seconds), "", built.timedOut ? "timeout" : firstError(built.err + built.out)]);
 		return;
 	}
@@ -272,7 +300,7 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 }
 
 function coldCell(out: string, results: string, host: string, hostTarget: string, bundle: string, target: Target, compiler: string): void {
-	if (!target.selector || (compiler == "bundle" && (bundle == "" || !exists(bundle)))) { return; }
+	if (compiler == "bundle" && (bundle == "" || !exists(bundle))) { return; }
 	const cache = `${out}/cold/${target.name}/${compiler}`;
 	removeAll(cache);
 	ensureDir(cache);
@@ -281,6 +309,7 @@ function coldCell(out: string, results: string, host: string, hostTarget: string
 	if (target.name != hostTarget) {
 		args.push(`--os=${target.os}`);
 		if (target.cpu != "") { args.push(`--cpu=${target.cpu}`); }
+		if (target.abi != "") { args.push(`--abi=${target.abi}`); }
 	}
 	if (compiler == "zig") { args.push("--cc=zig"); env.delete("MSC_NATIVE_TOOLCHAIN"); }
 	else { env.set("MSC_NATIVE_TOOLCHAIN", bundle); }
@@ -380,7 +409,11 @@ function summary(opts: Record<string, string>): void {
 	for (const key of keys) {
 		const f = rowOf(rows, key);
 		const pair = `${f[0]}|${f[1]}`;
-		if (f[3] == "debug" || seen.includes(pair)) { continue; }
+		if (f[3] == "debug" || f[3] == "debugstop") {
+			console.log(`${f[3]} ${f[1]} ${f[2]}: ${f[5]} ${f[7]}`);
+			continue;
+		}
+		if (seen.includes(pair)) { continue; }
 		seen.push(pair);
 		console.log(`${f[0]} ${f[1]}: zig=${cellText(rows, f[0], f[1], "zig")} bundle=${cellText(rows, f[0], f[1], "bundle")}`);
 	}
@@ -408,6 +441,8 @@ function summary(opts: Record<string, string>): void {
 
 const mode = argv.length > 1 ? argv[1] : "";
 const opts = options();
+const debuggerPath = opts["debuggerPath"] ?? "";
+if (debuggerPath != "") { env.set("PATH", debuggerPath + (platform == "windows" ? ";" : ":") + (env.get("PATH") ?? "")); }
 if (mode == "build") { build(opts); }
 else if (mode == "run") { runBuilt(opts); }
 else if (mode == "summary") { summary(opts); }
