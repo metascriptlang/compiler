@@ -525,6 +525,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	defer setRaiserModulePath("");
 
 	// --- Pass 3: Compile init functions for each module ---
+	const hostKeepsGlobals = exports.length > 0;
 	const initIndices: number[] = [];
 	const deinitIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -542,7 +543,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			compileStmt(atExit ? deinit : s, pd.programStmts[i]);
 			resetTemps(atExit ? deinit : s);
 		}
-		if (deinit.code.length > 0) {
+		if (deinit.code.length > 0 && !hostKeepsGlobals) {
 			const deinitNil = allocDyn(deinit);
 			emitLoadConst(deinit, deinitNil, raiserNil());
 			emitRet(deinit, deinitNil);
