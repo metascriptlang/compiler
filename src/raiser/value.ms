@@ -2146,6 +2146,7 @@ export function heapObjectGetObjectHandle(arr: RaiserArrayHeap, heap: RaiserObje
 export function clearArrayHeap(heap: RaiserArrayHeap): void {
 	heap.mem = createVmMemory();
 	heap.stringBytes.clear();
+	heap.seqViews.clear();
 	heap.orcRoots.length = 0;
 	heap.orcThreshold = ORC_DEFAULT_THRESHOLD;
 }
@@ -2219,6 +2220,18 @@ test "clearArrayHeap resets storage" {
 	assert heapSeqHandles(heap).length == 0;
 	const h2 = heapAllocArray(heap);
 	assert heapArrayLen(heap, h2) == 0;
+}
+
+test "clearArrayHeap forgets the views of the arrays it drops, so an array placed at their reused address owns no view" {
+	const heap = createArrayHeap();
+	const base = heapAllocArray(heap);
+	heapArrayPush(heap, base, raiserInt(1));
+	heapAllocView(heap, raiserArray(base), 0, 1);
+	heapAllocView(heap, raiserArray(base), 0, 1);
+	clearArrayHeap(heap);
+	const again = heapAllocArray(heap);
+	assert again == base, `${again} ${base}`;
+	assert heap.seqViews.get(again) == null;
 }
 
 test "a closure pair's env slot is cyclic and its fn slot and every other layout's slots are not" {
