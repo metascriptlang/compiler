@@ -363,6 +363,9 @@ function inlineStmt(node: Node, st: InlineState): Node {
 					const b = e.data as BinaryExprData;
 					b.right = replaceUnderProjections(b.right, makeIdentResolved(r.result, node.location));
 					r.stmts.push(node);
+				} else if (call != e && r.result != null) {
+					(node.data as ExprStmtData).expr = replaceUnderProjections(e, makeIdentResolved(r.result, node.location));
+					r.stmts.push(node);
 				}
 				return makeBlock(r.stmts, node.location);
 			}
@@ -1420,6 +1423,13 @@ test "a consumer of a generator call is expanded in place when returned or assig
 test "a consumer assigned with a compound operator is expanded in place" {
 	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 1; s += total(count(3)); return s; }") == 0;
 	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 1; s *= total(count(3)); return s; }") == 0;
+}
+
+test "a consumer under a cast as a statement is expanded in place and keeps its cast" {
+	const stmts = getStmts(lowered(sumSrc + "function f(): void { total(count(3)) as int8; }"));
+	const body = (stmts[stmts.length - 1].data as FunctionDeclData).fnBody;
+	assert countKind(body, NodeKind.CallExpr) == 0;
+	assert countKind(body, NodeKind.TypeAssertion) == 1;
 }
 
 test "a consumer of an iterator stored in a const read once is expanded in place" {
