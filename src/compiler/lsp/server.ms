@@ -1127,6 +1127,34 @@ function lateEditedDrains(): string[][] {
 	];
 }
 
+test "a request that fails outside its handler answers InternalError with its id and the next request is served" {
+	for (const id of ["2", "\"q2\""]) {
+		const drains = [initializeDrain(), frames([notification("textDocument/didOpen", openParams(LATE_URI, LATE_V1))]), [lateHover(id)], [lateHover("3")]];
+		const chunks: string[] = [];
+		for (const drain of drains) chunks.push(drain.join(""));
+		const wire = createMemoryWire(chunks);
+		const inner = memoryTransport(wire);
+		const refused = [false];
+		const io: LspTransport = {
+			readLine: inner.readLine,
+			readBytes: inner.readBytes,
+			hasBufferedData: inner.hasBufferedData,
+			write: (out: string): void => {
+				if (!refused[0] && out.contains(`"id":${id},`)) {
+					refused[0] = true;
+					throw new Error("write refused");
+				}
+				inner.write(out);
+			},
+		};
+		const exitCode = lspServe(io);
+		const r = lspTranscript(wire.output, exitCode, wire.nextChunk);
+		assert refused[0], id;
+		assert wire.output.contains(`"id":${id},"error":{"code":${INTERNAL_ERROR}`), wire.output;
+		assert hoverOf(r, 3).indexOf("int32", 0) >= 0;
+	}
+}
+
 test "a request cancelled while its check runs stops there and answers RequestCancelled" {
 	for (const probe of [2, 4]) {
 		const r = lateReplay(lateEditedDrains(), frames([notification("$/cancelRequest", "{\"id\":7}")]).concat([lateHover("8")]), probe);
