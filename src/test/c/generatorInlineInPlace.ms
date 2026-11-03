@@ -1,4 +1,6 @@
 import { compileToC, compileProjectToC, MapEntry } from "../helpers";
+import { execFileResult, cwd, env } from "std/process";
+import { writeFile, ensureDir, removeAll, readFile, readDir } from "std/fs";
 
 const generators = `
 	function* count(n: int32): Iterator<int32> {
@@ -240,4 +242,42 @@ test "E2E C: a stored chain of generators from another module read inside a loop
 	`);
 	assert c != "";
 	assert c.contains("dollariter");
+}
+
+function arrayLoopC(name: string, consumer: string): string {
+	const root = cwd();
+	const mscEnv = env.get("MSC");
+	const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
+	const dir = `${root}/out/generatorInlineInPlace/${name}`;
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(`${dir}/${name}.ms`, `const xs: int32[] = [1, 2, 3];\nlet s: int64 = 0;\n${consumer}\nconsole.log(s);\n`);
+	const r = execFileResult(msc, ["build", `${dir}/${name}.ms`, "--emit=c", "--output=prog"], dir);
+	if (r.exitCode != 0) return "";
+	for (const file of readDir(`${dir}/out/debug`)) {
+		if (file == `${name}Oms.c` || file.endsWith(`Z${name}Oms.c`)) {
+			const text = readFile(`${dir}/out/debug/${file}`);
+			return text.ok ? text.value : "";
+		}
+	}
+	return "";
+}
+
+function stepsAtLengthWidth(c: string): boolean {
+	return c.contains("_ < ((int64_t)") && !c.contains("_ < (*__arr_") && !c.contains("_ < dollarspan_");
+}
+
+test "E2E C: a for-of over values() of an array steps an index as wide as the array length" {
+	const c = arrayLoopC("widthvalues", `for (const x of xs.values()) s += x as int64;`);
+	assert c != "";
+	assert stepsAtLengthWidth(c);
+}
+
+test "E2E C: a helper chain over keys() or entries() of an array steps an index as wide as the array length" {
+	const keys = arrayLoopC("widthkeys", `for (const k of xs.keys().map((k) => k * 2)) s += k as int64;`);
+	assert keys != "";
+	assert stepsAtLengthWidth(keys);
+	const entries = arrayLoopC("widthentries", `for (const e of xs.entries()) s += (e[1] as int64) * (e[0] as int64);`);
+	assert entries != "";
+	assert stepsAtLengthWidth(entries);
 }
