@@ -1819,6 +1819,9 @@ export function ownedEdgeOf(t: Type | null, depth: int32 = 0): Type | null {
 		TypeKind.Union => ownedEdgeOf(unwrapRefNullUnion(t), depth + 1),
 		TypeKind.Array | TypeKind.SizedArray => ownedEdgeOf(t.typeReturn, depth + 1),
 		TypeKind.Struct | TypeKind.Tuple => firstOwnedEdge(t.typeChildren, depth),
+		TypeKind.Alias => ownedEdgeOf(peelThrough(t, PEEL_ALIAS), depth + 1),
+		TypeKind.Distinct => ownedEdgeOf(distinctBody(t), depth + 1),
+		TypeKind.GenericInstance => ownedEdgeOf(distinctBody(t) ?? t.typeReturn, depth + 1),
 		_ => null,
 	};
 }
