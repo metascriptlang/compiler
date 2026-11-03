@@ -1,5 +1,7 @@
 // Crypto — Comprehensive Test Suite
 
+import "./aeadOracle";
+
 import { CryptoError, CryptoErrorKind, HashAlgorithm, createHash, createHmac, digestSync, fromBase64, fromHex,
 	hmacSync, isHashSupported, md5Sync, randomBytesSync, randomIntSync, randomUUIDSync, sha1Sync, sha256,
 	sha256Sync, sha384Sync, sha512Sync, timingSafeEqual, toBase64, toHex } from "std/crypto";

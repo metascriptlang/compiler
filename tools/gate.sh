@@ -11,7 +11,7 @@ RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
-  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
+  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
@@ -491,7 +491,7 @@ select_leaves_nothing() {
   [ "$1" != tests ] && [ "$select" -eq 1 ] && [ -z "$only_csv" ]
 }
 
-TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms std/crypto/test.ms"
+TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms src/test/crypto/index.ms"
 SHARDED_TIERS="src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
 
