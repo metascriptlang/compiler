@@ -235,9 +235,10 @@ export enum RaiserOpcode {
 	UnionConv,        // ABC: fatal unless the member of the union that R[A] holds is marked allowed in the plan K[B] (`+`/`-`, a kind token, `len:display` per member, in match order); the message is K[C] then the held member's display
 	FutureThen,       // ABC: R[A] = a future settled by what R[A+2] (R[A+3] for a rejection) does with the value of the future R[A+1] after the code that registered it, as msFutureThen does; B = 1 makes R[A+2] the rejection handler and passes a fulfilled value through, as msFutureCatch does; C arguments
 	FutureRead,       // ABC: B = 0 reads the settled future R[A+1] into R[A] (a failed one raises its error), 1 raises the error of the settled future R[A+1], 2 sets R[A] to whether R[A+1] is settled; a value that is not a future reads as itself; C arguments
+	CollectCycles,    // ABC: run the cycle collector over the running heaps, then the destroys of the cells it condemned, before the next instruction
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.FutureRead;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CollectCycles;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -399,7 +400,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
 		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
-		RaiserOpcode.Jump | RaiserOpcode.Try | RaiserOpcode.Yield | RaiserOpcode.Trap => "---",
+		RaiserOpcode.Jump | RaiserOpcode.Try | RaiserOpcode.Yield | RaiserOpcode.Trap | RaiserOpcode.CollectCycles => "---",
 	};
 }
 
@@ -838,5 +839,6 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.ArraySplice3, 1) == RaiserRole.Any && opRole(RaiserOpcode.ArraySplice3, 2) == RaiserRole.IntPair;
 	assert opRole(RaiserOpcode.ArrayConcat, 2) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.AssignInPlace, 0) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 1) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 2) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Any && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
+	assert opRole(RaiserOpcode.FutureRead, 0) == RaiserRole.Any && opRole(RaiserOpcode.FutureRead, 1) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.None;
 }

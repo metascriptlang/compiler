@@ -1,1 +1,2 @@
-export function collectCycles(): void {}
+@builtin("CollectCycles")
+export extern function collectCycles(): void from "msOrcCollect";

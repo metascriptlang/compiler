@@ -2029,6 +2029,10 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (builtinKind == "PtrBits" && d.arguments.length == 1) {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
+	if (builtinKind == "CollectCycles" && d.arguments.length == 0) {
+		emitInst(s, raiserABC(RaiserOpcode.CollectCycles, 0, 0, 0));
+		return allocFor(s, node.nodeType);
+	}
 
 	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) and the
 	// Promise.all / race / any combinators — the async surface the VM owns as
