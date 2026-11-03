@@ -29,6 +29,7 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 | `digest.ms` | `ifaceDigest` (a check's exact interface text), `implDigest` |
 | `outputs.ms` | `TaOutputStore`, `outputChangedAt` |
 | `adopt.ms` | `adoptDecls`, `verifyAdoption` |
+| `absentProbes.ms` | `TaAbsentProbes`, `enterCheckProbes`, `leaveCheckProbes`, `knownAbsentAt`, `recordAbsentAt` |
 | `cancel.ms` | `getCancelVersion`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
 | `index.ms` | `TransAmDb`, `createTransAmDb`, `dbBindGraph`, `dbSetGlobalImports`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 
