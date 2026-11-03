@@ -2618,6 +2618,12 @@ function unionReadArm(ctx: CheckerContext, source: Node, member: Type): Node | n
 	return read && arm.nodeType != null && !reportedErrorSince(ctx, mark) ? arm : null;
 }
 
+function joinUnionReadArm(ctx: CheckerContext, arm: Node, joined: Type): Node {
+	if (arm.nodeType!.kind != TypeKind.Enum) return fitJoinedBranch(ctx, arm, joined);
+	const projected = narrowUnionToVariant(arm, arm.nodeType!);
+	return projected != null as unknown as Node ? projected : arm;
+}
+
 function unionReadTypes(ctx: CheckerContext, operand: Node): Type[] {
 	const t = peelTransparentInstance(operand.nodeType!);
 	if (!isSlotUnion(t) || hasGenericParams(t)) return [operand.nodeType!];
@@ -2735,7 +2741,7 @@ export function readUnionOperand(ctx: CheckerContext, op: string, node: Node, op
 		const types: Type[] = [];
 		for (const arm of arms) types.push(arm.nodeType!);
 		joined = textReads ? stringType() : joinBranchTypes(types);
-		for (let i = 0; i < arms.length; i += 1) arms[i] = fitJoinedBranch(ctx, arms[i], joined);
+		for (let i = 0; i < arms.length; i += 1) arms[i] = joinUnionReadArm(ctx, arms[i], joined);
 	}
 	const classes: int32[] = [];
 	const kinds: int32[] = [];
