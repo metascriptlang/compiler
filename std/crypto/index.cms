@@ -61,7 +61,7 @@ extern function msCryptoHmacSpanInto(algorithm: string, key: Readonly<Span<uint8
 
 // Random
 extern function msCryptoRandomBytes(size: number): string;
-extern function msCryptoRandomIntInto(min: number, max: number, ref out: int64[1]): int32;
+extern function msCryptoRandomIntInto(min: number, max: number, ref out: int64): int32;
 extern function msCryptoRandomUuid(): string;
 
 // Timing-safe comparison
@@ -170,9 +170,9 @@ const RANDOM_INT_RANGE_TOO_WIDE = 4;
 const RANDOM_INT_SOURCE_FAILED = 5;
 
 export function randomIntSync(min: number, max: number): Result<number, CryptoError> {
-	let drawn: int64[1] = [0];
+	let drawn: int64 = 0;
 	const status = msCryptoRandomIntInto(min, max, drawn);
-	if (status == 0) return Result.ok(drawn[0] as number);
+	if (status == 0) return Result.ok(drawn as number);
 	if (status == RANDOM_INT_BAD_MIN) return Result.err(invalidInput("random", "min must be a safe integer"));
 	if (status == RANDOM_INT_BAD_MAX) return Result.err(invalidInput("random", "max must be a safe integer"));
 	if (status == RANDOM_INT_EMPTY_RANGE) return Result.err(invalidInput("random", "max must be greater than min"));
