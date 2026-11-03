@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
-import { functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
+import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
@@ -1137,8 +1137,12 @@ function storeCause(site: Node, what: BorrowSource, into: string): EffectCause {
 	return cause(site, "stores " + borrowText(what) + " " + into);
 }
 
-function holdsNoCount(slot: Type | null): boolean {
+function holdsNoCount(slot: Readonly<Type | null>): boolean {
 	return slot != null && slot.kind == TypeKind.Cursor;
+}
+
+function isCursorToReference(slot: Readonly<Type | null>): boolean {
+	return holdsNoCount(slot) && slot!.typeReturn != null && slot!.typeReturn.kind == TypeKind.Ref;
 }
 
 function elementHoldsNoCount(container: Type | null): boolean {
@@ -1157,9 +1161,10 @@ function slotStoreOf(node: Node): EffectCause | null {
 	if (node.kind == NodeKind.ArrayLiteral && elementHoldsNoCount(node.nodeType)) return null;
 	const items = node.kind == NodeKind.ArrayLiteral ? (node.data as ArrayLiteralData).elements : (node.data as ObjectLiteralData).properties;
 	for (let i = 0; i < items.length; i += 1) {
+		const keys = node.kind == NodeKind.ObjectLiteral ? (node.data as ObjectLiteralData).keys : [];
+		if (i < keys.length && keys[i] != "" && isCursorToReference(declaredFieldType(node.nodeType, keys[i]))) continue;
 		const what = borrowedOf(items[i]);
 		if (what == null) continue;
-		const keys = node.kind == NodeKind.ObjectLiteral ? (node.data as ObjectLiteralData).keys : [];
 		const into = node.kind == NodeKind.ArrayLiteral ? "into an array literal" : i < keys.length && keys[i] != "" ? "into the field '" + keys[i] + "' of an object literal" : "into an object literal";
 		return storeCause(items[i], what, into);
 	}
