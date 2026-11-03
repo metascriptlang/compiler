@@ -244,14 +244,14 @@ test "E2E C: a stored chain of generators from another module read inside a loop
 	assert c.contains("dollariter");
 }
 
-function arrayLoopC(name: string, consumer: string): string {
+function mainUnitC(name: string, source: string): string {
 	const root = cwd();
 	const mscEnv = env.get("MSC");
 	const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 	const dir = `${root}/out/generatorInlineInPlace/${name}`;
 	removeAll(dir);
 	ensureDir(dir);
-	writeFile(`${dir}/${name}.ms`, `const xs: int32[] = [1, 2, 3];\nlet s: int64 = 0;\n${consumer}\nconsole.log(s);\n`);
+	writeFile(`${dir}/${name}.ms`, source);
 	const r = execFileResult(msc, ["build", `${dir}/${name}.ms`, "--emit=c", "--output=prog"], dir);
 	if (r.exitCode != 0) return "";
 	for (const file of readDir(`${dir}/out/debug`)) {
@@ -261,6 +261,14 @@ function arrayLoopC(name: string, consumer: string): string {
 		}
 	}
 	return "";
+}
+
+function arrayLoopC(name: string, consumer: string): string {
+	return mainUnitC(name, `const xs: int32[] = [1, 2, 3];\nlet s: int64 = 0;\n${consumer}\nconsole.log(s);\n`);
+}
+
+function reduceChainC(name: string, consumer: string): string {
+	return mainUnitC(name, `function* count(n: int32): Iterator<int32> {\n\tfor (let i: int32 = 0; i < n; i++) yield i;\n}\nconst xs: int32[] = [1, 2, 3, 4];\nconst r = ${consumer};\nconsole.log(r);\n`);
 }
 
 function stepsAtLengthWidth(c: string): boolean {
@@ -280,4 +288,18 @@ test "E2E C: a helper chain over keys() or entries() of an array steps an index 
 	const entries = arrayLoopC("widthentries", `for (const e of xs.entries()) s += (e[1] as int64) * (e[0] as int64);`);
 	assert entries != "";
 	assert stepsAtLengthWidth(entries);
+}
+
+test "E2E C: reduce without an initial value after map over a generator runs in the caller's loop" {
+	const c = reduceChainC("reducemap", "count(10).map((v: int32, i: number): int32 => v * 2).reduce((a: int32, v: int32, i: number): int32 => a + v)");
+	assert c != "";
+	assert !c.contains("Iterator_reduce");
+	assert !c.contains(".next.fn");
+}
+
+test "E2E C: reduce without an initial value after filter over array values runs in the caller's loop" {
+	const c = reduceChainC("reducefilter", "xs.values().filter((v: int32, i: number): boolean => v % 2 == 0).reduce((a: int32, v: int32, i: number): int32 => a + v)");
+	assert c != "";
+	assert !c.contains("Iterator_reduce");
+	assert !c.contains(".next.fn");
 }
