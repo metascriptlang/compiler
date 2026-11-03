@@ -3175,7 +3175,7 @@ test "register classes: a local takes the class of its declared type, not of its
 		+ " console.log(`${l()}`);";
 	const f = compiledFunc(code, "l");
 	const table = classTable(f);
-	assert table == "RRRDFRRDFWFF", table;
+	assert table == "RRRDFRDFWFF", table;
 	const text = disasmFunc(f);
 	assert countNamed(f, "Box") == 3, text;
 	const vm = evalVM(code);
