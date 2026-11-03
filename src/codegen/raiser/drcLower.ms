@@ -1,4 +1,4 @@
-import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, SymbolFlag, AttachedOp, Symbol, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, NodeKind, CallExprData, NumberLiteralData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, SymbolFlag, SymbolKind, AttachedOp, Symbol, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { hasFlag } from "../../checker/symbol";
 import { declaresUserHook } from "../../checker/instantiate";
 import { isMaybeType, isStructType, isIterator, isIteratorResult, needsValueCopy, isPlainDataType, valueCopyRepr, distinctBody, skipModifier, matchUnionBehindInstance } from "../../checker/types";
@@ -297,6 +297,30 @@ function userHookAt(type: Type, op: AttachedOp): Symbol | null {
 	return userHookOf(hookOwnerOf(type), op);
 }
 
+function runsUserDestroy(type: Type | null, open: Type[]): boolean {
+	const t = skipModifier(type);
+	if (t == null || open.includes(t)) return false;
+	if (userHookAt(t, AttachedOp.AttachedDestructor) != null) return true;
+	open.push(t);
+	const shape = valueCopyRepr(hookOwnerOf(t));
+	if (shape != null && shape != t) return runsUserDestroy(shape, open);
+	if (t.kind == TypeKind.SizedArray) return runsUserDestroy(t.typeReturn, open);
+	if (!isStructType(t) && t.kind != TypeKind.Tuple && !(t.kind == TypeKind.Union && isUnionCell(t))) return false;
+	for (const child of t.typeChildren) {
+		if (runsUserDestroy(child, open)) return true;
+	}
+	return false;
+}
+
+function isAuthorLocal(sym: Symbol): boolean {
+	return sym.symbolKind != SymbolKind.Temp && !hasFlag(sym, SymbolFlag.HoistedCall);
+}
+
+function runsHookOnZeros(s: RaiserCompState, arg: Node): boolean {
+	const place = placeOf(arg);
+	return localOfPlace(s, place) >= 0 && isAuthorLocal(place.resolvedSym!) && nullIsZeroValue(place.nodeType) && runsUserDestroy(place.nodeType, []);
+}
+
 function isOpOf(type: Type, op: AttachedOp, sym: Symbol): boolean {
 	return getOpByKey(type, op) == sym || getOpByKey(hookOwnerOf(type), op) == sym;
 }
@@ -392,6 +416,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	}
 	if (isCellHook(d, SymbolFlag.DestroyOp)) {
 		const hookName = d.callee.resolvedSym!.name;
+		if (runsHookOnZeros(s, d.arguments[0])) emitMaterialize(s, hookName, d.arguments[0]);
 		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, hookName, d.arguments[0]), 0, 0));
 		emitClear(s, hookName, d.arguments[0], false);
 		return true;
