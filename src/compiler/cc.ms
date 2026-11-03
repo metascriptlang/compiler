@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove, readFileBytes } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
+import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, DEBUG_UB_CHECKS, debugUbChecks, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { cacheRoot } from "./package/cache";
@@ -661,6 +661,16 @@ function isCrossZig(opts: CliOptions): boolean {
 	return opts.targetOs != platform && opts.ccBinary == "" && checkZigCC();
 }
 
+// zig cc panics with a message on signed overflow and its siblings in a -O0 build; the prepared
+// toolchain matches it with the compiler-rt runtime its bundle ships: the minimal one on macOS and
+// glibc Linux, the standalone one (file and line in the message, as zig's) on Windows and musl. A wasm build is forced to release, as zig's is, so it has none.
+export function debugUbFlags(opts: CliOptions): string {
+	if (opts.ccCompiler != CC_PREPARED || !debugUbChecks(opts)) return "";
+	const checks = `-fsanitize=${DEBUG_UB_CHECKS}`;
+	if (opts.targetOs == "windows" || opts.abi == "musl") return `${checks} -fno-sanitize-recover=undefined`;
+	return `${checks} -fsanitize-minimal-runtime -fno-sanitize-recover=undefined`;
+}
+
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	// Solana/SBF: completely different flag set, skip everything else.
@@ -726,6 +736,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
+	flags = appendFlag(flags, debugUbFlags(opts));
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
@@ -1567,9 +1578,10 @@ test "prepared shared C++ keeps its config order and explicit compilers keep the
 	assert !explicit.value.command.args.includes("--config=/prepared/target.so.cfg");
 }
 
-// The sanitizer runtimes of the prepared Linux toolchain call _Unwind_Backtrace, which only its C++ runtime provides.
+// The sanitizer runtimes of the prepared Linux toolchain call _Unwind_Backtrace, which only its C++ runtime provides; the minimal UBSan runtime does not.
 function needsUnwinder(flagArgs: string[], ccOption: number, targetOs: string): boolean {
 	if (ccOption != CC_PREPARED || targetOs != "linux" || flagArgs.includes("-shared")) return false;
+	if (flagArgs.includes("-fsanitize-minimal-runtime")) return false;
 	for (const arg of flagArgs) if (arg.startsWith("-fsanitize=")) return true;
 	return false;
 }
@@ -1723,6 +1735,45 @@ test "a Windows link through an external clang or gcc carries winpthread inside 
 	opts.ccCompiler = 1;
 	opts.ccBinary = "";
 	assert !cliLinkFlags("", opts).contains("-Bstatic");
+}
+
+function debugUbOptions(os: string, mode: number, sanitize: string): CliOptions {
+	const opts = newCliOptions();
+	opts.targetOs = os;
+	opts.mode = mode;
+	opts.sanitize = sanitize;
+	opts.ccCompiler = CC_PREPARED;
+	opts.ccBinary = "/prepared/clang --config=/prepared/target.cfg";
+	return opts;
+}
+
+test "a prepared debug build reports signed overflow with the runtime its target has, and nothing else does" {
+	const listed = `-fsanitize=${DEBUG_UB_CHECKS}`;
+	for (const os of ["linux", "macos", "darwin"]) {
+		const flags = cliCompileFlags(debugUbOptions(os, MODE_DEBUG, ""));
+		assert flags.contains(`${listed} -fsanitize-minimal-runtime -fno-sanitize-recover=undefined`);
+	}
+	const musl = debugUbOptions("linux", MODE_DEBUG, "");
+	musl.abi = "musl";
+	const muslFlags = cliCompileFlags(musl);
+	assert muslFlags.contains(`${listed} -fno-sanitize-recover=undefined`) && !muslFlags.contains("minimal");
+	const windows = cliCompileFlags(debugUbOptions("windows", MODE_DEBUG, ""));
+	assert windows.contains(`${listed} -fno-sanitize-recover=undefined`) && !windows.contains("minimal");
+	assert !cliCompileFlags(debugUbOptions("wasm", MODE_DEBUG, "")).contains("-fsanitize");
+	for (const os of ["linux", "macos", "windows", "wasm"]) {
+		for (const mode of [MODE_RELEASE, MODE_DANGER]) assert !cliCompileFlags(debugUbOptions(os, mode, "")).contains("-fsanitize");
+	}
+	const explicit = cliCompileFlags(debugUbOptions("linux", MODE_DEBUG, "address"));
+	assert explicit.contains("-fsanitize=address") && !explicit.contains("minimal") && !explicit.contains(DEBUG_UB_CHECKS);
+	const zig = debugUbOptions("linux", MODE_DEBUG, "");
+	zig.ccCompiler = 0;
+	assert !cliCompileFlags(zig).contains("-fsanitize");
+	assert !cliCompileFlags(debugUbOptions("bare", MODE_DEBUG, "")).contains("-fsanitize");
+	for (const app of ["lib", "staticlib"]) {
+		const library = debugUbOptions("linux", MODE_DEBUG, "");
+		library.appMode = app;
+		assert !cliCompileFlags(library).contains("-fsanitize");
+	}
 }
 
 test "the default math library follows the link target, not the host" {

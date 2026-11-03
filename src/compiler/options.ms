@@ -130,6 +130,18 @@ export function buildCpu(targetOs: string, cpuTarget: string): string {
 	return "amd64";
 }
 
+// The checks zig cc turns on by itself in a debug build (the "undefined" group less function and
+// vptr, which C programs with cast function pointers would trip).
+export const DEBUG_UB_CHECKS = "alignment,array-bounds,bool,builtin,enum,float-cast-overflow,integer-divide-by-zero,nonnull-attribute,null,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound";
+
+// A prepared debug executable reports the same overflows zig cc does; an explicit --sanitize= replaces this.
+// A library does not take it: clang links no sanitizer runtime into a shared library, so its handlers stay
+// undefined at load. Upgrade when the libraries link the minimal runtime archive into themselves.
+export function debugUbChecks(opts: CliOptions): boolean {
+	if (opts.mode != MODE_DEBUG || opts.sanitize != "" || opts.appMode != "console") return false;
+	return opts.targetOs == "linux" || opts.targetOs == "windows" || opts.targetOs == "macos" || opts.targetOs == "darwin";
+}
+
 function targetCpuName(targetOs: string, cpuTarget: string): string {
 	if (cpuTarget != "") return cpuTarget;
 	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";

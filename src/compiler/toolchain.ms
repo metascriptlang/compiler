@@ -9,7 +9,7 @@ import { nowSeconds, markUsed } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, buildCpu, newCliOptions } from "./options";
+import { CliOptions, CC_PREPARED, MODE_RELEASE, buildCpu, debugUbChecks, newCliOptions } from "./options";
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
@@ -830,11 +830,34 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	const config = join(bundle.root, `runtime/${name}`);
 	const target = opts.abi == "musl" ? `${opts.targetOs}-musl/${cpu}` : `${opts.targetOs}/${cpu}`;
 	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${target} is not installed in ${bundle.root}`);
-	if (opts.targetOs == "windows" && opts.sanitize != "") return Result.err(`native toolchain: --sanitize=${opts.sanitize} on windows needs a libclang_rt sanitizer runtime, and ${bundle.root} ships none for windows\n  → build with --cc=zig, or drop --sanitize`);
+	if (opts.targetOs == "windows") {
+		const missing = try windowsSanitizerGap(opts, bundle.root, name);
+	}
+	const sanitizing = opts.sanitize != "" || debugUbChecks(opts);
+	const minimal = opts.sanitize == "" && opts.abi != "musl";
+	if (opts.targetOs == "linux" && sanitizing && !minimal) {
+		const cxxConfig = `runtime/${name.slice(0, name.length - 4)}.cxx.cfg`;
+		if (!exists(join(bundle.root, cxxConfig))) return Result.err(`native toolchain: UBSan or a sanitizer on ${target} links its runtime against the C++ runtime, and ${bundle.root} has no ${cxxConfig}\n  → use a bundle that ships it, or build with --release`);
+	}
 	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
 	pendingConfig = `runtime/${name}`;
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
+	if (opts.targetOs == "linux" && sanitizing) opts.ccBinary = `${opts.ccBinary} --target=${name.slice(0, name.indexOf("-"))}-unknown-linux-${opts.abi == "musl" ? "musl" : "gnu"}`;
 	opts.ccConfigOwnsTarget = true;
+	return Result.ok(null);
+}
+
+// A Windows sanitizer link needs the standalone UBSan runtime beside the target's libraries; mingw has
+// no ASan or TSan runtime, so those are refused whatever the bundle holds.
+function windowsSanitizerGap(opts: CliOptions, root: string, name: string): Result<void, string> {
+	for (const sanitizer of opts.sanitize == "" ? [] : opts.sanitize.split(",")) {
+		if (sanitizer != "undefined") return Result.err(`native toolchain: --sanitize=${sanitizer} is not available on windows: mingw has no ${sanitizer} runtime, zig cc fails it as well\n  → use --sanitize=undefined, or drop --sanitize`);
+	}
+	if (opts.sanitize == "" && !debugUbChecks(opts)) return Result.ok(null);
+	const folder = `runtime/${name.slice(0, name.length - 4)}${opts.appMode == "lib" ? ".dll" : ""}`;
+	for (const library of ["libclang_rt.ubsan_standalone.a", "libclang_rt.ubsan_standalone_cxx.a"]) {
+		if (!exists(join(join(root, folder), library))) return Result.err(`native toolchain: UBSan on windows needs ${folder}/${library}, and ${root} does not ship it\n  → use a bundle that ships it, or build with --release`);
+	}
 	return Result.ok(null);
 }
 
@@ -947,6 +970,7 @@ test "a bundle without the musl runtime refuses --abi=musl naming it, and with i
 	const refused = selectNativeToolchain(opts, root, "");
 	assert !refused.ok && refused.error.contains("prepared runtime for linux-musl/x86_64 is not installed");
 	assert writeFile(join(root, "runtime/x86_64-linux-musl.cfg"), "").ok;
+	assert writeFile(join(root, "runtime/x86_64-linux-musl.cxx.cfg"), "").ok;
 	const chosen = linuxOptions();
 	chosen.abi = "musl";
 	assert selectNativeToolchain(chosen, root, "").ok;
@@ -955,23 +979,80 @@ test "a bundle without the musl runtime refuses --abi=musl naming it, and with i
 	assert removeAll(root).ok;
 }
 
-test "the prepared Windows runtime refuses every sanitizer on both CPUs because the bundle ships no runtime for it" {
+function windowsOptions(cpu: string, sanitize: string, mode: number): CliOptions {
+	const opts = newCliOptions();
+	opts.targetOs = "windows";
+	opts.cpuTarget = cpu;
+	opts.sanitize = sanitize;
+	opts.mode = mode;
+	return opts;
+}
+
+test "a prepared Windows build takes UBSan only where the bundle ships the standalone runtime, and refuses ASan and TSan" {
 	const root = selectionProbe(true);
 	assert root != "";
 	for (const cpu of ["x86_64", "arm64"]) {
 		const stem = cpu == "x86_64" ? "x86_64" : "aarch64";
-		assert ensureDir(join(root, "runtime/windows")).ok;
+		const folder = join(root, `runtime/windows/${stem}-windows-gnu`);
+		assert ensureDir(folder).ok;
 		assert writeFile(join(root, `runtime/windows/${stem}-windows-gnu.cfg`), "").ok;
-		for (const san of ["undefined", "address"]) {
-			const opts = newCliOptions();
-			opts.targetOs = "windows";
-			opts.cpuTarget = cpu;
-			opts.sanitize = san;
-			const refused = selectNativeToolchain(opts, root, "");
-			assert !refused.ok && refused.error.contains(`--sanitize=${san} on windows`) && refused.error.contains("--cc=zig");
-			opts.sanitize = "";
-			assert selectNativeToolchain(opts, root, "").ok;
+		for (const mode of [0, MODE_RELEASE]) {
+			for (const san of ["address", "thread", "undefined,address"]) {
+				const refused = selectNativeToolchain(windowsOptions(cpu, san, mode), root, "");
+				assert !refused.ok && refused.error.contains("is not available on windows") && refused.error.contains("zig cc fails it as well");
+			}
 		}
+		const gap = selectNativeToolchain(windowsOptions(cpu, "undefined", MODE_RELEASE), root, "");
+		assert !gap.ok && gap.error.contains(`runtime/windows/${stem}-windows-gnu/libclang_rt.ubsan_standalone.a`);
+		assert selectNativeToolchain(windowsOptions(cpu, "", MODE_RELEASE), root, "").ok;
+		const debugGap = selectNativeToolchain(windowsOptions(cpu, "", 0), root, "");
+		assert !debugGap.ok && debugGap.error.contains("libclang_rt.ubsan_standalone.a");
+		assert writeFile(join(folder, "libclang_rt.ubsan_standalone.a"), "").ok;
+		const cxxGap = selectNativeToolchain(windowsOptions(cpu, "undefined", MODE_RELEASE), root, "");
+		assert !cxxGap.ok && cxxGap.error.contains("libclang_rt.ubsan_standalone_cxx.a");
+		assert writeFile(join(folder, "libclang_rt.ubsan_standalone_cxx.a"), "").ok;
+		assert selectNativeToolchain(windowsOptions(cpu, "undefined", MODE_RELEASE), root, "").ok;
+		assert selectNativeToolchain(windowsOptions(cpu, "", 0), root, "").ok;
+		const dll = windowsOptions(cpu, "undefined", 0);
+		dll.appMode = "lib";
+		const dllGap = selectNativeToolchain(dll, root, "");
+		assert !dllGap.ok && dllGap.error.contains(`runtime/windows/${stem}-windows-gnu.dll/libclang_rt.ubsan_standalone.a`);
+	}
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
+}
+
+test "a prepared Linux sanitizer link names its target after the config, and a non-minimal one needs the C++ config" {
+	const root = selectionProbe(true);
+	assert root != "";
+	for (const abi of ["gnu", "musl"]) {
+		const stem = abi == "gnu" ? "x86_64-linux-gnu.2.31" : "x86_64-linux-musl";
+		assert writeFile(join(root, `runtime/${stem}.cfg`), "").ok;
+		const triple = `--target=x86_64-unknown-linux-${abi}`;
+		const plain = linuxOptions();
+		plain.abi = abi;
+		plain.mode = MODE_RELEASE;
+		assert selectNativeToolchain(plain, root, "").ok;
+		assert !plain.ccBinary.contains("--target=");
+		const debug = linuxOptions();
+		debug.abi = abi;
+		if (abi == "musl") {
+			const muslGap = selectNativeToolchain(debug, root, "");
+			assert !muslGap.ok && muslGap.error.contains(`runtime/${stem}.cxx.cfg`);
+			assert writeFile(join(root, `runtime/${stem}.cxx.cfg`), "").ok;
+		}
+		assert selectNativeToolchain(debug, root, "").ok;
+		assert debug.ccBinary.endsWith(triple) && debug.ccBinary.indexOf(".cfg") < debug.ccBinary.indexOf(triple);
+		const explicit = linuxOptions();
+		explicit.abi = abi;
+		explicit.sanitize = "address";
+		if (abi == "gnu") {
+			const refused = selectNativeToolchain(explicit, root, "");
+			assert !refused.ok && refused.error.contains(`runtime/${stem}.cxx.cfg`);
+			assert writeFile(join(root, `runtime/${stem}.cxx.cfg`), "").ok;
+		}
+		assert selectNativeToolchain(explicit, root, "").ok;
+		assert explicit.ccBinary.endsWith(triple);
 	}
 	verifySelectedToolchain();
 	assert removeAll(root).ok;
