@@ -495,9 +495,16 @@ export function refuseUnliftedClosure(body: Node, ctx: TransformContext): void {
 }
 
 export function holdClosureEnv(body: Node, ctx: TransformContext): void {
+	const decl = heldClosureEnvDecl(body, ctx);
+	if (decl == null) return;
+	const bd = body.data as BlockStmtData;
+	bd.statements = [decl!, ...bd.statements];
+}
+
+function heldClosureEnvDecl(body: Node, ctx: TransformContext): Node | null {
 	const found: Node[] = [];
 	findClosureEnv(body, found);
-	if (found.length == 0 || body.kind != NodeKind.BlockStmt) return;
+	if (found.length == 0 || body.kind != NodeKind.BlockStmt) return null;
 	const param = closureEnvParam(found[0])!;
 	const held = createRef(found[0].nodeType!.typeReturn!);
 	const local = newLoweredSym(ctx, SymbolKind.Variable, `$heldEnv${ctx.tempCounter}`, held, false);
@@ -507,8 +514,7 @@ export function holdClosureEnv(body: Node, ctx: TransformContext): void {
 	const decl = makeVarDecl(local.name, init, DeclKind.Const, body.location);
 	decl.resolvedSym = local;
 	decl.nodeType = held;
-	const bd = body.data as BlockStmtData;
-	bd.statements = [decl, ...bd.statements];
+	return decl;
 }
 
 // Emit yield: transition to next state + return IteratorResult.
@@ -1338,7 +1344,7 @@ function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Nod
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation, source: Symbol | null = null): Node {
 	refuseUnliftedClosure(body, ctx);
 	spillAssignedYields(body, ctx);
-	holdClosureEnv(body, ctx);
+	const heldEnvDecl = heldClosureEnvDecl(body, ctx);
 	// 1. Collect all locals and their types
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
@@ -1425,6 +1431,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   let local1; let local2; ...
 	//   return { next: function() { while(true) { switch dispatch } } };
 	const newBodyStmts: Node[] = [];
+	if (heldEnvDecl != null) newBodyStmts.push(heldEnvDecl!);
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
 	stateDecl.resolvedSym = stateSym;
 	newBodyStmts.push(stateDecl);
