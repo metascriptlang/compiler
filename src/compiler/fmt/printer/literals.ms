@@ -183,7 +183,7 @@ export function indexSourceLines(source: string): void {
 	indexed = source;
 }
 
-function sourceOffset(source: string, line: int32, col: int32): int32 {
+export function sourceOffset(source: string, line: int32, col: int32): int32 {
 	if (source == "" || line < 1 || line > lines.starts.length) return -1;
 	const pos = lines.lineStart(line) + col;
 	return pos < source.byteLength ? pos : -1;

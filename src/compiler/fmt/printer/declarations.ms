@@ -16,9 +16,9 @@ import {
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
-import { structuralType, printTypeAnnotation } from "./types";
+import { structuralType, printTypeAnnotation, commentedUnionType } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
-import { sourceByteAt, sourceSpan, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
+import { sourceByteAt, sourceSpan, sourceOffset, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
 import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
@@ -182,8 +182,39 @@ function typeAliasAssignment(head: string, distinct: string, d: TypeAliasDeclDat
 	return docText(head + " = " + text);
 }
 
+function aliasTypeFrom(source: string, d: TypeAliasDeclData): int32 {
+	let pos = sourceOffset(source, d.nameLocation.line, d.nameLocation.column - 1);
+	if (pos < 0) return -1;
+	let depth = 0;
+	while (pos < source.byteLength) {
+		const ch = source.byteAt(pos);
+		const next = pos + 1 < source.byteLength ? source.byteAt(pos + 1) : 0;
+		if (ch == "\"".code || ch == "'".code || ch == "`".code || (ch == "/".code && (next == "/".code || next == "*".code))) return -1;
+		if (ch == "<".code) depth += 1;
+		else if (ch == ">".code) depth -= 1;
+		else if (ch == "=".code && depth == 0) return next == ">".code ? -1 : pos + 1;
+		pos += 1;
+	}
+	return -1;
+}
+
+function commentedUnionAlias(node: Node, d: TypeAliasDeclData, options: FormatOptions): Doc | null {
+	const loc = node.location;
+	const discriminated = d.discriminantName != "" && d.discriminantName != null;
+	if (loc.endLine == 0 || d.aliasIsDistinct || discriminated || node.flags.has(NodeFlag.ValueUnion)) return null;
+	const comments = commentsWithin(loc, makeLoc(loc.endLine, loc.endColumn));
+	if (comments.length == 0) return null;
+	const union = commentedUnionType(node.typeExpr, d.aliasType, aliasTypeFrom(options.source, d), comments, options);
+	if (union == null) return null;
+	for (const c of comments) c.markFormatted();
+	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
+	return docGroup([assembleAssignment([docText(head)], " =", AssignmentLayout.Fluid, union), docText(";")]);
+}
+
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
+	const commented = commentedUnionAlias(node, d, options);
+	if (commented != null) return commented;
 	const verbatim = aliasWithInnerComments(node, options);
 	if (verbatim != "") return docText(verbatim);
 	const distinct = d.aliasIsDistinct ? "distinct " : "";

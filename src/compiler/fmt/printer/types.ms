@@ -8,10 +8,11 @@ import {
 } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import {
-	Doc, DocKind, docNil, docText, docGroup, docGroupBreak, docBreakParent, docIndent, docAlign, docLine, docSoftLine, docIfBreak,
+	Doc, DocKind, docNil, docText, docSourceText, docGroup, docGroupBreak, docBreakParent, docIndent, docAlign, docLine, docSoftLine, docHardLine, docIfBreak,
 } from "../doc";
+import { SourceComment, CommentKind } from "../comments";
 import { commentsWithin } from "./commentDocs";
-import { sourceSpan, sourceByteAt, blankLineBefore, normalizeStringToken, writtenMemberName } from "./literals";
+import { sourceSpan, sourceOffset, sourceByteAt, blankLineBefore, normalizeStringToken, writtenMemberName } from "./literals";
 
 enum TypeParent {
 	Annotation,
@@ -76,6 +77,70 @@ function needsParens(node: Node, parent: TypeParent): boolean {
 }
 
 let unsupported = false;
+let commentedUnion: Node | null = null;
+let unionComments: SourceComment[] = [];
+let unionCursor = -1;
+
+interface MemberComments {
+	trailingPrevious: SourceComment[];
+	beforeBar: SourceComment[];
+	afterBar: SourceComment[];
+}
+
+function commentStart(source: string, c: SourceComment): int32 {
+	return sourceOffset(source, c.line, c.column - 1);
+}
+
+function barBetween(source: string, from: int32, to: int32, comments: SourceComment[]): int32 {
+	let pos = from;
+	let next = 0;
+	while (pos < to) {
+		if (next < comments.length && pos == commentStart(source, comments[next])) {
+			pos += comments[next].text.byteLength;
+			next += 1;
+			continue;
+		}
+		if (source.byteAt(pos) == "|".code) return pos;
+		pos += 1;
+	}
+	return -1;
+}
+
+function newlineBetween(source: string, from: int32, to: int32): boolean {
+	for (let pos = from; pos < to; pos += 1) if (source.byteAt(pos) == "\n".code) return true;
+	return false;
+}
+
+function memberComments(m: Node, first: boolean, options: FormatOptions): MemberComments {
+	const out: MemberComments = { trailingPrevious: [], beforeBar: [], afterBar: [] };
+	const source = options.source;
+	const start = sourceOffset(source, m.location.line, m.location.column - 1);
+	const run: SourceComment[] = [];
+	while (unionComments.length > 0) {
+		const at = commentStart(source, unionComments[0]);
+		if (at < unionCursor || at + unionComments[0].text.byteLength > start) break;
+		run.push(unionComments.shift()!);
+	}
+	const bar = barBetween(source, unionCursor, start, run);
+	for (const c of run) {
+		const line = c.kind == CommentKind.Line;
+		const at = commentStart(source, c);
+		const before = bar >= 0 ? at < bar : line;
+		if (before && !newlineBetween(source, unionCursor, at)) {
+			if (first) unsupported = true;
+			out.trailingPrevious.push(c);
+		} else if (before != line) {
+			unsupported = true;
+		} else if (before) {
+			out.beforeBar.push(c);
+		} else {
+			out.afterBar.push(c);
+		}
+	}
+	unionCursor = sourceOffset(source, m.location.endLine, m.location.endColumn - 1);
+	if (unionCursor < 0) unsupported = true;
+	return out;
+}
 
 function leafText(node: Node, options: FormatOptions): string {
 	const name = (node.data as IdentifierData).name;
@@ -102,7 +167,8 @@ function member(node: Node, parent: TypeParent, options: FormatOptions): Doc {
 
 function printUnion(node: Node, parent: TypeParent, options: FormatOptions): Doc {
 	const members = unionMembers(node);
-	if (shouldHug(node)) {
+	const commented = node == commentedUnion;
+	if (shouldHug(node) && !commented) {
 		const parts: Doc[] = [];
 		for (let i = 0; i < members.length; i += 1) {
 			if (i > 0) parts.push(docText(" | "));
@@ -113,11 +179,28 @@ function printUnion(node: Node, parent: TypeParent, options: FormatOptions): Doc
 	const indented = parent != TypeParent.TypeArgument;
 	const body: Doc[] = [];
 	if (indented) body.push(docIfBreak(docLine(), docNil()));
-	body.push(docIfBreak(docText("| "), docNil()));
 	for (let i = 0; i < members.length; i += 1) {
-		if (i > 0) {
-			body.push(docLine());
-			body.push(docText("| "));
+		const lead = commented ? memberComments(members[i], i == 0, options) : null;
+		if (lead != null) {
+			for (const c of lead.trailingPrevious) {
+				body.push(docText(" "));
+				body.push(docSourceText(c.text));
+				if (c.kind == CommentKind.Line) body.push(docBreakParent());
+			}
+		}
+		if (i > 0) body.push(docLine());
+		if (lead != null) {
+			for (const c of lead.beforeBar) {
+				body.push(docSourceText(c.text));
+				body.push(docHardLine());
+			}
+		}
+		body.push(i > 0 ? docText("| ") : docIfBreak(docText("| "), docNil()));
+		if (lead != null) {
+			for (const c of lead.afterBar) {
+				body.push(docSourceText(c.text));
+				body.push(docText(" "));
+			}
 		}
 		body.push(docAlign([member(members[i], TypeParent.Element, options)]));
 	}
@@ -250,7 +333,8 @@ function printType(node: Node, parent: TypeParent, options: FormatOptions): Doc 
 function flat(doc: Doc): string {
 	return match (doc.kind) {
 		DocKind.Nil | DocKind.Line | DocKind.HardLine | DocKind.BreakParent => "",
-		DocKind.Text | DocKind.SourceText => (doc.data as { text: string }).text,
+		DocKind.Text => (doc.data as { text: string }).text,
+		DocKind.SourceText => "",
 		DocKind.IfBreak => flat((doc.data as { broken: Doc, flat: Doc }).flat),
 		DocKind.Group | DocKind.Concat | DocKind.Indent | DocKind.Align | DocKind.LineSuffix | DocKind.IndentIfGroupBreaks | DocKind.Fill => {
 			let out = "";
@@ -300,6 +384,20 @@ export function structuralType(expr: Node | null, text: string, options: FormatO
 	unsupported = false;
 	const doc = printType(expr, TypeParent.Annotation, options);
 	return !unsupported && signature(flat(doc)) == signature(text) ? doc : null;
+}
+
+export function commentedUnionType(expr: Node | null, text: string, from: int32, comments: SourceComment[], options: FormatOptions): Doc | null {
+	if (expr == null || expr.kind != NodeKind.TypeUnion || expr.location.endLine == 0 || options.source == "" || from < 0) return null;
+	commentedUnion = expr;
+	unionComments = comments.slice();
+	unionCursor = from;
+	unsupported = false;
+	const doc = printType(expr, TypeParent.Annotation, options);
+	const placed = unionComments.length == 0;
+	commentedUnion = null;
+	unionComments = [];
+	unionCursor = -1;
+	return placed && !unsupported && signature(flat(doc)) == signature(text) ? doc : null;
 }
 
 export function printTypeAnnotation(expr: Node | null, text: string, options: FormatOptions): Doc {
