@@ -80,17 +80,9 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number, ite
 	arr[s] = item;
 }
 
-when (mscReturnsBorrowedReference) {
-	export function reverse<T>(this arr: T[]): Borrow<T[]> {
-		arr.reverseInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function reverse<T>(this arr: T[]): T[] {
-		arr.reverseInPlace();
-		return arr;
-	}
+export function reverse<T>(this arr: T[]): Borrow<T[]> {
+	arr.reverseInPlace();
+	return arr;
 }
 
 function reverseInPlace<T>(this arr: T[]): void {
@@ -150,43 +142,19 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-when (mscReturnsBorrowedReference) {
-	export function sort(this arr: number[]): Borrow<number[]> {
-		arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort(this arr: number[]): number[] {
-		arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
-		return arr;
-	}
+export function sort(this arr: number[]): Borrow<number[]> {
+	arr.sortBy((a: number, b: number): number => a < b ? -1 : (a > b ? 1 : 0));
+	return arr;
 }
 
-when (mscReturnsBorrowedReference) {
-	export function sort(this arr: string[]): Borrow<string[]> {
-		arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort(this arr: string[]): string[] {
-		arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
-		return arr;
-	}
+export function sort(this arr: string[]): Borrow<string[]> {
+	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
+	return arr;
 }
 
-when (mscReturnsBorrowedReference) {
-	export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
-		arr.sortBy(cmp);
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
-		arr.sortBy(cmp);
-		return arr;
-	}
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
+	arr.sortBy(cmp);
+	return arr;
 }
 
 

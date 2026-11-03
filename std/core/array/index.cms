@@ -87,17 +87,9 @@ export extern function concat(this arr: Vec<number>, other: number[]): number[] 
  */
 extern function reverseInPlace(this arr: number[]): void from "&msNumberArrayReverse";
 
-when (mscReturnsBorrowedReference) {
-	export function reverse(this arr: number[]): Borrow<number[]> {
-		arr.reverseInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function reverse(this arr: number[]): number[] {
-		arr.reverseInPlace();
-		return arr;
-	}
+export function reverse(this arr: number[]): Borrow<number[]> {
+	arr.reverseInPlace();
+	return arr;
 }
 
 /**
@@ -106,17 +98,9 @@ when (!mscReturnsBorrowedReference) {
  */
 extern function sortInPlace(this arr: number[]): void from "&msNumberArraySort";
 
-when (mscReturnsBorrowedReference) {
-	export function sort(this arr: number[]): Borrow<number[]> {
-		arr.sortInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort(this arr: number[]): number[] {
-		arr.sortInPlace();
-		return arr;
-	}
+export function sort(this arr: number[]): Borrow<number[]> {
+	arr.sortInPlace();
+	return arr;
 }
 
 /** Changes all array elements to a static value, from a start index to an end index. */
@@ -196,17 +180,9 @@ export extern function concat(this arr: Vec<string>, other: string[]): string[] 
  */
 extern function reverseInPlace(this arr: string[]): void from "&msStringArrayReverse";
 
-when (mscReturnsBorrowedReference) {
-	export function reverse(this arr: string[]): Borrow<string[]> {
-		arr.reverseInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function reverse(this arr: string[]): string[] {
-		arr.reverseInPlace();
-		return arr;
-	}
+export function reverse(this arr: string[]): Borrow<string[]> {
+	arr.reverseInPlace();
+	return arr;
 }
 
 /**
@@ -215,17 +191,9 @@ when (!mscReturnsBorrowedReference) {
  */
 extern function sortInPlace(this arr: string[]): void from "&msStringArraySort";
 
-when (mscReturnsBorrowedReference) {
-	export function sort(this arr: string[]): Borrow<string[]> {
-		arr.sortInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort(this arr: string[]): string[] {
-		arr.sortInPlace();
-		return arr;
-	}
+export function sort(this arr: string[]): Borrow<string[]> {
+	arr.sortInPlace();
+	return arr;
 }
 
 /** Changes all array elements to a static value. */
@@ -392,17 +360,9 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
-when (mscReturnsBorrowedReference) {
-	export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
-		arr.sortBy(cmp);
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): T[] {
-		arr.sortBy(cmp);
-		return arr;
-	}
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): Borrow<T[]> {
+	arr.sortBy(cmp);
+	return arr;
 }
 
 
@@ -555,17 +515,9 @@ export function fill<T>(this arr: T[], value: T): void {
 }
 
 /** Reverses the array in place. */
-when (mscReturnsBorrowedReference) {
-	export function reverse<T>(this arr: T[]): Borrow<T[]> {
-		arr.reverseInPlace();
-		return arr;
-	}
-}
-when (!mscReturnsBorrowedReference) {
-	export function reverse<T>(this arr: T[]): T[] {
-		arr.reverseInPlace();
-		return arr;
-	}
+export function reverse<T>(this arr: T[]): Borrow<T[]> {
+	arr.reverseInPlace();
+	return arr;
 }
 
 function reverseInPlace<T>(this arr: T[]): void {

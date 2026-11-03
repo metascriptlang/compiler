@@ -189,13 +189,8 @@ class ActorCell {
 	terminate: ((reason: ExitReason) => void) | null = null;
 }
 
-when (mscBuildsPreludeTables) {
-	function newActorCells(): Map<int64, ActorCell> { return new Map<int64, ActorCell>(); }
-	function newTimersLive(): Map<int64, () => void> { return new Map<int64, () => void>(); }
-} else {
-	function newActorCells(): Map<int64, ActorCell> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser actor table"); }
-	function newTimersLive(): Map<int64, () => void> { throw new Error("internal: a compiler without mscBuildsPreludeTables built the Raiser timer table"); }
-}
+function newActorCells(): Map<int64, ActorCell> { return new Map<int64, ActorCell>(); }
+function newTimersLive(): Map<int64, () => void> { return new Map<int64, () => void>(); }
 
 let actorCellsTable: Map<int64, ActorCell> | null = null;
 

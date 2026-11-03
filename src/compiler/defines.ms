@@ -20,14 +20,7 @@ export interface DefineTable {
 }
 
 export function createDefineTable(): DefineTable {
-	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
-	// std sort and reverse return a Borrow only under this symbol: an older builder emits that Borrow as the address of the callee's parameter slot, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscReturnsBorrowedReference", "true");
-	// A number argument ranks as an exact match for a float64 parameter only under this symbol: std keeps its number overloads for a compiler that predates it, which would take the generic overload instead, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscRanksNumberAsFloat64", "true");
-	// The Raiser prelude builds its actor and timer tables only under this symbol: a compiler that predates it checks a collection constructor before the extensions it calls, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscBuildsPreludeTables", "true");
-	return t;
+	return { symbols: new HashMap<string, string>(), names: [], seeded: [] };
 }
 
 export function normalizeDefineName(name: string): string {
@@ -218,10 +211,8 @@ test "define: bare flag stores true" {
 	assert definedValue(t, "myFlag") == "true";
 }
 
-test "define: a fresh table carries the compiler feature symbol" {
-	const t = createDefineTable();
-	assert isDefined(t, "mscRanksNumberAsFloat64");
-	assert isDefined(t, "mscBuildsPreludeTables");
+test "define: a fresh table carries no symbol" {
+	assert createDefineTable().names.length == 0;
 }
 
 test "define: unknown flag is false, never an error" {
