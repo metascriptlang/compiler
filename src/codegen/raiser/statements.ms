@@ -15,7 +15,7 @@ import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC,
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
-	declareLocal, declaredSymbol, regIsFixedLocal,
+	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
@@ -132,15 +132,25 @@ function trapMissingTarget(s: RaiserCompState, node: Node, jump: string): void {
 function compileBlock(s: RaiserCompState, node: Node): void {
 	const d = node.data as BlockStmtData;
 	const savedLocals = s.locals.items.length;
+	const enclosingRegs = s.nextReg;
 	for (let i = 0; i < d.statements.length; i += 1) {
 		const stmt = d.statements[i];
 		if (stmt.kind == NodeKind.VariableDecl && i + 1 < d.statements.length && d.statements[i + 1].kind == NodeKind.WhileStmt) {
 			markBoundedCounterStep(s, stmt, d.statements[i + 1]);
 		}
 		compileStmt(s, stmt);
+		resetTemps(s, enclosingRegs);
 	}
 	// Restore locals scope — drop block-scoped vars
 	s.locals.items.shrink(savedLocals);
+}
+
+function compileStatements(s: RaiserCompState, statements: Node[]): void {
+	const enclosingRegs = s.nextReg;
+	for (const stmt of statements) {
+		compileStmt(s, stmt);
+		resetTemps(s, enclosingRegs);
+	}
 }
 
 // --- Variable Declaration ---
@@ -654,7 +664,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 			const testReg = compileExpr(s, cd.caseTests[0]);
 			emitInst(s, raiserABC(RaiserOpcode.BeqI64, discReg, testReg, 1));
 			const skipJump = emitJumpPlaceholder(s);
-			for (const stmt of cd.caseStmts) { compileStmt(s, stmt); }
+			compileStatements(s, cd.caseStmts);
 			endPatches.push(emitJumpPlaceholder(s));
 			patchJumpTo(s, skipJump, codeLen(s));
 		} else {
@@ -675,7 +685,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 			emitLoadConst(s, zeroReg, raiserInt(0));
 			emitInst(s, raiserABC(RaiserOpcode.BneI64, flagReg, zeroReg, 1));
 			const skipBody = emitJumpPlaceholder(s);
-			for (const stmt of cd.caseStmts) { compileStmt(s, stmt); }
+			compileStatements(s, cd.caseStmts);
 			endPatches.push(emitJumpPlaceholder(s));
 			patchJumpTo(s, skipBody, codeLen(s));
 		}
@@ -684,7 +694,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 	// Default case
 	if (defaultCaseIdx >= 0) {
 		const dd = d.switchCases[defaultCaseIdx].data as SwitchCaseData;
-		for (const stmt of dd.caseStmts) { compileStmt(s, stmt); }
+		compileStatements(s, dd.caseStmts);
 	}
 
 	// Patch all end jumps to here

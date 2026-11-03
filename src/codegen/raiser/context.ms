@@ -349,8 +349,8 @@ export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
 // before declaring `k` at R2 — leaving R1 as a live-but-anonymous slot.
 // Using `locals.items.length` would set nextReg=2 and clobber R2 (`k`)
 // on the next statement. Compute max(local.reg)+1 instead.
-export function resetTemps(s: RaiserCompState): void {
-	let maxReg = -1;
+export function resetTemps(s: RaiserCompState, enclosingRegs: int32 = 0): void {
+	let maxReg = enclosingRegs - 1;
 	for (const local of s.locals.items) {
 		if (local.reg > maxReg) maxReg = local.reg;
 	}
