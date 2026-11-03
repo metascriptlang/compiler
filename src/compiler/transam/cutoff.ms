@@ -263,3 +263,19 @@ test "a method body edit keeps the exported class Symbol, so a module checked la
 		assert messages == "", messages;
 	}
 }
+
+const LENDER = "export class H { v: int32 = 1; }\nexport async function work(h: H): Promise<int32> { return h.v; }";
+const BORROWER = 'import { H, work } from "./dep";\nexport async function go(): Promise<int32> { const h = new H(); const p = work(h); h.v = 2; return await p; }';
+
+test "an edit that makes an exported async routine lend its parameter to a spawn rechecks its importer" {
+	const db = openDb([DEP, USER], [LENDER, BORROWER], [[1, 0]], resolveRuntimeDir() + "/std");
+	assert check(db, [DEP, USER]) == `${DEP},${USER}`;
+	assert dbTypeCheck(db, USER).errors.length == 0;
+	const lending = LENDER.replace("return h.v;", "const f = spawn(() => h.v); return await f;");
+	dbSetFileText(db, DEP, lending);
+	assert check(db, [DEP, USER]) == `${DEP},${USER}`;
+	const messages = dbTypeCheck(db, USER).errors.map((e: CheckerError): string => e.message).join("; ");
+	assert messages.contains("'h' is lent to the spawn"), messages;
+	dbSetFileText(db, DEP, "// note\n" + lending);
+	assert check(db, [DEP, USER]) == DEP;
+}
