@@ -69,6 +69,7 @@ export interface BoundaryParam {
 	callback: BoundaryCallback | null;
 	leaves: BoundaryLeaf[];
 	element: BoundaryKind;
+	handle: string | null;
 }
 
 export interface BoundaryFunction {
@@ -82,6 +83,8 @@ export interface BoundaryFunction {
 	resultNullable: boolean;
 	resultLeaves: BoundaryLeaf[];
 	resultElement: BoundaryKind;
+	resultHandle: string | null;
+	resultLabel: string;
 }
 
 export interface BoundaryRefusal {
@@ -104,6 +107,7 @@ interface Collector {
 	errors: BoundaryRefusal[];
 	fnName: string;
 	modulePath: string;
+	entryPath: string;
 	at: SourceLocation;
 	exports: ExportedSymInfo[];
 	handles: Symbol[];
@@ -256,10 +260,10 @@ function checkHandle(
 	what: string,
 	t: Type,
 	nullable: boolean,
-): void {
+): string | null {
 	if (nullable) {
 		handleRefusal(c, "handle-null", what, "nullable Handle<T> is not supported");
-		return;
+		return null;
 	}
 	const target = handleTarget(t);
 	if (target == null || !isNominalTarget(target)) {
@@ -267,13 +271,13 @@ function checkHandle(
 		const text = `${shown}: T must be an exported class or struct, `
 			+ "as in Handle<Counter>";
 		handleRefusal(c, "handle-target", what, text);
-		return;
+		return null;
 	}
 	const name = describe(target);
 	if (!isExportedTarget(c, target)) {
 		const text = `Handle<${name}>: ${name} must be exported to cross`;
 		handleRefusal(c, "handle-unexported", what, text);
-		return;
+		return null;
 	}
 	if (!c.handles.includes(target.sym!)) c.handles.push(target.sym!);
 	handleRefusal(
@@ -282,6 +286,7 @@ function checkHandle(
 		what,
 		`Handle<${name}> crossing is not generated yet`,
 	);
+	return name;
 }
 
 function callbackParamKind(pt: Type): BoundaryKind | null {
@@ -405,6 +410,7 @@ interface ValueShape {
 	nullable: boolean;
 	leaves: BoundaryLeaf[];
 	element: BoundaryKind;
+	handle: string | null;
 }
 
 function declaresHook(t: Type): boolean {
@@ -618,7 +624,8 @@ function valueShape(
 		const leaves: BoundaryLeaf[] = [];
 		if (!structLeaves(c, what, t, [], leaves)) return null;
 		const element = BoundaryKind.Void;
-		return { kind: BoundaryKind.Struct, nullable, leaves, element };
+		const handle = null;
+		return { kind: BoundaryKind.Struct, nullable, leaves, element, handle };
 	}
 	if (t.kind == TypeKind.Array && t.typeReturn != null) {
 		const et = peeled(t.typeReturn!);
@@ -634,9 +641,15 @@ function valueShape(
 			);
 			return null;
 		}
-		return { kind: BoundaryKind.Vec, nullable, leaves: [], element };
+		const handle = null;
+		return { kind: BoundaryKind.Vec, nullable, leaves: [], element, handle };
 	}
 	return null;
+}
+
+function handleLabel(c: Collector, target: string, at: SourceLocation): string {
+	const file = relative(dirname(c.entryPath), c.modulePath);
+	return `Handle<${target}> created at ${file}:${at.line}`;
 }
 
 function plainParam(
@@ -646,7 +659,16 @@ function plainParam(
 	mode: BoundaryMode,
 ): BoundaryParam {
 	const element = BoundaryKind.Void;
-	return { name, kind, nullable, mode, callback: null, leaves: [], element };
+	return {
+		name,
+		kind,
+		nullable,
+		mode,
+		callback: null,
+		leaves: [],
+		element,
+		handle: null,
+	};
 }
 
 function paramOf(
@@ -720,8 +742,12 @@ function paramOf(
 		return param;
 	}
 	if (isHandleType(t)) {
-		checkHandle(c, what, t, nullable);
-		return null;
+		const target = checkHandle(c, what, t, nullable);
+		if (target == null) return null;
+		const kind = BoundaryKind.Handle;
+		const param = plainParam(name, kind, false, BoundaryMode.Borrowed);
+		param.handle = target;
+		return param;
 	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, what, t, nullable);
@@ -742,7 +768,8 @@ function paramOf(
 }
 
 function plainShape(kind: BoundaryKind, nullable: boolean): ValueShape {
-	return { kind, nullable, leaves: [], element: BoundaryKind.Void };
+	const element = BoundaryKind.Void;
+	return { kind, nullable, leaves: [], element, handle: null };
 }
 
 function resultOf(c: Collector, type: Type | null): ValueShape | null {
@@ -767,8 +794,11 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		return null;
 	}
 	if (isHandleType(t)) {
-		checkHandle(c, "the result", t, nullable);
-		return null;
+		const target = checkHandle(c, "the result", t, nullable);
+		if (target == null) return null;
+		const shape = plainShape(BoundaryKind.Handle, false);
+		shape.handle = target;
+		return shape;
 	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, "the result", t, nullable);
@@ -938,6 +968,10 @@ function boundaryFunction(
 		resultNullable: result.nullable,
 		resultLeaves: result.leaves,
 		resultElement: result.element,
+		resultHandle: result.handle,
+		resultLabel: result.handle == null
+			? ""
+			: handleLabel(c, result.handle!, nameAt),
 	};
 }
 
@@ -1040,7 +1074,15 @@ export function manifestFor(
 ): Manifest {
 	const key = moduleKeyOf(modulePath, entryPath);
 	const at = makeLoc(0, 0);
-	const c: Collector = { errors: [], fnName: "", modulePath, at, exports, handles: [] };
+	const c: Collector = {
+		errors: [],
+		fnName: "",
+		modulePath,
+		entryPath,
+		at,
+		exports,
+		handles: [],
+	};
 	const functions: BoundaryFunction[] = [];
 	const locs: SourceLocation[] = [];
 	const seen: string[] = [];

@@ -34,7 +34,7 @@ const ALL_POSITIONS: Position[] = [
 	Position.CallbackSpanElement,
 ];
 
-function accepts(kind: BoundaryKind, at: Position): boolean {
+function accepts(kind: BoundaryKind, at: Position, jsSide: boolean): boolean {
 	return match (kind) {
 		BoundaryKind.Bool
 			| BoundaryKind.I8
@@ -53,7 +53,7 @@ function accepts(kind: BoundaryKind, at: Position): boolean {
 		BoundaryKind.Callback => at == Position.Param,
 		BoundaryKind.Struct | BoundaryKind.Vec => at == Position.Param || at == Position.Result,
 		BoundaryKind.Span => at == Position.Param || at == Position.CallbackParam,
-		BoundaryKind.Handle => false,
+		BoundaryKind.Handle => !jsSide && (at == Position.Param || at == Position.Result),
 	};
 }
 
@@ -77,7 +77,8 @@ function plainCallback(): BoundaryCallback {
 
 function paramOf(name: string, kind: BoundaryKind, leaves: BoundaryLeaf[], element: BoundaryKind): BoundaryParam {
 	const mode = kind == BoundaryKind.Span ? BoundaryMode.Shared : kind == BoundaryKind.Callback ? BoundaryMode.Borrowed : BoundaryMode.Copied;
-	return { name, kind, mode, callback: kind == BoundaryKind.Callback ? plainCallback() : null, leaves, element };
+	const handle = kind == BoundaryKind.Handle ? "Counter" : null;
+	return { name, kind, mode, callback: kind == BoundaryKind.Callback ? plainCallback() : null, leaves, element, handle };
 }
 
 function leavesOf(kind: BoundaryKind): BoundaryLeaf[] {
@@ -85,7 +86,7 @@ function leavesOf(kind: BoundaryKind): BoundaryLeaf[] {
 }
 
 function functionOf(params: BoundaryParam[], result: BoundaryKind, resultLeaves: BoundaryLeaf[], resultElement: BoundaryKind): BoundaryFunction {
-	return { modulePath: "/p/calc.ms", moduleKey: "calc", name: "f", exportSymbol: "msb_calc_f", params, result, resultLeaves, resultElement };
+	return { modulePath: "/p/calc.ms", moduleKey: "calc", name: "f", exportSymbol: "msb_calc_f", params, result, resultLeaves, resultElement, resultHandle: result == BoundaryKind.Handle ? "Counter" : null, resultLabel: "" };
 }
 
 function functionAt(kind: BoundaryKind, at: Position): BoundaryFunction {
@@ -107,7 +108,7 @@ function functionAt(kind: BoundaryKind, at: Position): BoundaryFunction {
 }
 
 function functionOfCallback(cb: BoundaryCallback): BoundaryFunction {
-	const p: BoundaryParam = { name: "a", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void };
+	const p: BoundaryParam = { name: "a", kind: BoundaryKind.Callback, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void, handle: null };
 	return functionOf([p], BoundaryKind.Void, [], BoundaryKind.Void);
 }
 
@@ -136,7 +137,7 @@ test "wire kinds: every kind in every position is emitted or refused naming the 
 			for (const at of ALL_POSITIONS) {
 				const message = emitted(functionAt(kind, at), jsSide);
 				const cell = `${jsSide ? "js" : "wasm"} side, ${BoundaryKind[kind]} at ${Position[at]}`;
-				if (accepts(kind, at)) {
+				if (accepts(kind, at, jsSide)) {
 					assert message == "", `${cell} must emit, got: ${message}`;
 				} else {
 					assert message.startsWith(`internal: boundary kind ${BoundaryKind[kind]} has no `), `${cell} must be refused naming the kind, got: '${message}'`;

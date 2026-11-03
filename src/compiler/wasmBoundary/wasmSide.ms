@@ -275,7 +275,28 @@ function guardedExport(
 	return lines;
 }
 
-function wrapperLines(f: BoundaryFunction, alias: string): string[] {
+function handleAliasOf(
+	modules: string[],
+	f: BoundaryFunction,
+	name: string,
+): string {
+	return `msbm${modules.indexOf(f.modulePath)}_${name}`;
+}
+
+function releaseLines(alias: string): string[] {
+	return [
+		'@exportName("msb_release")',
+		"export function msb_release(p: uint32): void {",
+		`\tHandle.at<${alias}>(p as uint64 as Ptr<void>).release();`,
+		"}",
+	];
+}
+
+function wrapperLines(
+	f: BoundaryFunction,
+	alias: string,
+	modules: string[],
+): string[] {
 	const sigs: string[] = [];
 	const argList: string[] = [];
 	for (let i = 0; i < f.params.length; i += 1) {
@@ -288,6 +309,12 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 			BoundaryKind.Callback => {
 				sigs.push(`${p.name}: int32`);
 				argList.push(closureOf(p.callback!, p.name));
+			}
+			BoundaryKind.Handle => {
+				sigs.push(`${p.name}: uint32`);
+				const target = handleAliasOf(modules, f, p.handle!);
+				const at = `${p.name} as uint64 as Ptr<void>`;
+				argList.push(`Handle.at<${target}>(${at})`);
 			}
 			BoundaryKind.Struct => {
 				if (p.nullable) sigs.push(`${some}: int32`);
@@ -334,6 +361,11 @@ function wrapperLines(f: BoundaryFunction, alias: string): string[] {
 			const base = `(r as Span<${t}>) as Ptr<void> as uint64 as int32`;
 			const take = `msb_rv(${base}, r.length as int32);`;
 			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+		},
+		BoundaryKind.Handle => {
+			const ret = "return r.ptr as uint64 as uint32;";
+			const body = [`const r = ${call};`, ret];
+			guardedExport(f, sig, "uint32", body, "0")
 		},
 		BoundaryKind.String => {
 			const take = "msb_rs_s(msbStrPtr(r), r.asBytes().length);";
@@ -418,6 +450,12 @@ interface EntryUsage {
 	vecElements: BoundaryKind[];
 	resultImports: string[];
 	callbacks: BoundaryCallback[];
+	handles: string[];
+}
+
+function addHandle(usage: EntryUsage, f: BoundaryFunction, name: string): void {
+	const key = `${f.modulePath}\n${name}`;
+	if (!usage.handles.includes(key)) usage.handles.push(key);
 }
 
 function usageOf(fns: BoundaryFunction[]): EntryUsage {
@@ -430,6 +468,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		vecElements: [],
 		resultImports: [],
 		callbacks: [],
+		handles: [],
 	};
 	let hasVecResult = false;
 	const addResultImport = (name: string): void => {
@@ -449,6 +488,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		) {
 			usage.hasScalarSome = true;
 		}
+		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!);
 		if (f.result == BoundaryKind.Vec) {
 			usage.readsHeap = true;
 			hasVecResult = true;
@@ -459,6 +499,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			addResultImport("msb_rs_" + letters);
 		}
 		for (const p of f.params) {
+			if (p.handle != null) addHandle(usage, f, p.handle!);
 			if (p.kind == BoundaryKind.String) {
 				usage.hasString = true;
 				usage.copiesIn = true;
@@ -505,6 +546,7 @@ function aliasOf(f: BoundaryFunction, modules: string[]): string {
 function moduleImportLines(
 	fns: BoundaryFunction[],
 	modules: string[],
+	handles: string[],
 	importPathOf: (modulePath: string) => string,
 ): string[] {
 	const lines: string[] = [];
@@ -515,6 +557,12 @@ function moduleImportLines(
 			if (f.modulePath != modulePath || imported.includes(f.name)) continue;
 			imported.push(f.name);
 			names.push(`${f.name} as ${aliasOf(f, modules)}`);
+		}
+		for (const key of handles) {
+			const at = key.indexOf("\n");
+			if (key.slice(0, at) != modulePath) continue;
+			const name = key.slice(at + 1);
+			names.push(`${name} as msbm${modules.indexOf(modulePath)}_${name}`);
 		}
 		const from = importPathOf(modulePath);
 		lines.push(`import { ${names.join(", ")} } from "${from}";`);
@@ -546,7 +594,9 @@ function entryLines(
 	usage: EntryUsage,
 	importPathOf: (modulePath: string) => string,
 ): string[] {
-	const lines = moduleImportLines(fns, usage.modules, importPathOf);
+	const { modules, handles } = usage;
+	const lines = moduleImportLines(fns, modules, handles, importPathOf);
+	if (handles.length > 0) lines.push('import { Handle } from "std/ffi";');
 	for (const l of unsignedWireLines()) lines.push(l);
 	if (usage.hasString) for (const l of stringHelperLines()) lines.push(l);
 	if (usage.hasScalarSome) {
@@ -567,7 +617,15 @@ function entryLines(
 		for (const l of importLines(name, letters, "v", false)) lines.push(l);
 	}
 	for (const f of fns) {
-		for (const l of wrapperLines(f, aliasOf(f, usage.modules))) lines.push(l);
+		const alias = aliasOf(f, usage.modules);
+		for (const l of wrapperLines(f, alias, usage.modules)) lines.push(l);
+	}
+	if (usage.handles.length > 0) {
+		const key = usage.handles[0];
+		const at = key.indexOf("\n");
+		const first = `msbm${usage.modules.indexOf(key.slice(0, at))}_`
+			+ key.slice(at + 1);
+		for (const l of releaseLines(first)) lines.push(l);
 	}
 	return lines;
 }
@@ -578,6 +636,7 @@ function exportedSymbolsOf(
 ): string[] {
 	const exported = fns.map((f) => "_" + f.exportSymbol);
 	if (usage.hasScalarSome) exported.push("_msb_ret_some");
+	if (usage.handles.length > 0) exported.push("_msb_release");
 	if (usage.callbacks.length > 0) exported.push("_msb_fail");
 	if (usage.copiesIn || usage.callbacks.length > 0) exported.push("_malloc");
 	if (usage.copiesIn) exported.push("_free");

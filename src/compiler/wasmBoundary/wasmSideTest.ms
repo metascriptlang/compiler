@@ -48,17 +48,18 @@ export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
 export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
 `;
 
-function manifestFrom(source: string, names: string[]): Manifest {
+function manifestFrom(source: string, names: string[], also: string[] = []): Manifest {
 	const ctx = checkSource(source);
 	if (ctx == null) throw new Error("internal: test source did not check");
 	const exps: ExportedSymInfo[] = [];
-	for (const n of names) {
+	for (const n of [...also, ...names]) {
 		const sym = lookupSymbol(ctx.table, n);
 		if (sym == null) throw new Error("internal: test source lacks " + n);
 		exps.push(buildExportInfo(sym!, null as unknown as ExtensionRegistry, "/p/calc.ms", null as unknown as CheckerContext));
 	}
 	const m = manifestFor("/p/calc.ms", "/p/app.ms", exps, names);
-	if (m.errors.length > 0) throw new Error("internal: " + m.errors.map((e) => e.message).join("; "));
+	const refused = m.errors.filter((e) => e.code != "handle-not-generated");
+	if (refused.length > 0) throw new Error("internal: " + refused.map((e) => e.message).join("; "));
 	return m;
 }
 
@@ -315,4 +316,43 @@ test "wasm entry: a nullable callback parameter is split into a flag and a value
 	assert s.includes("void msb_cb_v_iiis(int32_t id, int32_t a0, int32_t a1, int32_t a2, uint32_t a3p, int32_t a3l);");
 	assert s.includes("msbm0_replayBig((a0: boolean | null, a1: int64 | null): void => { msb_cb_v_iiij(cb, (a0 != null ? 1 : 0), ((a0 ?? false) ? 1 : 0), (a1 != null ? 1 : 0), (a1 ?? 0)); msbCheck(); })");
 	assert s.includes("extern function msb_cb_v_iiij(id: int32, a0: int32, a1: int32, a2: int32, a3: int64): void from \"msb_cb_v_iiij\";");
+}
+
+const HANDLES = `
+@builtin("FfiHandle")
+export struct Handle<T> { ptr: Ptr<void>; }
+export class Counter { n: int32 = 0; }
+export class Gauge { n: int32 = 0; }
+export function open(start: int32): Handle<Counter> { return null as unknown as Handle<Counter>; }
+export function openGauge(): Handle<Gauge> { return null as unknown as Handle<Gauge>; }
+export function bump(h: Handle<Counter>, by: int32): int32 { return by; }
+export function ping(): int32 { return 1; }
+`;
+
+function handleEntryFor(names: string[]) {
+	return wasmEntrySource(manifestFrom(HANDLES, names, ["Counter", "Gauge"]).functions, (p: string) => "./calc");
+}
+
+test "wasm entry: a Handle result is returned as a raw pointer and a Handle parameter is rebuilt with no count" {
+	const s = handleEntryFor(["open", "bump"]).source;
+	assert s.includes("import { Handle } from \"std/ffi\";");
+	assert s.includes("import { open as msbm0_open, bump as msbm0_bump, Counter as msbm0_Counter } from \"./calc\";");
+	assert s.includes("export function msb_calc_open(start: int32): uint32 {\n\ttry {\n\t\tconst r = msbm0_open(start);\n\t\treturn r.ptr as uint64 as uint32;\n\t} catch (e) {\n\t\tmsbEscape(e.message);\n\t\treturn 0;\n\t}\n}");
+	assert s.includes("export function msb_calc_bump(h: uint32, by: int32): int32 {\n\ttry {\n\t\treturn msbm0_bump(Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>), by);");
+}
+
+test "wasm entry: msb_release is exported once when a Handle is in the manifest, for any number of targets" {
+	const one = handleEntryFor(["open"]);
+	assert one.source.split("export function msb_release(").length == 2;
+	assert one.source.includes("Handle.at<msbm0_Counter>(p as uint64 as Ptr<void>).release();");
+	assert one.exportedFunctions.filter((n) => n == "_msb_release").length == 1;
+	const two = handleEntryFor(["open", "openGauge", "bump"]);
+	assert two.source.split("export function msb_release(").length == 2;
+	assert two.exportedFunctions.filter((n) => n == "_msb_release").length == 1;
+}
+
+test "wasm entry: no msb_release and no Handle import without a Handle" {
+	const e = handleEntryFor(["ping"]);
+	assert e.source.includes("msb_release") == false && e.source.includes("std/ffi") == false;
+	assert e.exportedFunctions.includes("_msb_release") == false;
 }

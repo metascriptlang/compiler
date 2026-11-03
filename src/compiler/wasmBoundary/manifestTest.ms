@@ -431,7 +431,7 @@ export function takeOwned(o: Owned): int32 { return 0; }
 	assert errorFor(m.errors, "takeOwned").includes("Owned has no JS/wasm boundary form: it crosses as Handle<Owned>");
 }
 
-test "manifest: a Handle<T> of an exported class is not generated yet" {
+test "manifest: a Handle<T> of an exported class is refused as not generated yet while the JS half is missing" {
 	const src = HANDLE + `
 export class Counter { n: int32 = 0; }
 export function open(): Handle<Counter> { return null as unknown as Handle<Counter>; }
@@ -439,7 +439,6 @@ export function use(h: Handle<Counter>): int32 { return 0; }
 `;
 	const names = ["open", "use"];
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", ...names]), names);
-	assert m.functions.length == 0;
 	assert errorFor(m.errors, "open").includes("Handle<Counter> crossing is not generated yet");
 	assert errorFor(m.errors, "use").includes("parameter 'h': Handle<Counter> crossing is not generated yet");
 }
@@ -481,4 +480,20 @@ export function open(): Handle<Counter> { return null as unknown as Handle<Count
 `;
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", "open"]), ["open"]);
 	assert m.handles.length == 1 && m.handles[0].name == "Counter";
+}
+
+test "manifest: a Handle parameter and result carry the target name, and the result carries its declaration site label" {
+	const src = HANDLE + `
+export class Counter { n: int32 = 0; }
+export function open(): Handle<Counter> { return null as unknown as Handle<Counter>; }
+export function use(h: Handle<Counter>): int32 { return 0; }
+`;
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, ["Counter", "open", "use"]), ["open", "use"]);
+	assert m.functions.length == 2;
+	const open = m.functions[0];
+	assert open.result == BoundaryKind.Handle && open.resultHandle == "Counter" && open.resultNullable == false;
+	assert open.resultLabel == "Handle<Counter> created at calc/core.ms:" + 6, open.resultLabel;
+	const use = m.functions[1];
+	assert use.params[0].kind == BoundaryKind.Handle && use.params[0].handle == "Counter";
+	assert use.resultHandle == null && use.resultLabel == "";
 }

@@ -235,8 +235,8 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	const m: Manifest = {
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", overloadIndex: 0, exportSymbol: "msb_calc_note",
-			params: [{ name: "cb", kind: BoundaryKind.Callback, nullable: false, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void }],
-			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void,
+			params: [{ name: "cb", kind: BoundaryKind.Callback, nullable: false, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void, handle: null }],
+			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void, resultHandle: null, resultLabel: "",
 		}],
 		errors: [],
 		handles: [],
