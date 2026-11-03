@@ -70,3 +70,35 @@ test "loop span cache: a loop with an inner loop is cached once, outside both" {
 	assert c.includes("msSpan_int32_t dollarspan_"), "no span local for the array";
 	assert !c.includes("msArrayAccessUnchecked("), "an element is still reached through the cell";
 }
+
+const GUARD = "changed while iterating";
+
+test "loop span cache: a for-of whose body cannot change the array drops the length guard" {
+	const c = emitted(loopIn("for (const x of a) n += x;"), true);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes(GUARD), "the guard of a header-stable loop is still emitted";
+}
+
+test "loop span cache: nested for-of loops over one array drop both guards" {
+	const c = emitted(loopIn("for (const x of a) { for (const y of a) n += x * y; }"), true);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes(GUARD), "a guard of the nested loops is still emitted";
+}
+
+test "loop span cache: a for-of that pushes keeps the length guard" {
+	const c = emitted(loopIn("for (const x of a) { if (x == 1) a.push(9); n += x; }"), true);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert c.includes(GUARD), "the guard of a loop that pushes was dropped";
+}
+
+test "loop span cache: a for-of that sets a length through an alias keeps the length guard" {
+	const c = emitted(loopIn("const b = a; for (const x of a) { if (x == 1) b.length = 2; n += x; }"), true);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert c.includes(GUARD), "the guard of a loop that sets a length was dropped";
+}
+
+test "loop span cache: a checked build keeps the length guard" {
+	const c = emitted(loopIn("for (const x of a) n += x;"), false);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert c.includes(GUARD), "a checked build lost the guard";
+}

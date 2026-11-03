@@ -11,7 +11,7 @@
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
-	ArrayAccessData, NumberLiteralData, TryCatchStmtData,
+	ArrayAccessData, NumberLiteralData, TryCatchStmtData, BinaryExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
@@ -284,9 +284,26 @@ function cannotRebind(sym: Symbol | null): boolean {
 
 function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
 	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
-	const message = `the length of the ${isString ? "string" : "array"} changed while iterating over it`;
-	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(message, loc) }, loc);
+	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(lengthChangedMessage(isString), loc) }, loc);
 	return makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc);
+}
+
+function lengthChangedMessage(isString: boolean): string {
+	return `the length of the ${isString ? "string" : "array"} changed while iterating over it`;
+}
+
+export function isArrayLengthGuard(n: Node): boolean {
+	if (n.kind != NodeKind.IfStmt) return false;
+	const then = (n.data as IfStmtData).consequent;
+	if (then.kind != NodeKind.BlockStmt) return false;
+	const stmts = (then.data as BlockStmtData).statements;
+	if (stmts.length != 1 || stmts[0].kind != NodeKind.ThrowStmt) return false;
+	const arg = (stmts[0].data as ThrowStmtData).throwArg;
+	if (arg.kind != NodeKind.StringLiteral || (arg.data as StringLiteralData).value != lengthChangedMessage(false)) return false;
+	const cond = (n.data as IfStmtData).condition;
+	if (cond.kind != NodeKind.BinaryExpr) return false;
+	const snapshot = (cond.data as BinaryExprData).right;
+	return snapshot.kind == NodeKind.Identifier && snapshot.resolvedSym != null && snapshot.resolvedSym.symbolKind == SymbolKind.Temp;
 }
 
 function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {

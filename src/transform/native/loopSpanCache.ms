@@ -2,7 +2,7 @@
 // header, so its arrays are read through a local Span. Admitting any other node kind here breaks
 // that rule: a header change inside the loop would go unseen.
 
-import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData } from "../../ast/node";
 import { isRoutineNode } from "../../ast/shape";
 import { peelTransparentInstance, peelToRepr, createSpan, isNumeric } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
@@ -10,6 +10,7 @@ import { isAssignOp } from "../../ast/operators";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, freshTemp, newLoweredSym } from "../context";
 import { makeBlock, makeVarDecl, makeIdentResolved, makeHiddenDeref } from "../util";
 import { arraySpanLiteral } from "../lowering/spanLower";
+import { isArrayLengthGuard } from "../lowering/forOfLower";
 
 class Cached {
 	array: Symbol;
@@ -27,8 +28,23 @@ class LoopCache {
 export function lowerLoopSpans(program: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend || ctx.raiserBackend || ctx.boundChecks) return program;
 	const st: LoopCache = { ctx, bound: createSymSet(), cached: [] };
+	dropProvenLengthGuards(program, st);
 	scan(program, st);
 	return program;
+}
+
+function dropProvenLengthGuards(n: Node, st: LoopCache): void {
+	forEachChild(n, (c: Node): void => dropProvenLengthGuards(c, st));
+	if (n.kind != NodeKind.WhileStmt) return;
+	const d = n.data as WhileStmtData;
+	if (d.whileBody.kind != NodeKind.BlockStmt) return;
+	const body = d.whileBody.data as BlockStmtData;
+	const last = body.statements.length - 1;
+	if (last < 0 || !isArrayLengthGuard(body.statements[last])) return;
+	st.cached = [];
+	let stable = isHeaderStable(d.whileCondition, st);
+	for (let i = 0; stable && i < last; i++) stable = isHeaderStable(body.statements[i], st);
+	if (stable) body.statements.pop();
 }
 
 function scan(node: Node, st: LoopCache): void {
@@ -86,9 +102,14 @@ function plainElem(t: Type | null): boolean {
 	return r != null && isNumeric(r) && r.kind != TypeKind.Char;
 }
 
+function holdsByReference(sym: Symbol): boolean {
+	const t = peelTransparentInstance(sym.symbolType);
+	return (t.kind == TypeKind.Ref || t.kind == TypeKind.Borrow) && t.typeReturn != null;
+}
+
 function arrayElemOf(sym: Symbol | null, viaDeref: boolean): Type | null {
 	if (sym == null || sym.symbolType == null) return null;
-	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return null;
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter && sym.symbolKind != SymbolKind.Temp) return null;
 	let t = peelTransparentInstance(sym.symbolType);
 	if (viaDeref) {
 		if ((t.kind != TypeKind.Ref && t.kind != TypeKind.Borrow) || t.typeReturn == null) return null;
@@ -133,7 +154,9 @@ function arrayUse(a: Node, st: LoopCache): boolean {
 	if (id == null) return false;
 	if (a == id && isSpanIdent(id)) return true;
 	const sym = id.resolvedSym;
-	const viaDeref = a != id;
+	if (sym == null || sym.symbolType == null) return false;
+	const viaDeref = holdsByReference(sym);
+	if (a != id && !viaDeref) return false;
 	const elem = arrayElemOf(sym, viaDeref);
 	if (sym == null || elem == null) return false;
 	if (sym.symbolKind == SymbolKind.Parameter || symSetContains(st.bound, sym)) note(sym, elem, viaDeref, st);
