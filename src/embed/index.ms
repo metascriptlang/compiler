@@ -9,6 +9,7 @@ import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
 import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { vmCallFunction, vmDumpStack } from "../raiser/vm";
+import { liveCellBlocks } from "../raiser/memory";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
 import { join } from "std/fs/path";
@@ -536,13 +537,13 @@ test "callRoutine passes a struct the host built and the struct it returns outli
 	assert routineValue(interp, "onKey", [key]).field("send").text() == "KeyA:2";
 	const vm = interp.run!.vm!;
 	const objects = vm.objectHeap.objects.length;
-	const arrays = vm.arrayHeap.arrays.length;
+	const arrays = liveCellBlocks(vm.arrayHeap.mem).length;
 	for (let i = 0; i < 2000; i += 1) {
 		routineValue(interp, "onKey", [key]);
 		routineValue(interp, "current", []);
 	}
 	assert vm.objectHeap.objects.length == objects;
-	assert vm.arrayHeap.arrays.length == arrays;
+	assert liveCellBlocks(vm.arrayHeap.mem).length == arrays;
 	removeAll(dir);
 }
 
