@@ -675,16 +675,6 @@ static inline msString msUnboxString(void* p) {
 #endif
     return v;
 }
-static inline void* msBoxStruct(const void* val, size_t size) {
-#ifdef MSOS_BARE
-    void* p = msArenaAlloc(size);
-    __builtin_memcpy(p, val, size);
-#else
-    void* p = msMemAlloc(size);
-    memcpy(p, val, size);
-#endif
-    return p;
-}
 
 /* ===== Locked<T> stubs (--mm=manual has no threading: the lock is a no-op) =====
  * The cell itself is an ordinary allocation whose payload the backend reaches

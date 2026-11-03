@@ -529,16 +529,6 @@ static inline msString msFutureTakeStringRaw(void* fp) {
 	return v;
 }
 
-/* Generic struct boxing for spawn — any value type via memcpy.
- * Used when spawn closure returns a struct (Result, interface, etc.).
- * Caller passes &value and sizeof(Type). Box allocates heap copy.
- * Unbox: cast void* to Type*, dereference, free. */
-static inline void* msBoxStruct(const void* val, size_t size) {
-	void* p = msMemAlloc(size);
-	memcpy(p, val, size);
-	return p;
-}
-
 /* ===== Error Reporting ===== */
 
 /* Bounds check failure — prints error and exits */

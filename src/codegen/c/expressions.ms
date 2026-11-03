@@ -2711,7 +2711,7 @@ function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly
 enum CallMagic {
 	None,
 	StringConcatArr, StringArrayFromArr, StringAppendArr,
-	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
+	SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
 	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
 	OrcDisownValue,
@@ -2730,7 +2730,6 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 		"StringConcatArr" => CallMagic.StringConcatArr,
 		"StringArrayFromArr" => CallMagic.StringArrayFromArr,
 		"StringAppendArr" => CallMagic.StringAppendArr,
-		"BoxStruct" => CallMagic.BoxStruct,
 		"SinkBoxStruct" => CallMagic.SinkBoxStruct,
 		"UnboxStruct" => CallMagic.UnboxStruct,
 		"BoxRefArray" => CallMagic.BoxRefArray,
@@ -2892,16 +2891,6 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 	if (magic == CallMagic.None && namesRoutine(cd.callee, protoSym)) ensureCrossModuleProto(g, callee, protoType, protoSym);
 	// DRC hooks — emit forward declaration on-demand
 	ensureDrcProto(g, callee, protoSym);
-
-	// msBoxStruct(val) → msBoxStruct(&val, sizeof(TypeName))
-	// spawnLower emits this for struct returns. nodeType carries the type.
-	if (magic == CallMagic.BoxStruct && node.nodeType != null) {
-		const boxType = getTypeDesc(g, node.nodeType);
-		// Explicitly add & — ccgIntroducedPtr won't fire for synthetic calls
-		const addrArg = argsStr.length > 0 && argsStr.charAt(0) == "&" ? argsStr : "&(" + argsStr + ")";
-		ctx.results.push(`msBoxStruct(${addrArg}, sizeof(${boxType}))`);
-		return;
-	}
 
 	// msSinkBoxStruct(val) → malloc + memcpy + memset (DRC-aware boxing)
 	// spawnLower emits this for struct returns. The boxed value's type is the

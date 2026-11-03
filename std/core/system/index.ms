@@ -150,9 +150,6 @@ extern function msWaitForStruct(fut: Ptr<void>): Ptr<void>;
 @compilerFunc @builtin("FutureThenBoxed")
 extern function msFutureThenBoxed(input: Ptr<void>, onFulfilled: Ptr<void>): Ptr<void>;
 
-@compilerFunc @builtin("BoxStruct")
-extern function msBoxStruct(val: Ptr<void>): Ptr<void>;
-
 @compilerFunc @builtin("ModuleImport")
 extern function msModuleImport(name: string): Ptr<void>;
 
