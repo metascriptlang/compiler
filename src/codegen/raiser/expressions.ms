@@ -27,7 +27,7 @@ import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
-import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol, builtinKindName } from "../../checker/symbol";
+import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol } from "../../checker/symbol";
 import { isCtorSignature } from "../../checker/ctorRoutine";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
@@ -2001,35 +2001,35 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 
 	const builtinKind = callBuiltinKind(node);
 	// exit(code) / process.exit(code) is a Tier-0 concern: halt the VM with the code.
-	if (builtinKind == "Exit" && d.arguments.length <= 1) {
+	if (builtinKind == BuiltinKind.Exit && d.arguments.length <= 1) {
 		return compileExitCall(s, node);
 	}
-	if ((builtinKind == "UnionText" || builtinKind == "UnionDebug") && d.arguments.length >= 1) {
+	if ((builtinKind == BuiltinKind.UnionText || builtinKind == BuiltinKind.UnionDebug) && d.arguments.length >= 1) {
 		return compileTextOf(s, d.arguments[0]);
 	}
-	if (builtinKind == "MapFatal" && d.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.MapFatal && d.arguments.length == 1) {
 		return compileMapFatalCall(s, node);
 	}
-	if (builtinKind == "SetSize" && d.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.SetSize && d.arguments.length == 1) {
 		return compileSetSizeCall(s, node);
 	}
-	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
+	if (builtinKind == BuiltinKind.HiXorLo && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
 	}
-	if ((builtinKind == "LoadLE64" || builtinKind == "LoadLE32") && d.arguments.length == 2) {
-		return compileLoadLECall(s, node, builtinKind == "LoadLE64" ? 8 : 4);
+	if ((builtinKind == BuiltinKind.LoadLE64 || builtinKind == BuiltinKind.LoadLE32) && d.arguments.length == 2) {
+		return compileLoadLECall(s, node, builtinKind == BuiltinKind.LoadLE64 ? 8 : 4);
 	}
-	if (builtinKind == "Float64Bits" && d.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.Float64Bits && d.arguments.length == 1) {
 		const value = compileExpr(s, d.arguments[0]);
 		return emitConvTo(s, value, RaiserConvClass.F64Bits as int32, RaiserConvClass.F64 as int32);
 	}
-	if (builtinKind == "Float64FromBits" && d.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.Float64FromBits && d.arguments.length == 1) {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.F64 as int32, RaiserConvClass.F64Bits as int32);
 	}
-	if (builtinKind == "PtrBits" && d.arguments.length == 1) {
+	if (builtinKind == BuiltinKind.PtrBits && d.arguments.length == 1) {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
-	if (builtinKind == "CollectCycles" && d.arguments.length == 0) {
+	if (builtinKind == BuiltinKind.CollectCycles && d.arguments.length == 0) {
 		emitInst(s, raiserABC(RaiserOpcode.CollectCycles, 0, 0, 0));
 		return allocFor(s, node.nodeType);
 	}
@@ -2039,7 +2039,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	// opcodes. Keyed on builtinKind (set from the @builtin decorator in
 	// std/core/promise), never on the name.
 	const asyncKind = builtinKind;
-	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
+	if (asyncKind == BuiltinKind.PromiseSpawn && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		const literal = closureLiteralOf(d.arguments[0]);
 		countLiteralEnv(s, literal, closureReg);
@@ -2048,21 +2048,21 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
 		return dest;
 	}
-	if (asyncKind == "PromiseThen") {
+	if (asyncKind == BuiltinKind.PromiseThen) {
 		const handlers = d.arguments.length - (d.callee.kind == NodeKind.MemberExpr ? 0 : 1);
 		if (handlers == 1 || handlers == 2) return compileFutureThen(s, node, false);
 	}
-	if (asyncKind == "PromiseCatch") {
+	if (asyncKind == BuiltinKind.PromiseCatch) {
 		const handlers = d.arguments.length - (d.callee.kind == NodeKind.MemberExpr ? 0 : 1);
 		if (handlers == 1) return compileFutureThen(s, node, true);
 	}
-	if (asyncKind == "SleepAsync" && d.arguments.length == 1) {
+	if (asyncKind == BuiltinKind.SleepAsync && d.arguments.length == 1) {
 		const delayReg = compileExpr(s, d.arguments[0]);
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
-	if (asyncKind == "SleepTask" && d.arguments.length == 2) {
+	if (asyncKind == BuiltinKind.SleepTask && d.arguments.length == 2) {
 		const delayReg = compileExpr(s, d.arguments[0]);
 		const closureReg = compileExpr(s, d.arguments[1]);
 		const literal = closureLiteralOf(d.arguments[1]);
@@ -2071,30 +2071,30 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		if (literal != null) emitInst(s, raiserABC(RaiserOpcode.RcDec, closureReg, 0, 0));
 		return closureReg;
 	}
-	if (asyncKind == "SleepCancel" && d.arguments.length == 1) {
+	if (asyncKind == BuiltinKind.SleepCancel && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, closureReg, closureReg, 2));
 		return closureReg;
 	}
-	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
+	if (builtinKind == BuiltinKind.ModuleImport && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
 		const dest = allocFor(s, node.nodeType);
 		const name = addConst(s, raiserConstString((d.arguments[0].data as StringLiteralData).value));
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
-	if (asyncKind == "FutureRead" || asyncKind == "FutureCheck" || asyncKind == "FutureFinished" || asyncKind == "FutureTake") {
-		const mode = asyncKind == "FutureRead" ? 0 : asyncKind == "FutureCheck" ? 1 : asyncKind == "FutureFinished" ? 2 : 3;
+	const mode = futureReadMode(node);
+	if (mode >= 0) {
 		const dest = callBlock(s, node.nodeType, d.arguments, null);
 		emitCallArgs(s, dest, d.arguments);
 		emitInst(s, raiserABC(RaiserOpcode.FutureRead, dest, mode, d.arguments.length));
 		return dest;
 	}
-	if (asyncKind == "PromisePending") {
+	if (asyncKind == BuiltinKind.PromisePending) {
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		return dest;
 	}
-	if (asyncKind == "PromiseReject" && d.arguments.length == 1) {
+	if (asyncKind == BuiltinKind.PromiseReject && d.arguments.length == 1) {
 		const errorReg = compileExpr(s, d.arguments[0]);
 		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
@@ -2103,7 +2103,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		if (isFreshValue(reason) || reason.kind == NodeKind.NewExpr) emitInst(s, raiserABC(RaiserOpcode.RcDec, errorReg, 0, 0));
 		return dest;
 	}
-	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
+	if ((asyncKind == BuiltinKind.PromiseSettle || asyncKind == BuiltinKind.PromiseFail) && d.arguments.length >= 1) {
 		const futReg = compileExpr(s, d.arguments[0]);
 		let valueReg = 0;
 		if (d.arguments.length > 1 && (d.arguments[1].nodeType == null || d.arguments[1].nodeType!.kind != TypeKind.Void)) {
@@ -2113,7 +2113,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			emitLoadConst(s, valueReg, raiserNil());
 		}
 		const consumes = failTakesTheReason(d.callee.resolvedSym, asyncKind) || settleValueIsSunk(d.callee.resolvedSym) ? 1 : 0;
-		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, consumes));
+		emitInst(s, raiserABC(asyncKind == BuiltinKind.PromiseSettle ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, consumes));
 		return futReg;
 	}
 	const combine = combineOf(asyncKind);
@@ -2124,7 +2124,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.FutureCombine, dest, combine, d.arguments.length));
 		return dest;
 	}
-	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
+	if (asyncKind == BuiltinKind.PromiseResolve && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.
 		const value = compileExpr(s, d.arguments[0]);
@@ -2981,16 +2981,18 @@ function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
 
 // spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
 // on the CallExpr for free functions and on the callee for the static method.
-function combineOf(builtinKind: string): int32 {
-	if (builtinKind == "PromiseAll") return RaiserCombine.All as int32;
-	if (builtinKind == "PromiseRace") return RaiserCombine.Race as int32;
-	if (builtinKind == "PromiseAny") return RaiserCombine.Any as int32;
-	if (builtinKind == "PromiseAllSettled") return RaiserCombine.AllSettled as int32;
-	return -1;
+function combineOf(builtinKind: BuiltinKind): int32 {
+	return match (builtinKind) {
+		BuiltinKind.PromiseAll => RaiserCombine.All as int32,
+		BuiltinKind.PromiseRace => RaiserCombine.Race as int32,
+		BuiltinKind.PromiseAny => RaiserCombine.Any as int32,
+		BuiltinKind.PromiseAllSettled => RaiserCombine.AllSettled as int32,
+		_ => -1,
+	};
 }
 
-function failTakesTheReason(callee: Symbol | null, asyncKind: string): boolean {
-	return asyncKind == "PromiseFail" && (callee == null || callee.builtinKind != BuiltinKind.PromiseFail);
+function failTakesTheReason(callee: Symbol | null, asyncKind: BuiltinKind): boolean {
+	return asyncKind == BuiltinKind.PromiseFail && (callee == null || callee.builtinKind != BuiltinKind.PromiseFail);
 }
 
 function settleValueIsSunk(callee: Symbol | null): boolean {
@@ -2998,27 +3000,29 @@ function settleValueIsSunk(callee: Symbol | null): boolean {
 	return callee.symbolType.typeChildren[1].kind == TypeKind.Sink;
 }
 
-function futureRuntimeKind(sym: Symbol | null): string {
-	if (sym == null) return "";
-	const n = sym.nativeName;
-	if (n == "msFutureCreate") return "PromisePending";
-	if (n == "msFutureComplete" || n == "msFutureCompleteT" || n == "msFutureCompleteVoid") return "PromiseSettle";
-	if (n == "msFutureFail") return "PromiseFail";
-	if (n == "msFutureFinished") return "FutureFinished";
-	if (n == "msFutureCheckErr") return "FutureCheck";
-	if (n.startsWith("msFutureRead")) return "FutureRead";
-	if (n == "msFutureTakeRaw") return "FutureTake";
-	return "";
+function futureRuntimeKind(n: string): BuiltinKind {
+	if (n == "msFutureCreate") return BuiltinKind.PromisePending;
+	if (n == "msFutureComplete" || n == "msFutureCompleteT" || n == "msFutureCompleteVoid") return BuiltinKind.PromiseSettle;
+	if (n == "msFutureFail") return BuiltinKind.PromiseFail;
+	return BuiltinKind.None;
 }
 
-function callBuiltinKind(node: Node): string {
-	if (node.resolvedSym != null && node.resolvedSym.builtinKind != BuiltinKind.None) return builtinKindName(node.resolvedSym.builtinKind);
-	const d = node.data as CallExprData;
-	if (d.callee.resolvedSym != null) {
-		if (d.callee.resolvedSym.builtinKind != BuiltinKind.None) return builtinKindName(d.callee.resolvedSym.builtinKind);
-		return futureRuntimeKind(d.callee.resolvedSym);
-	}
-	return "";
+function futureReadMode(node: Node): int32 {
+	const callee = (node.data as CallExprData).callee.resolvedSym;
+	if (callee == null || callee.builtinKind != BuiltinKind.None || (node.resolvedSym != null && node.resolvedSym.builtinKind != BuiltinKind.None)) return -1;
+	const n = callee.nativeName;
+	if (n.startsWith("msFutureRead")) return 0;
+	if (n == "msFutureCheckErr") return 1;
+	if (n == "msFutureFinished") return 2;
+	if (n == "msFutureTakeRaw") return 3;
+	return -1;
+}
+
+function callBuiltinKind(node: Node): BuiltinKind {
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind != BuiltinKind.None) return node.resolvedSym.builtinKind;
+	const callee = (node.data as CallExprData).callee.resolvedSym;
+	if (callee == null) return BuiltinKind.None;
+	return callee.builtinKind != BuiltinKind.None ? callee.builtinKind : futureRuntimeKind(callee.nativeName);
 }
 
 // --- String method detection + compilation ---
