@@ -54,9 +54,19 @@ scope or surviving storage growth.
 | 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`, 174 `registerHostFn` entries) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
 | 2 | Portable MS (`std/core/string/shared.ms`, `std/core/array/index.rms`) | everything derivable; shared with the C and JS backends |
 
-The bridge table is compiler-side, so Tier 1 exists only where a host compiler does: roles 1 and 2. Roles 3 and 4 get whatever minimal surface the embedder supplies, so their stdlib has to come from Tier 2. Answering "Raiser needs X" with "add a bridge" is a role-1-only answer. Comptime runs a std routine of a `.cms` module through that module's `.rms` tier when one declares it, and a tier that lacks the routine is an internal error, not a fall back to the C body (`raiserTierOf`, `src/codegen/raiser/eval.ms`).
+The bridge table is compiler-side, so Tier 1 exists only where a host compiler does: roles 1 and 2. Roles 3 and 4 get whatever minimal surface the embedder supplies, so their stdlib has to come from Tier 2. Answering "Raiser needs X" with "add a bridge" is a role-1-only answer. Comptime runs a std routine of a `.cms` module through that module's `.rms` tier when one declares it, and a tier that lacks the routine refuses the call rather than falling back to the C body (`raiserTierOf`, `src/codegen/raiser/eval.ms`).
 
-A call to an extern with no bridge compiles with `raiser warning: no host bridge for '<name>'` at the call site and fails at runtime with `Unknown host function: <name>`. It is a warning, not an error, because std bodies the program never calls may contain unbridged externs.
+A reached call the Raiser cannot run is a compile error at the call, naming the routine, its module, the reason and the backends whose tier declares it (`src/module/tiers.ms`). The import refuses a module with no Raiser tier (loader) and a name its `.rms` tier lacks (checker); codegen refuses an extern with no bridge, and moves the refusal of a std body it compiles on demand to the outermost call into std. Only that refusal stops the build; other queued codegen errors stay `raiser warning`s, because a demanded body can hold a site its run never reaches. A body nothing calls is never compiled, so its unbridged externs cost nothing. Measured 2026-11-03 on a candidate of `wt/rs-raiser-tier-diagnostic` (Linux):
+
+| Probe | Output |
+|---|---|
+| `run --target=raiser`, `import { blake2bSync } from "std/crypto/blake2b"` | `error: 'blake2bSync' from 'std/crypto/blake2b' cannot run on the Raiser: the module has no Raiser tier; it runs on C and JS` at the import line |
+| `run --target=raiser`, `import { cpus } from "std/os"` | `error: 'cpus' from 'std/os' cannot run on the Raiser: its Raiser tier does not declare it; it runs on C` at 1:10 |
+| `run --target=raiser`, a call to `extern function msOsHostname(): string` | `raiser error: … 'msOsHostname' cannot run on the Raiser: no host bridge for 'msOsHostname' at 3:13`, nothing printed |
+| `run --target=c`, a macro calling `cpus()` | `error: Macro 'probe' body: 'cpus' from 'std/os' cannot run on the Raiser: no host bridge for 'msOsCpuCount' (and 1 more); it runs on C` at the `cpus()` call |
+| `run --target=c`, a macro calling `utf8String` of `std/core/string/bytes` | `… the Raiser tier of std/core/string/bytes does not declare 'utf8String'; it runs on C` at the call |
+
+Not verified: Windows and macOS hosts, and a std routine whose tier is a shared `.ms` (the message then names C and JS from the file alone).
 
 `String(value)` uses the same checked text-conversion contract on every backend:
 the receiver's declared `toString` wins; a value payload otherwise calls the
