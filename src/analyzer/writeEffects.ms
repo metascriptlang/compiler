@@ -1540,6 +1540,22 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 	return flags;
 }
 
+// A receiver a builtin member call keeps under its callee is read before the arguments run, so
+// an argument that may write the slot it was read from would leave the call a freed receiver.
+export function borrowedReceiverToCopy(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
+	const d = call.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr || !call.flags.has(NodeFlag.ExtCall) || call.flags.has(NodeFlag.ExtStatic)) return false;
+	const receiver = (d.callee.data as MemberExprData).object;
+	if (!w.rcOf(receiver.nodeType).needsCleanup) return false;
+	const slots: string[] = [];
+	pathSlots(w, receiver, slots);
+	if (slots.length == 0) return false;
+	for (const a of d.arguments) {
+		if (a != null && evaluationMayWrite(w, a, slots, defs)) return true;
+	}
+	return false;
+}
+
 function evaluationMayWrite(w: WriteEffects, n: Node, slots: string[], defs: LocalDefs | null): boolean {
 	if (isRoutineNode(n)) return false;
 	const k = n.kind;
