@@ -1,6 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
+import { isRuntimeProcSym } from "../../transform/util";
 import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
@@ -2132,16 +2133,16 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	}
 
 	// str.charAt(i)
-	if (isStringMethod(s, d.callee, "charAt") && d.arguments.length == 1) {
+	if (isStringMethod(s, node, "msStringCharAt") && d.arguments.length == 1) {
 		return compileStrCharAt(s, node);
 	}
 
 	// str.slice(start, end)
-	if (isStringMethod(s, d.callee, "slice") && d.arguments.length == 2) {
+	if (isStringMethod(s, node, "msStringSlice") && d.arguments.length == 2) {
 		return compileStrSlice(s, node);
 	}
 
-	if (isConsoleLog(d.callee)) {
+	if (echoNative(node) == "msPrintln") {
 		if (d.arguments.length <= 1) {
 			let lastReg = 0;
 			for (let i = 0; i < d.arguments.length; i = i + 1) {
@@ -2157,7 +2158,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		return acc;
 	}
 
-	if (isConsoleStderr(d.callee)) {
+	if ((echoNative(node) == "msWarnln" || echoNative(node) == "msEprintln")) {
 		const dest = allocBlock(s, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
 		const lineReg = dest + 1;
 		const line = compileEchoLine(s, d.arguments);
@@ -2891,8 +2892,8 @@ function isInterceptedCall(s: RaiserCompState, node: Node): boolean {
 	return isArrayPush(node) || isLoweredArrayPush(d.callee)
 		|| (isArraySetLengthCall(node) && d.arguments.length == 1)
 		|| (isToStringCall(node) && d.arguments.length == 0)
-		|| (isStringMethod(s, d.callee, "charAt") && d.arguments.length == 1)
-		|| (isStringMethod(s, d.callee, "slice") && d.arguments.length == 2)
+		|| (isStringMethod(s, node, "msStringCharAt") && d.arguments.length == 1)
+		|| (isStringMethod(s, node, "msStringSlice") && d.arguments.length == 2)
 		|| isStrIndexReadCall(node);
 }
 
@@ -3022,11 +3023,9 @@ function callBuiltinKind(node: Node): string {
 
 // --- String method detection + compilation ---
 
-function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
-	const d = node.data as MemberExprData;
-	if (d.property != method) return false;
-	return exprIsString(s, d.object);
+function isStringMethod(s: RaiserCompState, call: Node, nativeName: string): boolean {
+	const sym = memberCallSym(call);
+	return sym != null && (sym.nativeName == nativeName || isRuntimeProcSym(sym, nativeName)) && exprIsString(s, ((call.data as CallExprData).callee.data as MemberExprData).object);
 }
 
 function hasStringType(node: Node): boolean {
@@ -3100,23 +3099,9 @@ function compileEchoLine(s: RaiserCompState, args: Node[]): int32 {
 	return acc;
 }
 
-function isConsoleStderr(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
-	const d = node.data as MemberExprData;
-	if (d.property != "warn" && d.property != "error") return false;
-	if (d.object.kind != NodeKind.Identifier) return false;
-	return (d.object.data as IdentifierData).name == "console";
-}
-
-// --- Console.log detection ---
-
-function isConsoleLog(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
-	const d = node.data as MemberExprData;
-	if (d.property != "log") return false;
-	if (d.object.kind != NodeKind.Identifier) return false;
-	const obj = d.object.data as IdentifierData;
-	return obj.name == "console";
+function echoNative(call: Node): string {
+	const sym = memberCallSym(call);
+	return sym != null && sym.builtinKind == BuiltinKind.Echo ? sym.nativeName : "";
 }
 
 // --- Class instances ---
