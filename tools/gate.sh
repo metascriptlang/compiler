@@ -2410,6 +2410,18 @@ cand_key=""
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && [ -z "${MSC_NATIVE_TOOLCHAIN:-}" ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
+run_tool_test() {
+  local p=$1 dir
+  case "$p" in
+    tools/managedToolchain/archiveBatchContractTest.ms | tools/managedToolchain/windowsEngineProducerTest.ms)
+      echo "tools: $p drives real Windows LLVM tools; it runs in the Windows toolchain proof, not here"; return 0 ;;
+    tools/managedToolchain/processContractTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run "$p" parent "$dir" ;;
+    tools/managedToolchain/nativePathTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run "$p" "$dir" ;;
+    tools/managedToolchain/*Test.ms) "$CAND" run "$p" ;;
+    *) return 0 ;;
+  esac
+}
+
 run_tools_lane() {
   local p rc=0 queue=0 py=0
   while IFS=$'\t' read -r _ p; do
@@ -2424,6 +2436,7 @@ run_tools_lane() {
       *.ms)
         if [ ! -x "$CAND" ]; then echo "tools: $p is checked by the candidate compiler; include the build lane"; printf 'FAIL %s: check\n' "$p"; rc=1
         elif ! "$CAND" check "$p"; then printf 'FAIL %s: check\n' "$p"; rc=1
+        elif ! run_tool_test "$p"; then printf 'FAIL %s: run\n' "$p"; rc=1
         fi ;;
     esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
