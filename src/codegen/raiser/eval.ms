@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
@@ -140,6 +140,15 @@ function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: strin
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(decl.location));
 	const transformed = transformCheckedForEngine(program, bodyCtx);
 	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym));
+}
+
+function compileLiftedOpIntoEngine(sym: Symbol): int32 {
+	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
+	defer registerRaiserOnDemand(previousOnDemand);
+	enterEngineCompile();
+	defer leaveEngineCompile();
+	const program = createNode(NodeKind.Program, { programStmts: [sym.declNode] }, synthToken(sym.declNode.location));
+	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, program, sym.name, sym));
 }
 
 export function evalASTCompile(program: Node): RaiserModule {
@@ -646,6 +655,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null || hasHostCallback(sym)) return -1;
+	if (sym.symFlags.has(SymbolFlag.GeneratedOp)) return compileLiftedOpIntoEngine(sym);
 	_engineBodyNames.push(sym.name);
 	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
 	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));

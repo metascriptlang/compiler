@@ -98,7 +98,17 @@ export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T):
 }
 
 export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
-	return underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false), ctx, createWriteSummaries(createRoutineDecls(), [])));
+	const lowered = underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false), ctx, createWriteSummaries(createRoutineDecls(), [])));
+	keepLiftedOpBodies(lowered);
+	return lowered;
+}
+
+function keepLiftedOpBodies(program: Node): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const fnNode = unwrapToFuncDecl(stmt);
+		const sym = fnNode != null ? fnNode.resolvedSym : null;
+		if (sym != null && sym.symFlags.has(SymbolFlag.GeneratedOp)) sym.declNode = fnNode!;
+	}
 }
 
 export function generateRaiser(program: Node): RaiserModule {
