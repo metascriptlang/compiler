@@ -8,12 +8,25 @@ extern function msBigIntAdd(a: bigint, b: bigint): bigint;
 extern function msBigIntSub(a: bigint, b: bigint): bigint;
 @compilerFunc
 extern function msBigIntMul(a: bigint, b: bigint): bigint;
+extern function msBigIntDivRaw(a: bigint, b: bigint): bigint from "msBigIntDiv";
+extern function msBigIntModRaw(a: bigint, b: bigint): bigint from "msBigIntMod";
+extern function msBigIntPowRaw(a: bigint, b: bigint): bigint from "msBigIntPow";
+
 @compilerFunc
-extern function msBigIntDiv(a: bigint, b: bigint): bigint;
+function msBigIntDiv(a: bigint, b: bigint): bigint {
+	if (msBigIntIsZero(b)) throw new RangeError("Division by zero");
+	return msBigIntDivRaw(a, b);
+}
 @compilerFunc
-extern function msBigIntMod(a: bigint, b: bigint): bigint;
+function msBigIntMod(a: bigint, b: bigint): bigint {
+	if (msBigIntIsZero(b)) throw new RangeError("Division by zero");
+	return msBigIntModRaw(a, b);
+}
 @compilerFunc
-extern function msBigIntPow(a: bigint, b: bigint): bigint;
+function msBigIntPow(a: bigint, b: bigint): bigint {
+	if (msBigIntCmp(b, 0n) < 0) throw new RangeError("Exponent must be non-negative");
+	return msBigIntPowRaw(a, b);
+}
 @compilerFunc
 extern function msBigIntAnd(a: bigint, b: bigint): bigint;
 @compilerFunc
@@ -128,5 +141,11 @@ function msBigIntToStringOrNull(b: bigint | null, radix: int32): string {
 	return b.toString(radix);
 }
 
-export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
-export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
+export function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint {
+	if (bits < 0) throw new RangeError("Invalid value: not (convertible to) a safe integer");
+	return msBigIntAsIntN(bits, b);
+}
+export function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint {
+	if (bits < 0) throw new RangeError("Invalid value: not (convertible to) a safe integer");
+	return msBigIntAsUintN(bits, b);
+}

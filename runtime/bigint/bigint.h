@@ -49,5 +49,6 @@ int32_t msFloat64CompareBigInt(double d, const msBigInt* a, int32_t unordered);
 bool msBigIntIsZero(const msBigInt* a);
 msBigInt* msBigIntAsIntN(int64_t bits, const msBigInt* a);
 msBigInt* msBigIntAsUintN(int64_t bits, const msBigInt* a);
+void msBigIntThrowRange(msString message);
 
 #endif

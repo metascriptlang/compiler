@@ -26,6 +26,24 @@ static void bigFail(const char* msg) {
 
 #define CHK(f) do { if ((f) != 0) bigFail("out of memory"); } while (0)
 
+static MS_THREAD_LOCAL bool bigTooLarge;
+#define GROW(f) do { if ((f) != 0) bigTooLarge = true; } while (0)
+
+static msBigInt* bigRaise(msBigInt* r, const char* message) {
+	bigTooLarge = false;
+	msDecref(r);
+	msString m = msStringNew(message, (int64_t)strlen(message));
+	msBigIntThrowRange(m);
+	msStringDestroy(m);
+	return NULL;
+}
+
+static msBigInt* sized(msBigInt* r) {
+	return bigTooLarge ? bigRaise(r, "Maximum BigInt size exceeded") : r;
+}
+
+static msBigInt* asIntN(int64_t bits, const msBigInt* a);
+
 static msBigInt* newBig(void) {
 	msBigInt* r = (msBigInt*)msAllocTyped(sizeof(msBigInt), &msBigIntTypeInfo);
 	mbedtls_mpi_init(&r->v);
@@ -251,7 +269,7 @@ double msBigIntToFloat64(const msBigInt* a) {
 }
 
 int64_t msBigIntToInt64(const msBigInt* a) {
-	msBigInt* t = msBigIntAsIntN(64, a);
+	msBigInt* t = asIntN(64, a);
 	int neg = mbedtls_mpi_cmp_int(&t->v, 0) < 0;
 	mbedtls_mpi m, zero;
 	mbedtls_mpi_init(&m); mbedtls_mpi_init(&zero);
@@ -306,7 +324,7 @@ float msBigIntToFloat32(const msBigInt* a) {
 #define BIN_OP(name, call) \
 	msBigInt* name(const msBigInt* a, const msBigInt* b) { \
 		msBigInt* r = newBig(); \
-		CHK(call(&r->v, &a->v, &b->v)); \
+		if (call(&r->v, &a->v, &b->v) != 0) return bigRaise(r, "Maximum BigInt size exceeded"); \
 		return r; \
 	}
 
@@ -317,18 +335,16 @@ BIN_OP(msBigIntMul, mbedtls_mpi_mul_mpi)
 /* div_mpi is truncated division (R takes the dividend's sign) — exactly JS
  * `/` and `%`. mod_mpi is NOT usable: it rejects negative moduli. */
 msBigInt* msBigIntDiv(const msBigInt* a, const msBigInt* b) {
+	if (mbedtls_mpi_cmp_int(&b->v, 0) == 0) return bigRaise(NULL, "Division by zero");
 	msBigInt* r = newBig();
-	int rc = mbedtls_mpi_div_mpi(&r->v, NULL, &a->v, &b->v);
-	if (rc == MBEDTLS_ERR_MPI_DIVISION_BY_ZERO) bigFail("division by zero");
-	CHK(rc);
+	CHK(mbedtls_mpi_div_mpi(&r->v, NULL, &a->v, &b->v));
 	return r;
 }
 
 msBigInt* msBigIntMod(const msBigInt* a, const msBigInt* b) {
+	if (mbedtls_mpi_cmp_int(&b->v, 0) == 0) return bigRaise(NULL, "Division by zero");
 	msBigInt* r = newBig();
-	int rc = mbedtls_mpi_div_mpi(NULL, &r->v, &a->v, &b->v);
-	if (rc == MBEDTLS_ERR_MPI_DIVISION_BY_ZERO) bigFail("division by zero");
-	CHK(rc);
+	CHK(mbedtls_mpi_div_mpi(NULL, &r->v, &a->v, &b->v));
 	return r;
 }
 
@@ -343,9 +359,9 @@ msBigInt* msBigIntNeg(const msBigInt* a) {
 	mbedtls_mpi zero;
 	mbedtls_mpi_init(&zero);
 	CHK(mbedtls_mpi_lset(&zero, 0));
-	CHK(mbedtls_mpi_sub_mpi(&r->v, &zero, &a->v));
+	GROW(mbedtls_mpi_sub_mpi(&r->v, &zero, &a->v));
 	mbedtls_mpi_free(&zero);
-	return r;
+	return sized(r);
 }
 
 msBigInt* msBigIntNot(const msBigInt* a) {
@@ -353,29 +369,29 @@ msBigInt* msBigIntNot(const msBigInt* a) {
 	mbedtls_mpi t, zero;
 	mbedtls_mpi_init(&t); mbedtls_mpi_init(&zero);
 	CHK(mbedtls_mpi_lset(&zero, 0));
-	CHK(mbedtls_mpi_add_int(&t, &a->v, 1));
-	CHK(mbedtls_mpi_sub_mpi(&r->v, &zero, &t));
+	GROW(mbedtls_mpi_add_int(&t, &a->v, 1));
+	GROW(mbedtls_mpi_sub_mpi(&r->v, &zero, &t));
 	mbedtls_mpi_free(&t); mbedtls_mpi_free(&zero);
-	return r;
+	return sized(r);
 }
 
 msBigInt* msBigIntPow(const msBigInt* a, const msBigInt* b) {
-	if (mbedtls_mpi_cmp_int(&b->v, 0) < 0) bigFail("exponent must be non-negative");
+	if (mbedtls_mpi_cmp_int(&b->v, 0) < 0) return bigRaise(NULL, "Exponent must be non-negative");
 	msBigInt* r = newBig();
 	CHK(mbedtls_mpi_lset(&r->v, 1));
 	mbedtls_mpi t;
 	mbedtls_mpi_init(&t);
 	size_t bits = mbedtls_mpi_bitlen(&b->v);
-	for (size_t i = bits; i-- > 0;) {
-		CHK(mbedtls_mpi_mul_mpi(&t, &r->v, &r->v));
+	for (size_t i = bits; i-- > 0 && !bigTooLarge;) {
+		GROW(mbedtls_mpi_mul_mpi(&t, &r->v, &r->v));
 		mbedtls_mpi_swap(&t, &r->v);
 		if (mbedtls_mpi_get_bit(&b->v, i) == 1) {
-			CHK(mbedtls_mpi_mul_mpi(&t, &r->v, &a->v));
+			GROW(mbedtls_mpi_mul_mpi(&t, &r->v, &a->v));
 			mbedtls_mpi_swap(&t, &r->v);
 		}
 	}
 	mbedtls_mpi_free(&t);
-	return r;
+	return sized(r);
 }
 
 /* JS bitwise is two's-complement over infinite width; mpi is sign-magnitude.
@@ -383,27 +399,27 @@ msBigInt* msBigIntPow(const msBigInt* a, const msBigInt* b) {
  * guarantees room for the sign bit, negatives become 2^(8L)+x. */
 static void tcWrite(const mbedtls_mpi* x, uint8_t* buf, size_t L) {
 	if (mbedtls_mpi_cmp_int(x, 0) >= 0) {
-		CHK(mbedtls_mpi_write_binary(x, buf, L));
+		GROW(mbedtls_mpi_write_binary(x, buf, L));
 		return;
 	}
 	mbedtls_mpi t;
 	mbedtls_mpi_init(&t);
-	CHK(mbedtls_mpi_lset(&t, 1));
-	CHK(mbedtls_mpi_shift_l(&t, 8 * L));
-	CHK(mbedtls_mpi_add_mpi(&t, &t, x));
-	CHK(mbedtls_mpi_write_binary(&t, buf, L));
+	GROW(mbedtls_mpi_lset(&t, 1));
+	GROW(mbedtls_mpi_shift_l(&t, 8 * L));
+	GROW(mbedtls_mpi_add_mpi(&t, &t, x));
+	GROW(mbedtls_mpi_write_binary(&t, buf, L));
 	mbedtls_mpi_free(&t);
 }
 
 static msBigInt* tcRead(const uint8_t* buf, size_t L) {
 	msBigInt* r = newBig();
-	CHK(mbedtls_mpi_read_binary(&r->v, buf, L));
+	GROW(mbedtls_mpi_read_binary(&r->v, buf, L));
 	if (buf[0] & 0x80) {
 		mbedtls_mpi t;
 		mbedtls_mpi_init(&t);
-		CHK(mbedtls_mpi_lset(&t, 1));
-		CHK(mbedtls_mpi_shift_l(&t, 8 * L));
-		CHK(mbedtls_mpi_sub_mpi(&r->v, &r->v, &t));
+		GROW(mbedtls_mpi_lset(&t, 1));
+		GROW(mbedtls_mpi_shift_l(&t, 8 * L));
+		GROW(mbedtls_mpi_sub_mpi(&r->v, &r->v, &t));
 		mbedtls_mpi_free(&t);
 	}
 	return r;
@@ -424,7 +440,7 @@ static msBigInt* bitwiseOp(const msBigInt* a, const msBigInt* b, int op) {
 	}
 	msBigInt* r = tcRead(ba, L);
 	free(ba);
-	return r;
+	return sized(r);
 }
 
 msBigInt* msBigIntAnd(const msBigInt* a, const msBigInt* b) { return bitwiseOp(a, b, 0); }
@@ -439,14 +455,17 @@ static size_t shiftCount(const msBigInt* b, int* negOut) {
 	CHK(mbedtls_mpi_lset(&zero, 0));
 	if (neg) CHK(mbedtls_mpi_sub_mpi(&m, &zero, &b->v));
 	else CHK(mbedtls_mpi_copy(&m, &b->v));
-	if (mbedtls_mpi_size(&m) > 8) bigFail("shift count too large");
+	const uint64_t saturated = (uint64_t)1 << 40;
+	if (mbedtls_mpi_size(&m) > 8) {
+		mbedtls_mpi_free(&m); mbedtls_mpi_free(&zero);
+		return (size_t)saturated;
+	}
 	uint8_t buf[8] = {0};
 	CHK(mbedtls_mpi_write_binary(&m, buf, 8));
 	uint64_t u = 0;
 	for (int i = 0; i < 8; i++) u = (u << 8) | buf[i];
 	mbedtls_mpi_free(&m); mbedtls_mpi_free(&zero);
-	if (u > (uint64_t)1 << 40) bigFail("shift count too large");
-	return (size_t)u;
+	return (size_t)(u > saturated ? saturated : u);
 }
 
 static msBigInt* shrBy(const msBigInt* a, size_t n);
@@ -454,7 +473,7 @@ static msBigInt* shrBy(const msBigInt* a, size_t n);
 static msBigInt* shlBy(const msBigInt* a, size_t n) {
 	msBigInt* r = newBig();
 	CHK(mbedtls_mpi_copy(&r->v, &a->v));
-	CHK(mbedtls_mpi_shift_l(&r->v, n));
+	GROW(mbedtls_mpi_shift_l(&r->v, n));
 	return r;
 }
 
@@ -468,6 +487,11 @@ static msBigInt* shrBy(const msBigInt* a, size_t n) {
 	if (neg) CHK(mbedtls_mpi_sub_mpi(&m, &zero, &a->v));
 	else CHK(mbedtls_mpi_copy(&m, &a->v));
 	msBigInt* r = newBig();
+	if (n >= mbedtls_mpi_bitlen(&m)) {
+		CHK(mbedtls_mpi_lset(&r->v, neg ? -1 : 0));
+		mbedtls_mpi_free(&m); mbedtls_mpi_free(&zero); mbedtls_mpi_free(&back);
+		return r;
+	}
 	CHK(mbedtls_mpi_copy(&r->v, &m));
 	CHK(mbedtls_mpi_shift_r(&r->v, n));
 	if (neg) {
@@ -483,13 +507,13 @@ static msBigInt* shrBy(const msBigInt* a, size_t n) {
 msBigInt* msBigIntShl(const msBigInt* a, const msBigInt* b) {
 	int neg;
 	size_t n = shiftCount(b, &neg);
-	return neg ? shrBy(a, n) : shlBy(a, n);
+	return sized(neg ? shrBy(a, n) : shlBy(a, n));
 }
 
 msBigInt* msBigIntShr(const msBigInt* a, const msBigInt* b) {
 	int neg;
 	size_t n = shiftCount(b, &neg);
-	return neg ? shlBy(a, n) : shrBy(a, n);
+	return sized(neg ? shlBy(a, n) : shrBy(a, n));
 }
 
 int32_t msBigIntCmp(const msBigInt* a, const msBigInt* b) {
@@ -516,33 +540,43 @@ bool msBigIntIsZero(const msBigInt* a) {
 	return mbedtls_mpi_cmp_int(&a->v, 0) == 0;
 }
 
-msBigInt* msBigIntAsUintN(int64_t bits, const msBigInt* a) {
-	if (bits < 0) bigFail("asUintN bits must be non-negative");
+static msBigInt* asUintN(int64_t bits, const msBigInt* a) {
+	if (mbedtls_mpi_cmp_int(&a->v, 0) >= 0 && mbedtls_mpi_bitlen(&a->v) <= (uint64_t)bits) return msBigIntClone(a);
 	mbedtls_mpi p2;
 	mbedtls_mpi_init(&p2);
-	CHK(mbedtls_mpi_lset(&p2, 1));
-	CHK(mbedtls_mpi_shift_l(&p2, (size_t)bits));
+	GROW(mbedtls_mpi_lset(&p2, 1));
+	GROW(mbedtls_mpi_shift_l(&p2, (size_t)bits));
 	msBigInt* r = newBig();
 	int rc = mbedtls_mpi_div_mpi(NULL, &r->v, &a->v, &p2);
-	CHK(rc);
-	if (mbedtls_mpi_cmp_int(&r->v, 0) < 0) CHK(mbedtls_mpi_add_mpi(&r->v, &r->v, &p2));
+	GROW(rc);
+	if (mbedtls_mpi_cmp_int(&r->v, 0) < 0) GROW(mbedtls_mpi_add_mpi(&r->v, &r->v, &p2));
 	mbedtls_mpi_free(&p2);
 	return r;
 }
 
-msBigInt* msBigIntAsIntN(int64_t bits, const msBigInt* a) {
-	if (bits < 0) bigFail("asIntN bits must be non-negative");
-	msBigInt* u = msBigIntAsUintN(bits, a);
+static msBigInt* asIntN(int64_t bits, const msBigInt* a) {
+	if (bits > 0 && mbedtls_mpi_bitlen(&a->v) < (uint64_t)bits) return msBigIntClone(a);
+	msBigInt* u = asUintN(bits, a);
 	if (bits == 0) return u;
 	mbedtls_mpi half, p2;
 	mbedtls_mpi_init(&half); mbedtls_mpi_init(&p2);
-	CHK(mbedtls_mpi_lset(&half, 1));
-	CHK(mbedtls_mpi_shift_l(&half, (size_t)(bits - 1)));
+	GROW(mbedtls_mpi_lset(&half, 1));
+	GROW(mbedtls_mpi_shift_l(&half, (size_t)(bits - 1)));
 	if (mbedtls_mpi_cmp_mpi(&u->v, &half) >= 0) {
-		CHK(mbedtls_mpi_lset(&p2, 1));
-		CHK(mbedtls_mpi_shift_l(&p2, (size_t)bits));
-		CHK(mbedtls_mpi_sub_mpi(&u->v, &u->v, &p2));
+		GROW(mbedtls_mpi_lset(&p2, 1));
+		GROW(mbedtls_mpi_shift_l(&p2, (size_t)bits));
+		GROW(mbedtls_mpi_sub_mpi(&u->v, &u->v, &p2));
 	}
 	mbedtls_mpi_free(&half); mbedtls_mpi_free(&p2);
 	return u;
+}
+
+msBigInt* msBigIntAsUintN(int64_t bits, const msBigInt* a) {
+	if (bits < 0) return bigRaise(NULL, "Invalid value: not (convertible to) a safe integer");
+	return sized(asUintN(bits, a));
+}
+
+msBigInt* msBigIntAsIntN(int64_t bits, const msBigInt* a) {
+	if (bits < 0) return bigRaise(NULL, "Invalid value: not (convertible to) a safe integer");
+	return sized(asIntN(bits, a));
 }

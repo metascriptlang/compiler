@@ -27,31 +27,31 @@ when (!bare && !solana) {
 
 	// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
 	// and reach C as bare calls against the header above.
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntAdd(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntSub(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntMul(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntDiv(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntMod(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntPow(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntAnd(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntOr(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntXor(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntShl(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntShr(a: bigint, b: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntNeg(a: bigint): bigint;
-	@compilerFunc
+	@compilerFunc @throws
 	extern function msBigIntNot(a: bigint): bigint;
 	@compilerFunc
 	extern function msBigIntCmp(a: bigint, b: bigint): int32;
@@ -81,8 +81,10 @@ when (!bare && !solana) {
 	extern function msBigIntFromInt64(v: int64): bigint;
 	@compilerFunc
 	extern function msBigIntFromUint64(v: uint64): bigint;
-	extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
-	extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
+	@exportName("msBigIntThrowRange")
+	function throwRange(message: string): void {
+		throw new RangeError(message);
+	}
 	extern function msBigIntParses(s: string): boolean;
 	extern function msBigIntParse(s: string): bigint;
 
@@ -153,6 +155,8 @@ when (!bare && !solana) {
 		return b.toString(radix);
 	}
 
+	@throws
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
+	@throws
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
 }
