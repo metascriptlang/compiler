@@ -17,7 +17,9 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
 import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact, reportTransformError } from "../context";
 import { canFormAcycle } from "../cycles";
-import { containsExprKind, mapChildren } from "../walker";
+import { mapChildren } from "../walker";
+import { parseInput } from "../testUtil";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { mayHoldCycleRoot, disownStmt, disownReturns } from "./spawnLower";
 import {
@@ -1130,50 +1132,16 @@ function injectActorPoll(program: Node): Node {
 
 // ===== Phase 5: Pre-async extraction of suspending actor methods =====
 
-// Check if an expression tree contains AwaitExpr anywhere (nested calls, binary, etc.)
-function exprContainsAwait(expr: Node): boolean {
-	return containsExprKind(expr, NodeKind.AwaitExpr);
+function awaitVerdict(n: Node): Visit {
+	return match (n.kind) {
+		NodeKind.AwaitExpr => Visit.Hit,
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => Visit.Skip,
+		_ => Visit.Descend,
+	};
 }
 
-// Check if a node tree contains any AwaitExpr (recursive, stops at function boundaries).
-export function bodyContainsAwait(node: Node): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.AwaitExpr) return true;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr
-		|| node.kind == NodeKind.ArrowFunction) return false;
-	return match (node.kind) {
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			let f = false;
-			for (const s of d.statements) { if (!f && bodyContainsAwait(s)) { f = true; } }
-			return f;
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			return bodyContainsAwait(d.consequent) || bodyContainsAwait(d.alternate);
-		},
-		NodeKind.WhileStmt => bodyContainsAwait((node.data as WhileStmtData).whileBody),
-		NodeKind.ForOfStmt => bodyContainsAwait((node.data as ForOfStmtData).forOfBody),
-		NodeKind.ForStmt => bodyContainsAwait((node.data as ForStmtData).forBody),
-		NodeKind.DoWhileStmt => bodyContainsAwait((node.data as DoWhileStmtData).doBody),
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			return bodyContainsAwait(d.tryBody) || bodyContainsAwait(d.catchBody) || bodyContainsAwait(d.finallyBody);
-		},
-		NodeKind.ExprStmt => {
-			const d = node.data as ExprStmtData;
-			return d.expr != null && exprContainsAwait(d.expr);
-		},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			return d.initializer != null && exprContainsAwait(d.initializer);
-		},
-		NodeKind.ReturnStmt => {
-			const d = node.data as ReturnStmtData;
-			return d.argument != null && exprContainsAwait(d.argument);
-		},
-		_ => false,
-	};
+export function bodyContainsAwait(node: Node | null): boolean {
+	return anyDescendant(node, awaitVerdict);
 }
 
 // Pre-async pipeline: extract async actor methods as top-level FunctionDecl so
@@ -1531,4 +1499,23 @@ export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const expanded = expandActorDecls(program, actors, ctx);
 	if (actors.length == 0) return expanded;
 	return injectActorPoll(expanded);
+}
+
+function programAwaits(src: string): boolean {
+	const parsed = parseInput(src);
+	if (!parsed.ok) throw new Error("parse: " + src);
+	return bodyContainsAwait(parsed.value);
+}
+
+test "an await under any statement kind marks the body as suspending" {
+	assert programAwaits("switch (k) { case 1: { const r = await g(); } }");
+	assert programAwaits("for (const x in o) { await g(); }");
+	assert programAwaits("outer: while (true) { await g(); }");
+	assert programAwaits("throw new Error(await g());");
+	assert programAwaits("if (c) { switch (k) { default: h(await g()); } }");
+}
+
+test "an await inside a nested function does not mark the body" {
+	assert !programAwaits("switch (k) { case 1: { const f = async () => await g(); } }");
+	assert !programAwaits("if (c) { async function f() { await g(); } }");
 }
