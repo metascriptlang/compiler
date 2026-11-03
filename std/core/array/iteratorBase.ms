@@ -51,6 +51,13 @@ function advance<T>(iters: Iterator<T>[], open: boolean[], i: number, out: T[]):
 	}
 }
 
+when (c) {
+	extern function reserve<T>(this arr: T[], n: int64): void from "&msGenericArrayReserve";
+}
+when (!c) {
+	function reserve<T>(this arr: T[], n: int64): void {}
+}
+
 function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterator<T[]> {
 	const count = iters.length;
 	if (count == 0) return;
@@ -60,6 +67,7 @@ function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterato
 	try {
 		while (true) {
 			const results: T[] = [];
+			results.reserve(count);
 			for (let i = 0; i < count; i++) {
 				if (!open[i]) {
 					results.push(padding[i]);

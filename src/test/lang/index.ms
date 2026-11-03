@@ -99,6 +99,7 @@ import "./arrayText";
 import "./arrayIteration";
 import "./iteratorHelpers";
 import "./iteratorStatics";
+import "./iteratorZipBuffer";
 import "./sequentialTypeof";
 import "./typePredicateRoutines";
 import "./cborNestedTypeIdentity";
