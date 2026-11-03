@@ -24,7 +24,8 @@ import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArg
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
-import { selectedNativeToolchain } from "./toolchain";
+import { selectedNativeToolchain, type NativeToolchain } from "./toolchain";
+import { CC_PREPARED } from "./options";
 
 // ===== Hash Functions =====
 
@@ -589,6 +590,15 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	let path = command.value.path;
 	const found = findOnPath(path);
 	if (found != "") path = found;
+	const bundle = selectedNativeToolchain();
+	if (ccOption == CC_PREPARED && bundle != null) {
+		const prepared = preparedCompilerIdentity(bundle, path, command.value.args);
+		if (prepared != "") {
+			_ccIdentityName = name;
+			_ccIdentity = prepared;
+			return prepared;
+		}
+	}
 	const root = globalCacheRoot();
 	const changed = changedTime(path);
 	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${changed}${developerToolchain()}`)}`;
@@ -608,6 +618,17 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 	_ccIdentityName = name;
 	_ccIdentity = identity;
 	return identity;
+}
+
+// A compiler inside a bundle is identified by the bundle's IDENTITY, which payload
+// verification binds to every file, plus the configuration files the invocation names.
+export function preparedCompilerIdentity(bundle: NativeToolchain, path: string, args: string[]): string {
+	if (!path.startsWith(`${bundle.root}/`)) return "";
+	let configs = "";
+	for (const arg of args) {
+		if (arg.startsWith("--config=")) configs = `${configs}\n${arg}:${hashFileContent(arg.slice(9))}`;
+	}
+	return hashContent(`prepared:${bundle.identity}${configs}`);
 }
 
 function developerToolchain(): string {
@@ -1182,15 +1203,15 @@ function rememberedPresence(depFile: string, key: string): RememberedPresence {
 }
 
 function stampLines(walked: string[]): string {
-	let text = "";
+	const lines: string[] = [];
 	const seen = new HashSet<string>();
 	for (const path of walked) {
 		if (seen.has(path)) continue;
 		seen.add(path);
 		const stamp = dirStamp(path);
-		text = `${text}w\t${path}\t${stamp == "" ? UNSETTLED_STAMP : stamp}\n`;
+		lines.push(`w\t${path}\t${stamp == "" ? UNSETTLED_STAMP : stamp}\n`);
 	}
-	return text;
+	return lines.join("");
 }
 
 function presenceOfRecord(depFile: string, text: string, key: string, remembered: HashMap<string, DirPresence>): string {
@@ -1214,22 +1235,22 @@ function presenceOfRecord(depFile: string, text: string, key: string, remembered
 	const walks = record.dirs.some((dir) => !remembered.has(dir));
 	const tree = walks ? relTree(record.rels) : new HashMap<string, string[]>();
 	const folded = walks ? foldedRels(record.rels) : new HashSet<string>();
-	let signature = "";
-	let memo = "";
+	const signature: string[] = [];
+	const memo: string[] = [];
 	for (const dir of record.dirs) {
 		const part = remembered.get(dir) ?? dirPresence(dir, tree, folded);
-		signature = `${signature}${signatureLine(dir, part.found)}`;
-		memo = `${memo}s\t${dir}\t${part.found}\n${stampLines(part.walked)}`;
+		signature.push(signatureLine(dir, part.found));
+		memo.push(`s\t${dir}\t${part.found}\n${stampLines(part.walked)}`);
 	}
 	const parents: string[] = [];
 	for (const path of record.paths) {
 		parents.push(dirname(path));
-		signature = `${signature}e\t${path}\t${exists(path) ? 1 : 0}\n`;
+		signature.push(`e\t${path}\t${exists(path) ? 1 : 0}\n`);
 	}
-	const presence = hashContent(signature);
+	const presence = hashContent(signature.join(""));
 	const memoFile = presenceMemo(depFile);
 	ensureDir(dirname(memoFile));
-	atomicWriteFile(memoFile, `${key}\n${presence}\n${memo}p\n${stampLines(parents)}`);
+	atomicWriteFile(memoFile, `${key}\n${presence}\n${memo.join("")}p\n${stampLines(parents)}`);
 	return presence;
 }
 
@@ -2910,6 +2931,28 @@ test "the C compiler identity moves with its path, size, mtime and version" {
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
 	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
+}
+
+test "a prepared compiler is identified by the bundle IDENTITY and its config, never by the binary bytes" {
+	withProjectRecordFixture("preparedIdentity", (dir: string): void => {
+		const root = realpath(dir);
+		const clang = `${root}/bin/clang`;
+		const config = `${root}/target.cfg`;
+		ensureDir(`${root}/bin`);
+		writeFile(clang, "binary one");
+		writeFile(config, "-O2");
+		const sha = "a".repeat(64);
+		const bundle = { root, version: "1.2.3", identity: sha };
+		const args = ["--no-default-config", `--config=${config}`];
+		const base = preparedCompilerIdentity(bundle, clang, args);
+		assert base != "";
+		writeFile(clang, "binary two, longer");
+		assert preparedCompilerIdentity(bundle, clang, args) == base;
+		assert preparedCompilerIdentity({ root, version: "1.2.3", identity: "b".repeat(64) }, clang, args) != base;
+		writeFile(config, "-O3");
+		assert preparedCompilerIdentity(bundle, clang, args) != base;
+		assert preparedCompilerIdentity(bundle, "/elsewhere/clang", args) == "";
+	});
 }
 
 test "a precompiled header goes stale when a header it includes changes in place" {
