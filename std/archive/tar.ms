@@ -109,7 +109,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 	const prefixField = split.value.prefix;
 
 	// Name (offset 0, 100 bytes)
-	hdr.write(nameField, 0, nameField.byteLength, "binary");
+	hdr.write(nameField, 0, nameField.byteLength, "utf8");
 
 	// Mode (offset 100, 8 bytes): 7 octal digits + NUL.
 	writeOctal(hdr, 100, 8, entry.mode);
@@ -154,7 +154,7 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 
 	// Prefix (offset 345, 155 bytes)
 	if (prefixField.byteLength > 0) {
-		hdr.write(prefixField, 345, prefixField.byteLength, "binary");
+		hdr.write(prefixField, 345, prefixField.byteLength, "utf8");
 	}
 
 	// Compute checksum: sum of all 512 bytes (interpreted as unsigned) with

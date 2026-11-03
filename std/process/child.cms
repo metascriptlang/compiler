@@ -22,7 +22,7 @@ import {
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
 import { utf8Text } from "../core/string/bytes";
-import { rawString } from "../core/buffer/bytes";
+import { rawString, rawBuffer } from "../core/buffer/bytes";
 
 extern function msProcChildSpawn(
 	path: string,
@@ -121,7 +121,7 @@ export class ChildProcess {
 		const which = stream as int32;
 		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
 		if (code == CHILD_OK) {
-			return Result.ok({ data: Buffer.fromString(msProcChildTake(this.handle, which), "utf8"), ended: false });
+			return Result.ok({ data: rawBuffer(msProcChildTake(this.handle, which)), ended: false });
 		}
 		if (code == CHILD_ENDED) return Result.ok({ data: Buffer.alloc(0), ended: true });
 		return Result.err(this.readFailure(stream, code, timeoutMs));

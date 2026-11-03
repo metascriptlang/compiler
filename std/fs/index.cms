@@ -5,6 +5,7 @@
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 import { utf8Text } from "../core/string/bytes";
 import { utf8Text } from "../core/string/bytes";
+import { rawBuffer } from "../core/buffer/bytes";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
@@ -564,7 +565,7 @@ export function readFile(path: string): Result<string, IoError> {
 
 export function readFileBytes(path: string): Result<Buffer, IoError> {
 	const raw = try readRaw(path);
-	return Result.ok(Buffer.fromString(raw, "utf8"));
+	return Result.ok(rawBuffer(raw));
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {

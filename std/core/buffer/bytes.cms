@@ -9,5 +9,5 @@ export function rawString(data: Bytes): string {
 }
 
 export function rawBuffer(raw: string): Buffer {
-	return Buffer.fromString(raw, "latin1");
+	return raw.asBytes().slice(0) as Buffer;
 }
