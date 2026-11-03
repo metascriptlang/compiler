@@ -501,6 +501,58 @@ test "a host routine's throw, uncaught two script frames deep, comes back as Res
 	removeAll(dir);
 }
 
+test "an uncaught throw of the script, of a host routine or of a module's error leaves the heap as it found it" {
+	implementRoutine("embedTest.refuse", (args: RaiserValue[]): RaiserValue => {
+		throw new Error("host refusal");
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function refuse(): void from "embedTest.refuse";\n`
+		+ `const shared = new Error("shared refusal");\n`
+		+ `export function hostThrow(): void { refuse(); }\n`
+		+ `export function scriptThrow(): void { throw new Error("script refusal"); }\n`
+		+ `export function sharedThrow(): void { throw shared; }\n`
+		+ `export function sharedMessage(): string { return shared.message; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const vm = interp.run!.vm!;
+	let objects = 0;
+	let cells = 0;
+	for (let round = 0; round < 200; round += 1) {
+		for (const name of ["hostThrow", "scriptThrow", "sharedThrow"]) {
+			const r = callRoutine(interp, routineOf(interp, name), []);
+			assert !r.ok, name;
+			if (!r.ok) assert r.error.includes("refusal"), r.error;
+		}
+		if (round == 0) {
+			objects = vm.objectHeap.objects.length;
+			cells = liveCellBlocks(vm.arrayHeap.mem).length;
+		}
+	}
+	assert vm.objectHeap.objects.length == objects;
+	assert liveCellBlocks(vm.arrayHeap.mem).length == cells;
+	assert routineValue(interp, "sharedMessage", []).text() == "shared refusal";
+	removeAll(dir);
+}
+
+test "a routine that keeps a struct the host passed holds it after the call, and the host's copy is released" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `export interface Key { code: string; mods: int32; }\n`
+		+ `let kept: Key = { code: "none", mods: 0 };\n`
+		+ `export function keep(e: Key): void { kept = e; }\n`
+		+ `export function keptCode(): string { return kept.code; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	routineValue(interp, "keep", [keyEvent("KeyA", 2)]);
+	routineValue(interp, "keep", [keyEvent("KeyB", 0)]);
+	assert routineValue(interp, "keptCode", []).text() == "KeyB";
+	const vm = interp.run!.vm!;
+	const objects = vm.objectHeap.objects.length;
+	const cells = liveCellBlocks(vm.arrayHeap.mem).length;
+	for (let i = 0; i < 500; i += 1) routineValue(interp, "keep", [keyEvent(`Key${i}`, i)]);
+	assert routineValue(interp, "keptCode", []).text() == "Key499";
+	assert vm.objectHeap.objects.length == objects;
+	assert liveCellBlocks(vm.arrayHeap.mem).length == cells;
+	removeAll(dir);
+}
+
 function routineValue(interp: Interpreter, name: string, args: RaiserHostValue[]): RaiserHostValue {
 	const r = callRoutine(interp, routineOf(interp, name), args);
 	if (!r.ok) throw new Error(r.error);
