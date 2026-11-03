@@ -39,6 +39,7 @@ import { resolveRuntimeDir, builtinIncludeDir, isBuiltinStubHeader } from "../ut
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
 import { hashContent } from "../utils/contentHash";
+import { TIER_EXTENSIONS, TIER_NAMES, raiserRefusal } from "./tiers";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -575,7 +576,9 @@ function processImport(graph: ModuleGraph, mod: Module, specifier: string, impor
 		if (resolved == "") {
 			// std/ with empty stdPath: silently skip (handled externally)
 			if (isStdImport(specifier) && config.stdPath.length == 0) return;
-			mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
+			const tierless = config.backend == Backend.Raiser ? raiserTierlessRefusal(specifier, importNames, mod.path, provider, config) : "";
+			if (tierless != "") mod.errors.push(createModuleError(tierless, line, 0, ErrorSeverity.Error));
+			else mod.errors.push(createModuleError(`Cannot resolve module '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
 		resolved = moduleIdentity(resolved, config, provider);
@@ -590,6 +593,17 @@ function processImport(graph: ModuleGraph, mod: Module, specifier: string, impor
 			lastDep2.importNames = importNames;
 		}
 	}
+}
+
+function raiserTierlessRefusal(specifier: string, importNames: string[], fromPath: string, provider: SourceProvider, config: ResolverConfig): string {
+	const tiers: string[] = [];
+	for (let i = 0; i < TIER_EXTENSIONS.length; i += 1) {
+		const candidates = resolveImportWithConfig(specifier, fromPath, { ...config, extensions: [TIER_EXTENSIONS[i]] });
+		if (candidates.some((c: string): boolean => provideSource(provider, c).ok)) tiers.push(TIER_NAMES[i]);
+	}
+	if (tiers.length == 0) return "";
+	const names = importNames.map((n: string): string => `'${n}'`).join(", ");
+	return raiserRefusal(names == "" ? `'${specifier}'` : `${names} from '${specifier}'`, "the module has no Raiser tier", tiers);
 }
 
 // ===== Convenience: Load from entry point =====

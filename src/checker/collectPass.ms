@@ -14,6 +14,7 @@ import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
+import { tiersDeclaring, raiserRefusal } from "../module/tiers";
 import { getModuleDir, appendFlag, findChar } from "../utils/string";
 import { isDigit } from "../lexer/chars";
 import { normalize } from "std/fs/path";
@@ -1544,7 +1545,11 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				const isCircular = ctx.moduleGraph != null
 					&& ctx.currentModule != null
 					&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
-				if (!isCircular) {
+				const tiers = !isCircular && sourcePath.endsWith(".rms") ? tiersDeclaring(sourcePath, importName) : [];
+				if (tiers.length > 0) {
+					const at = i < d.nameLocations.length ? d.nameLocations[i] : node.location;
+					addError(ctx, raiserRefusal(`'${importName}' from '${d.importSource}'`, "its Raiser tier does not declare it", tiers), at.line, at.column);
+				} else if (!isCircular) {
 					addError(ctx, "Module '" + d.importSource + "' has no export '" + importName + "'", node.location.line, node.location.column);
 				}
 				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, inferredType(), false), node);

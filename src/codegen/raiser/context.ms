@@ -10,6 +10,7 @@ import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
+import { raiserRefusal, stdModuleName, tiersDeclaring } from "../../module/tiers";
 
 // --- Bytecode-compiler error queue ---
 // The expression/statement compilers used to silently emit LoadConst nil
@@ -30,7 +31,7 @@ export function getRaiserModulePath(): string {
 	return _raiserModulePath;
 }
 
-export function queueRaiserCompileError(message: string, line: int32, column: int32): void {
+export function queueRaiserCompileError(message: string, line: int32, column: int32, fatal: boolean = false): void {
 	const tagged = _raiserModulePath == "" ? message : `[${_raiserModulePath}] ${message}`;
 	_raiserCompileErrors.push({
 		message: tagged,
@@ -38,7 +39,7 @@ export function queueRaiserCompileError(message: string, line: int32, column: in
 		column: column,
 		endLine: 0,
 		endColumn: 0,
-		fatal: false,
+		fatal: fatal,
 		severity: Severity.Error,
 		tags: 0,
 	});
@@ -544,16 +545,70 @@ function demandIndex(index: int32 | null): int32 {
 	return index;
 }
 
+let _callSite: Node | null = null;
+let _stdDemandDepth = 0;
+let _refusedSite: Node | null = null;
+let _refusal = "";
+
+export function refusalAt(site: Node): string {
+	return _refusedSite == site ? _refusal : "";
+}
+
+export function setRaiserCallSite(site: Node | null): Node | null {
+	const outer = _callSite;
+	_callSite = site;
+	return outer;
+}
+
+export function inStdDemand(): boolean {
+	return _stdDemandDepth > 0;
+}
+
+function untagged(message: string): string {
+	const close = message.startsWith("[") ? message.indexOf("] ") : -1;
+	return close > 0 ? message.slice(close + 2) : message;
+}
+
+export function stdRoutineRefusal(sym: Symbol, reason: string): string {
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	return raiserRefusal(`'${origin.name}' from '${stdModuleName(origin.modulePath)}'`, reason, tiersDeclaring(origin.modulePath, origin.name));
+}
+
+function demandInsideStd(demand: () => int32): int32 {
+	_stdDemandDepth += 1;
+	defer { _stdDemandDepth -= 1; }
+	return demand();
+}
+
+function demandStd(sym: Symbol, demand: () => int32): int32 {
+	if (stdModuleName(sym.modulePath) == "") return demand();
+	const mark = _raiserCompileErrors.length;
+	const idx = demandInsideStd(demand);
+	const site = _callSite;
+	if (_stdDemandDepth > 0 || site == null || mark >= _raiserCompileErrors.length) return idx;
+	const reasons = _raiserCompileErrors.slice(mark);
+	const fatal = reasons.find((e: CheckerError): boolean => e.fatal);
+	if (fatal == null) return idx;
+	_raiserCompileErrors = _raiserCompileErrors.slice(0, mark);
+	const more = reasons.length > 1 ? ` (and ${reasons.length - 1} more)` : "";
+	_refusal = stdRoutineRefusal(sym, untagged(fatal.message) + more);
+	_refusedSite = site;
+	queueRaiserCompileError(_refusal, site.location.line, site.location.column, true);
+	return idx;
+}
+
 export function resolveRoutine(s: RaiserCompState, sym: Symbol | null): int32 {
-	return sym != null && isRoutineSym(sym) ? demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(placedInstances(), sym))) : -1;
+	if (sym == null || !isRoutineSym(sym)) return -1;
+	const routine: Symbol = sym;
+	return demandStd(routine, (): int32 => demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(placedInstances(), routine))));
 }
 
 export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 {
-	return demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(placedInstances(), classSym)));
+	return demandStd(classSym, (): int32 => demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(placedInstances(), classSym))));
 }
 
 export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
-	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(placedInstances(), classSym)));
+	return demandStd(classSym, (): int32 => demandIndex(s.funcMap.initIndices.get(placedInstanceOf(placedInstances(), classSym))));
 }
 
 // --- Builtin helpers ---
@@ -647,7 +702,7 @@ export function isRoutineSym(sym: Symbol): boolean {
 
 export function callRaiserOnDemand(sym: Symbol): int32 {
 	if (!isRoutineSym(sym) && sym.symbolKind != SymbolKind.Class) return -1;
-	return _raiserOnDemandFn(sym);
+	return demandStd(sym, (): int32 => _raiserOnDemandFn(sym));
 }
 
 type RaiserStmtCompilerFn = (s: RaiserCompState, stmt: Node) => void;

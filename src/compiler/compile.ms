@@ -5389,15 +5389,17 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
 	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
-	// Comptime parity: queued bytecode-compile errors are collected and
-	// reported, not fatal — std module bodies the program never calls can
-	// contain unbridgeable externs or unresolved helpers. A nil that leaks
-	// into live code is visible here as a "cannot evaluate" line.
+	// Only a call the Raiser cannot run stops the build: other queued errors stay
+	// warnings, because a demanded std body can hold a site the run never reaches.
 	const hook = _diagnosticHook;
+	let refused = 0;
 	for (const e of takeRaiserCompileErrors()) {
-		if (hook != null) hook("", { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Warning });
-		else printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+		if (e.fatal) refused += 1;
+		const severity = e.fatal ? ErrorSeverity.Error : ErrorSeverity.Warning;
+		if (hook != null) hook("", { message: e.message, line: e.line, column: e.column, severity });
+		else printDiag(`${e.fatal ? red("raiser error") : yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
+	if (refused > 0) stopBuild();
 	return raiserMod;
 }
 

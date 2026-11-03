@@ -21,7 +21,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, Raise
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
-import { resolveRuntimeDir } from "../../utils/path";
+import { raiserRefusal, stdModuleName } from "../../module/tiers";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
@@ -35,7 +35,7 @@ import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
 	isLocalString, declareLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
-	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
+	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
 	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
 import { raiserStructSlotUnion } from "../../analyzer/classify";
@@ -50,25 +50,20 @@ import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 // shape, one phase earlier than the reference needs it.
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
 	if (lookupHost(sym.nativeName) != null) return "";
-	const msg = `no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`;
-	queueRaiserCompileError(msg, callee.location.line, callee.location.column);
+	const reason = `no host bridge for '${sym.nativeName}'`;
+	let msg = reason;
+	if (!inStdDemand()) msg = stdModuleName(sym.modulePath) != "" ? stdRoutineRefusal(sym, reason) : raiserRefusal(`'${sym.name}'`, reason, []);
+	queueRaiserCompileError(msg, callee.location.line, callee.location.column, true);
 	return msg;
 }
-
-let _stdRoot = "";
 
 // The qualified name a host callback is registered under: the declaring module and the declared
 // name, with no signature, so one callback serves every overload and every instance of a generic.
 export function hostRoutineKey(sym: Symbol): string {
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 	if (origin.symbolKind != SymbolKind.Function || origin.modulePath == "") return "";
-	if (_stdRoot == "") _stdRoot = resolveRuntimeDir() + "/std/";
-	if (!origin.modulePath.startsWith(_stdRoot)) return "";
-	let module = origin.modulePath.slice(_stdRoot.length);
-	const dot = module.lastIndexOf(".");
-	if (dot > module.lastIndexOf("/")) module = module.slice(0, dot);
-	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
-	return `std/${module}.${origin.name}`;
+	const module = stdModuleName(origin.modulePath);
+	return module == "" ? "" : `${module}.${origin.name}`;
 }
 
 export function hasHostCallback(sym: Symbol): boolean {
@@ -1937,6 +1932,8 @@ function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 }
 
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
+	const outerSite = setRaiserCallSite(node);
+	defer setRaiserCallSite(outerSite);
 	const d = node.data as CallExprData;
 	const sliceMark = s.argSlices.length;
 	const viewMark = s.argViews.length;
@@ -2238,6 +2235,8 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			calleeSym = overloadAt(calleeSym, resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx));
 		}
 		const funcIdx = routineIndex(s, calleeSym);
+		const refusal = funcIdx < 0 ? refusalAt(node) : "";
+		if (refusal != "") return emitTrapValue(s, refusal, node.nodeType);
 		if (funcIdx >= 0) {
 			const declaredParams = calleeParamTypes(calleeSym);
 			const runtimeArgs: Node[] = [];
@@ -2592,6 +2591,8 @@ function sharedNewKind(t: Type | null, sym: Symbol | null): string {
 }
 
 function compileNewExpr(s: RaiserCompState, node: Node): int32 {
+	const outerSite = setRaiserCallSite(node);
+	defer setRaiserCallSite(outerSite);
 	const d = node.data as NewExprData;
 
 	const arrayType = zeroArrayType(node.nodeType);

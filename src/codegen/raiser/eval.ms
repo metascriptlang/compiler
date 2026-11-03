@@ -27,7 +27,8 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import { ModuleGraph, createModuleGraph } from "../../module/graph";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
-import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
+import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors, queueRaiserCompileError } from "./context";
+import { stdModuleName } from "../../module/tiers";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
 import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -477,7 +478,8 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 			if (sameType(candidate.symbolType, sym.symbolType)) return candidate;
 		}
 	}
-	throw new Error(`internal: ${tierPath} has no Raiser tier of '${sym.name}' to run at comptime`);
+	queueRaiserCompileError(`the Raiser tier of ${stdModuleName(sym.modulePath)} does not declare '${sym.name}'`, sym.location.line, sym.location.column, true);
+	return sym;
 }
 
 function tierGenericOf(generic: Symbol, tier: Symbol[]): Symbol | null {
@@ -642,6 +644,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
 	const tierSym = raiserTierOf(sym);
+	if (tierSym == sym) return -1;
 	if (tierSym != null) return ensureCompiledIntoEngine(tierSym);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
