@@ -5,7 +5,7 @@
 // it into `pre`.
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
+	Node, NodeKind, NodeFlag, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
 	CallExprData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	ArrayLiteralData, ObjectLiteralData, NewExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
@@ -91,8 +91,14 @@ export function arrayHandleRead(e: Node): Node | null {
 	return e.nodeType != null && e.nodeType.kind == TypeKind.Array && isStorageRead(place) ? place : null;
 }
 
+function runsEarly(e: Node): boolean {
+	if (e.kind == NodeKind.TypeAssertion) return runsEarly((e.data as TypeAssertionData).asExpr);
+	if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) return runsEarly((e.data as HiddenStdConvData).convExpr);
+	return isCallKind(e) && !isVoidType(e.nodeType);
+}
+
 function bindIfEarly(sp: Spiller, e: Node, pre: Node[]): Node {
-	if (!readsBeforeHoist(e) && !(isCallKind(e) && !isVoidType(e.nodeType))) return e;
+	if (!readsBeforeHoist(e) && !runsEarly(e)) return e;
 	return tempRef(bindTemp(sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 }
 
@@ -103,7 +109,7 @@ function bindOperand(sp: Spiller, e: Node, snapshot: boolean, pre: Node[]): Node
 		hd.expr = bindOperand(sp, hd.expr, snapshot, pre);
 		return e;
 	}
-	if ((snapshot && readsBeforeHoist(e)) || (isCallKind(e) && !isVoidType(e.nodeType))) {
+	if ((snapshot && readsBeforeHoist(e)) || runsEarly(e)) {
 		return tempRef(bindTemp(sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 	}
 	return e;
@@ -119,7 +125,7 @@ function lowerOperands(sp: Spiller, ops: Node[], pre: Node[], receivers: int32, 
 	for (let i = 0; i < ops.length; i += 1) {
 		if (ops[i] == null) continue;
 		if (places != null && places[i]) {
-			ops[i] = settleTarget(sp, ops[i], pre);
+			ops[i] = settleTarget(sp, ops[i], ops.slice(i + 1, last + 1), pre);
 			continue;
 		}
 		const lowered = sp.lower(ops[i], pre);
@@ -147,7 +153,7 @@ export function lowerOperandList(sp: Spiller, e: Node, pre: Node[]): boolean {
 			ops.push(d.arguments[i]);
 			places.push(formals != null && i < formals.length && formals[i] != null && formals[i].kind == TypeKind.Var);
 		}
-		lowerOperands(sp, ops, pre, 1, places);
+		lowerOperands(sp, ops, pre, viaMember && receiverIsPlace(e) ? 1 : 0, places);
 		if (viaMember) (d.callee.data as MemberExprData).object = ops[0];
 		else d.callee = ops[0];
 		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = ops[i + 1];
@@ -169,26 +175,43 @@ export function lowerOperandList(sp: Spiller, e: Node, pre: Node[]): boolean {
 	return true;
 }
 
-function settleTarget(sp: Spiller, e: Node, pre: Node[]): Node {
-	if (e.kind == NodeKind.ArrayAccess) {
+function receiverIsPlace(call: Node): boolean {
+	if (!call.flags.has(NodeFlag.ExtCall) || call.flags.has(NodeFlag.ExtStatic)) return false;
+	const t = call.resolvedSym != null ? call.resolvedSym.symbolType : null;
+	if (t == null || t.kind != TypeKind.Function || t.typeChildren.length == 0) return true;
+	const formal = t.typeChildren[0];
+	return formal == null || formal.kind == TypeKind.Var;
+}
+
+function settleTarget(sp: Spiller, e: Node, later: Node[], pre: Node[]): Node {
+	if (e.kind == NodeKind.HiddenDeref) {
+		const hd = e.data as HiddenDerefData;
+		const handle = arrayHandleRead(e);
+		if (handle == null || unchangedByHoist(sp, handle, later)) {
+			hd.expr = settleTarget(sp, hd.expr, later, pre);
+		} else {
+			const read = sp.lower(handle, pre);
+			hd.expr = tempRef(bindTemp(sp, read, DeclKind.Const, read.nodeType, pre, read.location), read.location);
+		}
+	} else if (e.kind == NodeKind.ArrayAccess) {
 		const d = e.data as ArrayAccessData;
-		d.array = settleTarget(sp, d.array, pre);
+		d.array = settleTarget(sp, d.array, later, pre);
 		d.index = bindIfEarly(sp, sp.lower(d.index, pre), pre);
 	} else if (e.kind == NodeKind.MemberExpr) {
 		const d = e.data as MemberExprData;
-		d.object = settleObject(sp, sp.lower(d.object, pre), pre);
+		d.object = settleObject(sp, sp.lower(d.object, pre), later, pre);
 	}
 	return e;
 }
 
-function settleObject(sp: Spiller, obj: Node, pre: Node[]): Node {
+function settleObject(sp: Spiller, obj: Node, later: Node[], pre: Node[]): Node {
 	if (obj.kind == NodeKind.HiddenDeref) {
 		const hd = obj.data as HiddenDerefData;
-		hd.expr = settleObject(sp, hd.expr, pre);
+		hd.expr = settleObject(sp, hd.expr, later, pre);
 		return obj;
 	}
 	const bound = bindIfEarly(sp, obj, pre);
-	return bound == obj ? settleTarget(sp, obj, pre) : bound;
+	return bound == obj ? settleTarget(sp, obj, later, pre) : bound;
 }
 
 // An assignment target evaluates before its value: what the target reads is settled first.
@@ -198,7 +221,7 @@ export function lowerAssign(sp: Spiller, e: Node, pre: Node[]): Node {
 		d.left = sp.lower(d.left, pre);
 		return e;
 	}
-	d.left = settleTarget(sp, d.left, pre);
+	d.left = settleTarget(sp, d.left, [d.right], pre);
 	const readBack = d.operator == "=" || unchangedByHoist(sp, d.left, [d.right]) ? null : cloneIfPure(d.left);
 	if (readBack == null) {
 		const value = sp.lower(d.right, pre);
