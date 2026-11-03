@@ -1151,9 +1151,10 @@ function queryPresence(depFile: string): string {
 	const known = _presenceByRecord.get(text);
 	if (known != null) return known;
 	const key = hashContent(text);
-	const remembered = rememberedPresence(depFile, key);
+	const memo = try readFile(presenceMemo(depFile)) catch "";
+	const remembered = rememberedPresence(memo, key);
 	let presence = remembered.presence;
-	if (presence == "") presence = presenceOfRecord(depFile, text, key, remembered.dirs);
+	if (presence == "") presence = presenceOfRecord(depFile, text, key, remembered.dirs, memo);
 	_presenceByRecord.set(text, presence);
 	return presence;
 }
@@ -1162,9 +1163,9 @@ function presenceMemo(depFile: string): string {
 	return `${dirname(depFile)}/presence/${basename(depFile)}.qs`;
 }
 
-function rememberedPresence(depFile: string, key: string): RememberedPresence {
+function rememberedPresence(memo: string, key: string): RememberedPresence {
 	const dirs = new HashMap<string, DirPresence>();
-	const lines = (try readFile(presenceMemo(depFile)) catch "").split("\n");
+	const lines = memo.split("\n");
 	if (lines.length < 2 || lines[0] != key) return { presence: "", dirs };
 	let allCurrent = true;
 	let open = false;
@@ -1214,7 +1215,7 @@ function stampLines(walked: string[]): string {
 	return lines.join("");
 }
 
-function presenceOfRecord(depFile: string, text: string, key: string, remembered: HashMap<string, DirPresence>): string {
+function presenceOfRecord(depFile: string, text: string, key: string, remembered: HashMap<string, DirPresence>, previous: string): string {
 	const lines = text.split("\n");
 	if (lines[0] != QUERY_RECORD_FORMAT) return HEADER_QUERY_UNRECORDED;
 	const record: QueryRecord = { dirs: [], rels: [], paths: [], bounded: true };
@@ -1248,9 +1249,11 @@ function presenceOfRecord(depFile: string, text: string, key: string, remembered
 		signature.push(`e\t${path}\t${exists(path) ? 1 : 0}\n`);
 	}
 	const presence = hashContent(signature.join(""));
+	const next = `${key}\n${presence}\n${memo.join("")}p\n${stampLines(parents)}`;
+	if (next == previous) return presence;
 	const memoFile = presenceMemo(depFile);
 	ensureDir(dirname(memoFile));
-	atomicWriteFile(memoFile, `${key}\n${presence}\n${memo.join("")}p\n${stampLines(parents)}`);
+	atomicWriteFile(memoFile, next);
 	return presence;
 }
 
@@ -3226,4 +3229,37 @@ test "a record that cannot bound its header queries settles untrusted, so a cold
 	const search: HeaderSearch = { dirs: [], frameworks: [], complete: false };
 	assert recordQueries(`${dir}/entry.d`, [`${dir}/entry.c`], [], search, [], Date.now() / 1000 + 60);
 	assert queryPresence(`${dir}/entry.d`) == HEADER_QUERY_UNBOUNDED;
+}
+
+function forgetPresenceMemory(): void {
+	_presenceByRecord = new HashMap<string, string>();
+	_dirStamps = new HashMap<string, string>();
+	_dirNames = new HashMap<string, HashSet<string>>();
+	_dirEntries = new HashMap<string, string[]>();
+	_dirFolds = new HashMap<string, HashMap<string, string[]>>();
+	_dirUnfoldable = new HashMap<string, string[]>();
+}
+
+test "a second identical warm run rewrites no presence memo, even when a walked directory changed inside the settle window" {
+	if (platform == "windows") return;
+	const dir = `out/test/presenceRewrite${performance.now()}`;
+	ensureDir(`${dir}/inc`);
+	writeFile(`${dir}/entry.c`, "int a;\n");
+	writeFile(`${dir}/inc/x.h`, "int x;\n");
+	const search: HeaderSearch = { dirs: [`${dir}/inc`], frameworks: [], complete: true };
+	const depFile = `${dir}/entry.d`;
+	assert recordQueries(depFile, [`${dir}/entry.c`], [`${cwd()}/${dir}/inc/x.h`], search, [], Date.now() / 1000 + 60);
+	forgetPresenceMemory();
+	const first = queryPresence(depFile);
+	assert presenceTrusted(first);
+	const memo = presenceMemo(depFile);
+	assert exists(memo);
+	assert execFileCapture("touch", ["-t", "202001010000", memo]).ok;
+	forgetPresenceMemory();
+	assert queryPresence(depFile) == first;
+	assert modifiedTime(memo) < Date.now() / 1000 - 3600;
+	assert remove(`${dir}/inc/x.h`).ok;
+	forgetPresenceMemory();
+	assert queryPresence(depFile) != first;
+	assert modifiedTime(memo) > Date.now() / 1000 - 60;
 }
