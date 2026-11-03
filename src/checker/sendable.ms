@@ -4,7 +4,7 @@ import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, Arr
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
+import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
@@ -362,6 +362,30 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 	return false;
+}
+
+export function isActorMessageCall(call: Node): boolean {
+	if (call.kind != NodeKind.CallExpr || call.flags.has(NodeFlag.ActorSelfCall)) return false;
+	const recv = receiverOf(call);
+	if (recv == null) return false;
+	const r = peelView(recv);
+	if (r.kind == NodeKind.Identifier && (r.data as IdentifierData).name == "this") return false;
+	const t = recv.nodeType;
+	return isActorRef(t) || (t != null && t.sym != null && t.sym.symbolKind == SymbolKind.Actor);
+}
+
+export function actorCallBorrows(call: Node): int32[] {
+	const out: int32[] = [];
+	if (!isActorMessageCall(call)) return out;
+	const method = call.resolvedSym != null ? call.resolvedSym.symbolType : null;
+	if (method == null || method.kind != TypeKind.Function || method.typeReturn == null || method.typeReturn.kind == TypeKind.Void) return out;
+	const shift: int32 = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const args = (call.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		const t = args[i].nodeType;
+		if (t != null && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t) && peelView(args[i]).kind != NodeKind.MoveExpr) out.push((i as int32) + shift);
+	}
+	return out;
 }
 
 function plainFunctionPath(t: Type | null, seen: Type[]): string | null {

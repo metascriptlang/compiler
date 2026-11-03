@@ -17,7 +17,7 @@ import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { sameUpToDistinct } from "./checkExprPass";
 import { isSpawnCall } from "./freestanding";
-import { refuseBorrowingHandleEscapes } from "./sendable";
+import { refuseBorrowingHandleEscapes, actorCallBorrows, isActorMessageCall } from "./sendable";
 import { recordBodyRead } from "./bodyReads";
 
 export const MAX_TIME: int32 = 999999;
@@ -817,16 +817,12 @@ function scanPending(decl: Node): PendingLend[] {
 }
 
 function isMessageSend(call: Node): boolean {
-	const recv = receiverOf(call);
-	if (recv == null) return false;
-	const r = peelConv(recv);
-	if (r != null && r.kind == NodeKind.Identifier && (r.data as IdentifierData).name == "this") return false;
-	const t = recv.nodeType;
-	return t != null && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+	return isActorMessageCall(call);
 }
 
 function pendingOfCall(call: Node): PendingLend[] {
-	if (isSpawnCall(call) || isMessageSend(call)) return [];
+	if (isSpawnCall(call)) return [];
+	if (isMessageSend(call)) return actorCallBorrows(call).map((i: int32): PendingLend => ({ input: i, capture: null, task: call }));
 	const callee = peelConv((call.data as CallExprData).callee);
 	if (callee != null && (callee.kind == NodeKind.ArrowFunction || callee.kind == NodeKind.FunctionExpr)) return pendingLends(callee);
 	return call.resolvedSym != null ? pendingOfRoutine(call.resolvedSym) : [];
@@ -873,12 +869,24 @@ function callLentRoots(call: Node, roots: Symbol[], tasks: Node[]): void {
 }
 
 function lendsPastCall(call: Node, atModule: boolean): boolean {
+	if (isMessageSend(call)) return false;
 	const roots: Symbol[] = [];
 	callLentRoots(call, roots, []);
 	for (const r of roots) {
 		if (atModule || !hasFlag(r, SymbolFlag.Global)) return true;
 	}
 	return false;
+}
+
+function isActorLend(call: Node): boolean {
+	if (call.kind != NodeKind.CallExpr || !isMessageSend(call)) return false;
+	const roots: Symbol[] = [];
+	callLentRoots(call, roots, []);
+	return roots.length > 0;
+}
+
+function opensCallLend(call: Node): boolean {
+	return call.flags.has(NodeFlag.LendsPastCall) || isActorLend(call);
 }
 
 interface BorrowUnit {
@@ -1900,7 +1908,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 2 && isSpawnCall(node) && d.arguments.length > 0) u.thunks.push(thunkOf(d.arguments[0]));
 			for (const a of d.arguments) { walk(u, a); }
 			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
-			if (u.pass == 1 && node.flags.has(NodeFlag.LendsPastCall)) openCallLend(u, node);
+			if (u.pass == 1 && opensCallLend(node)) openCallLend(u, node);
 			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
 		},
 		NodeKind.NewExpr => {
@@ -2137,7 +2145,7 @@ function findJoin(u: BorrowUnit, stmt: Node): void {
 
 function markJoins(u: BorrowUnit, node: Node): void {
 	for (const op of joinedBy(node)) {
-		if (isSpawnCall(op) || op.flags.has(NodeFlag.LendsPastCall)) {
+		if (isSpawnCall(op) || opensCallLend(op)) {
 			u.closerSites.push(op);
 			u.closerAwaits.push(node);
 		}
@@ -2188,11 +2196,18 @@ function openCallLend(u: BorrowUnit, site: Node): void {
 	const roots: Symbol[] = [];
 	const kept: Node[] = [];
 	for (let i = 0; i < found.length; i += 1) {
-		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) continue;
+		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) {
+			if (isMessageSend(site)) refuseModuleLend(u, site, found[i]);
+			continue;
+		}
 		roots.push(found[i]);
 		kept.push(tasks[i]);
 	}
 	pushLend(u, site, roots, [], kept, calleeName(site));
+}
+
+function refuseModuleLend(u: BorrowUnit, site: Node, root: Symbol): void {
+	addError(u.ctx, `module-level '${root.name}' cannot be lent to the actor call of '${calleeName(site)}': any code that runs before the reply can change module state while the actor reads it; pass a copy, move a local, or share it through Arc<T> or Locked<T>`, site.location.line, site.location.column);
 }
 
 function calleeName(call: Node): string {
@@ -2224,20 +2239,28 @@ function lendMutation(g: MutationInfo, l: Lend): int32 {
 	return -1;
 }
 
+function refuseUnjoinedActorLend(u: BorrowUnit, l: Lend): void {
+	if (l.closer != null || l.roots.length == 0 || !isMessageSend(l.site)) return;
+	addError(u.ctx, `'${l.roots[0].name}' is lent to the actor call of '${calleeName(l.site)}' at ${l.site.location.line}:${l.site.location.column} until its reply is awaited, but this scope does not await that reply on every path before it leaves; await the call where it is written, or bind it with const and await it in this scope`, l.site.location.line, l.site.location.column);
+}
+
 function checkLends(u: BorrowUnit, unitEnd: string): void {
 	for (const l of u.lends) {
+		refuseUnjoinedActorLend(u, l);
 		const until = l.closer != null ? `its await at ${l.closer.location.line}:${l.closer.location.column}` : unitEnd;
 		for (let ri = 0; ri < l.roots.length; ri += 1) {
 			const r = l.roots[ri];
 			const task = l.tasks[ri];
-			const via = l.callee != "" ? `, which the call of '${l.callee}' at ${l.site.location.line}:${l.site.location.column} starts,` : "";
-			const spawnAt = `${task.location.line}:${task.location.column}${via}`;
+			const actor = isMessageSend(task);
+			const via = l.callee != "" && task != l.site ? `, which the call of '${l.callee}' at ${l.site.location.line}:${l.site.location.column} starts,` : "";
+			const spawnAt = `${actor ? "actor call of '" + calleeName(task) + "'" : "spawn"} at ${task.location.line}:${task.location.column}${via}`;
+			const reader = actor ? "the actor" : "the task";
 			const id = variableId(u.p, r);
 			if (id < 0) continue;
 			const root = ufRoot(u.p, id);
 			const call = callWriteIn(u, l, root);
 			if (call != null) {
-				addError(u.ctx, `'${r.name}' is lent to the spawn at ${spawnAt} until ${until}, and the call at ${call.location.line}:${call.location.column} can change it while the task reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`, l.site.location.line, l.site.location.column);
+				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt} until ${until}, and the call at ${call.location.line}:${call.location.column} can change it while ${reader} reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`, l.site.location.line, l.site.location.column);
 				break;
 			}
 			if (u.p.vars[root].con.kind != CK_ROOT_OF) continue;
@@ -2246,7 +2269,7 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 			if (i < 0) continue;
 			const site = g.sites[i];
 			const change = site != null ? `the change at ${site.location.line}:${site.location.column}` : "a change";
-			addError(u.ctx, `'${r.name}' is lent to the spawn at ${spawnAt} until ${until}, and ${change} changes it while the task reads it; make the change after the await, or give the task its own copy`, l.site.location.line, l.site.location.column);
+			addError(u.ctx, `'${r.name}' is lent to the ${spawnAt} until ${until}, and ${change} changes it while ${reader} reads it; make the change after the await, or give ${reader} its own copy`, l.site.location.line, l.site.location.column);
 			break;
 		}
 	}
@@ -2275,7 +2298,7 @@ function scanUnitBody(node: Node | null, scan: UnitScan): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
-	if (!scan.spawn && isSpawnCall(node)) scan.spawn = true;
+	if (!scan.spawn && (isSpawnCall(node) || isActorLend(node))) scan.spawn = true;
 	if (node.kind == NodeKind.CallExpr && lendsPastCall(node, scan.module)) {
 		node.flags = node.flags.incl(NodeFlag.LendsPastCall);
 		scan.spawn = true;
