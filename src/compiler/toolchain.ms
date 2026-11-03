@@ -107,9 +107,8 @@ function autoInstallAllowed(assumeYes: boolean): boolean {
 	return env.get("MSC_AUTO_INSTALL_CC") == "1";
 }
 
-function promptInstall(dir: string): boolean {
-	writeStderr(`msc compiles C with Zig ${ZIG_VERSION} by default. Download it to ${dir}? ` +
-		`(--cc=clang uses your own) [y/N] `);
+function promptInstall(question: string): boolean {
+	writeStderr(question);
 	const ans = readLine();
 	return ans == "y" || ans == "Y" || ans == "yes";
 }
@@ -126,7 +125,8 @@ function ensureZig(assumeYes: boolean): string {
 	}
 
 	const dir = managedZigDir();
-	if (!autoInstallAllowed(assumeYes) && !promptInstall(dir)) {
+	if (!autoInstallAllowed(assumeYes) && !promptInstall(`msc compiles C with Zig ${ZIG_VERSION} by default. Download it to ${dir}? ` +
+		`(--cc=clang uses your own) [y/N] `)) {
 		eprintln(`error: no C compiler available.`);
 		eprintln(`  → install one, re-run and accept the Zig download, or set MSC_AUTO_INSTALL_CC=1.`);
 		return "";
@@ -161,7 +161,7 @@ function ensureZig(assumeYes: boolean): string {
 		eprintln(`error: failed to extract Zig archive.`);
 		return "";
 	}
-	if (!publishZig(stage, dir) && !hasManagedZig()) {
+	if (!publishStaged(stage, dir) && !hasManagedZig()) {
 		eprintln(`error: cannot install Zig at ${dir}; it exists without a zig binary.`);
 		eprintln(`  → remove ${dir} and re-run.`);
 		return "";
@@ -171,7 +171,7 @@ function ensureZig(assumeYes: boolean): string {
 
 // Moving a directory onto a non-empty one fails on every OS, so a published
 // install is never replaced; an empty leftover from an earlier failed run goes.
-function publishZig(staged: string, dir: string): boolean {
+function publishStaged(staged: string, dir: string): boolean {
 	rmdir(dir);
 	if (rename(staged, dir).ok) return true;
 	removeAll(staged);
@@ -198,9 +198,9 @@ test "two zig installs publish one winner and the loser discards its copy" {
 	const second = zigStage(root, "zig.install.2", "second");
 	assert first != "" && second != "";
 	assert !exists(zigBinaryIn(final));
-	assert publishZig(first, final);
+	assert publishStaged(first, final);
 	assert !exists(first);
-	assert !publishZig(second, final);
+	assert !publishStaged(second, final);
 	assert !exists(second);
 	assert (try readFile(zigBinaryIn(final)) catch "") == "first";
 	assert (try readFile(join(final, "lib/std")) catch "") == "first";
@@ -214,7 +214,7 @@ test "an empty leftover zig directory gives way to a published install" {
 	assert ensureDir(final).ok;
 	const staged = zigStage(root, "zig.install.1", "only");
 	assert staged != "";
-	assert publishZig(staged, final);
+	assert publishStaged(staged, final);
 	assert (try readFile(zigBinaryIn(final)) catch "") == "only";
 	assert removeAll(root).ok;
 }
@@ -507,7 +507,7 @@ function settle(root: string, names: string[]): void {
 	}
 }
 
-function scopeBundle(): string {
+function scopeBundle(notices: boolean = false): string {
 	const root = join(cwd(), `out/bundleScopeProbe-${performance.now()}`);
 	if (!ensureDir(root).ok) return "";
 	const real = realpath(root).replaceAll("\\", "/");
@@ -523,6 +523,7 @@ function scopeBundle(): string {
 	add("VERSION", "1.2.3\n");
 	for (const tool of ["clang", "clang++", "llvm-ar", linker]) add(`bin/${tool}`, "#!/bin/sh\necho 'clang version 1.2.3'\n");
 	add("lib/clang/1/include/stddef.h", "");
+	if (notices) add("notices/provenance.json", "{}");
 	for (const target of ["t1", "t2"]) {
 		add(`runtime/${target}.cfg`, `--sysroot=<CFGDIR>/${target}\n-isystem <CFGDIR>/include/${target}\n-isystem <CFGDIR>/../lib/clang/1/include\n`);
 		add(`runtime/include/${target}/h.h`, "");
@@ -1073,6 +1074,118 @@ test "bundle manifest paths cannot escape or inject checksum records" {
 	}
 }
 
+export struct BundleSource {
+	host: string;
+	url: string;
+	sha256: string;
+	identity: string;
+}
+
+// One row per host whose prepared bundle is published; empty until the first release.
+const PUBLISHED_BUNDLES: BundleSource[] = [];
+
+const INSTALL_LEFTOVER_SECONDS = 3600;
+
+// MSC_TOOLCHAIN_ARCHIVE=<archive path or file:// url>,<archive sha256>,<bundle IDENTITY> stands in for the table.
+function bundleSourceFor(host: string): Result<BundleSource, string> {
+	const override = env.get("MSC_TOOLCHAIN_ARCHIVE");
+	if (override != "") {
+		const parts = override.split(",");
+		if (parts.length != 3 || !isSha256(parts[1]) || !isSha256(parts[2])) {
+			return Result.err("MSC_TOOLCHAIN_ARCHIVE must be <archive>,<archive sha256>,<bundle IDENTITY>");
+		}
+		return Result.ok({ host, url: parts[0], sha256: parts[1], identity: parts[2] });
+	}
+	for (const row of PUBLISHED_BUNDLES) {
+		if (row.host == host) return Result.ok(row);
+	}
+	return Result.err(`no prepared toolchain bundle is published for host '${host}'`);
+}
+
+function localArchivePath(url: string): string {
+	if (url.startsWith("http://") || url.startsWith("https://")) return "";
+	if (!url.startsWith("file://")) return url;
+	const path = url.slice(7);
+	return platform == "windows" && path.length > 2 && path.charAt(0) == "/" && path.charAt(2) == ":" ? path.slice(1) : path;
+}
+
+function tarProgram(): string {
+	const system = env.get("SystemRoot");
+	return platform == "windows" && system != "" ? join(system, "System32/tar.exe") : "tar";
+}
+
+// An archive holds exactly one top-level directory, which extraction strips.
+function archiveTopLevel(archive: string): Result<void, string> {
+	const listed = execFileCapture(tarProgram(), ["tf", archive]);
+	if (!listed.ok) return Result.err(`native toolchain: cannot list ${archive}: ${listed.error.message}`);
+	let top = "";
+	for (const raw of listed.value.split("\n")) {
+		let path = raw.endsWith("\r") ? raw.slice(0, raw.length - 1) : raw;
+		if (path.startsWith("./")) path = path.slice(2);
+		if (path == "") continue;
+		const first = path.split("/")[0];
+		if (first == "" || first == "." || first == ".." || first.indexOf(":") >= 0) return Result.err(`native toolchain: archive entry ${path} is not under a top-level directory`);
+		if (top == "") top = first;
+		else if (first != top) return Result.err(`native toolchain: archive has more than one top-level entry (${top}, ${first})`);
+	}
+	if (top == "") return Result.err(`native toolchain: ${archive} is empty`);
+	return Result.ok(null);
+}
+
+// The payload is checked in full, with the manifest, identity and compiler version, before the directory is visible.
+function verifyStagedBundle(stage: string, source: BundleSource): Result<void, string> {
+	const notices = readDir(join(stage, "notices"));
+	if (notices.length == 0) return Result.err("native toolchain: the bundle ships no notices/");
+	const bundle = try validateNativeToolchain(stage, "", "");
+	if (bundle.identity != source.identity) return Result.err(`native toolchain: bundle identity ${bundle.identity} does not match the expected ${source.identity}`);
+	return Result.ok(null);
+}
+
+function installFromArchive(archive: string, source: BundleSource, stage: string, final: string): Result<string, string> {
+	const digest = try fileSha256(archive);
+	if (digest != source.sha256) return Result.err(`native toolchain: archive sha256 ${digest} does not match the expected ${source.sha256}`);
+	try archiveTopLevel(archive);
+	if (!ensureDir(stage).ok) return Result.err(`native toolchain: cannot create ${stage}`);
+	const extracted = execFileCapture(tarProgram(), ["xf", archive, "-C", stage, "--strip-components=1"]);
+	const checked: Result<void, string> = extracted.ok ? verifyStagedBundle(stage, source) : Result.err(`native toolchain: cannot extract ${archive}: ${extracted.error.message}`);
+	if (!checked.ok) {
+		removeAll(stage);
+		return Result.err(checked.error);
+	}
+	if (!publishStaged(stage, final) && !exists(join(final, "IDENTITY"))) {
+		return Result.err(`native toolchain: cannot install the bundle at ${final}; it exists without a verified payload\n  → remove ${final} and re-run`);
+	}
+	return Result.ok(final);
+}
+
+// A leftover of a killed install is never selected (its name is not msc-toolchain); one that has not
+// moved for an hour belongs to no running install and goes.
+function sweepInstallLeftovers(compilerRoot: string): void {
+	for (const entry of readDir(compilerRoot)) {
+		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+		if (!name.startsWith("msc-toolchain.install.")) continue;
+		const path = join(compilerRoot, name);
+		if (nowSeconds() - modifiedTime(path) > INSTALL_LEFTOVER_SECONDS) removeAll(path);
+	}
+}
+
+function installBundle(compilerRoot: string, source: BundleSource, assumeYes: boolean): Result<string, string> {
+	sweepInstallLeftovers(compilerRoot);
+	const final = join(compilerRoot, "msc-toolchain");
+	const stage = join(compilerRoot, `msc-toolchain.install.${Date.now()}.${Math.floor(Math.random() * 1000000000)}`);
+	const local = localArchivePath(source.url);
+	if (local != "") return installFromArchive(local, source, stage, final);
+	if (!autoInstallAllowed(assumeYes) && !promptInstall(`Download the prepared toolchain bundle from ${source.url} to ${final}? [y/N] `)) {
+		return Result.err("native toolchain: not installed\n  → accept the download, or set MSC_AUTO_INSTALL_CC=1");
+	}
+	const archive = `${stage}.archive`;
+	eprintln(`Downloading the prepared toolchain bundle (${source.host})…`);
+	const fetched = exec(`curl -fL --retry 3 -o "${archive}" "${source.url}"`);
+	const installed: Result<string, string> = fetched.ok ? installFromArchive(archive, source, stage, final) : Result.err(`native toolchain: failed to download ${source.url}`);
+	remove(archive);
+	return installed;
+}
+
 function nativeToolchainPath(compilerRoot: string, explicit: string): string {
 	if (explicit != "") return explicit;
 	if (compilerRoot == "") return "";
@@ -1095,6 +1208,21 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 	assert rmdir(root).ok;
 }
 
+function installedBundle(assumeYes: boolean): string {
+	const root = resolveRuntimeDir();
+	let error = "msc has no runtime directory to install a toolchain beside";
+	if (root != "") {
+		const source = bundleSourceFor(hostKey());
+		const installed: Result<string, string> = source.ok ? installBundle(root, source.value, assumeYes) : Result.err(source.error);
+		if (installed.ok) return installed.value;
+		error = installed.error;
+	}
+	eprintln(`error: ${error}`);
+	eprintln(`  → drop --cc=bundle to compile with Zig.`);
+	stopBuild();
+	return "";
+}
+
 // Normalize the --cc alias and resolve (installing if needed) the compiler to
 // use. Every command that emits C must call this — cmdBuildC and cmdTest both
 // do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
@@ -1102,11 +1230,14 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 // known.
 export function resolveCC(opts: CliOptions, stampRoot: string): void {
 	if (opts.ccBinary == "zig") opts.ccBinary = "zig cc";
+	const wantBundle = opts.ccBinary == "bundle";
+	if (wantBundle) opts.ccBinary = "";
 
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "emcc") return;
 
-	const native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
+	let native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
+	if (native == "" && wantBundle) native = installedBundle(opts.autoYes);
 	if (native != "") {
 		const selected = selectNativeToolchain(opts, native, stampRoot);
 		if (!selected.ok) {
@@ -1120,4 +1251,126 @@ export function resolveCC(opts: CliOptions, stampRoot: string): void {
 	// Leave ccBinary empty: getCompilerName resolves managed zig from its warmed
 	// global, which workers read read-only. Stuffing the heap path string into
 	// ccBinary would capture it into the parallel-compile spawn closures.
+}
+
+function installRoot(): string {
+	const root = join(cwd(), `out/bundleInstallProbe-${performance.now()}`);
+	return ensureDir(root).ok ? realpath(root).replaceAll("\\", "/") : "";
+}
+
+// Archives `source` (a directory) as <name>.tar under root, returning the archive path.
+function tarOf(root: string, source: string, name: string): string {
+	const slash = source.lastIndexOf("/");
+	const archive = join(root, `${name}.tar`);
+	return execFileCapture(tarProgram(), ["cf", archive, "-C", source.slice(0, slash), source.slice(slash + 1)]).ok ? archive : "";
+}
+
+function bundleSourceOf(archive: string, identity: string): BundleSource {
+	return { host: hostKey(), url: archive, sha256: (try fileSha256(archive) catch ""), identity };
+}
+
+function leftovers(root: string): number {
+	let count = 0;
+	for (const entry of readDir(root)) {
+		if (entry.startsWith("msc-toolchain.install.")) count++;
+	}
+	return count;
+}
+
+test "an archive with the wrong sha256 is refused before anything is extracted" {
+	const root = installRoot();
+	assert root != "";
+	const dir = join(root, "top");
+	assert ensureDir(dir).ok && writeFile(join(dir, "a.txt"), "a").ok;
+	const archive = tarOf(root, dir, "good");
+	assert archive != "";
+	const source = bundleSourceOf(archive, SEAL_LINES[0].slice(0, 64));
+	const wrong = { host: source.host, url: archive, sha256: SEAL_LINES[0].slice(0, 64), identity: source.identity };
+	const installed = installFromArchive(archive, wrong, join(root, "msc-toolchain.install.1"), join(root, "msc-toolchain"));
+	assert !installed.ok && installed.error.contains("does not match the expected");
+	assert leftovers(root) == 0 && !exists(join(root, "msc-toolchain"));
+	assert removeAll(root).ok;
+}
+
+test "an archive with two top-level entries is refused before extraction" {
+	const root = installRoot();
+	assert root != "";
+	const dir = join(root, "pack");
+	assert ensureDir(join(dir, "one")).ok && ensureDir(join(dir, "two")).ok;
+	assert writeFile(join(dir, "one/a.txt"), "a").ok && writeFile(join(dir, "two/b.txt"), "b").ok;
+	const archive = join(root, "two.tar");
+	assert execFileCapture(tarProgram(), ["cf", archive, "-C", dir, "one", "two"]).ok;
+	const installed = installFromArchive(archive, bundleSourceOf(archive, SEAL_LINES[0].slice(0, 64)), join(root, "msc-toolchain.install.1"), join(root, "msc-toolchain"));
+	assert !installed.ok && installed.error.contains("more than one top-level entry");
+	assert leftovers(root) == 0;
+	assert removeAll(root).ok;
+}
+
+test "an archive installs verified, a second install adopts the first, and the install is discovered" {
+	if (platform == "windows") return;
+	const root = installRoot();
+	assert root != "";
+	const bundle = scopeBundle(true);
+	assert bundle != "";
+	const identity = (try readFile(join(bundle, "IDENTITY")) catch "").trim();
+	const archive = tarOf(root, bundle, "bundle");
+	assert archive != "";
+	const source = bundleSourceOf(archive, identity);
+	const final = join(root, "msc-toolchain");
+	assert nativeToolchainPath(root, "") == "";
+	const first = installFromArchive(archive, source, join(root, "msc-toolchain.install.1"), final);
+	assert first.ok && first.value == final;
+	const second = installFromArchive(archive, source, join(root, "msc-toolchain.install.2"), final);
+	assert second.ok && second.value == final;
+	assert leftovers(root) == 0;
+	assert nativeToolchainPath(root, "") == final;
+	assert validateNativeToolchain(final, "", "").ok;
+	assert removeAll(root).ok && removeAll(bundle).ok;
+}
+
+test "a payload that fails its manifest, a wrong identity or missing notices never becomes visible" {
+	if (platform == "windows") return;
+	const root = installRoot();
+	assert root != "";
+	const bundle = scopeBundle(true);
+	assert bundle != "";
+	const identity = (try readFile(join(bundle, "IDENTITY")) catch "").trim();
+	const final = join(root, "msc-toolchain");
+	const stage = join(root, "msc-toolchain.install.1");
+	const good = tarOf(root, bundle, "good");
+	const wrongIdentity = installFromArchive(good, bundleSourceOf(good, SEAL_LINES[0].slice(0, 64)), stage, final);
+	assert !wrongIdentity.ok && wrongIdentity.error.contains("does not match the expected");
+	assert writeFile(join(bundle, "runtime/t1/a.o"), "tampered").ok;
+	const tampered = tarOf(root, bundle, "tampered");
+	const refused = installFromArchive(tampered, bundleSourceOf(tampered, identity), stage, final);
+	assert !refused.ok && refused.error.contains("verification failed");
+	assert removeAll(join(bundle, "notices")).ok;
+	const bare = tarOf(root, bundle, "bare");
+	const noNotices = installFromArchive(bare, bundleSourceOf(bare, identity), stage, final);
+	assert !noNotices.ok;
+	assert leftovers(root) == 0 && !exists(final);
+	assert removeAll(root).ok && removeAll(bundle).ok;
+}
+
+test "the leftovers of a killed install are never selected and the next install sweeps the stale ones" {
+	if (platform == "windows") return;
+	const root = installRoot();
+	assert root != "";
+	const dead = join(root, "msc-toolchain.install.1");
+	const partial = join(root, "msc-toolchain.install.1.archive");
+	const live = join(root, "msc-toolchain.install.2");
+	assert ensureDir(join(dead, "bin")).ok && writeFile(partial, "half").ok && ensureDir(live).ok;
+	assert execFileCapture("touch", ["-t", "202001010000", dead, partial]).ok;
+	assert nativeToolchainPath(root, "") == "";
+	sweepInstallLeftovers(root);
+	assert !exists(dead) && !exists(partial) && exists(live);
+	assert removeAll(root).ok;
+}
+
+test "the bundle source is the table row of the host, or the override, and fails loud without either" {
+	const absent = bundleSourceFor("nowhere-nothing");
+	if (env.get("MSC_TOOLCHAIN_ARCHIVE") == "") assert !absent.ok && absent.error.contains("nowhere-nothing");
+	assert localArchivePath("file:///tmp/x.tar") == "/tmp/x.tar";
+	assert localArchivePath("/tmp/x.tar") == "/tmp/x.tar";
+	assert localArchivePath("https://example.com/x.tar") == "";
 }
