@@ -6691,6 +6691,31 @@ test "unify concrete no bindings" {
 	assert b.names.length == 0;
 }
 
+function wideNonGenericDag(depth: int32): Type {
+	let level: Type = numberType();
+	for (let d = 0; d < depth; d += 1) {
+		const members: Type[] = [];
+		for (let w = 1; w <= 6; w += 1) members.push(createSizedArray(level, w));
+		level = createUnionInOrder(members);
+	}
+	return level;
+}
+
+test "unify skips a formal that holds no type parameter however wide its structure" {
+	const b = createUnifyBindings();
+	unifyType(wideNonGenericDag(24), wideNonGenericDag(24), b);
+	assert b.names.length == 0;
+}
+
+test "unify still binds a type parameter beside a wide non-generic member" {
+	const b = createUnifyBindings();
+	const formal = createUnionInOrder([wideNonGenericDag(24), createArray(createGenericParam("T"))]);
+	const concrete = createUnionInOrder([wideNonGenericDag(24), createArray(stringType())]);
+	unifyType(formal, concrete, b);
+	assert b.names.length == 1;
+	assert b.types[0].kind == TypeKind.String;
+}
+
 test "hasGenericParams true" {
 	assert hasGenericParams(createGenericParam("T"));
 	assert hasGenericParams(createArray(createGenericParam("T")));
