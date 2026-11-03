@@ -153,7 +153,7 @@ export function parseArchive(
 		const name = memberName(nameBytes);
 		if (!name.ok) { return Result.err(name.error); }
 		if (!isSymbolTable(name.value)) {
-			members.push({ name: name.value, data: [...data[bodyStart..bodyEnd]] });
+			members.push({ name: name.value, data: [...data[bodyStart..bodyEnd]] as Buffer });
 		}
 	}
 	return Result.ok(members);

@@ -31,8 +31,8 @@ function archive(parts: Buffer[]): Buffer {
 
 function coffArchive(names: Buffer, parts: Buffer[]): Buffer {
 	const all: Buffer[] = [
-		member("/", [0, 0, 0, 0]),
-		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
+		member("/", Buffer.fromArray([0, 0, 0, 0])),
+		member("/", Buffer.fromArray([0, 0, 0, 0, 0, 0, 0, 0])),
 		member("//", names),
 	];
 	for (const part of parts) { all.push(part); }
@@ -77,11 +77,11 @@ when (!testBuild) {
 	const coffNames = bytes(firstName + "\0" + secondName + "\0");
 	const secondOffset = bytes(firstName).length + 1;
 	expectMembers(coffArchive(coffNames, [
-		member("/0", [0, 255, 1]),
-		member("/" + String(secondOffset), [2, 0, 3]),
+		member("/0", Buffer.fromArray([0, 255, 1])),
+		member("/" + String(secondOffset), Buffer.fromArray([2, 0, 3])),
 	]), [
-		{ name: firstName, data: [0, 255, 1] },
-		{ name: secondName, data: [2, 0, 3] },
+		{ name: firstName, data: Buffer.fromArray([0, 255, 1]) },
+		{ name: secondName, data: Buffer.fromArray([2, 0, 3]) },
 	]);
 	expectMembers(coffArchive(coffNames, [
 		member("/0", bytes("one")), member("/0", bytes("two")),
@@ -90,51 +90,51 @@ when (!testBuild) {
 		{ name: firstName, data: bytes("two") },
 	]);
 	expectMembers(archive([
-		member("/", [0, 0, 0, 0]),
-		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
-		member("short.o/", [7]),
-	]), [{ name: "short.o", data: [7] }]);
-	expectMembers(coffArchive(bytes("has/\ninside.obj\0"), [member("/0", [8])]),
-		[{ name: "has/\ninside.obj", data: [8] }]);
-	expectMembers(coffArchive([], []), []);
+		member("/", Buffer.fromArray([0, 0, 0, 0])),
+		member("/", Buffer.fromArray([0, 0, 0, 0, 0, 0, 0, 0])),
+		member("short.o/", Buffer.fromArray([7])),
+	]), [{ name: "short.o", data: Buffer.fromArray([7]) }]);
+	expectMembers(coffArchive(bytes("has/\ninside.obj\0"), [member("/0", Buffer.fromArray([8]))]),
+		[{ name: "has/\ninside.obj", data: Buffer.fromArray([8]) }]);
+	expectMembers(coffArchive(Buffer.fromArray([]), []), []);
 	expectMembers(archive([
-		member("/SYM64/", [0, 0, 0, 0]),
-		member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
-		member("//", bytes("mixed-prefix.obj\0")), member("/0", [9]),
-	]), [{ name: "mixed-prefix.obj", data: [9] }]);
+		member("/SYM64/", Buffer.fromArray([0, 0, 0, 0])),
+		member("/", Buffer.fromArray([0, 0, 0, 0, 0, 0, 0, 0])),
+		member("//", bytes("mixed-prefix.obj\0")), member("/0", Buffer.fromArray([9])),
+	]), [{ name: "mixed-prefix.obj", data: Buffer.fromArray([9]) }]);
 	for (const names of [bytes("no terminator.obj"), bytes("gnu-only.obj/\n")]) {
-		expectRefusal(coffArchive(names, [member("/0", [1])]),
+		expectRefusal(coffArchive(names, [member("/0", Buffer.fromArray([1]))]),
 			"long name reference");
 	}
-	expectRefusal(coffArchive([0], [member("/0", [1])]),
+	expectRefusal(coffArchive(Buffer.fromArray([0]), [member("/0", Buffer.fromArray([1]))]),
 		"invalid ar member name");
-	expectRefusal(coffArchive(bytes(" bad.obj\0"), [member("/0", [1])]),
+	expectRefusal(coffArchive(bytes(" bad.obj\0"), [member("/0", Buffer.fromArray([1]))]),
 		"invalid ar member name");
-	expectRefusal(coffArchive([255, 0], [member("/0", [1])]), "not UTF-8");
+	expectRefusal(coffArchive(Buffer.fromArray([255, 0]), [member("/0", Buffer.fromArray([1]))]), "not UTF-8");
 	expectRefusal(coffArchive(coffNames, [
-		member("/" + String(coffNames.length), [1]),
+		member("/" + String(coffNames.length), Buffer.fromArray([1])),
 	]), "long name reference");
 	expectRefusal(coffArchive(coffNames, [
-		member("/" + String(coffNames.length - 1), [1]),
+		member("/" + String(coffNames.length - 1), Buffer.fromArray([1])),
 	]), "invalid ar member name");
 	expectRefusal(archive([
-		member("ordinary.o/", [1]),
-		member("/", [0, 0, 0, 0]), member("/", [0, 0, 0, 0, 0, 0, 0, 0]),
-		member("//", bytes("not-coff.obj\0")), member("/0", [1]),
+		member("ordinary.o/", Buffer.fromArray([1])),
+		member("/", Buffer.fromArray([0, 0, 0, 0])), member("/", Buffer.fromArray([0, 0, 0, 0, 0, 0, 0, 0])),
+		member("//", bytes("not-coff.obj\0")), member("/0", Buffer.fromArray([1])),
 	]), "long name reference");
 	for (const symbol of ["/", "/SYM64/"]) {
 		expectRefusal(archive([
-			member(symbol, [0, 0, 0, 0]),
-			member("//", bytes("not-coff.obj\0")), member("/0", [1]),
+			member(symbol, Buffer.fromArray([0, 0, 0, 0])),
+			member("//", bytes("not-coff.obj\0")), member("/0", Buffer.fromArray([1])),
 		]), "long name reference");
 	}
 	expectMembers(archive([
-		member("/", [0, 0, 0, 0]),
+		member("/", Buffer.fromArray([0, 0, 0, 0])),
 		member("//", bytes("/private/tmp/cache/closedir.o/\n")),
-		member("/0", [0, 255, 127]),
+		member("/0", Buffer.fromArray([0, 255, 127])),
 		member("short.o/", bytes("even")),
 	]), [
-		{ name: "/private/tmp/cache/closedir.o", data: [0, 255, 127] },
+		{ name: "/private/tmp/cache/closedir.o", data: Buffer.fromArray([0, 255, 127]) },
 		{ name: "short.o", data: bytes("even") },
 	]);
 	expectMembers(archive([
@@ -145,8 +145,8 @@ when (!testBuild) {
 		{ name: "short.o", data: bytes("even") },
 	]);
 	for (const name of ["高.o", "🚀.o", "\uFEFFname.o", "\uFFFD.o"]) {
-		expectMembers(archive([bsdMember(name, [0, 255, 0])]), [
-			{ name, data: [0, 255, 0] },
+		expectMembers(archive([bsdMember(name, Buffer.fromArray([0, 255, 0]))]), [
+			{ name, data: Buffer.fromArray([0, 255, 0]) },
 		]);
 	}
 	expectMembers(archive([
@@ -172,15 +172,15 @@ when (!testBuild) {
 		{ name: "dup.o", data: bytes("second") },
 	]);
 	expectMembers(archive([
-		member("/SYM64/", [0, 0]), member("zero.o/", []),
-	]), [{ name: "zero.o", data: [] }]);
+		member("/SYM64/", Buffer.fromArray([0, 0])), member("zero.o/", Buffer.fromArray([])),
+	]), [{ name: "zero.o", data: Buffer.fromArray([]) }]);
 	for (const invalid of [
 		{ data: member("#1/bad", bytes("name")), why: "BSD ar name length" },
 		{ data: member("#1/0", bytes("object")), why: "BSD ar name length" },
 		{ data: member("#1/20", bytes("short")), why: "BSD ar name length" },
-		{ data: member("#1/4", [0, 0, 0, 0]), why: "invalid ar member name" },
-		{ data: member("#1/4", [120, 0, 121, 0]), why: "invalid ar member name" },
-		{ data: member("#1/1", [255, 111]), why: "not UTF-8" },
+		{ data: member("#1/4", Buffer.fromArray([0, 0, 0, 0])), why: "invalid ar member name" },
+		{ data: member("#1/4", Buffer.fromArray([120, 0, 121, 0])), why: "invalid ar member name" },
+		{ data: member("#1/1", Buffer.fromArray([255, 111])), why: "not UTF-8" },
 		{ data: member("/0", bytes("object")), why: "long name reference" },
 		{ data: member("/unknown", bytes("object")), why: "unsupported ar member" },
 		{ data: member(" bad.o/", bytes("x")), why: "invalid ar member name" },
@@ -190,7 +190,7 @@ when (!testBuild) {
 	for (const invalidName of [
 		[192, 175], [237, 160, 128], [244, 144, 128, 128], [226, 130],
 	]) {
-		const raw: Buffer = [];
+		const raw = Buffer.fromArray([]);
 		for (const byte of invalidName) { raw.push(byte as uint8); }
 		expectRefusal(archive([member("#1/" + String(raw.length), raw)]),
 			"not UTF-8");
@@ -209,7 +209,7 @@ when (!testBuild) {
 		"truncated");
 	expectRefusal(archive([truncated(member("a.o/", bytes("abc")), 2)]),
 		"truncated");
-	const oversized = member("large.o/", []);
+	const oversized = member("large.o/", Buffer.fromArray([]));
 	const hugeSize = bytes("9999999999");
 	for (let i: int32 = 0; i < hugeSize.length; i += 1) {
 		oversized[48 + i] = hugeSize[i];
@@ -227,7 +227,7 @@ when (!testBuild) {
 	const nonAscii = member("bad.o/", bytes("x"));
 	nonAscii[0] = 255;
 	expectRefusal(archive([nonAscii]), "not ASCII");
-	const mutable = archive([member("owned.o/", [1, 2, 3])]);
+	const mutable = archive([member("owned.o/", Buffer.fromArray([1, 2, 3]))]);
 	const parsed = parseArchive(mutable);
 	if (!parsed.ok) { throw new Error(parsed.error); }
 	mutable[68] = 99;

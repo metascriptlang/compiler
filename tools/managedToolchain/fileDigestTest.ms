@@ -4,7 +4,7 @@ import { sha256File } from "./fileDigest";
 const OUTPUT_DIRECTORY = "out/fileDigestTest";
 let cases: int32 = 0;
 
-function expectHash(path: string, bytes: Buffer, expected: string): void {
+function expectHash(path: string, bytes: uint8[], expected: string): void {
 	const written = writeFileBytes(path, bytes);
 	if (!written.ok) { throw new Error(written.error.message); }
 	const digest = sha256File(path);

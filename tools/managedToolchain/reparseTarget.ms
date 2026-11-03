@@ -7,7 +7,7 @@ const MAXIMUM_BUFFER_SIZE: int64 = 16384;
 export struct ReparseTarget {
 	tag: uint32;
 	flags: uint32;
-	nameUtf16Le: Buffer;
+	nameUtf16Le: uint8[];
 }
 
 function u16At(data: Readonly<Span<uint8>>, at: int64): int64 {
@@ -56,7 +56,7 @@ export function parseReparseTarget(
 	if (start < pathStart || end < start || end > wholeSize) {
 		return Result.err("reparse substitute name out of bounds");
 	}
-	const name: Buffer = [];
+	const name: uint8[] = [];
 	for (let at = start; at < end; at += 1) { name.push(data[at]); }
 	const flags: uint32 = tag == SYMLINK_TAG ? u32At(data, 16) : 0;
 	return Result.ok({ tag, flags, nameUtf16Le: name });

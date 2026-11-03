@@ -4,7 +4,7 @@ import { readUtf8File } from "./textFile";
 const DIRECTORY = "out/textFileTest";
 let cases: int32 = 0;
 
-function writeBytes(path: string, data: Buffer): void {
+function writeBytes(path: string, data: uint8[]): void {
 	const written = writeFileBytes(path, data);
 	if (!written.ok) { throw new Error(written.error.message); }
 }
@@ -29,7 +29,7 @@ function run(): void {
 		[255], [128], [192, 175], [224, 128, 175], [237, 160, 128],
 		[244, 144, 128, 128], [226, 130], [97, 255, 98],
 	]) {
-		const data: Buffer = [];
+		const data: uint8[] = [];
 		for (const byte of invalid) { data.push(byte as uint8); }
 		writeBytes(path, data);
 		const read = readUtf8File(path);

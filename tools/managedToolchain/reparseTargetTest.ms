@@ -17,7 +17,7 @@ function put32(data: Buffer, at: int32, value: uint32): void {
 	}
 }
 
-function recordOf(tag: uint32, flags: uint32, name: Buffer): Buffer {
+function recordOf(tag: uint32, flags: uint32, name: uint8[]): Buffer {
 	const start: int32 = tag == SYMLINK_TAG ? 20 : 16;
 	const data = Buffer.alloc(start + name.length);
 	put32(data, 0, tag);
@@ -34,7 +34,7 @@ function expectTarget(
 	data: Readonly<Span<uint8>>,
 	tag: uint32,
 	flags: uint32,
-	name: Buffer,
+	name: uint8[],
 ): void {
 	const parsed = parseReparseTarget(data);
 	if (!parsed.ok) { throw new Error(parsed.error); }
@@ -60,7 +60,7 @@ function expectRefusal(data: Buffer, fragment: string): void {
 }
 
 function run(): void {
-	const name: Buffer = [108, 0, 105, 0, 98, 0];
+	const name: uint8[] = [108, 0, 105, 0, 98, 0];
 	const flagValues: uint32[] = [0, 1, 3, 4294967295];
 	for (const flags of flagValues) {
 		expectTarget(recordOf(SYMLINK_TAG, flags, name), SYMLINK_TAG, flags, name);
@@ -69,7 +69,7 @@ function run(): void {
 	for (const units of [
 		[233, 0, 45, 78], [61, 216, 128, 222], [0, 0], [0, 216],
 	]) {
-		const raw: Buffer = [];
+		const raw: uint8[] = [];
 		for (const unit of units) { raw.push(unit as uint8); }
 		expectTarget(recordOf(SYMLINK_TAG, 1, raw), SYMLINK_TAG, 1, raw);
 	}
@@ -81,7 +81,7 @@ function run(): void {
 	trailing.push(255);
 	trailing.push(255);
 	expectTarget(trailing, MOUNT_POINT_TAG, 0, name);
-	const surrounded: Buffer = [255, 255];
+	const surrounded: uint8[] = [255, 255];
 	const inner = recordOf(SYMLINK_TAG, 1, name);
 	for (const byte of inner) { surrounded.push(byte); }
 	surrounded.push(255);
