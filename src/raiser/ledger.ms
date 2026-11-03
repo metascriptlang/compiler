@@ -7,10 +7,11 @@ import {
 	RaiserObjectData, RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapStringText, heapAllocArray, heapAllocObject, heapAllocBox, heapBoxHandles, heapBoxValue, heapBoxRc,
 	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldNameAt, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, stringBytesHandles, heapStringHandles, heapSeqHandles, heapObjectCellHandles, objectCellClass, objectCellFieldValue, objectCellRawSlot, stringHandleRc,
-	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle, holdsCount
+	heapArrayIsView, heapArrayRc, makeHandle, createClassType, objectCellHandle, holdsCount, isObjectCell, seqCellOf, heapObjectSetField, raiserNil
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
 import { objectCellNew, objectCellSetSlot } from "./objectCell";
+import { seqBase } from "./vmSeq";
 
 interface LedgerTally {
 	strings: HashMap<int64, int32>;
@@ -53,6 +54,62 @@ function objectFieldNames(data: RaiserObjectData): string {
 	return names.join(",");
 }
 
+function cellFieldRef(arr: RaiserArrayHeap, handle: int64, f: int32): RaiserValue {
+	if (objectCellClass(handle).kinds[f] != RaiserRegClass.Dyn) return objectCellFieldValue(arr, handle, f);
+	const box = objectCellRawSlot(handle, f);
+	return box != 0 ? { kind: RaiserValueKind.Box, intVal: box, floatVal: 0.0 } : raiserNil();
+}
+
+function itemRefs(arr: RaiserArrayHeap, obj: RaiserObjectHeap, handle: int64, out: RaiserValue[]): void {
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Seq => {
+			if (isObjectCell(handle)) {
+				for (let f = 0; f < objectCellClass(handle).kinds.length; f += 1) out.push(cellFieldRef(arr, handle, f));
+			} else if (heapArrayIsView(arr, handle)) {
+				out.push(raiserArray(seqBase(seqCellOf(handle))));
+			} else if (arrayHoldsHandles(arr, handle)) {
+				const held = arrayHeldCount(arr, handle);
+				for (let k = 0; k < held; k += 1) out.push(arrayHeldAt(arr, handle, k));
+			}
+		},
+		RaiserHeapKind.Object => {
+			const data = obj.objects[handleIndex(handle)];
+			for (let f = 0; f < objectFieldCount(data); f += 1) out.push(fieldValueAt(data, f));
+		},
+		RaiserHeapKind.Box => { out.push(heapBoxValue(arr, handle)); },
+		_ => {},
+	}
+}
+
+// The live items that the roots, and the items no holder counts, do not reach: each is held only by
+// other such items, so a garbage cycle balances its counts and only this walk finds it.
+function unreachedItems(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], stringBytes: int64[], live: int64[], counts: int64[]): int64[] {
+	const reached = new HashMap<int64, boolean>();
+	const work: RaiserValue[] = [];
+	for (const root of roots) work.push(root);
+	for (const bytes of stringBytes) work.push(raiserArray(bytes));
+	for (let i = 0; i < live.length; i += 1) if (counts[i] == 0) work.push({ kind: RaiserValueKind.Array, intVal: live[i], floatVal: 0.0 });
+	while (work.length > 0) {
+		const v = work.pop();
+		if (!holdsCount(v.kind) || reached.has(v.intVal)) continue;
+		reached.set(v.intVal, true);
+		itemRefs(arr, obj, v.intVal, work);
+	}
+	const out: int64[] = [];
+	for (const handle of live) if (!reached.has(handle)) out.push(handle);
+	return out;
+}
+
+function itemName(arr: RaiserArrayHeap, obj: RaiserObjectHeap, handle: int64): string {
+	return match (handleHeapKind(handle)) {
+		RaiserHeapKind.Seq => isObjectCell(handle) ? `${objectCellClass(handle).name}#${handle}` : `array#${handle}`,
+		RaiserHeapKind.Object => `${obj.objects[handleIndex(handle)].classType.name}#${handleIndex(handle)}`,
+		RaiserHeapKind.Box => `Box#${handle}`,
+		RaiserHeapKind.String => `"${heapStringText(arr, { kind: RaiserValueKind.String, intVal: handle, floatVal: 0.0 }).slice(0, 40)}"`,
+		_ => `item#${handle}`,
+	};
+}
+
 function freeFlags(count: int32, freeList: int64[]): boolean[] {
 	const free: boolean[] = [];
 	for (let i = 0; i < count; i += 1) free.push(false);
@@ -86,12 +143,7 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	const cellHandles = heapObjectCellHandles(arr);
 	for (const handle of cellHandles) {
 		const kinds = objectCellClass(handle).kinds;
-		for (let f = 0; f < kinds.length; f += 1) {
-			if (kinds[f] == RaiserRegClass.Dyn) {
-				const box = objectCellRawSlot(handle, f);
-				if (box != 0) tallyRef(tally, { kind: RaiserValueKind.Box, intVal: box, floatVal: 0.0 }, `cell ${objectCellClass(handle).name}#${handle} field ${f}`);
-			} else tallyRef(tally, objectCellFieldValue(arr, handle, f), `cell ${objectCellClass(handle).name}#${handle} field ${f}`);
-		}
+		for (let f = 0; f < kinds.length; f += 1) tallyRef(tally, cellFieldRef(arr, handle, f), `cell ${objectCellClass(handle).name}#${handle} field ${f}`);
 	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
 		if (freeObjects[i]) continue;
@@ -156,6 +208,23 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 	if (leakedArrays > 0) return `internal: ${leakedArrays} array items live after ${where} end`;
 	if (leakedObjects > 0) return `internal: ${leakedObjects} object items live after ${where} end${firstLeak == "" ? "" : " (leaked: " + firstLeak + ")"}`;
 	if (leakedBoxes > 0) return `internal: ${leakedBoxes} box items live after ${where} end (first: ${firstBox})`;
+	const live: int64[] = [];
+	const counts: int64[] = [];
+	for (const handle of cellHandles) { live.push(handle); counts.push(heapArrayRc(arr, handle) as int64); }
+	for (let i = 0; i < obj.objects.length; i += 1) {
+		if (!freeObjects[i]) { live.push(makeHandle(i as int64, RaiserHeapKind.Object)); counts.push(obj.objects[i].rc as int64); }
+	}
+	for (const handle of seqHandles) {
+		if (!heapArrayIsView(arr, handle)) { live.push(handle); counts.push(heapArrayRc(arr, handle) as int64); }
+	}
+	for (const handle of boxHandles) { live.push(handle); counts.push(heapBoxRc(handle) as int64); }
+	for (const handle of heapStringHandles(arr)) { live.push(handle); counts.push(stringHandleRc(handle)); }
+	const unreached = unreachedItems(arr, obj, roots, stringBytes, live, counts);
+	if (unreached.length > 0) {
+		const named: string[] = [];
+		for (let i = 0; i < unreached.length && i < 4; i += 1) named.push(itemName(arr, obj, unreached[i]));
+		return `internal: ${unreached.length} items live after ${where} end held only by a cycle no root reaches (leaked: ${named.join("; ")})`;
+	}
 	return "";
 }
 
@@ -215,4 +284,35 @@ test "the audit counts the references an object cell holds and names a cell that
 	assert ledgerAudit(arr, obj, [root], "program") == "", ledgerAudit(arr, obj, [root], "program");
 	assert ledgerAudit(arr, obj, [], "program").startsWith("internal: 1 object items live after program end (leaked: Holder[");
 	assert ledgerAudit(arr, obj, [root, root], "program").includes("counts 1 holders but 2 hold it at program end");
+}
+
+test "the audit names a garbage ring of objects whose counts balance and accepts the same ring held by a root" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const a = heapAllocObject(obj);
+	const b = heapAllocObject(obj);
+	rcIncref(arr, obj, raiserObject(b));
+	heapObjectSetField(arr, obj, a, "next", raiserObject(b));
+	rcIncref(arr, obj, raiserObject(a));
+	heapObjectSetField(arr, obj, b, "next", raiserObject(a));
+	rcDecref(arr, obj, raiserObject(a));
+	rcDecref(arr, obj, raiserObject(b));
+	const verdict = ledgerAudit(arr, obj, [], "program");
+	assert verdict.startsWith("internal: 2 items live after program end held only by a cycle no root reaches (leaked: "), verdict;
+	rcIncref(arr, obj, raiserObject(a));
+	assert ledgerAudit(arr, obj, [raiserObject(a)], "program") == "";
+}
+
+test "the audit names a garbage ring of object cells and the string it alone holds" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const ring = createClassType("Ring", -1, [], ["next", "name"], [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+	const a = objectCellNew(arr.mem, ring, 1);
+	const b = objectCellNew(arr.mem, ring, 1);
+	objectCellSetSlot(a, 0, objectCellHandle(b));
+	objectCellSetSlot(b, 0, objectCellHandle(a));
+	objectCellSetSlot(a, 1, heapAllocString(arr, "tail").intVal);
+	const verdict = ledgerAudit(arr, obj, [], "strand");
+	assert verdict.startsWith("internal: 3 items live after strand end held only by a cycle no root reaches (leaked: Ring#"), verdict;
+	assert verdict.includes("\"tail\""), verdict;
 }
