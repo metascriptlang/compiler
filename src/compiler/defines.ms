@@ -214,8 +214,9 @@ test "define: bare flag stores true" {
 	assert definedValue(t, "myFlag") == "true";
 }
 
-test "define: a fresh table carries no symbol" {
-	assert createDefineTable().names.length == 0;
+test "define: a fresh table carries only the capability symbols std reads while a builder predates them" {
+	const names = createDefineTable().names;
+	assert names.length == 1 && names[0] == "mscReadsPureExterns", names.join(",");
 }
 
 test "define: unknown flag is false, never an error" {
