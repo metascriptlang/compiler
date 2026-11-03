@@ -190,8 +190,11 @@ export const REST_NOT_LAST = "A rest element must be last in a destructuring pat
 function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 	if (target.kind != NodeKind.ArrayLiteral) {
 		if (target.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = target;
+		const savedDefinite = ctx.initTracker.definiteTarget;
+		ctx.initTracker.definiteTarget = target;
 		checkExpr(ctx, target, null);
 		ctx.initTracker.assignTarget = null;
+		ctx.initTracker.definiteTarget = savedDefinite;
 		const k = target.kind;
 		if (k != NodeKind.Identifier && k != NodeKind.MemberExpr && k != NodeKind.ArrayAccess && k != NodeKind.ObjectLiteral) {
 			addError(ctx, "a destructuring assignment target must be a variable, a field or an element", target.location.line, target.location.column);
