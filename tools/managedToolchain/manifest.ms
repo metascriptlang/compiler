@@ -1,4 +1,4 @@
-import { sha256 } from "std/crypto";
+import { sha256Sync, toHex } from "std/crypto";
 
 const DIGEST_LENGTH: int32 = 64;
 const SEPARATOR = "  ";
@@ -153,9 +153,9 @@ export function parseHeader(
 }
 
 export function manifestIdentity(text: string): Result<string, string> {
-	const digest = sha256(text);
+	const digest = sha256Sync(text);
 	if (!digest.ok) { return Result.err(digest.error.message); }
-	return Result.ok(digest.value + "\n");
+	return Result.ok(toHex(digest.value) + "\n");
 }
 
 export function verifyIdentity(

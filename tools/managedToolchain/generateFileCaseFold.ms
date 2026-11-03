@@ -1,6 +1,6 @@
 import { argv } from "std/process";
 import { writeStdout } from "std/io";
-import { sha256 } from "std/crypto";
+import { sha256Sync, toHex } from "std/crypto";
 import { readUtf8File } from "./textFile";
 
 const DATA_SHA256 =
@@ -86,9 +86,9 @@ function table(name: string, data: int32[]): string {
 
 function generate(input: string): Result<string, string> {
 	const source = try readUtf8File(input);
-	const digest = sha256(source);
+	const digest = sha256Sync(source);
 	if (!digest.ok) { return Result.err(digest.error.message); }
-	if (digest.value != DATA_SHA256) {
+	if (toHex(digest.value) != DATA_SHA256) {
 		return Result.err("casefold data cohort mismatch");
 	}
 	const rows = mappings(source);

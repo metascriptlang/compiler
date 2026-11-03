@@ -3,7 +3,7 @@ import {
 	readDirNames, readFileBytes, ensureDir, removeAll, realpath,
 } from "std/fs";
 import { platform } from "std/process";
-import { randomUUID } from "std/crypto";
+import { randomUUIDSync } from "std/crypto";
 import { IoErrorKind } from "std/io/errors";
 import { jsonValueOf } from "std/serialize/json";
 import { stringifyPretty } from "std/serialize/json/stringify";
@@ -679,7 +679,7 @@ function claimPartial(output: string): Result<string, string> {
 	const parent = dirname(output);
 	try engineIo(ensureDir(parent));
 	for (let i: int32 = 0; i < 100; i += 1) {
-		const token = randomUUID();
+		const token = randomUUIDSync();
 		if (!token.ok) { return Result.err(token.error.message); }
 		const path = join(parent, basename(output) + ".partial-" + token.value);
 		const claimed = createDirectoryExclusive(path);

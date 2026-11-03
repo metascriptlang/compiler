@@ -1,4 +1,4 @@
-import { sha256 } from "std/crypto";
+import { sha256Sync, toHex } from "std/crypto";
 import { readUtf8File } from "./textFile";
 import { sortEnginePaths } from "./engineFiles";
 import {
@@ -29,8 +29,8 @@ function main(): void {
 	if (!read.ok) { throw new Error(read.error); }
 	const fixture = read.value;
 	const normalized = fixture.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
-	const digest = sha256(normalized);
-	check(digest.ok && digest.value ==
+	const digest = sha256Sync(normalized);
+	check(digest.ok && toHex(digest.value) ==
 		"d1f5d9817b12aef7b41d6a3a296516d01cc1605aed01c80b156f7eae7aa54128",
 		"recorded fixture cohort after explicit universal-newline decoding");
 	const recorded = pe(fixture);
