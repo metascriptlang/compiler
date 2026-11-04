@@ -157,11 +157,11 @@ function checkedIndex(index: Node, len: Node, loc: SourceLocation): Node {
 	return makeCall(runtimeRef("msChkIndex", loc), [index, len], loc);
 }
 
-function checkedSpanPlace(view: Node, index: Node, loc: SourceLocation): Node | null {
+function checkedSpanPlace(view: Node, index: Node, inBounds: boolean, loc: SourceLocation): Node | null {
 	const lenView = cloneIfPure(view);
 	const offView = cloneIfPure(view);
 	if (lenView == null || offView == null) return null;
-	const at = makeBinary(makeMember(offView, "off", loc), "+", checkedIndex(index, makeMember(lenView, "len", loc), loc), loc);
+	const at = makeBinary(makeMember(offView, "off", loc), "+", inBounds ? index : checkedIndex(index, makeMember(lenView, "len", loc), loc), loc);
 	return makeArrayAccess(makeMember(view, "base", loc), at, loc);
 }
 
@@ -177,10 +177,12 @@ function checkedArrayPlace(arr: Node, index: Node, loc: SourceLocation): Node | 
 
 function checkedAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
-	if (isRange(d.index) || indexedType(d.array) == null || node.flags.has(NodeFlag.InBounds)) return node;
+	if (isRange(d.index) || indexedType(d.array) == null) return node;
 	const loc = node.location;
 	const span = isSpan(d.array);
-	let access = span ? checkedSpanPlace(d.array, d.index, loc) : checkedArrayPlace(d.array, d.index, loc);
+	const inBounds = node.flags.has(NodeFlag.InBounds);
+	if (inBounds && !span) return node;
+	let access = span ? checkedSpanPlace(d.array, d.index, inBounds, loc) : checkedArrayPlace(d.array, d.index, loc);
 	if (access == null) access = makeCall(runtimeRef(span ? "msSpanAt" : "msArrayAt", loc), [d.array, d.index], loc);
 	access.nodeType = node.nodeType;
 	return access;
