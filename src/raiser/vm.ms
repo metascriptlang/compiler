@@ -26,7 +26,7 @@ import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, RaiserCopyPlan, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
+import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, hostRaised, hostStateActive, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink, boxString, unboxFloat } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -5388,30 +5388,23 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vmError(vm, "spawn is not available in compile-time evaluation: the child process would outlive the build");
 		return;
 	}
-	const fn = entry.fn;
 	const inPlace = entry.inPlace;
-
-	const args: RaiserValue[] = [];
-	if (inPlace < 0) {
-		const argc = func.blocks[ic + 1] as int32;
-		let i = 0;
-		while (i < argc) {
-			args.push(getDyn(vm, func.blocks[ic + 3 + i] as int32));
-			i = i + 1;
-		}
-	}
-	const outerArgsAt = vm.hostArgsAt;
-	const outerResult = vm.hostResult;
 	vm.hostArgsAt = ic + 3;
 	vm.hostResult = ia;
 
 	// Save/restore so a bridge that re-enters a nested VM leaves the outer
 	// VM's heaps active when it resumes.
-	const prevObjHeap = activeHostObjectHeap();
-	const prevArrHeap = activeHostArrayHeap();
-	const prevArgv = activeProgramArgv();
-	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
-	setActiveProgramArgv(vm.programArgv);
+	const swapState = !hostStateActive(vm.objectHeap, vm.arrayHeap, vm.programArgv);
+	let prevObjHeap: RaiserObjectHeap | null = null;
+	let prevArrHeap: RaiserArrayHeap | null = null;
+	let prevArgv: string[] | null = null;
+	if (swapState) {
+		prevObjHeap = activeHostObjectHeap();
+		prevArrHeap = activeHostArrayHeap();
+		prevArgv = activeProgramArgv();
+		setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
+		setActiveProgramArgv(vm.programArgv);
+	}
 	const outerFloor = vm.floor;
 	const outerPending = vm.floorPending;
 	const suspended = vm.suspendedRuns.length;
@@ -5420,18 +5413,31 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	if (inPlace >= 0) {
 		_inPlaceHostFns[inPlace](vm);
 		if (!vm.floorPending) raiseFromHost("internal: an in-place host function re-entered the VM, so its registers moved under it", true);
-	} else result = fn(args);
+	} else {
+		const args: RaiserValue[] = [];
+		const argc = func.blocks[ic + 1] as int32;
+		let i = 0;
+		while (i < argc) {
+			args.push(getDyn(vm, func.blocks[ic + 3 + i] as int32));
+			i = i + 1;
+		}
+		result = entry.fn(args);
+	}
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
 		vm.suspendedRuns.shrink(suspended);
 	}
 	vm.floor = outerFloor;
 	vm.floorPending = outerPending;
-	vm.hostArgsAt = outerArgsAt;
-	vm.hostResult = outerResult;
-	setActiveHostHeaps(prevObjHeap, prevArrHeap);
-	setActiveProgramArgv(prevArgv);
+	if (swapState) {
+		setActiveHostHeaps(prevObjHeap, prevArrHeap);
+		setActiveProgramArgv(prevArgv);
+	}
 
+	if (!hostRaised()) {
+		if (inPlace < 0) setRegConform(vm, ia, result);
+		return;
+	}
 	const fatal = hostRaiseIsFatal();
 	const raised = takeHostRaise();
 	if (raised != null) {
@@ -5446,10 +5452,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		heapObjectSetField(vm.arrayHeap, vm.objectHeap, error, "message", heapAllocString(vm.arrayHeap, raised));
 		setException(vm, raiserObject(error));
 		unwindStep(vm);
-		return;
 	}
-
-	if (inPlace < 0) setRegConform(vm, ia, result);
 }
 
 export type RaiserInPlaceHostFn = (vm: RaiserVM) => void;
