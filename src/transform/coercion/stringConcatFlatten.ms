@@ -1,4 +1,4 @@
-import { Node, NodeKind, SourceLocation, TypeKind, BinaryExprData, CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeKind, BinaryExprData, CallExprData, IdentifierData, VariableDeclData, StringLiteralData } from "../../ast/node";
 import { stringType, isStringLike, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -91,6 +91,15 @@ function flattenConcat(node: Node): Node {
 
 	const loc = node.location;
 
+	if (parts.some(isEmptyLiteral)) {
+		const kept = parts.filter((p: Node): boolean => !isEmptyLiteral(p));
+		if (kept.length == 0) return parts[0];
+		if (kept.length == 1) {
+			return coerceToString(kept[0], loc);
+		}
+		return concatParts(kept, loc);
+	}
+
 	if (parts.length == 2) {
 		if (!parts.some(needsCoercion)) return node;
 		const args: Node[] = [coerceToString(parts[0], loc), coerceToString(parts[1], loc)];
@@ -99,6 +108,19 @@ function flattenConcat(node: Node): Node {
 		return call2;
 	}
 
+	return concatParts(parts, loc);
+}
+
+function isEmptyLiteral(node: Node): boolean {
+	return node.kind == NodeKind.StringLiteral && (node.data as StringLiteralData).value == "";
+}
+
+function concatParts(parts: Node[], loc: SourceLocation): Node {
+	if (parts.length == 2) {
+		const call2 = makeCall(runtimeRef("msStringConcat", loc), [coerceToString(parts[0], loc), coerceToString(parts[1], loc)], loc);
+		call2.nodeType = stringType();
+		return call2;
+	}
 	const allArgs: Node[] = [makeNumber(parts.length, loc)];
 	for (const p of parts) {
 		allArgs.push(coerceToString(p, loc));

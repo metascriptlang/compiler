@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind, BuiltinKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, isIntegerType, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { findAllExtensionsByName, findFirstMatchingExt } from "../../checker/context";
 import { walkNode } from "../walker";
@@ -242,6 +242,13 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
 		const checked = !ctx.jsBackend && cd2.arguments.length > 0 && !isRadixLiteral(radixArg);
+		const decimal = !ctx.jsBackend && (cd2.arguments.length == 0 || (radixArg.kind == NodeKind.NumberLiteral && (radixArg.data as NumberLiteralData).value == 10));
+		if (decimal && objType.kind != TypeKind.Char) {
+			const decimalFn = objType.kind == TypeKind.Uint64 ? "msUint64ToString" : isIntegerType(objType) ? "msIntToString" : "msNumberToString";
+			const decimalCall = makeCall(runtimeRef(decimalFn, loc), [obj], loc);
+			decimalCall.nodeType = stringType();
+			return decimalCall;
+		}
 		let fn = checked ? "msNumberToStringRadixChecked" : "msNumberToStringRadix";
 		if (objType.kind == TypeKind.Uint64) { fn = checked ? "msUint64ToStringRadixChecked" : "msUint64ToStringRadix"; }
 		else if (objType.kind == TypeKind.Int64) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
