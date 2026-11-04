@@ -1,12 +1,13 @@
 /**
  * GF(2^255 - 19) in ten alternating 26/25-bit limbs: the fiat-crypto curve25519 32-bit code (MIT, see
  * LICENSE.fiat.MIT; fiat-c/src/curve25519_32.c, SHA-256 403a8a44…bade1), copied from the translation in
- * std/crypto/x25519/field.cms without its C value barrier, so the module is plain .ms and runs on JS too.
- * Without the barrier a C compiler may turn the one conditional move of to_bytes into a branch.
+ * std/crypto/x25519/field.cms. Its value barrier lives in ./secret (.cms on C, a no-op .jms on JS), so this
+ * module stays one portable .ms.
  *
  * Every exported element is tight: feAdd and feSub carry the loose sum before returning it, so any
  * exported result is a valid input of every other operation.
  */
+import { valueBarrier } from "./secret";
 
 export type Fe = uint32[10];
 
@@ -63,7 +64,7 @@ function fiat_25519_cmovznz_u32(ref out1: uint32, arg1: uint8, arg2: uint32, arg
 	let x3: uint32 = 0;
 	x1 = arg1;
 	x2 = (0 - (x1 as int32)) as uint32;
-	x3 = ((x2 & arg3) | ((~x2) & arg2));
+	x3 = ((valueBarrier(x2) & arg3) | (valueBarrier((~x2)) & arg2));
 	out1 = x3;
 }
 
@@ -1202,6 +1203,16 @@ export function feSub(a: Fe, b: Fe): Fe {
 	return fiat_25519_carry(fiat_25519_sub(a, b));
 }
 
+/** a + b left loose: valid only as an operand of feMul or feSqr, which accept fiat's loose bounds. */
+export function feAddLoose(a: Fe, b: Fe): Fe {
+	return fiat_25519_add(a, b);
+}
+
+/** a - b left loose: valid only as an operand of feMul or feSqr, which accept fiat's loose bounds. */
+export function feSubLoose(a: Fe, b: Fe): Fe {
+	return fiat_25519_sub(a, b);
+}
+
 export function feNeg(a: Fe): Fe {
 	return feSub(feZero, a);
 }
@@ -1254,4 +1265,12 @@ export function feEqual(a: Fe, b: Fe): boolean {
 /** The low bit of the canonical encoding, the sign Ed25519 stores in bit 255. */
 export function feIsNegative(a: Fe): boolean {
 	return ((fiat_25519_to_bytes(a)[0] as int32) & 1) == 1;
+}
+
+/** b when bit is 1, a when it is 0, without a branch on bit. */
+export function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
+	const mask = valueBarrier((0 - (bit as int32)) as uint32);
+	let out: Fe = a;
+	for (let i = 0; i < 10; i++) out[i] = a[i] ^ (mask & (a[i] ^ b[i]));
+	return out;
 }
