@@ -1,7 +1,7 @@
 // Buffer text codecs with the decoding rules of Node's Buffer: hex stops at the first pair that is
 // not two hex digits; base64 takes both alphabets, skips any other byte and stops at `=`.
 
-import { hexDigitValue } from "../encoding";
+import { hexDigitValue, encodeBase64, encodeHex } from "../encoding";
 import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../encoding/output";
 
 const equalsSign: uint8 = 61;
@@ -212,6 +212,20 @@ export function base64Capacity(text: Readonly<Span<uint8>>): int64 {
 }
 
 when (c) {
+	@include("runtime/core/base64.h");
+	extern function msBase64Encode(data: Readonly<Ptr<uint8>>, length: int64, out: Ptr<uint8>, url: int32): void;
+	extern function msBase64Decode(text: Readonly<Ptr<uint8>>, length: int64, out: Ptr<uint8>, limit: int64, standardOnly: int32): int64;
+	extern function markAscii(text: string): void from "msStringMarkAscii";
+	extern function msBase64DecodeScalar(text: Readonly<Ptr<uint8>>, length: int64, out: Ptr<uint8>, limit: int64, standardOnly: int32): int64;
+
+	function fillBase64Url(data: Readonly<Span<uint8>>, out: Ptr<uint8>): void {
+		msBase64Encode(data as Readonly<Ptr<uint8>>, data.length as int64, out, 1);
+	}
+
+	function decodeBase64Into(text: Readonly<Span<uint8>>, out: Ptr<uint8>, limit: int64): int64 {
+		return msBase64Decode(text as Readonly<Ptr<uint8>>, text.length as int64, out, limit, 0);
+	}
+
 	@inline
 	function hexInvalid(byte: uint8): int32 {
 		const b = byte as int32;
@@ -366,6 +380,15 @@ export function writeHex(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: 
 
 /** Decodes base64 or base64url `text` into `bytes[at..at + limit)`; returns the bytes written. */
 export function writeBase64(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64): int64 {
+	when (c) {
+		if (text.length == 0) return 0;
+		return decodeBase64Into(text, bytes + at, limit);
+	} else {
+		return writeBase64Portable(text, bytes, at, limit);
+	}
+}
+
+function writeBase64Portable(text: Readonly<Span<uint8>>, bytes: EncodingBytes, at: int64, limit: int64): int64 {
 	const n = text.length as int64;
 	let i: int64 = 0;
 	let k: int64 = 0;
@@ -409,30 +432,36 @@ export function writeBase64(text: Readonly<Span<uint8>>, bytes: EncodingBytes, a
 
 @inline
 export function encodeBase64Url(data: Readonly<Span<uint8>>): string {
-	const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".asBytes();
 	const length = data.length as int64;
 	const rest = length % 3;
 	let result = newEncodingOutput(length / 3 * 4 + (rest == 0 ? 0 : rest + 1));
 	const bytes = freshEncodingOutputBytes(result);
-	let at: int64 = 0;
-	let i: int64 = 0;
-	while (i + 3 <= length) {
-		const triple = ((data[i] as int32) << 16) | ((data[i + 1] as int32) << 8) | (data[i + 2] as int32);
-		bytes[at] = digits[(triple >> 18) & 63];
-		bytes[at + 1] = digits[(triple >> 12) & 63];
-		bytes[at + 2] = digits[(triple >> 6) & 63];
-		bytes[at + 3] = digits[triple & 63];
-		at += 4;
-		i += 3;
+	when (c) {
+		if (length != 0) fillBase64Url(data, bytes);
+		markAscii(result);
+		return result;
+	} else {
+		const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".asBytes();
+		let at: int64 = 0;
+		let i: int64 = 0;
+		while (i + 3 <= length) {
+			const triple = ((data[i] as int32) << 16) | ((data[i + 1] as int32) << 8) | (data[i + 2] as int32);
+			bytes[at] = digits[(triple >> 18) & 63];
+			bytes[at + 1] = digits[(triple >> 12) & 63];
+			bytes[at + 2] = digits[(triple >> 6) & 63];
+			bytes[at + 3] = digits[triple & 63];
+			at += 4;
+			i += 3;
+		}
+		if (rest != 0) {
+			const a = data[i] as int32;
+			const b = rest == 2 ? data[i + 1] as int32 : 0;
+			bytes[at] = digits[a >> 2];
+			bytes[at + 1] = digits[((a & 3) << 4) | (b >> 4)];
+			if (rest == 2) bytes[at + 2] = digits[(b & 15) << 2];
+		}
+		return result.asString();
 	}
-	if (rest != 0) {
-		const a = data[i] as int32;
-		const b = rest == 2 ? data[i + 1] as int32 : 0;
-		bytes[at] = digits[a >> 2];
-		bytes[at + 1] = digits[((a & 3) << 4) | (b >> 4)];
-		if (rest == 2) bytes[at + 2] = digits[(b & 15) << 2];
-	}
-	when (c) { return result; } else { return result.asString(); }
 }
 
 test "receivedText groups the digits of an integer beyond 2 ** 32" {
@@ -471,4 +500,95 @@ test "ucs2Text joins a pair and keeps a lone surrogate" {
 	assert text.charCodeAt(1) == 0xD83D;
 	assert text.charCodeAt(2) == 0xDE00;
 	assert text.charCodeAt(3) == 0xD800;
+}
+
+test "base64url encode is base64 with the url digits and no padding" {
+	const data: uint8[] = [];
+	for (let n = 0; n < 200; n++) {
+		const expected = encodeBase64(data).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+		assert encodeBase64Url(data) == expected;
+		data.push(((n * 37 + 11) & 255) as uint8);
+	}
+}
+
+when (c) {
+	function filled(size: int64): uint8[] {
+		const bytes: uint8[] = [];
+		for (let i: int64 = 0; i < size; i++) bytes.push(0xEE);
+		return bytes;
+	}
+
+	function written(text: string, room: int64, at: int64, size: int64): string {
+		const out = filled(size);
+		const span: Span<uint8> = out;
+		const count = writeBase64(text.asBytes(), span as Ptr<uint8>, at, room);
+		return `${count}:${encodeHex(out)}`;
+	}
+
+	function lenient(text: string): string {
+		const data = text.asBytes();
+		const room = base64Capacity(data);
+		const out = filled(room + 1);
+		const span: Span<uint8> = out;
+		const count = writeBase64(data, span as Ptr<uint8>, 0, room);
+		return encodeHex(out.slice(0, count as number));
+	}
+
+	function scalarLenient(text: string, room: int64): string {
+		const data = text.asBytes();
+		const out = filled(room + 1);
+		const span: Span<uint8> = out;
+		const readable: Readonly<Span<uint8>> = data;
+		const count = msBase64DecodeScalar(readable as Readonly<Ptr<uint8>>, data.length as int64, span as Ptr<uint8>, room, 0);
+		return encodeHex(out.slice(0, count as number));
+	}
+
+	test "base64 Buffer decode follows Node's lenient rules" {
+		assert lenient("") == "";
+		assert lenient("aGVsbG8") == "68656c6c6f";
+		assert lenient("aGVsbG8=") == "68656c6c6f";
+		assert lenient("aGVsbG8==") == "68656c6c6f";
+		assert lenient("aGVs\nbG8=") == "68656c6c6f";
+		assert lenient("aGVsbG8=YWJj") == "68656c6c6f";
+		assert lenient("aGVsbG8-_w") == "68656c6c6f3eff";
+		assert lenient("a") == "";
+		assert lenient("ab") == "69";
+		assert lenient("!!!!aGVsbG8") == "68656c6c6f";
+		assert lenient("aGVs bG8gd29y bGQ=") == "68656c6c6f20776f726c64";
+		assert lenient("=aGVs") == "";
+		assert lenient("aGV=sbG8") == "6865";
+		assert lenient("+/+/") == "fbffbf";
+		assert lenient("-_-_") == "fbffbf";
+		assert lenient("\u00e9aGVs") == "68656c";
+	}
+
+	test "base64 Buffer decode leaves bytes past its room untouched" {
+		assert written("aGVsbG8gd29ybGQ=", 4, 2, 10) == "4:eeee68656c6ceeeeeeee";
+		assert written("aGVs", 8, 2, 10) == "3:eeee68656ceeeeeeeeee";
+		const long = "AAAA".repeat(100);
+		for (const room of [0 as int64, 1, 23, 24, 25, 47, 48, 49, 95, 96, 97]) {
+			const result = written(long, room, 0, 128);
+			assert result.startsWith(`${room}:${"00".repeat(room as int32)}`);
+			assert result.endsWith("ee".repeat((128 - room) as int32));
+		}
+	}
+
+	test "base64 Buffer decode matches the scalar kernel on noisy text" {
+		const data: uint8[] = [];
+		for (let n = 0; n < 260; n++) {
+			const text = encodeBase64(data);
+			const length = text.length;
+			assert lenient(text) == encodeHex(data);
+			for (const at of [0, length / 3, length / 2, length - 1]) {
+				const spot = Math.floor(at) as int32;
+				if (spot < 0) continue;
+				for (const noise of ["\n", "*", "=", "-", "_", "\u00ff"]) {
+					const noisy = `${text.slice(0, spot)}${noise}${text.slice(spot + 1)}`;
+					const room = base64Capacity(noisy.asBytes());
+					assert lenient(noisy) == scalarLenient(noisy, room);
+				}
+			}
+			data.push(((n * 37 + 11) & 255) as uint8);
+		}
+	}
 }

@@ -5,7 +5,7 @@
 // @stdout: floats entries=436 digest=812692326
 // @stdout: search entries=807 digest=463268746
 // @stdout: fill entries=94 digest=96635134
-// @stdout: strings entries=74 digest=544307510
+// @stdout: strings entries=5325 digest=982137436
 
 let log = "";
 let entries: int32 = 0;
@@ -18,6 +18,11 @@ function note(value: number): void {
 function noteBytes(value: Buffer): void {
 	for (let i: int32 = 0; i < value.byteLength(); i++) log += `${value.byteAt(i)}.`;
 	log += ";";
+	entries += 1;
+}
+
+function noteText(value: string): void {
+	log += `${value};`;
 	entries += 1;
 }
 
@@ -249,7 +254,41 @@ function checkWriteString(): void {
 	const out = Buffer.alloc(8);
 	note(out.write("deadBEEF00", 1, 4, "hex"));
 	noteBytes(out);
+	checkBase64();
 	section("strings");
+}
+
+function noisy(text: string, at: int32, piece: string): string {
+	return `${text.slice(0, at)}${piece}${text.slice(at + 1)}`;
+}
+
+function checkBase64(): void {
+	const lengths: int32[] = [];
+	for (let n: int32 = 0; n <= 64; n++) lengths.push(n);
+	for (const n of [95, 96, 97, 191, 1000, 4097]) lengths.push(n);
+	for (const n of lengths) {
+		const data = patterned(n, n);
+		const text = data.toBase64();
+		noteText(text);
+		noteText(data.toStringEncoded("base64url", 0, n));
+		noteText(data.toStringEncoded("base64", 1, n - 1));
+		noteBytes(Buffer.fromString(text, "base64"));
+		noteBytes(Buffer.fromString(data.toStringEncoded("base64url", 0, n), "base64url"));
+		if (n < 3) continue;
+		for (const at of [0, 1, Math.floor(text.length / 2) as int32, text.length - 1]) {
+			for (const piece of ["\n", "*", "=", " ", "-", "_", "+", "/", "\u00e9", "AB"]) {
+				noteBytes(Buffer.fromString(noisy(text, at, piece), "base64"));
+			}
+		}
+		for (const at of [0, 5]) {
+			for (const limit of [0, 1, 7, 24, 25, 48, 49, 64 - at]) {
+				if (limit > 64 - at) continue;
+				const out = patterned(64, 3);
+				note(out.write(text, at, limit, "base64"));
+				noteBytes(out);
+			}
+		}
+	}
 }
 
 checkReads();

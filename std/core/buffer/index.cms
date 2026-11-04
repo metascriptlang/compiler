@@ -289,7 +289,7 @@ function replaceSurrogates(bytes: Ptr<uint8>, count: int64): void {
 function decodeText(value: string, base64: boolean): Buffer {
 	const text = value.asBytes();
 	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
-	const buf = bufferAlloc(capacity as number);
+	const buf = bufferAllocUninit(capacity as number);
 	const written = base64 ? writeBase64(text, buf.bytePointer(), 0, capacity) : writeHex(text, buf.bytePointer(), 0, capacity);
 	if (written < capacity) buf.length = written as int32;
 	return buf;
