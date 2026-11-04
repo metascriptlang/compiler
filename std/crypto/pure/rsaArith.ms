@@ -10,7 +10,7 @@ import {
 	uintShiftRightPublic, uintDivRem, uintDivRemPublic, uintGcd, uintGcdModinvOdd, uintWipe, limbsFor,
 	feFromBytes, reduce, sub, mul, sq, pow, powPublic, isMinusOne,
 } from "./ff";
-import { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
+import { RsaPublicData, RsaPrivateData, rsaModulusBytes, wipeBytes } from "./rsaKey";
 import { randomOctets } from "./random";
 
 function uintOf(bytes: Readonly<uint8[]>): uint32[] {
@@ -103,10 +103,6 @@ function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
 	uintWipe(blinded);
 	uintWipe(exponent);
 	return bytes;
-}
-
-function wipeBytes(bytes: uint8[]): void {
-	for (let i = 0; i < bytes.length; i++) bytes[i] = 0;
 }
 
 // Blinded CRT checked against the public operation, as `mbedtls_rsa_private`; null when the input is not below n.
