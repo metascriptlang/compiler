@@ -334,10 +334,11 @@ export function finishBlake2bInto(s: Blake2bState, out: uint8[], outOff: int32):
 	for (let i = s.filled; i < 128; i++) s.block[i] = 0;
 	compress(s, s.block, 0, true);
 	s.finished = true;
-	for (let i = 0; i < s.outputSize; i++) out[outOff + i] = ((s.h[i >> 3] >> (((i & 7) * 8) as uint64)) & 255) as uint8;
-	wipeBytes(s.block);
-	wipeWords64(s.m);
-	wipeWords64(s.h);
+	for (let i = 0; i < s.outputSize; i++) out[outOff + i] = ((s.h[i >> 2] >> (((i & 3) * 8) as uint32)) & 255) as uint8;
+	for (let i = 0; i < 128; i++) s.block[i] = 0;
+	for (let i = 0; i < 32; i++) s.m[i] = 0;
+	for (let i = 0; i < 16; i++) s.h[i] = 0;
+	for (let i = 0; i < 16; i++) s.m64[i] = 0;
 }
 
 export function finishBlake2b(s: Blake2bState): uint8[] {
