@@ -22,6 +22,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { raiserRefusal, stdModuleName } from "../../module/tiers";
+import { demandNativeBridge } from "./nativeBridge";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
@@ -50,7 +51,9 @@ import { isNamespaceRef } from "../../transform/lowering/namespaceValueLower";
 // shape, one phase earlier than the reference needs it.
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
 	if (lookupHost(sym.nativeName) != null) return "";
-	const reason = `no host bridge for '${sym.nativeName}'`;
+	const native = demandNativeBridge(sym);
+	if (native == "") return "";
+	const reason = native ?? `no host bridge for '${sym.nativeName}'`;
 	let msg = reason;
 	if (!inStdDemand()) msg = stdModuleName(sym.modulePath) != "" ? stdRoutineRefusal(sym, reason) : raiserRefusal(`'${sym.name}'`, reason, []);
 	queueRaiserCompileError(msg, callee.location.line, callee.location.column, true);
