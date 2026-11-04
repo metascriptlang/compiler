@@ -1,15 +1,14 @@
 import { newBlake2b, updateBlake2b, finishBlake2bInto } from "./blake2b";
-import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
+import { wipeBytes, wipeWords } from "./secret";
 
 const noKey: Readonly<uint8[]> = [];
 const syncPoints = 4;
 const maxWords = 2147483647;
 
-/** Scratch for one Argon2 run: the block under compression, the address blocks and the byte forms the hashes read. */
+/** Scratch for one Argon2 run: the halves of the block under compression on JS, the address blocks and the byte forms the hashes read. */
 class Argon2Work {
-	buf: uint32[256];
-	wide: uint64[128];
-	input: uint64[128];
+	low: uint32[128];
+	high: uint32[128];
 	address: uint32[];
 	h0: uint8[];
 	bytes: uint8[];
@@ -19,7 +18,7 @@ class Argon2Work {
 }
 
 function newWork(): Argon2Work {
-	return { buf: [0], wide: [0], input: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4), chain: new Array<uint8>(64), last: new Array<uint32>(256) };
+	return { low: [0], high: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4), chain: new Array<uint8>(64), last: new Array<uint32>(256) };
 }
 
 function put32(out: uint8[], at: int32, value: number): void {
@@ -46,56 +45,71 @@ function mulHigh(a: uint32, b: uint32): uint32 {
 	return a1 * b1 + (lh >> 16) + (hl >> 16) + (mid >> 16);
 }
 
-/** w.buf[a] = w.buf[a] + w.buf[b] + 2 * low32(w.buf[a]) * low32(w.buf[b]) on 64-bit words stored as (low, high) pairs. */
-function blamka(w: Argon2Work, a: int32, b: int32): void {
-	const al = w.buf[2 * a];
-	const bl = w.buf[2 * b];
-	const ml = al * bl;
-	const mh = mulHigh(al, bl);
-	const rl = al + bl;
-	const doubled = ml << 1;
-	const sum = rl + doubled;
-	w.buf[2 * a + 1] = w.buf[2 * a + 1] + w.buf[2 * b + 1] + ((mh << 1) | (ml >> 31)) + carry(rl, bl) + carry(sum, doubled);
-	w.buf[2 * a] = sum;
-}
-
-function rotr32(w: Argon2Work, d: int32, a: int32): void {
-	const xh = w.buf[2 * d + 1] ^ w.buf[2 * a + 1];
-	const xl = w.buf[2 * d] ^ w.buf[2 * a];
-	w.buf[2 * d] = xh;
-	w.buf[2 * d + 1] = xl;
-}
-
-function rotr24(w: Argon2Work, b: int32, c: int32): void {
-	const xh = w.buf[2 * b + 1] ^ w.buf[2 * c + 1];
-	const xl = w.buf[2 * b] ^ w.buf[2 * c];
-	w.buf[2 * b + 1] = (xh >> 24) | (xl << 8);
-	w.buf[2 * b] = (xl >> 24) | (xh << 8);
-}
-
-function rotr16(w: Argon2Work, d: int32, a: int32): void {
-	const xh = w.buf[2 * d + 1] ^ w.buf[2 * a + 1];
-	const xl = w.buf[2 * d] ^ w.buf[2 * a];
-	w.buf[2 * d + 1] = (xh >> 16) | (xl << 16);
-	w.buf[2 * d] = (xl >> 16) | (xh << 16);
-}
-
-function rotr63(w: Argon2Work, b: int32, c: int32): void {
-	const xh = w.buf[2 * b + 1] ^ w.buf[2 * c + 1];
-	const xl = w.buf[2 * b] ^ w.buf[2 * c];
-	w.buf[2 * b + 1] = (xh << 1) | (xl >> 31);
-	w.buf[2 * b] = (xl << 1) | (xh >> 31);
-}
-
+/** The BlaMka G of RFC 9106 3.6 on words a, b, c and d of the block, each held as its `w.low` and `w.high` halves. */
 function mixG(w: Argon2Work, a: int32, b: int32, c: int32, d: int32): void {
-	blamka(w, a, b);
-	rotr32(w, d, a);
-	blamka(w, c, d);
-	rotr24(w, b, c);
-	blamka(w, a, b);
-	rotr16(w, d, a);
-	blamka(w, c, d);
-	rotr63(w, b, c);
+	let al = w.low[a];
+	let ah = w.high[a];
+	let bl = w.low[b];
+	let bh = w.high[b];
+	let cl = w.low[c];
+	let ch = w.high[c];
+	let dl = w.low[d];
+	let dh = w.high[d];
+	{
+		const ml = al * bl;
+		const sum = al + bl;
+		const twice = ml << 1;
+		const total = sum + twice;
+		ah = ah + bh + ((mulHigh(al, bl) << 1) | (ml >> 31)) + carry(sum, bl) + carry(total, twice);
+		al = total;
+		const xl = dl ^ al;
+		dl = dh ^ ah;
+		dh = xl;
+	}
+	{
+		const ml = cl * dl;
+		const sum = cl + dl;
+		const twice = ml << 1;
+		const total = sum + twice;
+		ch = ch + dh + ((mulHigh(cl, dl) << 1) | (ml >> 31)) + carry(sum, dl) + carry(total, twice);
+		cl = total;
+		const xl = bl ^ cl;
+		const xh = bh ^ ch;
+		bh = (xh >> 24) | (xl << 8);
+		bl = (xl >> 24) | (xh << 8);
+	}
+	{
+		const ml = al * bl;
+		const sum = al + bl;
+		const twice = ml << 1;
+		const total = sum + twice;
+		ah = ah + bh + ((mulHigh(al, bl) << 1) | (ml >> 31)) + carry(sum, bl) + carry(total, twice);
+		al = total;
+		const xl = dl ^ al;
+		const xh = dh ^ ah;
+		dh = (xh >> 16) | (xl << 16);
+		dl = (xl >> 16) | (xh << 16);
+	}
+	{
+		const ml = cl * dl;
+		const sum = cl + dl;
+		const twice = ml << 1;
+		const total = sum + twice;
+		ch = ch + dh + ((mulHigh(cl, dl) << 1) | (ml >> 31)) + carry(sum, dl) + carry(total, twice);
+		cl = total;
+		const xl = bl ^ cl;
+		const xh = bh ^ ch;
+		bh = (xh << 1) | (xl >> 31);
+		bl = (xl << 1) | (xh >> 31);
+	}
+	w.low[a] = al;
+	w.high[a] = ah;
+	w.low[b] = bl;
+	w.high[b] = bh;
+	w.low[c] = cl;
+	w.high[c] = ch;
+	w.low[d] = dl;
+	w.high[d] = dh;
 }
 
 function permute(w: Argon2Work, i0: int32, i1: int32, i2: int32, i3: int32, i4: int32, i5: int32, i6: int32, i7: int32, i8: int32, i9: int32, i10: int32, i11: int32, i12: int32, i13: int32, i14: int32, i15: int32): void {
@@ -109,527 +123,158 @@ function permute(w: Argon2Work, i0: int32, i1: int32, i2: int32, i3: int32, i4: 
 	mixG(w, i3, i4, i9, i14);
 }
 
-function fBlaMka(x: uint64, y: uint64): uint64 {
-	return x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff);
-}
-
-function rotr64(x: uint64, n: uint64): uint64 {
-	return (x >> n) | (x << (64 - n));
-}
-
-/** The BlaMka round over row `at` of `w.wide`; constant offsets let the C compiler keep the words in vector registers. */
-function roundRow(w: Argon2Work, at: int64): void {
-	let v0 = w.wide[at];
-	let v1 = w.wide[at + 1];
-	let v2 = w.wide[at + 2];
-	let v3 = w.wide[at + 3];
-	let v4 = w.wide[at + 4];
-	let v5 = w.wide[at + 5];
-	let v6 = w.wide[at + 6];
-	let v7 = w.wide[at + 7];
-	let v8 = w.wide[at + 8];
-	let v9 = w.wide[at + 9];
-	let v10 = w.wide[at + 10];
-	let v11 = w.wide[at + 11];
-	let v12 = w.wide[at + 12];
-	let v13 = w.wide[at + 13];
-	let v14 = w.wide[at + 14];
-	let v15 = w.wide[at + 15];
-	v0 = fBlaMka(v0, v4);
-	v12 = rotr64(v12 ^ v0, 32);
-	v8 = fBlaMka(v8, v12);
-	v4 = rotr64(v4 ^ v8, 24);
-	v0 = fBlaMka(v0, v4);
-	v12 = rotr64(v12 ^ v0, 16);
-	v8 = fBlaMka(v8, v12);
-	v4 = rotr64(v4 ^ v8, 63);
-	v1 = fBlaMka(v1, v5);
-	v13 = rotr64(v13 ^ v1, 32);
-	v9 = fBlaMka(v9, v13);
-	v5 = rotr64(v5 ^ v9, 24);
-	v1 = fBlaMka(v1, v5);
-	v13 = rotr64(v13 ^ v1, 16);
-	v9 = fBlaMka(v9, v13);
-	v5 = rotr64(v5 ^ v9, 63);
-	v2 = fBlaMka(v2, v6);
-	v14 = rotr64(v14 ^ v2, 32);
-	v10 = fBlaMka(v10, v14);
-	v6 = rotr64(v6 ^ v10, 24);
-	v2 = fBlaMka(v2, v6);
-	v14 = rotr64(v14 ^ v2, 16);
-	v10 = fBlaMka(v10, v14);
-	v6 = rotr64(v6 ^ v10, 63);
-	v3 = fBlaMka(v3, v7);
-	v15 = rotr64(v15 ^ v3, 32);
-	v11 = fBlaMka(v11, v15);
-	v7 = rotr64(v7 ^ v11, 24);
-	v3 = fBlaMka(v3, v7);
-	v15 = rotr64(v15 ^ v3, 16);
-	v11 = fBlaMka(v11, v15);
-	v7 = rotr64(v7 ^ v11, 63);
-	v0 = fBlaMka(v0, v5);
-	v15 = rotr64(v15 ^ v0, 32);
-	v10 = fBlaMka(v10, v15);
-	v5 = rotr64(v5 ^ v10, 24);
-	v0 = fBlaMka(v0, v5);
-	v15 = rotr64(v15 ^ v0, 16);
-	v10 = fBlaMka(v10, v15);
-	v5 = rotr64(v5 ^ v10, 63);
-	v1 = fBlaMka(v1, v6);
-	v12 = rotr64(v12 ^ v1, 32);
-	v11 = fBlaMka(v11, v12);
-	v6 = rotr64(v6 ^ v11, 24);
-	v1 = fBlaMka(v1, v6);
-	v12 = rotr64(v12 ^ v1, 16);
-	v11 = fBlaMka(v11, v12);
-	v6 = rotr64(v6 ^ v11, 63);
-	v2 = fBlaMka(v2, v7);
-	v13 = rotr64(v13 ^ v2, 32);
-	v8 = fBlaMka(v8, v13);
-	v7 = rotr64(v7 ^ v8, 24);
-	v2 = fBlaMka(v2, v7);
-	v13 = rotr64(v13 ^ v2, 16);
-	v8 = fBlaMka(v8, v13);
-	v7 = rotr64(v7 ^ v8, 63);
-	v3 = fBlaMka(v3, v4);
-	v14 = rotr64(v14 ^ v3, 32);
-	v9 = fBlaMka(v9, v14);
-	v4 = rotr64(v4 ^ v9, 24);
-	v3 = fBlaMka(v3, v4);
-	v14 = rotr64(v14 ^ v3, 16);
-	v9 = fBlaMka(v9, v14);
-	v4 = rotr64(v4 ^ v9, 63);
-	w.wide[at] = v0;
-	w.wide[at + 1] = v1;
-	w.wide[at + 2] = v2;
-	w.wide[at + 3] = v3;
-	w.wide[at + 4] = v4;
-	w.wide[at + 5] = v5;
-	w.wide[at + 6] = v6;
-	w.wide[at + 7] = v7;
-	w.wide[at + 8] = v8;
-	w.wide[at + 9] = v9;
-	w.wide[at + 10] = v10;
-	w.wide[at + 11] = v11;
-	w.wide[at + 12] = v12;
-	w.wide[at + 13] = v13;
-	w.wide[at + 14] = v14;
-	w.wide[at + 15] = v15;
-}
-
-/** Four BlaMka column rounds at once, over the column pairs at, at + 2, at + 4 and at + 6, so each step lands on 8 adjacent words the C compiler vectorizes. */
-function roundColumns(w: Argon2Work, at: int64): void {
-	let a0 = w.wide[at];
-	let a1 = w.wide[at + 1];
-	let a2 = w.wide[at + 16];
-	let a3 = w.wide[at + 17];
-	let a4 = w.wide[at + 32];
-	let a5 = w.wide[at + 33];
-	let a6 = w.wide[at + 48];
-	let a7 = w.wide[at + 49];
-	let a8 = w.wide[at + 64];
-	let a9 = w.wide[at + 65];
-	let a10 = w.wide[at + 80];
-	let a11 = w.wide[at + 81];
-	let a12 = w.wide[at + 96];
-	let a13 = w.wide[at + 97];
-	let a14 = w.wide[at + 112];
-	let a15 = w.wide[at + 113];
-	let b0 = w.wide[at + 2];
-	let b1 = w.wide[at + 3];
-	let b2 = w.wide[at + 18];
-	let b3 = w.wide[at + 19];
-	let b4 = w.wide[at + 34];
-	let b5 = w.wide[at + 35];
-	let b6 = w.wide[at + 50];
-	let b7 = w.wide[at + 51];
-	let b8 = w.wide[at + 66];
-	let b9 = w.wide[at + 67];
-	let b10 = w.wide[at + 82];
-	let b11 = w.wide[at + 83];
-	let b12 = w.wide[at + 98];
-	let b13 = w.wide[at + 99];
-	let b14 = w.wide[at + 114];
-	let b15 = w.wide[at + 115];
-	let c0 = w.wide[at + 4];
-	let c1 = w.wide[at + 5];
-	let c2 = w.wide[at + 20];
-	let c3 = w.wide[at + 21];
-	let c4 = w.wide[at + 36];
-	let c5 = w.wide[at + 37];
-	let c6 = w.wide[at + 52];
-	let c7 = w.wide[at + 53];
-	let c8 = w.wide[at + 68];
-	let c9 = w.wide[at + 69];
-	let c10 = w.wide[at + 84];
-	let c11 = w.wide[at + 85];
-	let c12 = w.wide[at + 100];
-	let c13 = w.wide[at + 101];
-	let c14 = w.wide[at + 116];
-	let c15 = w.wide[at + 117];
-	let d0 = w.wide[at + 6];
-	let d1 = w.wide[at + 7];
-	let d2 = w.wide[at + 22];
-	let d3 = w.wide[at + 23];
-	let d4 = w.wide[at + 38];
-	let d5 = w.wide[at + 39];
-	let d6 = w.wide[at + 54];
-	let d7 = w.wide[at + 55];
-	let d8 = w.wide[at + 70];
-	let d9 = w.wide[at + 71];
-	let d10 = w.wide[at + 86];
-	let d11 = w.wide[at + 87];
-	let d12 = w.wide[at + 102];
-	let d13 = w.wide[at + 103];
-	let d14 = w.wide[at + 118];
-	let d15 = w.wide[at + 119];
-	a0 = fBlaMka(a0, a4);
-	b0 = fBlaMka(b0, b4);
-	c0 = fBlaMka(c0, c4);
-	d0 = fBlaMka(d0, d4);
-	a12 = rotr64(a12 ^ a0, 32);
-	b12 = rotr64(b12 ^ b0, 32);
-	c12 = rotr64(c12 ^ c0, 32);
-	d12 = rotr64(d12 ^ d0, 32);
-	a8 = fBlaMka(a8, a12);
-	b8 = fBlaMka(b8, b12);
-	c8 = fBlaMka(c8, c12);
-	d8 = fBlaMka(d8, d12);
-	a4 = rotr64(a4 ^ a8, 24);
-	b4 = rotr64(b4 ^ b8, 24);
-	c4 = rotr64(c4 ^ c8, 24);
-	d4 = rotr64(d4 ^ d8, 24);
-	a0 = fBlaMka(a0, a4);
-	b0 = fBlaMka(b0, b4);
-	c0 = fBlaMka(c0, c4);
-	d0 = fBlaMka(d0, d4);
-	a12 = rotr64(a12 ^ a0, 16);
-	b12 = rotr64(b12 ^ b0, 16);
-	c12 = rotr64(c12 ^ c0, 16);
-	d12 = rotr64(d12 ^ d0, 16);
-	a8 = fBlaMka(a8, a12);
-	b8 = fBlaMka(b8, b12);
-	c8 = fBlaMka(c8, c12);
-	d8 = fBlaMka(d8, d12);
-	a4 = rotr64(a4 ^ a8, 63);
-	b4 = rotr64(b4 ^ b8, 63);
-	c4 = rotr64(c4 ^ c8, 63);
-	d4 = rotr64(d4 ^ d8, 63);
-	a1 = fBlaMka(a1, a5);
-	b1 = fBlaMka(b1, b5);
-	c1 = fBlaMka(c1, c5);
-	d1 = fBlaMka(d1, d5);
-	a13 = rotr64(a13 ^ a1, 32);
-	b13 = rotr64(b13 ^ b1, 32);
-	c13 = rotr64(c13 ^ c1, 32);
-	d13 = rotr64(d13 ^ d1, 32);
-	a9 = fBlaMka(a9, a13);
-	b9 = fBlaMka(b9, b13);
-	c9 = fBlaMka(c9, c13);
-	d9 = fBlaMka(d9, d13);
-	a5 = rotr64(a5 ^ a9, 24);
-	b5 = rotr64(b5 ^ b9, 24);
-	c5 = rotr64(c5 ^ c9, 24);
-	d5 = rotr64(d5 ^ d9, 24);
-	a1 = fBlaMka(a1, a5);
-	b1 = fBlaMka(b1, b5);
-	c1 = fBlaMka(c1, c5);
-	d1 = fBlaMka(d1, d5);
-	a13 = rotr64(a13 ^ a1, 16);
-	b13 = rotr64(b13 ^ b1, 16);
-	c13 = rotr64(c13 ^ c1, 16);
-	d13 = rotr64(d13 ^ d1, 16);
-	a9 = fBlaMka(a9, a13);
-	b9 = fBlaMka(b9, b13);
-	c9 = fBlaMka(c9, c13);
-	d9 = fBlaMka(d9, d13);
-	a5 = rotr64(a5 ^ a9, 63);
-	b5 = rotr64(b5 ^ b9, 63);
-	c5 = rotr64(c5 ^ c9, 63);
-	d5 = rotr64(d5 ^ d9, 63);
-	a2 = fBlaMka(a2, a6);
-	b2 = fBlaMka(b2, b6);
-	c2 = fBlaMka(c2, c6);
-	d2 = fBlaMka(d2, d6);
-	a14 = rotr64(a14 ^ a2, 32);
-	b14 = rotr64(b14 ^ b2, 32);
-	c14 = rotr64(c14 ^ c2, 32);
-	d14 = rotr64(d14 ^ d2, 32);
-	a10 = fBlaMka(a10, a14);
-	b10 = fBlaMka(b10, b14);
-	c10 = fBlaMka(c10, c14);
-	d10 = fBlaMka(d10, d14);
-	a6 = rotr64(a6 ^ a10, 24);
-	b6 = rotr64(b6 ^ b10, 24);
-	c6 = rotr64(c6 ^ c10, 24);
-	d6 = rotr64(d6 ^ d10, 24);
-	a2 = fBlaMka(a2, a6);
-	b2 = fBlaMka(b2, b6);
-	c2 = fBlaMka(c2, c6);
-	d2 = fBlaMka(d2, d6);
-	a14 = rotr64(a14 ^ a2, 16);
-	b14 = rotr64(b14 ^ b2, 16);
-	c14 = rotr64(c14 ^ c2, 16);
-	d14 = rotr64(d14 ^ d2, 16);
-	a10 = fBlaMka(a10, a14);
-	b10 = fBlaMka(b10, b14);
-	c10 = fBlaMka(c10, c14);
-	d10 = fBlaMka(d10, d14);
-	a6 = rotr64(a6 ^ a10, 63);
-	b6 = rotr64(b6 ^ b10, 63);
-	c6 = rotr64(c6 ^ c10, 63);
-	d6 = rotr64(d6 ^ d10, 63);
-	a3 = fBlaMka(a3, a7);
-	b3 = fBlaMka(b3, b7);
-	c3 = fBlaMka(c3, c7);
-	d3 = fBlaMka(d3, d7);
-	a15 = rotr64(a15 ^ a3, 32);
-	b15 = rotr64(b15 ^ b3, 32);
-	c15 = rotr64(c15 ^ c3, 32);
-	d15 = rotr64(d15 ^ d3, 32);
-	a11 = fBlaMka(a11, a15);
-	b11 = fBlaMka(b11, b15);
-	c11 = fBlaMka(c11, c15);
-	d11 = fBlaMka(d11, d15);
-	a7 = rotr64(a7 ^ a11, 24);
-	b7 = rotr64(b7 ^ b11, 24);
-	c7 = rotr64(c7 ^ c11, 24);
-	d7 = rotr64(d7 ^ d11, 24);
-	a3 = fBlaMka(a3, a7);
-	b3 = fBlaMka(b3, b7);
-	c3 = fBlaMka(c3, c7);
-	d3 = fBlaMka(d3, d7);
-	a15 = rotr64(a15 ^ a3, 16);
-	b15 = rotr64(b15 ^ b3, 16);
-	c15 = rotr64(c15 ^ c3, 16);
-	d15 = rotr64(d15 ^ d3, 16);
-	a11 = fBlaMka(a11, a15);
-	b11 = fBlaMka(b11, b15);
-	c11 = fBlaMka(c11, c15);
-	d11 = fBlaMka(d11, d15);
-	a7 = rotr64(a7 ^ a11, 63);
-	b7 = rotr64(b7 ^ b11, 63);
-	c7 = rotr64(c7 ^ c11, 63);
-	d7 = rotr64(d7 ^ d11, 63);
-	a0 = fBlaMka(a0, a5);
-	b0 = fBlaMka(b0, b5);
-	c0 = fBlaMka(c0, c5);
-	d0 = fBlaMka(d0, d5);
-	a15 = rotr64(a15 ^ a0, 32);
-	b15 = rotr64(b15 ^ b0, 32);
-	c15 = rotr64(c15 ^ c0, 32);
-	d15 = rotr64(d15 ^ d0, 32);
-	a10 = fBlaMka(a10, a15);
-	b10 = fBlaMka(b10, b15);
-	c10 = fBlaMka(c10, c15);
-	d10 = fBlaMka(d10, d15);
-	a5 = rotr64(a5 ^ a10, 24);
-	b5 = rotr64(b5 ^ b10, 24);
-	c5 = rotr64(c5 ^ c10, 24);
-	d5 = rotr64(d5 ^ d10, 24);
-	a0 = fBlaMka(a0, a5);
-	b0 = fBlaMka(b0, b5);
-	c0 = fBlaMka(c0, c5);
-	d0 = fBlaMka(d0, d5);
-	a15 = rotr64(a15 ^ a0, 16);
-	b15 = rotr64(b15 ^ b0, 16);
-	c15 = rotr64(c15 ^ c0, 16);
-	d15 = rotr64(d15 ^ d0, 16);
-	a10 = fBlaMka(a10, a15);
-	b10 = fBlaMka(b10, b15);
-	c10 = fBlaMka(c10, c15);
-	d10 = fBlaMka(d10, d15);
-	a5 = rotr64(a5 ^ a10, 63);
-	b5 = rotr64(b5 ^ b10, 63);
-	c5 = rotr64(c5 ^ c10, 63);
-	d5 = rotr64(d5 ^ d10, 63);
-	a1 = fBlaMka(a1, a6);
-	b1 = fBlaMka(b1, b6);
-	c1 = fBlaMka(c1, c6);
-	d1 = fBlaMka(d1, d6);
-	a12 = rotr64(a12 ^ a1, 32);
-	b12 = rotr64(b12 ^ b1, 32);
-	c12 = rotr64(c12 ^ c1, 32);
-	d12 = rotr64(d12 ^ d1, 32);
-	a11 = fBlaMka(a11, a12);
-	b11 = fBlaMka(b11, b12);
-	c11 = fBlaMka(c11, c12);
-	d11 = fBlaMka(d11, d12);
-	a6 = rotr64(a6 ^ a11, 24);
-	b6 = rotr64(b6 ^ b11, 24);
-	c6 = rotr64(c6 ^ c11, 24);
-	d6 = rotr64(d6 ^ d11, 24);
-	a1 = fBlaMka(a1, a6);
-	b1 = fBlaMka(b1, b6);
-	c1 = fBlaMka(c1, c6);
-	d1 = fBlaMka(d1, d6);
-	a12 = rotr64(a12 ^ a1, 16);
-	b12 = rotr64(b12 ^ b1, 16);
-	c12 = rotr64(c12 ^ c1, 16);
-	d12 = rotr64(d12 ^ d1, 16);
-	a11 = fBlaMka(a11, a12);
-	b11 = fBlaMka(b11, b12);
-	c11 = fBlaMka(c11, c12);
-	d11 = fBlaMka(d11, d12);
-	a6 = rotr64(a6 ^ a11, 63);
-	b6 = rotr64(b6 ^ b11, 63);
-	c6 = rotr64(c6 ^ c11, 63);
-	d6 = rotr64(d6 ^ d11, 63);
-	a2 = fBlaMka(a2, a7);
-	b2 = fBlaMka(b2, b7);
-	c2 = fBlaMka(c2, c7);
-	d2 = fBlaMka(d2, d7);
-	a13 = rotr64(a13 ^ a2, 32);
-	b13 = rotr64(b13 ^ b2, 32);
-	c13 = rotr64(c13 ^ c2, 32);
-	d13 = rotr64(d13 ^ d2, 32);
-	a8 = fBlaMka(a8, a13);
-	b8 = fBlaMka(b8, b13);
-	c8 = fBlaMka(c8, c13);
-	d8 = fBlaMka(d8, d13);
-	a7 = rotr64(a7 ^ a8, 24);
-	b7 = rotr64(b7 ^ b8, 24);
-	c7 = rotr64(c7 ^ c8, 24);
-	d7 = rotr64(d7 ^ d8, 24);
-	a2 = fBlaMka(a2, a7);
-	b2 = fBlaMka(b2, b7);
-	c2 = fBlaMka(c2, c7);
-	d2 = fBlaMka(d2, d7);
-	a13 = rotr64(a13 ^ a2, 16);
-	b13 = rotr64(b13 ^ b2, 16);
-	c13 = rotr64(c13 ^ c2, 16);
-	d13 = rotr64(d13 ^ d2, 16);
-	a8 = fBlaMka(a8, a13);
-	b8 = fBlaMka(b8, b13);
-	c8 = fBlaMka(c8, c13);
-	d8 = fBlaMka(d8, d13);
-	a7 = rotr64(a7 ^ a8, 63);
-	b7 = rotr64(b7 ^ b8, 63);
-	c7 = rotr64(c7 ^ c8, 63);
-	d7 = rotr64(d7 ^ d8, 63);
-	a3 = fBlaMka(a3, a4);
-	b3 = fBlaMka(b3, b4);
-	c3 = fBlaMka(c3, c4);
-	d3 = fBlaMka(d3, d4);
-	a14 = rotr64(a14 ^ a3, 32);
-	b14 = rotr64(b14 ^ b3, 32);
-	c14 = rotr64(c14 ^ c3, 32);
-	d14 = rotr64(d14 ^ d3, 32);
-	a9 = fBlaMka(a9, a14);
-	b9 = fBlaMka(b9, b14);
-	c9 = fBlaMka(c9, c14);
-	d9 = fBlaMka(d9, d14);
-	a4 = rotr64(a4 ^ a9, 24);
-	b4 = rotr64(b4 ^ b9, 24);
-	c4 = rotr64(c4 ^ c9, 24);
-	d4 = rotr64(d4 ^ d9, 24);
-	a3 = fBlaMka(a3, a4);
-	b3 = fBlaMka(b3, b4);
-	c3 = fBlaMka(c3, c4);
-	d3 = fBlaMka(d3, d4);
-	a14 = rotr64(a14 ^ a3, 16);
-	b14 = rotr64(b14 ^ b3, 16);
-	c14 = rotr64(c14 ^ c3, 16);
-	d14 = rotr64(d14 ^ d3, 16);
-	a9 = fBlaMka(a9, a14);
-	b9 = fBlaMka(b9, b14);
-	c9 = fBlaMka(c9, c14);
-	d9 = fBlaMka(d9, d14);
-	a4 = rotr64(a4 ^ a9, 63);
-	b4 = rotr64(b4 ^ b9, 63);
-	c4 = rotr64(c4 ^ c9, 63);
-	d4 = rotr64(d4 ^ d9, 63);
-	w.wide[at] = a0;
-	w.wide[at + 1] = a1;
-	w.wide[at + 16] = a2;
-	w.wide[at + 17] = a3;
-	w.wide[at + 32] = a4;
-	w.wide[at + 33] = a5;
-	w.wide[at + 48] = a6;
-	w.wide[at + 49] = a7;
-	w.wide[at + 64] = a8;
-	w.wide[at + 65] = a9;
-	w.wide[at + 80] = a10;
-	w.wide[at + 81] = a11;
-	w.wide[at + 96] = a12;
-	w.wide[at + 97] = a13;
-	w.wide[at + 112] = a14;
-	w.wide[at + 113] = a15;
-	w.wide[at + 2] = b0;
-	w.wide[at + 3] = b1;
-	w.wide[at + 18] = b2;
-	w.wide[at + 19] = b3;
-	w.wide[at + 34] = b4;
-	w.wide[at + 35] = b5;
-	w.wide[at + 50] = b6;
-	w.wide[at + 51] = b7;
-	w.wide[at + 66] = b8;
-	w.wide[at + 67] = b9;
-	w.wide[at + 82] = b10;
-	w.wide[at + 83] = b11;
-	w.wide[at + 98] = b12;
-	w.wide[at + 99] = b13;
-	w.wide[at + 114] = b14;
-	w.wide[at + 115] = b15;
-	w.wide[at + 4] = c0;
-	w.wide[at + 5] = c1;
-	w.wide[at + 20] = c2;
-	w.wide[at + 21] = c3;
-	w.wide[at + 36] = c4;
-	w.wide[at + 37] = c5;
-	w.wide[at + 52] = c6;
-	w.wide[at + 53] = c7;
-	w.wide[at + 68] = c8;
-	w.wide[at + 69] = c9;
-	w.wide[at + 84] = c10;
-	w.wide[at + 85] = c11;
-	w.wide[at + 100] = c12;
-	w.wide[at + 101] = c13;
-	w.wide[at + 116] = c14;
-	w.wide[at + 117] = c15;
-	w.wide[at + 6] = d0;
-	w.wide[at + 7] = d1;
-	w.wide[at + 22] = d2;
-	w.wide[at + 23] = d3;
-	w.wide[at + 38] = d4;
-	w.wide[at + 39] = d5;
-	w.wide[at + 54] = d6;
-	w.wide[at + 55] = d7;
-	w.wide[at + 70] = d8;
-	w.wide[at + 71] = d9;
-	w.wide[at + 86] = d10;
-	w.wide[at + 87] = d11;
-	w.wide[at + 102] = d12;
-	w.wide[at + 103] = d13;
-	w.wide[at + 118] = d14;
-	w.wide[at + 119] = d15;
-}
-
-/** The compression function on native 64-bit words, for a backend where uint64 is a machine word. */
-function compressWide(w: Argon2Work, x: Span<uint32>, xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
-	const xAt = xPos as int64;
-	const yAt = yPos as int64;
-	const outAt = outPos as int64;
-	for (let i: int64 = 0; i < 128; i++) {
-		const lo = x[xAt + 2 * i] ^ x[yAt + 2 * i];
-		const hi = x[xAt + 2 * i + 1] ^ x[yAt + 2 * i + 1];
-		const v = (lo as uint64) | ((hi as uint64) << 32);
-		w.input[i] = v;
-		w.wide[i] = v;
+when (c) {
+	function fBlaMka(x: uint64, y: uint64): uint64 {
+		return x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff);
 	}
-	for (let i: int64 = 0; i < 128; i += 16) roundRow(w, i);
-	for (let i: int64 = 0; i < 16; i += 8) roundColumns(w, i);
-	if (needXor) {
-		for (let i: int64 = 0; i < 128; i++) {
-			const v = w.input[i] ^ w.wide[i];
-			x[outAt + 2 * i] = x[outAt + 2 * i] ^ ((v & 0xffffffff) as uint32);
-			x[outAt + 2 * i + 1] = x[outAt + 2 * i + 1] ^ ((v >> 32) as uint32);
+
+	function rotr64(x: uint64, n: uint64): uint64 {
+		return (x >> n) | (x << (64 - n));
+	}
+
+	/** The BlaMka round of RFC 9106 3.6 over the 16 words of `t` from `at`; constant offsets let the C compiler keep them in vector registers. */
+	function roundRow(t: Span<uint64>, at: int64): void {
+		let v0 = t[at];
+		let v1 = t[at + 1];
+		let v2 = t[at + 2];
+		let v3 = t[at + 3];
+		let v4 = t[at + 4];
+		let v5 = t[at + 5];
+		let v6 = t[at + 6];
+		let v7 = t[at + 7];
+		let v8 = t[at + 8];
+		let v9 = t[at + 9];
+		let v10 = t[at + 10];
+		let v11 = t[at + 11];
+		let v12 = t[at + 12];
+		let v13 = t[at + 13];
+		let v14 = t[at + 14];
+		let v15 = t[at + 15];
+		v0 = fBlaMka(v0, v4);
+		v12 = rotr64(v12 ^ v0, 32);
+		v8 = fBlaMka(v8, v12);
+		v4 = rotr64(v4 ^ v8, 24);
+		v0 = fBlaMka(v0, v4);
+		v12 = rotr64(v12 ^ v0, 16);
+		v8 = fBlaMka(v8, v12);
+		v4 = rotr64(v4 ^ v8, 63);
+		v1 = fBlaMka(v1, v5);
+		v13 = rotr64(v13 ^ v1, 32);
+		v9 = fBlaMka(v9, v13);
+		v5 = rotr64(v5 ^ v9, 24);
+		v1 = fBlaMka(v1, v5);
+		v13 = rotr64(v13 ^ v1, 16);
+		v9 = fBlaMka(v9, v13);
+		v5 = rotr64(v5 ^ v9, 63);
+		v2 = fBlaMka(v2, v6);
+		v14 = rotr64(v14 ^ v2, 32);
+		v10 = fBlaMka(v10, v14);
+		v6 = rotr64(v6 ^ v10, 24);
+		v2 = fBlaMka(v2, v6);
+		v14 = rotr64(v14 ^ v2, 16);
+		v10 = fBlaMka(v10, v14);
+		v6 = rotr64(v6 ^ v10, 63);
+		v3 = fBlaMka(v3, v7);
+		v15 = rotr64(v15 ^ v3, 32);
+		v11 = fBlaMka(v11, v15);
+		v7 = rotr64(v7 ^ v11, 24);
+		v3 = fBlaMka(v3, v7);
+		v15 = rotr64(v15 ^ v3, 16);
+		v11 = fBlaMka(v11, v15);
+		v7 = rotr64(v7 ^ v11, 63);
+		v0 = fBlaMka(v0, v5);
+		v15 = rotr64(v15 ^ v0, 32);
+		v10 = fBlaMka(v10, v15);
+		v5 = rotr64(v5 ^ v10, 24);
+		v0 = fBlaMka(v0, v5);
+		v15 = rotr64(v15 ^ v0, 16);
+		v10 = fBlaMka(v10, v15);
+		v5 = rotr64(v5 ^ v10, 63);
+		v1 = fBlaMka(v1, v6);
+		v12 = rotr64(v12 ^ v1, 32);
+		v11 = fBlaMka(v11, v12);
+		v6 = rotr64(v6 ^ v11, 24);
+		v1 = fBlaMka(v1, v6);
+		v12 = rotr64(v12 ^ v1, 16);
+		v11 = fBlaMka(v11, v12);
+		v6 = rotr64(v6 ^ v11, 63);
+		v2 = fBlaMka(v2, v7);
+		v13 = rotr64(v13 ^ v2, 32);
+		v8 = fBlaMka(v8, v13);
+		v7 = rotr64(v7 ^ v8, 24);
+		v2 = fBlaMka(v2, v7);
+		v13 = rotr64(v13 ^ v2, 16);
+		v8 = fBlaMka(v8, v13);
+		v7 = rotr64(v7 ^ v8, 63);
+		v3 = fBlaMka(v3, v4);
+		v14 = rotr64(v14 ^ v3, 32);
+		v9 = fBlaMka(v9, v14);
+		v4 = rotr64(v4 ^ v9, 24);
+		v3 = fBlaMka(v3, v4);
+		v14 = rotr64(v14 ^ v3, 16);
+		v9 = fBlaMka(v9, v14);
+		v4 = rotr64(v4 ^ v9, 63);
+		t[at] = v0;
+		t[at + 1] = v1;
+		t[at + 2] = v2;
+		t[at + 3] = v3;
+		t[at + 4] = v4;
+		t[at + 5] = v5;
+		t[at + 6] = v6;
+		t[at + 7] = v7;
+		t[at + 8] = v8;
+		t[at + 9] = v9;
+		t[at + 10] = v10;
+		t[at + 11] = v11;
+		t[at + 12] = v12;
+		t[at + 13] = v13;
+		t[at + 14] = v14;
+		t[at + 15] = v15;
+	}
+
+	/** The BlaMka G of RFC 9106 3.6 on words a, b, c and d of `t`. */
+	@inline
+	function mix64(t: Span<uint64>, a: int64, b: int64, c: int64, d: int64): void {
+		let va = t[a];
+		let vb = t[b];
+		let vc = t[c];
+		let vd = t[d];
+		va = fBlaMka(va, vb);
+		vd = rotr64(vd ^ va, 32);
+		vc = fBlaMka(vc, vd);
+		vb = rotr64(vb ^ vc, 24);
+		va = fBlaMka(va, vb);
+		vd = rotr64(vd ^ va, 16);
+		vc = fBlaMka(vc, vd);
+		vb = rotr64(vb ^ vc, 63);
+		t[a] = va;
+		t[b] = vb;
+		t[c] = vc;
+		t[d] = vd;
+	}
+
+	/** The compression function on native 64-bit words, for a backend where uint64 is a machine word: each (low, high) pair of `x` is read and written as one little-endian uint64. */
+	function compressWide(x: Span<uint32>, xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
+		@emit(`_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "a uint32 pair is read as one uint64");`);
+		const m = (x as Ptr<uint32>) as Ptr<uint64>;
+		const words = m[0..x.length / 2];
+		const xAt = (xPos / 2) as int64;
+		const yAt = (yPos / 2) as int64;
+		const outAt = (outPos / 2) as int64;
+		let t: uint64[128] = [0];
+		for (let i: int64 = 0; i < 128; i++) t[i] = words[xAt + i] ^ words[yAt + i];
+		for (let i: int64 = 0; i < 128; i += 16) roundRow(t, i);
+		for (let i: int64 = 0; i < 32; i++) mix64(t, i, i + 32, i + 64, i + 96);
+		for (let i: int64 = 0; i < 16; i += 2) {
+			mix64(t, i, i + 33, i + 80, i + 113);
+			mix64(t, i + 1, i + 48, i + 81, i + 96);
+			mix64(t, i + 16, i + 49, i + 64, i + 97);
+			mix64(t, i + 17, i + 32, i + 65, i + 112);
 		}
-	} else {
-		for (let i: int64 = 0; i < 128; i++) {
-			const v = w.input[i] ^ w.wide[i];
-			x[outAt + 2 * i] = (v & 0xffffffff) as uint32;
-			x[outAt + 2 * i + 1] = (v >> 32) as uint32;
+		if (needXor) {
+			for (let i: int64 = 0; i < 128; i++) words[outAt + i] = words[outAt + i] ^ t[i] ^ words[xAt + i] ^ words[yAt + i];
+		} else {
+			for (let i: int64 = 0; i < 128; i++) words[outAt + i] = t[i] ^ words[xAt + i] ^ words[yAt + i];
 		}
 	}
 }
@@ -637,26 +282,32 @@ function compressWide(w: Argon2Work, x: Span<uint32>, xPos: int32, yPos: int32, 
 /** The compression function: out (xor-accumulated when `needXor`) from the blocks at `xPos` and `yPos` of `x`. */
 function compressBlock(w: Argon2Work, x: uint32[], xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
 	when (c) {
-		compressWide(w, x, xPos, yPos, outPos, needXor);
+		compressWide(x, xPos, yPos, outPos, needXor);
 	} else {
 		compressPairs(w, x, xPos, yPos, outPos, needXor);
 	}
 }
 
-/** The compression function on (low, high) 32-bit pairs, for a backend whose 64-bit integers are not machine words. */
+/** The compression function on (low, high) 32-bit halves, for a backend whose 64-bit integers are not machine words. */
 function compressPairs(w: Argon2Work, x: uint32[], xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
-	if (needXor) {
-		for (let i = 0; i < 256; i++) {
-			const r = x[xPos + i] ^ x[yPos + i];
-			w.buf[i] = r;
-			x[outPos + i] = x[outPos + i] ^ r;
+	let xi = xPos;
+	let yi = yPos;
+	let oi = outPos;
+	for (let i = 0; i < 128; i++) {
+		const low = x[xi] ^ x[yi];
+		const high = x[xi + 1] ^ x[yi + 1];
+		w.low[i] = low;
+		w.high[i] = high;
+		if (needXor) {
+			x[oi] = x[oi] ^ low;
+			x[oi + 1] = x[oi + 1] ^ high;
+		} else {
+			x[oi] = low;
+			x[oi + 1] = high;
 		}
-	} else {
-		for (let i = 0; i < 256; i++) {
-			const r = x[xPos + i] ^ x[yPos + i];
-			w.buf[i] = r;
-			x[outPos + i] = r;
-		}
+		xi += 2;
+		yi += 2;
+		oi += 2;
 	}
 	for (let i = 0; i < 128; i += 16) {
 		permute(w, i, i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7, i + 8, i + 9, i + 10, i + 11, i + 12, i + 13, i + 14, i + 15);
@@ -664,7 +315,12 @@ function compressPairs(w: Argon2Work, x: uint32[], xPos: int32, yPos: int32, out
 	for (let i = 0; i < 16; i += 2) {
 		permute(w, i, i + 1, i + 16, i + 17, i + 32, i + 33, i + 48, i + 49, i + 64, i + 65, i + 80, i + 81, i + 96, i + 97, i + 112, i + 113);
 	}
-	for (let i = 0; i < 256; i++) x[outPos + i] = x[outPos + i] ^ w.buf[i];
+	oi = outPos;
+	for (let i = 0; i < 128; i++) {
+		x[oi] = x[oi] ^ w.low[i];
+		x[oi + 1] = x[oi + 1] ^ w.high[i];
+		oi += 2;
+	}
 }
 
 /** The variable-length hash H' of `length` bytes of `data`, `outLength` bytes into `out` at `outOff`. */
@@ -882,9 +538,8 @@ export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: 
 }
 
 function wipeWork(w: Argon2Work): void {
-	wipeWords(w.buf);
-	wipeWords64(w.wide);
-	wipeWords64(w.input);
+	wipeWords(w.low);
+	wipeWords(w.high);
 	wipeWords(w.address);
 	wipeBytes(w.h0);
 	wipeBytes(w.bytes);
