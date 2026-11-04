@@ -16,7 +16,7 @@ import { Bytes } from "std/core/buffer/bytes";
 import { encodeHex } from "../../core/encoding";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import {
-	TlsTransport, Tls13Client, CertificateVerifier, connectTls13,
+	TlsTransport, Tls13Client, CertificateVerifier, connectTls,
 	entropyLength, read as clientRead, write as clientWrite,
 	close as clientClose,
 } from "./client";
@@ -195,7 +195,7 @@ export function tlsConnect(hostname: string, port: int32, opts: TlsOptions = {})
 	const verifier: CertificateVerifier = (chain: uint8[][], name: string): Result<void, string> =>
 		verifyServer(chain, hostname, roots, now);
 	const transport = new SocketTransport(fd);
-	const connected = connectTls13(transport, {
+	const connected = connectTls(transport, {
 		hostname: isIpLiteral(hostname) ? "" : hostname,
 		verifier,
 		entropy: entropy as uint8[],
