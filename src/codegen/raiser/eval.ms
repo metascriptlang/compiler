@@ -2937,6 +2937,15 @@ test "engine: an integer converted to uint64 and int64Bits keep their bits and e
 	assert vm.error == "" && vm.output == "18446744073709551615 18446744073709551614 -1 -9223372036854775808 7\n", `${vm.error} ${vm.output}`;
 }
 
+test "engine: a constructor stores no zero a fresh object's word, float or bool slot already holds" {
+	const code = "class P { x: int64; y: float64; b: boolean; s: string; n: int32 = 4; constructor(x: int64) { this.x = x; } }"
+		+ " const p = new P(3); console.log(`${p.x} ${p.y} ${p.b} [${p.s}] ${p.n}`);";
+	const f = gapFunc(code, "P_new");
+	assert countNamed(f, "StoreSlot") + countNamed(f, "StoreSlotW") + countNamed(f, "StoreSlotR") + countNamed(f, "StoreField") == 3, disasmFunc(f);
+	const vm = evalVM(code);
+	assert vm.error == "" && vm.output == "3 0 false [] 4\n", `${vm.error} ${vm.output}`;
+}
+
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);

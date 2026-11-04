@@ -34,7 +34,7 @@ import {
 import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
-import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
+import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst, layoutOf, slotKindsOf } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { lowerStaticFieldReads } from "../../transform/lowering/staticLower";
@@ -190,16 +190,26 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 
 
-function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | null, classBody: Node[]): void {
+function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | null, classBody: Node[], fresh: boolean): void {
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
-			if (pd.propIsStatic) continue;
+			if (pd.propIsStatic || fresh && zeroedByNewObject(s, thisType, pd.propName, classBody[ci].nodeType)) continue;
 			const fieldReg = emitZeroValue(s, classBody[ci].nodeType);
 			const nameIdx = addConst(s, raiserConstString(pd.propName));
 			emitInst(s, fieldInst(s, thisType, pd.propName, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, thisReg, nameIdx, fieldReg));
 		}
 	}
+}
+
+// NewObject lays a cell out with every byte zero, which is already the zero of a word, float or bool slot.
+function zeroedByNewObject(s: RaiserCompState, thisType: Type | null, name: string, fieldType: Type | null): boolean {
+	const slot = layoutOf(thisType).indexOf(name);
+	if (slot < 0) return false;
+	const cls = slotKindsOf(s, thisType)[slot];
+	if (cls != RaiserRegClass.Word && cls != RaiserRegClass.Float && cls != RaiserRegClass.Bool || regClassOf(s, fieldType) != cls) return false;
+	const zero = zeroScalar(fieldType);
+	return (zero.kind == RaiserValueKind.Int || zero.kind == RaiserValueKind.Bool) && zero.intVal == 0 || zero.kind == RaiserValueKind.Float && zero.floatVal == 0.0;
 }
 
 function compileClassInit(
@@ -215,7 +225,7 @@ function compileClassInit(
 	for (let i = 0; i < ctorSyms.length; i += 1) {
 		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
-	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody, false);
 	if (ctorBody != null) {
 		compileStmt(s, ctorBody);
 	}
@@ -249,7 +259,7 @@ function compileClassConstructor(
 	s.receiverReg = thisReg;
 	if (ctorSyms.length > 0) declareLocal(s, ctorSyms[0], thisReg);
 
-	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody, true);
 
 	// Execute constructor body
 	if (ctorBody != null) {
