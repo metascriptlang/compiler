@@ -1,10 +1,19 @@
 /**
- * The field ed25519.ms computes in, chosen per backend: the fiat limbs of ./fe25519 on C, JS BigInt on JS.
- * On JS every 64-bit limb product compiles to a BigInt call, which measured the limb field about 4x slower
- * than BigInt arithmetic itself (rtx, 2026-11-04).
+ * The field ed25519.ms computes in, chosen per backend: the fiat limbs of
+ * ./fe25519 on C, JS BigInt on JS. On JS every 64-bit limb product compiles to
+ * a BigInt call, which measured the limb field about 4x slower than BigInt
+ * arithmetic itself (rtx, 2026-11-04).
  */
 when (js) {
-	import { P, mul, sqr, inv, pow2252m3, bigFromBytes, bigToBytes } from "./field25519";
+	import {
+		P,
+		mul,
+		sqr,
+		inv,
+		pow2252m3,
+		bigFromBytes,
+		bigToBytes,
+	} from "./field25519";
 
 	export type Fe = bigint;
 

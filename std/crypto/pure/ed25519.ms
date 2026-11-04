@@ -1,12 +1,15 @@
 /**
- * Ed25519 (RFC 8032), ported from Zig's std.crypto (ed25519.zig, edwards25519.zig, scalar.zig; MIT, see
- * LICENSE.zig.MIT) over the field of ./ed25519Field and the scalars of ./scalar25519. Verification
- * is the cofactorless strict form, the equation the C backend's Monocypher checks, with Zig's refusals of a
- * non-canonical S, A or R and of identity points, plus the C backend's small-order denylist.
+ * Ed25519 (RFC 8032), ported from Zig's std.crypto (ed25519.zig,
+ * edwards25519.zig, scalar.zig; MIT, see LICENSE.zig.MIT) over the field of
+ * ./ed25519Field and the scalars of ./scalar25519. Verification is the
+ * cofactorless strict form, the equation the C backend's Monocypher checks,
+ * with Zig's refusals of a non-canonical S, A or R and of identity points, plus
+ * the C backend's small-order denylist.
  *
- * Signing multiplies the base point with ref10's per-row table (./ed25519BaseTable) and picks entries with masks
- * in the manner of Zig's pcSelect, never by a secret index; the JS backend still promises no constant time,
- * because its field is BigInt.
+ * Signing multiplies the base point with ref10's per-row table
+ * (./ed25519BaseTable) and picks entries with masks in the manner of Zig's
+ * pcSelect, never by a secret index; the JS backend still promises no constant
+ * time, because its field is BigInt.
  */
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
@@ -33,17 +36,32 @@ import {
 	feIsNegative,
 	feCMov,
 } from "./ed25519Field";
-import { scalarReduce32, scalarReduce64, scalarMulAdd, scalarIsCanonical } from "./scalar25519";
+import {
+	scalarReduce32,
+	scalarReduce64,
+	scalarMulAdd,
+	scalarIsCanonical,
+} from "./scalar25519";
 
 function feHex(hex: string): Fe {
 	return feFromBytes(hex.decodeHex(), 0);
 }
 
-const edwardsD = feHex("a3785913ca4deb75abd841414d0a700098e879777940c78c73fe6f2bee6c0352");
-const edwardsD2 = feHex("59f1b226949bd6eb56b183829a14e00030d1f3eef2808e19e7fcdf56dcd90624");
-const sqrtMinusOne = feHex("b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b");
-const baseX = feHex("1ad5258f602d56c9b2a7259560c72c695cdcd6fd31e2a4c0fe536ecdd3366921");
-const baseY = feHex("5866666666666666666666666666666666666666666666666666666666666666");
+const edwardsD = feHex(
+	"a3785913ca4deb75abd841414d0a700098e879777940c78c73fe6f2bee6c0352",
+);
+const edwardsD2 = feHex(
+	"59f1b226949bd6eb56b183829a14e00030d1f3eef2808e19e7fcdf56dcd90624",
+);
+const sqrtMinusOne = feHex(
+	"b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b",
+);
+const baseX = feHex(
+	"1ad5258f602d56c9b2a7259560c72c695cdcd6fd31e2a4c0fe536ecdd3366921",
+);
+const baseY = feHex(
+	"5866666666666666666666666666666666666666666666666666666666666666",
+);
 
 export const ed25519SeedLength = 32;
 export const ed25519SecretKeyLength = 64;
@@ -92,7 +110,10 @@ function toBytes(p: Readonly<Point>): uint8[] {
 	return s;
 }
 
-/** Whether y, the sign bit ignored, is below P: Zig's Fe.rejectNonCanonical with the extra bit ignored. */
+/**
+ * Whether y, the sign bit ignored, is below P: Zig's Fe.rejectNonCanonical with
+ * the extra bit ignored.
+ */
 function isCanonicalEncoding(s: Readonly<uint8[]>, from: int32): boolean {
 	let c = ((s[from + 31] as int32) & 0x7f) ^ 0x7f;
 	for (let i = 30; i > 0; i--) c = c | ((s[from + i] as int32) ^ 0xff);
@@ -109,7 +130,10 @@ function neg(p: Readonly<Point>): Point {
 	return { x: feNeg(p.x), y: p.y, z: p.z, t: feNeg(p.t) };
 }
 
-/** 2p; dbl never reads T, so `withT` false skips its product when only another dbl reads the result. */
+/**
+ * 2p; dbl never reads T, so `withT` false skips its product when only another
+ * dbl reads the result.
+ */
 function dbl(p: Readonly<Point>, withT: boolean = true): Point {
 	const t0 = feSqr(feAddLoose(p.x, p.y));
 	let x = feSqr(p.x);
@@ -118,7 +142,12 @@ function dbl(p: Readonly<Point>, withT: boolean = true): Point {
 	z = feSub(z, x);
 	x = feSubLoose(t0, y);
 	const t = feSubLoose(feAdd(feSqr(p.z), feSqr(p.z)), z);
-	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: withT ? feMul(x, y) : p.t };
+	return {
+		x: feMul(x, t),
+		y: feMul(y, z),
+		z: feMul(z, t),
+		t: withT ? feMul(x, y) : p.t,
+	};
 }
 
 /** 16p, Zig's shift(p, 4). */
@@ -145,7 +174,9 @@ function subPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
 
 function precompute(p: Point, count: int32): Point[] {
 	const pc: Point[] = [identity(), p];
-	for (let i = 2; i <= count; i++) pc.push(i % 2 == 0 ? dbl(pc[i / 2]) : addPoints(pc[i - 1], p));
+	for (let i = 2; i <= count; i++) {
+		pc.push(i % 2 == 0 ? dbl(pc[i / 2]) : addPoints(pc[i - 1], p));
+	}
 	return pc;
 }
 
@@ -160,7 +191,11 @@ struct Niels {
 
 function nielsOf(hex: string): Niels {
 	const bytes = hex.decodeHex();
-	return { yPlusX: feFromBytes(bytes, 0), yMinusX: feFromBytes(bytes, 32), xy2d: feFromBytes(bytes, 64) };
+	return {
+		yPlusX: feFromBytes(bytes, 0),
+		yMinusX: feFromBytes(bytes, 32),
+		xy2d: feFromBytes(bytes, 64),
+	};
 }
 
 function loadBaseTable(): Niels[] {
@@ -171,7 +206,9 @@ function loadBaseTable(): Niels[] {
 
 const baseTable: Readonly<Niels[]> = loadBaseTable();
 
-/** p + q for an affine q: addPoints without the products Z1 * Z2 and T2 * 2d. */
+/**
+ * p + q for an affine q: addPoints without the products Z1 * Z2 and T2 * 2d.
+ */
 function addNiels(p: Readonly<Point>, q: Readonly<Niels>): Point {
 	const a = feMul(feSubLoose(p.y, p.x), q.yMinusX);
 	const b = feMul(feAddLoose(p.x, p.y), q.yPlusX);
@@ -192,15 +229,26 @@ function cMovNiels(p: Readonly<Niels>, q: Readonly<Niels>, bit: uint32): Niels {
 	};
 }
 
-/** [digit * 256^row]B for a digit in -8..8, read by touching all eight entries of the row and without a branch. */
+/**
+ * [digit * 256^row]B for a digit in -8..8, read by touching all eight entries
+ * of the row and without a branch.
+ */
 function selectBase(row: int32, digit: int32): Niels {
 	const negative = (digit >> 31) & 1;
 	const magnitude = digit - (((0 - negative) & digit) << 1);
 	let t: Niels = { yPlusX: feOne, yMinusX: feOne, xy2d: feZero };
 	for (let j = 1; j <= 8; j++) {
-		t = cMovNiels(t, baseTable[row * 8 + j - 1], ((((magnitude ^ j) - 1) >> 31) & 1) as uint32);
+		t = cMovNiels(
+			t,
+			baseTable[row * 8 + j - 1],
+			((((magnitude ^ j) - 1) >> 31) & 1) as uint32,
+		);
 	}
-	const minus: Niels = { yPlusX: t.yMinusX, yMinusX: t.yPlusX, xy2d: feNeg(t.xy2d) };
+	const minus: Niels = {
+		yPlusX: t.yMinusX,
+		yMinusX: t.yPlusX,
+		xy2d: feNeg(t.xy2d),
+	};
 	return cMovNiels(t, minus, negative as uint32);
 }
 
@@ -226,7 +274,10 @@ function slide(s: Readonly<uint8[]>): int32[] {
 	return e;
 }
 
-/** [s]B in constant time from radix-16 signed digits, ref10's ge_scalarmult_base; null for the identity. */
+/**
+ * [s]B in constant time from radix-16 signed digits, ref10's
+ * ge_scalarmult_base; null for the identity.
+ */
 function mulBase(s: Readonly<uint8[]>): Point | null {
 	const e = slide(s);
 	let q = identity();
@@ -237,8 +288,14 @@ function mulBase(s: Readonly<uint8[]>): Point | null {
 	return q;
 }
 
-/** [s1]B + [s2]p2 in variable time; null when p2 generates a small-order group. */
-function mulDoubleBasePublic(s1: Readonly<uint8[]>, p2: Point, s2: Readonly<uint8[]>): Point | null {
+/**
+ * [s1]B + [s2]p2 in variable time; null when p2 generates a small-order group.
+ */
+function mulDoubleBasePublic(
+	s1: Readonly<uint8[]>,
+	p2: Point,
+	s2: Readonly<uint8[]>,
+): Point | null {
 	const pc2 = precompute(p2, 8);
 	if (isIdentityX(pc2[4])) return null;
 	const e1 = slide(s1);
@@ -278,7 +335,10 @@ export function ed25519PublicFromSeed(seed: Readonly<uint8[]>): uint8[] {
 	return toBytes(pk);
 }
 
-/** The 64-byte secret key (seed then public key) the C backend keeps; empty for a seed not 32 bytes long. */
+/**
+ * The 64-byte secret key (seed then public key) the C backend keeps; empty for
+ * a seed not 32 bytes long.
+ */
 export function ed25519SecretKeyFromSeed(seed: Readonly<uint8[]>): uint8[] {
 	const pk = ed25519PublicFromSeed(seed);
 	if (pk.length == 0) return [];
@@ -290,9 +350,19 @@ export function ed25519SecretKeyFromSeed(seed: Readonly<uint8[]>): uint8[] {
 	return out;
 }
 
-/** RFC 8032 5.1.6; `publicKey` is the one derived from `seed`. Empty on a bad length. */
-export function ed25519Sign(seed: Readonly<uint8[]>, publicKey: Readonly<uint8[]>, message: Readonly<uint8[]>): uint8[] {
-	if (seed.length != ed25519SeedLength || publicKey.length != ed25519PublicKeyLength) return [];
+/**
+ * RFC 8032 5.1.6; `publicKey` is the one derived from `seed`. Empty on a bad
+ * length.
+ */
+export function ed25519Sign(
+	seed: Readonly<uint8[]>,
+	publicKey: Readonly<uint8[]>,
+	message: Readonly<uint8[]>,
+): uint8[] {
+	if (
+		seed.length != ed25519SeedLength ||
+		publicKey.length != ed25519PublicKeyLength
+	) return [];
 	const az = hashOf(kindSha512, seed);
 	const scalar = az.slice(0, 32);
 	clamp(scalar);
@@ -315,14 +385,20 @@ export function ed25519Sign(seed: Readonly<uint8[]>, publicKey: Readonly<uint8[]
 	return out;
 }
 
-/** Signs with the 64-byte secret key of ed25519SecretKeyFromSeed; empty on a bad length. */
-export function ed25519SignWithSecretKey(secretKey: Readonly<uint8[]>, message: Readonly<uint8[]>): uint8[] {
+/**
+ * Signs with the 64-byte secret key of ed25519SecretKeyFromSeed; empty on a bad
+ * length.
+ */
+export function ed25519SignWithSecretKey(
+	secretKey: Readonly<uint8[]>,
+	message: Readonly<uint8[]>,
+): uint8[] {
 	if (secretKey.length != ed25519SecretKeyLength) return [];
 	return ed25519Sign(secretKey.slice(0, 32), secretKey.slice(32, 64), message);
 }
 
-// The eight small-order points with the sign bit cleared, plus the non-canonical aliases of y = 0 and y = 1,
-// as the C backend refuses them.
+// The eight small-order points with the sign bit cleared, plus the
+// non-canonical aliases of y = 0 and y = 1, as the C backend refuses them.
 const smallOrder: Readonly<string[]> = [
 	"0000000000000000000000000000000000000000000000000000000000000000",
 	"0100000000000000000000000000000000000000000000000000000000000000",
@@ -343,15 +419,31 @@ function isSmallOrder(encoded: Readonly<uint8[]>, from: int32): boolean {
 	return false;
 }
 
-/** The shape every backend refuses before any curve work: wrong sizes, small-order key or R, S not below L. */
-export function ed25519Acceptable(publicKey: Readonly<uint8[]>, signature: Readonly<uint8[]>): boolean {
-	if (publicKey.length != ed25519PublicKeyLength || signature.length != ed25519SignatureLength) return false;
+/**
+ * The shape every backend refuses before any curve work: wrong sizes,
+ * small-order key or R, S not below L.
+ */
+export function ed25519Acceptable(
+	publicKey: Readonly<uint8[]>,
+	signature: Readonly<uint8[]>,
+): boolean {
+	if (
+		publicKey.length != ed25519PublicKeyLength ||
+		signature.length != ed25519SignatureLength
+	) return false;
 	if (isSmallOrder(publicKey, 0) || isSmallOrder(signature, 0)) return false;
 	return scalarIsCanonical(signature, 32);
 }
 
-/** RFC 8032 5.1.7, cofactorless: [S]B - [k]A must equal R. False on any bad length, encoding or signature. */
-export function ed25519Verify(publicKey: Readonly<uint8[]>, signature: Readonly<uint8[]>, message: Readonly<uint8[]>): boolean {
+/**
+ * RFC 8032 5.1.7, cofactorless: [S]B - [k]A must equal R. False on any bad
+ * length, encoding or signature.
+ */
+export function ed25519Verify(
+	publicKey: Readonly<uint8[]>,
+	signature: Readonly<uint8[]>,
+	message: Readonly<uint8[]>,
+): boolean {
 	if (!ed25519Acceptable(publicKey, signature)) return false;
 	if (!isCanonicalEncoding(publicKey, 0)) return false;
 	const a = fromBytes(publicKey, 0);
@@ -368,21 +460,27 @@ export function ed25519Verify(publicKey: Readonly<uint8[]>, signature: Readonly<
 }
 
 test "RFC 8032 test 1: empty message" {
-	const seed = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60".decodeHex();
+	const seed =
+		"9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60".decodeHex();
 	const pub = ed25519PublicFromSeed(seed);
-	assert pub.encodeHex() == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+	assert pub.encodeHex() ==
+		"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
 	const sig = ed25519Sign(seed, pub, []);
-	assert sig.encodeHex() == "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
+	assert sig.encodeHex() ==
+		"e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
 	assert ed25519Acceptable(pub, sig);
 	assert ed25519Verify(pub, sig, []);
 	assert !ed25519Verify(pub, sig, [1]);
 }
 
 test "RFC 8032 test 2: one byte" {
-	const seed = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb".decodeHex();
+	const seed =
+		"4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb".decodeHex();
 	const pub = ed25519PublicFromSeed(seed);
-	assert pub.encodeHex() == "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+	assert pub.encodeHex() ==
+		"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
 	const sig = ed25519Sign(seed, pub, [0x72]);
-	assert sig.encodeHex() == "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
+	assert sig.encodeHex() ==
+		"92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
 	assert ed25519Verify(pub, sig, [0x72]);
 }
