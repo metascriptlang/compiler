@@ -36,10 +36,24 @@ echo "tsc flags: $(grep -m1 -owE 'constant_tsc|nonstop_tsc|tsc_reliable|tsc_know
 echo "clang $(clang --version | head -1)"
 "$MSC" --version | sed 's/\x1b\[[0-9;]*m//g'
 echo "dudect upstream oreparaz/dudect dc269651fb2567e46755cfb2a13d3875592968b5 header sha256 $pinnedHeaderSha"
-implSources=$([ "$impl" = pure ] && echo "std/crypto/pure/x25519.ms std/crypto/pure/ed25519Field.ms std/crypto/pure/fe25519.ms std/crypto/pure/secret.cms" || echo "std/crypto/x25519/pilot.cms std/crypto/x25519/field.cms")
-allSrcs="$implSources $harness/x25519HostEntry.ms $harness/x25519DudectHost.c tools/crypto/x25519Build.sh"
-for _f in $allSrcs; do [ -f "$_f" ] || { echo "FAIL source not found: $_f" >&2; failures=$((failures + 1)); }; done
-echo "source sha256: $(for f in $allSrcs; do [ -f "$f" ] && printf '%s %s; ' "$(sha256 "$f" | cut -c1-16)" "$f" || printf 'MISSING:%s; ' "$f"; done)"
+implSources=("$harness/x25519HostEntry.ms")
+case "$impl" in
+	pure)
+		implSources+=(std/crypto/pure/{x25519.ms,ed25519Field.ms,fe25519.ms,secret.cms}) ;;
+	pilot)
+		implSources+=(std/crypto/x25519/{pilot.cms,field.cms}) ;;
+	monocypher)
+		implSources+=(vendor/monocypher/src/{monocypher.c,monocypher.h}) ;;
+	noop|leakyBranch|leakyIndex) ;;
+	*)
+		echo "FAIL unknown dudect implementation: $impl" >&2; exit 2 ;;
+esac
+allSrcs=("${implSources[@]}" "$harness/x25519DudectHost.c"
+	tools/crypto/x25519Build.sh)
+for source in "${allSrcs[@]}"; do
+	[ -f "$source" ] || { echo "FAIL source not found: $source" >&2; exit 1; }
+done
+echo "source sha256: $(for source in "${allSrcs[@]}"; do printf '%s %s; ' "$(sha256 "$source" | cut -c1-16)" "$source"; done)"
 echo "run impl=$impl modes=[$modes] measurementsPerBatch=$measurements batches=$batches seed=$seed cpu=${DUDECT_CPU:-unpinned} leakSpin=$leakSpin timeout=${limit}s"
 echo "build x25519Build.sh: msc --app=staticlib -d:x25519Impl=<impl> --cc=clang --<mode> --lto=off; clang -O2 -g -Wall -Werror ${extras[*]} host.c lib.a -lm -lpthread"
 
