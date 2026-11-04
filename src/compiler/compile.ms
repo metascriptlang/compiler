@@ -3053,9 +3053,9 @@ function readReplay(path: string): string[][] {
 	for (const raw of text.value.split("\n")) {
 		const line = raw.trim();
 		if (line == "") continue;
-		const parts = line.split(" ");
-		if (parts.length != 2) {
-			printError(`--watch-replay line '${line}' must be '<source> <target>'`);
+		const parts = line.split(" ").filter((part: string): boolean => part != "");
+		if (parts.length % 2 != 0) {
+			printError(`--watch-replay line '${line}' must be '<source> <target>' pairs`);
 			exit(1);
 		}
 		steps.push(parts);
@@ -3154,8 +3154,12 @@ function watchBuild(run: WatchRun): boolean {
 function watchNext(run: WatchRun, stopped: () => boolean): boolean {
 	if (run.feed == null) {
 		if (run.step > run.replay.length) return false;
-		copyForReplay(run.replay[run.step - 1][0], run.replay[run.step - 1][1]);
-		run.changed = [run.replay[run.step - 1][1]];
+		const pairs = run.replay[run.step - 1];
+		run.changed = [];
+		for (let i = 0; i < pairs.length; i += 2) {
+			copyForReplay(pairs[i], pairs[i + 1]);
+			run.changed.push(pairs[i + 1]);
+		}
 		return true;
 	}
 	const changed = waitForSourceChange(run.feed!, stopped);
