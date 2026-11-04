@@ -8,7 +8,7 @@ import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
-import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
+import { WriteSite, isLocation, lvalueText, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callReadonlyFieldWrite, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot, boundModuleCtx } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, ExtensionRegistry, resolveUserOperator } from "./context";
@@ -2827,10 +2827,19 @@ function reportRefArgWrite(ctx: CheckerContext, lvArg: Node, paramType: Type): v
 
 function reportArrayReceiverWrite(ctx: CheckerContext, me: MemberExprData, recvFormal: Type): void {
 	if (recvFormal.kind == TypeKind.Var) {
+		if (!isLocation(me.object)) {
+			addError(ctx, "'" + me.property + "' receiver: " + (isOutParam(recvFormal) ? "out" : "ref") + " parameter requires a variable, not an expression", me.object.location.line, me.object.location.column);
+			return;
+		}
 		reportRefArgWrite(ctx, me.object, recvFormal);
 		return;
 	}
 	const formal = skipModifier(recvFormal) ?? recvFormal;
+	const held = me.object.nodeType;
+	if (writesThroughReceiver(formal) && held != null && (held.kind == TypeKind.Array || held.kind == TypeKind.SizedArray) && me.object.kind == NodeKind.TypeAssertion) {
+		addError(ctx, "cannot mutate a cast of '" + lvalueText((me.object.data as TypeAssertionData).asExpr) + "' with '" + me.property + "': a cast or a non-null assertion as the receiver yields a copy of the value, so the change would be lost — call it on the variable", me.object.location.line, me.object.location.column);
+		return;
+	}
 	const refusal = formal.kind == TypeKind.Span ? viewRefusal(me.object, formal)
 		: writesThroughReceiver(formal) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : null;
 	if (refusal != null) addError(ctx, refusal, me.object.location.line, me.object.location.column);

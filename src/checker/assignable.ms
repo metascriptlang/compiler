@@ -21,6 +21,7 @@ export enum WriteVerdict {
 	ValueParamInterior,
 	ForVarInterior,
 	BorrowView,
+	CopyInterior,
 }
 
 export enum WriteSite {
@@ -132,6 +133,13 @@ function valueBehindNull(t: Type | null): Type | null {
 	return nonNullMemberOfNullable(t) ?? t;
 }
 
+function yieldsACopy(n: Node): boolean {
+	if (n.kind == NodeKind.ConditionalExpr) return true;
+	if (n.kind != NodeKind.BinaryExpr) return false;
+	const op = (n.data as BinaryExprData).operator;
+	return op == "??" || op == "||" || op == "&&";
+}
+
 function sameStorageOperand(n: Node): Node | null {
 	if (n.kind == NodeKind.TypeAssertion) return (n.data as TypeAssertionData).asExpr;
 	if (n.kind == NodeKind.OutExpr) return (n.data as OutExprData).outArg;
@@ -155,6 +163,7 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		interior = true;
 	}
 	while (cur.kind != NodeKind.Identifier) {
+		if (interior && yieldsACopy(cur)) return { verdict: WriteVerdict.CopyInterior, root: null };
 		const operand = sameStorageOperand(cur);
 		if (operand != null) {
 			if (!isDeclaredValueStorage(valueBehindNull(operand.nodeType))) deep = false;
@@ -265,6 +274,9 @@ export function viewRefusal(source: Node, slot: Type | null): string | null {
 
 export function writeRefusal(target: Node, site: WriteSite, method: string = ""): string | null {
 	const w = checkWrite(target, site);
+	if (w.verdict == WriteVerdict.CopyInterior) {
+		return `cannot write '${lvalueText(target)}' — a conditional or a '??', '||' or '&&' yields a copy of the value, so the write would be lost; write to the variable it chose instead`;
+	}
 	if (w.root == null || w.verdict == WriteVerdict.Writable) return null;
 	const name = w.root.name;
 	const text = lvalueText(target);
@@ -280,7 +292,7 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
 		WriteVerdict.BorrowView => `cannot ${what} — '${name}' is a read-only Borrow<T> view; to write, change what it was taken from or take a 'ref' parameter instead`,
-		WriteVerdict.Writable => { throw new Error("internal: writeRefusal reached a Writable verdict"); },
+		WriteVerdict.Writable | WriteVerdict.CopyInterior => { throw new Error("internal: writeRefusal reached a verdict it answered above"); },
 	};
 	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;
 }
