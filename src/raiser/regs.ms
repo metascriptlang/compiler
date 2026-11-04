@@ -223,6 +223,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 		const result = raiserABC(op, fields[0], fields[1], c);
 		result.line = inst.line;
 		result.slot = inst.slot;
+		result.site = inst.site;
 		out.push(result);
 	}
 	const sigs: int64[] = [];

@@ -62,8 +62,10 @@ import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util"
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
+import { CallInlining, lowerCallInline } from "./lowering/iterInline";
+import { flowAddMs } from "../compiler/flows";
 
-export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, liftTables: WriteSummaries | null = null, rangeChecks: boolean = true): Node {
+export function transformForRaiser(program: Node, checkerCtx: CheckerContext, placed: boolean = false, namesEnums: boolean = true, liftTables: WriteSummaries | null = null, rangeChecks: boolean = true, inlining: CallInlining = new CallInlining([])): Node {
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
 		const ctx = createTransformContextWithChecker(checkerCtx);
@@ -71,7 +73,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext, pl
 		ctx.rangeChecks = rangeChecks;
 		ctx.liftTables = liftTables;
 		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-		return lowerForRaiser(program, ctx, placed, namesEnums);
+		return lowerForRaiser(program, ctx, placed, namesEnums, inlining);
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
@@ -86,7 +88,7 @@ function dropUnionTextMemberTexts(program: Node): Node {
 	});
 }
 
-function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean): Node {
+function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean, inlining: CallInlining): Node {
 	let result = dropUnionTextMemberTexts(eraseVoidParamReads(planModuleTdz(program, ctx)));
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
@@ -101,6 +103,9 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerForLoop(result, ctx);
+	const inlineStart = performance.now();
+	result = lowerCallInline(result, inlining);
+	flowAddMs("pass.lowerCallInline", performance.now() - inlineStart);
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	// Result.ok/err are `static extern` (no body, no nativeName) — Raiser

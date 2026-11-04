@@ -39,6 +39,7 @@ import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { lowerStaticFieldReads } from "../../transform/lowering/staticLower";
 import { transformForRaiser } from "../../transform/raiserLowering";
+import { CallInlining } from "../../transform/lowering/iterInline";
 import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destructorLifting";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
 import { analyzeProgram } from "../../analyzer/index";
@@ -97,8 +98,8 @@ export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T):
 	}
 }
 
-export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null): Node {
-	const lowered = underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false), ctx, createWriteSummaries(createRoutineDecls(), [])));
+export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null, inlining: CallInlining = new CallInlining([])): Node {
+	const lowered = underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false, null, true, inlining), ctx, createWriteSummaries(createRoutineDecls(), [])));
 	keepLiftedOpBodies(lowered);
 	return lowered;
 }
@@ -178,7 +179,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 	emitImplicitReturn(s);
 
-	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses);
+	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses, s.inlineSites);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -230,7 +231,7 @@ function compileClassInit(
 		compileStmt(s, ctorBody);
 	}
 	emitImplicitReturn(s);
-	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.regClasses.length, s.regClasses);
+	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.regClasses.length, s.regClasses, s.inlineSites);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -270,7 +271,7 @@ function compileClassConstructor(
 	// Always return this
 	emitRet(s, thisReg);
 
-	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.regClasses.length, s.regClasses);
+	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.regClasses.length, s.regClasses, s.inlineSites);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -571,7 +572,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			const deinitNil = allocDyn(deinit);
 			emitLoadConst(deinit, deinitNil, raiserNil());
 			emitRet(deinit, deinitNil);
-			const deinitFunc = createRaiserFunction("__deinit_" + mi, deinit.code, deinit.constants, 0, 0, deinit.regClasses.length, deinit.regClasses);
+			const deinitFunc = createRaiserFunction("__deinit_" + mi, deinit.code, deinit.constants, 0, 0, deinit.regClasses.length, deinit.regClasses, deinit.inlineSites);
 			deinitFunc.copyPlans = deinit.copyPlans;
 			deinitFunc.classTypes = deinit.classTypes;
 			functions.push(deinitFunc);
@@ -589,7 +590,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		emitLoadConst(s, nilReg, raiserNil());
 		emitRet(s, nilReg);
 
-		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.regClasses.length, s.regClasses);
+		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.regClasses.length, s.regClasses, s.inlineSites);
 		initFunc.copyPlans = s.copyPlans;
 		initFunc.classTypes = s.classTypes;
 		functions.push(initFunc);
@@ -625,7 +626,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, allocDyn(entryS), deinitIndices[di], 0));
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
-	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses);
+	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses, entryS.inlineSites);
 	functions.push(entryFunc);
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);

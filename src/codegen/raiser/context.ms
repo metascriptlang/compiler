@@ -6,8 +6,9 @@ import {
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, CLOSURE_LAYOUT, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
-import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, InlineFrame } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
+import { RaiserInlineSite } from "../../raiser/module";
 import { CheckerError, Severity } from "../../checker/context";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { raiserRefusal, stdModuleName, tiersDeclaring } from "../../module/tiers";
@@ -137,6 +138,9 @@ export interface RaiserCompState {
 	cellRegs: int32[];
 	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
 	argViews: int32[];
+	site: int32;
+	inlineSites: RaiserInlineSite[];
+	siteIds: HashMap<InlineFrame, int32>;
 }
 
 export interface RaiserTryInfo {
@@ -154,7 +158,26 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>() };
+}
+
+export function enterSite(s: RaiserCompState, node: Node): void {
+	if (node.inlineFrame != null) s.site = siteIndex(s, node.inlineFrame!);
+}
+
+function siteIndex(s: RaiserCompState, site: InlineFrame): int32 {
+	const known = s.siteIds.get(site);
+	if (known != null) return known;
+	const parent = site.parent != null ? siteIndex(s, site.parent!) : 0;
+	s.inlineSites.push({ name: site.name, parent, callLine: site.callLine });
+	const id = s.inlineSites.length as int32;
+	s.siteIds.set(site, id);
+	return id;
+}
+
+function pushInst(s: RaiserCompState, inst: RaiserInstruction): void {
+	inst.site = s.site;
+	s.code.push(inst);
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -245,7 +268,7 @@ const PAYLOAD_WORD = 1;
 function unboxedAs(s: RaiserCompState, reg: number, cls: RaiserRegClass, how: number): number {
 	if (classOfReg(s, reg as int32) != RaiserRegClass.Dyn) return reg;
 	const plain = allocReg(s, cls);
-	s.code.push(raiserABC(RaiserOpcode.Unbox, plain, reg, how));
+	pushInst(s, raiserABC(RaiserOpcode.Unbox, plain, reg, how));
 	return plain;
 }
 
@@ -278,12 +301,12 @@ export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
 		if (classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn) {
 			const held = inst.a;
 			inst.a = allocReg(s, produced);
-			s.code.push(inst);
-			s.code.push(raiserABC(RaiserOpcode.Box, held, inst.a, 0));
+			pushInst(s, inst);
+			pushInst(s, raiserABC(RaiserOpcode.Box, held, inst.a, 0));
 			return;
 		}
 	}
-	s.code.push(inst);
+	pushInst(s, inst);
 }
 
 export function addConst(s: RaiserCompState, val: RaiserValue): int32 {

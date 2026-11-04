@@ -55,6 +55,7 @@ import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurren
 import { SymbolFlag, hasFlag, sealRoutineFlags } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
+import { CallInlining } from "../transform/lowering/iterInline";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, HcrTypeLayout, HcrStorageTable, hcrFunctions, lowerHcrIndirection, createHcrStorageTable, buildHcrStorage } from "../transform/native/hcrIndirect";
@@ -2576,6 +2577,16 @@ function collectCFunctionNames(node: Node, exports: HashMap<string, string>, ext
 		if (hasFlag(sym, SymbolFlag.ImportC) && hasFlag(sym, SymbolFlag.CompilerProc)) compilerCalls.push(sym.name);
 	}
 	forEachChild(node, (child: Node): void => { collectCFunctionNames(child, exports, externs, compilerCalls, path); });
+}
+
+function hcrReloadablePaths(graph: ModuleGraph, entryPath: string, opts: CliOptions, stdPath: string): string[] {
+	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const deps = depRoots(opts.projectRoot != "" ? opts.projectRoot : root);
+	const paths: string[] = [];
+	for (const path of graph.loadOrder) {
+		if (hcrModuleId(path, root, stdPath, deps, []) != "") paths.push(path);
+	}
+	return paths;
 }
 
 function hcrCoreUserModules(graph: ModuleGraph, entryPath: string, opts: CliOptions, stdPath: string): string[] {
@@ -5400,6 +5411,8 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	const liftTables = createWriteSummaries(createRoutineDecls(), []);
 	liftTables.unloweredWritesAnything = true;
+	ensureHostTableLoaded();
+	const inlining = new CallInlining(opts.isHcr ? hcrReloadablePaths(graph, entryCanonical, opts, config.stdPath) : []);
 	const lowered: Node[] = [];
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
@@ -5408,7 +5421,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		const mod = findModule(graph, unitPaths[i]);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformForRaiser(comptimeResolved, modCtx, true, true, liftTables, opts.mode != MODE_DANGER);
+		const transformed = transformForRaiser(comptimeResolved, modCtx, true, true, liftTables, opts.mode != MODE_DANGER, inlining);
 		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 		noteUnitDecls(liftTables, unitPaths[i], transformed);
 		lowered.push(transformed);

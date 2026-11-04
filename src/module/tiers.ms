@@ -1,4 +1,4 @@
-import { Node, NodeKind, ProgramData, ExportDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, ExternDeclData, DecoratedDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, ProgramData, ExportDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, ExternDeclData, DecoratedDeclData } from "../ast/node";
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { exists, readFile } from "std/fs";
@@ -59,6 +59,15 @@ export function stdModuleName(modulePath: string): string {
 	let module = stemOf(modulePath.slice(_stdRoot.length));
 	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
 	return `std/${module}`;
+}
+
+// The qualified name a host callback is registered under: the declaring module and the declared
+// name, with no signature, so one callback serves every overload and every instance of a generic.
+export function hostRoutineKey(sym: Symbol): string {
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	if (origin.symbolKind != SymbolKind.Function || origin.modulePath == "") return "";
+	const module = stdModuleName(origin.modulePath);
+	return module == "" ? "" : `${module}.${origin.name}`;
 }
 
 export function raiserRefusal(subject: string, reason: string, tiers: string[]): string {

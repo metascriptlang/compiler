@@ -15,6 +15,8 @@ export interface RaiserFunction {
 	code: RaiserInstruction[];  // registers renumbered into ranks; disasm and tests read it, the VM reads `packed`
 	packed: int64[];      // code, packed once by createRaiserFunction
 	lines: int32[];       // source line per instruction, 0 = unknown
+	inlined: int32[];     // inline site per instruction: 0 for the function's own code, k for inlineSites[k - 1]
+	inlineSites: RaiserInlineSite[];
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
 	constWords: int64[];  // constants[i] as the word a Word, Bool or Float register holds (float bits), 0 for any other kind
@@ -31,6 +33,12 @@ export interface RaiserFunction {
 	sigs: int64[];        // sigs[n] is the class signature of the first n registers
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
+}
+
+export interface RaiserInlineSite {
+	name: string;    // the inlined routine, as its own frame is named
+	parent: int32;   // the site this one was inlined into, 0 for the function itself
+	callLine: int32; // the line of the call this site replaced, in its parent
 }
 
 export function assertPacked(func: RaiserFunction): void {
@@ -67,14 +75,16 @@ export interface RaiserModule {
 
 // --- Constructors ---
 
-export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null): RaiserFunction {
+export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null, inlineSites: RaiserInlineSite[] = []): RaiserFunction {
 	const layout = layoutRegisters(name, code, constants, regCount as int32, classes);
 	const packed: int64[] = [];
 	const lines: int32[] = [];
+	const inlined: int32[] = [];
 	const fieldCache: int32[] = [];
 	for (const inst of layout.code) {
 		packed.push(packInstruction(inst));
 		lines.push(inst.line as int32);
+		inlined.push(inst.site as int32);
 		fieldCache.push(-1);
 	}
 	const names: string[] = [];
@@ -89,7 +99,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	}
 	const ownRefs: int32[] = [];
 	for (let r = arity as int32; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, constWords, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 	bindReturns(func);
 	return func;
 }

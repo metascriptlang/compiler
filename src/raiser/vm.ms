@@ -5720,29 +5720,29 @@ export function vmDumpStack(vm: RaiserVM): string {
 	let i = 0;
 	while (i < vm.callStack.depth) {
 		const frame = vm.callStack.items[i];
-		const func = getModuleFunc(vm.mod, frame.funcIdx);
-		const ln = func.lines[frame.returnIp > 0 ? frame.returnIp - 1 : 0];
-		if (ln > 0) {
-			trace = `${trace}\n  line ${ln} in ${func.name}`;
-		} else {
-			trace = `${trace}\n  ${func.name}`;
-		}
+		trace = frameTrace(trace, getModuleFunc(vm.mod, frame.funcIdx), frame.returnIp > 0 ? frame.returnIp - 1 : 0, "");
 		i = i + 1;
 	}
-	// Current frame (top of stack)
-	const curFunc = getModuleFunc(vm.mod, vm.funcIdx);
-	const curIp = vm.ip > 0 ? vm.ip - 1 : 0;
-	if (curIp < curFunc.lines.length) {
-		const curLn = curFunc.lines[curIp];
-		if (curLn > 0) {
-			trace = `${trace}\n  line ${curLn} in ${curFunc.name} (current)`;
-		} else {
-			trace = `${trace}\n  ${curFunc.name} (current)`;
-		}
-	} else {
-		trace = `${trace}\n  ${curFunc.name} (current)`;
+	return frameTrace(trace, getModuleFunc(vm.mod, vm.funcIdx), vm.ip > 0 ? vm.ip - 1 : 0, " (current)");
+}
+
+function frameTrace(trace: string, func: RaiserFunction, pc: int32, suffix: string): string {
+	const names: string[] = [];
+	const ln = pc < func.lines.length ? func.lines[pc] : 0;
+	const lines: int32[] = [ln];
+	let site = pc < func.inlined.length ? func.inlined[pc] : 0;
+	while (site > 0) {
+		names.push(func.inlineSites[site - 1].name);
+		lines.push(ln > 0 ? func.inlineSites[site - 1].callLine : 0);
+		site = func.inlineSites[site - 1].parent;
 	}
-	return trace;
+	names.push(func.name);
+	let out = trace;
+	for (let k = names.length - 1; k >= 0; k -= 1) {
+		const tail = k == 0 ? suffix : "";
+		out = lines[k] > 0 ? `${out}\n  line ${lines[k]} in ${names[k]}${tail}` : `${out}\n  ${names[k]}${tail}`;
+	}
+	return out;
 }
 
 // --- Test helpers ---

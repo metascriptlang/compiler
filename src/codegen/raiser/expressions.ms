@@ -21,7 +21,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, Raise
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
-import { raiserRefusal, stdModuleName } from "../../module/tiers";
+import { raiserRefusal, stdModuleName, hostRoutineKey } from "../../module/tiers";
 import { demandNativeBridge } from "./nativeBridge";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
@@ -37,7 +37,7 @@ import {
 	isLocalString, declareLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
-	callRaiserStmtCompiler, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
+	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
 import { raiserStructSlotUnion } from "../../analyzer/classify";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
@@ -58,15 +58,6 @@ function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
 	if (!inStdDemand()) msg = stdModuleName(sym.modulePath) != "" ? stdRoutineRefusal(sym, reason) : raiserRefusal(`'${sym.name}'`, reason, []);
 	queueRaiserCompileError(msg, callee.location.line, callee.location.column, true);
 	return msg;
-}
-
-// The qualified name a host callback is registered under: the declaring module and the declared
-// name, with no signature, so one callback serves every overload and every instance of a generic.
-export function hostRoutineKey(sym: Symbol): string {
-	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
-	if (origin.symbolKind != SymbolKind.Function || origin.modulePath == "") return "";
-	const module = stdModuleName(origin.modulePath);
-	return module == "" ? "" : `${module}.${origin.name}`;
 }
 
 export function hasHostCallback(sym: Symbol): boolean {
@@ -552,6 +543,14 @@ function compileExprInto(s: RaiserCompState, node: Node, target: number): void {
 // A Dyn register holds a box, so an expression whose checked type has a plain class (a variable
 // narrowed from a union) is read out of it into a register of that class.
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
+	const outer = s.site;
+	enterSite(s, node);
+	const reg = compileTypedExpr(s, node);
+	s.site = outer;
+	return reg;
+}
+
+function compileTypedExpr(s: RaiserCompState, node: Node): int32 {
 	const reg = compileExprRaw(s, node);
 	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
 	const cls = regClassOf(s, node.nodeType);

@@ -510,18 +510,19 @@ export interface RaiserInstruction {
 	c: number;
 	line: number;       // Source line number for diagnostics (0 = unknown)
 	slot: number;       // LoadSlot/StoreSlot: the field's slot in the receiver type's layout, packed in the top byte
+	site: number;       // 0 for the function's own code, k for code inlined from the function's inline site k
 }
 
 // --- Constructors ---
 
 export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	return { op, a, b, c, line: 0, slot: 0 };
+	return { op, a, b, c, line: 0, slot: 0, site: 0 };
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
 	const bHigh: int32 = (bx as int32 / 256) | 0;
 	const bLow = bx - (bHigh as number) * 256;
-	return { op, a, b: bHigh as number, c: bLow, line: 0, slot: 0 };
+	return { op, a, b: bHigh as number, c: bLow, line: 0, slot: 0, site: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -533,7 +534,7 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	const rem = raw - (aHigh as number) * 65536;
 	const bMid: int32 = (rem as int32 / 256) | 0;
 	const cLow = rem - (bMid as number) * 256;
-	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0, slot: 0 };
+	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0, slot: 0, site: 0 };
 }
 
 // --- Decoders ---

@@ -2,7 +2,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag, SourceLocation, Type, TypeKind,
 	ProgramData, IfStmtData, ForOfStmtData, ForInStmtData, ForStmtData, WhileStmtData, DoWhileStmtData, CallExprData,
 	MemberExprData, UnaryExprData, NewExprData, ArrayLiteralData, ArrayAccessData, HiddenStdConvData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
-	TryCatchStmtData, BinaryExprData, UpdateExprData,
+	TryCatchStmtData, BinaryExprData, UpdateExprData, ConditionalExprData, InlineFrame,
 	HiddenDerefData, OutExprData, BreakStmtData, ContinueStmtData, IdentifierData,
 	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData, isEmptyBlock,
 } from "../../ast/node";
@@ -27,6 +27,8 @@ import {
 import { parseInput, getStmts, makeCtx, makeJsCtx } from "../testUtil";
 import { checkProgram, checkProgramJs } from "../../checker/checkPass";
 import { recordBodyRead } from "../../checker/bodyReads";
+import { hostRoutineKey } from "../../module/tiers";
+import { lookupHost } from "../../raiser/hostRegistry";
 
 interface InlineState {
 	ctx: TransformContext;
@@ -1300,6 +1302,190 @@ function retargetConsumer(node: Node, plan: JumpPlan, inLoop: boolean, inSwitch:
 	const switching = wrapper || node.kind == NodeKind.SwitchStmt;
 	mapChildren(node, (child: Node): Node => retargetConsumer(child, plan, inLoop || loop, inSwitch || switching));
 	return node;
+}
+
+export class CallInlining {
+	reloadable: string[];
+	leaves: HashMap<string, Node> = new HashMap<string, Node>();
+	constructor(reloadable: string[]) {
+		this.reloadable = reloadable;
+	}
+}
+
+const LEAF_NODE_LIMIT: int32 = 30;
+
+interface LeafState {
+	inlining: CallInlining;
+	own: HashMap<Symbol, Node>;
+	checked: HashSet<Symbol>;
+	leafDecls: HashMap<Symbol, Node>;
+}
+
+export function lowerCallInline(program: Node, inlining: CallInlining): Node {
+	const st: LeafState = { inlining, own: new HashMap<Symbol, Node>(), checked: new HashSet<Symbol>(), leafDecls: new HashMap<Symbol, Node>() };
+	collectRoutines(program, st.own);
+	for (const sym of st.own.keys()) ownLeaf(sym, st);
+	const result = inlineLeafCalls(program, st);
+	for (const sym of st.leafDecls.keys()) {
+		const key = offerKey(sym);
+		if (key == null) continue;
+		inlining.leaves.set(key, cloneNodeKeepSem(st.leafDecls.get(sym)!));
+	}
+	return result;
+}
+
+function collectRoutines(node: Node, out: HashMap<Symbol, Node>): void {
+	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && (node.data as FunctionDeclData).fnBody != null) out.set(node.resolvedSym, node);
+	forEachChild(node, (child: Node): void => { collectRoutines(child, out); });
+}
+
+function ownLeaf(sym: Symbol, st: LeafState): Node | null {
+	if (st.leafDecls.has(sym)) return st.leafDecls.get(sym);
+	if (st.checked.has(sym)) return null;
+	st.checked.add(sym);
+	const decl = st.own.get(sym)!;
+	const fd = decl.data as FunctionDeclData;
+	fd.fnBody = inlineLeafCalls(fd.fnBody, st);
+	if (leafValue(decl) == null) return null;
+	st.leafDecls.set(sym, decl);
+	return decl;
+}
+
+function foreignLeaf(sym: Symbol, st: LeafState): Node | null {
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	if (st.inlining.reloadable.includes(sym.modulePath) || st.inlining.reloadable.includes(origin.modulePath)) return null;
+	const key = offerKey(sym);
+	return key != null ? st.inlining.leaves.get(key) : null;
+}
+
+function inlineLeafCalls(node: Node, st: LeafState): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && st.checked.has(node.resolvedSym)) return node;
+	mapChildren(node, (child: Node): Node => inlineLeafCalls(child, st));
+	if (node.kind != NodeKind.CallExpr) return node;
+	const inlined = inlinedCall(node, st);
+	return inlined != null ? inlined : node;
+}
+
+function inlinedCall(call: Node, st: LeafState): Node | null {
+	const target = callTarget(call);
+	if (target == null || target.sym.symbolKind != SymbolKind.Function) return null;
+	const decl = st.own.has(target.sym) ? ownLeaf(target.sym, st) : foreignLeaf(target.sym, st);
+	if (decl == null) return null;
+	const fd = decl.data as FunctionDeclData;
+	const params = decl.paramSyms!;
+	const value = leafValue(decl);
+	if (value == null || params.length != target.args.length || !sameType(value.nodeType, call.nodeType)) return null;
+	for (let i = 0; i < params.length; i += 1) {
+		if (!passesAsIs(target.args[i], params[i])) return null;
+	}
+	const copy = cloneNodeKeepSem(value);
+	frameCopy(copy, new InlineFrame(fd.fnName, null, call.location.line), new HashMap<InlineFrame, InlineFrame>());
+	return substituteParams(copy, params, target.args);
+}
+
+function leafValue(decl: Node): Node | null {
+	const sym = decl.resolvedSym!;
+	const fd = decl.data as FunctionDeclData;
+	if (decl.paramSyms == null || fd.fnBody == null) return null;
+	if (fd.fnFlags.indexOf("async") >= 0 || fd.fnFlags.indexOf("generator") >= 0 || fd.fnFlags.indexOf("gen:") >= 0) return null;
+	if (hasFlag(sym, SymbolFlag.NoInline) || hasFlag(sym, SymbolFlag.CompileTime) || hostBound(sym)) return null;
+	if (sym.symbolType == null || !isWordType(sym.symbolType.typeReturn)) return null;
+	const stmts = extractBodyStmts(fd.fnBody);
+	if (stmts.length != 1 || stmts[0].kind != NodeKind.ReturnStmt) return null;
+	const value = (stmts[0].data as ReturnStmtData).argument;
+	if (value == null || !pureOver(value, decl.paramSyms)) return null;
+	return hasFlag(sym, SymbolFlag.Inline) || nodeCount(value) <= LEAF_NODE_LIMIT ? value : null;
+}
+
+function hostBound(sym: Symbol): boolean {
+	const key = hostRoutineKey(sym);
+	return sym.nativeName != "" || hasFlag(sym, SymbolFlag.ImportC) || (key != "" && lookupHost(key) != null);
+}
+
+function isWordType(t: Type | null): boolean {
+	if (t == null) return false;
+	return match (t.kind) {
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
+		TypeKind.Float32 | TypeKind.Float64 | TypeKind.Number | TypeKind.Boolean | TypeKind.Char => true,
+		_ => false,
+	};
+}
+
+function pureOver(e: Node, params: Symbol[]): boolean {
+	match (e.kind) {
+		NodeKind.NumberLiteral | NodeKind.BooleanLiteral => { return isWordType(e.nodeType); },
+		NodeKind.Identifier => { return e.resolvedSym != null && params.includes(e.resolvedSym); },
+		NodeKind.BinaryExpr => {
+			const b = e.data as BinaryExprData;
+			return isWordType(e.nodeType) && !isAssignOp(b.operator) && !e.flags.has(NodeFlag.UserOp) && pureOver(b.left, params) && pureOver(b.right, params);
+		},
+		NodeKind.UnaryExpr => {
+			const u = e.data as UnaryExprData;
+			const op = u.unaryOp;
+			return isWordType(e.nodeType) && (op == "-" || op == "+" || op == "!" || op == "~") && pureOver(u.operand, params);
+		},
+		NodeKind.ConditionalExpr => {
+			const c = e.data as ConditionalExprData;
+			return isWordType(e.nodeType) && pureOver(c.ternaryCondition, params) && pureOver(c.ternaryConsequent, params) && pureOver(c.ternaryAlternate, params);
+		},
+		NodeKind.TypeAssertion => {
+			const checked = e.flags.has(NodeFlag.ObjCheck) || e.flags.has(NodeFlag.ConvCheck);
+			return isWordType(e.nodeType) && !checked && pureOver((e.data as TypeAssertionData).asExpr, params);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			return isWordType(e.nodeType) && pureOver((e.data as HiddenStdConvData).convExpr, params);
+		},
+		NodeKind.MemberExpr => {
+			const m = e.data as MemberExprData;
+			const field = e.resolvedSym;
+			if (m.isOptional || !isWordType(e.nodeType) || !declaresField(m.object.nodeType, m.property)) return false;
+			if (field != null && (field.symbolKind != SymbolKind.Property || hasFlag(field, SymbolFlag.Static))) return false;
+			return pureOver(m.object, params);
+		},
+		NodeKind.HiddenDeref => { return pureOver((e.data as HiddenDerefData).expr, params); },
+		_ => { return false; },
+	};
+}
+
+function declaresField(t: Type | null, name: string): boolean {
+	let held = t;
+	while (held != null && (held.kind == TypeKind.Ref || held.kind == TypeKind.Ptr || held.kind == TypeKind.Borrow || held.kind == TypeKind.Lent)) held = held.typeReturn;
+	return held != null && held.kind == TypeKind.Struct && held.typeNames.includes(name);
+}
+
+function nodeCount(node: Node): int32 {
+	let n: int32 = 1;
+	forEachChild(node, (child: Node): void => { n += nodeCount(child); });
+	return n;
+}
+
+function passesAsIs(arg: Node, param: Symbol): boolean {
+	if (arg.kind == NodeKind.NumberLiteral || arg.kind == NodeKind.BooleanLiteral) return sameType(arg.nodeType, param.symbolType);
+	const sym = arg.resolvedSym;
+	if (arg.kind != NodeKind.Identifier || sym == null || hasFlag(sym, SymbolFlag.Global)) return false;
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return false;
+	return sameType(sym.symbolType, param.symbolType) && sameType(arg.nodeType, param.symbolType);
+}
+
+function substituteParams(node: Node, params: Symbol[], args: Node[]): Node {
+	const at = node.kind == NodeKind.Identifier && node.resolvedSym != null ? params.indexOf(node.resolvedSym) : -1;
+	if (at >= 0) return cloneNodeKeepSem(args[at]);
+	mapChildren(node, (child: Node): Node => substituteParams(child, params, args));
+	return node;
+}
+
+function frameCopy(node: Node, base: InlineFrame, rebased: HashMap<InlineFrame, InlineFrame>): void {
+	node.inlineFrame = node.inlineFrame == null ? base : rebasedFrame(node.inlineFrame!, base, rebased);
+	forEachChild(node, (child: Node): void => { frameCopy(child, base, rebased); });
+}
+
+function rebasedFrame(frame: InlineFrame, base: InlineFrame, rebased: HashMap<InlineFrame, InlineFrame>): InlineFrame {
+	const known = rebased.get(frame);
+	if (known != null) return known;
+	const fresh = new InlineFrame(frame.name, frame.parent == null ? base : rebasedFrame(frame.parent!, base, rebased), frame.callLine);
+	rebased.set(frame, fresh);
+	return fresh;
 }
 
 
