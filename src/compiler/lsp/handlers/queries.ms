@@ -32,7 +32,7 @@ import { JsonKind } from "std/serialize/json/types";
 import { getDynamicField, asBoolean } from "std/serialize/json/accessors";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
+import { Symbol, SymbolKind, SymbolFlag, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc, documentUri,
 } from "./shared";
@@ -353,6 +353,34 @@ function loadedPaths(db: TransAmDb): string[] {
 	return paths;
 }
 
+function spellsName(source: string, name: string): boolean {
+	if (name == "") return false;
+	let from = 0;
+	while (true) {
+		const at = source.indexOf(name, from);
+		if (at < 0) return false;
+		const end = at + name.byteLength;
+		if ((at == 0 || !sgIsIdentByte(source.byteAt(at - 1))) && (end >= source.byteLength || !sgIsIdentByte(source.byteAt(end)))) return true;
+		from = at + 1;
+	}
+}
+
+function staysInOwnFile(sym: Symbol): boolean {
+	if (sym.symbolKind == SymbolKind.Parameter) return true;
+	return sym.symbolKind == SymbolKind.Variable && !sym.symFlags.has(SymbolFlag.Global) && !sym.symFlags.has(SymbolFlag.Exported);
+}
+
+function filesSpellingName(db: TransAmDb, sym: Symbol | null, name: string, paths: string[]): string[] {
+	if (sym == null || staysInOwnFile(sym)) return [];
+	if (sym.modulePath == "") throw new Error("internal: symbol '" + sym.name + "' has no module path, so the files that can hold it are unknown");
+	if (dbGetSource(db, sym.modulePath).indexOf("export default") >= 0) return paths;
+	const kept: string[] = [];
+	for (const path of paths) {
+		if (spellsName(dbGetSource(db, path), name)) kept.push(path);
+	}
+	return kept;
+}
+
 export function handleReferences(id: string, params: string, db: TransAmDb, candidates: string[] | null = null): string {
 	const flag = referenceIncludesDeclaration(params);
 	if (!flag.ok) return lspErrorResponse(id, -32602, flag.error);
@@ -371,7 +399,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb, cand
 	// Search current file via symbol identity (no false positives from shadowing)
 	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym), includeDeclaration);
 
-	for (const otherPath of candidates != null ? candidates : dependentPaths(db, path)) {
+	for (const otherPath of filesSpellingName(db, suggest.sym, suggest.sym != null ? suggest.sym.name : "", candidates != null ? candidates : dependentPaths(db, path))) {
 		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
@@ -493,7 +521,7 @@ export function handleRename(id: string, params: string, db: TransAmDb, candidat
 		changes.push(lspJsonString(pos.uri) + ":" + curEdits);
 	}
 
-	for (const otherPath of candidates != null ? candidates : loadedPaths(db)) {
+	for (const otherPath of filesSpellingName(db, suggest.sym, suggest.name, candidates != null ? candidates : loadedPaths(db))) {
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
