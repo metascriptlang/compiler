@@ -108,6 +108,7 @@ export function bindsSignatureTypes(node: Node): boolean {
 // positioned type AST it needs for LSP hover/goto.
 function copyNodeMeta(src: Node, dst: Node): void {
 	dst.genericDefaults = src.genericDefaults;
+	dst.inlineFrame = src.inlineFrame;
 	if (currentCloneMode == CloneMode.Keep) {
 		dst.flags = src.flags;
 		dst.variantSlot = src.variantSlot;

@@ -799,6 +799,19 @@ export class Node {
 	// for nested re-expansion. Macro bodies should read nodeType (above) — in the
 	// VM heap that key always carries the type-AST Node.
 	nodeTypeAst: Node | null;
+	inlineFrame: InlineFrame | null; // Compiler-side: the routine this node was copied from when a call to it was inlined; null for the routine's own code.
+}
+
+// A routine whose call was replaced by its body; `parent` is the inlined routine that called it, `callLine` the line of that call.
+export class InlineFrame {
+	name: string;
+	parent: InlineFrame | null;
+	callLine: int32;
+	constructor(name: string, parent: InlineFrame | null, callLine: int32) {
+		this.name = name;
+		this.parent = parent;
+		this.callLine = callLine;
+	}
 }
 
 export type Expression = Node;
@@ -948,6 +961,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		typeArg: "",
 		flowNode: null,
 		nodeTypeAst: null,
+		inlineFrame: null,
 	};
 }
 
@@ -1090,6 +1104,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		typeArg: "",
 		flowNode: null,
 		nodeTypeAst: null,
+		inlineFrame: null,
 	};
 }
 
