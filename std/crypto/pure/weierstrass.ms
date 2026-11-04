@@ -1,7 +1,8 @@
 /**
  * Short Weierstrass curves (P-256 and P-384): key encodings (SPKI, PKCS#8, SEC1), ECDSA signature
- * encodings, ECDSA with RFC 6979 nonces and ECDH over the fixed-width arithmetic of ./pcurve. A secret
- * scalar is multiplied in constant time; verification multiplies public scalars in variable time.
+ * encodings, ECDSA with RFC 6979 nonces and ECDH. The native backend computes on the fixed-width
+ * limbs of ./pcurve, multiplying a secret scalar in constant time; JavaScript computes on its own
+ * `bigint` through ./bigCurve, which is not constant-time.
  */
 
 import {
@@ -11,6 +12,7 @@ import {
 } from "./asn1";
 import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
 import { CurveMath, basePoint, mulSecret, mulDoublePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
+import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
 
@@ -202,17 +204,17 @@ function digestScalar(c: Readonly<Curve>, digest: Readonly<uint8[]>): Limbs {
 	return reduceBytes(c.math.order, leftmost(c.size, digest), 0);
 }
 
-export function ecPointValid(c: Readonly<Curve>, point: Readonly<uint8[]>): boolean {
+function pointValid(c: Readonly<Curve>, point: Readonly<uint8[]>): boolean {
 	return decodePoint(c.math, point) != null;
 }
 
-export function ecPublicPoint(c: Readonly<Curve>, d: Readonly<uint8[]>): uint8[] | null {
+function publicPoint(c: Readonly<Curve>, d: Readonly<uint8[]>): uint8[] | null {
 	if (secretScalar(c, d) == null) return null;
 	const point = mulSecret(c.math, basePoint(c.math), d);
 	return point == null ? null : encodePoint(c.math, point);
 }
 
-export function ecdhShared(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<uint8[]>): uint8[] | null {
+function sharedSecret(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<uint8[]>): uint8[] | null {
 	const peer = decodePoint(c.math, point);
 	if (peer == null || secretScalar(c, d) == null) return null;
 	const shared = mulSecret(c.math, peer, d);
@@ -244,7 +246,7 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 	}
 }
 
-export function ecdsaSignRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): uint8[] | null {
+function signRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): uint8[] | null {
 	const order = c.math.order;
 	const scalar = secretScalar(c, d);
 	if (scalar == null) return null;
@@ -260,7 +262,7 @@ export function ecdsaSignRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[
 	return derJoin([toBytes(order, r), toBytes(order, s)]);
 }
 
-export function ecdsaVerifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, digest: Readonly<uint8[]>, raw: Readonly<uint8[]>): boolean {
+function verifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, digest: Readonly<uint8[]>, raw: Readonly<uint8[]>): boolean {
 	const order = c.math.order;
 	const q = decodePoint(c.math, point);
 	if (q == null || raw.length != 2 * c.size) return false;
@@ -275,6 +277,46 @@ export function ecdsaVerifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, dig
 	const sum = mulDoublePublic(c.math, basePoint(c.math), toBytes(order, u1), q, toBytes(order, u2));
 	const xy = sum == null ? null : affineBytes(c.math, sum);
 	return xy != null && equal(order, reduceBytes(order, xy[0], 0), r);
+}
+
+export function ecPointValid(c: Readonly<Curve>, point: Readonly<uint8[]>): boolean {
+	when (js) {
+		return bigPointValid(c.size, point);
+	} else {
+		return pointValid(c, point);
+	}
+}
+
+export function ecPublicPoint(c: Readonly<Curve>, d: Readonly<uint8[]>): uint8[] | null {
+	when (js) {
+		return bigPublicPoint(c.size, d);
+	} else {
+		return publicPoint(c, d);
+	}
+}
+
+export function ecdhShared(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<uint8[]>): uint8[] | null {
+	when (js) {
+		return bigEcdhShared(c.size, d, point);
+	} else {
+		return sharedSecret(c, d, point);
+	}
+}
+
+export function ecdsaSignRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): uint8[] | null {
+	when (js) {
+		return bigSignRaw(c.size, kind, d, digest);
+	} else {
+		return signRaw(c, kind, d, digest);
+	}
+}
+
+export function ecdsaVerifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, digest: Readonly<uint8[]>, raw: Readonly<uint8[]>): boolean {
+	when (js) {
+		return bigVerifyRaw(c.size, point, digest, raw);
+	} else {
+		return verifyRaw(c, point, digest, raw);
+	}
 }
 
 when (c) {
