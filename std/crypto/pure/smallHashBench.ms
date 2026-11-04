@@ -5,7 +5,8 @@
 
 import { HashAlgorithm, digestSync } from "std/crypto";
 import { digestSync as pureDigestSync } from "./coreNative";
-import { newHashState } from "./state";
+import { newHashState, wipeHashState } from "./state";
+import { Buffer } from "std/core/buffer";
 import { wipeBytes, wipeWords } from "./secret";
 import { newHash, updateHash, finishHashInto, finishHash, hashOf } from "./hash";
 
@@ -69,13 +70,17 @@ for (let a = 0; a < 4; a++) {
 			() => { const h = newHash(kind); updateHash(h, data); sink += h.filled; },
 			() => { const h = newHash(kind); updateHash(h, data); finishHashInto(h, out); sink += out[0]; },
 			() => { wipeWords(words); wipeBytes(block); sink += block.length; },
+			() => { const h = newHash(kind); updateHash(h, data); finishHashInto(h, out); wipeHashState(h); sink += out[0]; },
+			() => { sink += Buffer.allocUnsafe(outSizes[a]).length; },
+			() => { const h = newHash(kind); updateHash(h, data); finishHashInto(h, out); wipeWords(h.state); sink += out[0]; },
+			() => { const h = newHash(kind); updateHash(h, data); finishHashInto(h, out); wipeBytes(h.block); sink += out[0]; },
 			() => { const h = newHash(kind); updateHash(h, data); sink += finishHash(h)[0]; },
 			() => { sink += hashOf(kind, data)[0]; },
 			() => { const r = pureDigestSync(algorithm, data); if (r.ok) sink += r.value[0]; },
 			() => { const r = digestSync(algorithm, data); if (r.ok) sink += r.value[0]; },
 		];
 		measure(`${algorithm} ${size}B`, ops,
-			["alloc", "+init", "+update", "+finishInto", "wipe16+block", "finishHash", "hashOf", "pureDigest", "vendor"]);
+			["alloc", "+init", "+update", "+finishInto", "wipe16+block", "+wipeState", "outAlloc", "+wipeWords", "+wipeBlock", "finishHash", "hashOf", "pureDigest", "vendor"]);
 	}
 }
 console.log(`sink ${sink > 0}`);
