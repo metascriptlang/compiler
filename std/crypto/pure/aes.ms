@@ -1,6 +1,4 @@
-import { newGhash, updateGhash, finishGhash } from "./ghash";
-import { wipeBytes, wipeWords } from "./secret";
-import { load32LE, store32LE, store64BE } from "./endian";
+import { newGhash, updateGhash, finishGhash, storeBE64 } from "./ghash";
 
 /**
  * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: eight blocks run at once as 32 words, so the
@@ -44,6 +42,17 @@ function subWord(n: uint32): uint32 {
 
 function rotl(n: uint32, by: uint32): uint32 {
 	return (n << by) | (n >> (32 - by));
+}
+
+function loadLE(data: Readonly<uint8[]>, at: int32): uint32 {
+	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
+}
+
+function storeLE(out: uint8[], at: int32, word: uint32): void {
+	out[at] = (word & 0xff) as uint8;
+	out[at + 1] = ((word >> 8) & 0xff) as uint8;
+	out[at + 2] = ((word >> 16) & 0xff) as uint8;
+	out[at + 3] = (word >> 24) as uint8;
 }
 
 function swapBytes(n: uint32): uint32 {
@@ -382,7 +391,7 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 	if (key.length != 16 && key.length != 24 && key.length != 32) throw new Error(`aes: key must be 16, 24 or 32 bytes, got ${key.length}`);
 	const nk = key.length / 4;
 	const words = new Array<uint32>(key.length + 28);
-	for (let i = 0; i < nk; i++) words[i] = load32LE(key, i * 4);
+	for (let i = 0; i < nk; i++) words[i] = loadLE(key, i * 4);
 	let rcon: int32 = 1;
 	for (let i = nk; i < words.length; i++) {
 		let t = words[i - 1];
@@ -402,8 +411,8 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 		packState(st);
 		for (let i = 0; i < 32; i++) packed[r * 32 + i] = st[i];
 	}
-	wipeWords(words);
-	wipeWords(st);
+	words.fill(0);
+	st.fill(0);
 	return packed;
 }
 
@@ -419,15 +428,15 @@ class Batch {
 }
 
 function wipe(batch: Batch): void {
-	wipeWords(batch.st);
-	wipeBytes(batch.bytes);
+	batch.st.fill(0);
+	batch.bytes.fill(0);
 }
 
 // Loads `count` blocks of `src` from `at` into the state, zero blocks after them.
 function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int32): void {
 	const st = batch.st;
 	for (let block = 0; block < 8; block++) {
-		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? load32LE(src, at + block * 16 + w * 4) : 0;
+		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? loadLE(src, at + block * 16 + w * 4) : 0;
 	}
 	packState(st);
 }
@@ -435,15 +444,15 @@ function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int3
 function storeBlocks(batch: Batch): void {
 	const st = batch.st;
 	unpackState(st);
-	for (let i = 0; i < 32; i++) store32LE(batch.bytes, i * 4, st[i]);
+	for (let i = 0; i < 32; i++) storeLE(batch.bytes, i * 4, st[i]);
 }
 
 // The key stream of counters `first .. first + 7` under `nonce`; with `hashKey` block 0 is the all-zero block instead.
 function counterBlocks(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, first: uint32, hashKey: boolean): void {
 	const st = batch.st;
-	const n0 = load32LE(nonce, 0);
-	const n1 = load32LE(nonce, 4);
-	const n2 = load32LE(nonce, 8);
+	const n0 = loadLE(nonce, 0);
+	const n1 = loadLE(nonce, 4);
+	const n2 = loadLE(nonce, 8);
 	for (let block = 0; block < 8; block++) {
 		const zero = hashKey && block == 0;
 		st[block * 4] = zero ? 0 : n0;
@@ -489,8 +498,8 @@ function gcmTag(keyed: Readonly<uint8[]>, aad: Readonly<uint8[]>, text: Readonly
 	updateGhash(ghash, aad, 0, aad.length);
 	updateGhash(ghash, text, at, at + length);
 	const lengths = new Array<uint8>(16);
-	store64BE(lengths, 0, (aad.length as uint64) << 3);
-	store64BE(lengths, 8, (length as uint64) << 3);
+	storeBE64(lengths, 0, (aad.length as uint64) << 3);
+	storeBE64(lengths, 8, (length as uint64) << 3);
 	updateGhash(ghash, lengths, 0, 16);
 	finishGhash(ghash, tag, 0);
 	for (let i = 0; i < 16; i++) tag[i] ^= keyed[16 + i];
@@ -512,7 +521,7 @@ export function gcmEncryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 	const computed = new Array<uint8>(16);
 	gcmTag(authKey, aad, dst, dstAt, length, computed);
 	for (let i = 0; i < 16; i++) tag[tagAt + i] = computed[i];
-	wipeBytes(authKey);
+	authKey.fill(0);
 	wipe(batch);
 }
 
@@ -531,7 +540,7 @@ export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 	gcmTag(batch.bytes, aad, src, srcAt, length, computed);
 	let diff: uint8 = 0;
 	for (let i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
-	wipeBytes(computed);
+	computed.fill(0);
 	if (diff != 0) {
 		wipe(batch);
 		return false;
@@ -543,7 +552,7 @@ export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
 export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
-	if (nonce.length != 12) throw new Error(`aes-gcm: nonce must be 12 bytes, got ${nonce.length}`);
+	requireNonce(nonce);
 	const size = plain.length;
 	const sealed = new Array<uint8>(12 + size + 16);
 	for (let i = 0; i < 12; i++) sealed[i] = nonce[i];
@@ -554,13 +563,9 @@ export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]
 /** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
 export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
 	if (sealed.length < 28) return null;
-	const end = sealed.length - 16;
-	const tag = gcmTag(xk, sealed, end, aad);
-	let diff: uint8 = 0;
-	for (let i = 0; i < 16; i++) diff = diff | (tag[i] ^ sealed[end + i]);
-	if (diff != 0) return null;
-	const plain = new Array<uint8>(end - 12);
-	ctr32Xor(xk, loadLE(sealed, 0), loadLE(sealed, 4), loadLE(sealed, 8), 2, sealed, 12, end, plain, 0);
+	const size = sealed.length - 28;
+	const plain = new Array<uint8>(size);
+	if (!gcmDecryptInto(xk, sealed.slice(0, 12), aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
 	return plain;
 }
 
@@ -613,7 +618,7 @@ export function cbcDecrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, cipher
 		bad |= ((out[size - 1 - i] as uint32) ^ pad) & inPadding;
 	}
 	if (bad != 0) {
-		wipeBytes(out);
+		out.fill(0);
 		return null;
 	}
 	return out.slice(0, size - (pad as int32));

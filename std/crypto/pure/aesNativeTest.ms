@@ -7,7 +7,8 @@
 // CBC vectors: NIST SP 800-38A (2001), Appendix F.2.1, F.2.3 and F.2.5 (AES-128/192/256-CBC). US gov work.
 // NOT constant-time: T-table AES leaks the key via cache timing. Phase 2 audit parked.
 
-import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt, cbcDecrypt } from "./aes";
+import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, gcmEncryptInto, gcmDecryptInto, cbcEncrypt, cbcDecrypt } from "./aes";
+import { newGhash, updateGhash, finishGhash } from "./ghash";
 import { encodeHex, decodeHex } from "../../core/encoding";
 
 function eqHex(got: Readonly<uint8[]>, want: string): boolean {
@@ -295,4 +296,44 @@ test "bad key, nonce and iv lengths are refused" {
 	assert refuses(() => { gcmSealWithNonce(xk, new Array<uint8>(16), "".decodeHex(), "".decodeHex()); });
 	assert refuses(() => { cbcEncrypt(xk, new Array<uint8>(12), "".decodeHex()); });
 	assert refuses(() => { cbcDecrypt(xk, new Array<uint8>(15), new Array<uint8>(16)); });
+}
+
+test "GHASH alone over 256 bytes, whole and split" {
+	const key = "42424242424242424242424242424242".decodeHex();
+	const message = new Array<uint8>(256);
+	message.fill(0x69);
+	const whole = newGhash(key);
+	updateGhash(whole, message, 0, 256);
+	const out = new Array<uint8>(16);
+	finishGhash(whole, out, 0);
+	assert eqHex(out, "889295fa746e8b174bf4ec80a65dea41");
+	const split = newGhash(key);
+	updateGhash(split, message, 0, 96);
+	updateGhash(split, message, 96, 256);
+	finishGhash(split, out, 0);
+	assert eqHex(out, "889295fa746e8b174bf4ec80a65dea41");
+}
+
+test "GCM encrypt and decrypt into caller ranges, in place" {
+	const xk = expandKey(k128f.decodeHex());
+	const pt = "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39";
+	const record = new Array<uint8>(5 + 60 + 16);
+	const plain = pt.decodeHex();
+	for (let i = 0; i < 60; i++) record[5 + i] = plain[i];
+	gcmEncryptInto(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, 5, 60, record, 5, record, 65);
+	assert eqHex(record.slice(5, 65), "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091");
+	assert eqHex(record.slice(65, 81), "5bc94fbc3221a5db94fae95ae7121a47");
+	assert !gcmDecryptInto(xk, ivCafe.decodeHex(), "".decodeHex(), record, 5, 60, record, 65, record, 5);
+	assert gcmDecryptInto(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, 5, 60, record, 65, record, 5);
+	assert eqHex(record.slice(5, 65), pt);
+}
+
+test "GCM into refuses a range outside its array" {
+	const xk = expandKey(k128z.decodeHex());
+	const nonce = ivZ.decodeHex();
+	const buf = new Array<uint8>(32);
+	assert refuses(() => { gcmEncryptInto(xk, nonce, buf, buf, 20, 16, buf, 0, buf, 16); });
+	assert refuses(() => { gcmEncryptInto(xk, nonce, buf, buf, 0, -1, buf, 0, buf, 16); });
+	assert refuses(() => { gcmEncryptInto(xk, nonce, buf, buf, 0, 16, buf, 0, buf, 17); });
+	assert refuses(() => { gcmDecryptInto(xk, nonce, buf, buf, 0, 16, buf, 16, buf, 24); });
 }

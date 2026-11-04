@@ -48,12 +48,8 @@ function carrylessProduct64(g: Ghash, a: uint64, b: uint64): void {
 	g.productHi = hi ^ (mid >> 32);
 }
 
-// The carry-less product of `v` and 0xc200000000000000 (x^63 + x^62 + x^57, the reduction constant shifted down
-// 64 bits) into `g.productHi:productLo`, as the three shifted copies the constant's set bits select.
-function timesReduction(g: Ghash, v: uint64): void {
-	g.productHi = (v >> 1) ^ (v >> 2) ^ (v >> 7);
-	g.productLo = (v << 63) ^ (v << 62) ^ (v << 57);
-}
+// The low half of the reduction constant x^127 + x^126 + x^121, shifted down 64 bits.
+const reductionHalf: uint64 = 0xc200000000000000;
 
 // acc = (acc ^ block) * key, reduced modulo x^128 + x^127 + x^126 + x^121 + 1.
 function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
@@ -72,21 +68,31 @@ function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
 	const highLo = hiLo ^ midHi;
 	const lowHi = loHi ^ midLo;
 	const lowLo = loLo;
-	timesReduction(g, lowLo);
+	carrylessProduct64(g, lowLo, reductionHalf);
 	const bHi = lowLo ^ g.productHi;
 	const bLo = lowHi ^ g.productLo;
-	timesReduction(g, bLo);
+	carrylessProduct64(g, bLo, reductionHalf);
 	g.accHi = bLo ^ g.productHi ^ highHi;
 	g.accLo = bHi ^ g.productLo ^ highLo;
 }
 
+function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
+	let out: uint64 = 0;
+	for (let i = 0; i < 8; i++) out = (out << 8) | (data[at + i] as uint64);
+	return out;
+}
+
+export function storeBE64(out: uint8[], at: int32, value: uint64): void {
+	for (let i = 0; i < 8; i++) out[at + i] = ((value >> ((56 - 8 * i) as uint64)) & 0xff) as uint8;
+}
+
 /** A GHASH under the 16-byte hash key H. */
 export function newGhash(key: Readonly<uint8[]>): Ghash {
-	const hHi = load64BE(key, 0);
-	const hLo = load64BE(key, 8);
+	const hHi = loadBE64(key, 0);
+	const hLo = loadBE64(key, 8);
 	const carry = (0 as uint64) - (hHi >> 63);
 	return {
-		keyHi: ((hHi << 1) | (hLo >> 63)) ^ ((0xc200000000000000 as uint64) & carry),
+		keyHi: ((hHi << 1) | (hLo >> 63)) ^ (reductionHalf & carry),
 		keyLo: (hLo << 1) ^ ((1 as uint64) & carry),
 		accHi: 0,
 		accLo: 0,
@@ -100,25 +106,25 @@ export function newGhash(key: Readonly<uint8[]>): Ghash {
 export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): void {
 	let at = from;
 	while (at + 16 <= to) {
-		absorb(g, load64BE(data, at), load64BE(data, at + 8));
+		absorb(g, loadBE64(data, at), loadBE64(data, at + 8));
 		at += 16;
 	}
 	if (at < to) {
 		const tail = g.tail;
 		for (let i = 0; i < 16; i++) tail[i] = at + i < to ? data[at + i] : 0;
-		absorb(g, load64BE(tail, 0), load64BE(tail, 8));
+		absorb(g, loadBE64(tail, 0), loadBE64(tail, 8));
 	}
 }
 
 /** Writes the 16-byte hash to `out[at, at + 16)` and wipes the state. */
 export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
-	store64BE(out, at, g.accHi);
-	store64BE(out, at + 8, g.accLo);
+	storeBE64(out, at, g.accHi);
+	storeBE64(out, at + 8, g.accLo);
 	g.keyHi = 0;
 	g.keyLo = 0;
 	g.accHi = 0;
 	g.accLo = 0;
 	g.productHi = 0;
 	g.productLo = 0;
-	wipeBytes(g.tail);
+	for (let i = 0; i < 16; i++) g.tail[i] = 0;
 }
