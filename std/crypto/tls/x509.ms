@@ -489,12 +489,16 @@ function verifyRsa(
 	if (modulusLength != 128 && modulusLength != 256 && modulusLength != 384 && modulusLength != 512) {
 		return Result.err(X509Error.SignatureUnsupportedBitCount);
 	}
-	const n = bigFromBytes(copyOf(key, modulusStart, modulusElement.end));
+	const modulus = copyOf(key, modulusStart, modulusElement.end);
+	const n = bigFromBytes(modulus);
 	if (bitLength(n) < 512) return Result.err(X509Error.SignatureInvalid);
 	if (exponentLength > 4) return Result.err(X509Error.SignatureInvalid);
-	const e = bigFromBytes(copyOf(key, exponentElement.start, exponentElement.end));
+	let exponentStart = exponentElement.start;
+	while (exponentStart + 1 < exponentElement.end && key[exponentStart] == 0) exponentStart += 1;
+	const exponent = copyOf(key, exponentStart, exponentElement.end);
+	const e = bigFromBytes(exponent);
 	if (e % 2n == 0n || e < 2n || e >= n) return Result.err(X509Error.SignatureInvalid);
-	const publicKey: RsaPublicData = { n, e };
+	const publicKey: RsaPublicData = { n: modulus, e: exponent };
 	if (!rsaVerifyPkcs1(publicKey, hashName, message, signature)) return Result.err(X509Error.SignatureInvalid);
 	return Result.ok(null);
 }
