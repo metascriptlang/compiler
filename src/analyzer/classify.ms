@@ -16,6 +16,72 @@ import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
 
+import { declaresUserHook } from "../checker/instantiate";
+import {
+	hostTargetInfo, sizeOfType, alignOfType, storesNothing,
+} from "../checker/types";
+
+const PACKED_MAX_DEPTH = 12;
+const PACKED_MAX_BYTES = 65535 * 8;
+
+export function raiserPackedEligible(t: Type | null): boolean {
+	return packedEligibleAt(t, 0);
+}
+
+function packedEligibleAt(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > PACKED_MAX_DEPTH || isAwaitable(t)) return false;
+	if (hasAsgnFlag(t) || packedHasUserHook(t)) return false;
+	if (t.kind == TypeKind.GenericInstance && t.typeExtra != null &&
+		packedHasUserHook(t.typeExtra)) return false;
+	const supported = match (t.kind) {
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Char | TypeKind.Enum | TypeKind.EnumLiteral
+			| TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
+			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => true,
+		TypeKind.Alias | TypeKind.Distinct | TypeKind.GenericInstance =>
+			packedEligibleAt(t.typeReturn, depth + 1),
+		TypeKind.SizedArray => packedArrayEligible(t, depth),
+		TypeKind.Struct => isStructType(t) && packedFieldsEligible(t, depth),
+		TypeKind.Tuple => packedFieldsEligible(t, depth),
+		_ => false,
+	};
+	if (!supported) return false;
+	const target = hostTargetInfo();
+	const size = sizeOfType(target, t);
+	return size >= 0 && size <= PACKED_MAX_BYTES && alignOfType(target, t) > 0;
+}
+
+function packedHasUserHook(t: Type): boolean {
+	if (declaresUserHook(t)) return true;
+	for (const op of t.attachedOps) {
+		if (op != null && !hasFlag(op, SymbolFlag.GeneratedOp)) return true;
+	}
+	return false;
+}
+
+function packedArrayEligible(t: Type, depth: int32): boolean {
+	if (t.typeValue < 0 || t.typeValue > 65535 ||
+		!packedEligibleAt(t.typeReturn, depth + 1)) return false;
+	const elementSize = sizeOfType(hostTargetInfo(), t.typeReturn!);
+	const count = Math.max(1, t.typeValue) as int64;
+	return count * elementSize <= PACKED_MAX_BYTES;
+}
+
+function packedFieldsEligible(t: Type, depth: int32): boolean {
+	if (t.kind == TypeKind.Struct && t.typeNames.length != t.typeChildren.length) {
+		return false;
+	}
+	let bytes: int64 = 0;
+	for (const field of t.typeChildren) {
+		if (storesNothing(t, field)) continue;
+		if (!packedEligibleAt(field, depth + 1)) return false;
+		bytes += sizeOfType(hostTargetInfo(), field);
+		if (bytes > PACKED_MAX_BYTES) return false;
+	}
+	return true;
+}
+
 // ===== RC Classification Kind =====
 
 export enum RcKind {

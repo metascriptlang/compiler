@@ -149,6 +149,7 @@ import "./positionalNameBinding";
 import "./preludeExportOwnership";
 import "./raiserProgramArgv";
 import "./raiserProjectImage";
+import "./raiserPackedPlaces";
 import "./raiserRuntimeLayout";
 import "./raiserValueUnionCopy";
 import "./sendableFunction";

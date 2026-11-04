@@ -3,7 +3,8 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
-	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
+	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset,
+	RaiserSlotShape
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, CLOSURE_LAYOUT, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, InlineFrame } from "../../ast/node";
@@ -62,6 +63,7 @@ export interface RaiserLocal {
 	sym: Symbol;
 	reg: int32;
 	isString: boolean;
+	shape: RaiserSlotShape;
 	heldThrough: int32;
 }
 
@@ -341,6 +343,23 @@ function blockFits(s: RaiserCompState, start: int32, classes: RaiserRegClass[]):
 	return true;
 }
 
+export function allocPackedBlock(s: RaiserCompState, shape: RaiserSlotShape): int32 {
+	const words = shapeWords(shape);
+	if (!shape.block) throw new Error("internal: packed allocation needs a block shape");
+	const classes: RaiserRegClass[] = [];
+	for (let i = 0; i < words; i += 1) classes.push(RaiserRegClass.Word);
+	return allocBlock(s, classes);
+}
+
+function shapeWords(shape: RaiserSlotShape): int32 {
+	if (shape.words != shape.words || shape.words < 1 || shape.words > 65535 ||
+		shape.words != ((shape.words as int32) as number) ||
+		!shape.block && shape.words != 1) {
+		throw new Error("internal: invalid Raiser storage shape");
+	}
+	return shape.words as int32;
+}
+
 export function allocWord(s: RaiserCompState): int32 {
 	return allocReg(s, RaiserRegClass.Word);
 }
@@ -379,6 +398,8 @@ export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
 export function resetTemps(s: RaiserCompState, enclosingRegs: int32 = 0): void {
 	let maxReg = enclosingRegs - 1;
 	for (const local of s.locals.items) {
+		const end = local.reg + (local.shape.words as int32) - 1;
+		if (end > maxReg) maxReg = end;
 		if (local.heldThrough > maxReg) maxReg = local.heldThrough;
 	}
 	s.nextReg = maxReg + 1;
@@ -424,10 +445,20 @@ export function emitLoadConst(s: RaiserCompState, reg: int32, value: RaiserValue
 	emitInst(s, inst);
 }
 
-// A Ret inside a guarded region runs again after the finally, reading this register.
-export function emitRet(s: RaiserCompState, reg: int32): void {
-	for (const guarded of s.tries) if (reg > guarded.returnTop) guarded.returnTop = reg;
-	emitInst(s, raiserABC(RaiserOpcode.Ret, reg, 0, 0));
+// A return inside a guarded region reads its storage again after the finally.
+export function emitRet(
+	s: RaiserCompState,
+	reg: int32,
+	shape: RaiserSlotShape | null = null,
+): void {
+	const words = shape != null ? shapeWords(shape) : 1;
+	const top = reg + words - 1;
+	for (const guarded of s.tries) {
+		if (top > guarded.returnTop) guarded.returnTop = top;
+	}
+	emitInst(s, shape != null && shape.block
+		? raiserABC(RaiserOpcode.RetN, reg, words, 0)
+		: raiserABC(RaiserOpcode.Ret, reg, 0, 0));
 }
 
 export function emitHalt(s: RaiserCompState): void {
@@ -436,9 +467,31 @@ export function emitHalt(s: RaiserCompState): void {
 
 // --- Locals helpers ---
 
-export function declareLocal(s: RaiserCompState, sym: Symbol, reg: int32, isString: boolean = false): void {
-	const local: RaiserLocal = { sym, reg, isString, heldThrough: reg };
+export function declareLocal(
+	s: RaiserCompState,
+	sym: Symbol,
+	reg: int32,
+	isString: boolean = false,
+	shape: RaiserSlotShape | null = null,
+): void {
+	const storage: RaiserSlotShape = shape != null
+		? { words: shapeWords(shape), block: shape.block }
+		: { words: 1, block: false };
+	const local: RaiserLocal = {
+		sym, reg, isString, shape: storage,
+		heldThrough: reg + (storage.words as int32) - 1,
+	};
 	s.locals.items.push(local);
+}
+
+export function localSlotShape(
+	s: RaiserCompState,
+	sym: Symbol | null,
+): RaiserSlotShape | null {
+	for (let i = s.locals.items.length - 1; i >= 0; i -= 1) {
+		if (s.locals.items[i].sym == sym) return s.locals.items[i].shape;
+	}
+	return null;
 }
 
 export function declaredSymbol(node: Node, name: string): Symbol {
@@ -466,7 +519,7 @@ export function resolveLocal(s: RaiserCompState, sym: Symbol | null): int32 {
 
 export function regIsFixedLocal(s: RaiserCompState, reg: int32): boolean {
 	for (const local of s.locals.items) {
-		if (local.reg == reg) return true;
+		if (reg >= local.reg && reg < local.reg + local.shape.words) return true;
 	}
 	return false;
 }
@@ -824,8 +877,20 @@ function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
 
 // `reg` is where an expression compiled from `startPc` left its value, `firstTemp` the first register
 // that expression could allocate: the value is moved to `target` unless its writer can aim there.
-export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
+export function landResult(
+	s: RaiserCompState,
+	target: number,
+	startPc: int32,
+	firstTemp: int32,
+	reg: int32,
+	shape: RaiserSlotShape | null = null,
+): void {
+	const words = shape != null ? shapeWords(shape) : 1;
 	if (reg == target) return;
+	if (shape != null && shape.block) {
+		emitInst(s, raiserABC(RaiserOpcode.MoveN, target, reg, words));
+		return;
+	}
 	const tail = reg >= firstTemp && classOfReg(s, reg) == classOfReg(s, target as int32) ? lastWriteTail(s, startPc, reg) : 0;
 	if (tail > 0) {
 		const end = s.code.length;
@@ -843,7 +908,9 @@ export function landResult(s: RaiserCompState, target: number, startPc: int32, f
 // is a Ret, no jump or skip lands past it, and no handler (whose offsets are not scanned) exists.
 function endIsUnreachable(s: RaiserCompState): boolean {
 	const end = s.code.length;
-	if (end == 0 || s.code[end - 1].op != RaiserOpcode.Ret) return false;
+	if (end == 0) return false;
+	const last = s.code[end - 1].op;
+	if (last != RaiserOpcode.Ret && last != RaiserOpcode.RetN) return false;
 	for (let i = 0; i < end; i = i + 1) {
 		const inst = s.code[i];
 		if (landsPast(inst, i, end)) return false;

@@ -7,13 +7,33 @@ import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
 import { MemKind } from "../../raiser/layout";
-import { memKindOf } from "./layout";
+import { VmLayouts, memKindOf, vmLayoutOf } from "./layout";
+import { RaiserSlotShape } from "../../raiser/bytecode";
+import { raiserPackedEligible } from "../../analyzer/classify";
 import { RaiserValue, RaiserValueKind, createClassType, CLOSURE_LAYOUT, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, unwrapRefNullUnion, isPlainFunctionPointer, isCountedRef, isUnownedSlot } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType, layoutOperand } from "./context";
+
+export function packedSlotShapeOf(
+	layouts: VmLayouts,
+	valueType: Type | null,
+): RaiserSlotShape | null {
+	if (!raiserPackedEligible(valueType) || valueType == null) return null;
+	let body = valueType;
+	while ((body.kind == TypeKind.Alias || body.kind == TypeKind.Distinct ||
+		body.kind == TypeKind.GenericInstance) && body.typeReturn != null) {
+		body = body.typeReturn;
+	}
+	if (body.kind != TypeKind.Struct && body.kind != TypeKind.Tuple &&
+		body.kind != TypeKind.SizedArray) return null;
+	const layout = vmLayoutOf(layouts, valueType);
+	if (layout.kind != MemKind.Block) return null;
+	const words = Math.max(1, Math.ceil((layout.size as number) / 8));
+	return { words, block: true };
+}
 
 function copyPlan(s: RaiserCompState, valueType: Readonly<Type | null>): int32 {
 	const base = distinctBody(valueType);
