@@ -1,17 +1,40 @@
 import { newGhash, updateGhash, finishGhash, storeBE32 } from "./ghash";
 
 /**
- * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, fixsliced (Adomnicai and Peyrin, "Fixslicing AES-like
- * ciphers", 2020): a pass holds four blocks in eight uint64 words on C and two blocks in eight uint32 words on JS, where
- * a uint64 is a BigInt. ShiftRows is folded into the round keys and the MixColumns rotations, so no table is indexed by
- * the key or the data, the key schedule included. A key schedule is the fixsliced round keys, the same words for both
- * directions.
+ * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, with no table indexed by the key or the data, the key
+ * schedule included. Serial and short work is fixsliced (Adomnicai and Peyrin, "Fixslicing AES-like ciphers", 2020):
+ * four blocks in eight uint64 words on C, two blocks in eight uint32 words on JS, where a uint64 is a BigInt. Long
+ * counter-mode runs, and long CBC decryption on JS, take the bitsliced cipher with eight blocks per 32-bit lane, which
+ * costs less per block there. A key schedule holds both round-key layouts, the same words for both directions.
  */
 
 when (c) {
 	type Word = uint64;
+	/** Two eight-block 32-bit lanes per wide word. */
+	type Wide = uint64;
 
 	const BLOCKS: int32 = 4;
+	const WIDE_BLOCKS: int32 = 16;
+	// Measured on x86-64: a wide pass costs about 3.4 fixsliced passes, and wide decryption never beats fixsliced.
+	const WIDE_FROM: int32 = 208;
+	const WIDE_DECRYPT_FROM: int32 = 0x7fffffff;
+
+	function splatLike(x: uint32, like: Wide): Wide {
+		return (x as uint64) | ((x as uint64) << 32);
+	}
+
+	function laneWord(lo: uint32, hi: uint32): Wide {
+		return (lo as uint64) | ((hi as uint64) << 32);
+	}
+
+	function laneOf(w: Wide, g: int32): uint32 {
+		return ((w >> ((32 * g) as uint64)) & 0xffffffff) as uint32;
+	}
+
+	function laneRotl(x: Wide, by: Wide): Wide {
+		const low = splatLike(((1 as uint32) << (by as uint32)) - 1, x);
+		return ((x << by) & ~low) | ((x >> (32 - by)) & low);
+	}
 	const WIDTH: Word = 64;
 	const ROW: Word = 16;
 	const COL: Word = 4;
@@ -57,6 +80,7 @@ when (c) {
 			writeReordered(out, p * 16 + 4, st[p + 4]);
 		}
 	}
+
 } else {
 	type Word = uint32;
 
@@ -74,6 +98,30 @@ when (c) {
 	const SHIFT_ROWS_1: Word = 0x0c0f0300;
 	const SHIFT_ROWS_3: Word = 0x030f0c00;
 	const SHIFT_ROWS_ODD: Word = 0x33003300;
+
+	/** One eight-block lane per wide word. */
+	type Wide = uint32;
+
+	const WIDE_BLOCKS: int32 = 8;
+	// Measured on node: a wide pass costs about two fixsliced passes, and wins CBC decryption from a full pass on.
+	const WIDE_FROM: int32 = 64;
+	const WIDE_DECRYPT_FROM: int32 = 8;
+
+	function splatLike(x: uint32, like: Wide): Wide {
+		return x;
+	}
+
+	function laneWord(lo: uint32, hi: uint32): Wide {
+		return lo;
+	}
+
+	function laneOf(w: Wide, g: int32): uint32 {
+		return w;
+	}
+
+	function laneRotl(x: Wide, by: Wide): Wide {
+		return (x << by) | (x >> (32 - by));
+	}
 
 	// Word 2w + p is the little-endian word w of block p; blocks from `count` on are zero.
 	function loadWords(st: Word[], src: Readonly<uint8[]>, at: int32, count: int32): void {
@@ -431,6 +479,7 @@ function invSubBytes(st: Word[]): void {
 
 // The row and column rotations of the fixsliced MixColumns: round r % 4 rotates by `firstRotation(x, r % 4)` and
 // `secondRotation(x, r % 4)`.
+@inline
 function firstRotation(x: Word, variant: int32): Word {
 	if (variant == 0) return ror(x, ROW);
 	if (variant == 1) return (ror(x, ROW + COL) & ROT11) | (ror(x, COL) & ~ROT11);
@@ -438,11 +487,13 @@ function firstRotation(x: Word, variant: int32): Word {
 	return (ror(x, ROW + 3 * COL) & ROT13) | (ror(x, 3 * COL) & ~ROT13);
 }
 
+@inline
 function secondRotation(x: Word, variant: int32): Word {
 	if ((variant & 1) == 0) return ror(x, 2 * ROW);
 	return (ror(x, 2 * ROW + 2 * COL) & ROT12) | (ror(x, ROW + 2 * COL) & ~ROT12);
 }
 
+@inline
 function mixColumns(st: Word[], variant: int32): void {
 	const a0 = st[0];
 	const a1 = st[1];
@@ -478,6 +529,7 @@ function mixColumns(st: Word[], variant: int32): void {
 	st[7] = b7 ^ c6 ^ secondRotation(c7, variant);
 }
 
+@inline
 function invMixColumns(st: Word[], variant: int32): void {
 	const a0 = st[0];
 	const a1 = st[1];
@@ -542,13 +594,432 @@ function addRoundKey(st: Word[], keys: Readonly<Word[]>, round: int32): void {
 	for (let i = 0; i < 8; i++) st[i] ^= keys[at + i];
 }
 
-function encryptState(keys: Readonly<Word[]>, st: Word[]): void {
-	const rounds = keys.length / 8 - 1;
-	addRoundKey(st, keys, 0);
+// Round r runs MixColumns variant r % 4; callers pass it as a constant, so each inlined round folds its rotations.
+@inline
+function encryptRound(st: Word[], keys: Readonly<Word[]>, r: int32, variant: int32): void {
+	subBytes(st);
+	mixColumns(st, variant);
+	addRoundKey(st, keys, r);
+}
+
+@inline
+function decryptRound(st: Word[], keys: Readonly<Word[]>, r: int32, variant: int32): void {
+	addRoundKey(st, keys, r);
+	invMixColumns(st, variant);
+	invSubBytes(st);
+}
+
+// The bulk path: the bitsliced cipher with eight blocks per 32-bit lane, WIDE_BLOCKS per pass, which runs many blocks
+// faster than fixsliced passes.
+function wideSbox(u: Wide[], at: int32): void {
+	const s0 = u[at + 4] ^ u[at + 16];
+	const s1 = u[at + 20] ^ u[at + 28];
+	const s2 = u[at + 12] ^ s0;
+	const s3 = u[at + 0] ^ u[at + 8];
+	const q0 = s1 ^ s2;
+	const s4 = u[at + 0] ^ u[at + 24];
+	const s5 = u[at + 8] ^ u[at + 24];
+	const s6 = u[at + 12] ^ s1;
+	const s7 = u[at + 20] ^ s3;
+	const q1 = s1 ^ s5;
+	const q2 = u[at + 8] ^ q0;
+	const q3 = s4 ^ s2;
+	const q4 = s3 ^ q0;
+	const s8 = u[at + 16] ^ s3;
+	const q5 = s6 ^ s8;
+	const q6 = u[at + 8] ^ u[at + 12];
+	const q7 = u[at + 24] ^ s2;
+	const s9 = u[at + 24] ^ s0;
+	const q8 = s3 ^ s9;
+	const q9 = s4 ^ s6;
+	const q10 = s0 ^ s5;
+	const q12 = u[at + 28] ^ s2;
+	const q13 = u[at + 4] ^ s7;
+	const q14 = u[at + 28] ^ s3;
+	const q15 = s2 ^ s7;
+	const q16 = u[at + 4] ^ s1;
+	const q17 = u[at + 4] ^ u[at + 28];
+	const q11 = u[at + 20];
+	const t20 = q6 & q12;
+	const t21 = q3 & q14;
+	const t22 = q1 & q16;
+	const t23 = q2 & q17;
+	const x0 = ((q3 | q14) ^ (q0 & q7)) ^ (t20 ^ t22);
+	const x1 = ((q4 | q13) ^ (q10 & q11)) ^ (t21 ^ t20);
+	const x2 = ((q2 | q17) ^ (q5 & q9)) ^ (t21 ^ t22);
+	const x3 = ((q8 | q15) ^ t23) ^ (t21 ^ (q4 & q13));
+	const a = x1 & ~x3;
+	const b = x0 & ~x3;
+	const c = x3 & ~x1;
+	const d = x2 & ~x1;
+	const e = x0 ^ a;
+	const y0 = x3 ^ (x2 & ~e);
+	const f = x1 ^ b;
+	const y1 = c ^ (x2 & f);
+	const g = x2 ^ c;
+	const y2 = x1 ^ (x0 & ~g);
+	const h = x3 ^ d;
+	const y3 = a ^ (x0 & h);
+	const y02 = y2 ^ y0;
+	const y13 = y3 ^ y1;
+	const y23 = y3 ^ y2;
+	const y01 = y1 ^ y0;
+	const y00 = y02 ^ y13;
+	const a0 = y01 & q11;
+	const a1 = y0 & q12;
+	const a2 = y1 & q0;
+	const a3 = y23 & q17;
+	const a4 = y2 & q5;
+	const a5 = y3 & q15;
+	const a6 = y13 & q14;
+	const a7 = y00 & q16;
+	const a8 = y02 & q13;
+	const a9 = y01 & q7;
+	const a10 = y0 & q10;
+	const a11 = y1 & q6;
+	const a12 = y23 & q2;
+	const a13 = y2 & q9;
+	const a14 = y3 & q8;
+	const a15 = y13 & q3;
+	const a16 = y00 & q1;
+	const a17 = y02 & q4;
+	const r0 = a1 ^ a5;
+	const r1 = a9 ^ a15;
+	const r2 = a4 ^ r0;
+	const r3 = a2 ^ a10;
+	const r4 = a11 ^ a17;
+	const r5 = a8 ^ r1;
+	const r6 = a0 ^ a16;
+	const r7 = a7 ^ a13;
+	const r8 = a11 ^ a14;
+	const r9 = r3 ^ r4;
+	const r10 = r5 ^ r6;
+	const r11 = r2 ^ r9;
+	const r12 = a3 ^ r0;
+	const r13 = r7 ^ r8;
+	const r14 = r12 ^ r13;
+	u[at + 0] = r10 ^ r14;
+	const r15 = a6 ^ a10;
+	const r16 = r15 ^ r2;
+	u[at + 4] = ~(r10 ^ r16);
+	u[at + 8] = ~(a2 ^ r2);
+	const r17 = a12 ^ a13;
+	const r18 = a15 ^ r17;
+	u[at + 12] = r18 ^ r11;
+	const r19 = a1 ^ a14;
+	const r20 = a17 ^ r3;
+	const r21 = r7 ^ r19;
+	const r22 = r5 ^ r20;
+	u[at + 16] = r21 ^ r22;
+	const r23 = a9 ^ a12;
+	u[at + 20] = r8 ^ r23;
+	u[at + 24] = ~(r1 ^ r4);
+	u[at + 28] = ~(a16 ^ r11);
+}
+
+function wideMixColumns(st: Wide[]): void {
+	const t2_0 = st[0] ^ st[1];
+	const t2_1 = st[1] ^ st[2];
+	const t2_2 = st[2] ^ st[3];
+	const t2_3 = st[3] ^ st[0];
+	let t0_0 = st[28] ^ st[29];
+	let t0_1 = st[29] ^ st[30];
+	let t0_2 = st[30] ^ st[31];
+	let t0_3 = st[31] ^ st[28];
+	let t = st[28];
+	st[28] = t2_0 ^ t0_2 ^ st[29];
+	st[29] = t2_1 ^ t0_2 ^ t;
+	t = st[30];
+	st[30] = t2_2 ^ t0_0 ^ st[31];
+	st[31] = t2_3 ^ t0_0 ^ t;
+	let t1_0 = st[24] ^ st[25];
+	let t1_1 = st[25] ^ st[26];
+	let t1_2 = st[26] ^ st[27];
+	let t1_3 = st[27] ^ st[24];
+	t = st[24];
+	st[24] = t0_0 ^ t2_0 ^ st[25] ^ t1_2;
+	let t_bis = st[25];
+	st[25] = t0_1 ^ t2_1 ^ t1_2 ^ t;
+	t = st[26];
+	st[26] = t0_2 ^ t2_2 ^ t1_3 ^ t_bis;
+	st[27] = t0_3 ^ t2_3 ^ t1_0 ^ t;
+	t0_0 = st[20] ^ st[21];
+	t0_1 = st[21] ^ st[22];
+	t0_2 = st[22] ^ st[23];
+	t0_3 = st[23] ^ st[20];
+	t = st[20];
+	st[20] = t1_0 ^ t0_1 ^ st[23];
+	t_bis = st[21];
+	st[21] = t1_1 ^ t0_2 ^ t;
+	t = st[22];
+	st[22] = t1_2 ^ t0_3 ^ t_bis;
+	st[23] = t1_3 ^ t0_0 ^ t;
+	t1_0 = st[16] ^ st[17];
+	t1_1 = st[17] ^ st[18];
+	t1_2 = st[18] ^ st[19];
+	t1_3 = st[19] ^ st[16];
+	t = st[16];
+	st[16] = t0_0 ^ t2_0 ^ t1_1 ^ st[19];
+	t_bis = st[17];
+	st[17] = t0_1 ^ t2_1 ^ t1_2 ^ t;
+	t = st[18];
+	st[18] = t0_2 ^ t2_2 ^ t1_3 ^ t_bis;
+	st[19] = t0_3 ^ t2_3 ^ t1_0 ^ t;
+	t0_0 = st[12] ^ st[13];
+	t0_1 = st[13] ^ st[14];
+	t0_2 = st[14] ^ st[15];
+	t0_3 = st[15] ^ st[12];
+	t = st[12];
+	st[12] = t1_0 ^ t2_0 ^ t0_1 ^ st[15];
+	t_bis = st[13];
+	st[13] = t1_1 ^ t2_1 ^ t0_2 ^ t;
+	t = st[14];
+	st[14] = t1_2 ^ t2_2 ^ t0_3 ^ t_bis;
+	st[15] = t1_3 ^ t2_3 ^ t0_0 ^ t;
+	t1_0 = st[8] ^ st[9];
+	t1_1 = st[9] ^ st[10];
+	t1_2 = st[10] ^ st[11];
+	t1_3 = st[11] ^ st[8];
+	t = st[8];
+	st[8] = t0_0 ^ t1_1 ^ st[11];
+	t_bis = st[9];
+	st[9] = t0_1 ^ t1_2 ^ t;
+	t = st[10];
+	st[10] = t0_2 ^ t1_3 ^ t_bis;
+	st[11] = t0_3 ^ t1_0 ^ t;
+	t0_0 = st[4] ^ st[5];
+	t0_1 = st[5] ^ st[6];
+	t0_2 = st[6] ^ st[7];
+	t0_3 = st[7] ^ st[4];
+	t = st[4];
+	st[4] = t1_0 ^ t0_1 ^ st[7];
+	t_bis = st[5];
+	st[5] = t1_1 ^ t0_2 ^ t;
+	t = st[6];
+	st[6] = t1_2 ^ t0_3 ^ t_bis;
+	st[7] = t1_3 ^ t0_0 ^ t;
+	t = st[0];
+	st[0] = t0_0 ^ t2_1 ^ st[3];
+	t_bis = st[1];
+	st[1] = t0_1 ^ t2_2 ^ t;
+	t = st[2];
+	st[2] = t0_2 ^ t2_3 ^ t_bis;
+	st[3] = t0_3 ^ t2_0 ^ t;
+}
+
+function wideSubBytes(st: Wide[]): void {
+	wideSbox(st, 0);
+	wideSbox(st, 1);
+	wideSbox(st, 2);
+	wideSbox(st, 3);
+}
+
+function wideShiftRows(st: Wide[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		st[i + 1] = laneRotl(st[i + 1], 24);
+		st[i + 2] = laneRotl(st[i + 2], 16);
+		st[i + 3] = laneRotl(st[i + 3], 8);
+	}
+}
+
+function wideSwapMove(st: Wide[], a: int32, b: int32, mask: uint32, n: Wide): void {
+	const tmp = (st[b] ^ (st[a] >> n)) & splatLike(mask, st[a]);
+	st[b] ^= tmp;
+	st[a] ^= tmp << n;
+}
+
+function wideTranspose(st: Wide[]): void {
+	for (let k = 0; k < 4; k++) {
+		wideSwapMove(st, k + 4, k, 0x55555555, 1);
+		wideSwapMove(st, k + 12, k + 8, 0x55555555, 1);
+		wideSwapMove(st, k + 20, k + 16, 0x55555555, 1);
+		wideSwapMove(st, k + 28, k + 24, 0x55555555, 1);
+		wideSwapMove(st, k + 8, k, 0x33333333, 2);
+		wideSwapMove(st, k + 12, k + 4, 0x33333333, 2);
+		wideSwapMove(st, k + 24, k + 16, 0x33333333, 2);
+		wideSwapMove(st, k + 28, k + 20, 0x33333333, 2);
+		wideSwapMove(st, k + 16, k, 0x0f0f0f0f, 4);
+		wideSwapMove(st, k + 20, k + 4, 0x0f0f0f0f, 4);
+		wideSwapMove(st, k + 24, k + 8, 0x0f0f0f0f, 4);
+		wideSwapMove(st, k + 28, k + 12, 0x0f0f0f0f, 4);
+	}
+}
+
+function widePack(st: Wide[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		wideSwapMove(st, i, i + 1, 0x00ff00ff, 8);
+		wideSwapMove(st, i + 2, i + 3, 0x00ff00ff, 8);
+		wideSwapMove(st, i, i + 2, 0x0000ffff, 16);
+		wideSwapMove(st, i + 1, i + 3, 0x0000ffff, 16);
+	}
+	wideTranspose(st);
+}
+
+function wideUnpack(st: Wide[]): void {
+	wideTranspose(st);
+	for (let i = 0; i < 32; i += 4) {
+		wideSwapMove(st, i, i + 2, 0x0000ffff, 16);
+		wideSwapMove(st, i + 1, i + 3, 0x0000ffff, 16);
+		wideSwapMove(st, i, i + 1, 0x00ff00ff, 8);
+		wideSwapMove(st, i + 2, i + 3, 0x00ff00ff, 8);
+	}
+}
+
+function wideAddRoundKey(st: Wide[], keys: Readonly<Word[]>, at: int32): void {
+	for (let i = 0; i < 32; i++) st[i] ^= keys[at + i] as Wide;
+}
+
+function wideEncrypt(keys: Readonly<Word[]>, st: Wide[]): void {
+	const rounds = roundsOf(keys);
+	const base = 8 * (rounds + 1);
+	wideAddRoundKey(st, keys, base);
 	for (let r = 1; r < rounds; r++) {
-		subBytes(st);
-		mixColumns(st, r & 3);
-		addRoundKey(st, keys, r);
+		wideSubBytes(st);
+		wideShiftRows(st);
+		wideMixColumns(st);
+		wideAddRoundKey(st, keys, base + 32 * r);
+	}
+	wideSubBytes(st);
+	wideShiftRows(st);
+	wideAddRoundKey(st, keys, base + 32 * rounds);
+}
+
+// The wide round keys follow the fixsliced ones, 32 words per round.
+function appendWideKeys(packed: Word[], words: Readonly<uint32[]>, rounds: int32, st: Wide[]): void {
+	const base = 8 * (rounds + 1);
+	for (let r = 0; r <= rounds; r++) {
+		for (let i = 0; i < 32; i++) st[i] = laneWord(words[r * 4 + (i & 3)], words[r * 4 + (i & 3)]);
+		widePack(st);
+		for (let i = 0; i < 32; i++) packed[base + r * 32 + i] = st[i];
+	}
+}
+
+// The key stream of the WIDE_BLOCKS counters from `batch.counter` under `nonce` into `batch.bytes`; with `hashKey`
+// block 0 is the all-zero block instead.
+function refillWide(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, hashKey: boolean): void {
+	const st = batch.wide;
+	const n0 = loadLE(nonce, 0);
+	const n1 = loadLE(nonce, 4);
+	const n2 = loadLE(nonce, 8);
+	const first = batch.counter;
+	for (let p = 0; p < 8; p++) {
+		const zero = hashKey && p == 0;
+		st[p * 4] = laneWord(zero ? 0 : n0, n0);
+		st[p * 4 + 1] = laneWord(zero ? 0 : n1, n1);
+		st[p * 4 + 2] = laneWord(zero ? 0 : n2, n2);
+		st[p * 4 + 3] = laneWord(zero ? 0 : swapBytes(first + (p as uint32)), swapBytes(first + ((p + 8) as uint32)));
+	}
+	widePack(st);
+	wideEncrypt(keys, st);
+	wideStore(st, batch.bytes);
+	batch.end = WIDE_BLOCKS * 16;
+	batch.counter += WIDE_BLOCKS as uint32;
+}
+
+function wideStore(st: Wide[], bytes: uint8[]): void {
+	wideUnpack(st);
+	for (let g = 0; g < WIDE_BLOCKS / 8; g++) {
+		for (let i = 0; i < 32; i++) storeLE(bytes, g * 128 + i * 4, laneOf(st[i], g));
+	}
+}
+
+function wideInvShiftRows(st: Wide[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		st[i + 1] = laneRotl(st[i + 1], 8);
+		st[i + 2] = laneRotl(st[i + 2], 16);
+		st[i + 3] = laneRotl(st[i + 3], 24);
+	}
+}
+
+function wideInvMixColumns(st: Wide[]): void {
+	wideMixColumns(st);
+	wideMixColumns(st);
+	wideMixColumns(st);
+}
+
+function wideInvAffineGroup(st: Wide[], g: int32): void {
+	const a0 = ~st[g + 28];
+	const a1 = ~st[g + 24];
+	const a2 = st[g + 20];
+	const a3 = st[g + 16];
+	const a4 = st[g + 12];
+	const a5 = ~st[g + 8];
+	const a6 = ~st[g + 4];
+	const a7 = st[g];
+	st[g] = a1 ^ a4 ^ a6;
+	st[g + 4] = a0 ^ a3 ^ a5;
+	st[g + 8] = a7 ^ a2 ^ a4;
+	st[g + 12] = a6 ^ a1 ^ a3;
+	st[g + 16] = a5 ^ a0 ^ a2;
+	st[g + 20] = a4 ^ a7 ^ a1;
+	st[g + 24] = a3 ^ a6 ^ a0;
+	st[g + 28] = a2 ^ a5 ^ a7;
+}
+
+function wideInvSubBytes(st: Wide[]): void {
+	for (let g = 0; g < 4; g++) wideInvAffineGroup(st, g);
+	wideSubBytes(st);
+	for (let g = 0; g < 4; g++) wideInvAffineGroup(st, g);
+}
+
+function wideDecrypt(keys: Readonly<Word[]>, st: Wide[]): void {
+	const rounds = roundsOf(keys);
+	const base = 8 * (rounds + 1);
+	wideAddRoundKey(st, keys, base + 32 * rounds);
+	for (let r = rounds - 1; r > 0; r--) {
+		wideInvShiftRows(st);
+		wideInvSubBytes(st);
+		wideAddRoundKey(st, keys, base + 32 * r);
+		wideInvMixColumns(st);
+	}
+	wideInvShiftRows(st);
+	wideInvSubBytes(st);
+	wideAddRoundKey(st, keys, base);
+}
+
+// Loads `count` blocks of `src` from `at` into the wide state, zero blocks after them.
+function wideLoad(st: Wide[], src: Readonly<uint8[]>, at: int32, count: int32): void {
+	for (let p = 0; p < 8; p++) {
+		for (let w = 0; w < 4; w++) {
+			const lo = p < count ? loadLE(src, at + p * 16 + w * 4) : 0;
+			const hi = p + 8 < count ? loadLE(src, at + (p + 8) * 16 + w * 4) : 0;
+			st[p * 4 + w] = laneWord(lo, hi);
+		}
+	}
+	widePack(st);
+}
+
+const KEY_WORDS: int32 = 8 + 32;
+
+function newWide(): Wide[] {
+	return new Array<Wide>(32);
+}
+
+// The next key stream, a wide pass when at least WIDE_FROM bytes of it are `needed`.
+function refill(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, needed: int32, hashKey: boolean): void {
+	if (needed >= WIDE_FROM) refillWide(keys, batch, nonce, hashKey);
+	else refillNarrow(keys, batch, nonce, hashKey);
+}
+
+function roundsOf(keys: Readonly<Word[]>): int32 {
+	return keys.length / KEY_WORDS - 1;
+}
+
+function encryptState(keys: Readonly<Word[]>, st: Word[]): void {
+	const rounds = roundsOf(keys);
+	addRoundKey(st, keys, 0);
+	let r = 1;
+	while (r + 3 < rounds) {
+		encryptRound(st, keys, r, 1);
+		encryptRound(st, keys, r + 1, 2);
+		encryptRound(st, keys, r + 2, 3);
+		encryptRound(st, keys, r + 3, 0);
+		r += 4;
+	}
+	encryptRound(st, keys, r, 1);
+	if (r + 1 < rounds) {
+		encryptRound(st, keys, r + 1, 2);
+		encryptRound(st, keys, r + 2, 3);
 	}
 	if ((rounds & 3) == 2) shiftRows(st, 2);
 	subBytes(st);
@@ -556,15 +1027,24 @@ function encryptState(keys: Readonly<Word[]>, st: Word[]): void {
 }
 
 function decryptState(keys: Readonly<Word[]>, st: Word[]): void {
-	const rounds = keys.length / 8 - 1;
+	const rounds = roundsOf(keys);
 	addRoundKey(st, keys, rounds);
 	invSubBytes(st);
 	if ((rounds & 3) == 2) shiftRows(st, 2);
-	for (let r = rounds - 1; r > 0; r--) {
-		addRoundKey(st, keys, r);
-		invMixColumns(st, r & 3);
-		invSubBytes(st);
+	let r = rounds - 1;
+	if ((r & 3) == 3) {
+		decryptRound(st, keys, r, 3);
+		decryptRound(st, keys, r - 1, 2);
+		r -= 2;
 	}
+	while (r > 1) {
+		decryptRound(st, keys, r, 1);
+		decryptRound(st, keys, r - 1, 0);
+		decryptRound(st, keys, r - 2, 3);
+		decryptRound(st, keys, r - 3, 2);
+		r -= 4;
+	}
+	decryptRound(st, keys, 1, 1);
 	addRoundKey(st, keys, 0);
 }
 
@@ -606,7 +1086,7 @@ export function expandKey(key: Readonly<uint8[]>): Word[] {
 		words[i] = words[i - nk] ^ t;
 	}
 	const rounds = words.length / 4 - 1;
-	const packed = new Array<Word>((rounds + 1) * 8);
+	const packed = new Array<Word>((rounds + 1) * KEY_WORDS);
 	for (let r = 0; r <= rounds; r++) {
 		for (let p = 0; p < BLOCKS; p++) {
 			for (let w = 0; w < 4; w++) storeLE(block, p * 16 + w * 4, words[r * 4 + w]);
@@ -617,6 +1097,9 @@ export function expandKey(key: Readonly<uint8[]>): Word[] {
 		if (r > 0) subBytesNots(st);
 		for (let i = 0; i < 8; i++) packed[r * 8 + i] = st[i];
 	}
+	const wide = newWide();
+	appendWideKeys(packed, words, rounds, wide);
+	wide.fill(0);
 	words.fill(0);
 	st.fill(0);
 	block.fill(0);
@@ -634,21 +1117,23 @@ export function expandKeyDecrypt(key: Readonly<uint8[]>): Word[] {
  */
 class Batch {
 	st: Word[] = new Array<Word>(8);
+	wide = newWide();
 	input: uint8[] = new Array<uint8>(BLOCKS * 16);
-	bytes: uint8[] = new Array<uint8>(BLOCKS * 16);
+	bytes: uint8[] = new Array<uint8>(Math.max(BLOCKS, WIDE_BLOCKS) * 16);
 	end: int32 = 0;
 	counter: uint32 = 0;
 }
 
 function wipe(batch: Batch): void {
 	batch.st.fill(0);
+	batch.wide.fill(0);
 	batch.input.fill(0);
 	batch.bytes.fill(0);
 }
 
 // The key stream of the BLOCKS counters from `batch.counter` under `nonce` into `batch.bytes`; with `hashKey` block 0
 // is the all-zero block instead.
-function refill(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, hashKey: boolean): void {
+function refillNarrow(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, hashKey: boolean): void {
 	const input = batch.input;
 	for (let p = 0; p < BLOCKS; p++) {
 		const zero = hashKey && p == 0;
@@ -663,9 +1148,9 @@ function refill(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, 
 }
 
 // E(0) and E(J1) into batch.bytes[0, 32), and the key stream from counter 2 after them.
-function startGcm(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>): void {
+function startGcm(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, length: int32): void {
 	batch.counter = 0;
-	refill(keys, batch, nonce, true);
+	refill(keys, batch, nonce, 32 + length, true);
 }
 
 // dst[dstAt, +length) = src[srcAt, +length) ^ the key stream from counter 2, which `startGcm` began at batch.bytes[32].
@@ -675,7 +1160,7 @@ function ctrXor(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, 
 	let done = 0;
 	while (done < length) {
 		if (streamAt == batch.end) {
-			refill(keys, batch, nonce, false);
+			refill(keys, batch, nonce, length - done, false);
 			streamAt = 0;
 		}
 		const count = Math.min(batch.end - streamAt, length - done);
@@ -718,7 +1203,7 @@ export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 	requireRange("destination", dst, dstAt, length);
 	requireRange("tag", tag, tagAt, 16);
 	const batch = new Batch();
-	startGcm(xk, batch, nonce);
+	startGcm(xk, batch, nonce, length);
 	const authKey = batch.bytes.slice(0, 32);
 	ctrXor(xk, batch, nonce, src, srcAt, length, dst, dstAt);
 	const computed = new Array<uint8>(16);
@@ -738,7 +1223,7 @@ export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 	requireRange("destination", dst, dstAt, length);
 	requireRange("tag", tag, tagAt, 16);
 	const batch = new Batch();
-	startGcm(xk, batch, nonce);
+	startGcm(xk, batch, nonce, length);
 	const computed = new Array<uint8>(16);
 	gcmTag(batch.bytes, aad, src, srcAt, length, computed);
 	let diff: uint8 = 0;
@@ -806,12 +1291,21 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: 
 	if (size == 0 || size % 16 != 0) return null;
 	const out = new Array<uint8>(size);
 	const batch = new Batch();
-	for (let at = 0; at < size; at += BLOCKS * 16) {
-		const count = Math.min(BLOCKS, (size - at) / 16);
-		loadBlocks(batch.st, cipher, at, count);
-		decryptState(xk, batch.st);
-		storeBlocks(batch.st, batch.bytes);
+	let at = 0;
+	while (at < size) {
+		let count = Math.min(BLOCKS, (size - at) / 16);
+		if ((size - at) / 16 >= WIDE_DECRYPT_FROM) {
+			count = Math.min(WIDE_BLOCKS, (size - at) / 16);
+			wideLoad(batch.wide, cipher, at, count);
+			wideDecrypt(xk, batch.wide);
+			wideStore(batch.wide, batch.bytes);
+		} else {
+			loadBlocks(batch.st, cipher, at, count);
+			decryptState(xk, batch.st);
+			storeBlocks(batch.st, batch.bytes);
+		}
 		for (let i = 0; i < count * 16; i++) out[at + i] = batch.bytes[i] ^ (at + i < 16 ? iv[i] : cipher[at + i - 16]);
+		at += count * 16;
 	}
 	wipe(batch);
 	const pad = out[size - 1] as uint32;
