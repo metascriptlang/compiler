@@ -13,6 +13,9 @@
 
 extern void MS_ENTRY_DATINIT(void);
 extern void MS_ENTRY_INIT(void);
+#ifdef MS_ENTRY_DEP_INIT
+extern void MS_ENTRY_DEP_INIT(void);
+#endif
 extern void x25519ScalarMult(uint8_t *output, const uint8_t *scalar, const uint8_t *point);
 
 enum {
@@ -183,6 +186,9 @@ int main(int argc, char **argv) {
 	(void)requireTaintedOutput;
 	MS_ENTRY_DATINIT();
 	MS_ENTRY_INIT();
+#ifdef MS_ENTRY_DEP_INIT
+	MS_ENTRY_DEP_INIT();
+#endif
 	printf("STAGE init ok\n");
 
 	if (checkKnownAnswers) {

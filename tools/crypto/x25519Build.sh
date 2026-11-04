@@ -4,7 +4,7 @@
 # verbatim, as separate arguments, right after the host source and the library (an empty valgrindRoot means no taint flags).
 set -euo pipefail
 out=${1:?outDir}
-impl=${2:?impl: monocypher|pilot|noop|leakyBranch|leakyIndex}
+impl=${2:?impl: monocypher|pilot|pure|noop|leakyBranch|leakyIndex}
 mode=${3:?mode: release|danger}
 vg=${4:-}
 harness=src/test/crypto/harness
@@ -47,6 +47,11 @@ count=$(grep -c " T x25519ScalarMult\$" <<<"$symbols" || true)
 [ "$count" = 1 ] || { echo "x25519Build: x25519ScalarMult defined $count times in $lib" >&2; exit 1; }
 if grep -qw main <<<"$symbols"; then echo "x25519Build: $lib defines main" >&2; exit 1; fi
 printf '#define MS_ENTRY_DATINIT %s\n#define MS_ENTRY_INIT %s\n' "$datInit" "$init" >"$out/entry.$impl.$mode.h"
+if [ "$impl" = "pure" ]; then
+	fe25519Init=$(awk '$2 == "T" && $3 ~ /fe25519.*__Init000$/ { print $3 }' <<<"$symbols")
+	[ -n "$fe25519Init" ] && [ "$(printf '%s\n' "$fe25519Init" | wc -l)" = 1 ] || { echo "x25519Build: expected exactly one fe25519 Init000 in $lib for pure impl, found: ${fe25519Init:-none}" >&2; exit 1; }
+	printf '#define MS_ENTRY_DEP_INIT %s\n' "$fe25519Init" >> "$out/entry.$impl.$mode.h"
+fi
 
 taintFlags=()
 if [ -n "$vg" ]; then

@@ -16,6 +16,9 @@
 
 extern void MS_ENTRY_DATINIT(void);
 extern void MS_ENTRY_INIT(void);
+#ifdef MS_ENTRY_DEP_INIT
+extern void MS_ENTRY_DEP_INIT(void);
+#endif
 extern void x25519ScalarMult(uint8_t *output, const uint8_t *scalar, const uint8_t *point);
 
 enum {
@@ -180,6 +183,9 @@ int main(int argc, char **argv) {
 
 	MS_ENTRY_DATINIT();
 	MS_ENTRY_INIT();
+#ifdef MS_ENTRY_DEP_INIT
+	MS_ENTRY_DEP_INIT();
+#endif
 	printf("STAGE init ok\n");
 	printf("CONFIG measurementsPerBatch=%zu batches=%llu seed=0x%016llx kat=%d null=%d leakSpin=%llu\n", measurements,
 		(unsigned long long)batches, (unsigned long long)seed, checkKnownAnswer, nullExperiment, (unsigned long long)leakSpin);
