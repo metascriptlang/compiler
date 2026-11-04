@@ -304,13 +304,15 @@ function isIntegerConvClass(cls: int32): boolean {
 }
 
 // An integer register holds the value sign-extended (or zero-extended, for an unsigned class) into
-// 64 bits, so a conversion to a class that holds every value of the source class changes no bit.
-function widensLosslessly(fromCls: int32, toCls: int32): boolean {
+// 64 bits, so a conversion to a class that holds every value of the source class changes no bit; a
+// uint64 takes any integer's 64 bits as they are, as the Conv it would emit does.
+function changesNoBit(fromCls: int32, toCls: int32): boolean {
 	if (!isIntegerConvClass(fromCls) || !isIntegerConvClass(toCls)) return false;
 	const from = fromCls as RaiserConvClass;
 	const to = toCls as RaiserConvClass;
 	const fromBits = convClassBits(from);
 	const toBits = convClassBits(to);
+	if (to == RaiserConvClass.U64) return true;
 	if (convClassSigned(from)) return convClassSigned(to) && toBits >= fromBits;
 	return convClassSigned(to) ? toBits > fromBits : toBits >= fromBits;
 }
@@ -318,7 +320,7 @@ function widensLosslessly(fromCls: int32, toCls: int32): boolean {
 function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
-	if (fromCls < 0 || toCls < 0 || fromCls == toCls || widensLosslessly(fromCls, toCls)) return reg;
+	if (fromCls < 0 || toCls < 0 || fromCls == toCls || changesNoBit(fromCls, toCls)) return reg;
 	return emitConvTo(s, reg, toCls, fromCls);
 }
 
@@ -2029,6 +2031,13 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == BuiltinKind.HiXorLo && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
+	}
+	if (d.arguments.length == 1 && d.callee.resolvedSym != null && hostRoutineKey(d.callee.resolvedSym) == "std/core/struct.int64Bits") {
+		const bits = compileExpr(s, d.arguments[0]);
+		if (classOfReg(s, bits) == RaiserRegClass.Word) return bits;
+		const dest = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, bits, 0));
+		return dest;
 	}
 	if (isRuntimeProcCall(node, "msMaybeGet") && d.arguments.length == 3
 		&& d.arguments[1].kind == NodeKind.StringLiteral && d.arguments[2].kind == NodeKind.StringLiteral) {

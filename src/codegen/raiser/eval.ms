@@ -2925,6 +2925,18 @@ test "engine: a checked read of a scalar or null tests for nil and unboxes, with
 	assert absent.error.includes("member 'int64' is not accessible for type 'int64 | null' using 'null'"), absent.error;
 }
 
+test "engine: an integer converted to uint64 and int64Bits keep their bits and emit nothing" {
+	const code = "import { int64Bits } from \"std/core/struct\"; function wide(i: int64): uint64 { return i as uint64; } function narrow(i: int32): uint64 { return i as uint64; }"
+		+ " function bits(u: uint64): int64 { return int64Bits(u); }"
+		+ " console.log(`${wide(-1)} ${narrow(-2)} ${bits(18446744073709551615)} ${bits(wide(-9223372036854775807 - 1))} ${bits(7)}`);";
+	for (const name of ["wide", "narrow", "bits"]) {
+		const f = gapFunc(code, name);
+		assert countNamed(f, "Conv") == 0 && countNamed(f, "CallDirect") == 0, disasmFunc(f);
+	}
+	const vm = evalVM(code);
+	assert vm.error == "" && vm.output == "18446744073709551615 18446744073709551614 -1 -9223372036854775808 7\n", `${vm.error} ${vm.output}`;
+}
+
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
