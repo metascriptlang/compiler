@@ -99,6 +99,7 @@ function swapBytes(n: uint32): uint32 {
 
 /** The encryption round keys of a 16-, 24- or 32-byte key. */
 export function expandKey(key: Readonly<uint8[]>): uint32[] {
+	if (key.length != 16 && key.length != 24 && key.length != 32) throw new Error(`aes: key must be 16, 24 or 32 bytes, got ${key.length}`);
 	const nk = key.length / 4;
 	const xk = new Array<uint32>(key.length + 28);
 	for (let i = 0; i < nk; i++) xk[i] = loadLE(key, i * 4);
@@ -233,6 +234,7 @@ function gcmTag(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, bodyEnd: int3
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
 export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
+	if (nonce.length != 12) throw new Error(`aes-gcm: nonce must be 12 bytes, got ${nonce.length}`);
 	const size = plain.length;
 	const sealed = new Array<uint8>(12 + size + 16);
 	for (let i = 0; i < 12; i++) sealed[i] = nonce[i];
@@ -242,8 +244,9 @@ export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]
 	return sealed;
 }
 
-/** The plain text of a `nonce || cipher text || tag` blob, or null when the tag does not verify; needs at least 28 bytes. */
+/** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
 export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
+	if (sealed.length < 28) return null;
 	const end = sealed.length - 16;
 	const tag = gcmTag(xk, sealed, end, aad);
 	let diff: uint8 = 0;
@@ -254,8 +257,13 @@ export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: 
 	return plain;
 }
 
+function requireIv(iv: Readonly<uint8[]>): void {
+	if (iv.length != 16) throw new Error(`aes-cbc: iv must be 16 bytes, got ${iv.length}`);
+}
+
 /** AES-CBC with PKCS#7 padding; `iv` is 16 bytes. */
 export function cbcEncrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, plain: Readonly<uint8[]>): uint8[] {
+	requireIv(iv);
 	const size = plain.length;
 	const padding = 16 - (size % 16);
 	const out = new Array<uint8>(size + padding);
@@ -294,6 +302,7 @@ export function cbcEncrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, plain:
 
 /** The plain text of an AES-CBC cipher text, or null for an empty or ragged input or bad padding; `xk` is from `expandKeyDecrypt`. */
 export function cbcDecrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>): uint8[] | null {
+	requireIv(iv);
 	const size = cipher.length;
 	if (size == 0 || size % 16 != 0) return null;
 	const out = new Array<uint8>(size);
