@@ -147,16 +147,27 @@ function hchacha(w: ChaChaWork, key: Readonly<uint32[]>, nonce: Readonly<uint8[]
 function chachaXor(w: ChaChaWork, counter: uint32, src: Readonly<uint8[]>, srcOff: int32, dst: uint8[], dstOff: int32, length: int32): void {
 	let done = 0;
 	let cnt = counter;
-	while (done < length) {
+	while (length - done >= 64) {
 		chachaCore(w, w.nonce[0], w.nonce[1], w.nonce[2], cnt);
 		cnt = cnt + 1;
-		const take = length - done < 64 ? length - done : 64;
-		for (let i = 0; i < take; i++) {
-			const word = w.block[i >> 2];
-			const stream = ((word >> (((i & 3) * 8) as uint32)) & 255) as uint8;
-			dst[dstOff + done + i] = src[srcOff + done + i] ^ stream;
+		const from = srcOff + done;
+		const to = dstOff + done;
+		for (let j = 0; j < 16; j++) {
+			const word = w.block[j];
+			const at = 4 * j;
+			dst[to + at] = src[from + at] ^ ((word & 255) as uint8);
+			dst[to + at + 1] = src[from + at + 1] ^ (((word >> 8) & 255) as uint8);
+			dst[to + at + 2] = src[from + at + 2] ^ (((word >> 16) & 255) as uint8);
+			dst[to + at + 3] = src[from + at + 3] ^ ((word >> 24) as uint8);
 		}
-		done += take;
+		done += 64;
+	}
+	if (done == length) return;
+	chachaCore(w, w.nonce[0], w.nonce[1], w.nonce[2], cnt);
+	for (let i = 0; done + i < length; i++) {
+		const word = w.block[i >> 2];
+		const stream = ((word >> (((i & 3) * 8) as uint32)) & 255) as uint8;
+		dst[dstOff + done + i] = src[srcOff + done + i] ^ stream;
 	}
 }
 
