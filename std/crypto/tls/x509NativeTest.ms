@@ -345,18 +345,41 @@ test "crafted DER: extensions are read once each and an unknown critical one ref
 	assert parseError(craftedCertificate([negativePathLength])) == X509Error.FieldHasInvalidLength.toString();
 }
 
-test "crafted DER: non-canonical boolean value is refused at extension critical flag and isCa" {
-	const falseBoolean = tlv(0x30, concat([tlv(0x06, basicConstraintsOid), [0x01, 0x01, 0x00], tlv(0x04, caFalse)]));
-	assert parseError(craftedCertificate([falseBoolean])) == "ok";
-	const trueCritical = tlv(0x30, concat([tlv(0x06, basicConstraintsOid), [0x01, 0x01, 0xff], tlv(0x04, caFalse)]));
-	assert parseError(craftedCertificate([trueCritical])) == "ok";
-	const nonCanonicalCritical = tlv(0x30, concat([tlv(0x06, basicConstraintsOid), [0x01, 0x01, 0x01], tlv(0x04, caFalse)]));
-	assert parseError(craftedCertificate([nonCanonicalCritical])) == X509Error.FieldHasWrongDataType.toString();
-	const nonCanonicalIsCa = extension(basicConstraintsOid, true, tlv(0x30, [0x01, 0x01, 0x01]));
-	assert parseError(craftedCertificate([nonCanonicalIsCa])) == X509Error.FieldHasWrongDataType.toString();
-	const canonicalIsCa = extension(basicConstraintsOid, true, tlv(0x30, [0x01, 0x01, 0xff]));
-	const caResult = parseCertificate(craftedCertificate([canonicalIsCa]));
-	assert caResult.ok && caResult.value.isCa;
+test "crafted DER: extension booleans use canonical TRUE and FALSE" {
+	for (const value of [0x00, 0xff]) {
+		const encoded = tlv(0x30, concat([
+			tlv(0x06, basicConstraintsOid),
+			[0x01, 0x01, value as uint8],
+			tlv(0x04, caFalse),
+		]));
+		assert parseError(craftedCertificate([encoded])) == "ok";
+	}
+	const nonCanonicalCritical = tlv(0x30, concat([
+		tlv(0x06, basicConstraintsOid),
+		[0x01, 0x01, 0x01],
+		tlv(0x04, caFalse),
+	]));
+	const nonCanonicalIsCa = extension(
+		basicConstraintsOid,
+		true,
+		tlv(0x30, [0x01, 0x01, 0x01]),
+	);
+	const wrongType = X509Error.FieldHasWrongDataType.toString();
+	assert parseError(craftedCertificate([nonCanonicalCritical])) == wrongType;
+	assert parseError(craftedCertificate([nonCanonicalIsCa])) == wrongType;
+}
+
+test "crafted DER: basicConstraints preserves explicit TRUE and FALSE" {
+	for (const value of [0x00, 0xff]) {
+		const constraints = extension(
+			basicConstraintsOid,
+			true,
+			tlv(0x30, [0x01, 0x01, value as uint8]),
+		);
+		const parsed = parseCertificate(craftedCertificate([constraints]));
+		assert parsed.ok;
+		assert parsed.value.isCa == (value == 0xff);
+	}
 }
 
 test "crafted DER: a non-minimal length, data after the signature and an unknown signature OID are refused" {

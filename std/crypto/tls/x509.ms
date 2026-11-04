@@ -314,7 +314,9 @@ function readBasicConstraints(bytes: Readonly<uint8[]>, value: DerElement, ref f
 		const first = try element(bytes, at, sequence.end);
 		if (first.tagNumber() == derTagBoolean) {
 			if (first.contentSize() != 1) return Result.err(X509Error.FieldHasInvalidLength);
-			if (bytes[first.start] != 0x00 && bytes[first.start] != 0xff) return Result.err(X509Error.FieldHasWrongDataType);
+			if (bytes[first.start] != 0x00 && bytes[first.start] != 0xff) {
+				return Result.err(X509Error.FieldHasWrongDataType);
+			}
 			found.isCa = bytes[first.start] == 0xff;
 			at = first.end;
 		}
@@ -380,7 +382,9 @@ function readExtensions(bytes: Readonly<uint8[]>, wrapper: DerElement, ref found
 		let value = next;
 		if (next.tagNumber() == derTagBoolean) {
 			if (next.contentSize() != 1) return Result.err(X509Error.FieldHasInvalidLength);
-			if (bytes[next.start] != 0x00 && bytes[next.start] != 0xff) return Result.err(X509Error.FieldHasWrongDataType);
+			if (bytes[next.start] != 0x00 && bytes[next.start] != 0xff) {
+				return Result.err(X509Error.FieldHasWrongDataType);
+			}
 			critical = bytes[next.start] == 0xff;
 			value = try element(bytes, next.end, extension.end);
 		}
