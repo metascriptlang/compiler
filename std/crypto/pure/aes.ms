@@ -1,7 +1,7 @@
 import { newGhash, updateGhash, finishGhash, storeBE32 } from "./ghash";
 
 when (c) {
-	import { aesHwAvailable, aesGcmHwSeal, aesGcmHwOpen, aesCbcHwEncrypt, aesCbcHwDecrypt } from "./hw";
+	import { aesHwAvailable, aesGcmHwSeal, aesGcmHwOpen, aesGcmHwOpenFresh, aesCbcHwEncrypt, aesCbcHwDecrypt } from "./hw";
 }
 
 /**
@@ -1291,6 +1291,12 @@ export function gcmOpen(xk: Readonly<Word[]>, sealed: Readonly<uint8[]>, aad: Re
 	if (sealed.length < 28) return null;
 	const size = sealed.length - 28;
 	const plain = new Array<uint8>(size);
+	when (c) {
+		if (aesHwAvailable()) {
+			const nonce = sealed.slice(0, 12);
+			return aesGcmHwOpenFresh(xk, nonce, aad, sealed, 12, size, sealed, 12 + size, plain, 0) ? plain : null;
+		}
+	}
 	if (!gcmDecryptInto(xk, sealed.slice(0, 12), aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
 	return plain;
 }

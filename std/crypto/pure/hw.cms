@@ -33,6 +33,9 @@ export extern function aesGcmHwSeal(keys: Readonly<Span<uint64>>, nonce: Readonl
 /** AES-GCM open: true with the plain text in `dst[dstAt, +length)`, or false with `dst` untouched when the tag does not verify. */
 export extern function aesGcmHwOpen(keys: Readonly<Span<uint64>>, nonce: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, src: Readonly<Span<uint8>>, srcAt: int64, length: int64, tag: Readonly<Span<uint8>>, tagAt: int64, dst: Span<uint8>, dstAt: int64): boolean from "msPureAesGcmOpen";
 
+/** AES-GCM open in one pass into a buffer only the caller holds: true with the plain text in `dst[dstAt, +length)`, or false with that range zeroed. */
+export extern function aesGcmHwOpenFresh(keys: Readonly<Span<uint64>>, nonce: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, src: Readonly<Span<uint8>>, srcAt: int64, length: int64, tag: Readonly<Span<uint8>>, tagAt: int64, dst: Span<uint8>, dstAt: int64): boolean from "msPureAesGcmOpenFresh";
+
 /** AES-CBC encryption of `buf`, whole blocks with the padding in place, in place. */
 export extern function aesCbcHwEncrypt(keys: Readonly<Span<uint64>>, iv: Readonly<Span<uint8>>, buf: Span<uint8>): void from "msPureAesCbcEncrypt";
 

@@ -85,6 +85,26 @@ static inline int32_t msPureAesGcmOpen(const uint64_t *keys, int64_t keysLen, co
 	return msAesGcmHwOpen(rk, nr, nonce, aad, (size_t)aadLen, src + srcAt, (size_t)length, tag + tagAt, dst + dstAt);
 }
 
+/* GCM open in one pass into a buffer the caller owns alone: the plain text lands in dst before the tag is checked,
+ * and a mismatch zeroes dst[dstAt, +length) and returns 0. */
+static inline int32_t msPureAesGcmOpenFresh(const uint64_t *keys, int64_t keysLen, const uint8_t *nonce, int64_t nonceLen,
+		const uint8_t *aad, int64_t aadLen, const uint8_t *src, int64_t srcLen, int64_t srcAt, int64_t length,
+		const uint8_t *tag, int64_t tagLen, int64_t tagAt, uint8_t *dst, int64_t dstLen, int64_t dstAt) {
+	(void)nonceLen; (void)srcLen; (void)dstLen; (void)tagLen;
+	int nr;
+	const uint8_t *rk = msPureAesRoundKeys(keys, keysLen, &nr);
+	uint8_t computed[16];
+	msAesGcmHwRun(rk, nr, nonce, aad, (size_t)aadLen, src + srcAt, (size_t)length, dst + dstAt, computed, 1);
+	uint8_t diff = 0;
+	for (int i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
+	msPureHwWipe(computed, sizeof(computed));
+	if (diff != 0) {
+		msPureHwWipe(dst + dstAt, (size_t)length);
+		return 0;
+	}
+	return 1;
+}
+
 /* CBC encryption of buf (whole blocks, padding already in place) in place. */
 static inline void msPureAesCbcEncrypt(const uint64_t *keys, int64_t keysLen, const uint8_t *iv, int64_t ivLen,
 		uint8_t *buf, int64_t bufLen) {
