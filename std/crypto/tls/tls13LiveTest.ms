@@ -77,7 +77,8 @@ function fetchStatusPage(port: int32, seed: int32, rekey: boolean): string {
 	}
 	client.close();
 	closeSocket(fd);
-	return "suite " + client.cipherSuite.toString(16) + ": " + page;
+	const retried = client.helloRetried ? " after HelloRetryRequest" : "";
+	return "suite " + client.cipherSuite.toString(16) + retried + ": " + page;
 }
 
 test "live openssl s_server handshakes, one per configured port" {

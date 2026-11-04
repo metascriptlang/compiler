@@ -797,6 +797,7 @@ export function completeHandshake(
 		applicationProtocol: hs.applicationProtocol,
 		peerCertificates: hs.chain,
 		cipherSuite: hs.suite.code,
+		helloRetried: hs.retried,
 	};
 	return Result.ok(client);
 }
@@ -824,6 +825,8 @@ export class Tls13Client {
 	/** The server's certificate chain as sent, leaf first. */
 	peerCertificates: uint8[][];
 	cipherSuite: int32;
+	/** True when the server answered the first ClientHello with a HelloRetryRequest. */
+	helloRetried: boolean;
 }
 
 function sendKeyUpdate(c: Tls13Client, requestPeer: boolean): Result<void, CryptoError> {
