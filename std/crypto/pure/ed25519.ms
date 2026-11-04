@@ -15,7 +15,7 @@ import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
 import { hashOf, newHash, updateHash, finishHash } from "./hash";
 import { wipeBytes } from "./secret";
-import { baseTableHex } from "./ed25519BaseTable";
+import { baseTableFe } from "./ed25519BaseTable";
 import {
 	Fe,
 	feZero,
@@ -177,22 +177,14 @@ struct Niels {
 	xy2d: Fe;
 }
 
-function nielsOf(hex: string): Niels {
-	const bytes = hex.decodeHex();
+/** Entry 8i + j - 1 of ./ed25519BaseTable, [j * 256^i]B. */
+function baseNiels(entry: int32): Niels {
 	return {
-		yPlusX: feFromBytes(bytes, 0),
-		yMinusX: feFromBytes(bytes, 32),
-		xy2d: feFromBytes(bytes, 64),
+		yPlusX: baseTableFe[3 * entry],
+		yMinusX: baseTableFe[3 * entry + 1],
+		xy2d: baseTableFe[3 * entry + 2],
 	};
 }
-
-function loadBaseTable(): Niels[] {
-	const table: Niels[] = [];
-	for (const hex of baseTableHex) table.push(nielsOf(hex));
-	return table;
-}
-
-const baseTable: Readonly<Niels[]> = loadBaseTable();
 
 /**
  * p + q for an affine q: addPoints without the products Z1 * Z2 and T2 * 2d.
@@ -232,7 +224,7 @@ function selectBase(row: int32, digit: int32): Niels {
 	for (let j = 1; j <= 8; j++) {
 		t = cMovNiels(
 			t,
-			baseTable[row * 8 + j - 1],
+			baseNiels(row * 8 + j - 1),
 			((((magnitude ^ j) - 1) >> 31) & 1) as uint32,
 		);
 	}
@@ -291,8 +283,8 @@ function mulDoubleBasePublic(
 	let pos = 63;
 	while (true) {
 		const slot1 = e1[pos];
-		if (slot1 > 0) q = addNiels(q, baseTable[slot1 - 1]);
-		else if (slot1 < 0) q = addNiels(q, negNiels(baseTable[-slot1 - 1]));
+		if (slot1 > 0) q = addNiels(q, baseNiels(slot1 - 1));
+		else if (slot1 < 0) q = addNiels(q, negNiels(baseNiels(-slot1 - 1)));
 		const slot2 = e2[pos];
 		if (slot2 > 0) q = addPoints(q, pc2[slot2]);
 		else if (slot2 < 0) q = subPoints(q, pc2[-slot2]);
@@ -470,4 +462,22 @@ test "RFC 8032 test 2: one byte" {
 	assert sig.encodeHex() ==
 		"92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
 	assert ed25519Verify(pub, sig, [0x72]);
+}
+
+test "every base table entry is [j * 256^i]B in niels form" {
+	let row = fromBytes("5866666666666666666666666666666666666666666666666666666666666666".decodeHex(), 0) as Point;
+	for (let i = 0; i < 32; i++) {
+		let p = row;
+		for (let j = 1; j <= 8; j++) {
+			const zi = feInv(p.z);
+			const x = feMul(p.x, zi);
+			const y = feMul(p.y, zi);
+			const n = baseNiels(8 * i + j - 1);
+			assert feEqual(n.yPlusX, feAdd(y, x));
+			assert feEqual(n.yMinusX, feSub(y, x));
+			assert feEqual(n.xy2d, feMul(feMul(x, y), edwardsD2));
+			p = addPoints(p, row);
+		}
+		for (let k = 0; k < 8; k++) row = dbl(row);
+	}
 }
