@@ -13,7 +13,6 @@ import { bytesOf } from "./bytes";
 import { HashState } from "./state";
 import { hashKind, newHash, updateHash, finishHash, hashOf } from "./hash";
 import { HmacState, newHmac, updateHmac, finishHmac, hmacOf } from "./hmac";
-import { randomOctets } from "./bigint";
 import {
 	CryptoError, randomFailed, invalidAlgorithm, invalidInput,
 	invalidEncoding,
@@ -23,6 +22,10 @@ export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
 	| "sha1" | "md5" | "ripemd160"
 	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
+
+when (js) {
+	import { randomOctets } from "./bigint";
+}
 
 when (c) {
 	@include("runtime/crypto/randomFill.h");
@@ -80,42 +83,36 @@ function drawUint64(): uint64 | null {
 	return x;
 }
 
-/** The high and low 64-bit halves of `x * n`, from 32-bit limbs. */
-function mulWide(x: uint64, n: uint64): uint64[] {
+/** The high 64 bits of the 128-bit product `x * n`, from 32-bit limbs. */
+function mulHigh(x: uint64, n: uint64): uint64 {
 	const mask: uint64 = 0xffffffff;
 	const x0 = x & mask;
 	const x1 = x >> 32;
 	const n0 = n & mask;
 	const n1 = n >> 32;
-	const p00 = x0 * n0;
 	const p01 = x0 * n1;
 	const p10 = x1 * n0;
-	const p11 = x1 * n1;
-	const mid = (p00 >> 32) + (p01 & mask) + (p10 & mask);
-	const high = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
-	const low = (mid << 32) | (p00 & mask);
-	return [high, low];
+	const mid = ((x0 * n0) >> 32) + (p01 & mask) + (p10 & mask);
+	return x1 * n1 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
 }
 
 /** Lemire's debiased multiply: a uniform draw in [0, lessThan). */
 function uintLessThan(lessThan: uint64): uint64 | null {
-	const first = drawUint64();
-	if (first == null) return null;
-	let m = mulWide(first, lessThan);
-	if (m[1] < lessThan) {
+	let x = drawUint64();
+	if (x == null) return null;
+	if (x * lessThan < lessThan) {
 		const zero: uint64 = 0;
 		let t = zero - lessThan;
 		if (t >= lessThan) {
 			t -= lessThan;
 			if (t >= lessThan) t %= lessThan;
 		}
-		while (m[1] < t) {
-			const next = drawUint64();
-			if (next == null) return null;
-			m = mulWide(next, lessThan);
+		while (x * lessThan < t) {
+			x = drawUint64();
+			if (x == null) return null;
 		}
 	}
-	return m[0];
+	return mulHigh(x, lessThan);
 }
 
 export function randomIntSync(
