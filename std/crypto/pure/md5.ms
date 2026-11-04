@@ -1,10 +1,10 @@
 import { HashState, HashBytes } from "./state";
 
-export function initMd5(h: HashState): void {
-	h.state[0] = 0x67452301;
-	h.state[1] = 0xefcdab89;
-	h.state[2] = 0x98badcfe;
-	h.state[3] = 0x10325476;
+export function initMd5(state: Span<uint32>): void {
+	state[0] = 0x67452301;
+	state[1] = 0xefcdab89;
+	state[2] = 0x98badcfe;
+	state[3] = 0x10325476;
 }
 
 function rotl(v: uint32, c: uint32): uint32 {
@@ -12,7 +12,7 @@ function rotl(v: uint32, c: uint32): uint32 {
 }
 
 when (!js) {
-	function compressMd5Block(h: HashState, data: HashBytes, off: int32): void {
+	export function compressMd5Words(state: Span<uint32>, data: HashBytes, off: int32): void {
 		const w0: uint32 = (data[off + 0] as uint32) | ((data[off + 1] as uint32) << 8) | ((data[off + 2] as uint32) << 16) | ((data[off + 3] as uint32) << 24);
 		const w1: uint32 = (data[off + 4] as uint32) | ((data[off + 5] as uint32) << 8) | ((data[off + 6] as uint32) << 16) | ((data[off + 7] as uint32) << 24);
 		const w2: uint32 = (data[off + 8] as uint32) | ((data[off + 9] as uint32) << 8) | ((data[off + 10] as uint32) << 16) | ((data[off + 11] as uint32) << 24);
@@ -29,10 +29,10 @@ when (!js) {
 		const w13: uint32 = (data[off + 52] as uint32) | ((data[off + 53] as uint32) << 8) | ((data[off + 54] as uint32) << 16) | ((data[off + 55] as uint32) << 24);
 		const w14: uint32 = (data[off + 56] as uint32) | ((data[off + 57] as uint32) << 8) | ((data[off + 58] as uint32) << 16) | ((data[off + 59] as uint32) << 24);
 		const w15: uint32 = (data[off + 60] as uint32) | ((data[off + 61] as uint32) << 8) | ((data[off + 62] as uint32) << 16) | ((data[off + 63] as uint32) << 24);
-		let v0 = h.state[0];
-		let v1 = h.state[1];
-		let v2 = h.state[2];
-		let v3 = h.state[3];
+		let v0 = state[0];
+		let v1 = state[1];
+		let v2 = state[2];
+		let v3 = state[3];
 		v0 = v1 + rotl(v0 + ((v1 & v2) | (~v1 & v3)) + 0xd76aa478 + w0, 7);
 		v3 = v0 + rotl(v3 + ((v0 & v1) | (~v0 & v2)) + 0xe8c7b756 + w1, 12);
 		v2 = v3 + rotl(v2 + ((v3 & v0) | (~v3 & v1)) + 0x242070db + w2, 17);
@@ -97,10 +97,10 @@ when (!js) {
 		v3 = v0 + rotl(v3 + (v1 ^ (v0 | ~v2)) + 0xbd3af235 + w11, 10);
 		v2 = v3 + rotl(v2 + (v0 ^ (v3 | ~v1)) + 0x2ad7d2bb + w2, 15);
 		v1 = v2 + rotl(v1 + (v3 ^ (v2 | ~v0)) + 0xeb86d391 + w9, 21);
-		h.state[0] = h.state[0] + v0;
-		h.state[1] = h.state[1] + v1;
-		h.state[2] = h.state[2] + v2;
-		h.state[3] = h.state[3] + v3;
+		state[0] = state[0] + v0;
+		state[1] = state[1] + v1;
+		state[2] = state[2] + v2;
+		state[3] = state[3] + v3;
 	}
 }
 
@@ -171,5 +171,9 @@ when (js) {
 }
 
 export function compressMd5(h: HashState, data: HashBytes, off: int32): void {
-	compressMd5Block(h, data, off);
+	when (!js) {
+		compressMd5Words(h.state, data, off);
+	} else {
+		compressMd5Block(h, data, off);
+	}
 }

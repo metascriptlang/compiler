@@ -22,7 +22,7 @@ function isWide(kind: int32): boolean {
 }
 
 /** The 32-bit chaining words a hash kind keeps: 16 for the SHA-512 family, 8 for SHA-256, 5 for SHA-1, 4 for MD5. */
-function stateWords(kind: int32): int32 {
+export function stateWords(kind: int32): int32 {
 	if (isWide(kind)) return 16;
 	if (kind == kindSha1) return 5;
 	if (kind == kindMd5) return 4;

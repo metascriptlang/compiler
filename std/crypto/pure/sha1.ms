@@ -1,11 +1,11 @@
 import { HashState, HashBytes } from "./state";
 
-export function initSha1(h: HashState): void {
-	h.state[0] = 0x67452301;
-	h.state[1] = 0xefcdab89;
-	h.state[2] = 0x98badcfe;
-	h.state[3] = 0x10325476;
-	h.state[4] = 0xc3d2e1f0;
+export function initSha1(state: Span<uint32>): void {
+	state[0] = 0x67452301;
+	state[1] = 0xefcdab89;
+	state[2] = 0x98badcfe;
+	state[3] = 0x10325476;
+	state[4] = 0xc3d2e1f0;
 }
 
 function rotl(v: uint32, c: uint32): uint32 {
@@ -13,7 +13,7 @@ function rotl(v: uint32, c: uint32): uint32 {
 }
 
 when (!js) {
-	function compressSha1Block(h: HashState, data: HashBytes, off: int32): void {
+	export function compressSha1Words(state: Span<uint32>, data: HashBytes, off: int32): void {
 		let w0: uint32 = ((data[off + 0] as uint32) << 24) | ((data[off + 1] as uint32) << 16) | ((data[off + 2] as uint32) << 8) | (data[off + 3] as uint32);
 		let w1: uint32 = ((data[off + 4] as uint32) << 24) | ((data[off + 5] as uint32) << 16) | ((data[off + 6] as uint32) << 8) | (data[off + 7] as uint32);
 		let w2: uint32 = ((data[off + 8] as uint32) << 24) | ((data[off + 9] as uint32) << 16) | ((data[off + 10] as uint32) << 8) | (data[off + 11] as uint32);
@@ -30,11 +30,11 @@ when (!js) {
 		let w13: uint32 = ((data[off + 52] as uint32) << 24) | ((data[off + 53] as uint32) << 16) | ((data[off + 54] as uint32) << 8) | (data[off + 55] as uint32);
 		let w14: uint32 = ((data[off + 56] as uint32) << 24) | ((data[off + 57] as uint32) << 16) | ((data[off + 58] as uint32) << 8) | (data[off + 59] as uint32);
 		let w15: uint32 = ((data[off + 60] as uint32) << 24) | ((data[off + 61] as uint32) << 16) | ((data[off + 62] as uint32) << 8) | (data[off + 63] as uint32);
-		let v0 = h.state[0];
-		let v1 = h.state[1];
-		let v2 = h.state[2];
-		let v3 = h.state[3];
-		let v4 = h.state[4];
+		let v0 = state[0];
+		let v1 = state[1];
+		let v2 = state[2];
+		let v3 = state[3];
+		let v4 = state[4];
 		v4 = v4 + rotl(v0, 5) + 0x5a827999 + w0 + ((v1 & v2) | (~v1 & v3));
 		v1 = rotl(v1, 30);
 		v3 = v3 + rotl(v4, 5) + 0x5a827999 + w1 + ((v0 & v1) | (~v0 & v2));
@@ -259,11 +259,11 @@ when (!js) {
 		w15 = rotl(w12 ^ w7 ^ w1 ^ w15, 1);
 		v0 = v0 + rotl(v1, 5) + 0xca62c1d6 + w15 + (v2 ^ v3 ^ v4);
 		v2 = rotl(v2, 30);
-		h.state[0] = h.state[0] + v0;
-		h.state[1] = h.state[1] + v1;
-		h.state[2] = h.state[2] + v2;
-		h.state[3] = h.state[3] + v3;
-		h.state[4] = h.state[4] + v4;
+		state[0] = state[0] + v0;
+		state[1] = state[1] + v1;
+		state[2] = state[2] + v2;
+		state[3] = state[3] + v3;
+		state[4] = state[4] + v4;
 	}
 }
 
@@ -322,5 +322,9 @@ when (js) {
 }
 
 export function compressSha1(h: HashState, data: HashBytes, off: int32): void {
-	compressSha1Block(h, data, off);
+	when (!js) {
+		compressSha1Words(h.state, data, off);
+	} else {
+		compressSha1Block(h, data, off);
+	}
 }

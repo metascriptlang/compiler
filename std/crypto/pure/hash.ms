@@ -1,14 +1,16 @@
 import { HashState, HashBytes, newHashState, wipeHashState, kindSha256, kindSha224, kindSha512, kindSha384, kindSha1, kindMd5 } from "./state";
-import { initSha2, compress256, compress512 } from "./sha2";
-import { initSha1, compressSha1 } from "./sha1";
-import { initMd5, compressMd5 } from "./md5";
+import { sha2Iv } from "./sha2";
+import { initSha1 } from "./sha1";
+import { initMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
 
 when (!js) {
 	import { Buffer } from "std/core/buffer";
-	import { sha256HwBlocks, sha512HwBlocks, pureCpuFeatures } from "./hw";
-	import { hashOutputSize } from "./state";
-	import { sha2Iv } from "./sha2";
+	import { sha256HwBlocks, sha512HwBlocks } from "./hw";
+	import { compress256Words, compress512Words } from "./sha2";
+	import { compressSha1Words } from "./sha1";
+	import { compressMd5Words } from "./md5";
+	import { hashOutputSize, stateWords } from "./state";
 	import { wipeBytes, wipeWords } from "./secret";
 
 	/** The digest array; finishHashInto writes every byte, so it is not zeroed first. */
@@ -16,6 +18,10 @@ when (!js) {
 		return Buffer.allocUnsafe(size);
 	}
 } else {
+	import { compress256, compress512 } from "./sha2";
+	import { compressSha1 } from "./sha1";
+	import { compressMd5 } from "./md5";
+
 	function digestArray(size: int32): uint8[] {
 		return new Array<uint8>(size);
 	}
@@ -32,10 +38,15 @@ export function hashKind(algorithm: string): int32 {
 	return -1;
 }
 
+/** The initial chaining words of a hash kind into `state`. */
+function initWords(kind: int32, state: Span<uint32>): void {
+	if (kind == kindSha1) initSha1(state);
+	else if (kind == kindMd5) initMd5(state);
+	else sha2Iv(kind, state);
+}
+
 export function resetHash(h: HashState): void {
-	if (h.kind == kindSha1) initSha1(h);
-	else if (h.kind == kindMd5) initMd5(h);
-	else initSha2(h);
+	initWords(h.kind, h.state);
 	h.filled = 0;
 	h.length = 0;
 	h.finished = false;
@@ -55,25 +66,43 @@ export function copyHash(from: Readonly<HashState>, to: HashState): void {
 	to.finished = from.finished;
 }
 
-function compressBlock(h: HashState, data: HashBytes, off: int32): void {
-	if (h.kind == kindSha256 || h.kind == kindSha224) compress256(h, data, off);
-	else if (h.kind == kindSha512 || h.kind == kindSha384) compress512(h, data, off);
-	else if (h.kind == kindSha1) compressSha1(h, data, off);
-	else compressMd5(h, data, off);
-}
-
-/** Compresses `blocks` whole blocks of `data` from `off`, on the CPU's SHA extension when it has one. */
-function compressRun(h: HashState, data: HashBytes, off: int32, blocks: int32): void {
-	let done = 0;
-	when (!js) {
-		if (h.kind == kindSha256 || h.kind == kindSha224) done = sha256HwBlocks(h.state, data, off, blocks) as int32;
-		else if (h.kind == kindSha512 || h.kind == kindSha384) done = sha512HwBlocks(h.state, data, off, blocks) as int32;
+when (!js) {
+	/**
+	 * Compresses `blocks` whole blocks of `data` from `off` into the chaining words `state`, on the CPU's SHA
+	 * extension when it has one.
+	 */
+	function compressWords(kind: int32, state: Span<uint32>, data: HashBytes, off: int32, blocks: int32): void {
+		if (blocks == 0) return;
+		const wide = kind == kindSha512 || kind == kindSha384;
+		let done = 0;
+		if (kind == kindSha256 || kind == kindSha224) done = sha256HwBlocks(state, data, off, blocks) as int32;
+		else if (wide) done = sha512HwBlocks(state, data, off, blocks) as int32;
+		const size = wide ? 128 : 64;
+		for (let i = done; i < blocks; i++) {
+			const at = off + i * size;
+			if (kind == kindSha256 || kind == kindSha224) compress256Words(state, data, at);
+			else if (wide) compress512Words(state, data, at);
+			else if (kind == kindSha1) compressSha1Words(state, data, at);
+			else compressMd5Words(state, data, at);
+		}
 	}
-	const size = h.blockSize;
-	for (let i = done; i < blocks; i++) compressBlock(h, data, off + i * size);
+
+	function compressRun(h: HashState, data: HashBytes, off: int32, blocks: int32): void {
+		compressWords(h.kind, h.state, data, off, blocks);
+	}
+} else {
+	function compressRun(h: HashState, data: HashBytes, off: int32, blocks: int32): void {
+		for (let i = 0; i < blocks; i++) {
+			const at = off + i * h.blockSize;
+			if (h.kind == kindSha256 || h.kind == kindSha224) compress256(h, data, at);
+			else if (h.kind == kindSha512 || h.kind == kindSha384) compress512(h, data, at);
+			else if (h.kind == kindSha1) compressSha1(h, data, at);
+			else compressMd5(h, data, at);
+		}
+	}
 }
 
-export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
+export function updateHash(h: HashState, data: HashBytes): void {
 	if (h.finished) throw new Error("hash already finished");
 	const size = h.blockSize;
 	const end = data.length as int32;
@@ -106,13 +135,13 @@ export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 }
 
 /**
- * Pads the last `filled` bytes of a message of `length` bytes in `block` (two blocks of room): 0x80, zeros, then the
+ * Pads the last `filled` bytes of a message of `length` bytes in `block`: 0x80, zeros, then the
  * length in bits in the last eight bytes, little-endian for MD5 and big-endian for the others. The blocks to compress.
  */
 function padInto(block: Span<uint8>, filled: int32, size: int32, length: number, md5: boolean): int32 {
 	const lengthBytes = size == 128 ? 16 : 8;
 	block[filled] = 0x80;
-	const blocks = filled + 1 > size - lengthBytes ? 2 : 1;
+	const blocks = ((filled + lengthBytes) / size) as int32 + 1;
 	const end = blocks * size;
 	for (let i = filled + 1; i < end - 8; i++) block[i] = 0;
 	let high: uint32 = 0;
@@ -176,45 +205,49 @@ export function finishHash(h: HashState): uint8[] {
 	return out;
 }
 
-// A one-shot SHA-2 digest on the CPU's SHA extension keeps its chaining words and last blocks on the stack, so the
-// only allocation is the digest.
+// A one-shot digest on C keeps its chaining words and last blocks on the stack, so the only
+// allocation is the digest. With room for three blocks, the last whole block of the input is
+// compressed with the padding, in one call of the SHA extension.
 when (!js) {
-	function sha2OneShot(kind: int32, data: Readonly<uint8[]>): uint8[] | null {
-		const wide = kind == kindSha512 || kind == kindSha384;
-		if ((pureCpuFeatures() & (wide ? 2 : 1)) == 0) return null;
-		const size = wide ? 128 : 64;
-		let state: uint32[16] = [0];
-		let block: uint8[256] = [0];
-		sha2Iv(kind, state);
+	function digestWith(kind: int32, data: HashBytes, state: Span<uint32>, block: Span<uint8>): uint8[] {
+		const md5 = kind == kindMd5;
+		const size = kind == kindSha512 || kind == kindSha384 ? 128 : 64;
+		initWords(kind, state);
 		const length = data.length as int32;
-		const full = (length / size) as int32;
-		if (full > 0) {
-			if (wide) sha512HwBlocks(state, data, 0, full);
-			else sha256HwBlocks(state, data, 0, full);
-		}
-		const rest = length - full * size;
-		for (let i = 0; i < rest; i++) block[i] = data[full * size + i];
-		const blocks = padInto(block, rest, size, length as number, false);
-		if (wide) sha512HwBlocks(state, block, 0, blocks);
-		else sha256HwBlocks(state, block, 0, blocks);
+		let direct = (length / size) as int32;
+		if (direct > 0 && block.length >= 3 * size) direct -= 1;
+		compressWords(kind, state, data, 0, direct);
+		const rest = length - direct * size;
+		for (let i = 0; i < rest; i++) block[i] = data[direct * size + i];
+		const blocks = padInto(block, rest, size, length as number, md5);
+		compressWords(kind, state, block, 0, blocks);
 		const out = digestArray(hashOutputSize(kind));
-		writeDigest(state, out, out.length >> 2, false);
-		wipeWords(state[0..(wide ? 16 : 8)]);
+		writeDigest(state, out, out.length >> 2, md5);
+		wipeWords(state[0..stateWords(kind)]);
 		wipeBytes(block[0..blocks * size]);
 		return out;
 	}
+
+	function oneShot(kind: int32, data: HashBytes): uint8[] {
+		if (kind == kindSha512 || kind == kindSha384) {
+			let state: uint32[16] = [0];
+			let block: uint8[256] = [0];
+			return digestWith(kind, data, state, block);
+		}
+		let state: uint32[8] = [0];
+		let block: uint8[192] = [0];
+		return digestWith(kind, data, state, block);
+	}
 }
 
-export function hashOf(kind: int32, data: Readonly<uint8[]>): uint8[] {
+export function hashOf(kind: int32, data: HashBytes): uint8[] {
 	when (!js) {
-		if (kind == kindSha256 || kind == kindSha224 || kind == kindSha512 || kind == kindSha384) {
-			const out = sha2OneShot(kind, data);
-			if (out != null) return out;
-		}
+		return oneShot(kind, data);
+	} else {
+		const h = newHash(kind);
+		updateHash(h, data);
+		return finishHash(h);
 	}
-	const h = newHash(kind);
-	updateHash(h, data);
-	return finishHash(h);
 }
 
 function hex(kind: int32, text: string): string {

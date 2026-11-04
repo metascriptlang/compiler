@@ -65,18 +65,6 @@ export function sha2Iv(kind: int32, state: Span<uint32>): void {
 	}
 }
 
-export function initSha2(h: HashState): void {
-	if (h.kind == kindSha256) {
-		for (let i = 0; i < 8; i++) h.state[i] = iv256[i];
-	} else if (h.kind == kindSha224) {
-		for (let i = 0; i < 8; i++) h.state[i] = iv224[i];
-	} else if (h.kind == kindSha512) {
-		for (let i = 0; i < 16; i++) h.state[i] = iv512[i];
-	} else {
-		for (let i = 0; i < 16; i++) h.state[i] = iv384[i];
-	}
-}
-
 function rotr(v: uint32, c: uint32): uint32 {
 	return (v >> c) | (v << (32 - c));
 }
@@ -363,7 +351,7 @@ when (!js) {
 		return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
 	}
 
-	function compress256Block(st: HashState, data: HashBytes, off: int32): void {
+	export function compress256Words(state: Span<uint32>, data: HashBytes, off: int32): void {
 		let w0: uint32 = wordBE(data, off + 0);
 		let w1: uint32 = wordBE(data, off + 4);
 		let w2: uint32 = wordBE(data, off + 8);
@@ -380,14 +368,14 @@ when (!js) {
 		let w13: uint32 = wordBE(data, off + 52);
 		let w14: uint32 = wordBE(data, off + 56);
 		let w15: uint32 = wordBE(data, off + 60);
-		let a: uint32 = st.state[0];
-		let b: uint32 = st.state[1];
-		let c: uint32 = st.state[2];
-		let d: uint32 = st.state[3];
-		let e: uint32 = st.state[4];
-		let f: uint32 = st.state[5];
-		let g: uint32 = st.state[6];
-		let h: uint32 = st.state[7];
+		let a: uint32 = state[0];
+		let b: uint32 = state[1];
+		let c: uint32 = state[2];
+		let d: uint32 = state[3];
+		let e: uint32 = state[4];
+		let f: uint32 = state[5];
+		let g: uint32 = state[6];
+		let h: uint32 = state[7];
 		let t: uint32 = 0;
 		t = h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + k256[0] + w0;
 		d = d + t;
@@ -629,21 +617,21 @@ when (!js) {
 		t = a + (rotr(f, 6) ^ rotr(f, 11) ^ rotr(f, 25)) + ((f & g) ^ (~f & h)) + k256[63] + w15;
 		e = e + t;
 		a = t + (rotr(b, 2) ^ rotr(b, 13) ^ rotr(b, 22)) + ((b & c) ^ (b & d) ^ (c & d));
-		st.state[0] = st.state[0] + a;
-		st.state[1] = st.state[1] + b;
-		st.state[2] = st.state[2] + c;
-		st.state[3] = st.state[3] + d;
-		st.state[4] = st.state[4] + e;
-		st.state[5] = st.state[5] + f;
-		st.state[6] = st.state[6] + g;
-		st.state[7] = st.state[7] + h;
+		state[0] = state[0] + a;
+		state[1] = state[1] + b;
+		state[2] = state[2] + c;
+		state[3] = state[3] + d;
+		state[4] = state[4] + e;
+		state[5] = state[5] + f;
+		state[6] = state[6] + g;
+		state[7] = state[7] + h;
 	}
 
 	function rotr64(v: uint64, c: uint64): uint64 {
 		return (v >> c) | (v << (64 - c));
 	}
 
-	function compress512Block(st: HashState, data: HashBytes, off: int32): void {
+	export function compress512Words(state: Span<uint32>, data: HashBytes, off: int32): void {
 		let w0: uint64 = ((wordBE(data, off + 0) as uint64) << 32) | (wordBE(data, off + 4) as uint64);
 		let w1: uint64 = ((wordBE(data, off + 8) as uint64) << 32) | (wordBE(data, off + 12) as uint64);
 		let w2: uint64 = ((wordBE(data, off + 16) as uint64) << 32) | (wordBE(data, off + 20) as uint64);
@@ -660,14 +648,14 @@ when (!js) {
 		let w13: uint64 = ((wordBE(data, off + 104) as uint64) << 32) | (wordBE(data, off + 108) as uint64);
 		let w14: uint64 = ((wordBE(data, off + 112) as uint64) << 32) | (wordBE(data, off + 116) as uint64);
 		let w15: uint64 = ((wordBE(data, off + 120) as uint64) << 32) | (wordBE(data, off + 124) as uint64);
-		let a: uint64 = ((st.state[0] as uint64) << 32) | (st.state[1] as uint64);
-		let b: uint64 = ((st.state[2] as uint64) << 32) | (st.state[3] as uint64);
-		let c: uint64 = ((st.state[4] as uint64) << 32) | (st.state[5] as uint64);
-		let d: uint64 = ((st.state[6] as uint64) << 32) | (st.state[7] as uint64);
-		let e: uint64 = ((st.state[8] as uint64) << 32) | (st.state[9] as uint64);
-		let f: uint64 = ((st.state[10] as uint64) << 32) | (st.state[11] as uint64);
-		let g: uint64 = ((st.state[12] as uint64) << 32) | (st.state[13] as uint64);
-		let h: uint64 = ((st.state[14] as uint64) << 32) | (st.state[15] as uint64);
+		let a: uint64 = ((state[0] as uint64) << 32) | (state[1] as uint64);
+		let b: uint64 = ((state[2] as uint64) << 32) | (state[3] as uint64);
+		let c: uint64 = ((state[4] as uint64) << 32) | (state[5] as uint64);
+		let d: uint64 = ((state[6] as uint64) << 32) | (state[7] as uint64);
+		let e: uint64 = ((state[8] as uint64) << 32) | (state[9] as uint64);
+		let f: uint64 = ((state[10] as uint64) << 32) | (state[11] as uint64);
+		let g: uint64 = ((state[12] as uint64) << 32) | (state[13] as uint64);
+		let h: uint64 = ((state[14] as uint64) << 32) | (state[15] as uint64);
 		let t: uint64 = 0;
 		t = h + (rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)) + (g ^ (e & (f ^ g))) + 0x428a2f98d728ae22 + w0;
 		d = d + t;
@@ -973,30 +961,30 @@ when (!js) {
 		t = a + (rotr64(f, 14) ^ rotr64(f, 18) ^ rotr64(f, 41)) + (h ^ (f & (g ^ h))) + 0x6c44198c4a475817 + w15;
 		e = e + t;
 		a = t + (rotr64(b, 28) ^ rotr64(b, 34) ^ rotr64(b, 39)) + ((b & (c | d)) | (c & d));
-		const sa = (((st.state[0] as uint64) << 32) | (st.state[1] as uint64)) + a;
-		st.state[0] = (sa >> 32) as uint32;
-		st.state[1] = (sa & 0xffffffff) as uint32;
-		const sb = (((st.state[2] as uint64) << 32) | (st.state[3] as uint64)) + b;
-		st.state[2] = (sb >> 32) as uint32;
-		st.state[3] = (sb & 0xffffffff) as uint32;
-		const sc = (((st.state[4] as uint64) << 32) | (st.state[5] as uint64)) + c;
-		st.state[4] = (sc >> 32) as uint32;
-		st.state[5] = (sc & 0xffffffff) as uint32;
-		const sd = (((st.state[6] as uint64) << 32) | (st.state[7] as uint64)) + d;
-		st.state[6] = (sd >> 32) as uint32;
-		st.state[7] = (sd & 0xffffffff) as uint32;
-		const se = (((st.state[8] as uint64) << 32) | (st.state[9] as uint64)) + e;
-		st.state[8] = (se >> 32) as uint32;
-		st.state[9] = (se & 0xffffffff) as uint32;
-		const sf = (((st.state[10] as uint64) << 32) | (st.state[11] as uint64)) + f;
-		st.state[10] = (sf >> 32) as uint32;
-		st.state[11] = (sf & 0xffffffff) as uint32;
-		const sg = (((st.state[12] as uint64) << 32) | (st.state[13] as uint64)) + g;
-		st.state[12] = (sg >> 32) as uint32;
-		st.state[13] = (sg & 0xffffffff) as uint32;
-		const sh = (((st.state[14] as uint64) << 32) | (st.state[15] as uint64)) + h;
-		st.state[14] = (sh >> 32) as uint32;
-		st.state[15] = (sh & 0xffffffff) as uint32;
+		const sa = (((state[0] as uint64) << 32) | (state[1] as uint64)) + a;
+		state[0] = (sa >> 32) as uint32;
+		state[1] = (sa & 0xffffffff) as uint32;
+		const sb = (((state[2] as uint64) << 32) | (state[3] as uint64)) + b;
+		state[2] = (sb >> 32) as uint32;
+		state[3] = (sb & 0xffffffff) as uint32;
+		const sc = (((state[4] as uint64) << 32) | (state[5] as uint64)) + c;
+		state[4] = (sc >> 32) as uint32;
+		state[5] = (sc & 0xffffffff) as uint32;
+		const sd = (((state[6] as uint64) << 32) | (state[7] as uint64)) + d;
+		state[6] = (sd >> 32) as uint32;
+		state[7] = (sd & 0xffffffff) as uint32;
+		const se = (((state[8] as uint64) << 32) | (state[9] as uint64)) + e;
+		state[8] = (se >> 32) as uint32;
+		state[9] = (se & 0xffffffff) as uint32;
+		const sf = (((state[10] as uint64) << 32) | (state[11] as uint64)) + f;
+		state[10] = (sf >> 32) as uint32;
+		state[11] = (sf & 0xffffffff) as uint32;
+		const sg = (((state[12] as uint64) << 32) | (state[13] as uint64)) + g;
+		state[12] = (sg >> 32) as uint32;
+		state[13] = (sg & 0xffffffff) as uint32;
+		const sh = (((state[14] as uint64) << 32) | (state[15] as uint64)) + h;
+		state[14] = (sh >> 32) as uint32;
+		state[15] = (sh & 0xffffffff) as uint32;
 	}
 }
 
@@ -1174,9 +1162,17 @@ when (js) {
 }
 
 export function compress256(h: HashState, data: HashBytes, off: int32): void {
-	compress256Block(h, data, off);
+	when (!js) {
+		compress256Words(h.state, data, off);
+	} else {
+		compress256Block(h, data, off);
+	}
 }
 
 export function compress512(h: HashState, data: HashBytes, off: int32): void {
-	compress512Block(h, data, off);
+	when (!js) {
+		compress512Words(h.state, data, off);
+	} else {
+		compress512Block(h, data, off);
+	}
 }
