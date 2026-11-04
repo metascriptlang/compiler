@@ -72,8 +72,8 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-// The Raiser runs no ordered statement hoist, so a guarded use stays an expression
-// there and the VM evaluates it in place.
+// A plain read is left to the conditional-expression pass, which guards it with a statement before the
+// statement that reads it, as on C, so the read stays a place. A class operand and a write are guarded here.
 export function guardModuleTdzRaiser(program: Node, ctx: TransformContext): Node {
 	if (ctx.tdzFlags.size == 0) return program;
 	mapChildren(program, (c: Node): Node => guardUses(c, false, ctx));
@@ -91,7 +91,7 @@ function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 			return guarded(n, cls, ctx);
 		}
 		const read = moduleBindingRead(n);
-		if (read != null) return read.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
+		if (read != null) return n;
 		if (n.kind == NodeKind.ExprStmt) {
 			const assign = (n.data as ExprStmtData).expr;
 			if (assign.kind == NodeKind.BinaryExpr && flagOf(placeRoot((assign.data as BinaryExprData).left), ctx) != null) {

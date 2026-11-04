@@ -2885,6 +2885,31 @@ function countNamed(f: RaiserFunction, name: string): number {
 	return n;
 }
 
+function gapFunc(code: string, name: string): RaiserFunction {
+	const mod = compileLowered(code);
+	let names = "";
+	for (const f of mod.functions) {
+		if (f.name == name) return f;
+		names = names + " " + f.name;
+	}
+	throw new Error(`no function ${name} among${names}`);
+	return mod.functions[0];
+}
+
+const tdzReaders = "class P { x: int64 = 0; constructor(x: int64) { this.x = x; } } function make(): int64 { return 1; } const k = make();"
+	+ " const origin = new P(3); let counter: int64 = 2;"
+	+ " function readObj(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 3; i = i + 1) s = s + origin.x; return s; }"
+	+ " function readInt(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 3; i = i + 1) { s = s + counter; s = s + counter; } return s; }";
+
+test "engine: a guarded module binding read is checked by a statement before it and stays a borrow" {
+	const obj = gapFunc(tdzReaders + " console.log(`${readObj()} ${readInt()}`);", "readObj");
+	assert countNamed(obj, "Try") == 0 && countNamed(obj, "RcInc") == 0 && countNamed(obj, "RcDec") == 0 && countNamed(obj, "LoadGlobal") == 2, disasmFunc(obj);
+	const int = gapFunc(tdzReaders + " console.log(`${readObj()} ${readInt()}`);", "readInt");
+	assert countNamed(int, "Try") == 0 && countNamed(int, "MoveW") == 0 && countNamed(int, "LoadGlobal") == 4, disasmFunc(int);
+	const vm = evalVM(tdzReaders + " console.log(`${readObj()} ${readInt()}`);");
+	assert vm.error == "" && vm.output == "9 12\n", `${vm.error} ${vm.output}`;
+}
+
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);

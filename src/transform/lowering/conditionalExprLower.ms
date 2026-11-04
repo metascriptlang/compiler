@@ -596,7 +596,7 @@ function ownExpressionsNeedPass(stmt: Node): boolean {
 }
 
 function expressionNeedsPass(n: Node, inCall: boolean, inLiteral: boolean): boolean {
-	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr) return true;
+	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.SpreadExpr || tdzFlagOf(n) != null) return true;
 	if (isFunctionNode(n)) return false;
 	if (inCall && n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=") return true;
 	if (inLiteral && callMayRaiseValue(n)) return true;
