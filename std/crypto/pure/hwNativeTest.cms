@@ -1,0 +1,7 @@
+import { pureCpuFeatures, portableForced } from "./hw";
+
+test "MS_CRYPTO_PORTABLE turns every hardware path off" {
+	const features = pureCpuFeatures();
+	console.log(`pure crypto CPU features ${features}, portable forced ${portableForced()}`);
+	if (portableForced()) assert features == 0;
+}

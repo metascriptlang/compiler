@@ -4,6 +4,10 @@ import { initSha1, compressSha1 } from "./sha1";
 import { initMd5, compressMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
 
+when (!js) {
+	import { sha256HwBlocks, sha512HwBlocks } from "./hw";
+}
+
 /** The kind number of a hash name, or -1 when the portable code has no such hash. */
 export function hashKind(algorithm: string): int32 {
 	if (algorithm == "sha256") return kindSha256;
@@ -45,6 +49,17 @@ function compressBlock(h: HashState, data: HashBytes, off: int32): void {
 	else compressMd5(h, data, off);
 }
 
+/** Compresses `blocks` whole blocks of `data` from `off`, on the CPU's SHA extension when it has one. */
+function compressRun(h: HashState, data: HashBytes, off: int32, blocks: int32): void {
+	let done = 0;
+	when (!js) {
+		if (h.kind == kindSha256 || h.kind == kindSha224) done = sha256HwBlocks(h.state, data, off, blocks) as int32;
+		else if (h.kind == kindSha512 || h.kind == kindSha384) done = sha512HwBlocks(h.state, data, off, blocks) as int32;
+	}
+	const size = h.blockSize;
+	for (let i = done; i < blocks; i++) compressBlock(h, data, off + i * size);
+}
+
 export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 	if (h.finished) throw new Error("hash already finished");
 	const size = h.blockSize;
@@ -61,12 +76,13 @@ export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 			h.filled = filled;
 			return;
 		}
-		compressBlock(h, h.block, 0);
+		compressRun(h, h.block, 0, 1);
 		filled = 0;
 	}
-	while (at + size <= end) {
-		compressBlock(h, data, at);
-		at += size;
+	if (at + size <= end) {
+		const blocks = ((end - at) / size) as int32;
+		compressRun(h, data, at, blocks);
+		at += blocks * size;
 	}
 	while (at < end) {
 		h.block[filled] = data[at];
@@ -102,12 +118,12 @@ export function finishHashInto(h: HashState, out: uint8[]): void {
 	filled += 1;
 	if (filled > size - lengthBytes) {
 		for (let i = filled; i < size; i++) h.block[i] = 0;
-		compressBlock(h, h.block, 0);
+		compressRun(h, h.block, 0, 1);
 		filled = 0;
 	}
 	for (let i = filled; i < size - 8; i++) h.block[i] = 0;
 	putLength(h, size - 8);
-	compressBlock(h, h.block, 0);
+	compressRun(h, h.block, 0, 1);
 	h.filled = 0;
 	h.finished = true;
 	const length = h.outputSize;

@@ -1,0 +1,46 @@
+/**
+ * The C bindings of the hardware kernels the portable modules dispatch to (runtime/crypto/pureHw.h). Every call
+ * returns 0 without touching its outputs when the CPU lacks the extension or MS_CRYPTO_PORTABLE is set, and the
+ * caller then runs its portable code.
+ */
+
+@include("runtime/crypto/pureHw.h");
+
+/** Compresses `blocks` SHA-256 blocks of `data` from `off` into the first eight words of `state`; the blocks done. */
+export extern function sha256HwBlocks(state: Span<uint32>, data: Readonly<Span<uint8>>, off: int64, blocks: int64): int64 from "msPureSha256Blocks";
+
+/** As sha256HwBlocks for SHA-512, the state as sixteen words, high word first in each pair. */
+export extern function sha512HwBlocks(state: Span<uint32>, data: Readonly<Span<uint8>>, off: int64, blocks: int64): int64 from "msPureSha512Blocks";
+
+// The vector ChaCha20 and the 64-bit-limb Poly1305 are the vendor surface's, built for every C target; the AES
+// kernels need no vendor code.
+@compile("runtime/crypto/ciphers/chacha20Simd.c");
+@compile("runtime/crypto/ciphers/poly1305x64.c");
+@compile("runtime/crypto/ciphers/aesHw.c");
+
+/** The extensions the portable modules may use (cpuFeatures.h bits), 0 when MS_CRYPTO_PORTABLE forces the portable code. */
+export extern function pureCpuFeatures(): int32 from "msPureCpuFeatures";
+
+/** True when MS_CRYPTO_PORTABLE forces the portable code. */
+export extern function portableForced(): boolean from "msCryptoPortableForced";
+
+/** True when AES-GCM and AES-CBC run on the CPU's AES and carry-less multiply extensions. */
+export extern function aesHwAvailable(): boolean from "msPureAesAvailable";
+
+/** AES-GCM seal of `src[srcAt, +length)` into `dst[dstAt, +length)` (the same range is allowed) and the tag into `tag[tagAt, +16)`. */
+export extern function aesGcmHwSeal(keys: Readonly<Span<uint64>>, nonce: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, src: Readonly<Span<uint8>>, srcAt: int64, length: int64, dst: Span<uint8>, dstAt: int64, tag: Span<uint8>, tagAt: int64): void from "msPureAesGcmSeal";
+
+/** AES-GCM open: true with the plain text in `dst[dstAt, +length)`, or false with `dst` untouched when the tag does not verify. */
+export extern function aesGcmHwOpen(keys: Readonly<Span<uint64>>, nonce: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, src: Readonly<Span<uint8>>, srcAt: int64, length: int64, tag: Readonly<Span<uint8>>, tagAt: int64, dst: Span<uint8>, dstAt: int64): boolean from "msPureAesGcmOpen";
+
+/** AES-CBC encryption of `buf`, whole blocks with the padding in place, in place. */
+export extern function aesCbcHwEncrypt(keys: Readonly<Span<uint64>>, iv: Readonly<Span<uint8>>, buf: Span<uint8>): void from "msPureAesCbcEncrypt";
+
+/** AES-CBC decryption of the whole blocks of `src` into `dst` of the same length. */
+export extern function aesCbcHwDecrypt(keys: Readonly<Span<uint64>>, iv: Readonly<Span<uint8>>, src: Readonly<Span<uint8>>, dst: Span<uint8>): void from "msPureAesCbcDecrypt";
+
+/** IETF ChaCha20 over the leading whole blocks the vector kernel batches; the bytes done, a multiple of 64 (0 when forced portable). */
+export extern function chachaHwXor(key: Readonly<Span<uint32>>, nonce: Readonly<Span<uint32>>, counter: uint32, src: Readonly<Span<uint8>>, srcOff: int64, dst: Span<uint8>, dstOff: int64, length: int64): int64 from "msPureChachaXor";
+
+/** The ChaCha20-Poly1305 tag over `aad` and `text[off, +length)` under `authKey` into `tag`; false when the limb kernel is not used. */
+export extern function poly1305HwAead(tag: Span<uint8>, authKey: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, text: Readonly<Span<uint8>>, off: int64, length: int64): boolean from "msPurePoly1305Aead";

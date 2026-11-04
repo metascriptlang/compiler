@@ -1,5 +1,9 @@
 import { newGhash, updateGhash, finishGhash, storeBE32 } from "./ghash";
 
+when (c) {
+	import { aesHwAvailable, aesGcmHwSeal, aesGcmHwOpen, aesCbcHwEncrypt, aesCbcHwDecrypt } from "./hw";
+}
+
 /**
  * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, with no table indexed by the key or the data, the key
  * schedule included. Serial and short work is fixsliced (Adomnicai and Peyrin, "Fixslicing AES-like ciphers", 2020):
@@ -1001,8 +1005,32 @@ function refill(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, 
 	else refillNarrow(keys, batch, nonce, hashKey);
 }
 
-function roundsOf(keys: Readonly<Word[]>): int32 {
-	return keys.length / KEY_WORDS - 1;
+// On C a key schedule ends with the FIPS 197 round keys, two words per round key, and the round count, which the
+// CPU's AES instructions run on (hw.cms); JS has no such tail.
+when (c) {
+	function hwTailWords(rounds: int32): int32 {
+		return 2 * (rounds + 1) + 1;
+	}
+
+	function putHwKeys(packed: Word[], words: Readonly<uint32[]>, rounds: int32): void {
+		const base = (rounds + 1) * KEY_WORDS;
+		for (let i = 0; i < 2 * (rounds + 1); i++) packed[base + i] = (words[2 * i] as uint64) | ((words[2 * i + 1] as uint64) << 32);
+		packed[base + 2 * (rounds + 1)] = rounds as uint64;
+	}
+
+	function roundsOf(keys: Readonly<Word[]>): int32 {
+		return keys[keys.length - 1] as int32;
+	}
+} else {
+	function hwTailWords(rounds: int32): int32 {
+		return 0;
+	}
+
+	function putHwKeys(packed: Word[], words: Readonly<uint32[]>, rounds: int32): void {}
+
+	function roundsOf(keys: Readonly<Word[]>): int32 {
+		return keys.length / KEY_WORDS - 1;
+	}
 }
 
 function encryptState(keys: Readonly<Word[]>, st: Word[]): void {
@@ -1086,7 +1114,7 @@ export function expandKey(key: Readonly<uint8[]>): Word[] {
 		words[i] = words[i - nk] ^ t;
 	}
 	const rounds = words.length / 4 - 1;
-	const packed = new Array<Word>((rounds + 1) * KEY_WORDS);
+	const packed = new Array<Word>((rounds + 1) * KEY_WORDS + hwTailWords(rounds));
 	for (let r = 0; r <= rounds; r++) {
 		for (let p = 0; p < BLOCKS; p++) {
 			for (let w = 0; w < 4; w++) storeLE(block, p * 16 + w * 4, words[r * 4 + w]);
@@ -1099,10 +1127,11 @@ export function expandKey(key: Readonly<uint8[]>): Word[] {
 	}
 	const wide = newWide();
 	appendWideKeys(packed, words, rounds, wide);
-	wide.fill(0);
-	words.fill(0);
-	st.fill(0);
-	block.fill(0);
+	putHwKeys(packed, words, rounds);
+	wipeLanes(wide);
+	wipeWords(words);
+	wipeLanes(st);
+	wipeBytes(block);
 	return packed;
 }
 
@@ -1202,6 +1231,12 @@ export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
 	requireRange("tag", tag, tagAt, 16);
+	when (c) {
+		if (aesHwAvailable()) {
+			aesGcmHwSeal(xk, nonce, aad, src, srcAt, length, dst, dstAt, tag, tagAt);
+			return;
+		}
+	}
 	const batch = new Batch();
 	startGcm(xk, batch, nonce, length);
 	const authKey = batch.bytes.slice(0, 32);
@@ -1222,6 +1257,9 @@ export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
 	requireRange("tag", tag, tagAt, 16);
+	when (c) {
+		if (aesHwAvailable()) return aesGcmHwOpen(xk, nonce, aad, src, srcAt, length, tag, tagAt, dst, dstAt);
+	}
 	const batch = new Batch();
 	startGcm(xk, batch, nonce, length);
 	const computed = new Array<uint8>(16);
@@ -1267,6 +1305,14 @@ export function cbcEncrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, plain: R
 	const size = plain.length;
 	const padding = 16 - (size % 16);
 	const out = new Array<uint8>(size + padding);
+	when (c) {
+		if (aesHwAvailable()) {
+			for (let i = 0; i < size; i++) out[i] = plain[i];
+			for (let i = size; i < out.length; i++) out[i] = padding as uint8;
+			aesCbcHwEncrypt(xk, iv, out);
+			return out;
+		}
+	}
 	const batch = new Batch();
 	const block = new Array<uint8>(16);
 	for (let i = 0; i < 16; i++) block[i] = iv[i];
@@ -1284,12 +1330,8 @@ export function cbcEncrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, plain: R
 	return out;
 }
 
-/** The plain text of an AES-CBC cipher text, or null for an empty or ragged input or bad padding; `xk` is from `expandKeyDecrypt`. */
-export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>): uint8[] | null {
-	requireIv(iv);
+function cbcDecryptPortable(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>, out: uint8[]): void {
 	const size = cipher.length;
-	if (size == 0 || size % 16 != 0) return null;
-	const out = new Array<uint8>(size);
 	const batch = new Batch();
 	let at = 0;
 	while (at < size) {
@@ -1308,6 +1350,22 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: 
 		at += count * 16;
 	}
 	wipe(batch);
+}
+
+/** The plain text of an AES-CBC cipher text, or null for an empty or ragged input or bad padding; `xk` is from `expandKeyDecrypt`. */
+export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>): uint8[] | null {
+	requireIv(iv);
+	const size = cipher.length;
+	if (size == 0 || size % 16 != 0) return null;
+	const out = new Array<uint8>(size);
+	let decrypted = false;
+	when (c) {
+		if (aesHwAvailable()) {
+			aesCbcHwDecrypt(xk, iv, cipher, out);
+			decrypted = true;
+		}
+	}
+	if (!decrypted) cbcDecryptPortable(xk, iv, cipher, out);
 	const pad = out[size - 1] as uint32;
 	let bad: uint32 = ((pad - 1) >> 8) | ((16 - pad) >> 8);
 	for (let i = 0; i < 16; i++) {

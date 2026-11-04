@@ -7,6 +7,10 @@ import {
 import { wipeBytes, wipeWords } from "./secret";
 import { load32LE } from "./endian";
 
+when (c) {
+	import { chachaHwXor, poly1305HwAead } from "./hw";
+}
+
 /**
  * The working words of one cipher call, allocated once so no block
  * allocates.
@@ -223,6 +227,10 @@ function chachaXor(
 ): void {
 	let done = 0;
 	let cnt = counter;
+	when (c) {
+		done = chachaHwXor(w.key, w.nonce, counter, src, srcOff, dst, dstOff, length) as int32;
+		cnt = counter + ((done >> 6) as uint32);
+	}
 	while (length - done >= 64) {
 		chachaCore(w, w.nonce[0], w.nonce[1], w.nonce[2], cnt);
 		cnt = cnt + 1;
@@ -318,6 +326,9 @@ function computeTag(
 	cipherLength: int32,
 ): void {
 	chachaXor(w, 0, w.authKey, 0, w.authKey, 0, 32);
+	when (c) {
+		if (poly1305HwAead(w.tag, w.authKey, aad, cipher, cipherOff, cipherLength)) return;
+	}
 	const mac = newPoly1305(w.authKey, 0);
 	updatePoly1305(mac, aad, 0, aad.length as int32);
 	padPoly1305(mac);
