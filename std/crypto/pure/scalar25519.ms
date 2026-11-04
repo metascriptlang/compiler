@@ -9,6 +9,8 @@
  * Zig's unrolled code.
  */
 
+import { wipeWords } from "./secret";
+
 const scalarLimbs = 8;
 const orderLimbs: Readonly<uint32[]> = [
 	0x5cf5d3ed,
@@ -154,6 +156,7 @@ function subtractOrderOnce(s: Readonly<uint32[]>): uint32[] {
 	const mask = (t[s.length] ^ 1) * 0xffffffff;
 	const out = new Array<uint32>(s.length);
 	for (let i = 0; i < s.length; i++) out[i] = s[i] ^ (mask & (s[i] ^ t[i]));
+	wipeWords(t);
 	return out;
 }
 
@@ -173,17 +176,35 @@ function reduceLimbs(x: Readonly<uint32[]>): uint32[] {
 	const s = subBorrow(r, qmul);
 	s.length = 9;
 	s[8] = s[8] & 0xff;
-	return subtractOrderOnce(s);
+	const reduced = subtractOrderOnce(s);
+	for (const scratch of [q, qmu, quotient, qmul, r, s]) wipeWords(scratch);
+	return reduced;
+}
+
+/** The reduced bytes of `x`, wiping both limb arrays. */
+function reducedBytes(x: uint32[]): uint8[] {
+	const reduced = reduceLimbs(x);
+	const out = bytesOf(reduced);
+	wipeWords(x);
+	wipeWords(reduced);
+	return out;
 }
 
 /** The 32-byte little-endian scalar reduced mod L. */
 export function scalarReduce32(s: Readonly<uint8[]>): uint8[] {
-	return bytesOf(reduceLimbs(limbsOf(s, 0, 32, 16)));
+	return reducedBytes(limbsOf(s, 0, 32, 16));
 }
 
 /** The 64-byte little-endian scalar reduced mod L. */
 export function scalarReduce64(s: Readonly<uint8[]>): uint8[] {
-	return bytesOf(reduceLimbs(limbsOf(s, 0, 64, 16)));
+	return reducedBytes(limbsOf(s, 0, 64, 16));
+}
+
+function reducedLimbs(bytes: Readonly<uint8[]>): uint32[] {
+	const limbs = limbsOf(bytes, 0, 32, 16);
+	const reduced = reduceLimbs(limbs);
+	wipeWords(limbs);
+	return reduced;
 }
 
 /**
@@ -195,12 +216,13 @@ export function scalarMulAdd(
 	b: Readonly<uint8[]>,
 	c: Readonly<uint8[]>,
 ): uint8[] {
-	const x = reduceLimbs(limbsOf(a, 0, 32, 16));
-	const y = reduceLimbs(limbsOf(b, 0, 32, 16));
-	const z = reduceLimbs(limbsOf(c, 0, 32, 16));
+	const x = reducedLimbs(a);
+	const y = reducedLimbs(b);
+	const z = reducedLimbs(c);
 	x.length = scalarLimbs;
 	y.length = scalarLimbs;
-	const product = reduceLimbs(mulLow(x, y, 16));
+	const wide = mulLow(x, y, 16);
+	const product = reduceLimbs(wide);
 	const sum = new Array<uint32>(9);
 	let carry: uint64 = 0;
 	for (let i = 0; i < 9; i++) {
@@ -208,7 +230,12 @@ export function scalarMulAdd(
 		sum[i] = t as uint32;
 		carry = t >> 32;
 	}
-	return bytesOf(subtractOrderOnce(sum));
+	const result = subtractOrderOnce(sum);
+	const out = bytesOf(result);
+	for (const scratch of [x, y, z, wide, product, sum, result]) {
+		wipeWords(scratch);
+	}
+	return out;
 }
 
 /**
