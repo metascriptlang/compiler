@@ -2,13 +2,15 @@
  * native.ms against live servers. TLS_NATIVE_DIR holds ca.pem (signs both
  * servers' leaves, SAN DNS:localhost) and other.pem (an unrelated CA);
  * TLS_NATIVE_PORT serves a valid leaf and TLS_NATIVE_EXPIRED_PORT an
- * expired one, both `openssl s_server -tls1_3 -www`. TLS_NATIVE_PUBLIC=1
+ * expired one, both `openssl s_server -tls1_3 -www`, and TLS_NATIVE_TLS12_PORT
+ * the valid leaf over `-tls1_2 -www`. TLS_NATIVE_PUBLIC=1
  * also connects to example.com:443 with the default root store. Without
  * the variables each test connects nowhere and passes.
  */
 
 import { env } from "std/process";
 import { tlsConnect, TlsConnection, read, write, close, peerCert, tlsClosedMessage } from "./native";
+import { Tls13Client, versionTls12 } from "./client";
 
 function localDir(): string {
 	return env.get("TLS_NATIVE_DIR");
@@ -60,6 +62,23 @@ test "a trusted localhost server serves its page and the connection closes once"
 	assert conn.read(16).length == 0 && conn.lastError == tlsClosedMessage;
 	assert conn.write("x") == -1 && conn.lastError == tlsClosedMessage;
 	assert conn.peerCert() == "";
+}
+
+test "a TLS 1.2-only server is negotiated down to 1.2 and verified" {
+	const dir = localDir();
+	if (dir == "") return;
+	const r = tlsConnect("localhost", portOf("TLS_NATIVE_TLS12_PORT"), { caPath: `${dir}/ca.pem`, timeoutMs: 20000 });
+	if (!r.ok) console.log("tls12 connect: " + r.error.message);
+	assert r.ok;
+	const conn = r.value;
+	const client = conn._client as Tls13Client;
+	console.log("tls12 version: " + client.version.toString(16) + " suite " + client.cipherSuite.toString(16));
+	assert client.version == versionTls12;
+	assert conn.peerCert() == "CN=localhost";
+	const page = getPage(conn, "localhost");
+	console.log("tls12 page: " + page.slice(0, 40));
+	assert page.startsWith("HTTP/1.0 200");
+	conn.close();
 }
 
 test "a certificate for another host name is refused" {
