@@ -24,12 +24,12 @@ export type EnvLookup = (name: string) => string;
 const BEGIN_MARKER = "-----BEGIN CERTIFICATE-----";
 const END_MARKER = "-----END CERTIFICATE-----";
 
-export const MACOS_CA_PATHS: string[] = [
+export const MACOS_CA_PATHS: Readonly<string[]> = [
 	"/etc/ssl/cert.pem",
 	"/System/Library/OpenSSL/certs/cert.pem",
 ];
 
-export const LINUX_CA_PATHS: string[] = [
+export const LINUX_CA_PATHS: Readonly<string[]> = [
 	"/etc/ssl/certs/ca-certificates.crt",
 	"/etc/ssl/ca-bundle.pem",
 	"/etc/pki/tls/certs/ca-bundle.crt",
@@ -40,7 +40,7 @@ export const LINUX_CA_PATHS: string[] = [
 	"/etc/ssl/certs/ca-bundle.crt",
 ];
 
-export const BSD_CA_PATHS: string[] = [
+export const BSD_CA_PATHS: Readonly<string[]> = [
 	"/etc/ssl/certs/ca-certificates.crt",
 	"/usr/local/share/certs/ca-root-nss.crt",
 	"/etc/ssl/cert.pem",
@@ -149,12 +149,12 @@ export function systemCaCandidates(lookupEnv: EnvLookup): string[] {
 		return windowsCaCandidates(execPath, lookupEnv("PATH"));
 	}
 	when (macos || ios) {
-		return MACOS_CA_PATHS;
+		return [...MACOS_CA_PATHS];
 	}
 	when (linux || android) {
-		return LINUX_CA_PATHS;
+		return [...LINUX_CA_PATHS];
 	}
-	return BSD_CA_PATHS;
+	return [...BSD_CA_PATHS];
 }
 
 function loaded(anchors: TrustAnchor[], source: string): RootStore {
@@ -208,16 +208,11 @@ export function loadRootStore(
 	return resolveRootStore(caPath, processEnv, systemCaCandidates(processEnv));
 }
 
-let defaultStore: RootStore | null = null;
-
 /**
- * The process's default root store, loaded on first use and shared after.
- * A failed load is not kept, so a later call reports its own cause.
+ * The default root store, loaded on each call: a process-wide cache would
+ * be module state shared across threads, and a Locked<T> payload cannot
+ * own the anchors' memory.
  */
 export function defaultRootStore(): Result<RootStore, CryptoError> {
-	const cached = defaultStore;
-	if (cached != null) return Result.ok(cached);
-	const store = try loadRootStore(null);
-	defaultStore = store;
-	return Result.ok(store);
+	return loadRootStore(null);
 }

@@ -104,22 +104,11 @@ function bundleOf(store: RootStore, now: int64): X509Bundle {
 	return bundle;
 }
 
-let defaultBundle: X509Bundle | null = null;
-
-/** The roots of `caPath`, or the process's default roots parsed once and shared after. */
+/** The roots of `caPath`, else the default store; parsed per connect, since no cache may cross threads. */
 function rootsFor(caPath: string, now: int64): Result<X509Bundle, CryptoError> {
-	if (caPath != "") {
-		const store = loadRootStore(caPath);
-		if (!store.ok) return Result.err(connectFailed(store.error.message));
-		return Result.ok(bundleOf(store.value, now));
-	}
-	const cached = defaultBundle;
-	if (cached != null) return Result.ok(cached);
-	const store = defaultRootStore();
+	const store = caPath != "" ? loadRootStore(caPath) : defaultRootStore();
 	if (!store.ok) return Result.err(connectFailed(store.error.message));
-	const bundle = bundleOf(store.value, now);
-	defaultBundle = bundle;
-	return Result.ok(bundle);
+	return Result.ok(bundleOf(store.value, now));
 }
 
 function verifyText(error: X509Error): string {
