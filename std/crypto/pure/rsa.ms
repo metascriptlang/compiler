@@ -253,24 +253,20 @@ export function rsaVerifyPss(key: RsaPublicData, hash: string, message: Readonly
 	const hashSize = mHash.length as int32;
 	const emBits = bitLength(key.n) - 1;
 	const emLength = (emBits + 7) >> 3;
-	const zeros = pssLayout(key.n, hashSize) - hashSize;
 	const s = bigFromBytes(signature);
-	if (zeros < 0 || s >= key.n) return false;
+	if (emLength < hashSize + 2 || s >= key.n) return false;
 	const m = modPow(s, key.e, key.n);
 	if (bitLength(m) > emBits) return false;
 	const encoded = bigToBytes(m, emLength);
 	if (encoded[emLength - 1] != 0xbc) return false;
 	const block = slice(encoded, 0, emLength - hashSize - 1);
 	const h = slice(encoded, emLength - hashSize - 1, emLength - 1);
-	const top: int32 = 255 >> (8 * emLength - emBits);
-	if (((block[0] as int32) & ~top & 255) != 0) return false;
-	xorInto(block, mgf1(kind, h, emLength - hashSize - 1));
-	block[0] = ((block[0] as int32) & top) as uint8;
-	for (let i = 0; i < zeros; i++) {
-		if (block[i] != 0) return false;
-	}
-	if (block[zeros] != 1) return false;
-	const salt = slice(block, zeros + 1, block.length as int32);
+	xorInto(block, mgf1(kind, h, block.length as int32));
+	block[0] = ((block[0] as int32) & (255 >> (8 * emLength - emBits))) as uint8;
+	let at = 0;
+	while (at < block.length - 1 && block[at] == 0) at += 1;
+	if (block[at] != 1) return false;
+	const salt = slice(block, at + 1, block.length as int32);
 	return sameBytes(hashOf(kind, derJoin([repeated(8, 0), mHash, salt])), h);
 }
 
