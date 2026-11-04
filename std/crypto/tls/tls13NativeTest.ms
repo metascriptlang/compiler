@@ -12,8 +12,8 @@ import {
 	chachaPolySeal, chachaPolyOpen, aeadSeal, aeadTagLength,
 } from "./aead";
 import {
-	TrafficKeys, Record, RecordFailure, trafficKeysOf, sealRecord, openRecord, recordHeader, recordNonce,
-	contentApplicationData, contentHandshake, exhaustedSequence, updatedTrafficKeys,
+	TrafficKeys, Record, RecordFailure, trafficKeysOf, sealRecord, sealRecords, openRecord, recordHeader, recordNonce,
+	contentApplicationData, contentHandshake, exhaustedSequence, updatedTrafficKeys, newRecordBuffer, append, takeRecord,
 } from "./record";
 import {
 	TlsTransport, CertificateVerifier, Tls13Options, Tls13Handshake, newHandshake, completeHandshake, signatureAcceptable, read, write, close,
@@ -387,6 +387,36 @@ test "no record is sealed or opened at the last sequence number" {
 	assert openRecord(reader, recordOf(lastRecord)).ok;
 	const exhausted = openRecord(reader, recordOf(lastRecord));
 	assert !exhausted.ok && exhausted.error == RecordFailure.SequenceExhausted;
+}
+
+test "sealRecords output cut at any chunk size reopens to the same content on every suite" {
+	const data = counting(2 * 16384 + 1000);
+	for (const code of [suiteAes128GcmSha256, suiteAes256GcmSha384, suiteChacha20Poly1305Sha256]) {
+		const sealed = sealRecords(keysFor(code), contentApplicationData, data);
+		assert sealed.ok;
+		const wire = sealed.value;
+		for (const step of [1, 7, 16389, wire.length as int32]) {
+			const reader = keysFor(code);
+			const buffer = newRecordBuffer();
+			const got: uint8[] = [];
+			let records = 0;
+			for (let at = 0; at < wire.length; at += step) {
+				buffer.append(wire.slice(at, Math.min(at + step, wire.length) as int32));
+				while (true) {
+					const record = buffer.takeRecord();
+					if (record == null) break;
+					const opened = openRecord(reader, record);
+					assert opened.ok && opened.value.contentType == contentApplicationData;
+					for (const octet of opened.value.content) got.push(octet);
+					records += 1;
+				}
+			}
+			assert records == 3 && got.length == data.length;
+			let diff = 0;
+			for (let i = 0; i < data.length; i++) diff |= (got[i] ^ data[i]) as int32;
+			assert diff == 0;
+		}
+	}
 }
 
 // A replaced key is wiped by its destroy hook, which runs on C; JS has no destroy hooks.
