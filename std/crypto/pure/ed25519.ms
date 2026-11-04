@@ -345,7 +345,7 @@ function mulBase(s: Readonly<uint8[]>): Point | null {
 	return q;
 }
 
-const baseWindowWidth = 8;
+const baseWindowWidth = 7;
 const pointWindowWidth = 4;
 
 /** [p], [3p], [5p], ... up to the 2^(pointWindowWidth - 2) odd multiples. */
