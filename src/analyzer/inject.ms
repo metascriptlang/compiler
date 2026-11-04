@@ -593,7 +593,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	}
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
-	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && (isCursorSlot(node.nodeType) || isViewCall(node))) {
+	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && (isCursorSlot(node.nodeType) || isViewCall(node) || readsMemberInPlace(node))) {
 		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 	}
 	return node;
