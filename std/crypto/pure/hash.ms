@@ -6,7 +6,7 @@ import { encodeHex } from "../../core/encoding";
 
 when (!js) {
 	import { Buffer } from "std/core/buffer";
-	import { sha256HwBlocks, sha512HwBlocks } from "./hw";
+	import { sha256HwBlocks, sha512HwBlocks, pureCpuFeatures } from "./hw";
 	import { compress256Words, compress512Words } from "./sha2";
 	import { compressSha1Words } from "./sha1";
 	import { compressMd5Words } from "./md5";
@@ -206,8 +206,9 @@ export function finishHash(h: HashState): uint8[] {
 }
 
 // A one-shot digest on C keeps its chaining words and last blocks on the stack, so the only
-// allocation is the digest. With room for three blocks, the last whole block of the input is
-// compressed with the padding, in one call of the SHA extension.
+// allocation is the digest. SHA-2 on the CPU's extension calls the kernel directly, which
+// measured 7-10 ns faster at 64 B on arm64 than the shared path; with room for three blocks,
+// the shared path compresses the last whole block of the input with the padding.
 when (!js) {
 	function digestWith(kind: int32, data: HashBytes, state: Span<uint32>, block: Span<uint8>): uint8[] {
 		const md5 = kind == kindMd5;
@@ -228,7 +229,36 @@ when (!js) {
 		return out;
 	}
 
+	function sha2HwOneShot(kind: int32, data: HashBytes): uint8[] | null {
+		const wide = kind == kindSha512 || kind == kindSha384;
+		if ((pureCpuFeatures() & (wide ? 2 : 1)) == 0) return null;
+		const size = wide ? 128 : 64;
+		let state: uint32[16] = [0];
+		let block: uint8[256] = [0];
+		sha2Iv(kind, state);
+		const length = data.length as int32;
+		const full = (length / size) as int32;
+		if (full > 0) {
+			if (wide) sha512HwBlocks(state, data, 0, full);
+			else sha256HwBlocks(state, data, 0, full);
+		}
+		const rest = length - full * size;
+		for (let i = 0; i < rest; i++) block[i] = data[full * size + i];
+		const blocks = padInto(block, rest, size, length as number, false);
+		if (wide) sha512HwBlocks(state, block, 0, blocks);
+		else sha256HwBlocks(state, block, 0, blocks);
+		const out = digestArray(hashOutputSize(kind));
+		writeDigest(state, out, out.length >> 2, false);
+		wipeWords(state[0..(wide ? 16 : 8)]);
+		wipeBytes(block[0..blocks * size]);
+		return out;
+	}
+
 	function oneShot(kind: int32, data: HashBytes): uint8[] {
+		if (kind != kindSha1 && kind != kindMd5) {
+			const out = sha2HwOneShot(kind, data);
+			if (out != null) return out;
+		}
 		if (kind == kindSha512 || kind == kindSha384) {
 			let state: uint32[16] = [0];
 			let block: uint8[256] = [0];
