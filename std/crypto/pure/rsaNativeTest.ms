@@ -59,6 +59,8 @@ test "every key format parses to the same 2048-bit key" {
 	assert p1 != null && pub1 != null;
 	assert rsaModulusBytes(p8.n) == 256;
 	assert p1.n == p8.n && p1.d == p8.d && spki.n == p8.n && pub1.n == p8.n && spki.e == 65537n;
+	const crlf = publicOf(keyASpki.split("\n").join(" \t\r\n"));
+	assert crlf != null && crlf.n == p8.n;
 }
 
 test "encoders write the same PEM text openssl wrote" {
