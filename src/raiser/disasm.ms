@@ -58,6 +58,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ArraySetLen => "ArraySetLen",
 		RaiserOpcode.NewObject => "NewObject",
 		RaiserOpcode.LoadField => "LoadField",
+		RaiserOpcode.LoadFieldRequired => "LoadFieldRequired",
 		RaiserOpcode.StoreField => "StoreField",
 		RaiserOpcode.LoadSlot => "LoadSlot",
 		RaiserOpcode.StoreSlot => "StoreSlot",
@@ -223,6 +224,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const name = opName(op);
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
+	if (op == RaiserOpcode.LoadFieldRequired) return `${name} ${ra} ${regText(op, 1, inst.b)} K${inst.c}`;
 	if (op == RaiserOpcode.MoveN) return `${name} ${ra} ${regText(op, 1, inst.b)} words ${inst.c}`;
 	if (op == RaiserOpcode.ZeroN || op == RaiserOpcode.RetN) return `${name} ${ra} words ${inst.b}`;
 	if (op == RaiserOpcode.LoadFrame) return `${name} ${ra} ${regText(op, 1, inst.b)} +${inst.c} kind ${inst.slot}`;

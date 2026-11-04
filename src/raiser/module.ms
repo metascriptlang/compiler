@@ -81,6 +81,15 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	validateCount(name, arity, 65535);
 	validateCount(name, regCount, 65535);
 	const paramWords = validateCallShape(name, callShape, arity, regCount);
+	for (const inst of code) {
+		if (inst.op != RaiserOpcode.LoadFieldRequired) continue;
+		const index = inst.c;
+		if (index != index || index < 0 || index >= constants.length ||
+			index != ((index as int32) as number) ||
+			constants[index as int32].kind != RaiserValueKind.String) {
+			throw new Error(`internal: invalid required field name in ${name}`);
+		}
+	}
 	const layout = layoutRegisters(name, code, constants, regCount as int32, classes);
 	const packed: int64[] = [];
 	const lines: int32[] = [];

@@ -245,9 +245,10 @@ export enum RaiserOpcode {
 	LoadFrame,
 	StoreFrame,
 	RetN,
+	LoadFieldRequired,
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.RetN;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.LoadFieldRequired;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -386,7 +387,8 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArrayFill => "rx-",
 		RaiserOpcode.ArraySliceCopy => "rrp",
 		RaiserOpcode.ArrayConcat => "rrr",
-		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
+		RaiserOpcode.LoadField | RaiserOpcode.LoadFieldRequired |
+			RaiserOpcode.LoadSlot => "xr-",
 		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
 		RaiserOpcode.LoadSlotW => "ir-",
 		RaiserOpcode.LoadSlotR => "rr-",
@@ -886,13 +888,17 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.IntToF64, 0) == RaiserRole.Float && opRole(RaiserOpcode.UIntToF64, 1) == RaiserRole.Int;
 	assert opRole(RaiserOpcode.LoadConstW, 0) == RaiserRole.Word && opRole(RaiserOpcode.LoadConstW, 1) == RaiserRole.None;
 	assert opRole(RaiserOpcode.UnownedRc, 0) == RaiserRole.Slot && opRole(RaiserOpcode.UnownedRc, 1) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.RetN, 0) == RaiserRole.Int;
+	assert opRole(RaiserOpcode.RetN, 2) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Any;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
 	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.None;
 }
 
 test "frame data opcodes append to the numeric ABI and pack scalar MemKind in slot" {
 	assert (RaiserOpcode.MoveN as int32) == (RaiserOpcode.UnownedRc as int32) + 1;
-	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.StoreFrame as int32) + 1;
+	assert (RaiserOpcode.RetN as int32) == (RaiserOpcode.StoreFrame as int32) + 1;
+	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.RetN as int32) + 1;
 	assert opRoleLetters(RaiserOpcode.MoveN) == "ii-";
 	assert opRoleLetters(RaiserOpcode.ZeroN) == "i--";
 	assert opRoleLetters(RaiserOpcode.LoadFrame) == "xi-";
