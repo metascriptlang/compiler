@@ -56,12 +56,6 @@ const edwardsD2 = feHex(
 const sqrtMinusOne = feHex(
 	"b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b",
 );
-const baseX = feHex(
-	"1ad5258f602d56c9b2a7259560c72c695cdcd6fd31e2a4c0fe536ecdd3366921",
-);
-const baseY = feHex(
-	"5866666666666666666666666666666666666666666666666666666666666666",
-);
 
 export const ed25519SeedLength = 32;
 export const ed25519SecretKeyLength = 64;
@@ -78,10 +72,6 @@ struct Point {
 
 function identity(): Point {
 	return { x: feZero, y: feOne, z: feOne, t: feZero };
-}
-
-function basePoint(): Point {
-	return { x: baseX, y: baseY, z: feOne, t: feMul(baseX, baseY) };
 }
 
 function fromBytes(s: Readonly<uint8[]>, from: int32): Point | null {
@@ -180,8 +170,6 @@ function precompute(p: Point, count: int32): Point[] {
 	return pc;
 }
 
-const basePointPc: Readonly<Point[]> = precompute(basePoint(), 8);
-
 /** An affine table point in ref10's niels form: y + x, y - x and 2dxy. */
 struct Niels {
 	yPlusX: Fe;
@@ -221,6 +209,10 @@ function addNiels(p: Readonly<Point>, q: Readonly<Niels>): Point {
 	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
 }
 
+function negNiels(p: Readonly<Niels>): Niels {
+	return { yPlusX: p.yMinusX, yMinusX: p.yPlusX, xy2d: feNeg(p.xy2d) };
+}
+
 function cMovNiels(p: Readonly<Niels>, q: Readonly<Niels>, bit: uint32): Niels {
 	return {
 		yPlusX: feCMov(p.yPlusX, q.yPlusX, bit),
@@ -244,12 +236,7 @@ function selectBase(row: int32, digit: int32): Niels {
 			((((magnitude ^ j) - 1) >> 31) & 1) as uint32,
 		);
 	}
-	const minus: Niels = {
-		yPlusX: t.yMinusX,
-		yMinusX: t.yPlusX,
-		xy2d: feNeg(t.xy2d),
-	};
-	return cMovNiels(t, minus, negative as uint32);
+	return cMovNiels(t, negNiels(t), negative as uint32);
 }
 
 function clamp(s: uint8[]): void {
@@ -304,8 +291,8 @@ function mulDoubleBasePublic(
 	let pos = 63;
 	while (true) {
 		const slot1 = e1[pos];
-		if (slot1 > 0) q = addPoints(q, basePointPc[slot1]);
-		else if (slot1 < 0) q = subPoints(q, basePointPc[-slot1]);
+		if (slot1 > 0) q = addNiels(q, baseTable[slot1 - 1]);
+		else if (slot1 < 0) q = addNiels(q, negNiels(baseTable[-slot1 - 1]));
 		const slot2 = e2[pos];
 		if (slot2 > 0) q = addPoints(q, pc2[slot2]);
 		else if (slot2 < 0) q = subPoints(q, pc2[-slot2]);
