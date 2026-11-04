@@ -32,7 +32,7 @@ import { JsonKind } from "std/serialize/json/types";
 import { getDynamicField, asBoolean } from "std/serialize/json/accessors";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind, SymbolFlag, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
+import { Symbol, SymbolKind, SymbolFlag, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData, Node } from "../../../ast/node";
 import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc, documentUri,
 } from "./shared";
@@ -370,13 +370,56 @@ function staysInOwnFile(sym: Symbol): boolean {
 	return sym.symbolKind == SymbolKind.Variable && !sym.symFlags.has(SymbolFlag.Global) && !sym.symFlags.has(SymbolFlag.Exported);
 }
 
-function filesSpellingName(db: TransAmDb, sym: Symbol | null, name: string, paths: string[]): string[] {
+function spellsAny(source: string, names: string[]): boolean {
+	for (const name of names) {
+		if (spellsName(source, name)) return true;
+	}
+	return false;
+}
+
+// Names the file binds one of `names` under, in an import or a re-export specifier; null when a binding is `default`.
+function aliasesIn(program: Node | null, names: string[]): string[] | null {
+	const found: string[] = [];
+	if (program == null || program.kind != NodeKind.Program) return found;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl.kind != NodeKind.ImportDecl) continue;
+		const imp = decl.data as ImportDeclData;
+		for (let i = 0; i < imp.importNames.length && i < imp.importAliases.length; i += 1) {
+			if (names.indexOf(imp.importNames[i]) < 0 || imp.importAliases[i] == imp.importNames[i]) continue;
+			if (imp.importAliases[i] == "default") return null;
+			found.push(imp.importAliases[i]);
+		}
+	}
+	return found;
+}
+
+function filesSpellingName(db: TransAmDb, sym: Symbol | null, spelled: string[], paths: string[]): string[] {
 	if (sym == null || staysInOwnFile(sym)) return [];
 	if (sym.modulePath == "") throw new Error("internal: symbol '" + sym.name + "' has no module path, so the files that can hold it are unknown");
 	if (dbGetSource(db, sym.modulePath).indexOf("export default") >= 0) return paths;
+	const names = spelled.slice();
+	if (names.indexOf(sym.name) < 0) names.push(sym.name);
+	const expanded = new HashSet<string>();
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const path of paths) {
+			if (expanded.has(path) || !spellsAny(dbGetSource(db, path), names)) continue;
+			expanded.add(path);
+			const aliases = aliasesIn(dbParse(db, path), names);
+			if (aliases == null) return paths;
+			for (const alias of aliases) {
+				if (names.indexOf(alias) < 0) {
+					names.push(alias);
+					grew = true;
+				}
+			}
+		}
+	}
 	const kept: string[] = [];
 	for (const path of paths) {
-		if (spellsName(dbGetSource(db, path), name)) kept.push(path);
+		if (spellsAny(dbGetSource(db, path), names)) kept.push(path);
 	}
 	return kept;
 }
@@ -399,7 +442,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb, cand
 	// Search current file via symbol identity (no false positives from shadowing)
 	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym), includeDeclaration);
 
-	for (const otherPath of filesSpellingName(db, suggest.sym, suggest.sym != null ? suggest.sym.name : "", candidates != null ? candidates : dependentPaths(db, path))) {
+	for (const otherPath of filesSpellingName(db, suggest.sym, [suggest.name], candidates != null ? candidates : dependentPaths(db, path))) {
 		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
@@ -521,7 +564,7 @@ export function handleRename(id: string, params: string, db: TransAmDb, candidat
 		changes.push(lspJsonString(pos.uri) + ":" + curEdits);
 	}
 
-	for (const otherPath of filesSpellingName(db, suggest.sym, suggest.name, candidates != null ? candidates : loadedPaths(db))) {
+	for (const otherPath of filesSpellingName(db, suggest.sym, [suggest.name], candidates != null ? candidates : loadedPaths(db))) {
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;

@@ -60,3 +60,41 @@ test "rename of an exported symbol checks only the modules spelling its name, an
 	const local = checksDuring(db, (): string => handleRename("2", params("a", 1, 18), db, universe()));
 	assert local == 0, "" + local;
 }
+
+function aliasDb(barrel: string, user: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/alias/lib.ms", "export function f(): int32 { return 1; }");
+	dbSetFileText(db, "/alias/barrel.ms", barrel);
+	dbSetFileText(db, "/alias/user.ms", user);
+	dbSetFileText(db, "/alias/other.ms", "export const z = 1;");
+	return db;
+}
+
+const ALIAS_FILES = ["/alias/lib.ms", "/alias/barrel.ms", "/alias/user.ms", "/alias/other.ms"];
+const AT_F = `{"textDocument":{"uri":"file:///alias/lib.ms"},"position":{"line":0,"character":16},"context":{"includeDeclaration":true},"newName":"renamed"}`;
+const RENAMING_BARREL = "export { f as g } from \"./lib\";";
+const RENAMED_USER = "import { g } from \"./barrel\";\nexport const u = g();";
+
+test "references and rename reach an importer of a renaming re-export that never spells the declared name, checking one module less than the universe" {
+	const db = aliasDb(RENAMING_BARREL, RENAMED_USER);
+	dbTypeCheck(db, "/alias/lib.ms");
+	let refs = "";
+	const checks = checksDuring(db, (): string => { refs = handleReferences("1", AT_F, db, ALIAS_FILES); return refs; });
+	assert refs.indexOf("file:///alias/user.ms") >= 0 && refs.indexOf("file:///alias/barrel.ms") >= 0, refs;
+	assert refs.indexOf("other.ms") < 0, refs;
+	assert checks == 2, "" + checks;
+	const renamed = handleRename("2", AT_F, db, ALIAS_FILES);
+	assert renamed.indexOf("file:///alias/lib.ms") >= 0 && renamed.indexOf("file:///alias/barrel.ms") >= 0, renamed;
+	assert renamed.indexOf("user.ms") < 0 && renamed.indexOf("other.ms") < 0, renamed;
+}
+
+test "a re-export as default keeps the answer of searching every module: the default importer is not a reference today, and every module is checked" {
+	const db = aliasDb("export { f as default } from \"./lib\";", "import h from \"./barrel\";\nexport const w = h();");
+	dbTypeCheck(db, "/alias/lib.ms");
+	let refs = "";
+	const checks = checksDuring(db, (): string => { refs = handleReferences("1", AT_F, db, ALIAS_FILES); return refs; });
+	assert checks == 3, "" + checks;
+	assert refs.indexOf("file:///alias/barrel.ms") >= 0 && refs.indexOf("user.ms") < 0, refs;
+	const renamed = handleRename("2", AT_F, db, ALIAS_FILES);
+	assert renamed.indexOf("file:///alias/lib.ms") >= 0 && renamed.indexOf("other.ms") < 0, renamed;
+}
