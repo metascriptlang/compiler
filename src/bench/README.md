@@ -13,12 +13,15 @@ longer than any check the edit loop allows.
 - `bench.ms`, and `bench.node.mjs` (or `bench.lua`) as its twin, printing the same row names; both time each row through the
   shared harness (`src/bench/harness.ms`, `src/bench/harness.mjs`; `bench.lua` carries its own copy): three rounds of
   at least 250 ms, the median and its spread;
+- optionally `bench.rs` and `bench.nim`, the Rust and Nim twins of the same rows with a copy of that harness;
 - `baseline.md`, the recorded tables: host, commit, tree, load, and the command that produced them.
 
 An area that compares against something other than node lists its arms in `arms` (default `candidate node`):
 `candidate` or `c` is `bench.ms` on C `--release`, `raiser` is `msc run --target=raiser bench.ms`, `node` runs
 `bench.node.mjs`, and `luajit-joff`, `luajit-jon` and `lua54` run the Lua twin `bench.lua` under LuaJIT 2.1 and Lua
-5.4, which `src/bench/buildLua.sh` builds from pinned sources into `out/bench/lua/` on first use.
+5.4, which `src/bench/buildLua.sh` builds from pinned sources into `out/bench/lua/` on first use. `rust` and `nim` build the
+twins `rustc -C opt-level=3` and `nim c -d:danger`, or take prebuilt binaries from `MSBENCH_RUST` and `MSBENCH_NIM` on
+a host that lacks the toolchain.
 
 `src/bench/run.sh <area> [rounds]` builds `bench.ms` with `MSC` (and, with `MSBENCH_BASE`, the area's first arm again
 as `base` for an A/B), runs every arm in turn for `rounds` rounds and prints each row's median per arm; it prints the

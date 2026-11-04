@@ -19,11 +19,13 @@ case " ${wanted[*]} " in *" lua"*) src/bench/buildLua.sh out/bench/lua ;; esac
 build() { # <arm> <msc> <output>
 	case $1 in
 		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
+		rust) rustc -C opt-level=3 "$HERE/bench.rs" -o "$OUT/rust" ;;
+		nim) nim c -d:danger --hints:off --nimcache:"$OUT/nimcache" -o:"$PWD/$OUT/nim" "$HERE/bench.nim" >/dev/null ;;
 	esac
 }
 runArm() { # <arm>
 	case $1 in
-		candidate | c) "$OUT/$1" ;;
+		candidate | c | rust | nim) "$OUT/$1" ;;
 		base) if [ "${wanted[0]}" = raiser ]; then "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms"; else "$OUT/base"; fi ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
 		node) "$NODE" "$HERE/bench.node.mjs" ;;
@@ -39,6 +41,13 @@ for arm in "${wanted[@]}"; do
 	case $arm in
 		base) build "${wanted[0]}" "$MSBENCH_BASE" base ;;
 		node) versions+=" · node $("$NODE" --version)" ;;
+		# MSBENCH_RUST or MSBENCH_NIM names a twin binary built elsewhere, for a host that lacks that toolchain.
+		rust)
+			if [ -n "${MSBENCH_RUST:-}" ]; then cp "$MSBENCH_RUST" "$OUT/rust"; versions+=" · rust prebuilt $MSBENCH_RUST"
+			else build rust; versions+=" · $(rustc --version) -C opt-level=3"; fi ;;
+		nim)
+			if [ -n "${MSBENCH_NIM:-}" ]; then cp "$MSBENCH_NIM" "$OUT/nim"; versions+=" · nim prebuilt $MSBENCH_NIM"
+			else build nim; versions+=" · nim $(nim --version | head -1 | awk '{ print $4 }') -d:danger"; fi ;;
 		luajit-*) [ -x "$LUAJIT" ] || { echo "skip $arm: no $LUAJIT"; continue; }; [ "$arm" = luajit-jon ] || versions+=" · $("$LUAJIT" -v | cut -d' ' -f1-2)" ;;
 		lua54) [ -x "$LUA54" ] || { echo "skip $arm: no $LUA54"; continue; }; versions+=" · $("$LUA54" -v | cut -d' ' -f1-2)" ;;
 		*) build "$arm" "$MSC" "$arm" ;;
