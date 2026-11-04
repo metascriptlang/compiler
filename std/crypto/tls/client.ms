@@ -1246,6 +1246,7 @@ export function completeHandshake(
 		readKeys,
 		writeKeys,
 		plaintext: [],
+		plaintextAt: 0,
 		receivedCloseNotify: false,
 		sentCloseNotify: false,
 		applicationProtocol: hs.applicationProtocol,
@@ -1278,8 +1279,9 @@ export class Tls13Client {
 	version: int32;
 	readKeys: TrafficKeys;
 	writeKeys: TrafficKeys;
-	/** Decrypted application data not yet returned by `read`. */
+	/** Decrypted application data; `plaintext[plaintextAt, length)` is not yet returned by `read`. */
 	plaintext: uint8[];
+	plaintextAt: int32;
 	receivedCloseNotify: boolean;
 	sentCloseNotify: boolean;
 	/** The ALPN protocol the server chose, or empty. */
@@ -1332,7 +1334,12 @@ function pumpRecord(c: Tls13Client): Result<void, CryptoError> {
 	if (!opened.ok) return Result.err(connectionError(recordFailureText(opened.error)));
 	const inner = opened.value;
 	if (inner.contentType == contentApplicationData) {
-		putBytes(c.plaintext, inner.content);
+		if (c.plaintextAt == c.plaintext.length) {
+			c.plaintext = inner.content;
+			c.plaintextAt = 0;
+		} else {
+			putBytes(c.plaintext, inner.content);
+		}
 	} else if (inner.contentType == contentAlert) {
 		if (inner.content.length == 2 && inner.content[1] == alertCloseNotify) {
 			c.receivedCloseNotify = true;
@@ -1349,10 +1356,20 @@ function pumpRecord(c: Tls13Client): Result<void, CryptoError> {
 
 /** Up to `maxBytes` of application data; empty once the server sent close_notify. */
 export function read(this c: Tls13Client, maxBytes: int32 = 16384): Result<uint8[], CryptoError> {
-	while (c.plaintext.length == 0 && !c.receivedCloseNotify) try pumpRecord(c);
-	const take = Math.min(c.plaintext.length, maxBytes) as int32;
-	const out = c.plaintext.slice(0, take);
-	c.plaintext = c.plaintext.slice(take);
+	while (c.plaintextAt == c.plaintext.length && !c.receivedCloseNotify) try pumpRecord(c);
+	const at = c.plaintextAt;
+	const take = Math.min(c.plaintext.length - at, maxBytes) as int32;
+	if (at == 0 && take == c.plaintext.length) {
+		const out = c.plaintext;
+		c.plaintext = [];
+		return Result.ok(out);
+	}
+	const out = c.plaintext.slice(at, at + take);
+	c.plaintextAt = at + take;
+	if (c.plaintextAt == c.plaintext.length) {
+		c.plaintext = [];
+		c.plaintextAt = 0;
+	}
 	return Result.ok(out);
 }
 
