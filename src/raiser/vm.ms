@@ -5495,6 +5495,23 @@ export function hostReturnInt(vm: RaiserVM, n: int64): void {
 	setRegInt(vm, vm.hostResult, n);
 }
 
+export function hostArgCount(vm: RaiserVM): int32 {
+	return getModuleFunc(vm.mod, vm.funcIdx).blocks[vm.hostArgsAt - 2] as int32;
+}
+
+export function hostArgString(vm: RaiserVM, i: int32): string {
+	const v = hostArg(vm, i);
+	return v.kind == RaiserValueKind.String ? heapStringText(vm.arrayHeap, v) : "";
+}
+
+export function hostReturnString(vm: RaiserVM, s: string): void {
+	setRegString(vm, vm.hostResult, s);
+}
+
+export function hostReturnBool(vm: RaiserVM, b: boolean): void {
+	setRegBool(vm, vm.hostResult, b);
+}
+
 // --- Stack trace ---
 
 export function vmDumpStack(vm: RaiserVM): string {

@@ -43,7 +43,7 @@ import {
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
-import { RaiserVM, registerInPlaceHostFn, hostArgFloat, hostReturnFloat } from "../../raiser/vm";
+import { RaiserVM, registerInPlaceHostFn, hostArg, hostArgCount, hostArgFloat, hostArgInt, hostArgString, hostReturn, hostReturnFloat, hostReturnInt, hostReturnString, hostReturnBool } from "../../raiser/vm";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
@@ -873,21 +873,20 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 	return out;
 }
 
-function _bridgeMsNodeChildCount(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxInt(0);
-	return boxInt(_nodeChildSlots(args[0].intVal).length);
+function _bridgeMsNodeChildCount(vm: RaiserVM): void {
+	const node = hostArgCount(vm) < 1 ? raiserNil() : hostArg(vm, 0);
+	if (node.kind != RaiserValueKind.Object) { hostReturnInt(vm, 0); return; }
+	hostReturnInt(vm, _nodeChildSlots(node.intVal).length as int64);
 }
 
-function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
-	if (args.length < 2 || args[0].kind != RaiserValueKind.Object) return raiserNil();
-	const slots = _nodeChildSlots(args[0].intVal);
-	const i = unboxInt(args[1]);
-	if (i < 0 || i >= slots.length) return raiserNil();
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null) throw new Error("internal: msNodeChildAt called with no active host heap");
-	rcIncref(arrHeap, objHeap, slots[i]);
-	return slots[i];
+function _bridgeMsNodeChildAt(vm: RaiserVM): void {
+	const node = hostArgCount(vm) < 2 ? raiserNil() : hostArg(vm, 0);
+	if (node.kind != RaiserValueKind.Object) { hostReturn(vm, raiserNil()); return; }
+	const slots = _nodeChildSlots(node.intVal);
+	const i = unboxInt(hostArg(vm, 1));
+	if (i < 0 || i >= slots.length) { hostReturn(vm, raiserNil()); return; }
+	rcIncref(vm.arrayHeap, vm.objectHeap, slots[i]);
+	hostReturn(vm, slots[i]);
 }
 
 // --- String bridges ---
@@ -895,60 +894,60 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
 
-function _bridgeMsStringTrim(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trim());
+function _bridgeMsStringTrim(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).trim());
 }
 
-function _bridgeMsStringTrimStart(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trimStart());
+function _bridgeMsStringTrimStart(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).trimStart());
 }
 
-function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trimEnd());
+function _bridgeMsStringTrimEnd(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).trimEnd());
 }
 
-function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).toLowerCase());
+function bridgeMsStringToLower(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).toLowerCase());
 }
 
-function bridgeMsStringToUpper(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).toUpperCase());
+function bridgeMsStringToUpper(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).toUpperCase());
 }
 
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
-function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
-	const start = args.length > 2 ? args[2].intVal : 0;
-	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start as int32));
+function _bridgeMsStringIndexOf(vm: RaiserVM): void {
+	const start = hostArgCount(vm) > 2 ? hostArg(vm, 2).intVal : 0;
+	hostReturnInt(vm, hostArgString(vm, 0).indexOf(hostArgString(vm, 1), start as int32) as int64);
 }
 
-function _bridgeMsStringEquals(args: RaiserValue[]): RaiserValue {
-	return boxBool(unboxString(args[0]) == unboxString(args[1]));
+function _bridgeMsStringEquals(vm: RaiserVM): void {
+	hostReturnBool(vm, hostArgString(vm, 0) == hostArgString(vm, 1));
 }
 
-function _bridgeMsStringCompare(args: RaiserValue[]): RaiserValue {
-	const x = unboxString(args[0]);
-	const y = unboxString(args[1]);
-	return boxInt(x == y ? 0 : x < y ? -1 : 1);
+function _bridgeMsStringCompare(vm: RaiserVM): void {
+	const x = hostArgString(vm, 0);
+	const y = hostArgString(vm, 1);
+	hostReturnInt(vm, x == y ? 0 : x < y ? -1 : 1);
 }
 
-function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1]) as int32));
+function _bridgeMsStringCharCodeAt(vm: RaiserVM): void {
+	hostReturnInt(vm, hostArgString(vm, 0).charCodeAt(unboxInt(hostArg(vm, 1)) as int32) as int64);
 }
 
-function _bridgeMsStringPadStart(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).padStart(unboxInt(args[1]) as int32, unboxString(args[2])));
+function _bridgeMsStringPadStart(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).padStart(unboxInt(hostArg(vm, 1)) as int32, hostArgString(vm, 2)));
 }
 
-function _bridgeMsStringPadEnd(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).padEnd(unboxInt(args[1]) as int32, unboxString(args[2])));
+function _bridgeMsStringPadEnd(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).padEnd(unboxInt(hostArg(vm, 1)) as int32, hostArgString(vm, 2)));
 }
 
-function _bridgeMsStringParseInt(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).parseInt() as number);
+function _bridgeMsStringParseInt(vm: RaiserVM): void {
+	hostReturnInt(vm, (hostArgString(vm, 0).parseInt() as number) as int64);
 }
 
-function _bridgeMsStringParseFloat(args: RaiserValue[]): RaiserValue {
-	return boxFloat(unboxString(args[0]).parseFloat());
+function _bridgeMsStringParseFloat(vm: RaiserVM): void {
+	hostReturnFloat(vm, hostArgString(vm, 0).parseFloat());
 }
 
 // --- Math bridges ---
@@ -961,49 +960,48 @@ function _bridgeSqrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.sqrt(hostArg
 function _bridgeCbrt(vm: RaiserVM): void { hostReturnFloat(vm, Math.cbrt(hostArgFloat(vm, 0))); }
 function _bridgePow(vm: RaiserVM): void { hostReturnFloat(vm, Math.pow(hostArgFloat(vm, 0), hostArgFloat(vm, 1))); }
 
-function _powOverflow(): RaiserValue {
+function _powOverflow(): void {
 	raiseFromHost("over- or underflow", true);
-	return raiserInt(0);
 }
 
-function _bridgePowSigned(args: RaiserValue[], exponentMax: int64): RaiserValue {
-	const exponent = args[1].intVal;
+function _bridgePowSigned(vm: RaiserVM, exponentMax: int64): void {
+	const exponent = hostArgInt(vm, 1);
 	if (exponent < 0) {
 		raiseFromHost(`value ${exponent} not in range 0 .. ${exponentMax}`, true);
-		return raiserInt(0);
+		return;
 	}
 	let result: int64 = 1;
-	let base = args[0].intVal;
+	let base = hostArgInt(vm, 0);
 	let rest = exponent;
 	while (true) {
 		if ((rest & 1) != 0) {
-			if (mulOverflowsI64(result, base)) return _powOverflow();
+			if (mulOverflowsI64(result, base)) { _powOverflow(); return; }
 			result = int64Bits((result as uint64) * (base as uint64));
 		}
 		rest = rest >> 1;
-		if (rest == 0) return raiserInt(result);
-		if (mulOverflowsI64(base, base)) return _powOverflow();
+		if (rest == 0) { hostReturnInt(vm, result); return; }
+		if (mulOverflowsI64(base, base)) { _powOverflow(); return; }
 		base = int64Bits((base as uint64) * (base as uint64));
 	}
 }
 
-function _bridgeMsPowI64(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 9223372036854775807); }
-function _bridgeMsPowI32(args: RaiserValue[]): RaiserValue { return _bridgePowSigned(args, 2147483647); }
+function _bridgeMsPowI64(vm: RaiserVM): void { _bridgePowSigned(vm, 9223372036854775807); }
+function _bridgeMsPowI32(vm: RaiserVM): void { _bridgePowSigned(vm, 2147483647); }
 
-function _bridgePowUnsigned(args: RaiserValue[], mask: uint64): RaiserValue {
+function _bridgePowUnsigned(vm: RaiserVM, mask: uint64): void {
 	let result: uint64 = 1;
-	let base = (args[0].intVal as uint64) & mask;
-	let rest = args[1].intVal as uint64;
+	let base = (hostArgInt(vm, 0) as uint64) & mask;
+	let rest = hostArgInt(vm, 1) as uint64;
 	while (true) {
 		if ((rest & 1) != 0) result = (result * base) & mask;
 		rest = rest >> 1;
-		if (rest == 0) return raiserInt(int64Bits(result));
+		if (rest == 0) { hostReturnInt(vm, int64Bits(result)); return; }
 		base = (base * base) & mask;
 	}
 }
 
-function _bridgeMsPowU64(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 18446744073709551615); }
-function _bridgeMsPowU32(args: RaiserValue[]): RaiserValue { return _bridgePowUnsigned(args, 4294967295); }
+function _bridgeMsPowU64(vm: RaiserVM): void { _bridgePowUnsigned(vm, 18446744073709551615); }
+function _bridgeMsPowU32(vm: RaiserVM): void { _bridgePowUnsigned(vm, 4294967295); }
 
 function _bridgeExp(vm: RaiserVM): void { hostReturnFloat(vm, Math.exp(hostArgFloat(vm, 0))); }
 function _bridgeExpm1(vm: RaiserVM): void { hostReturnFloat(vm, Math.expm1(hostArgFloat(vm, 0))); }
@@ -1027,25 +1025,24 @@ function _bridgeAcosh(vm: RaiserVM): void { hostReturnFloat(vm, Math.acosh(hostA
 function _bridgeAtanh(vm: RaiserVM): void { hostReturnFloat(vm, Math.atanh(hostArgFloat(vm, 0))); }
 function _bridgeFmod(vm: RaiserVM): void { hostReturnFloat(vm, hostArgFloat(vm, 0) % hostArgFloat(vm, 1)); }
 
-function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
-	return boxString(fromCodePoint(unboxInt(args[0])));
+function _bridgeMsStringFromCodePoint(vm: RaiserVM): void {
+	hostReturnString(vm, fromCodePoint(unboxInt(hostArg(vm, 0))));
 }
 
 // Tier 1 — string ↔ VM-heap byte-array kernels. These cross the VM-heap
 // boundary (host zero-copy view vs VM heap array), which MS cannot express
 // from either side; every derived string algorithm is Tier 2
 // (std/core/string/shared.ms). The only bridges that CREATE a VM heap value.
-function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
-	const text = unboxString(args[0]);
+function _bridgeMsAsBytes(vm: RaiserVM): void {
+	const arg = hostArg(vm, 0);
+	const text = unboxString(arg);
 	const bytes = text.asBytes();
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const placed = args[0].kind == RaiserValueKind.String;
-	let handle = placed ? stringBytesHandle(heap, args[0]) : 0;
+	const heap = vm.arrayHeap;
+	const placed = arg.kind == RaiserValueKind.String;
+	let handle = placed ? stringBytesHandle(heap, arg) : 0;
 	if (handle == 0) {
 		handle = heapAllocArray(heap);
-		if (placed) setStringBytesHandle(heap, args[0], handle);
+		if (placed) setStringBytesHandle(heap, arg, handle);
 	} else {
 		heapArraySetLen(heap, handle, 0);
 	}
@@ -1054,25 +1051,21 @@ function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
 		heapArrayPush(heap, handle, boxInt(bytes[i]));
 		i = i + 1;
 	}
-	return raiserArray(handle);
+	hostReturn(vm, raiserArray(handle));
 }
 
-function _bridgeMsRawString(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const handle = args[0].intVal;
+function _bridgeMsRawString(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const handle = hostArg(vm, 0).intVal;
 	const len = heapArrayLen(heap, handle);
 	const bytes = Buffer.alloc(0);
 	for (let i = 0; i < len; i = i + 1) bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
-	return boxString(rawString(bytes));
+	hostReturnString(vm, rawString(bytes));
 }
 
-function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const handle = args[0].intVal;
+function _bridgeMsAsString(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const handle = hostArg(vm, 0).intVal;
 	const len = heapArrayLen(heap, handle);
 	const bytes: uint8[] = [];
 	let i = 0;
@@ -1080,30 +1073,28 @@ function _bridgeMsAsString(args: RaiserValue[]): RaiserValue {
 		bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
 		i = i + 1;
 	}
-	return boxString(bytes.asString());
+	hostReturnString(vm, bytes.asString());
 }
 
 // split: the std extension is pure MetaScript (std/core/string/shared.ms) and
 // macros cannot import std, so the raiser dispatches here. The array lands in
 // the active array heap; macro code reads it with .length/[i] as any array.
-function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
-	const parts = unboxString(args[0]).split(unboxString(args[1]));
-	const arrHeapOrNull = activeHostArrayHeap();
-	if (arrHeapOrNull == null) return raiserNil();
-	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+function _bridgeMsStringSplit(vm: RaiserVM): void {
+	const parts = hostArgString(vm, 0).split(hostArgString(vm, 1));
+	const arrHeap = vm.arrayHeap;
 	const h = heapAllocArray(arrHeap);
 	for (let i = 0; i < parts.length; i = i + 1) {
 		heapArrayPush(arrHeap, h, heapAllocStoredString(arrHeap, parts[i]));
 	}
-	return raiserArray(h);
+	hostReturn(vm, raiserArray(h));
 }
 
-function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
-	return boxFloat(performance.now());
+function _bridgeMsPerformanceNow(vm: RaiserVM): void {
+	hostReturnFloat(vm, performance.now());
 }
 
-function _bridgeMsTimeNow(args: RaiserValue[]): RaiserValue {
-	return boxFloat(Date.now());
+function _bridgeMsTimeNow(vm: RaiserVM): void {
+	hostReturnFloat(vm, Date.now());
 }
 
 function isWireNode(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
@@ -1118,15 +1109,11 @@ function isTypedAsFloat(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, h: 
 	return repr != null && (repr.kind == TypeKind.Float32 || repr.kind == TypeKind.Float64 || repr.kind == TypeKind.Number);
 }
 
-function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxBool(false);
-	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull == null) return boxBool(false);
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	const arrHeapOrNull = activeHostArrayHeap();
-	if (arrHeapOrNull == null) return boxBool(false);
-	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
-	return boxBool(isWireNode(arrHeap, objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(arrHeap, objHeap, args[0].intVal) || isTypedAsFloat(arrHeap, objHeap, args[0].intVal)));
+function _bridgeMsNodeIsFloatLiteral(vm: RaiserVM): void {
+	const n = hostArgCount(vm) < 1 ? raiserNil() : hostArg(vm, 0);
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	hostReturnBool(vm, isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral) && (wireLiteralIsFloat(arrHeap, objHeap, n.intVal) || isTypedAsFloat(arrHeap, objHeap, n.intVal)));
 }
 
 function wireNodeKindText(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, n: RaiserValue): string {
@@ -1143,112 +1130,113 @@ function enumMemberOrdinal(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, 
 	return index < 0 ? raiserNil() : raiserInt(enumMemberValue(enumType, index) as int64);
 }
 
-function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null || args.length < 1) {
+function _bridgeMsNodeIntValue(vm: RaiserVM): void {
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	if (hostArgCount(vm) < 1) {
 		raiseFromHost("intValue needs an integer literal node", true);
-		return raiserInt(0);
+		return;
 	}
-	const n = args[0];
+	const n = hostArg(vm, 0);
 	const ordinal = enumMemberOrdinal(arrHeap, objHeap, n);
-	if (ordinal.kind == RaiserValueKind.Int) return ordinal;
+	if (ordinal.kind == RaiserValueKind.Int) { hostReturn(vm, ordinal); return; }
 	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
 		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(arrHeap, objHeap, n), true);
-		return raiserInt(0);
+		return;
 	}
 	if (wireLiteralIsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("intValue needs an integer literal, got a float literal; read it with floatValue", true);
-		return raiserInt(0);
+		return;
 	}
 	const refusal = wireLiteralIntegerRefusal(arrHeap, objHeap, n.intVal);
 	if (refusal != "") {
 		raiseFromHost("intValue: " + refusal, true);
-		return raiserInt(0);
+		return;
 	}
-	return raiserInt(wireLiteralInteger(arrHeap, objHeap, n.intVal));
+	hostReturnInt(vm, wireLiteralInteger(arrHeap, objHeap, n.intVal));
 }
 
-function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null || args.length < 1) {
+function _bridgeMsNodeFloatValue(vm: RaiserVM): void {
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	if (hostArgCount(vm) < 1) {
 		raiseFromHost("floatValue needs a float literal node", true);
-		return boxFloat(0.0);
+		return;
 	}
-	const n = args[0];
+	const n = hostArg(vm, 0);
 	if (!isWireNode(arrHeap, objHeap, n, NodeKind.NumberLiteral)) {
 		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(arrHeap, objHeap, n), true);
-		return boxFloat(0.0);
+		return;
 	}
 	if (!wireLiteralIsFloat(arrHeap, objHeap, n.intVal) && !isTypedAsFloat(arrHeap, objHeap, n.intVal)) {
 		raiseFromHost("floatValue needs a float literal, got an integer literal; read it with intValue", true);
-		return boxFloat(0.0);
+		return;
 	}
-	return boxFloat(wireLiteralFloat(arrHeap, objHeap, n.intVal));
+	hostReturnFloat(vm, wireLiteralFloat(arrHeap, objHeap, n.intVal));
 }
 
-function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null || args.length < 1) {
+function _bridgeMsNodeStringValue(vm: RaiserVM): void {
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	if (hostArgCount(vm) < 1) {
 		raiseFromHost("stringValue needs a string literal node", true);
-		return boxString("");
+		return;
 	}
-	const n = args[0];
+	const n = hostArg(vm, 0);
 	if (isWireNode(arrHeap, objHeap, n, NodeKind.Identifier)) {
 		const sym = boundSymOfObject(arrHeap, objHeap, n.intVal);
-		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
-		return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "name")));
+		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) { hostReturnString(vm, sym.name); return; }
+		hostReturnString(vm, unboxString(wireGet(arrHeap, objHeap, n.intVal, "name")));
+		return;
 	}
 	if (!isWireNode(arrHeap, objHeap, n, NodeKind.StringLiteral)) {
 		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(arrHeap, objHeap, n), true);
-		return boxString("");
+		return;
 	}
-	return boxString(unboxString(wireGet(arrHeap, objHeap, n.intVal, "value")));
+	hostReturnString(vm, unboxString(wireGet(arrHeap, objHeap, n.intVal, "value")));
 }
 
-function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).replace(unboxString(args[1]), unboxString(args[2])));
+function _bridgeMsStringReplace(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).replace(hostArgString(vm, 1), hostArgString(vm, 2)));
 }
 
-function _bridgeMsStringReplaceAll(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).replaceAll(unboxString(args[1]), unboxString(args[2])));
+function _bridgeMsStringReplaceAll(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).replaceAll(hostArgString(vm, 1), hostArgString(vm, 2)));
 }
 
-function _bridgeMsStringByteLength(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).byteLength());
+function _bridgeMsStringByteLength(vm: RaiserVM): void {
+	hostReturnInt(vm, hostArgString(vm, 0).byteLength() as int64);
 }
 
-function _bridgeMsStringByteAt(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).byteAt(unboxInt(args[1]) as int32));
+function _bridgeMsStringByteAt(vm: RaiserVM): void {
+	hostReturnInt(vm, hostArgString(vm, 0).byteAt(unboxInt(hostArg(vm, 1)) as int32) as int64);
 }
 
-function _bridgeStdHashFarm(args: RaiserValue[]): RaiserValue {
-	return raiserInt(hashFarm(unboxString(args[0])));
+function _bridgeStdHashFarm(vm: RaiserVM): void {
+	hostReturnInt(vm, hashFarm(hostArgString(vm, 0)));
 }
 
-function _bridgeMsStringByteSlice(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).byteSlice(unboxInt(args[1]) as int32, unboxInt(args[2]) as int32));
+function _bridgeMsStringByteSlice(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).byteSlice(unboxInt(hostArg(vm, 1)) as int32, unboxInt(hostArg(vm, 2)) as int32));
 }
 
-function _bridgeMsStringByteIndexOf(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).byteIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
+function _bridgeMsStringByteIndexOf(vm: RaiserVM): void {
+	hostReturnInt(vm, hostArgString(vm, 0).byteIndexOf(hostArgString(vm, 1), unboxInt(hostArg(vm, 2)) as int32) as int64);
 }
 
-function _bridgeMsStringByteLastIndexOf(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
+function _bridgeMsStringByteLastIndexOf(vm: RaiserVM): void {
+	hostReturnInt(vm, hostArgString(vm, 0).byteLastIndexOf(hostArgString(vm, 1), unboxInt(hostArg(vm, 2)) as int32) as int64);
 }
 
-function _bridgeMsUtf8Text(args: RaiserValue[]): RaiserValue {
-	return boxString(utf8Text(unboxString(args[0]), unboxBool(args[1])));
+function _bridgeMsUtf8Text(vm: RaiserVM): void {
+	hostReturnString(vm, utf8Text(hostArgString(vm, 0), unboxBool(hostArg(vm, 1))));
 }
 
-function _bridgeMsStringIsAscii(args: RaiserValue[]): RaiserValue {
-	for (const byte of unboxString(args[0]).asBytes()) {
-		if (byte >= 0x80) return boxBool(false);
+function _bridgeMsStringIsAscii(vm: RaiserVM): void {
+	for (const byte of hostArgString(vm, 0).asBytes()) {
+		if (byte >= 0x80) { hostReturnBool(vm, false); return; }
 	}
-	return boxBool(true);
+	hostReturnBool(vm, true);
 }
 
 function spanByte(heap: RaiserArrayHeap, span: RaiserValue, i: int64): int64 {
@@ -1261,82 +1249,79 @@ function spanMismatch(heap: RaiserArrayHeap, a: RaiserValue, aAt: int64, b: Rais
 	return i;
 }
 
-function _bridgeMsMemChr(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const byte = unboxInt(args[3]) as int64;
-	let i = unboxInt(args[1]) as int64;
-	const end = unboxInt(args[2]) as int64;
+function _bridgeMsMemChr(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const span = hostArg(vm, 0);
+	const byte = unboxInt(hostArg(vm, 3)) as int64;
+	let i = unboxInt(hostArg(vm, 1)) as int64;
+	const end = unboxInt(hostArg(vm, 2)) as int64;
 	while (i < end) {
-		if (spanByte(heap, args[0], i) == byte) return boxInt(i as number);
+		if (spanByte(heap, span, i) == byte) { hostReturnInt(vm, i); return; }
 		i = i + 1;
 	}
-	return boxInt(-1);
+	hostReturnInt(vm, -1);
 }
 
-function _bridgeMsMemEqAt(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const n = heapArrayLen(heap, args[2].intVal);
-	return boxBool(spanMismatch(heap, args[0], unboxInt(args[1]) as int64, args[2], n) == n);
+function _bridgeMsMemEqAt(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const needle = hostArg(vm, 2);
+	const n = heapArrayLen(heap, needle.intVal);
+	hostReturnBool(vm, spanMismatch(heap, hostArg(vm, 0), unboxInt(hostArg(vm, 1)) as int64, needle, n) == n);
 }
 
-function _bridgeMsEqualMem(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const n = heapArrayLen(heap, args[0].intVal);
-	return boxBool(spanMismatch(heap, args[0], 0, args[1], n) == n);
+function _bridgeMsEqualMem(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const a = hostArg(vm, 0);
+	const n = heapArrayLen(heap, a.intVal);
+	hostReturnBool(vm, spanMismatch(heap, a, 0, hostArg(vm, 1), n) == n);
 }
 
-function _bridgeMsMemMismatch(args: RaiserValue[]): RaiserValue {
-	const heapOrNull = activeHostArrayHeap();
-	if (heapOrNull == null) return raiserNil();
-	const heap: RaiserArrayHeap = heapOrNull;
-	const aLen = heapArrayLen(heap, args[0].intVal);
-	const bLen = heapArrayLen(heap, args[1].intVal);
-	return boxInt(spanMismatch(heap, args[0], 0, args[1], aLen < bLen ? aLen : bLen) as number);
+function _bridgeMsMemMismatch(vm: RaiserVM): void {
+	const heap = vm.arrayHeap;
+	const a = hostArg(vm, 0);
+	const b = hostArg(vm, 1);
+	const aLen = heapArrayLen(heap, a.intVal);
+	const bLen = heapArrayLen(heap, b.intVal);
+	hostReturnInt(vm, spanMismatch(heap, a, 0, b, aLen < bLen ? aLen : bLen));
 }
 
 // --- Whole-function callbacks, keyed by the routine's qualified name ---
 // The call site asks for the key before it compiles any body, so these std routines never
 // become VM code; each callback serves every overload of its name (see hostRoutineKey).
 
-function _callbackClampIndex(args: RaiserValue[]): RaiserValue {
-	const i = unboxInt(args[0]);
-	const len = unboxInt(args[1]);
-	return boxInt(i < 0 ? 0 : i > len ? len : i);
+function _callbackClampIndex(vm: RaiserVM): void {
+	const i = unboxInt(hostArg(vm, 0));
+	const len = unboxInt(hostArg(vm, 1));
+	hostReturnInt(vm, (i < 0 ? 0 : i > len ? len : i) as int64);
 }
 
-function _callbackRepeat(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).repeat(unboxInt(args[1]) as int32));
+function _callbackRepeat(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).repeat(unboxInt(hostArg(vm, 1)) as int32));
 }
 
-function _callbackReverse(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).reverse());
+function _callbackReverse(vm: RaiserVM): void {
+	hostReturnString(vm, hostArgString(vm, 0).reverse());
 }
 
-function _callbackEqualsIgnoreCase(args: RaiserValue[]): RaiserValue {
-	return boxBool(unboxString(args[0]).equalsIgnoreCase(unboxString(args[1])));
+function _callbackEqualsIgnoreCase(vm: RaiserVM): void {
+	hostReturnBool(vm, hostArgString(vm, 0).equalsIgnoreCase(hostArgString(vm, 1)));
 }
 
-function _callbackAsciiLower(args: RaiserValue[]): RaiserValue {
-	return boxInt(asciiLower(unboxInt(args[0]) as int32));
+function _callbackAsciiLower(vm: RaiserVM): void {
+	hostReturnInt(vm, asciiLower(unboxInt(hostArg(vm, 0)) as int32) as int64);
 }
 
-function _callbackAsciiUpper(args: RaiserValue[]): RaiserValue {
-	return boxInt(asciiUpper(unboxInt(args[0]) as int32));
+function _callbackAsciiUpper(vm: RaiserVM): void {
+	hostReturnInt(vm, asciiUpper(unboxInt(hostArg(vm, 0)) as int32) as int64);
 }
 
-function _callbackIsSpaceByte(args: RaiserValue[]): RaiserValue {
-	return boxBool(isSpaceByte(unboxInt(args[0]) as int32));
+function _callbackIsSpaceByte(vm: RaiserVM): void {
+	hostReturnBool(vm, isSpaceByte(unboxInt(hostArg(vm, 0)) as int32));
 }
 
-function _callbackByteLastIndexOf(args: RaiserValue[]): RaiserValue {
-	const startIdx = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
-	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), startIdx));
+function _callbackByteLastIndexOf(vm: RaiserVM): void {
+	const startIdx = hostArgCount(vm) > 2 ? unboxInt(hostArg(vm, 2)) as int32 : -1;
+	hostReturnInt(vm, hostArgString(vm, 0).byteLastIndexOf(hostArgString(vm, 1), startIdx) as int64);
 }
 
 function _hostArrayHeap(): RaiserArrayHeap {
@@ -1368,122 +1353,120 @@ function _stringsOf(v: RaiserValue): string[] {
 	return out;
 }
 
-function _bridgeNumberArrayIndexOf(args: RaiserValue[]): RaiserValue {
-	return boxFloat(_numbersOf(args[0]).indexOf(unboxFloat(args[1])));
+function _bridgeNumberArrayIndexOf(vm: RaiserVM): void {
+	hostReturnFloat(vm, _numbersOf(hostArg(vm, 0)).indexOf(hostArgFloat(vm, 1)));
 }
 
-function _bridgeNumberArrayIncludes(args: RaiserValue[]): RaiserValue {
-	return boxBool(_numbersOf(args[0]).includes(unboxFloat(args[1])));
+function _bridgeNumberArrayIncludes(vm: RaiserVM): void {
+	hostReturnBool(vm, _numbersOf(hostArg(vm, 0)).includes(hostArgFloat(vm, 1)));
 }
 
-function _bridgeNumberArrayCount(args: RaiserValue[]): RaiserValue {
-	return boxFloat(_numbersOf(args[0]).count(unboxFloat(args[1])));
+function _bridgeNumberArrayCount(vm: RaiserVM): void {
+	hostReturnFloat(vm, _numbersOf(hostArg(vm, 0)).count(hostArgFloat(vm, 1)));
 }
 
-function _bridgeNumberArrayJoin(args: RaiserValue[]): RaiserValue {
-	return boxString(_numbersOf(args[0]).join(unboxString(args[1])));
+function _bridgeNumberArrayJoin(vm: RaiserVM): void {
+	hostReturnString(vm, _numbersOf(hostArg(vm, 0)).join(hostArgString(vm, 1)));
 }
 
-function _bridgeNumberArrayAt(args: RaiserValue[]): RaiserValue {
-	const xs = _numbersOf(args[0]);
-	const idx = unboxFloat(args[1]);
+function _bridgeNumberArrayAt(vm: RaiserVM): void {
+	const xs = _numbersOf(hostArg(vm, 0));
+	const idx = hostArgFloat(vm, 1);
 	const i = idx < 0.0 ? xs.length + idx : idx;
 	if (i < 0.0 || i >= xs.length) {
 		raiseFromHost(`index ${idx} out of bounds (length ${xs.length})`, true);
-		return boxFloat(0.0);
+		return;
 	}
-	return boxFloat(xs[i as int32]);
+	hostReturnFloat(vm, xs[i as int32]);
 }
 
-function _bridgeRaiseRange(args: RaiserValue[]): RaiserValue {
-	raiseFromHost(`value ${args[0].intVal} not in range ${args[1].intVal} .. ${args[2].intVal}`, true);
-	return raiserNil();
+function _bridgeRaiseRange(vm: RaiserVM): void {
+	raiseFromHost(`value ${hostArg(vm, 0).intVal} not in range ${hostArg(vm, 1).intVal} .. ${hostArg(vm, 2).intVal}`, true);
 }
 
-function _bridgeRaiseField(args: RaiserValue[]): RaiserValue {
-	const labels = unboxString(args[1]).split("|");
-	const tag = unboxInt(args[2]);
+function _bridgeRaiseField(vm: RaiserVM): void {
+	const labels = hostArgString(vm, 1).split("|");
+	const tag = unboxInt(hostArg(vm, 2));
 	const label = tag >= 0 && tag < labels.length ? labels[tag as int32] : "";
-	raiseFromHost(`${unboxString(args[0])}${label}'`, true);
-	return raiserNil();
+	raiseFromHost(`${hostArgString(vm, 0)}${label}'`, true);
 }
 
-function _bridgeStringArrayIndexOf(args: RaiserValue[]): RaiserValue {
-	return boxFloat(_stringsOf(args[0]).indexOf(unboxString(args[1])));
+function _bridgeStringArrayIndexOf(vm: RaiserVM): void {
+	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).indexOf(hostArgString(vm, 1)));
 }
 
-function _bridgeStringArrayIncludes(args: RaiserValue[]): RaiserValue {
-	return boxBool(_stringsOf(args[0]).includes(unboxString(args[1])));
+function _bridgeStringArrayIncludes(vm: RaiserVM): void {
+	hostReturnBool(vm, _stringsOf(hostArg(vm, 0)).includes(hostArgString(vm, 1)));
 }
 
-function _bridgeStringArrayLastIndexOf(args: RaiserValue[]): RaiserValue {
-	const from = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
-	return boxFloat(_stringsOf(args[0]).lastIndexOf(unboxString(args[1]), from));
+function _bridgeStringArrayLastIndexOf(vm: RaiserVM): void {
+	const from = hostArgCount(vm) > 2 ? unboxInt(hostArg(vm, 2)) as int32 : -1;
+	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).lastIndexOf(hostArgString(vm, 1), from));
 }
 
-function _bridgeStringArrayCount(args: RaiserValue[]): RaiserValue {
-	return boxFloat(_stringsOf(args[0]).count(unboxString(args[1])));
+function _bridgeStringArrayCount(vm: RaiserVM): void {
+	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).count(hostArgString(vm, 1)));
 }
 
-function _bridgeStringArrayJoin(args: RaiserValue[]): RaiserValue {
-	return boxString(_stringsOf(args[0]).join(unboxString(args[1])));
+function _bridgeStringArrayJoin(vm: RaiserVM): void {
+	hostReturnString(vm, _stringsOf(hostArg(vm, 0)).join(hostArgString(vm, 1)));
 }
 
-function _bridgeGenericArrayCheckedIndex(args: RaiserValue[]): RaiserValue {
-	const len = heapArrayLen(_hostArrayHeap(), _arrayArg(args[0]));
-	const idx = unboxFloat(args[1]);
+function _bridgeGenericArrayCheckedIndex(vm: RaiserVM): void {
+	const len = heapArrayLen(_hostArrayHeap(), _arrayArg(hostArg(vm, 0)));
+	const idx = hostArgFloat(vm, 1);
 	const i = idx < 0.0 ? len + idx : idx;
 	if (i < 0.0 || i >= len) {
 		raiseFromHost(`index ${idx} out of bounds (length ${len})`, true);
-		return boxInt(0);
+		return;
 	}
-	return boxInt(i);
+	hostReturnInt(vm, i as int64);
 }
 
-function _bridgeStringLastIndexOf(args: RaiserValue[]): RaiserValue {
-	const start = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
-	return boxInt(unboxString(args[0]).lastIndexOf(unboxString(args[1]), start));
+function _bridgeStringLastIndexOf(vm: RaiserVM): void {
+	const start = hostArgCount(vm) > 2 ? unboxInt(hostArg(vm, 2)) as int32 : -1;
+	hostReturnInt(vm, hostArgString(vm, 0).lastIndexOf(hostArgString(vm, 1), start) as int64);
 }
 
 function registerArrayKernels(): void {
-	registerHostFn("msStringLastIndexOf", _bridgeStringLastIndexOf, HostCapability.Pure);
-	registerHostFn("&msNumberArrayIndexOf", _bridgeNumberArrayIndexOf, HostCapability.Pure);
-	registerHostFn("&msNumberArrayIncludes", _bridgeNumberArrayIncludes, HostCapability.Pure);
-	registerHostFn("&msNumberArrayCount", _bridgeNumberArrayCount, HostCapability.Pure);
-	registerHostFn("&msNumberArrayJoin", _bridgeNumberArrayJoin, HostCapability.Pure);
-	registerHostFn("&msNumberArrayAt", _bridgeNumberArrayAt, HostCapability.Pure);
-	registerHostFn("msRaiseRangeError", _bridgeRaiseRange, HostCapability.Pure);
-	registerHostFn("msRaiseFieldError", _bridgeRaiseField, HostCapability.Pure);
-	registerHostFn("&msStringArrayIndexOf", _bridgeStringArrayIndexOf, HostCapability.Pure);
-	registerHostFn("&msStringArrayIncludes", _bridgeStringArrayIncludes, HostCapability.Pure);
-	registerHostFn("&msStringArrayLastIndexOf", _bridgeStringArrayLastIndexOf, HostCapability.Pure);
-	registerHostFn("&msStringArrayCount", _bridgeStringArrayCount, HostCapability.Pure);
-	registerHostFn("&msStringArrayJoin", _bridgeStringArrayJoin, HostCapability.Pure);
-	registerHostFn("&msGenericArrayCheckedIndex", _bridgeGenericArrayCheckedIndex, HostCapability.Pure);
+	registerInPlaceHostFn("msStringLastIndexOf", _bridgeStringLastIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("&msNumberArrayIndexOf", _bridgeNumberArrayIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("&msNumberArrayIncludes", _bridgeNumberArrayIncludes, HostCapability.Pure);
+	registerInPlaceHostFn("&msNumberArrayCount", _bridgeNumberArrayCount, HostCapability.Pure);
+	registerInPlaceHostFn("&msNumberArrayJoin", _bridgeNumberArrayJoin, HostCapability.Pure);
+	registerInPlaceHostFn("&msNumberArrayAt", _bridgeNumberArrayAt, HostCapability.Pure);
+	registerInPlaceHostFn("msRaiseRangeError", _bridgeRaiseRange, HostCapability.Pure);
+	registerInPlaceHostFn("msRaiseFieldError", _bridgeRaiseField, HostCapability.Pure);
+	registerInPlaceHostFn("&msStringArrayIndexOf", _bridgeStringArrayIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("&msStringArrayIncludes", _bridgeStringArrayIncludes, HostCapability.Pure);
+	registerInPlaceHostFn("&msStringArrayLastIndexOf", _bridgeStringArrayLastIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("&msStringArrayCount", _bridgeStringArrayCount, HostCapability.Pure);
+	registerInPlaceHostFn("&msStringArrayJoin", _bridgeStringArrayJoin, HostCapability.Pure);
+	registerInPlaceHostFn("&msGenericArrayCheckedIndex", _bridgeGenericArrayCheckedIndex, HostCapability.Pure);
 }
 
 function registerStringCallbacks(): void {
-	registerHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
-	registerHostFn("std/core/string.trim",                _bridgeMsStringTrim, HostCapability.Pure);
-	registerHostFn("std/core/string.trimStart",           _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerHostFn("std/core/string.trimEnd",             _bridgeMsStringTrimEnd, HostCapability.Pure);
-	registerHostFn("std/core/string.toLowerCase",         bridgeMsStringToLower, HostCapability.Pure);
-	registerHostFn("std/core/string.toUpperCase",         bridgeMsStringToUpper, HostCapability.Pure);
-	registerHostFn("msStringTrim",                        _bridgeMsStringTrim, HostCapability.Pure);
-	registerHostFn("msStringTrimStart",                   _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerHostFn("msStringTrimEnd",                     _bridgeMsStringTrimEnd, HostCapability.Pure);
-	registerHostFn("msStringToLowerCase",                 bridgeMsStringToLower, HostCapability.Pure);
-	registerHostFn("msStringToUpperCase",                 bridgeMsStringToUpper, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.asciiLower",   _callbackAsciiLower, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.asciiUpper",   _callbackAsciiUpper, HostCapability.Pure);
-	registerHostFn("std/core/string/shared.isSpaceByte",  _callbackIsSpaceByte, HostCapability.Pure);
-	registerHostFn("std/core/string/bytes.byteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
-	registerHostFn("std/core/string/bytes.byteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
-	registerHostFn("std/core/string/bytes.byteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
-	registerHostFn("std/core/string/bytes.byteLastIndexOf", _callbackByteLastIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string.trim",                _bridgeMsStringTrim, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string.trimStart",           _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string.trimEnd",             _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string.toLowerCase",         bridgeMsStringToLower, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string.toUpperCase",         bridgeMsStringToUpper, HostCapability.Pure);
+	registerInPlaceHostFn("msStringTrim",                        _bridgeMsStringTrim, HostCapability.Pure);
+	registerInPlaceHostFn("msStringTrimStart",                   _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerInPlaceHostFn("msStringTrimEnd",                     _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerInPlaceHostFn("msStringToLowerCase",                 bridgeMsStringToLower, HostCapability.Pure);
+	registerInPlaceHostFn("msStringToUpperCase",                 bridgeMsStringToUpper, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.asciiLower",   _callbackAsciiLower, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.asciiUpper",   _callbackAsciiUpper, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/shared.isSpaceByte",  _callbackIsSpaceByte, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/bytes.byteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/bytes.byteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/bytes.byteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/bytes.byteLastIndexOf", _callbackByteLastIndexOf, HostCapability.Pure);
 }
 
 // --- Registry init ---
@@ -1513,48 +1496,48 @@ function _unionSlotAllowed(arrHeap: RaiserArrayHeap, slots: RaiserValue, tag: in
 	return false;
 }
 
-function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null) return raiserNil();
-	const u = args[0];
-	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
+function _unionRead(vm: RaiserVM, maybe: boolean): void {
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	const u = hostArg(vm, 0);
+	if (maybe && u.kind == RaiserValueKind.Nil) { hostReturn(vm, raiserNil()); return; }
 	const tag = wireGet(arrHeap, objHeap, u.intVal, "$tag").intVal;
-	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
-		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
-		raiseFromHost(unboxString(args[2]) + unboxString(label) + "'", true);
-		return raiserNil();
+	if (!_unionSlotAllowed(arrHeap, hostArg(vm, 1), tag)) {
+		const label = heapArrayGet(arrHeap, hostArg(vm, 3).intVal, tag);
+		raiseFromHost(hostArgString(vm, 2) + unboxString(label) + "'", true);
+		return;
 	}
-	return wireGet(arrHeap, objHeap, u.intVal, "$v");
+	hostReturn(vm, wireGet(arrHeap, objHeap, u.intVal, "$v"));
 }
 
-function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
-	return _unionRead(args, false);
+function _bridgeMsUnionRead(vm: RaiserVM): void {
+	_unionRead(vm, false);
 }
 
-function _bridgeMsUnionReadMaybe(args: RaiserValue[]): RaiserValue {
-	return _unionRead(args, true);
+function _bridgeMsUnionReadMaybe(vm: RaiserVM): void {
+	_unionRead(vm, true);
 }
 
-function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
-	const v = args[0];
-	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
-	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
+function _rangeBound(v: RaiserValue): int64 {
+	return v.kind == RaiserValueKind.Float ? v.floatVal as int64 : v.intVal;
+}
+
+function _bridgeMsCheckRangeI32(vm: RaiserVM): void {
+	const v = hostArg(vm, 0);
+	const lo = _rangeBound(hostArg(vm, 1));
+	const hi = _rangeBound(hostArg(vm, 2));
 	const inRange = v.kind == RaiserValueKind.Float ? v.floatVal > (lo as float64) - 1.0 && v.floatVal < (hi as float64) + 1.0 : v.intVal >= lo && v.intVal <= hi;
 	if (!inRange) {
 		raiseFromHost(`value ${v.kind == RaiserValueKind.Float ? `${v.floatVal}` : `${v.intVal}`} not in range ${lo} .. ${hi}`, true);
-		return v;
+		return;
 	}
-	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
+	hostReturn(vm, v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v);
 }
 
-function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
-	const v = args[0];
-	if (v.intVal >= 0) return _bridgeMsCheckRangeI32(args);
-	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
-	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
-	raiseFromHost(`value ${v.intVal as uint64} not in range ${lo} .. ${hi}`, true);
-	return v;
+function _bridgeMsCheckRangeI32FromU64(vm: RaiserVM): void {
+	const v = hostArg(vm, 0);
+	if (v.intVal >= 0) { _bridgeMsCheckRangeI32(vm); return; }
+	raiseFromHost(`value ${v.intVal as uint64} not in range ${_rangeBound(hostArg(vm, 1))} .. ${_rangeBound(hostArg(vm, 2))}`, true);
 }
 
 function closureAdaptee(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
@@ -1569,45 +1552,49 @@ function closureAdaptee(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, clo
 	return c;
 }
 
-function _bridgeMsClosureSame(args: RaiserValue[]): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	const arrHeap = activeHostArrayHeap();
-	if (objHeap == null || arrHeap == null) throw new Error("internal: msClosureSame called with no active host heap");
-	const a = closureAdaptee(arrHeap, objHeap, args[0]);
-	const b = closureAdaptee(arrHeap, objHeap, args[1]);
-	if (a.kind != RaiserValueKind.Object || b.kind != RaiserValueKind.Object) return boxBool(raiserEqual(arrHeap, a, b));
-	return boxBool(raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "fn"), heapObjectGetField(arrHeap, objHeap, b.intVal, "fn"))
+function _bridgeMsClosureSame(vm: RaiserVM): void {
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	const a = closureAdaptee(arrHeap, objHeap, hostArg(vm, 0));
+	const b = closureAdaptee(arrHeap, objHeap, hostArg(vm, 1));
+	if (a.kind != RaiserValueKind.Object || b.kind != RaiserValueKind.Object) { hostReturnBool(vm, raiserEqual(arrHeap, a, b)); return; }
+	hostReturnBool(vm, raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "fn"), heapObjectGetField(arrHeap, objHeap, b.intVal, "fn"))
 		&& raiserEqual(arrHeap, heapObjectGetField(arrHeap, objHeap, a.intVal, "env"), heapObjectGetField(arrHeap, objHeap, b.intVal, "env")));
 }
 
-function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
-	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
-	return args[0];
+function _bridgeMsMaybeGet(vm: RaiserVM): void {
+	const v = hostArg(vm, 0);
+	if (v.kind == RaiserValueKind.Nil) {
+		raiseFromHost(hostArgString(vm, 1) + hostArgString(vm, 2) + "'", true);
+		return;
+	}
+	hostReturn(vm, v);
 }
 
-function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
-	const objHeap = activeHostObjectHeap();
-	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
-	const arrHeap = activeHostArrayHeap();
-	if (arrHeap == null) throw new Error("internal: msUnionWrapMaybe called with no active host array heap");
+function _bridgeMsUnionWrapMaybe(vm: RaiserVM): void {
+	const v = hostArg(vm, 0);
+	if (v.kind == RaiserValueKind.Nil) { hostReturn(vm, raiserNil()); return; }
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
+	const tag = hostArg(vm, 1);
 	const handle = allocWireObject(objHeap, WIRE_UNION);
-	wireSet(arrHeap, objHeap, handle, "$tag", args[1]);
-	wireSet(arrHeap, objHeap, handle, "$v", args[0]);
-	rcIncref(arrHeap, objHeap, args[0]);
-	rcIncref(arrHeap, objHeap, args[1]);
-	return raiserObject(handle);
+	wireSet(arrHeap, objHeap, handle, "$tag", tag);
+	wireSet(arrHeap, objHeap, handle, "$v", v);
+	rcIncref(arrHeap, objHeap, v);
+	rcIncref(arrHeap, objHeap, tag);
+	hostReturn(vm, raiserObject(handle));
 }
 
 export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
 
-	registerHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
-	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
-	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
-	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
-	registerHostFn("msClosureSame", _bridgeMsClosureSame, HostCapability.Pure);
-	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
-	registerHostFn("msCheckRangeI32FromU64", _bridgeMsCheckRangeI32FromU64, HostCapability.Pure);
+	registerInPlaceHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
+	registerInPlaceHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
+	registerInPlaceHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
+	registerInPlaceHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
+	registerInPlaceHostFn("msClosureSame", _bridgeMsClosureSame, HostCapability.Pure);
+	registerInPlaceHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
+	registerInPlaceHostFn("msCheckRangeI32FromU64", _bridgeMsCheckRangeI32FromU64, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
@@ -1674,23 +1661,23 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);
 	// macro Node child accessors (std/meta childCount/childAt)
-	registerHostFn("msNodeChildCount",      _bridgeMsNodeChildCount, HostCapability.Pure);
-	registerHostFn("msNodeChildAt",         _bridgeMsNodeChildAt, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeChildCount",      _bridgeMsNodeChildCount, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeChildAt",         _bridgeMsNodeChildAt, HostCapability.Pure);
 	// string ops — extension methods called as `s.trim()` etc.
 	// Coverage: trim family + case + indexOf/contains/start/end + replace.
 	// Hot paths (charAt/slice) stay hardcoded in raiser/expressions.ms for
 	// direct-opcode performance.
-	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
-	registerHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
-	registerHostFn("msStringCompare",       _bridgeMsStringCompare, HostCapability.Pure);
-	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
-	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
-	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
-	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt, HostCapability.Pure);
-	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
-	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
-	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
-	registerHostFn("msTimeNow",             _bridgeMsTimeNow);
+	registerInPlaceHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
+	registerInPlaceHostFn("msStringCompare",       _bridgeMsStringCompare, HostCapability.Pure);
+	registerInPlaceHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
+	registerInPlaceHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
+	registerInPlaceHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
+	registerInPlaceHostFn("msStringParseInt",      _bridgeMsStringParseInt, HostCapability.Pure);
+	registerInPlaceHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
+	registerInPlaceHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
+	registerInPlaceHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
+	registerInPlaceHostFn("msTimeNow",             _bridgeMsTimeNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
@@ -1738,31 +1725,31 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
 	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
 	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
-	registerHostFn("msStringSplit",         _bridgeMsStringSplit, HostCapability.Pure);
-	registerHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral, HostCapability.Pure);
-	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
-	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue, HostCapability.Pure);
-	registerHostFn("msNodeStringValue",     _bridgeMsNodeStringValue, HostCapability.Pure);
-	registerHostFn("msStringReplace",       _bridgeMsStringReplace, HostCapability.Pure);
-	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
-	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
-	registerHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
-	registerHostFn("std/core/struct.hashFarm", _bridgeStdHashFarm, HostCapability.Pure);
-	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
-	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
-	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
-	registerHostFn("msStringIsAscii",       _bridgeMsStringIsAscii, HostCapability.Pure);
-	registerHostFn("msUtf8Text",            _bridgeMsUtf8Text, HostCapability.Pure);
-	registerHostFn("msMemChr",              _bridgeMsMemChr, HostCapability.Pure);
-	registerHostFn("msMemEqAt",             _bridgeMsMemEqAt, HostCapability.Pure);
-	registerHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
-	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
-	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
+	registerInPlaceHostFn("msStringSplit",         _bridgeMsStringSplit, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue, HostCapability.Pure);
+	registerInPlaceHostFn("msNodeStringValue",     _bridgeMsNodeStringValue, HostCapability.Pure);
+	registerInPlaceHostFn("msStringReplace",       _bridgeMsStringReplace, HostCapability.Pure);
+	registerInPlaceHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
+	registerInPlaceHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
+	registerInPlaceHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/struct.hashFarm", _bridgeStdHashFarm, HostCapability.Pure);
+	registerInPlaceHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
+	registerInPlaceHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
+	registerInPlaceHostFn("msStringIsAscii",       _bridgeMsStringIsAscii, HostCapability.Pure);
+	registerInPlaceHostFn("msUtf8Text",            _bridgeMsUtf8Text, HostCapability.Pure);
+	registerInPlaceHostFn("msMemChr",              _bridgeMsMemChr, HostCapability.Pure);
+	registerInPlaceHostFn("msMemEqAt",             _bridgeMsMemEqAt, HostCapability.Pure);
+	registerInPlaceHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
+	registerInPlaceHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
+	registerInPlaceHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerStringCallbacks();
 	registerArrayKernels();
 	registerBigIntKernels();
-	registerHostFn("msAsString",           _bridgeMsAsString, HostCapability.Pure);
-	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
+	registerInPlaceHostFn("msAsString",           _bridgeMsAsString, HostCapability.Pure);
+	registerInPlaceHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
 	registerInPlaceHostFn("fabs",  _bridgeFabs, HostCapability.Pure);
 	registerInPlaceHostFn("ceil",  _bridgeCeil, HostCapability.Pure);
@@ -1772,10 +1759,10 @@ export function ensureHostTableLoaded(): void {
 	registerInPlaceHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
 	registerInPlaceHostFn("pow",   _bridgePow, HostCapability.Pure);
 	registerInPlaceHostFn("msPowF64", _bridgePow, HostCapability.Pure);
-	registerHostFn("msPowI64", _bridgeMsPowI64, HostCapability.Pure);
-	registerHostFn("msPowI32", _bridgeMsPowI32, HostCapability.Pure);
-	registerHostFn("msPowU64", _bridgeMsPowU64, HostCapability.Pure);
-	registerHostFn("msPowU32", _bridgeMsPowU32, HostCapability.Pure);
+	registerInPlaceHostFn("msPowI64", _bridgeMsPowI64, HostCapability.Pure);
+	registerInPlaceHostFn("msPowI32", _bridgeMsPowI32, HostCapability.Pure);
+	registerInPlaceHostFn("msPowU64", _bridgeMsPowU64, HostCapability.Pure);
+	registerInPlaceHostFn("msPowU32", _bridgeMsPowU32, HostCapability.Pure);
 	registerInPlaceHostFn("exp",   _bridgeExp, HostCapability.Pure);
 	registerInPlaceHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
 	registerInPlaceHostFn("log",   _bridgeLog, HostCapability.Pure);
@@ -1805,7 +1792,27 @@ export function ensureHostTableLoaded(): void {
 import { raiserInt, raiserFloat, raiserConstString, RaiserValueKind } from "../../raiser/value";
 import { lookupHost, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
 import { int64Bits } from "../../utils/stdBackport";
-import { mulOverflowsI64 } from "../../raiser/vm";
+import { mulOverflowsI64, execModule } from "../../raiser/vm";
+import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "../../raiser/bytecode";
+import { makeTestModule } from "../../raiser/module";
+
+function callHost(name: string, args: RaiserValue[]): RaiserVM {
+	const code: RaiserInstruction[] = [];
+	const consts: RaiserValue[] = [raiserConstString(name)];
+	for (let i = 0; i < args.length; i = i + 1) {
+		code.push(raiserABx(RaiserOpcode.LoadConst, i + 1, i + 1));
+		consts.push(args[i]);
+	}
+	code.push(raiserABC(RaiserOpcode.CallHost, 0, 0, args.length));
+	code.push(raiserABC(RaiserOpcode.Halt, 0, 0, 0));
+	return execModule(makeTestModule(code, consts));
+}
+
+function callHostText(name: string, args: RaiserValue[]): string {
+	const vm = callHost(name, args);
+	if (vm.error != "") throw new Error(vm.error);
+	return heapStringText(vm.arrayHeap, vm.exitValue);
+}
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
@@ -1830,33 +1837,29 @@ test "string padding bridges preserve native semantics" {
 	setActiveHostHeaps(createStructHeap(), createArrayHeap());
 	assert lookupHost("msStringPadStart") != null;
 	assert lookupHost("msStringPadEnd") != null;
-	assert unboxString(_bridgeMsStringPadStart([boxString("42"), boxInt(6), boxString("0")])) == "000042";
-	assert unboxString(_bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")])) == "42aba";
-	assert unboxString(_bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")])) == "xxé";
-	assert unboxString(_bridgeMsStringPadEnd([boxString("same"), boxInt(7), boxString("")])) == "same";
+	assert callHostText("msStringPadStart", [raiserConstString("42"), raiserInt(6), raiserConstString("0")]) == "000042";
+	assert callHostText("msStringPadEnd", [raiserConstString("42"), raiserInt(5), raiserConstString("ab")]) == "42aba";
+	assert callHostText("msStringPadStart", [raiserConstString("é"), raiserInt(3), raiserConstString("x")]) == "xxé";
+	assert callHostText("msStringPadEnd", [raiserConstString("same"), raiserInt(7), raiserConstString("")]) == "same";
 }
 
 test "the enum range bridge raises for a float outside the range without converting it" {
-	takeHostRaise();
-	const nan = _bridgeMsCheckRangeI32([raiserFloat(0.0 / 0.0), raiserInt(0), raiserInt(2)]);
-	assert takeHostRaise() == "value NaN not in range 0 .. 2";
-	assert nan.kind == RaiserValueKind.Float;
-	_bridgeMsCheckRangeI32([raiserFloat(1e300), raiserInt(0), raiserInt(2)]);
-	assert (takeHostRaise() ?? "").endsWith(" not in range 0 .. 2");
-	assert _bridgeMsCheckRangeI32([raiserFloat(2.5), raiserInt(0), raiserInt(2)]).intVal == 2;
-	assert takeHostRaise() == null;
+	ensureHostTableLoaded();
+	assert callHost("msCheckRangeI32", [raiserFloat(0.0 / 0.0), raiserInt(0), raiserInt(2)]).error == "value NaN not in range 0 .. 2";
+	assert callHost("msCheckRangeI32", [raiserFloat(1e300), raiserInt(0), raiserInt(2)]).error.endsWith(" not in range 0 .. 2");
+	const inRange = callHost("msCheckRangeI32", [raiserFloat(2.5), raiserInt(0), raiserInt(2)]);
+	assert inRange.error == "", inRange.error;
+	assert inRange.exitValue.kind == RaiserValueKind.Int && inRange.exitValue.intVal == 2;
 }
 
 test "the enum range bridge for a uint64 source reports a value past int64 unsigned and refuses it" {
-	takeHostRaise();
-	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(9223372036854775808)), raiserInt(0), raiserInt(2)]);
-	assert takeHostRaise() == "value 9223372036854775808 not in range 0 .. 2";
-	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(18446744073709551613)), raiserInt(-5), raiserInt(1)]);
-	assert takeHostRaise() == "value 18446744073709551613 not in range -5 .. 1";
-	assert _bridgeMsCheckRangeI32FromU64([raiserInt(1), raiserInt(-5), raiserInt(1)]).intVal == 1;
-	assert takeHostRaise() == null;
-	_bridgeMsCheckRangeI32FromU64([raiserInt(2), raiserInt(-5), raiserInt(1)]);
-	assert takeHostRaise() == "value 2 not in range -5 .. 1";
+	ensureHostTableLoaded();
+	assert callHost("msCheckRangeI32FromU64", [raiserInt(int64Bits(9223372036854775808)), raiserInt(0), raiserInt(2)]).error == "value 9223372036854775808 not in range 0 .. 2";
+	assert callHost("msCheckRangeI32FromU64", [raiserInt(int64Bits(18446744073709551613)), raiserInt(-5), raiserInt(1)]).error == "value 18446744073709551613 not in range -5 .. 1";
+	const inRange = callHost("msCheckRangeI32FromU64", [raiserInt(1), raiserInt(-5), raiserInt(1)]);
+	assert inRange.error == "", inRange.error;
+	assert inRange.exitValue.intVal == 1;
+	assert callHost("msCheckRangeI32FromU64", [raiserInt(2), raiserInt(-5), raiserInt(1)]).error == "value 2 not in range -5 .. 1";
 }
 
 test "ensureHostTableLoaded is idempotent" {
