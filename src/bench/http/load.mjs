@@ -79,7 +79,7 @@ async function freshSend(requestHead, body, expect) {
 	const conn = new Connection();
 	await conn.open();
 	await conn.request(requestHead, body, expect);
-	conn.close();
+	conn.socket.resetAndDestroy();
 }
 
 async function row(name, perCallBytes, width, keepAlive, method, path, body, expect) {
