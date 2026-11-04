@@ -1267,6 +1267,14 @@ export function feIsNegative(a: Fe): boolean {
 	return ((fiat_25519_to_bytes(a)[0] as int32) & 1) == 1;
 }
 
+/** b when bit is 1, a when it is 0, without a branch on bit. */
+export function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
+	const mask = valueBarrier((0 - (bit as int32)) as uint32);
+	let out: Fe = a;
+	for (let i = 0; i < 10; i++) out[i] = a[i] ^ (mask & (a[i] ^ b[i]));
+	return out;
+}
+
 /** An affine point in ref10's niels form: y + x, y - x and 2dxy. */
 export struct Niels {
 	yPlusX: Fe;

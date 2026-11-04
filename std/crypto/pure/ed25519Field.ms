@@ -76,7 +76,7 @@ when (js) {
 		return (a & 1n) == 1n;
 	}
 
-	function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
+	export function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
 		return a ^ ((0n - BigInt(bit as int32)) & (a ^ b));
 	}
 
@@ -122,6 +122,7 @@ when (js) {
 		feIsZero,
 		feEqual,
 		feIsNegative,
+		feCMov,
 		Niels,
 		feSelectNiels,
 	} from "./fe25519";
