@@ -7,11 +7,21 @@ import { generateRaiserProject, lowerForRaiser, RaiserModuleInput } from "../../
 import { RaiserValueKind, heapObjectGetField } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
+import { RaiserModule } from "../../raiser/module";
+import { RaiserOpcode } from "../../raiser/bytecode";
+import { CallInlining } from "../../transform/lowering/iterInline";
 
 // Checks the modules as one graph and lowers each, as `msc run --target=raiser` does.
 // codes[0] is the entry `a.ms`, codes[i] is `<b, c, …>.ms`; a module reaches another
 // through `import … from "./b"`.
 function runProjectImage(codes: string[]): RaiserContext {
+	const ctx = createContext();
+	load(ctx, projectImage(codes, []));
+	execute(ctx);
+	return ctx;
+}
+
+function projectImage(codes: string[], reloadable: string[]): RaiserModule {
 	resetBuildState();
 	const names: string[] = ["a", "b", "c", "d", "e", "f"];
 	const entries: MapEntry[] = [];
@@ -21,17 +31,41 @@ function runProjectImage(codes: string[]): RaiserContext {
 	const graph = loadModuleGraph(entries[0].entryPath, createMapProvider(entries));
 	checkModuleGraph(graph, "");
 	const modules: RaiserModuleInput[] = [];
+	const inlining = new CallInlining(reloadable);
 	for (const path of graph.loadOrder) {
 		const program = lookupModuleProgram(path);
 		const modCtx = lookupModuleCtx(path);
-		if (program == null || modCtx == null || hasErrors(modCtx)) { unreachable; return createContext(); }
-		modules.push({ modulePath: path, program: lowerForRaiser(program, modCtx) });
+		if (program == null || modCtx == null || hasErrors(modCtx)) throw new Error(`module ${path} did not check`);
+		modules.push({ modulePath: path, program: lowerForRaiser(program, modCtx, null, inlining) });
 	}
-	const raiserMod = generateRaiserProject(modules);
+	return generateRaiserProject(modules);
+}
+
+function callsIn(mod: RaiserModule, name: string): int32 {
+	for (const f of mod.functions) {
+		if (f.name != name) continue;
+		let n: int32 = 0;
+		for (const inst of f.code) {
+			if (inst.op == RaiserOpcode.Call || inst.op == RaiserOpcode.CallDirect) n += 1;
+		}
+		return n;
+	}
+	throw new Error(`no function ${name}`);
+}
+
+test "raiserProject: a leaf routine of another module is inlined unless that module reloads" {
+	const codes = [
+		"import { incB } from \"./b\"; import { incC } from \"./c\"; export function run(n: int64): int64 { const sum = incB(n) + incC(n); return sum; } export default run(3);",
+		"export function incB(x: int64): int64 { return x + 1; }",
+		"export function incC(x: int64): int64 { return x + 2; }",
+	];
+	assert callsIn(projectImage(codes, []), "run") == 0;
+	const reloading = projectImage(codes, [canonicalModulePath("/raiserProject/c.ms")]);
+	assert callsIn(reloading, "run") == 1;
 	const ctx = createContext();
-	load(ctx, raiserMod);
+	load(ctx, reloading);
 	execute(ctx);
-	return ctx;
+	assert ctx.lastResult.intVal == 9;
 }
 
 test "raiserProject: class ctor returns object" {

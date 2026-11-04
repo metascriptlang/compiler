@@ -26,7 +26,7 @@ import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { ModuleGraph, createModuleGraph } from "../../module/graph";
-import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
+import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps, vmDumpStack } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors, queueRaiserCompileError } from "./context";
 import { stdModuleName } from "../../module/tiers";
@@ -2424,12 +2424,7 @@ test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
 // --- Conditions: a comparison in condition position is one compare-and-skip ---
 
 function compiledFunc(code: string, name: string): RaiserFunction {
-	const mod = compileLowered(code);
-	for (const f of mod.functions) {
-		if (f.name == name) return f;
-	}
-	unreachable;
-	return mod.functions[0];
+	return gapFunc(code, name);
 }
 
 test "engine: a field of a receiver whose type fixes its layout is read and written at its slot" {
@@ -2901,8 +2896,9 @@ function countNamed(f: RaiserFunction, name: string): number {
 	return n;
 }
 
+// The code of routine `name`, kept a routine: a call to it from the probe would otherwise be inlined and leave nothing to read.
 function gapFunc(code: string, name: string): RaiserFunction {
-	const mod = compileLowered(code);
+	const mod = compileLowered(code.replace(`function ${name}(`, `@noinline function ${name}(`));
 	let names = "";
 	for (const f of mod.functions) {
 		if (f.name == name) return f;
@@ -3411,4 +3407,44 @@ test "engine: a string index read leaves no string behind, as charAt does" {
 	const vm = evalVM("function show(v: string): void { console.log('[' + v + ']'); } function main(): void { const s = 'Hello'; show(s[1]); show(s.charAt(0)); } main();");
 	assert vm.error == "", vm.error;
 	assert vm.output == "[e]\n[H]\n", vm.output;
+}
+
+const leafCalls = "class S { w: int64; h: int64; constructor(w: int64, h: int64) { this.w = w; this.h = h; } }"
+	+ " function inc(x: int64): int64 { return x + 1; }"
+	+ " function half(x: float64): float64 { return x * 0.5 + 1.0; }"
+	+ " function area(s: S): int64 { return s.w * s.h; }"
+	+ " function rim(this s: S): int64 { return 2 * (s.w + s.h); }"
+	+ " function twice(x: int64): int64 { return inc(x) * 2; }"
+	+ " function digits(n: int64): int64 { const t = `${n}`; return t.length; }"
+	+ " @noinline function kept(x: int64): int64 { return x - 1; }"
+	+ " function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 1000; i = i + 1) s = s + inc(i); return s; }"
+	+ " function mixed(n: int64, f: float64): float64 { const box = new S(n, 3); const a = area(box) + box.rim() + twice(n); return half(f) + (a as float64); }"
+	+ " function refused(n: int64): int64 { return digits(n) + kept(n); }"
+	+ " console.log(`${run()} ${mixed(4, 3.0)} ${refused(1234)}`);";
+
+test "engine: a call to a small leaf routine is its body over the arguments, with no call left" {
+	const run = gapFunc(leafCalls, "run");
+	assert countNamed(run, "CallDirect") == 0 && countNamed(run, "Call") == 0 && run.code.length == 7 && opName(run.code[5].op) == "ForLtI64Imm", disasmFunc(run);
+	const mixed = gapFunc(leafCalls, "mixed");
+	assert countNamed(mixed, "CallDirect") + countNamed(mixed, "Call") == 1, disasmFunc(mixed);
+	const refused = gapFunc(leafCalls, "refused");
+	assert countNamed(refused, "CallDirect") + countNamed(refused, "Call") == 2, disasmFunc(refused);
+	const vm = evalVM(leafCalls);
+	assert vm.error == "" && vm.output == "500500 38.5 1237\n", `${vm.error} ${vm.output}`;
+}
+
+test "engine: an overflow in an inlined routine traces the frames its calls would have had" {
+	const callee = "function bump(x: int64): int64 { return x + 1; }\nfunction step(n: int64): int64 { return bump(n) * 1; }"
+		+ "\nfunction go(n: int64): int64 { return step(n); }\nconsole.log(`${go(9223372036854775807)}`);";
+	const inlined = evalVM(callee);
+	const kept = evalVM(callee.replace("function bump", "@noinline function bump").replace("function step", "@noinline function step"));
+	assert countNamed(gapFunc(callee, "go"), "CallDirect") == 0, disasmFunc(gapFunc(callee, "go"));
+	assert inlined.error != "" && inlined.error == kept.error, `${inlined.error} | ${kept.error}`;
+	assert vmDumpStack(inlined) == vmDumpStack(kept), `${vmDumpStack(inlined)}\n--\n${vmDumpStack(kept)}`;
+	const keptTrace = vmDumpStack(kept);
+	assert keptTrace.indexOf("go\n") > 0 && keptTrace.indexOf("go\n") < keptTrace.indexOf("step\n") && keptTrace.endsWith("bump (current)"), keptTrace;
+	const lifted = callee.replace("console.log(`${go(", "const g = (n: int64): int64 => go(n); console.log(`${g(");
+	const liftedKept = lifted.replace("function bump", "@noinline function bump").replace("function step", "@noinline function step");
+	const viaLambda = evalVM(lifted);
+	assert viaLambda.error != "" && vmDumpStack(viaLambda) == vmDumpStack(evalVM(liftedKept)), vmDumpStack(viaLambda);
 }
