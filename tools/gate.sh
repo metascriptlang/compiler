@@ -1048,10 +1048,15 @@ triage_side() {
       cd "$tree" || exit 2
       case "$lane" in
         corpus|san|tsan)
+          # a san rerun writes out/corpus/threaded.txt keyed to its narrowed selection, and the tsan lane after it refused
+          # the slice's list (await-wake-regression, q1104115816-rtx, 2026-11-04), so the san lane's list is put back
+          [ "$lane" != san ] || [ ! -f out/corpus/threaded.txt ] || cp -p out/corpus/threaded.txt "$out.threaded"
           env -u FORCE_COLOR NO_COLOR=1 MSCORPUS_ONLY="$csv" MSCORPUS_CELL_TIMEOUT_MS=120000 \
             $([ "$lane" = san ] && echo MSCORPUS_SAN=1) $([ "$lane" = tsan ] && echo MSCORPUS_TSAN=1) \
             $([ "$lane" = corpus ] && [ "$raiser_on" -eq 1 ] && echo MSCORPUS_RAISER=1) \
-            MSC="$cmp" "$bld" run src/test/corpus/run.ms ;;
+            MSC="$cmp" "$bld" run src/test/corpus/run.ms; r=$?
+          [ ! -f "$out.threaded" ] || mv -f "$out.threaded" out/corpus/threaded.txt
+          exit $r ;;
         guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
         hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
         lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
@@ -1107,6 +1112,10 @@ triage_self_test() (
   printf '%s\n' 'once [c]' 'twice [c]' 'twice [c]' 'onMain [c]' >"$d/slice"
   got=$(triage_judge "$d/names" "$d/main" "$d/slice" 3 | cut -f1 | paste -sd'|' -)
   [ "$got" = 'onMain [c]|once [c]|never [c]' ] || { echo "FAIL triage: judged not the slice's '$got', want onMain, once, never"; bad=1; }
+  mkdir -p "$d/tree/out/corpus"; echo 'only=' >"$d/tree/out/corpus/threaded.txt"; printf '%s\n' 'p1 [c]' >"$d/new"
+  printf '#!/bin/bash\necho "only=$MSCORPUS_ONLY" >out/corpus/threaded.txt\necho "  ✗ FAIL p1 [c] exit 1"\nexit 1\n' >"$d/bld"; chmod +x "$d/bld"
+  triage_side san "$d/tree" "$d/bld" "$d/bld" "$d/new" 1 "$d/tri" >/dev/null
+  [ "$(cat "$d/tree/out/corpus/threaded.txt")" = 'only=' ] || { echo "FAIL triage: a san rerun left threaded.txt as '$(cat "$d/tree/out/corpus/threaded.txt")', want the lane's 'only='"; bad=1; }
   return $bad
 )
 
