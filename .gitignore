@@ -57,6 +57,7 @@ docs/*
 !docs/LANG-STRUCT.md
 !docs/LANG-TEST.md
 !docs/STD-SOLANA.md
+!docs/STD-CRYPTO.md
 !docs/ANALYZER.md
 !docs/BARE.md
 !docs/BUILD-PERF.md
