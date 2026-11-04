@@ -10,7 +10,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
-  'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
+  'hcr|^src/test/(hcr|ic)/|^src/compiler/transam/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
@@ -1985,7 +1985,7 @@ src/compiler/cc.ms|boundary build cache corpus solana suite tests
 src/compiler/compile.ms|boundary build cache corpus hcr solana suite tests
 src/compiler/meta/comptime.ms|build corpus guard solana suite tests
 src/compiler/lsp/server.ms|build lsp suite
-src/compiler/transam/query.ms|build lsp suite
+src/compiler/transam/query.ms|build hcr lsp suite
 src/test/lsp/run.ms|build lsp suite
 std/process/child.cms|boundary build corpus hcr lsp suite tests
 runtime/process.h|boundary build corpus hcr lsp suite tests
@@ -2003,6 +2003,7 @@ src/test/corpus/run.ms|build corpus san suite
 src/test/corpus/hammerAsan.sh|build corpus san suite
 src/test/guard/run.ms|build guard suite
 src/test/hcr/run.ms|build hcr suite
+src/test/ic/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
 examples/hcrProbe/main.ms|build hcr suite
 tools/gate.sh|tools
