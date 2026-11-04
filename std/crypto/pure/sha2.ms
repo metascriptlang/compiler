@@ -1,4 +1,5 @@
 import { HashState, kindSha256, kindSha224, kindSha512 } from "./state";
+import { load32BE } from "./endian";
 
 const k256: uint32[64] = [
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -68,27 +69,23 @@ function rotr(v: uint32, c: uint32): uint32 {
 	return (v >> c) | (v << (32 - c));
 }
 
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
-}
-
 function compress256Unrolled(st: HashState, data: Readonly<uint8[]>, off: int32): void {
-	let w0: uint32 = load32(data, off + 0);
-	let w1: uint32 = load32(data, off + 4);
-	let w2: uint32 = load32(data, off + 8);
-	let w3: uint32 = load32(data, off + 12);
-	let w4: uint32 = load32(data, off + 16);
-	let w5: uint32 = load32(data, off + 20);
-	let w6: uint32 = load32(data, off + 24);
-	let w7: uint32 = load32(data, off + 28);
-	let w8: uint32 = load32(data, off + 32);
-	let w9: uint32 = load32(data, off + 36);
-	let w10: uint32 = load32(data, off + 40);
-	let w11: uint32 = load32(data, off + 44);
-	let w12: uint32 = load32(data, off + 48);
-	let w13: uint32 = load32(data, off + 52);
-	let w14: uint32 = load32(data, off + 56);
-	let w15: uint32 = load32(data, off + 60);
+	let w0: uint32 = load32BE(data, off + 0);
+	let w1: uint32 = load32BE(data, off + 4);
+	let w2: uint32 = load32BE(data, off + 8);
+	let w3: uint32 = load32BE(data, off + 12);
+	let w4: uint32 = load32BE(data, off + 16);
+	let w5: uint32 = load32BE(data, off + 20);
+	let w6: uint32 = load32BE(data, off + 24);
+	let w7: uint32 = load32BE(data, off + 28);
+	let w8: uint32 = load32BE(data, off + 32);
+	let w9: uint32 = load32BE(data, off + 36);
+	let w10: uint32 = load32BE(data, off + 40);
+	let w11: uint32 = load32BE(data, off + 44);
+	let w12: uint32 = load32BE(data, off + 48);
+	let w13: uint32 = load32BE(data, off + 52);
+	let w14: uint32 = load32BE(data, off + 56);
+	let w15: uint32 = load32BE(data, off + 60);
 	let a: uint32 = st.state[0];
 	let b: uint32 = st.state[1];
 	let c: uint32 = st.state[2];
@@ -350,7 +347,7 @@ function compress256Unrolled(st: HashState, data: Readonly<uint8[]>, off: int32)
 
 function compress256Loop(h: HashState, data: Readonly<uint8[]>, off: int32): void {
 	let w: uint32[64] = [];
-	for (let i = 0; i < 16; i++) w[i] = load32(data, off + i * 4);
+	for (let i = 0; i < 16; i++) w[i] = load32BE(data, off + i * 4);
 	for (let i = 16; i < 64; i++) {
 		const w15 = w[i - 15];
 		const w2 = w[i - 2];
@@ -407,22 +404,22 @@ function k64(i: int32): uint64 {
 }
 
 function compress512Wide(st: HashState, data: Readonly<uint8[]>, off: int32): void {
-	let w0: uint64 = ((load32(data, off + 0) as uint64) << 32) | (load32(data, off + 4) as uint64);
-	let w1: uint64 = ((load32(data, off + 8) as uint64) << 32) | (load32(data, off + 12) as uint64);
-	let w2: uint64 = ((load32(data, off + 16) as uint64) << 32) | (load32(data, off + 20) as uint64);
-	let w3: uint64 = ((load32(data, off + 24) as uint64) << 32) | (load32(data, off + 28) as uint64);
-	let w4: uint64 = ((load32(data, off + 32) as uint64) << 32) | (load32(data, off + 36) as uint64);
-	let w5: uint64 = ((load32(data, off + 40) as uint64) << 32) | (load32(data, off + 44) as uint64);
-	let w6: uint64 = ((load32(data, off + 48) as uint64) << 32) | (load32(data, off + 52) as uint64);
-	let w7: uint64 = ((load32(data, off + 56) as uint64) << 32) | (load32(data, off + 60) as uint64);
-	let w8: uint64 = ((load32(data, off + 64) as uint64) << 32) | (load32(data, off + 68) as uint64);
-	let w9: uint64 = ((load32(data, off + 72) as uint64) << 32) | (load32(data, off + 76) as uint64);
-	let w10: uint64 = ((load32(data, off + 80) as uint64) << 32) | (load32(data, off + 84) as uint64);
-	let w11: uint64 = ((load32(data, off + 88) as uint64) << 32) | (load32(data, off + 92) as uint64);
-	let w12: uint64 = ((load32(data, off + 96) as uint64) << 32) | (load32(data, off + 100) as uint64);
-	let w13: uint64 = ((load32(data, off + 104) as uint64) << 32) | (load32(data, off + 108) as uint64);
-	let w14: uint64 = ((load32(data, off + 112) as uint64) << 32) | (load32(data, off + 116) as uint64);
-	let w15: uint64 = ((load32(data, off + 120) as uint64) << 32) | (load32(data, off + 124) as uint64);
+	let w0: uint64 = ((load32BE(data, off + 0) as uint64) << 32) | (load32BE(data, off + 4) as uint64);
+	let w1: uint64 = ((load32BE(data, off + 8) as uint64) << 32) | (load32BE(data, off + 12) as uint64);
+	let w2: uint64 = ((load32BE(data, off + 16) as uint64) << 32) | (load32BE(data, off + 20) as uint64);
+	let w3: uint64 = ((load32BE(data, off + 24) as uint64) << 32) | (load32BE(data, off + 28) as uint64);
+	let w4: uint64 = ((load32BE(data, off + 32) as uint64) << 32) | (load32BE(data, off + 36) as uint64);
+	let w5: uint64 = ((load32BE(data, off + 40) as uint64) << 32) | (load32BE(data, off + 44) as uint64);
+	let w6: uint64 = ((load32BE(data, off + 48) as uint64) << 32) | (load32BE(data, off + 52) as uint64);
+	let w7: uint64 = ((load32BE(data, off + 56) as uint64) << 32) | (load32BE(data, off + 60) as uint64);
+	let w8: uint64 = ((load32BE(data, off + 64) as uint64) << 32) | (load32BE(data, off + 68) as uint64);
+	let w9: uint64 = ((load32BE(data, off + 72) as uint64) << 32) | (load32BE(data, off + 76) as uint64);
+	let w10: uint64 = ((load32BE(data, off + 80) as uint64) << 32) | (load32BE(data, off + 84) as uint64);
+	let w11: uint64 = ((load32BE(data, off + 88) as uint64) << 32) | (load32BE(data, off + 92) as uint64);
+	let w12: uint64 = ((load32BE(data, off + 96) as uint64) << 32) | (load32BE(data, off + 100) as uint64);
+	let w13: uint64 = ((load32BE(data, off + 104) as uint64) << 32) | (load32BE(data, off + 108) as uint64);
+	let w14: uint64 = ((load32BE(data, off + 112) as uint64) << 32) | (load32BE(data, off + 116) as uint64);
+	let w15: uint64 = ((load32BE(data, off + 120) as uint64) << 32) | (load32BE(data, off + 124) as uint64);
 	let a: uint64 = ((st.state[0] as uint64) << 32) | (st.state[1] as uint64);
 	let b: uint64 = ((st.state[2] as uint64) << 32) | (st.state[3] as uint64);
 	let c: uint64 = ((st.state[4] as uint64) << 32) | (st.state[5] as uint64);
@@ -785,7 +782,7 @@ function carry(sum: uint32, addend: uint32): uint32 {
 
 function compress512Split(h: HashState, data: Readonly<uint8[]>, off: int32): void {
 	let w: uint32[160] = [];
-	for (let i = 0; i < 32; i++) w[i] = load32(data, off + i * 4);
+	for (let i = 0; i < 32; i++) w[i] = load32BE(data, off + i * 4);
 	for (let i = 16; i < 80; i++) {
 		const w15h = w[(i - 15) * 2];
 		const w15l = w[(i - 15) * 2 + 1];

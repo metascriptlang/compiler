@@ -1,4 +1,5 @@
 import { wipeBytes, wipeWords } from "./secret";
+import { load32LE } from "./endian";
 /**
  * The running state of one Poly1305 MAC: 32-bit limbs with 64-bit products,
  * fixed storage so no call allocates.
@@ -11,32 +12,22 @@ export class Poly1305State {
 	filled: int32;
 }
 
-/** The little-endian 32-bit word of `data` at `at`. */
-export function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (
-		(data[at] as uint32) |
-		((data[at + 1] as uint32) << 8) |
-		((data[at + 2] as uint32) << 16) |
-		((data[at + 3] as uint32) << 24)
-	);
-}
-
 export function newPoly1305(
 	key: Readonly<uint8[]>,
 	keyOff: int32,
 ): Poly1305State {
 	return {
 		r: [
-			load32(key, keyOff) & 0x0fffffff,
-			load32(key, keyOff + 4) & 0x0ffffffc,
-			load32(key, keyOff + 8) & 0x0ffffffc,
-			load32(key, keyOff + 12) & 0x0ffffffc,
+			load32LE(key, keyOff) & 0x0fffffff,
+			load32LE(key, keyOff + 4) & 0x0ffffffc,
+			load32LE(key, keyOff + 8) & 0x0ffffffc,
+			load32LE(key, keyOff + 12) & 0x0ffffffc,
 		],
 		pad: [
-			load32(key, keyOff + 16),
-			load32(key, keyOff + 20),
-			load32(key, keyOff + 24),
-			load32(key, keyOff + 28),
+			load32LE(key, keyOff + 16),
+			load32LE(key, keyOff + 20),
+			load32LE(key, keyOff + 24),
+			load32LE(key, keyOff + 28),
 		],
 		h: [0, 0, 0, 0, 0],
 		block: new Array<uint8>(16),
@@ -71,10 +62,10 @@ function absorb(
 	let h4 = s.h[4];
 	let at = off;
 	for (let b = 0; b < blocks; b++) {
-		const s0 = (h0 as uint64) + (load32(data, at) as uint64);
-		const s1 = (h1 as uint64) + (load32(data, at + 4) as uint64);
-		const s2 = (h2 as uint64) + (load32(data, at + 8) as uint64);
-		const s3 = (h3 as uint64) + (load32(data, at + 12) as uint64);
+		const s0 = (h0 as uint64) + (load32LE(data, at) as uint64);
+		const s1 = (h1 as uint64) + (load32LE(data, at + 4) as uint64);
+		const s2 = (h2 as uint64) + (load32LE(data, at + 8) as uint64);
+		const s3 = (h3 as uint64) + (load32LE(data, at + 12) as uint64);
 		const s4 = h4 + hibit;
 		at += 16;
 

@@ -1,4 +1,5 @@
 import { wipeBytes } from "./secret";
+import { load64BE, store64BE } from "./endian";
 /**
  * The GHASH of AES-GCM (NIST SP 800-38D) without tables: each carry-less product is built from integer multiplies of
  * operands masked to every fourth bit, so no memory access or branch depends on the key or the data. Blocks are read
@@ -79,22 +80,10 @@ function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
 	g.accLo = bHi ^ g.productLo ^ highLo;
 }
 
-function loadBE32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
-}
-
-function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
-	return ((loadBE32(data, at) as uint64) << 32) | (loadBE32(data, at + 4) as uint64);
-}
-
-export function storeBE64(out: uint8[], at: int32, value: uint64): void {
-	for (let i = 0; i < 8; i++) out[at + i] = ((value >> ((56 - 8 * i) as uint64)) & 0xff) as uint8;
-}
-
 /** A GHASH under the 16-byte hash key H. */
 export function newGhash(key: Readonly<uint8[]>): Ghash {
-	const hHi = loadBE64(key, 0);
-	const hLo = loadBE64(key, 8);
+	const hHi = load64BE(key, 0);
+	const hLo = load64BE(key, 8);
 	const carry = (0 as uint64) - (hHi >> 63);
 	return {
 		keyHi: ((hHi << 1) | (hLo >> 63)) ^ ((0xc200000000000000 as uint64) & carry),
@@ -111,20 +100,20 @@ export function newGhash(key: Readonly<uint8[]>): Ghash {
 export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): void {
 	let at = from;
 	while (at + 16 <= to) {
-		absorb(g, loadBE64(data, at), loadBE64(data, at + 8));
+		absorb(g, load64BE(data, at), load64BE(data, at + 8));
 		at += 16;
 	}
 	if (at < to) {
 		const tail = g.tail;
 		for (let i = 0; i < 16; i++) tail[i] = at + i < to ? data[at + i] : 0;
-		absorb(g, loadBE64(tail, 0), loadBE64(tail, 8));
+		absorb(g, load64BE(tail, 0), load64BE(tail, 8));
 	}
 }
 
 /** Writes the 16-byte hash to `out[at, at + 16)` and wipes the state. */
 export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
-	storeBE64(out, at, g.accHi);
-	storeBE64(out, at + 8, g.accLo);
+	store64BE(out, at, g.accHi);
+	store64BE(out, at + 8, g.accLo);
 	g.keyHi = 0;
 	g.keyLo = 0;
 	g.accHi = 0;

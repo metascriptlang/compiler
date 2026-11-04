@@ -1,4 +1,5 @@
 import { wipeBytes, wipeWords64 } from "./secret";
+import { load32LE } from "./endian";
 const iv: uint64[8] = [
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
 	0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
@@ -50,12 +51,8 @@ export function newBlake2b(outputSize: int32, key: Readonly<uint8[]>): Blake2bSt
 	return s;
 }
 
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
-}
-
 function compress(s: Blake2bState, data: Readonly<uint8[]>, off: int32, isLast: boolean): void {
-	for (let i = 0; i < 16; i++) s.m[i] = (load32(data, off + i * 8) as uint64) | ((load32(data, off + i * 8 + 4) as uint64) << 32);
+	for (let i = 0; i < 16; i++) s.m[i] = (load32LE(data, off + i * 8) as uint64) | ((load32LE(data, off + i * 8 + 4) as uint64) << 32);
 	let v0 = s.h[0];
 	let v1 = s.h[1];
 	let v2 = s.h[2];

@@ -3,9 +3,9 @@ import {
 	updatePoly1305,
 	padPoly1305,
 	finishPoly1305,
-	load32,
 } from "./poly1305";
 import { wipeBytes, wipeWords } from "./secret";
+import { load32LE } from "./endian";
 
 /**
  * The working words of one cipher call, allocated once so no block
@@ -41,7 +41,7 @@ function rotl(x: uint32, n: uint32): uint32 {
  */
 export function keyWords(key: Readonly<uint8[]>, dst: uint32[]): boolean {
 	if (key.length != 32) return false;
-	for (let i = 0; i < 8; i++) dst[i] = load32(key, i * 4);
+	for (let i = 0; i < 8; i++) dst[i] = load32LE(key, i * 4);
 	return true;
 }
 
@@ -192,10 +192,10 @@ function hchacha(
 	nonce: Readonly<uint8[]>,
 	nonceOff: int32,
 ): void {
-	const n0 = load32(nonce, nonceOff);
-	const n1 = load32(nonce, nonceOff + 4);
-	const n2 = load32(nonce, nonceOff + 8);
-	const n3 = load32(nonce, nonceOff + 12);
+	const n0 = load32LE(nonce, nonceOff);
+	const n1 = load32LE(nonce, nonceOff + 4);
+	const n2 = load32LE(nonce, nonceOff + 8);
+	const n3 = load32LE(nonce, nonceOff + 12);
 	for (let i = 0; i < 8; i++) w.key[i] = key[i];
 	chachaCore(w, n1, n2, n3, n0);
 	w.key[0] = w.block[0] - 0x61707865;
@@ -254,8 +254,8 @@ function startCipher(
 ): void {
 	hchacha(w, key, nonce, 0);
 	w.nonce[0] = 0;
-	w.nonce[1] = load32(nonce, 16);
-	w.nonce[2] = load32(nonce, 20);
+	w.nonce[1] = load32LE(nonce, 16);
+	w.nonce[2] = load32LE(nonce, 20);
 }
 
 function startIetf(
@@ -264,9 +264,9 @@ function startIetf(
 	nonce: Readonly<uint8[]>,
 ): void {
 	for (let i = 0; i < 8; i++) w.key[i] = key[i];
-	w.nonce[0] = load32(nonce, 0);
-	w.nonce[1] = load32(nonce, 4);
-	w.nonce[2] = load32(nonce, 8);
+	w.nonce[0] = load32LE(nonce, 0);
+	w.nonce[1] = load32LE(nonce, 4);
+	w.nonce[2] = load32LE(nonce, 8);
 }
 
 /**

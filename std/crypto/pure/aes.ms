@@ -1,5 +1,6 @@
-import { newGhash, updateGhash, finishGhash, storeBE64 } from "./ghash";
+import { newGhash, updateGhash, finishGhash } from "./ghash";
 import { wipeBytes, wipeWords } from "./secret";
+import { load32LE, store32LE, store64BE } from "./endian";
 
 /**
  * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: eight blocks run at once as 32 words, so the
@@ -43,17 +44,6 @@ function subWord(n: uint32): uint32 {
 
 function rotl(n: uint32, by: uint32): uint32 {
 	return (n << by) | (n >> (32 - by));
-}
-
-function loadLE(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
-}
-
-function storeLE(out: uint8[], at: int32, word: uint32): void {
-	out[at] = (word & 0xff) as uint8;
-	out[at + 1] = ((word >> 8) & 0xff) as uint8;
-	out[at + 2] = ((word >> 16) & 0xff) as uint8;
-	out[at + 3] = (word >> 24) as uint8;
 }
 
 function swapBytes(n: uint32): uint32 {
@@ -392,7 +382,7 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 	if (key.length != 16 && key.length != 24 && key.length != 32) throw new Error(`aes: key must be 16, 24 or 32 bytes, got ${key.length}`);
 	const nk = key.length / 4;
 	const words = new Array<uint32>(key.length + 28);
-	for (let i = 0; i < nk; i++) words[i] = loadLE(key, i * 4);
+	for (let i = 0; i < nk; i++) words[i] = load32LE(key, i * 4);
 	let rcon: int32 = 1;
 	for (let i = nk; i < words.length; i++) {
 		let t = words[i - 1];
@@ -437,7 +427,7 @@ function wipe(batch: Batch): void {
 function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int32): void {
 	const st = batch.st;
 	for (let block = 0; block < 8; block++) {
-		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? loadLE(src, at + block * 16 + w * 4) : 0;
+		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? load32LE(src, at + block * 16 + w * 4) : 0;
 	}
 	packState(st);
 }
@@ -445,15 +435,15 @@ function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int3
 function storeBlocks(batch: Batch): void {
 	const st = batch.st;
 	unpackState(st);
-	for (let i = 0; i < 32; i++) storeLE(batch.bytes, i * 4, st[i]);
+	for (let i = 0; i < 32; i++) store32LE(batch.bytes, i * 4, st[i]);
 }
 
 // The key stream of counters `first .. first + 7` under `nonce`; with `hashKey` block 0 is the all-zero block instead.
 function counterBlocks(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, first: uint32, hashKey: boolean): void {
 	const st = batch.st;
-	const n0 = loadLE(nonce, 0);
-	const n1 = loadLE(nonce, 4);
-	const n2 = loadLE(nonce, 8);
+	const n0 = load32LE(nonce, 0);
+	const n1 = load32LE(nonce, 4);
+	const n2 = load32LE(nonce, 8);
 	for (let block = 0; block < 8; block++) {
 		const zero = hashKey && block == 0;
 		st[block * 4] = zero ? 0 : n0;
@@ -499,8 +489,8 @@ function gcmTag(keyed: Readonly<uint8[]>, aad: Readonly<uint8[]>, text: Readonly
 	updateGhash(ghash, aad, 0, aad.length);
 	updateGhash(ghash, text, at, at + length);
 	const lengths = new Array<uint8>(16);
-	storeBE64(lengths, 0, (aad.length as uint64) << 3);
-	storeBE64(lengths, 8, (length as uint64) << 3);
+	store64BE(lengths, 0, (aad.length as uint64) << 3);
+	store64BE(lengths, 8, (length as uint64) << 3);
 	updateGhash(ghash, lengths, 0, 16);
 	finishGhash(ghash, tag, 0);
 	for (let i = 0; i < 16; i++) tag[i] ^= keyed[16 + i];

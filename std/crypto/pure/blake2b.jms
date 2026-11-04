@@ -1,3 +1,4 @@
+import { load32LE } from "./endian";
 // 64-bit words are (low, high) uint32 pairs, as in sha2: JS has no cheap 64-bit integer.
 const iv: uint32[16] = [
 	0xf3bcc908, 0x6a09e667, 0x84caa73b, 0xbb67ae85, 0xfe94f82b, 0x3c6ef372, 0x5f1d36f1, 0xa54ff53a,
@@ -56,10 +57,6 @@ export function newBlake2b(outputSize: int32, key: Readonly<uint8[]>): Blake2bSt
 		s.length = 128;
 	}
 	return s;
-}
-
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
 }
 
 function carry(sum: uint32, addend: uint32): uint32 {
@@ -124,7 +121,7 @@ function mix(s: Blake2bState, a: int32, b: int32, c: int32, d: int32, x: int32, 
 }
 
 function compress(s: Blake2bState, data: Readonly<uint8[]>, off: int32, isLast: boolean): void {
-	for (let i = 0; i < 32; i++) s.m[i] = load32(data, off + i * 4);
+	for (let i = 0; i < 32; i++) s.m[i] = load32LE(data, off + i * 4);
 	for (let i = 0; i < 16; i++) {
 		s.v[i] = s.h[i];
 		s.v[16 + i] = iv[i];
