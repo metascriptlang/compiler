@@ -13,7 +13,7 @@ export const p256: Readonly<Curve> = {
 	math: p256Math,
 };
 
-test "p256 key and signature from RFC 6979 appendix A.2.5, and ECDH agrees both ways where the portable random exists" {
+test "p256 key and signature from RFC 6979 appendix A.2.5, and ECDH with a random key agrees both ways" {
 	const d = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721".decodeHex();
 	const point = ecPublicPoint(p256, d);
 	assert point != null;
@@ -23,15 +23,13 @@ test "p256 key and signature from RFC 6979 appendix A.2.5, and ECDH agrees both 
 	assert signature != null;
 	assert encodeHex(signature as uint8[]) == "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8";
 	assert ecdsaVerifyRaw(p256, point as uint8[], digest, signature as uint8[]);
-	when (js) {
-		const other = ecRandomScalar(p256);
-		const otherPoint = ecPublicPoint(p256, other);
-		assert otherPoint != null;
-		const ab = ecdhShared(p256, d, otherPoint as uint8[]);
-		const ba = ecdhShared(p256, other, point as uint8[]);
-		assert ab != null && ba != null;
-		assert encodeHex(ab as uint8[]) == encodeHex(ba as uint8[]);
-	}
+	const other = ecRandomScalar(p256);
+	const otherPoint = ecPublicPoint(p256, other);
+	assert otherPoint != null;
+	const ab = ecdhShared(p256, d, otherPoint as uint8[]);
+	const ba = ecdhShared(p256, other, point as uint8[]);
+	assert ab != null && ba != null;
+	assert encodeHex(ab as uint8[]) == encodeHex(ba as uint8[]);
 }
 
 test "p256 refuses a point off the curve and a scalar outside the group order" {
