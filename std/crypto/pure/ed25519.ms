@@ -1,117 +1,129 @@
 /**
  * Ed25519 (RFC 8032), ported from Zig's std.crypto (ed25519.zig, edwards25519.zig, scalar.zig; MIT, see
- * LICENSE.zig.MIT) over the BigInt field of ./field25519. Verification is the cofactorless strict form, the
+ * LICENSE.zig.MIT) over the fiat-crypto limb field of ./fe25519 and the scalars of ./scalar25519. Verification is the cofactorless strict form, the
  * equation the C backend's Monocypher checks, with Zig's refusals of a non-canonical S, A or R and of identity
  * points, plus the C backend's small-order denylist.
  *
- * BigInt arithmetic is not constant time: secret scalars index the window table.
+ * Not constant time: secret scalars index the window table.
  */
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
 import { hashOf } from "./hash";
-import { P, mul, sqr, mod, inv, pow2252m3, bigFromBytes, bigToBytes } from "./field25519";
+import {
+	Fe,
+	feZero,
+	feOne,
+	feFromBytes,
+	feToBytes,
+	feAdd,
+	feSub,
+	feNeg,
+	feMul,
+	feSqr,
+	feInv,
+	fePow2252m3,
+	feIsZero,
+	feEqual,
+	feIsNegative,
+} from "./fe25519";
+import { scalarReduce32, scalarReduce64, scalarMulAdd, scalarIsCanonical } from "./scalar25519";
 
-const edwardsD = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n;
-const edwardsD2 = (2n * edwardsD) % P;
-const sqrtMinusOne = 19681161376707505956807079304988542015446066515923890162744021073123829784752n;
-const baseX = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an;
-const baseY = 0x6666666666666666666666666666666666666666666666666666666666666658n;
-export const groupOrder = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn;
+function feHex(hex: string): Fe {
+	return feFromBytes(hex.decodeHex(), 0);
+}
+
+const edwardsD = feHex("a3785913ca4deb75abd841414d0a700098e879777940c78c73fe6f2bee6c0352");
+const edwardsD2 = feHex("59f1b226949bd6eb56b183829a14e00030d1f3eef2808e19e7fcdf56dcd90624");
+const sqrtMinusOne = feHex("b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b");
+const baseX = feHex("1ad5258f602d56c9b2a7259560c72c695cdcd6fd31e2a4c0fe536ecdd3366921");
+const baseY = feHex("5866666666666666666666666666666666666666666666666666666666666666");
 
 export const ed25519SeedLength = 32;
 export const ed25519SecretKeyLength = 64;
 export const ed25519PublicKeyLength = 32;
 export const ed25519SignatureLength = 64;
 
-function fadd(a: bigint, b: bigint): bigint {
-	return (a + b) % P;
-}
-
-function fsub(a: bigint, b: bigint): bigint {
-	return (a + P - b) % P;
-}
-
-function isNegative(a: bigint): boolean {
-	return (mod(a) & 1n) == 1n;
-}
-
-/** Extended twisted Edwards coordinates: x = X/Z, y = Y/Z, xy = T/Z; every coordinate is kept below P. */
+/** Extended twisted Edwards coordinates: x = X/Z, y = Y/Z, xy = T/Z. */
 class Point {
-	x: bigint;
-	y: bigint;
-	z: bigint;
-	t: bigint;
+	x: Fe;
+	y: Fe;
+	z: Fe;
+	t: Fe;
 }
 
 function identity(): Point {
-	return { x: 0n, y: 1n, z: 1n, t: 0n };
+	return { x: feZero, y: feOne, z: feOne, t: feZero };
 }
 
 function basePoint(): Point {
-	return { x: baseX, y: baseY, z: 1n, t: mul(baseX, baseY) };
+	return { x: baseX, y: baseY, z: feOne, t: feMul(baseX, baseY) };
 }
 
 function fromBytes(s: Readonly<uint8[]>, from: int32): Point | null {
-	const z = 1n;
-	const y = mod(bigFromBytes(s, from, 32) & ((1n << 255n) - 1n));
-	let u = sqr(y);
-	let v = mul(u, edwardsD);
-	u = fsub(u, z);
-	v = fadd(v, z);
-	let x = mul(pow2252m3(mul(u, v)), u);
-	const vxx = mul(sqr(x), v);
-	const hasMRoot = fsub(vxx, u) == 0n;
-	const hasPRoot = fadd(vxx, u) == 0n;
+	const z = feOne;
+	const y = feFromBytes(s, from);
+	let u = feSqr(y);
+	let v = feMul(u, edwardsD);
+	u = feSub(u, z);
+	v = feAdd(v, z);
+	let x = feMul(fePow2252m3(feMul(u, v)), u);
+	const vxx = feMul(feSqr(x), v);
+	const hasMRoot = feIsZero(feSub(vxx, u));
+	const hasPRoot = feIsZero(feAdd(vxx, u));
 	if (!hasMRoot && !hasPRoot) return null;
-	if (!hasMRoot) x = mul(x, sqrtMinusOne);
+	if (!hasMRoot) x = feMul(x, sqrtMinusOne);
 	const sign = (s[from + 31] as int32) >> 7;
-	if (x == 0n && sign != 0) return null;
-	if ((isNegative(x) ? 1 : 0) != sign) x = fsub(0n, x);
-	return { x, y, z, t: mul(x, y) };
+	if (feIsZero(x) && sign != 0) return null;
+	if ((feIsNegative(x) ? 1 : 0) != sign) x = feNeg(x);
+	return { x, y, z, t: feMul(x, y) };
 }
 
 function toBytes(p: Readonly<Point>): uint8[] {
-	const zi = inv(p.z);
-	const s = bigToBytes(mul(p.y, zi), 32);
-	if (isNegative(mul(p.x, zi))) s[31] = s[31] ^ 0x80;
+	const zi = feInv(p.z);
+	const s = feToBytes(feMul(p.y, zi));
+	if (feIsNegative(feMul(p.x, zi))) s[31] = s[31] ^ 0x80;
 	return s;
 }
 
-/** A y at or above P, ignoring the sign bit. */
+/** Whether y, the sign bit ignored, is below P: Zig's Fe.rejectNonCanonical with the extra bit ignored. */
 function isCanonicalEncoding(s: Readonly<uint8[]>, from: int32): boolean {
-	return (bigFromBytes(s, from, 32) & ((1n << 255n) - 1n)) < P;
+	let c = ((s[from + 31] as int32) & 0x7f) ^ 0x7f;
+	for (let i = 30; i > 0; i--) c = c | ((s[from + i] as int32) ^ 0xff);
+	c = ((c - 1) >> 8) & 1;
+	const d = ((0xed - 1 - (s[from] as int32)) >> 8) & 1;
+	return (c & d) == 0;
 }
 
 function isIdentityX(p: Readonly<Point>): boolean {
-	return p.x == 0n;
+	return feIsZero(p.x);
 }
 
 function neg(p: Readonly<Point>): Point {
-	return { x: fsub(0n, p.x), y: p.y, z: p.z, t: fsub(0n, p.t) };
+	return { x: feNeg(p.x), y: p.y, z: p.z, t: feNeg(p.t) };
 }
 
 function dbl(p: Readonly<Point>): Point {
-	const t0 = sqr(fadd(p.x, p.y));
-	let x = sqr(p.x);
-	let z = sqr(p.y);
-	const y = fadd(z, x);
-	z = fsub(z, x);
-	x = fsub(t0, y);
-	const t = fsub(fadd(sqr(p.z), sqr(p.z)), z);
-	return { x: mul(x, t), y: mul(y, z), z: mul(z, t), t: mul(x, y) };
+	const t0 = feSqr(feAdd(p.x, p.y));
+	let x = feSqr(p.x);
+	let z = feSqr(p.y);
+	const y = feAdd(z, x);
+	z = feSub(z, x);
+	x = feSub(t0, y);
+	const t = feSub(feAdd(feSqr(p.z), feSqr(p.z)), z);
+	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
 }
 
 function addPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
-	const a = mul(fsub(p.y, p.x), fsub(q.y, q.x));
-	const b = mul(fadd(p.x, p.y), fadd(q.x, q.y));
-	const c = mul(mul(p.t, q.t), edwardsD2);
-	let d = mul(p.z, q.z);
-	d = fadd(d, d);
-	const x = fsub(b, a);
-	const y = fadd(b, a);
-	const z = fadd(d, c);
-	const t = fsub(d, c);
-	return { x: mul(x, t), y: mul(y, z), z: mul(z, t), t: mul(x, y) };
+	const a = feMul(feSub(p.y, p.x), feSub(q.y, q.x));
+	const b = feMul(feAdd(p.x, p.y), feAdd(q.x, q.y));
+	const c = feMul(feMul(p.t, q.t), edwardsD2);
+	let d = feMul(p.z, q.z);
+	d = feAdd(d, d);
+	const x = feSub(b, a);
+	const y = feAdd(b, a);
+	const z = feAdd(d, c);
+	const t = feSub(d, c);
+	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
 }
 
 function subPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
@@ -126,31 +138,13 @@ function precompute(p: Point, count: int32): Point[] {
 
 const basePointPc: Readonly<Point[]> = precompute(basePoint(), 15);
 
-/** Little-endian 32-byte scalar reduced mod L. */
-function reduce32(s: Readonly<uint8[]>): uint8[] {
-	return bigToBytes(bigFromBytes(s, 0, 32) % groupOrder, 32);
-}
-
-function reduce64(s: Readonly<uint8[]>): uint8[] {
-	return bigToBytes(bigFromBytes(s, 0, 64) % groupOrder, 32);
-}
-
-/** a * b + c mod L. */
-function scalarMulAdd(a: Readonly<uint8[]>, b: Readonly<uint8[]>, c: Readonly<uint8[]>): uint8[] {
-	return bigToBytes((bigFromBytes(a, 0, 32) * bigFromBytes(b, 0, 32) + bigFromBytes(c, 0, 32)) % groupOrder, 32);
-}
-
-function isCanonicalScalar(s: Readonly<uint8[]>, from: int32): boolean {
-	return bigFromBytes(s, from, 32) < groupOrder;
-}
-
 function clamp(s: uint8[]): void {
 	s[0] = s[0] & 248;
 	s[31] = (s[31] & 127) | 64;
 }
 
 function slide(s: Readonly<uint8[]>): int32[] {
-	const reduced = ((s[31] as int32) & 0x80) == 0 ? s : reduce32(s);
+	const reduced = ((s[31] as int32) & 0x80) == 0 ? s : scalarReduce32(s);
 	const e: int32[] = [];
 	for (let i = 0; i < 32; i++) {
 		e.push((reduced[i] as int32) & 15);
@@ -254,11 +248,11 @@ export function ed25519Sign(seed: Readonly<uint8[]>, publicKey: Readonly<uint8[]
 	const az = hashOf(kindSha512, seed);
 	const scalar = bytesAt(az, 0, 32);
 	clamp(scalar);
-	const nonce = reduce64(sha512Of([bytesAt(az, 32, 32), message]));
+	const nonce = scalarReduce64(sha512Of([bytesAt(az, 32, 32), message]));
 	const r = mulBase(nonce);
 	if (r == null) return [];
 	const rBytes = toBytes(r);
-	const hram = reduce64(sha512Of([rBytes, publicKey, message]));
+	const hram = scalarReduce64(sha512Of([rBytes, publicKey, message]));
 	const s = scalarMulAdd(hram, scalar, nonce);
 	const out = new Array<uint8>(64);
 	for (let i = 0; i < 32; i++) {
@@ -300,7 +294,7 @@ function isSmallOrder(encoded: Readonly<uint8[]>, from: int32): boolean {
 export function ed25519Acceptable(publicKey: Readonly<uint8[]>, signature: Readonly<uint8[]>): boolean {
 	if (publicKey.length != ed25519PublicKeyLength || signature.length != ed25519SignatureLength) return false;
 	if (isSmallOrder(publicKey, 0) || isSmallOrder(signature, 0)) return false;
-	return isCanonicalScalar(signature, 32);
+	return scalarIsCanonical(signature, 32);
 }
 
 /** RFC 8032 5.1.7, cofactorless: [S]B - [k]A must equal R. False on any bad length, encoding or signature. */
@@ -313,11 +307,11 @@ export function ed25519Verify(publicKey: Readonly<uint8[]>, signature: Readonly<
 	const expectedR = fromBytes(signature, 0);
 	if (expectedR == null || isIdentityX(expectedR)) return false;
 	const rBytes = bytesAt(signature, 0, 32);
-	const hram = reduce64(sha512Of([rBytes, publicKey, message]));
+	const hram = scalarReduce64(sha512Of([rBytes, publicKey, message]));
 	const sbAh = mulDoubleBasePublic(bytesAt(signature, 32, 32), neg(a), hram);
 	if (sbAh == null) return false;
 	const check = subPoints(sbAh, expectedR);
-	return check.x == 0n && check.y == check.z;
+	return feIsZero(check.x) && feEqual(check.y, check.z);
 }
 
 test "RFC 8032 test 1: empty message" {
