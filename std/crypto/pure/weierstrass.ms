@@ -11,7 +11,7 @@ import {
 	oidEcPublicKey,
 } from "./asn1";
 import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
-import { CurveMath, basePoint, mulSecret, mulDoublePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
+import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
 import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
@@ -216,7 +216,7 @@ function pointValid(c: Readonly<Curve>, point: Readonly<uint8[]>): boolean {
 
 function publicPoint(c: Readonly<Curve>, d: Readonly<uint8[]>): uint8[] | null {
 	if (secretScalar(c, d) == null) return null;
-	const point = mulSecret(c.math, basePoint(c.math), d);
+	const point = mulBase(c.math, d);
 	return point == null ? null : encodePoint(c.math, point);
 }
 
@@ -257,7 +257,7 @@ function signRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: 
 	const scalar = secretScalar(c, d);
 	if (scalar == null) return null;
 	const k = nonceFor(c, kind, d, digest);
-	const point = mulSecret(c.math, basePoint(c.math), toBytes(order, k));
+	const point = mulBase(c.math, toBytes(order, k));
 	const xy = point == null ? null : affineBytes(c.math, point);
 	if (xy == null) return null;
 	const r = reduceBytes(order, xy[0], 0);
@@ -280,7 +280,7 @@ function verifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, digest: Readonl
 	const w = invert(order, toMontgomery(order, s));
 	const u1 = fromMontgomery(order, mul(order, toMontgomery(order, e), w));
 	const u2 = fromMontgomery(order, mul(order, toMontgomery(order, r), w));
-	const sum = mulDoublePublic(c.math, basePoint(c.math), toBytes(order, u1), q, toBytes(order, u2));
+	const sum = mulDoubleBasePublic(c.math, toBytes(order, u1), q, toBytes(order, u2));
 	const xy = sum == null ? null : affineBytes(c.math, sum);
 	return xy != null && equal(order, reduceBytes(order, xy[0], 0), r);
 }

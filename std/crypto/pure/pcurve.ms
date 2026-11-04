@@ -272,28 +272,41 @@ function dbl4(cm: Readonly<CurveMath>, p: Point): Point {
 	return dbl(cm, dbl(cm, dbl(cm, dbl(cm, p))));
 }
 
-function precompute(cm: Readonly<CurveMath>, p: Point, count: int32): Point[] {
-	const pc: Point[] = [identity(cm), p];
+/** Multiples 0·p to count·p; the entries past `count` stay the identity. */
+function precompute(cm: Readonly<CurveMath>, p: Point, count: int32): Point[16] {
+	const o = identity(cm);
+	let pc: Point[16] = [o, o, o, o, o, o, o, o, o, o, o, o, o, o, o, o];
+	pc[1] = p;
 	for (let i = 2; i <= count; i++) {
-		pc.push(i % 2 == 0 ? dbl(cm, pc[i / 2]) : addPoints(cm, pc[i - 1], p));
+		pc[i] = i % 2 == 0 ? dbl(cm, pc[i / 2]) : addPoints(cm, pc[i - 1], p);
 	}
 	return pc;
 }
 
+/** The native backend's base-point tables, built once; JavaScript computes on ./bigCurve and skips the start-up cost. */
+function baseTable(cm: Readonly<CurveMath>): Point[16] {
+	when (js) {
+		return precompute(cm, basePoint(cm), 1);
+	} else {
+		return precompute(cm, basePoint(cm), 15);
+	}
+}
+
+const p256Base: Point[16] = baseTable(p256Math);
+const p384Base: Point[16] = baseTable(p384Math);
+
 /** pc[slot] read by touching every entry, so the memory access does not depend on the slot. */
-function pcSelect(cm: Readonly<CurveMath>, pc: Readonly<Point[]>, slot: uint32): Point {
+function pcSelect(cm: Readonly<CurveMath>, pc: Readonly<Point[16]>, slot: uint32): Point {
 	let t = identity(cm);
-	for (let i = 1; i < pc.length; i++) {
+	for (let i = 1; i < 16; i++) {
 		const hit = (((slot ^ (i as uint32)) - 1) >> 31) as uint32;
 		t = selectPoint(cm, hit, t, pc[i]);
 	}
 	return t;
 }
 
-/** k·p for a secret scalar `k`, in constant time; null when the result is the identity. */
-export function mulSecret(cm: Readonly<CurveMath>, p: Point, k: Readonly<uint8[]>): Point | null {
-	if (isIdentity(cm, p)) return null;
-	const pc = precompute(cm, p, 15);
+/** The fixed 4-bit window over a secret scalar: one constant-time table read and one addition per window, zero windows included. */
+function mulTable(cm: Readonly<CurveMath>, pc: Readonly<Point[16]>, k: Readonly<uint8[]>): Point | null {
 	let q = identity(cm);
 	for (let pos = 8 * k.length - 4; pos >= 0; pos -= 4) {
 		const byte = k[k.length - 1 - (pos >> 3)] as uint32;
@@ -301,6 +314,27 @@ export function mulSecret(cm: Readonly<CurveMath>, p: Point, k: Readonly<uint8[]
 		if (pos > 0) q = dbl4(cm, q);
 	}
 	return isIdentity(cm, q) ? null : q;
+}
+
+/** k·p for a secret scalar `k`, in constant time; null when the result is the identity. */
+export function mulSecret(cm: Readonly<CurveMath>, p: Point, k: Readonly<uint8[]>): Point | null {
+	if (isIdentity(cm, p)) return null;
+	return mulTable(cm, precompute(cm, p, 15), k);
+}
+
+/** The base-point multiples 0·G to 15·G: a copy of the native table, or computed where JavaScript skipped it. */
+function baseMultiples(cm: Readonly<CurveMath>): Point[16] {
+	when (js) {
+		return precompute(cm, basePoint(cm), 15);
+	} else {
+		if (cm.field.words == 12) return p384Base;
+		return p256Base;
+	}
+}
+
+/** k·G for a secret scalar `k`, in constant time. */
+export function mulBase(cm: Readonly<CurveMath>, k: Readonly<uint8[]>): Point | null {
+	return mulTable(cm, baseMultiples(cm), k);
 }
 
 /** Signed 4-bit digits of a big-endian scalar, least significant first, each in [-8, 8]. */
@@ -321,22 +355,21 @@ function slide(k: Readonly<uint8[]>): int32[] {
 	return e;
 }
 
-function addDigit(cm: Readonly<CurveMath>, q: Point, pc: Readonly<Point[]>, digit: int32): Point {
+function addDigit(cm: Readonly<CurveMath>, q: Point, pc: Readonly<Point[16]>, digit: int32): Point {
 	if (digit > 0) return addPoints(cm, q, pc[digit]);
 	if (digit < 0) return addPoints(cm, q, neg(cm, pc[-digit]));
 	return q;
 }
 
-/** a·p + b·q for public scalars, in variable time; null when either point or the result is the identity. */
-export function mulDoublePublic(
+/** a·G + b·q for public scalars, in variable time; null when `q` or the result is the identity. */
+export function mulDoubleBasePublic(
 	cm: Readonly<CurveMath>,
-	p: Point,
 	a: Readonly<uint8[]>,
 	q: Point,
 	b: Readonly<uint8[]>,
 ): Point | null {
-	if (isIdentity(cm, p) || isIdentity(cm, q)) return null;
-	const pc1 = precompute(cm, p, 8);
+	if (isIdentity(cm, q)) return null;
+	const pc1 = baseMultiples(cm);
 	const pc2 = precompute(cm, q, 8);
 	const e1 = slide(a);
 	const e2 = slide(b);

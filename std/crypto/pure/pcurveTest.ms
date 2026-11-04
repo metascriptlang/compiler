@@ -3,7 +3,7 @@ import {
 	toMontgomery, fromMontgomery,
 } from "./montgomery";
 import {
-	CurveMath, Point, basePoint, dbl, addPoints, neg, mulSecret, mulDoublePublic,
+	CurveMath, Point, basePoint, dbl, addPoints, neg, mulSecret, mulBase, mulDoubleBasePublic,
 	encodePoint, sqrt, isSquare, p256Math, p384Math,
 } from "./pcurve";
 import { encodeHex } from "../../core/encoding";
@@ -103,6 +103,8 @@ test "2G matches the known point by doubling, by complete addition and by scalar
 	const want384 = "0408d999057ba3d2d969260045c55b97f089025959a6f434d651d207d19fb96e9e4fe0e86ebe0e64f85b96a9c75295df618e80f1fa5b1b3cedb7bfe8dffd6dba74b275d875bc6cc43e904e505f256ab4255ffd43e94d39e22d61501e700a940e80";
 	assert pointHex(p384Math, dbl(p384Math, g384)) == want384;
 	assert pointHex(p384Math, mulSecret(p384Math, g384, two384) as Point) == want384;
+	assert pointHex(p256Math, mulBase(p256Math, two256) as Point) == want256;
+	assert pointHex(p384Math, mulBase(p384Math, two384) as Point) == want384;
 }
 
 test "the generator times the group order is the identity, and times n - 1 is minus the generator" {
@@ -110,6 +112,7 @@ test "the generator times the group order is the identity, and times n - 1 is mi
 		const n = toBytes(cm.order, cm.order.m);
 		const g = basePoint(cm);
 		assert mulSecret(cm, g, n) == null;
+		assert mulBase(cm, n) == null;
 		const nMinusOne = n.slice(0);
 		nMinusOne[n.length - 1] = (nMinusOne[n.length - 1] - 1) as uint8;
 		const minusG = mulSecret(cm, g, nMinusOne);
@@ -117,7 +120,7 @@ test "the generator times the group order is the identity, and times n - 1 is mi
 		assert pointHex(cm, minusG as Point) == pointHex(cm, neg(cm, g));
 		const one = new Array<uint8>(n.length);
 		one[n.length - 1] = 1;
-		assert mulDoublePublic(cm, g, nMinusOne, g, one) == null;
-		assert pointHex(cm, mulDoublePublic(cm, g, one, g, one) as Point) == pointHex(cm, dbl(cm, g));
+		assert mulDoubleBasePublic(cm, nMinusOne, g, one) == null;
+		assert pointHex(cm, mulDoubleBasePublic(cm, one, g, one) as Point) == pointHex(cm, dbl(cm, g));
 	}
 }
