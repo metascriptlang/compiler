@@ -48,8 +48,12 @@ function carrylessProduct64(g: Ghash, a: uint64, b: uint64): void {
 	g.productHi = hi ^ (mid >> 32);
 }
 
-// The low half of the reduction constant x^127 + x^126 + x^121, shifted down 64 bits.
-const reductionHalf: uint64 = 0xc200000000000000;
+// The carry-less product of `v` and 0xc200000000000000 (x^63 + x^62 + x^57, the reduction constant shifted down
+// 64 bits) into `g.productHi:productLo`, as the three shifted copies the constant's set bits select.
+function timesReduction(g: Ghash, v: uint64): void {
+	g.productHi = (v >> 1) ^ (v >> 2) ^ (v >> 7);
+	g.productLo = (v << 63) ^ (v << 62) ^ (v << 57);
+}
 
 // acc = (acc ^ block) * key, reduced modulo x^128 + x^127 + x^126 + x^121 + 1.
 function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
@@ -68,18 +72,20 @@ function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
 	const highLo = hiLo ^ midHi;
 	const lowHi = loHi ^ midLo;
 	const lowLo = loLo;
-	carrylessProduct64(g, lowLo, reductionHalf);
+	timesReduction(g, lowLo);
 	const bHi = lowLo ^ g.productHi;
 	const bLo = lowHi ^ g.productLo;
-	carrylessProduct64(g, bLo, reductionHalf);
+	timesReduction(g, bLo);
 	g.accHi = bLo ^ g.productHi ^ highHi;
 	g.accLo = bHi ^ g.productLo ^ highLo;
 }
 
+function loadBE32(data: Readonly<uint8[]>, at: int32): uint32 {
+	return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
+}
+
 function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
-	let out: uint64 = 0;
-	for (let i = 0; i < 8; i++) out = (out << 8) | (data[at + i] as uint64);
-	return out;
+	return ((loadBE32(data, at) as uint64) << 32) | (loadBE32(data, at + 4) as uint64);
 }
 
 export function storeBE64(out: uint8[], at: int32, value: uint64): void {
@@ -92,7 +98,7 @@ export function newGhash(key: Readonly<uint8[]>): Ghash {
 	const hLo = loadBE64(key, 8);
 	const carry = (0 as uint64) - (hHi >> 63);
 	return {
-		keyHi: ((hHi << 1) | (hLo >> 63)) ^ (reductionHalf & carry),
+		keyHi: ((hHi << 1) | (hLo >> 63)) ^ ((0xc200000000000000 as uint64) & carry),
 		keyLo: (hLo << 1) ^ ((1 as uint64) & carry),
 		accHi: 0,
 		accLo: 0,
