@@ -3,12 +3,16 @@
  * addition and doubling formulas for a = -3 (Renes, Costello and Batina 2015, algorithms 4 and 6),
  * a constant-time fixed-window multiplication for secret scalars and a variable-time double-base
  * multiplication for public ones, as Zig's std.crypto.pcurves does. Scalars are big-endian bytes.
+ * On the native backend a secret multiple of the base point adds one entry of a per-window table
+ * of affine multiples per signed 4-bit digit and doubles nothing, as BoringSSL's P-256 does.
  */
 
 import {
 	Limbs, Modulus, zeroLimbs, select, nonzero, mul, square, add, sub, opp, equal,
 	invert, pow, fromBytes, toBytes, toMontgomery, fromMontgomery,
 } from "./montgomery";
+import { valueBarrier } from "./secret";
+import { p256WindowHex, p384WindowHex } from "./pcurveBaseTable";
 
 export struct CurveMath {
 	field: Modulus;
@@ -268,6 +272,54 @@ export function addPoints(cm: Readonly<CurveMath>, p: Point, q: Point): Point {
 	return { x: x3, y: y3, z: z3 };
 }
 
+/** An affine point, Montgomery form; x = 0 stands for the identity, as in Zig's addMixed. */
+struct Affine {
+	x: Limbs;
+	y: Limbs;
+}
+
+/** p + q for an affine q: algorithm 5 of Renes, Costello and Batina; p itself when q.x is zero. */
+function addMixed(cm: Readonly<CurveMath>, p: Point, q: Affine): Point {
+	const f = cm.field;
+	let t0 = mul(f, p.x, q.x);
+	let t1 = mul(f, p.y, q.y);
+	let t3 = add(f, q.x, q.y);
+	let t4 = add(f, p.x, p.y);
+	t3 = mul(f, t3, t4);
+	t4 = add(f, t0, t1);
+	t3 = sub(f, t3, t4);
+	t4 = mul(f, q.y, p.z);
+	t4 = add(f, t4, p.y);
+	let y3 = mul(f, q.x, p.z);
+	y3 = add(f, y3, p.x);
+	let z3 = mul(f, cm.b, p.z);
+	let x3 = sub(f, y3, z3);
+	z3 = add(f, x3, x3);
+	x3 = add(f, x3, z3);
+	z3 = sub(f, t1, x3);
+	x3 = add(f, t1, x3);
+	y3 = mul(f, cm.b, y3);
+	t1 = add(f, p.z, p.z);
+	let t2 = add(f, t1, p.z);
+	y3 = sub(f, y3, t2);
+	y3 = sub(f, y3, t0);
+	t1 = add(f, y3, y3);
+	y3 = add(f, t1, y3);
+	t1 = add(f, t0, t0);
+	t0 = add(f, t1, t0);
+	t0 = sub(f, t0, t2);
+	t1 = mul(f, t4, y3);
+	t2 = mul(f, t0, y3);
+	y3 = mul(f, x3, z3);
+	y3 = add(f, y3, t2);
+	x3 = mul(f, t3, x3);
+	x3 = sub(f, x3, t1);
+	z3 = mul(f, t4, z3);
+	t1 = mul(f, t3, t0);
+	z3 = add(f, z3, t1);
+	return selectPoint(cm, nonzero(f, q.x) ^ 1, { x: x3, y: y3, z: z3 }, p);
+}
+
 function dbl4(cm: Readonly<CurveMath>, p: Point): Point {
 	return dbl(cm, dbl(cm, dbl(cm, dbl(cm, p))));
 }
@@ -332,9 +384,76 @@ function baseMultiples(cm: Readonly<CurveMath>): Point[16] {
 	}
 }
 
+/** The windows of ./pcurveBaseTable as a flat array: window i, entry j at `(16 * i + 2 * (j - 1)) * words`, x then y, Montgomery form. */
+function loadWindows(cm: Readonly<CurveMath>, hex: Readonly<string[]>): uint32[] {
+	const f = cm.field;
+	const size = 4 * f.words;
+	const out = new Array<uint32>(16 * hex.length * f.words);
+	let at = 0;
+	for (const window of hex) {
+		const bytes = window.decodeHex();
+		if (bytes.length != 16 * size) throw new Error("pcurve base table: a window is not 8 points long");
+		for (let from = 0; from < bytes.length; from += size) {
+			const plain = fromBytes(f, bytes, from);
+			if (plain == null) throw new Error("pcurve base table: a coordinate is not below p");
+			const v = toMontgomery(f, plain);
+			for (let w = 0; w < f.words; w++) out[at + w] = v[w];
+			at += f.words;
+		}
+	}
+	return out;
+}
+
+const p256Windows: Readonly<uint32[]> = loadWindows(p256Math, p256WindowHex);
+const p384Windows: Readonly<uint32[]> = loadWindows(p384Math, p384WindowHex);
+
+/** Entry `slot` (0 to 8) of window `window`, read by touching all eight entries; slot 0 reads as x = 0, the identity. */
+@inline
+function windowSelect(table: Readonly<uint32[]>, window: int32, slot: uint32, n: int32): Affine {
+	let x = zeroLimbs();
+	let y = zeroLimbs();
+	for (let j = 0; j < 8; j++) {
+		const hit = (((slot ^ ((j + 1) as uint32)) - 1) >> 31) as uint32;
+		const mask = (0 as uint32) - valueBarrier(hit);
+		const at = (16 * window + 2 * j) * n;
+		for (let w = 0; w < n; w++) {
+			x[w] |= table[at + w] & mask;
+			y[w] |= table[at + n + w] & mask;
+		}
+	}
+	return { x, y };
+}
+
+/**
+ * k·G as the sum over windows of d_i·16^i·G, with the signed digits d_i in [-8, 8) recoded on the way
+ * up: one constant-time table read, one conditional negation and one mixed addition per window.
+ */
+function mulWindows(cm: Readonly<CurveMath>, table: Readonly<uint32[]>, k: Readonly<uint8[]>): Point | null {
+	const f = cm.field;
+	if (table.length != 16 * (2 * k.length + 1) * f.words) throw new Error("mulWindows: the scalar does not match the table");
+	let q = identity(cm);
+	let carry: int32 = 0;
+	for (let i = 0; i <= 2 * k.length; i++) {
+		const byte = i < 2 * k.length ? k[k.length - 1 - (i >> 1)] as int32 : 0;
+		let digit = ((byte >> (4 * (i & 1))) & 15) + carry;
+		carry = (digit + 8) >> 4;
+		digit -= carry * 16;
+		const negative = ((digit >> 31) & 1) as uint32;
+		const magnitude = ((digit ^ -(negative as int32)) + (negative as int32)) as uint32;
+		const entry = f.words == 8 ? windowSelect(table, i, magnitude, 8) : windowSelect(table, i, magnitude, 12);
+		const y = select(f, negative, entry.y, opp(f, entry.y));
+		q = addMixed(cm, q, { x: entry.x, y });
+	}
+	return isIdentity(cm, q) ? null : q;
+}
+
 /** k·G for a secret scalar `k`, in constant time. */
 export function mulBase(cm: Readonly<CurveMath>, k: Readonly<uint8[]>): Point | null {
-	return mulTable(cm, baseMultiples(cm), k);
+	when (js) {
+		return mulTable(cm, baseMultiples(cm), k);
+	} else {
+		return mulWindows(cm, cm.field.words == 12 ? p384Windows : p256Windows, k);
+	}
 }
 
 /** Signed 4-bit digits of a big-endian scalar, least significant first, each in [-8, 8]. */

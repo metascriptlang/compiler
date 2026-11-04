@@ -124,3 +124,29 @@ test "the generator times the group order is the identity, and times n - 1 is mi
 		assert pointHex(cm, mulDoubleBasePublic(cm, one, g, one) as Point) == pointHex(cm, dbl(cm, g));
 	}
 }
+
+function samePoint(cm: Readonly<CurveMath>, p: Point, q: Point): boolean {
+	const f = cm.field;
+	return equal(f, mul(f, p.x, q.z), mul(f, q.x, p.z)) && equal(f, mul(f, p.y, q.z), mul(f, q.y, p.z));
+}
+
+test "every entry of the native base table is j·16^i·G: the scalar j·16^i reads entry j of window i, and 8·16^i reads -8 and then window i + 1" {
+	when (c) {
+		for (const cm of [p256Math, p384Math]) {
+			const size = 4 * cm.field.words;
+			let base = basePoint(cm);
+			for (let i = 0; i < 2 * size; i++) {
+				let want = base;
+				for (let j = 1; j <= 8; j++) {
+					const k = new Array<uint8>(size);
+					k[size - 1 - (i >> 1)] = (j << (4 * (i & 1))) as uint8;
+					const got = mulBase(cm, k);
+					assert got != null;
+					assert samePoint(cm, got as Point, want);
+					want = addPoints(cm, want, base);
+				}
+				base = dbl(cm, dbl(cm, dbl(cm, dbl(cm, base))));
+			}
+		}
+	}
+}
