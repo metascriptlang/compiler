@@ -58,7 +58,7 @@ export function checkDependentsUnlessStopped(db: TransAmDb, path: string): boole
 	if (fileId < 0) return true;
 	for (const dep of getTransitiveDependents(db.moduleDeps, fileId)) {
 		const depPath = getFilePath(db.fileInput, dep);
-		if (depPath == "") continue;
+		if (depPath == "" || !isDocumentOpen(depPath)) continue;
 		dbTypeCheck(db, depPath);
 		if (db.cancelCtx.stoppedForInput) return false;
 	}
