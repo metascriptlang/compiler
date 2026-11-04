@@ -176,7 +176,7 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		const held = base != null ? valueBehindNull(base.nodeType) : null;
 		if (base == null || !isValueAggregateParam(held)) return { verdict: WriteVerdict.Writable, root: null };
 		interior = true;
-		if (!isDeclaredValueStorage(held)) deep = false;
+		if (sameStorageOperand(base) == null && !isDeclaredValueStorage(held)) deep = false;
 		cur = base;
 	}
 	const sym = cur.resolvedSym;
