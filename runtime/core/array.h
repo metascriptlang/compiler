@@ -222,6 +222,30 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 		(arr_ptr)->len, (arr_ptr)->p, (n), sizeof((arr_ptr)->p->data[0])); \
 } while(0)
 
+/* Make room for n more elements; the length is unchanged. */
+#define msGenericArrayReserveMore(arr_ptr, n) do { \
+	int64_t msMore_ = (n); \
+	if (msMore_ > 0) { \
+		(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayReserve( \
+			(arr_ptr)->len, (arr_ptr)->p, (arr_ptr)->len + msMore_, sizeof((arr_ptr)->p->data[0])); \
+	} \
+} while(0)
+
+/* Append every element of src with one copy; only for elements that need no copy hook. */
+#define msGenericArrayAppendBlock(arr_ptr, ...) do { \
+	__typeof__(*(arr_ptr)) msBlockSrc_ = (__VA_ARGS__); \
+	if (msBlockSrc_.len > 0) { \
+		if ((arr_ptr)->p == NULL || (((msArrayPayloadBase*)(arr_ptr)->p)->cap & ~MS_CAP_MASK) != 0 \
+			|| (arr_ptr)->len + msBlockSrc_.len > (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK)) { \
+			(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
+				(arr_ptr)->len, (arr_ptr)->p, msBlockSrc_.len, sizeof((arr_ptr)->p->data[0])); \
+		} \
+		memcpy(&(arr_ptr)->p->data[(arr_ptr)->len], msBlockSrc_.p->data, \
+			(size_t)msBlockSrc_.len * sizeof((arr_ptr)->p->data[0])); \
+		(arr_ptr)->len += msBlockSrc_.len; \
+	} \
+} while(0)
+
 /* Pop last element. Returns the value. */
 #define msGenericArrayPop(arr_ptr) ({ \
 	if ((arr_ptr)->len <= 0) msRaiseIndexError((arr_ptr)->len - 1, (arr_ptr)->len); \

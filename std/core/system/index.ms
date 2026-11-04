@@ -140,6 +140,12 @@ extern function msFutureCompleteT(fut: Ptr<void>, sink value: Ptr<void>): void f
 @compilerFunc
 extern function msGenericArrayPush(arr: Ptr<void>, sink value: Ptr<void>): void from "msGenericArrayPush";
 
+@compilerFunc
+extern function msGenericArrayReserveMore(arr: Ptr<void>, n: int64): void from "msGenericArrayReserveMore";
+
+@compilerFunc
+extern function msGenericArrayAppendBlock(arr: Ptr<void>, src: Ptr<void>): void from "msGenericArrayAppendBlock";
+
 @compilerFunc @builtin("SpawnInto")
 extern function msSpawnInto(sink fut: Ptr<void>, fn: Ptr<void>): Ptr<void>;
 

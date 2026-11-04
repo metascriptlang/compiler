@@ -3,17 +3,22 @@
 // so the rewrite never crosses the Vec<T> / T[] boundary.
 //
 //   const b: Vec<int32> = [...a, 3];
-//     → const $sps0 = a; let $spa1 = []; let $spi2 = 0;
-//       while ($spi2 < $sps0.length) { $spa1.push($sps0[$spi2]); $spi2 = $spi2 + 1; }
+//     → const $sps0 = a; let $spa1 = [];
+//       reserveMore($spa1, $sps0.length + 1); appendBlock($spa1, $sps0);
 //       $spa1.push(3);
 //       const b: Vec<int32> = $spa1;
+//
+// A source of hook-free elements is block-copied into capacity reserved for it and the plain
+// elements after it; any other array source reserves the same capacity and keeps its element
+// loop (`$spa1.push($sps0[$spi2])`), so each element copy runs its copy hook. The Raiser
+// keeps the loop alone.
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind, Symbol,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
-import { int32Type, peelTransparentInstance, typeDisplayName } from "../../checker/types";
+import { int32Type, isPrimitiveKind, peelTransparentInstance, typeDisplayName } from "../../checker/types";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import {
 	makeVarDecl, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock,
@@ -81,6 +86,23 @@ function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocat
 	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), [target, arg], loc), loc);
 }
 
+function plainRunAfter(elements: Node[], index: number): number {
+	let count = 0;
+	for (let i = index + 1; i < elements.length; i += 1) {
+		const e = elements[i];
+		if (e == null) continue;
+		if (e.kind == NodeKind.SpreadExpr) break;
+		count += 1;
+	}
+	return count;
+}
+
+function accumulatorCall(name: string, accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation): Node {
+	const acc = typedRef(accSym, accT, loc);
+	const target = isRefArray(accT) ? acc : makeHiddenAddr(acc, loc);
+	return makeExprStmt(makeCall(runtimeRef(name, loc), [target, arg], loc), loc);
+}
+
 export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): void {
 	const litT = lit.nodeType;
 	const loc = lit.location;
@@ -92,7 +114,10 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 	accDecl.resolvedSym = accSym;
 	accDecl.nodeType = litT;
 	out.push(accDecl);
-	for (const e of d.elements) {
+	const litBare = bareArrayType(litT);
+	const accElem = litBare != null ? litBare.typeReturn : null;
+	for (let at = 0; at < d.elements.length; at += 1) {
+		const e = d.elements[at];
 		if (e == null) continue;
 		if (e.kind != NodeKind.SpreadExpr) {
 			out.push(pushStmt(accSym, litT, e, loc));
@@ -118,6 +143,20 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 			}
 			continue;
 		}
+		const bareSrc = bareArrayType(srcT);
+		const srcElem = bareSrc != null ? bareSrc.typeReturn : null;
+		if (!ctx.raiserBackend && bareSrc != null && bareSrc.kind == TypeKind.Array) {
+			const length = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
+			length.nodeType = int32Type();
+			const extra = plainRunAfter(d.elements, at);
+			const room = extra == 0 ? length : makeBinary(length, "+", makeNumber(extra, loc), loc);
+			room.nodeType = int32Type();
+			out.push(accumulatorCall("msGenericArrayReserveMore", accSym, litT, room, loc));
+			if (srcElem != null && accElem != null && isPrimitiveKind(srcElem.kind) && srcElem.kind == accElem.kind) {
+				out.push(accumulatorCall("msGenericArrayAppendBlock", accSym, litT, viewRef(srcSym, srcT, loc), loc));
+				continue;
+			}
+		}
 		const indexType = counterType(ctx);
 		const iSym = freshTempSym(ctx, "spri", indexType);
 		const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
@@ -125,8 +164,7 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		iDecl.nodeType = indexType;
 		out.push(iDecl);
 		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, indexType, loc), loc);
-		const bareSrc = bareArrayType(srcT);
-		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
+		elemAccess.nodeType = srcElem;
 		const bodyStmts = [pushStmt(accSym, litT, elemAccess, loc), makeCounterStep(iSym, indexType, loc)];
 		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
 		lenMember.nodeType = int32Type();
