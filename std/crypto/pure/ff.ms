@@ -469,8 +469,19 @@ export function uintGcdModinvOdd(
 	a: Readonly<uint32[]>,
 	n: Readonly<uint32[]>,
 ): GcdInverse {
-	const limbs = n.length;
 	if (!uintIsOdd(n)) throw new Error("uintGcdModinvOdd: the modulus is even");
+	when (c) {
+		return wideGcdModinvOdd(a, n);
+	} else {
+		return narrowGcdModinvOdd(a, n);
+	}
+}
+
+function narrowGcdModinvOdd(
+	a: Readonly<uint32[]>,
+	n: Readonly<uint32[]>,
+): GcdInverse {
+	const limbs = n.length;
 	const aLimbs = Math.min(a.length, limbs) as int32;
 	const u = uintWiden(a, limbs);
 	const v = uintWiden(n, limbs);
@@ -771,6 +782,118 @@ when (c) {
 		wideWipe(xw);
 		wideWipe(chunk);
 		return out;
+	}
+
+	// x -= y over x's limbs; returns the borrow.
+	function wideSub(x: uint64[], y: Readonly<uint64[]>): uint64 {
+		let borrow: uint64 = 0;
+		for (let j = 0; j < x.length; j++) {
+			const xj = x[j];
+			const yj = y[j];
+			const d = xj - yj - borrow;
+			borrow = ((~xj & yj) | (~(xj ^ yj) & d)) >> 63;
+			x[j] = d;
+		}
+		return borrow;
+	}
+
+	// 1 when x < y.
+	function wideLt(x: Readonly<uint64[]>, y: Readonly<uint64[]>): uint64 {
+		let borrow: uint64 = 0;
+		for (let j = 0; j < x.length; j++) {
+			const xj = x[j];
+			const yj = y[j];
+			const d = xj - yj - borrow;
+			borrow = ((~xj & yj) | (~(xj ^ yj) & d)) >> 63;
+		}
+		return borrow;
+	}
+
+	// x += y when `on` is 1; returns the carry.
+	function wideCondAdd(x: uint64[], on: uint64, y: Readonly<uint64[]>): uint64 {
+		const mask = zero64 - on;
+		let carry: uint64 = 0;
+		for (let j = 0; j < x.length; j++) {
+			const xj = x[j];
+			const s = xj + (y[j] & mask);
+			const c = s < xj ? one64 : zero64;
+			const s2 = s + carry;
+			carry = c + (s2 < s ? one64 : zero64);
+			x[j] = s2;
+		}
+		return carry;
+	}
+
+	function wideCmov(x: uint64[], on: uint64, y: Readonly<uint64[]>): void {
+		const mask = zero64 - on;
+		for (let j = 0; j < x.length; j++) x[j] ^= mask & (x[j] ^ y[j]);
+	}
+
+	function wideCondSwap(x: uint64[], y: uint64[], on: uint64): void {
+		const mask = zero64 - on;
+		for (let j = 0; j < x.length; j++) {
+			const t = mask & (x[j] ^ y[j]);
+			x[j] ^= t;
+			y[j] ^= t;
+		}
+	}
+
+	function wideShiftRightOne(x: uint64[], carry: uint64): void {
+		let c = carry;
+		let j = x.length;
+		while (j != 0) {
+			j -= 1;
+			const xj = x[j];
+			x[j] = (xj >> 1) | (c << 63);
+			c = xj & 1;
+		}
+	}
+
+	// The odd-modulus gcd and inverse of `uintGcdModinvOdd` on 64-bit limbs, step for step.
+	function wideGcdModinvOdd(
+		a: Readonly<uint32[]>,
+		n: Readonly<uint32[]>,
+	): GcdInverse {
+		const limbs = n.length;
+		const k = wideLimbsFor(limbs * tBits);
+		const aWide = wideLimbsFor((Math.min(a.length, limbs) as int32) * tBits);
+		const nw = toWide(n, k);
+		const u = toWide(uintWiden(a, limbs), k);
+		const v = toWide(n, k);
+		const q = new Array<uint64>(k);
+		const r = new Array<uint64>(k);
+		r[0] = 1;
+		const d = new Array<uint64>(k);
+		const dq = new Array<uint64>(k);
+		const steps = (aWide + k) * 64;
+		for (let i = 0; i < steps; i++) {
+			const uOdd = u[0] & 1;
+			const vOdd = v[0] & 1;
+			const uOddVOdd = uOdd & vOdd;
+			const uEven = uOdd ^ 1;
+			const notBothOdd = uOddVOdd ^ 1;
+
+			for (let j = 0; j < k; j++) d[j] = v[j];
+			wideSub(d, u);
+			wideCmov(v, uOddVOdd, d);
+			wideCmov(v, uEven, u);
+			wideCmov(u, notBothOdd, d);
+			wideShiftRightOne(v, 0);
+			const swap = wideLt(v, u);
+			wideCondSwap(u, v, swap);
+
+			for (let j = 0; j < k; j++) dq[j] = q[j];
+			wideCondAdd(dq, wideSub(dq, r), nw);
+			wideCmov(q, uOddVOdd, dq);
+			wideCmov(q, uEven, r);
+			wideCmov(r, notBothOdd, dq);
+			wideShiftRightOne(q, wideCondAdd(q, q[0] & 1, nw));
+			wideCondSwap(r, q, swap);
+		}
+		const gcd = fromWide(v, limbs);
+		const inverse = fromWide(q, limbs);
+		for (const scratch of [u, v, q, r, d, dq]) wideWipe(scratch);
+		return { gcd, inverse };
 	}
 
 	function wideWipe(x: uint64[]): void {
