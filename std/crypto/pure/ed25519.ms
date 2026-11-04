@@ -34,7 +34,8 @@ import {
 	feIsZero,
 	feEqual,
 	feIsNegative,
-	feCMov,
+	Niels,
+	feSelectNiels,
 } from "./ed25519Field";
 import {
 	scalarReduce32,
@@ -170,13 +171,6 @@ function precompute(p: Point, count: int32): Point[] {
 	return pc;
 }
 
-/** An affine table point in ref10's niels form: y + x, y - x and 2dxy. */
-struct Niels {
-	yPlusX: Fe;
-	yMinusX: Fe;
-	xy2d: Fe;
-}
-
 /** Entry 8i + j - 1 of ./ed25519BaseTable, [j * 256^i]B. */
 function baseNiels(entry: int32): Niels {
 	return {
@@ -205,14 +199,6 @@ function negNiels(p: Readonly<Niels>): Niels {
 	return { yPlusX: p.yMinusX, yMinusX: p.yPlusX, xy2d: feNeg(p.xy2d) };
 }
 
-function cMovNiels(p: Readonly<Niels>, q: Readonly<Niels>, bit: uint32): Niels {
-	return {
-		yPlusX: feCMov(p.yPlusX, q.yPlusX, bit),
-		yMinusX: feCMov(p.yMinusX, q.yMinusX, bit),
-		xy2d: feCMov(p.xy2d, q.xy2d, bit),
-	};
-}
-
 /**
  * [digit * 256^row]B for a digit in -8..8, read by touching all eight entries
  * of the row and without a branch.
@@ -220,15 +206,7 @@ function cMovNiels(p: Readonly<Niels>, q: Readonly<Niels>, bit: uint32): Niels {
 function selectBase(row: int32, digit: int32): Niels {
 	const negative = (digit >> 31) & 1;
 	const magnitude = digit - (((0 - negative) & digit) << 1);
-	let t: Niels = { yPlusX: feOne, yMinusX: feOne, xy2d: feZero };
-	for (let j = 1; j <= 8; j++) {
-		t = cMovNiels(
-			t,
-			baseNiels(row * 8 + j - 1),
-			((((magnitude ^ j) - 1) >> 31) & 1) as uint32,
-		);
-	}
-	return cMovNiels(t, negNiels(t), negative as uint32);
+	return feSelectNiels(baseTableFe, row, magnitude, negative as uint32);
 }
 
 function clamp(s: uint8[]): void {

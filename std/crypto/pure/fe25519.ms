@@ -1267,10 +1267,34 @@ export function feIsNegative(a: Fe): boolean {
 	return ((fiat_25519_to_bytes(a)[0] as int32) & 1) == 1;
 }
 
-/** b when bit is 1, a when it is 0, without a branch on bit. */
-export function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
-	const mask = valueBarrier((0 - (bit as int32)) as uint32);
-	let out: Fe = a;
-	for (let i = 0; i < 10; i++) out[i] = a[i] ^ (mask & (a[i] ^ b[i]));
-	return out;
+/** An affine point in ref10's niels form: y + x, y - x and 2dxy. */
+export struct Niels {
+	yPlusX: Fe;
+	yMinusX: Fe;
+	xy2d: Fe;
+}
+
+/**
+ * Entry `magnitude - 1` of row `row` of a ref10 base table (three elements per entry, eight entries
+ * per row), negated when `negative` is 1 and the identity for magnitude 0. It reads all eight
+ * entries and moves limbs under masks, as ref10's select and ge_precomp_cmov do.
+ */
+export function feSelectNiels(table: Readonly<Fe[]>, row: int32, magnitude: int32, negative: uint32): Niels {
+	let t: Niels = { yPlusX: feOne, yMinusX: feOne, xy2d: feZero };
+	for (let j = 1; j <= 8; j++) {
+		const mask = valueBarrier((0 - ((((magnitude ^ j) - 1) >> 31) & 1)) as uint32);
+		const at = 3 * (row * 8 + j - 1);
+		for (let i = 0; i < 10; i++) t.yPlusX[i] = t.yPlusX[i] ^ (mask & (t.yPlusX[i] ^ table[at][i]));
+		for (let i = 0; i < 10; i++) t.yMinusX[i] = t.yMinusX[i] ^ (mask & (t.yMinusX[i] ^ table[at + 1][i]));
+		for (let i = 0; i < 10; i++) t.xy2d[i] = t.xy2d[i] ^ (mask & (t.xy2d[i] ^ table[at + 2][i]));
+	}
+	const flip = valueBarrier((0 - (negative as int32)) as uint32);
+	const minusXy = feNeg(t.xy2d);
+	for (let i = 0; i < 10; i++) {
+		const swap = flip & (t.yPlusX[i] ^ t.yMinusX[i]);
+		t.yPlusX[i] = t.yPlusX[i] ^ swap;
+		t.yMinusX[i] = t.yMinusX[i] ^ swap;
+		t.xy2d[i] = t.xy2d[i] ^ (flip & (t.xy2d[i] ^ minusXy[i]));
+	}
+	return t;
 }

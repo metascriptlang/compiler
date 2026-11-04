@@ -76,8 +76,32 @@ when (js) {
 		return (a & 1n) == 1n;
 	}
 
-	export function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
+	function feCMov(a: Fe, b: Fe, bit: uint32): Fe {
 		return a ^ ((0n - BigInt(bit as int32)) & (a ^ b));
+	}
+
+	export struct Niels {
+		yPlusX: Fe;
+		yMinusX: Fe;
+		xy2d: Fe;
+	}
+
+	export function feSelectNiels(table: Readonly<Fe[]>, row: int32, magnitude: int32, negative: uint32): Niels {
+		let t: Niels = { yPlusX: feOne, yMinusX: feOne, xy2d: feZero };
+		for (let j = 1; j <= 8; j++) {
+			const bit = ((((magnitude ^ j) - 1) >> 31) & 1) as uint32;
+			const at = 3 * (row * 8 + j - 1);
+			t = {
+				yPlusX: feCMov(t.yPlusX, table[at], bit),
+				yMinusX: feCMov(t.yMinusX, table[at + 1], bit),
+				xy2d: feCMov(t.xy2d, table[at + 2], bit),
+			};
+		}
+		return {
+			yPlusX: feCMov(t.yPlusX, t.yMinusX, negative),
+			yMinusX: feCMov(t.yMinusX, t.yPlusX, negative),
+			xy2d: feCMov(t.xy2d, feNeg(t.xy2d), negative),
+		};
 	}
 } else {
 	export {
@@ -98,6 +122,7 @@ when (js) {
 		feIsZero,
 		feEqual,
 		feIsNegative,
-		feCMov,
+		Niels,
+		feSelectNiels,
 	} from "./fe25519";
 }
