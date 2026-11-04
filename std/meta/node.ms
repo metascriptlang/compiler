@@ -258,6 +258,7 @@ export enum SymbolFlag {
 	ImmutableEnv, // a ClosureEnv whose every captured variable is a const: no field is written after the env is built
 	NoSideEffect, // @pure extern: writes only the operands its signature makes writable (reference: noSideEffect)
 	ImmutableModuleConst, // a module const the checker proved never written, on the source tree: a borrow of it takes no count on any thread
+	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard

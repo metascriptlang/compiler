@@ -20,6 +20,7 @@ import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
+import { scanJsCells } from "../transform/lowering/jsVarParamLower";
 import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { evaluateComptimeBlocks } from "../compiler/meta/comptime";
@@ -240,6 +241,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	refusePointerOpsOnJs(checkerCtx, unit.program);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
+	scanJsCells(unit.program, checkerCtx);
 	const transformed = transformProgram(unit.program, checkerCtx, true, [], false, null, !danger);
 	// Mirrors the drain compile.ms runs after the JS transform: a pass that
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
@@ -273,6 +275,7 @@ export function compileToJSWithStd(source: string, target: TargetInfo = hostTarg
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 	placeOwnedInstances([unit], true);
 
+	scanJsCells(unit.program, checkerCtx);
 	const transformed = transformProgram(unit.program, checkerCtx, true, [], false, null, !danger);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
@@ -375,6 +378,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	refusePointerOpsOnJs(checkerCtx, unit.program);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
+	scanJsCells(unit.program, checkerCtx);
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const res = generateJSModule(transformed, [], modPath, modPath, createJsTreeLayout(), [], [], [], [], [], true, false);
@@ -751,6 +755,7 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 	}
 
 	let combined = "";
+	for (let i = 0; i < unitPrograms.length; i += 1) scanJsCells(unitPrograms[i], unitCtxs[i]);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		refusePointerOpsOnJs(unitCtxs[i], unitPrograms[i]);
 		if (hasErrors(unitCtxs[i])) {

@@ -1,11 +1,12 @@
 import {
-	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
+	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind, SymbolFlag,
 	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
 	OutExprData, HiddenDerefData, ReturnStmtData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
 	ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
 	DeclKind, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, freshTempSym, reportTransformError } from "../context";
+import { TransformContext, createTransformContextWithChecker, freshTempSym, reportTransformError } from "../context";
+import { CheckerContext } from "../../checker/context";
 import { mapChildren } from "../walker";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef, makeBlock, makeReturn } from "../util";
 import { isRoutineNode } from "../../ast/shape";
@@ -18,14 +19,23 @@ interface Prologue {
 
 interface VarParamRun {
 	ctx: TransformContext;
-	boxedSyms: Symbol[];
+	sealed: boolean;
 	routineStack: Node[];
 	prologues: Prologue[];
 }
 
-function isBoxed(s: Symbol, run: VarParamRun): boolean {
-	for (const b of run.boxedSyms) { if (b == s) return true; }
-	return false;
+function isBoxed(s: Symbol): boolean {
+	return s.symFlags.has(SymbolFlag.JsCell);
+}
+
+function boxSym(s: Symbol, run: VarParamRun): void {
+	if (isBoxed(s)) return;
+	if (!run.sealed && !s.symFlags.has(SymbolFlag.Global)) return;
+	if (run.sealed && s.symFlags.has(SymbolFlag.Exported)) {
+		reportTransformError(run.ctx, `internal: the exported binding '${s.name}' is first taken by 'ref' after the module scan, so a module already emitted reads it unboxed`, s.location);
+		return;
+	}
+	s.symFlags = s.symFlags.incl(SymbolFlag.JsCell);
 }
 
 function isVarType(t: Type | null): boolean {
@@ -59,7 +69,7 @@ function noteBoxedArg(arg: Node, run: VarParamRun): void {
 	if (inner.kind == NodeKind.Identifier && inner.resolvedSym != null) {
 		const s = inner.resolvedSym;
 		if (!isVarType(s.symbolType) && !isBorrowType(s.symbolType)) {
-			if (!isBoxed(s, run)) run.boxedSyms.push(s);
+			boxSym(s, run);
 			if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s, run);
 		}
 	}
@@ -152,7 +162,7 @@ function pairize(arg: Node, run: VarParamRun): Node {
 		const s = inner.resolvedSym;
 		if (s == null) return arg;
 		if (isVarType(s.symbolType) || isBorrowType(s.symbolType)) return inner;
-		if (isBoxed(s, run)) {
+		if (isBoxed(s)) {
 			const cont = makeIdentResolved(s, inner.location);
 			cont.nodeType = null;
 			return pairLit(cont, makeNumber(0, inner.location), inner);
@@ -195,7 +205,7 @@ function declaredType(decl: Node): Type | null {
 function fillBoxes(stmts: Node[], run: VarParamRun): Node[] {
 	const result: Node[] = [];
 	for (const stmt of stmts) {
-		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null && isBoxed(stmt.resolvedSym, run)
+		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null && isBoxed(stmt.resolvedSym)
 			&& (stmt.data as VariableDeclData).initializer == null) {
 			const t = declaredType(stmt);
 			const sym = freshTempSym(run.ctx, "boxInit", t);
@@ -210,6 +220,11 @@ function fillBoxes(stmts: Node[], run: VarParamRun): Node[] {
 		result.push(stmt);
 	}
 	return result;
+}
+
+function isNamespaceMember(node: Node): boolean {
+	const object = (node.data as MemberExprData).object;
+	return object.resolvedSym != null && object.resolvedSym!.symbolKind == SymbolKind.Module;
 }
 
 function rw(node: Node, run: VarParamRun): Node {
@@ -260,7 +275,7 @@ function rw(node: Node, run: VarParamRun): Node {
 		if (s != null && ((isVarType(s.symbolType) && s.symbolKind == SymbolKind.Parameter) || isBorrowType(s.symbolType))) {
 			return derefPair(s, node);
 		}
-		if (s != null && isBoxed(s, run)) {
+		if (s != null && isBoxed(s)) {
 			const cont = makeIdentResolved(s, node.location);
 			cont.nodeType = null;
 			const cell = makeArrayAccess(cont, makeNumber(0, node.location), node.location);
@@ -269,14 +284,20 @@ function rw(node: Node, run: VarParamRun): Node {
 		}
 		return node;
 	}
+	if (node.kind == NodeKind.MemberExpr && isNamespaceMember(node) && node.resolvedSym != null && isBoxed(node.resolvedSym!)) {
+		const cell = makeArrayAccess(node, makeNumber(0, node.location), node.location);
+		cell.nodeType = node.nodeType;
+		node.nodeType = null;
+		return cell;
+	}
 	if (node.kind == NodeKind.VariableDecl) {
 		mapChildren(node, (child: Node): Node => rw(child, run));
 		const s = node.resolvedSym;
 		const d = node.data as VariableDeclData;
-		if (s != null && isBoxed(s, run) && d.initializer != null) {
+		if (s != null && isBoxed(s) && d.initializer != null) {
 			d.initializer = cellLit(d.initializer, node);
 		}
-		if (s != null && isBoxed(s, run) && d.initializer == null) {
+		if (s != null && isBoxed(s) && d.initializer == null) {
 			reportTransformError(run.ctx, "internal: a local whose address is taken is declared where the JS box cannot be filled", node.location);
 		}
 		return node;
@@ -304,8 +325,12 @@ export function routineBodyBlock(routine: Node): Node | null {
 	};
 }
 
+export function scanJsCells(program: Node, cc: CheckerContext): void {
+	sc(program, { ctx: createTransformContextWithChecker(cc), sealed: false, routineStack: [], prologues: [] });
+}
+
 export function lowerJsVarParam(program: Node, ctx: TransformContext): Node {
-	const run: VarParamRun = { ctx, boxedSyms: [], routineStack: [], prologues: [] };
+	const run: VarParamRun = { ctx, sealed: true, routineStack: [], prologues: [] };
 	sc(program, run);
 	rw(program, run);
 	for (const prologue of run.prologues) {
