@@ -140,6 +140,16 @@ bench("Math.sqrt host call 1k", 0, function()
 	for _ = 0, 999 do acc = sqrt(acc + 2.0) end
 	sink = sink + acc
 end)
+if jit then
+	local ffi = require("ffi")
+	ffi.cdef("double sqrt(double x);")
+	local csqrt = ffi.C.sqrt
+	bench("user C sqrt call 1k", 0, function()
+		local acc = 0.0
+		for _ = 0, 999 do acc = csqrt(acc + 2.0) end
+		sink = sink + acc
+	end)
+end
 bench("array push 1k", 0, function()
 	local out = {}
 	for i = 0, 999 do out[i + 1] = i end

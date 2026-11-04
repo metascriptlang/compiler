@@ -1,0 +1,1 @@
+double benchNativeSqrt(double x);

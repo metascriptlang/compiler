@@ -3,6 +3,7 @@
 import { Buffer } from "std/core/buffer";
 import { bench } from "../harness";
 import { CryptoError, digestSync } from "std/crypto";
+import { benchNativeSqrt } from "./benchNative.h";
 
 let sink: number = 0;
 
@@ -141,6 +142,11 @@ bench("closure call 1k", 0, () => {
 bench("Math.sqrt host call 1k", 0, () => {
 	let acc: float64 = 0;
 	for (let i: int64 = 0; i < 1000; i = i + 1) acc = Math.sqrt(acc + 2.0);
+	sink += acc;
+});
+bench("user C sqrt call 1k", 0, () => {
+	let acc: float64 = 0;
+	for (let i: int64 = 0; i < 1000; i = i + 1) acc = benchNativeSqrt(acc + 2.0);
 	sink += acc;
 });
 bench("array push 1k", 0, () => {
