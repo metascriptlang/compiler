@@ -131,6 +131,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.FutureThen => "FutureThen",
 		RaiserOpcode.FutureRead => "FutureRead",
 		RaiserOpcode.CollectCycles => "CollectCycles",
+		RaiserOpcode.IntToF64 => "IntToF64",
+		RaiserOpcode.UIntToF64 => "UIntToF64",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",

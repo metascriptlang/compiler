@@ -3,7 +3,7 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, TYPED_SLOTS, RaiserRegClass, RaiserRole, RaiserConvClass, regClassLetter, inRefFile, operandTagged,
-	opRole, opHasSite, siteArgCount, convTarget, raiserABC
+	opRole, opHasSite, siteArgCount, convTarget, convSource, raiserABC
 } from "./bytecode";
 import { RaiserValue, RaiserValueKind } from "./value";
 
@@ -146,6 +146,16 @@ function ranked(op: RaiserOpcode, a: RaiserRegClass): RaiserOpcode {
 	};
 }
 
+// A Conv from a Word register to F64 is the plain integer conversion, signed unless its source is U64; one from F64 bits
+// stays a Conv.
+function typedConv(inst: RaiserInstruction, classes: RaiserRegClass[], regCount: int32): RaiserOpcode {
+	if (inst.a >= regCount || inst.b >= regCount || convTarget(inst.c) != RaiserConvClass.F64) return RaiserOpcode.Conv;
+	if (classes[inst.a as int32] != RaiserRegClass.Float || classes[inst.b as int32] != RaiserRegClass.Word) return RaiserOpcode.Conv;
+	const from = convSource(inst.c);
+	if (from == (RaiserConvClass.U64 as int32)) return RaiserOpcode.UIntToF64;
+	return from == (RaiserConvClass.F64Bits as int32) ? RaiserOpcode.Conv : RaiserOpcode.IntToF64;
+}
+
 function typedSlot(op: RaiserOpcode, value: RaiserRegClass): RaiserOpcode {
 	if (value == RaiserRegClass.Word) return op == RaiserOpcode.LoadSlot ? RaiserOpcode.LoadSlotW : RaiserOpcode.StoreSlotW;
 	if (value == RaiserRegClass.Ref) return op == RaiserOpcode.LoadSlot ? RaiserOpcode.LoadSlotR : RaiserOpcode.StoreSlotR;
@@ -173,6 +183,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 		if (op == RaiserOpcode.LoadSlot && inst.a < regCount && inst.slot < TYPED_SLOTS) op = typedSlot(op, classes[inst.a as int32]);
 		if (op == RaiserOpcode.StoreSlot && inst.c < regCount && inst.slot < TYPED_SLOTS) op = typedSlot(op, classes[inst.c as int32]);
 		if (inst.a < regCount && (op == RaiserOpcode.BeqI64 || op == RaiserOpcode.BneI64 || op == RaiserOpcode.BrEqI64 || op == RaiserOpcode.BrNeI64)) op = ranked(op, classes[inst.a as int32]);
+		if (op == RaiserOpcode.Conv) op = typedConv(inst, classes, regCount);
 		const fields: int32[] = [inst.a as int32, inst.b as int32, inst.c as int32];
 		for (let slot = 0; slot < 3; slot += 1) {
 			const role = opRole(op, slot);

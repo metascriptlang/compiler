@@ -2681,6 +2681,18 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + ia] = slots[fb + ib];
 				break;
 			}
+			case RaiserOpcode.IntToF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				slots[fb + ia] = msFloat64Bits(slots[fb + ib] as float64);
+				break;
+			}
+			case RaiserOpcode.UIntToF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				slots[fb + ia] = msFloat64Bits((slots[fb + ib] as uint64) as float64);
+				break;
+			}
 			case RaiserOpcode.MoveR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -5712,6 +5724,21 @@ function execConv(value: RaiserValue, cls: RaiserConvClass, from: int32 = -1): R
 		],
 		[value]
 	));
+}
+
+test "a Conv to F64 from a Word register runs as the integer conversion the layout chose for it" {
+	const cases: RaiserConvClass[] = [RaiserConvClass.I32, RaiserConvClass.U64, RaiserConvClass.F64Bits];
+	const ops: RaiserOpcode[] = [RaiserOpcode.IntToF64, RaiserOpcode.UIntToF64, RaiserOpcode.Conv];
+	for (let i = 0; i < cases.length; i += 1) {
+		const f = createRaiserFunction("conv", [raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Conv, 1, 0, convOperand(RaiserConvClass.F64, cases[i] as int32)), raiserABC(RaiserOpcode.Halt, 1, 0, 0)], [raiserInt(-3)], 0, 0, 2);
+		assert f.code[1].op == ops[i], `source ${cases[i]}: ${f.code[1].op}`;
+	}
+	const signed = execConv(raiserInt(-3), RaiserConvClass.F64, RaiserConvClass.I32 as int32);
+	assert signed.error == "" && signed.exitValue.kind == RaiserValueKind.Float && signed.exitValue.floatVal == -3.0, `${signed.error} ${signed.exitValue.floatVal}`;
+	const unsigned = execConv(raiserInt(-1), RaiserConvClass.F64, RaiserConvClass.U64 as int32);
+	assert unsigned.error == "" && unsigned.exitValue.floatVal == 18446744073709551616.0, `${unsigned.error} ${unsigned.exitValue.floatVal}`;
+	const bits = execConv(raiserInt(msFloat64Bits(2.5)), RaiserConvClass.F64, RaiserConvClass.F64Bits as int32);
+	assert bits.error == "" && bits.exitValue.floatVal == 2.5, `${bits.error} ${bits.exitValue.floatVal}`;
 }
 
 test "a float converted to a signed integer out of its range stops, as on C" {

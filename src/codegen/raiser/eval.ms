@@ -2642,7 +2642,7 @@ test "engine: a widening integer conversion emits no instruction, a narrowing on
 	];
 	for (const program of kept) {
 		const f = compiledFunc(program, "f");
-		assert countNamed(f, "Conv") >= 1, disasmFunc(f);
+		assert countNamed(f, "Conv") + countNamed(f, "IntToF64") >= 1, disasmFunc(f);
 	}
 	const ok = evalVM("function f(a: int32, b: uint8, c: uint32, d: int16): int64 { const x: int64 = a; const y: int64 = b; const z: int64 = c; const w: int32 = d; return x + y + z + w; } console.log(`${f(-1, 2, 4000000000, 4)}`);");
 	assert ok.error == "" && ok.output == "4000000005\n", `${ok.error} ${ok.output}`;

@@ -236,9 +236,11 @@ export enum RaiserOpcode {
 	FutureThen,       // ABC: R[A] = a future settled by what R[A+2] (R[A+3] for a rejection) does with the value of the future R[A+1] after the code that registered it, as msFutureThen does; B = 1 makes R[A+2] the rejection handler and passes a fulfilled value through, as msFutureCatch does; C arguments
 	FutureRead,       // ABC: B = 0 reads the settled future R[A+1] into R[A] (a failed one raises its error), 1 raises the error of the settled future R[A+1], 2 sets R[A] to whether R[A+1] is settled; a value that is not a future reads as itself; C arguments
 	CollectCycles,    // ABC: run the cycle collector over the running heaps, then the destroys of the cells it condemned, before the next instruction
+	IntToF64,         // ABC: floats[A] = words[B] read as a signed integer; the layout's form of a Conv to F64 from a Word register
+	UIntToF64,        // ABC: floats[A] = words[B] read as an unsigned 64-bit integer; the layout's form of a Conv to F64 from U64
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CollectCycles;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.UIntToF64;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -353,6 +355,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.SameLoc => "bxx",
 		RaiserOpcode.EqVal | RaiserOpcode.NeVal => "xx-",
 		RaiserOpcode.Conv => "xx-",
+		RaiserOpcode.IntToF64 | RaiserOpcode.UIntToF64 => "fi-",
 		RaiserOpcode.CopyValue => "xx-",
 		RaiserOpcode.Box => "dx-",
 		RaiserOpcode.Unbox => "xd-",
@@ -840,5 +843,6 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.ArrayConcat, 2) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.AssignInPlace, 0) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 1) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 2) == RaiserRole.None;
 	assert opRole(RaiserOpcode.FutureRead, 0) == RaiserRole.Any && opRole(RaiserOpcode.FutureRead, 1) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.None;
+	assert opRole(RaiserOpcode.IntToF64, 0) == RaiserRole.Float && opRole(RaiserOpcode.UIntToF64, 1) == RaiserRole.Int;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Float && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Int;
 }
