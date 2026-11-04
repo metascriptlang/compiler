@@ -153,6 +153,7 @@ import "./sendableFunction";
 import "./slotRelation";
 import "./brandArrayRelations";
 import "./storageMutability";
+import "./moduleConstShare";
 import "./symbolNotSpelling";
 import "./viewStructStorage";
 import "./viewStructBorrows";
