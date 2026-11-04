@@ -539,7 +539,7 @@ function onServerHello(
 	const sessionEcho = d.takeBytes(d.takeU8());
 	const code = d.takeU16();
 	if (d.takeU8() != 0) return Result.err(tlsError("TlsIllegalParameter: compression method"));
-	const extensions = decoderOf(d.takeBytes(d.takeU16()));
+	const extensions = decoderOf(d.done() ? [] : d.takeBytes(d.takeU16()));
 	let version = 0;
 	let group = -1;
 	let share: uint8[] = [];
@@ -835,7 +835,12 @@ function offeredTls12(code: int32): boolean {
 	return false;
 }
 
-/** A TLS 1.2 ServerHello: no supported_versions, a random without the downgrade sentinel, an ECDHE AEAD suite offered. */
+/**
+ * A TLS 1.2 ServerHello: no supported_versions, a random without the
+ * downgrade sentinel, an ECDHE AEAD suite offered. renegotiation_info,
+ * when present, must be empty (RFC 5746 3.4); a server without it is
+ * accepted, as this client never renegotiates.
+ */
 function onTls12ServerHello(hs: Tls13Handshake, body: Readonly<uint8[]>, wrapped: Readonly<uint8[]>): Result<void, CryptoError> {
 	const d = decoderOf(body);
 	const legacyVersion = d.takeU16();
@@ -843,14 +848,12 @@ function onTls12ServerHello(hs: Tls13Handshake, body: Readonly<uint8[]>, wrapped
 	d.takeBytes(d.takeU8());
 	const code = d.takeU16();
 	d.takeU8();
-	const extensions = decoderOf(d.takeBytes(d.takeU16()));
-	let secureRenegotiation = false;
+	const extensions = decoderOf(d.done() ? [] : d.takeBytes(d.takeU16()));
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
 		if (type == extensionRenegotiationInfo) {
 			if (ext.takeU8() != 0 || !ext.done()) return Result.err(tlsError("TlsHandshakeFailure: renegotiation_info is not empty"));
-			secureRenegotiation = true;
 		} else if (type == extensionAlpn) {
 			try onAlpn(hs, ext);
 		} else if (type == extensionKeyShare) {
@@ -863,7 +866,6 @@ function onTls12ServerHello(hs: Tls13Handshake, body: Readonly<uint8[]>, wrapped
 	if (sameBytes(random.slice(24, 31), downgradeSentinel) && (random[31] as int32) >> 1 == 0) {
 		return Result.err(tlsError("TlsIllegalParameter: TLS 1.3 server downgraded to TLS 1.2"));
 	}
-	if (!secureRenegotiation) return Result.err(tlsError("TlsHandshakeFailure: server does not support secure renegotiation"));
 	const suite = tls12CipherSuiteOf(code);
 	if (suite == null || !offeredTls12(code)) return Result.err(tlsError("TlsIllegalParameter: cipher suite not offered"));
 	hs.version = versionTls12;

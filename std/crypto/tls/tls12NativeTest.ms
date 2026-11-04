@@ -59,16 +59,18 @@ function handshakeOffering(tls12: boolean): Tls13Handshake {
 	return started.value;
 }
 
-/** A plaintext record holding a ServerHello with `random`, `suite` and the hex `extensions`. */
-function serverHelloRecord(hs: Tls13Handshake, random: Readonly<uint8[]>, suite: int32, extensions: string): uint8[] {
+/** A plaintext record holding a ServerHello with `random`, `suite` and the hex `extensions`, or no extensions block at all. */
+function serverHelloRecord(hs: Tls13Handshake, random: Readonly<uint8[]>, suite: int32, extensions: string, withExtensions: boolean = true): uint8[] {
 	const ext = extensions.decodeHex();
 	const body: uint8[] = [0x03, 0x03, ...random, hs.sessionId.length as uint8, ...hs.sessionId];
 	body.push(((suite >> 8) & 255) as uint8);
 	body.push((suite & 255) as uint8);
 	body.push(0);
-	body.push(((ext.length >> 8) & 255) as uint8);
-	body.push((ext.length & 255) as uint8);
-	for (let i = 0; i < ext.length; i++) body.push(ext[i]);
+	if (withExtensions) {
+		body.push(((ext.length >> 8) & 255) as uint8);
+		body.push((ext.length & 255) as uint8);
+		for (let i = 0; i < ext.length; i++) body.push(ext[i]);
+	}
 	const message: uint8[] = [2, 0, ((body.length >> 8) & 255) as uint8, (body.length & 255) as uint8, ...body];
 	return [22, 3, 3, ((message.length >> 8) & 255) as uint8, (message.length & 255) as uint8, ...message];
 }
@@ -175,7 +177,7 @@ test "a TLS 1.2 ServerHello carrying the RFC 8446 downgrade sentinel is refused"
 	}
 }
 
-test "a TLS 1.2 ServerHello is followed only when TLS 1.2 was offered and renegotiation_info is empty" {
+test "a TLS 1.2 ServerHello is followed only when TLS 1.2 was offered and any renegotiation_info is empty" {
 	const accepted = handshakeOffering(true);
 	const plain = serverHelloRecord(accepted, counting(32), suiteEcdheRsaAes128GcmSha256, emptyRenegotiationInfo);
 	const followed = completeHandshake(accepted, new ScriptedTransport(plain), refuseAll);
@@ -186,9 +188,14 @@ test "a TLS 1.2 ServerHello is followed only when TLS 1.2 was offered and renego
 	const refused = completeHandshake(only13, new ScriptedTransport(serverHelloRecord(only13, counting(32), suiteEcdheRsaAes128GcmSha256, emptyRenegotiationInfo)), refuseAll);
 	assert !refused.ok && refused.error.message.includes("TlsProtocolVersion");
 
-	const insecure = handshakeOffering(true);
-	const noRenegotiation = completeHandshake(insecure, new ScriptedTransport(serverHelloRecord(insecure, counting(32), suiteEcdheRsaAes128GcmSha256, "")), refuseAll);
-	assert !noRenegotiation.ok && noRenegotiation.error.message.includes("secure renegotiation");
+	const renegotiated = handshakeOffering(true);
+	const notEmpty = completeHandshake(renegotiated, new ScriptedTransport(serverHelloRecord(renegotiated, counting(32), suiteEcdheRsaAes128GcmSha256, "ff0100020100")), refuseAll);
+	assert !notEmpty.ok && notEmpty.error.message.includes("renegotiation_info is not empty");
+
+	const legacy = handshakeOffering(true);
+	const bare = serverHelloRecord(legacy, counting(32), suiteEcdheRsaAes128GcmSha256, "", false);
+	const withoutExtensions = completeHandshake(legacy, new ScriptedTransport(bare), refuseAll);
+	assert !withoutExtensions.ok && withoutExtensions.error.message == "TlsConnectionTruncated";
 
 	const wrongSuite = handshakeOffering(true);
 	const tls13Suite = completeHandshake(wrongSuite, new ScriptedTransport(serverHelloRecord(wrongSuite, counting(32), 0x1301, emptyRenegotiationInfo)), refuseAll);
