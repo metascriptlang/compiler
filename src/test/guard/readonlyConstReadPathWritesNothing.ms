@@ -1,8 +1,9 @@
 // guard: a deep Readonly module const crosses threads only when nothing a task calls on it can write
 // a cell: a C extern reached from a call that reads the const, through a method receiver or a free
 // call, directly or through a routine with a body, refuses the const on C and JS; a string length
-// and == read of the const are accepted, and so is a @pure extern (push) that writes only a fresh
-// local, while the same push into a module `let` stays refused as module state.
+// and == read of the const are accepted, and so are a @pure extern (push) that writes only a fresh
+// local and the @pure array reads (includes, indexOf, lastIndexOf), while the same push into a
+// module `let` stays refused as module state.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent.
 //
@@ -93,6 +94,19 @@ const cases: Case[] = [
 		text: SHAPE
 			+ "function firstOffset(this s: Readonly<Shape>): int32 { let out: Vec<int32> = []; out.push(s.slices[0].offset); return out[0]; }\n"
 			+ "function read(): int32 { return shape.firstOffset(); }\n" + RUN,
+	},
+	{
+		name: "a @pure string[] includes on the const inside a routine a task calls",
+		refused: false,
+		text: "const known: Readonly<string[]> = [\"a\", \"b\"];\n"
+			+ "function has(x: string): boolean { return known.includes(x); }\n"
+			+ "function read(): int32 { return has(\"b\") ? 1 : 0; }\n" + RUN,
+	},
+	{
+		name: "a @pure number[] indexOf and string[] lastIndexOf called on the const directly",
+		refused: false,
+		text: "const nums: Readonly<number[]> = [1, 2];\nconst names: Readonly<string[]> = [\"a\", \"b\"];\n"
+			+ "function read(): number { return nums.indexOf(2) + names.lastIndexOf(\"a\"); }\n" + RUN,
 	},
 	{
 		name: "a @pure push into a module let inside a routine that reads the const",
