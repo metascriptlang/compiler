@@ -39,7 +39,8 @@ export function contentSize(this element: DerElement): int32 {
 
 /**
  * The element whose identifier is at `index`, or null when its header or content runs past `limit`,
- * its length is indefinite or wider than four bytes, or its tag needs the multi-byte form.
+ * its length is indefinite, wider than four bytes or not in its shortest form (X.690 10.1), or its tag needs the
+ * multi-byte form.
  */
 export function derElementAt(
 	bytes: Readonly<uint8[]>,
@@ -62,6 +63,7 @@ export function derElementAt(
 		length = (length << 8) | (bytes[at + i] as int64);
 	}
 	at += lengthSize;
+	if (length < 128 || bytes[index + 2] == 0) return null;
 	const room = (limit - at) as int64;
 	if (length > room) return null;
 	return { identifier, start: at, end: at + (length as int32) };
@@ -96,4 +98,12 @@ test "a header or content past the limit, an indefinite length and a wide length
 	assert derElementAt([0x04, 0x82, 0x01], 0, 3) == null;
 	assert derElementAt([0x1f, 0x01, 0x00], 0, 3) == null;
 	assert derElementAt([0x30, 0x02, 0x05, 0x00], 0, 3) == null;
+}
+
+test "a long-form length that fits a shorter form is refused" {
+	assert derElementAt([0x04, 0x81, 0x01, 0xaa], 0, 4) == null;
+	assert derElementAt([0x04, 0x81, 0x7f, ...new Array<uint8>(127)], 0, 130) == null;
+	assert derElementAt([0x04, 0x81, 0x80, ...new Array<uint8>(128)], 0, 131) != null;
+	const padded: uint8[] = [0x04, 0x82, 0x00, 0x80, ...new Array<uint8>(128)];
+	assert derElementAt(padded, 0, padded.length as int32) == null;
 }
