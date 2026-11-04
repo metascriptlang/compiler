@@ -174,12 +174,12 @@ when (c) {
 	}
 
 
-	function laneAt(data: Readonly<uint8[]>, at: int32): uint64 {
+	function laneAt(data: Readonly<uint8[]>, at: int64): uint64 {
 		return (data[at] as uint64) | ((data[at + 1] as uint64) << 8) | ((data[at + 2] as uint64) << 16) | ((data[at + 3] as uint64) << 24)
 			| ((data[at + 4] as uint64) << 32) | ((data[at + 5] as uint64) << 40) | ((data[at + 6] as uint64) << 48) | ((data[at + 7] as uint64) << 56);
 	}
 
-	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int32, len: int32): void {
+	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int64, len: int32): void {
 		let i = 0;
 		while (i + 8 <= len) {
 			state.st[i >> 3] ^= laneAt(data, at + i);
@@ -438,14 +438,15 @@ when (c) {
 	}
 
 
-	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int32, len: int32): void {
+	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int64, len: int32): void {
+		const base = at as number;
 		let i = 0;
 		while (i + 4 <= len) {
-			const j = at + i;
+			const j = base + i;
 			state.st[i >> 2] ^= (data[j] as uint32) | ((data[j + 1] as uint32) << 8) | ((data[j + 2] as uint32) << 16) | ((data[j + 3] as uint32) << 24);
 			i += 4;
 		}
-		for (let k = 0; i + k < len; k++) addByte(state, data[at + i + k], i + k);
+		for (let k = 0; i + k < len; k++) addByte(state, data[base + i + k], i + k);
 	}
 
 	function addByte(state: Sha3State, b: uint8, offset: int32): void {
@@ -481,11 +482,12 @@ export function newSha3(bits: int32): Sha3State {
 /** Absorb data into the sponge. Throws if called after finishSha3. */
 export function updateSha3(state: Sha3State, data: Readonly<uint8[]>): void {
 	if (state.finished) throw new Error("SHA3: already finished");
-	const n = data.length as int32;
+	const n: int64 = data.length;
 	const rate = state.rate;
-	let i = 0;
+	let i: int64 = 0;
 	if (state.filled > 0) {
-		const take = Math.min(rate - state.filled, n) as int32;
+		const room = rate - state.filled;
+		const take = n < room ? n as int32 : room;
 		for (let j = 0; j < take; j++) state.buf[state.filled + j] = data[j];
 		state.filled += take;
 		if (take == n) return;
@@ -496,17 +498,17 @@ export function updateSha3(state: Sha3State, data: Readonly<uint8[]>): void {
 		}
 		i = take;
 	}
-	while (i + rate < n) {
+	while (n - i > rate) {
 		addBytes(state, data, i, rate);
 		keccakF(state);
 		i += rate;
 	}
-	const left = n - i;
+	const left = (n - i) as int32;
 	for (let j = 0; j < left; j++) state.buf[j] = data[i + j];
 	state.filled = left;
 }
 
-/** Pad, permute, and return the digest bytes. Throws if called more than once. */
+/** Pad, permute, and return the digest bytes; the state is wiped afterwards. Throws if called more than once. */
 export function finishSha3(state: Sha3State): uint8[] {
 	if (state.finished) throw new Error("SHA3: already finished");
 	const rate = state.rate;
@@ -521,6 +523,9 @@ export function finishSha3(state: Sha3State): uint8[] {
 	state.finished = true;
 	const out = new Array<uint8>(state.bits >> 3);
 	for (let i = 0; i < out.length; i++) out[i] = stateByte(state, i);
+	state.st = zeroLanes();
+	for (let i = 0; i < rate; i++) state.buf[i] = 0;
+	state.filled = 0;
 	return out;
 }
 
@@ -606,6 +611,14 @@ test "sha3 update after finish throws even for empty input" {
 		threw = true;
 	}
 	assert threw;
+}
+
+test "sha3 finish wipes the sponge state and buffer" {
+	const s = newSha3(256);
+	updateSha3(s, "abc".asBytes().slice(0));
+	finishSha3(s);
+	for (let i = 0; i < s.st.length; i++) assert s.st[i] == 0;
+	for (let i = 0; i < s.buf.length; i++) assert s.buf[i] == 0;
 }
 
 test "sha3 finish after finish throws" {
