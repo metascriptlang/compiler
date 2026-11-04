@@ -3,8 +3,8 @@
  * async forms, and the pure `.ms` code of std/crypto/pure/ed25519 for every `*Sync` form and wherever `subtle` is
  * missing or lacks Ed25519 (old browsers, insecure contexts). The same surface as index.cms.
  *
- * The `.ms` path is BigInt arithmetic: JS cannot promise constant time. Secret scalars take no branch, but the
- * fixed-window table is indexed by them, so a timing or cache side channel is not ruled out.
+ * The `.ms` path does its field arithmetic on BigInt, so JS cannot promise constant time: secret scalars take no
+ * branch and pick base-table entries with masks, never by index, but a BigInt operation's time follows its values.
  */
 
 import { Buffer } from "std/core/buffer";

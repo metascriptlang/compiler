@@ -5,8 +5,9 @@
  * (browsers on secure contexts, Node 19 and later); a missing `crypto.subtle` is a `CryptoError`, never a throw.
  * WebCrypto binds a key to its algorithm and hash when it is imported, so a key object keeps its parsed DER and
  * imports a `CryptoKey` per (algorithm, hash) on first use and reuses it. Keys under 2048 bits are refused on
- * import and sha1 signatures are refused, as on the native backend. PSS signs and verifies with a salt as long as
- * the hash, which is what the native backend writes and accepts.
+ * import and sha1 signatures are refused, as on the native backend. PSS signs with a salt as long as the hash, as
+ * the native backend does; the asynchronous verify accepts only that salt length, while the native backend and the
+ * `*Sync` forms accept any salt length.
  *
  * WebCrypto has no synchronous API, so every `*Sync` form runs the BigInt code in `std/crypto/pure/rsa`. It is
  * correct against the same vectors but slow (key generation takes seconds, a 2048-bit signature milliseconds) and
