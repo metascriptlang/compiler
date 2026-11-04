@@ -2446,6 +2446,16 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	assert layoutOf(opaque.symbolType).length == 0;
 }
 
+test "engine: index and push keep every element class and width across the payload's growth" {
+	const vm = evalVM("const w: int64[] = []; const f: float64[] = []; const s: string[] = []; const n: int32[] = []; const b: boolean[] = [];"
+		+ " for (let i: int64 = 0; i < 20; i = i + 1) { w.push(i * 3); f.push((i as float64) + 0.5); s.push(`s${i}`); n.push((i - 10) as int32); b.push(i % 2 == 0); }"
+		+ " let sw: int64 = 0; let sf = 0.0; let ss = ''; let sn: int64 = 0; let sb = 0;"
+		+ " for (let i = 0; i < 20; i++) { sw = sw + w[i]; sf = sf + f[i]; ss = ss + s[i]; sn = sn + n[i]; if (b[i]) sb++; }"
+		+ " console.log(`${w.length} ${sw} ${sf} ${ss.length} ${s[19]} ${sn} ${sb}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "20 570 200 50 s19 -10 10\n", vm.output;
+}
+
 test "engine: concat of two string operands uses the typed opcode; a word operand is turned to text by the Dyn opcode first" {
 	const code = "function both(a: string, b: string): string { return a + b; } function mixed(a: string, n: int64): string { return a + n; }"
 		+ " class O { n: int64 = 7; } const o = new O(); let s = 'ab'; for (let i = 0; i < 5; i++) { s = s + s; }"
