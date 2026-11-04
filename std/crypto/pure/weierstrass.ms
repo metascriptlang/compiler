@@ -1,8 +1,7 @@
 /**
- * Short Weierstrass curves (P-256 and P-384) on `bigint`: key encodings (SPKI, PKCS#8, SEC1), ECDSA signature
- * encodings and, for the JavaScript `*Sync` forms, ECDSA with RFC 6979 nonces and ECDH. Not constant-time:
- * scalar multiplication branches on the scalar's bits, so use the asynchronous forms (WebCrypto) for secrets
- * that an observer of timing could reach.
+ * Short Weierstrass curves (P-256 and P-384): key encodings (SPKI, PKCS#8, SEC1), ECDSA signature
+ * encodings, ECDSA with RFC 6979 nonces and ECDH over the fixed-width arithmetic of ./pcurve. A secret
+ * scalar is multiplied in constant time; verification multiplies public scalars in variable time.
  */
 
 import {
@@ -10,7 +9,8 @@ import {
 	derOctets, derBits, derOidOf, derTlv, derJoin, tagSequence, tagOctetString, tagBitString, tagOid,
 	oidEcPublicKey,
 } from "./asn1";
-import { bigFromBytes, bigToBytes, bitLength, modInverse, randomBelow } from "./bigint";
+import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
+import { CurveMath, basePoint, mulSecret, mulDoublePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
 
@@ -18,13 +18,9 @@ export interface Curve {
 	name: string;
 	webName: string;
 	oid: uint8[];
+	/** Bytes of a field element and of a scalar: the order has exactly `8 * size` bits on both curves. */
 	size: int32;
-	p: bigint;
-	a: bigint;
-	b: bigint;
-	n: bigint;
-	gx: bigint;
-	gy: bigint;
+	math: CurveMath;
 }
 
 export interface EcPublicData {
@@ -40,7 +36,7 @@ export interface EcPrivateData {
 
 /** A key owns its own curve record, because a curve constant is a read-only view and a view cannot be returned or stored. */
 export function ownCurve(c: Readonly<Curve>): Curve {
-	return { name: c.name, webName: c.webName, oid: [...c.oid], size: c.size, p: c.p, a: c.a, b: c.b, n: c.n, gx: c.gx, gy: c.gy };
+	return { name: c.name, webName: c.webName, oid: [...c.oid], size: c.size, math: c.math };
 }
 
 function curveWithOid(curves: Readonly<Curve[]>, buf: Readonly<uint8[]>, item: DerItem): Curve | null {
@@ -177,147 +173,58 @@ export function ecdsaRawToDer(raw: Readonly<uint8[]>): uint8[] {
 	return derSequence([derUnsignedInteger(r), derUnsignedInteger(s)]);
 }
 
-
-interface Jacobian {
-	x: bigint;
-	y: bigint;
-	z: bigint;
-}
-
 function repeated(count: int32, value: uint8): uint8[] {
 	const out: uint8[] = [];
 	for (let i = 0; i < count; i++) out.push(value);
 	return out;
 }
 
-function fmod(value: bigint, p: bigint): bigint {
-	const r = value % p;
-	return r < 0n ? r + p : r;
+/** A secret scalar in [1, n) as limbs, or null; `d` must be exactly `size` bytes. */
+function secretScalar(c: Readonly<Curve>, d: Readonly<uint8[]>): Limbs | null {
+	if (d.length != c.size) return null;
+	const k = fromBytes(c.math.order, d, 0);
+	if (k == null || nonzero(c.math.order, k) == 0) return null;
+	return k;
 }
 
-function infinity(): Jacobian {
-	return { x: 1n, y: 1n, z: 0n };
-}
-
-function jacobianOf(x: bigint, y: bigint): Jacobian {
-	return { x, y, z: 1n };
-}
-
-function double(c: Readonly<Curve>, a: Jacobian): Jacobian {
-	const p = c.p;
-	if (a.z == 0n || a.y == 0n) return infinity();
-	const xx = (a.x * a.x) % p;
-	const yy = (a.y * a.y) % p;
-	const yyyy = (yy * yy) % p;
-	const zz = (a.z * a.z) % p;
-	const s = (4n * a.x * yy) % p;
-	const m = (3n * xx + c.a * ((zz * zz) % p)) % p;
-	const x = fmod(m * m - 2n * s, p);
-	const y = fmod(m * (s - x) - 8n * yyyy, p);
-	const z = (2n * a.y * a.z) % p;
-	return { x, y, z };
-}
-
-function add(c: Readonly<Curve>, a: Jacobian, b: Jacobian): Jacobian {
-	const p = c.p;
-	if (a.z == 0n) return b;
-	if (b.z == 0n) return a;
-	const z1z1 = (a.z * a.z) % p;
-	const z2z2 = (b.z * b.z) % p;
-	const u1 = (a.x * z2z2) % p;
-	const u2 = (b.x * z1z1) % p;
-	const s1 = (a.y * b.z * z2z2) % p;
-	const s2 = (b.y * a.z * z1z1) % p;
-	const h = fmod(u2 - u1, p);
-	const r = fmod(s2 - s1, p);
-	if (h == 0n) return r == 0n ? double(c, a) : infinity();
-	const hh = (h * h) % p;
-	const hhh = (h * hh) % p;
-	const v = (u1 * hh) % p;
-	const x = fmod(r * r - hhh - 2n * v, p);
-	const y = fmod(r * (v - x) - s1 * hhh, p);
-	const z = (((h * a.z) % p) * b.z) % p;
-	return { x, y, z };
-}
-
-function windowOf(c: Readonly<Curve>, a: Jacobian): Jacobian[] {
-	const table: Jacobian[] = [infinity(), a];
-	for (let i = 2; i < 16; i++) table.push(i % 2 == 0 ? double(c, table[i / 2]) : add(c, table[i - 1], a));
-	return table;
-}
-
-function multiplyWith(c: Readonly<Curve>, table: Jacobian[], scalar: bigint): Jacobian {
-	let result = infinity();
-	let at: int32 = ((bitLength(scalar) + 3) >> 2) << 2;
-	while (at > 0) {
-		at -= 4;
-		for (let i = 0; i < 4; i++) result = double(c, result);
-		const nibble = Number((scalar >> BigInt(at)) & 15n);
-		if (nibble != 0) result = add(c, result, table[nibble]);
+/** bits2int of RFC 6979 for an order of exactly `8 * size` bits: the leftmost `size` bytes, left-padded. */
+function leftmost(size: int32, bytes: Readonly<uint8[]>): uint8[] {
+	const out = new Array<uint8>(size);
+	if (bytes.length >= size) {
+		for (let i = 0; i < size; i++) out[i] = bytes[i];
+	} else {
+		for (let i = 0; i < bytes.length; i++) out[size - bytes.length + i] = bytes[i];
 	}
-	return result;
+	return out;
 }
 
-function generatorWindow(c: Readonly<Curve>): Jacobian[] {
-	return windowOf(c, jacobianOf(c.gx, c.gy));
-}
-
-interface Affine {
-	x: bigint;
-	y: bigint;
-}
-
-function affineOf(c: Readonly<Curve>, a: Jacobian): Affine | null {
-	if (a.z == 0n) return null;
-	const zi = modInverse(a.z, c.p);
-	const zi2 = (zi * zi) % c.p;
-	return { x: (a.x * zi2) % c.p, y: (a.y * zi2 * zi) % c.p };
-}
-
-function decodePoint(c: Readonly<Curve>, point: Readonly<uint8[]>): Affine | null {
-	if (point.length != 1 + 2 * c.size || point[0] != 4) return null;
-	const x = bigFromBytes(point.slice(1, 1 + c.size));
-	const y = bigFromBytes(point.slice(1 + c.size));
-	if (x >= c.p || y >= c.p) return null;
-	if ((y * y) % c.p != fmod(x * x * x + c.a * x + c.b, c.p)) return null;
-	return { x, y };
-}
-
-function encodePoint(c: Readonly<Curve>, a: Affine): uint8[] {
-	return derJoin([[4], bigToBytes(a.x, c.size), bigToBytes(a.y, c.size)]);
+function digestScalar(c: Readonly<Curve>, digest: Readonly<uint8[]>): Limbs {
+	return reduceBytes(c.math.order, leftmost(c.size, digest), 0);
 }
 
 export function ecPointValid(c: Readonly<Curve>, point: Readonly<uint8[]>): boolean {
-	return decodePoint(c, point) != null;
+	return decodePoint(c.math, point) != null;
 }
 
 export function ecPublicPoint(c: Readonly<Curve>, d: Readonly<uint8[]>): uint8[] | null {
-	const scalar = bigFromBytes(d);
-	if (scalar < 1n || scalar >= c.n) return null;
-	const point = affineOf(c, multiplyWith(c, generatorWindow(c), scalar));
-	if (point == null) return null;
-	return encodePoint(c, point);
+	if (secretScalar(c, d) == null) return null;
+	const point = mulSecret(c.math, basePoint(c.math), d);
+	return point == null ? null : encodePoint(c.math, point);
 }
 
 export function ecdhShared(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<uint8[]>): uint8[] | null {
-	const scalar = bigFromBytes(d);
-	const peer = decodePoint(c, point);
-	if (peer == null || scalar < 1n || scalar >= c.n) return null;
-	const shared = affineOf(c, multiplyWith(c, windowOf(c, jacobianOf(peer.x, peer.y)), scalar));
+	const peer = decodePoint(c.math, point);
+	if (peer == null || secretScalar(c, d) == null) return null;
+	const shared = mulSecret(c.math, peer, d);
 	if (shared == null) return null;
-	return bigToBytes(shared.x, c.size);
+	const xy = affineBytes(c.math, shared);
+	return xy == null ? null : xy[0];
 }
 
-function digestInt(c: Readonly<Curve>, digest: Readonly<uint8[]>): bigint {
-	const value = bigFromBytes(digest);
-	const extra = digest.length * 8 - bitLength(c.n);
-	return extra > 0 ? value >> BigInt(extra) : value;
-}
-
-function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): bigint {
+function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): Limbs {
+	const order = c.math.order;
 	const size = hashOf(kind, []).length as int32;
-	const reduced = bigToBytes(digestInt(c, digest) % c.n, c.size);
-	const seed = derJoin([d, reduced]);
+	const seed = derJoin([d, toBytes(order, digestScalar(c, digest))]);
 	let v = repeated(size, 1);
 	let k = repeated(size, 0);
 	k = hmacOf(kind, k, derJoin([v, [0], seed]));
@@ -330,40 +237,86 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 			v = hmacOf(kind, k, v);
 			stream = derJoin([stream, v]);
 		}
-		const candidate = digestInt(c, stream);
-		if (candidate >= 1n && candidate < c.n) return candidate;
+		const candidate = fromBytes(order, leftmost(c.size, stream), 0);
+		if (candidate != null && nonzero(order, candidate) != 0) return candidate;
 		k = hmacOf(kind, k, derJoin([v, [0]]));
 		v = hmacOf(kind, k, v);
 	}
 }
 
 export function ecdsaSignRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): uint8[] | null {
-	const scalar = bigFromBytes(d);
-	if (scalar < 1n || scalar >= c.n) return null;
-	const e = digestInt(c, digest);
+	const order = c.math.order;
+	const scalar = secretScalar(c, d);
+	if (scalar == null) return null;
 	const k = nonceFor(c, kind, d, digest);
-	const point = affineOf(c, multiplyWith(c, generatorWindow(c), k));
-	if (point == null) return null;
-	const r = point.x % c.n;
-	const s = (modInverse(k, c.n) * ((e + r * scalar) % c.n)) % c.n;
-	if (r == 0n || s == 0n) return null;
-	return derJoin([bigToBytes(r, c.size), bigToBytes(s, c.size)]);
+	const point = mulSecret(c.math, basePoint(c.math), toBytes(order, k));
+	const xy = point == null ? null : affineBytes(c.math, point);
+	if (xy == null) return null;
+	const r = reduceBytes(order, xy[0], 0);
+	const rd = mul(order, toMontgomery(order, r), toMontgomery(order, scalar));
+	const sum = add(order, toMontgomery(order, digestScalar(c, digest)), rd);
+	const s = fromMontgomery(order, mul(order, invert(order, toMontgomery(order, k)), sum));
+	if (nonzero(order, r) == 0 || nonzero(order, s) == 0) return null;
+	return derJoin([toBytes(order, r), toBytes(order, s)]);
 }
 
 export function ecdsaVerifyRaw(c: Readonly<Curve>, point: Readonly<uint8[]>, digest: Readonly<uint8[]>, raw: Readonly<uint8[]>): boolean {
-	const q = decodePoint(c, point);
+	const order = c.math.order;
+	const q = decodePoint(c.math, point);
 	if (q == null || raw.length != 2 * c.size) return false;
-	const r = bigFromBytes(raw.slice(0, c.size));
-	const s = bigFromBytes(raw.slice(c.size));
-	if (r < 1n || r >= c.n || s < 1n || s >= c.n) return false;
-	const w = modInverse(s, c.n);
-	const u1 = (digestInt(c, digest) * w) % c.n;
-	const u2 = (r * w) % c.n;
-	const sum = add(c, multiplyWith(c, generatorWindow(c), u1), multiplyWith(c, windowOf(c, jacobianOf(q.x, q.y)), u2));
-	const found = affineOf(c, sum);
-	return found != null && found.x % c.n == r;
+	const r = fromBytes(order, raw, 0);
+	const s = fromBytes(order, raw, c.size);
+	if (r == null || s == null || nonzero(order, r) == 0 || nonzero(order, s) == 0) return false;
+	const e = digestScalar(c, digest);
+	if (nonzero(order, e) == 0) return false;
+	const w = invert(order, toMontgomery(order, s));
+	const u1 = fromMontgomery(order, mul(order, toMontgomery(order, e), w));
+	const u2 = fromMontgomery(order, mul(order, toMontgomery(order, r), w));
+	const sum = mulDoublePublic(c.math, basePoint(c.math), toBytes(order, u1), q, toBytes(order, u2));
+	const xy = sum == null ? null : affineBytes(c.math, sum);
+	return xy != null && equal(order, reduceBytes(order, xy[0], 0), r);
+}
+
+when (c) {
+	@include("runtime/crypto/randomFill.h");
+	extern function osRandomFill(
+		buffer: Ptr<uint8>,
+		length: uint64,
+	): int32 from "ms_random_fill";
+}
+
+when (js) {
+	@emit(`function msEcRandom(size) {
+	const out = new Uint8Array(size);
+	globalThis.crypto.getRandomValues(out);
+	return Array.from(out);
+}`);
+
+	extern function jsRandom(size: int32): uint8[] from "msEcRandom(#)";
+}
+
+function drawBytes(size: int32): uint8[] | null {
+	when (js) {
+		return jsRandom(size);
+	} else {
+		const out = new Array<uint8>(size);
+		const span: Span<uint8> = out;
+		if (osRandomFill(span as Ptr<uint8>, size as uint64) != 0) return null;
+		return out;
+	}
+}
+
+/** A uniform scalar in [1, n), drawn by rejection; null when the random source failed. */
+export function ecDrawScalar(c: Readonly<Curve>): uint8[] | null {
+	while (true) {
+		const bytes = drawBytes(c.size);
+		if (bytes == null) return null;
+		if (secretScalar(c, bytes) != null) return bytes;
+	}
 }
 
 export function ecRandomScalar(c: Readonly<Curve>): uint8[] {
-	return bigToBytes(randomBelow(c.n), c.size);
+	const d = ecDrawScalar(c);
+	if (d == null) throw new Error("ecRandomScalar: the random source failed");
+	return d;
 }

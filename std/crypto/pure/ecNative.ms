@@ -1,8 +1,7 @@
 /**
  * ECDSA and ECDH on P-256 and P-384 in MetaScript: the surface of `std/crypto/ec` over the
- * portable `bigint` curve code, for the native backend. Private until the public index switches
- * to it. Signatures are DER; the nonce is RFC 6979 deterministic. Not constant-time: the scalar
- * multiplication and the `bigint` field arithmetic branch on secret bits.
+ * fixed-width curve code of ./pcurve, for the native backend. Private until the public index
+ * switches to it. Signatures are DER; the nonce is RFC 6979 deterministic.
  */
 
 import { Buffer } from "std/core/buffer";
@@ -12,47 +11,15 @@ import { PemBlock, pemEncode } from "./pem";
 import {
 	Curve, ownCurve, EcPublicData, EcPrivateData, ecPublicFromSpki, ecPublicToSpki,
 	ecPrivateFromSec1, ecPrivateFromPkcs8, ecPrivateToSec1, ecdsaDerToRaw, ecdsaRawToDer,
-	ecdsaSignRaw, ecdsaVerifyRaw, ecdhShared, ecPointValid, ecPublicPoint,
+	ecdsaSignRaw, ecdsaVerifyRaw, ecdhShared, ecPointValid, ecPublicPoint, ecDrawScalar,
 } from "./weierstrass";
-import { bigFromBytes, bitLength, randomOctets } from "./bigint";
 import { hashKind, hashOf } from "./hash";
 import { kindSha256, kindSha384, kindSha512 } from "./state";
 import { p256 } from "./p256";
 import { p384 } from "./p384";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 
-when (c) {
-	@include("runtime/crypto/randomFill.h");
-	extern function osRandomFill(
-		buffer: Ptr<uint8>,
-		length: uint64,
-	): int32 from "ms_random_fill";
-}
-
 export type EcCurve = "p256" | "p384";
-
-function drawBytes(size: int32): uint8[] | null {
-	when (js) {
-		return randomOctets(size);
-	} else {
-		const out = new Array<uint8>(size);
-		const span: Span<uint8> = out;
-		if (osRandomFill(span as Ptr<uint8>, size as uint64) != 0) return null;
-		return out;
-	}
-}
-
-/** A uniform scalar in [1, n), drawn by rejection; null when the OS source failed. */
-function randomScalar(curve: Readonly<Curve>): uint8[] | null {
-	const excess = curve.size * 8 - bitLength(curve.n);
-	while (true) {
-		const bytes = drawBytes(curve.size);
-		if (bytes == null) return null;
-		bytes[0] = ((bytes[0] as int32) & (255 >> excess)) as uint8;
-		const candidate = bigFromBytes(bytes);
-		if (candidate >= 1n && candidate < curve.n) return bytes;
-	}
-}
 
 function curves(): Curve[] {
 	return [ownCurve(p256), ownCurve(p384)];
@@ -161,7 +128,7 @@ export class EcPrivateKey {
 
 	static generateSync(curve: EcCurve): Result<EcPrivateKey, CryptoError> {
 		const chosen = curveNamed(curve);
-		const d = randomScalar(chosen);
+		const d = ecDrawScalar(chosen);
 		const point = d == null ? null : ecPublicPoint(chosen, d);
 		if (d == null || point == null) {
 			return Result.err(cryptoError(
