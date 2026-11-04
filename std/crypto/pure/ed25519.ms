@@ -585,7 +585,9 @@ test "every base table entry is [j * 256^i]B in niels form" {
 }
 
 test "every odd base table entry is [2k + 1]B in niels form" {
-	const base = fromBytes("5866666666666666666666666666666666666666666666666666666666666666".decodeHex(), 0) as Point;
+	const encoded =
+		"5866666666666666666666666666666666666666666666666666666666666666".decodeHex();
+	const base = fromBytes(encoded, 0) as Point;
 	const twice = dbl(base);
 	let p = base;
 	for (let k = 0; k < 1 << (baseWindowWidth - 2); k++) {
@@ -656,6 +658,8 @@ test "the double multiplication refuses a small-order point" {
 	const identityY = new Array<uint8>(32);
 	identityY[0] = 1;
 	const one = identityY.slice(0);
-	assert mulDoubleBasePublic(one, fromBytes(identityY, 0) as Point, one) == null;
-	assert mulDoubleBasePublic(one, fromBytes(zeroY, 0) as Point, one) == null;
+	const identityPoint = fromBytes(identityY, 0) as Point;
+	const orderFour = fromBytes(zeroY, 0) as Point;
+	assert mulDoubleBasePublic(one, identityPoint, one) == null;
+	assert mulDoubleBasePublic(one, orderFour, one) == null;
 }
