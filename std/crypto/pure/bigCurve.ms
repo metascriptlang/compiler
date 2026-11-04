@@ -50,12 +50,6 @@ interface Jacobian {
 	z: bigint;
 }
 
-function repeated(count: int32, value: uint8): uint8[] {
-	const out: uint8[] = [];
-	for (let i = 0; i < count; i++) out.push(value);
-	return out;
-}
-
 function fmod(value: bigint, p: bigint): bigint {
 	const r = value % p;
 	return r < 0n ? r + p : r;
@@ -187,8 +181,9 @@ function nonceFor(c: BigCurve, kind: int32, d: Readonly<uint8[]>, digest: Readon
 	const size = hashOf(kind, []).length as int32;
 	const reduced = bigToBytes(digestInt(c, digest) % c.n, c.size);
 	const seed = derJoin([d, reduced]);
-	let v = repeated(size, 1);
-	let k = repeated(size, 0);
+	let v = new Array<uint8>(size);
+	v.fill(1);
+	let k = new Array<uint8>(size);
 	k = hmacOf(kind, k, derJoin([v, [0], seed]));
 	v = hmacOf(kind, k, v);
 	k = hmacOf(kind, k, derJoin([v, [1], seed]));

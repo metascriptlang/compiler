@@ -181,12 +181,6 @@ export function ecdsaRawToDer(raw: Readonly<uint8[]>): uint8[] {
 	return derSequence([derUnsignedInteger(r), derUnsignedInteger(s)]);
 }
 
-function repeated(count: int32, value: uint8): uint8[] {
-	const out: uint8[] = [];
-	for (let i = 0; i < count; i++) out.push(value);
-	return out;
-}
-
 /** A secret scalar in [1, n) as limbs, or null; `d` must be exactly `size` bytes. */
 function secretScalar(c: Readonly<Curve>, d: Readonly<uint8[]>): Limbs | null {
 	if (d.length != c.size) return null;
@@ -229,22 +223,18 @@ function sharedSecret(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<
 	return xy == null ? null : xy[0];
 }
 
-/** Zeroes a secret's bytes once they are no longer read. */
-function wipe(bytes: uint8[]): void {
-	for (let i = 0; i < bytes.length; i++) bytes[i] = 0;
-}
-
 /** The RFC 6979 nonce as `size` bytes, in [1, n). */
 function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: Readonly<uint8[]>): uint8[] {
 	const size = hashOf(kind, []).length as int32;
 	const seed = derJoin([d, toBytes(c.math.order, digestScalar(c, digest))]);
-	let v = repeated(size, 1);
-	let k = repeated(size, 0);
+	let v = new Array<uint8>(size);
+	v.fill(1);
+	let k = new Array<uint8>(size);
 	k = hmacOf(kind, k, derJoin([v, [0], seed]));
 	v = hmacOf(kind, k, v);
 	k = hmacOf(kind, k, derJoin([v, [1], seed]));
 	v = hmacOf(kind, k, v);
-	wipe(seed);
+	seed.fill(0);
 	while (true) {
 		const stream: uint8[] = [];
 		while (stream.length < c.size) {
@@ -252,13 +242,13 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 			for (const b of v) stream.push(b);
 		}
 		const candidate = leftmost(c.size, stream);
-		wipe(stream);
+		stream.fill(0);
 		if (secretScalar(c, candidate) != null) {
-			wipe(k);
-			wipe(v);
+			k.fill(0);
+			v.fill(0);
 			return candidate;
 		}
-		wipe(candidate);
+		candidate.fill(0);
 		k = hmacOf(kind, k, derJoin([v, [0]]));
 		v = hmacOf(kind, k, v);
 	}
@@ -271,7 +261,7 @@ function signRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: 
 	const nonce = nonceFor(c, kind, d, digest);
 	const k = fromBytes(order, nonce, 0) as Limbs;
 	const point = mulBase(c.math, nonce);
-	wipe(nonce);
+	nonce.fill(0);
 	const xy = point == null ? null : affineBytes(c.math, point);
 	if (xy == null) return null;
 	const r = reduceBytes(order, xy[0], 0);

@@ -417,10 +417,7 @@ export function decodePoint(cm: Readonly<CurveMath>, s: Readonly<uint8[]>): Poin
 export function encodePoint(cm: Readonly<CurveMath>, p: Point): uint8[] | null {
 	const xy = affineBytes(cm, p);
 	if (xy == null) return null;
-	const out: uint8[] = [4];
-	for (const b of xy[0]) out.push(b);
-	for (const b of xy[1]) out.push(b);
-	return out;
+	return [4, ...xy[0], ...xy[1]];
 }
 
 /** A square root of `a` (Montgomery form), or null when `a` is not a square. */
