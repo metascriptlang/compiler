@@ -43,6 +43,13 @@ export enum X509Error {
 	MissingEndCertificateMarker,
 	InvalidPem,
 	EmptyChain,
+	/** A critical extension this parser does not enforce, such as nameConstraints (RFC 5280 4.2). */
+	UnsupportedCriticalExtension,
+	DuplicateExtension,
+	/** A CA's basicConstraints pathLenConstraint allows fewer intermediates below it than the chain has. */
+	PathLengthExceeded,
+	/** The leaf's keyUsage lacks digitalSignature or its extendedKeyUsage lacks serverAuth. */
+	KeyUsageMismatch,
 }
 
 export enum SignatureAlgorithm {
@@ -107,6 +114,8 @@ export interface X509Certificate {
 	pathLength: int32;
 	/** Bit `i` set means KeyUsage bit `i` is asserted; -1 when the extension is absent. */
 	keyUsage: int32;
+	/** The extendedKeyUsage purposes as OID content hex; empty when the extension is absent. */
+	extendedKeyUsage: string[];
 }
 
 function element(bytes: Readonly<uint8[]>, index: int32, limit: int32): Result<DerElement, X509Error> {
@@ -120,15 +129,9 @@ function expectTag(item: DerElement, tag: int32): Result<DerElement, X509Error> 
 	return Result.ok(item);
 }
 
-function copyOf(bytes: Readonly<uint8[]>, from: int32, to: int32): uint8[] {
-	const out: uint8[] = [];
-	for (let i = from; i < to; i++) out.push(bytes[i]);
-	return out;
-}
-
 function oidHex(bytes: Readonly<uint8[]>, item: DerElement): Result<string, X509Error> {
 	if (item.tagNumber() != derTagObjectIdentifier) return Result.err(X509Error.FieldHasWrongDataType);
-	return Result.ok(encodeHex(copyOf(bytes, item.start, item.end)));
+	return Result.ok(encodeHex(bytes.slice(item.start, item.end)));
 }
 
 function signatureAlgorithmOf(oid: string): Result<SignatureAlgorithm, X509Error> {
@@ -166,6 +169,11 @@ const oidCommonName = "550403";
 const oidSubjectAltName = "551d11";
 const oidBasicConstraints = "551d13";
 const oidKeyUsage = "551d0f";
+const oidExtendedKeyUsage = "551d25";
+const oidSubjectKeyIdentifier = "551d0e";
+const oidAuthorityKeyIdentifier = "551d23";
+const oidServerAuth = "2b06010505070301";
+const oidAnyExtendedKeyUsage = "551d2500";
 
 function parseVersion(bytes: Readonly<uint8[]>, item: DerElement): Result<int32, X509Error> {
 	if (item.identifier != 0xa0) return Result.ok(1);
@@ -179,7 +187,7 @@ function parseVersion(bytes: Readonly<uint8[]>, item: DerElement): Result<int32,
 function parseBitString(bytes: Readonly<uint8[]>, item: DerElement): Result<uint8[], X509Error> {
 	if (item.tagNumber() != derTagBitString) return Result.err(X509Error.FieldHasWrongDataType);
 	if (item.contentSize() < 1 || bytes[item.start] != 0) return Result.err(X509Error.InvalidBitString);
-	return Result.ok(copyOf(bytes, item.start + 1, item.end));
+	return Result.ok(bytes.slice(item.start + 1, item.end));
 }
 
 export function parseTimeDigits(
@@ -266,7 +274,7 @@ function commonNameOf(bytes: Readonly<uint8[]>, name: DerElement): Result<string
 				const value = try element(bytes, type.end, atav.end);
 				atavAt = value.end;
 				const oid = try oidHex(bytes, type);
-				if (oid == oidCommonName) commonName = copyOf(bytes, value.start, value.end).asString();
+				if (oid == oidCommonName) commonName = bytes.slice(value.start, value.end).asString();
 			}
 			rdnAt = atav.end;
 		}
@@ -282,6 +290,7 @@ struct Extensions {
 	isCa: boolean;
 	pathLength: int32;
 	keyUsage: int32;
+	extendedKeyUsage: string[];
 }
 
 function readSubjectAltName(bytes: Readonly<uint8[]>, value: DerElement, ref found: Extensions): Result<void, X509Error> {
@@ -291,8 +300,8 @@ function readSubjectAltName(bytes: Readonly<uint8[]>, value: DerElement, ref fou
 		const name = try element(bytes, at, names.end);
 		at = name.end;
 		const kind = name.tagNumber();
-		if (kind == 2) found.dnsNames.push(copyOf(bytes, name.start, name.end).asString());
-		else if (kind == 7) found.ipAddresses.push(copyOf(bytes, name.start, name.end));
+		if (kind == 2) found.dnsNames.push(bytes.slice(name.start, name.end).asString());
+		else if (kind == 7) found.ipAddresses.push(bytes.slice(name.start, name.end));
 	}
 	return Result.ok(null);
 }
@@ -336,22 +345,50 @@ function readKeyUsage(bytes: Readonly<uint8[]>, value: DerElement, ref found: Ex
 	return Result.ok(null);
 }
 
+function readExtendedKeyUsage(bytes: Readonly<uint8[]>, value: DerElement, ref found: Extensions): Result<void, X509Error> {
+	const purposes = try expectTag(try element(bytes, value.start, value.end), derTagSequence);
+	let at = purposes.start;
+	while (at < purposes.end) {
+		const purpose = try element(bytes, at, purposes.end);
+		found.extendedKeyUsage.push(try oidHex(bytes, purpose));
+		at = purpose.end;
+	}
+	if (found.extendedKeyUsage.length == 0) return Result.err(X509Error.FieldHasInvalidLength);
+	return Result.ok(null);
+}
+
+/** The extensions this parser reads or may skip even when critical, as their identifiers carry no constraint to enforce. */
+const understoodExtensions: Readonly<string[]> = [
+	oidSubjectAltName, oidBasicConstraints, oidKeyUsage, oidExtendedKeyUsage, oidSubjectKeyIdentifier, oidAuthorityKeyIdentifier,
+];
+
+/** RFC 5280 4.2: each extension at most once, and an unknown one marked critical refuses the certificate. */
 function readExtensions(bytes: Readonly<uint8[]>, wrapper: DerElement, ref found: Extensions): Result<void, X509Error> {
 	const extensions = try expectTag(try element(bytes, wrapper.start, wrapper.end), derTagSequence);
+	const seen: string[] = [];
 	let at = extensions.start;
 	while (at < extensions.end) {
 		const extension = try element(bytes, at, extensions.end);
 		at = extension.end;
 		const oidElement = try element(bytes, extension.start, extension.end);
 		const oid = try oidHex(bytes, oidElement);
-		const critical = try element(bytes, oidElement.end, extension.end);
-		const value = critical.tagNumber() == derTagBoolean
-			? try element(bytes, critical.end, extension.end)
-			: critical;
+		if (seen.includes(oid)) return Result.err(X509Error.DuplicateExtension);
+		seen.push(oid);
+		const next = try element(bytes, oidElement.end, extension.end);
+		let critical = false;
+		let value = next;
+		if (next.tagNumber() == derTagBoolean) {
+			if (next.contentSize() != 1) return Result.err(X509Error.FieldHasInvalidLength);
+			critical = bytes[next.start] != 0;
+			value = try element(bytes, next.end, extension.end);
+		}
 		if (value.tagNumber() != derTagOctetString) return Result.err(X509Error.FieldHasWrongDataType);
+		if (value.end != extension.end) return Result.err(X509Error.FieldHasInvalidLength);
+		if (critical && !understoodExtensions.includes(oid)) return Result.err(X509Error.UnsupportedCriticalExtension);
 		if (oid == oidSubjectAltName) try readSubjectAltName(bytes, value, found);
 		else if (oid == oidBasicConstraints) try readBasicConstraints(bytes, value, found);
 		else if (oid == oidKeyUsage) try readKeyUsage(bytes, value, found);
+		else if (oid == oidExtendedKeyUsage) try readExtendedKeyUsage(bytes, value, found);
 	}
 	return Result.ok(null);
 }
@@ -399,6 +436,7 @@ export function parseCertificate(der: Readonly<uint8[]>): Result<X509Certificate
 	const signatureAlgorithm = try signatureAlgorithmOf(try oidHex(der, signatureOid));
 	const signatureElement = try element(der, signatureAlgorithmElement.end, certificate.end);
 	const signature = try parseBitString(der, signatureElement);
+	if (signatureElement.end != certificate.end) return Result.err(X509Error.FieldHasInvalidLength);
 
 	let extensions: Extensions = {
 		dnsNames: [],
@@ -407,6 +445,7 @@ export function parseCertificate(der: Readonly<uint8[]>): Result<X509Certificate
 		isCa: false,
 		pathLength: -1,
 		keyUsage: -1,
+		extendedKeyUsage: [],
 	};
 	if (version == 3) {
 		let at = publicKeyInfo.end;
@@ -418,19 +457,19 @@ export function parseCertificate(der: Readonly<uint8[]>): Result<X509Certificate
 	}
 
 	return Result.ok({
-		der: copyOf(der, 0, limit),
+		der: der.slice(0, limit),
 		version,
-		serialNumber: copyOf(der, serial.start, serial.end),
+		serialNumber: der.slice(serial.start, serial.end),
 		signatureAlgorithm,
-		issuer: copyOf(der, issuer.start, issuer.end),
-		subject: copyOf(der, subject.start, subject.end),
+		issuer: der.slice(issuer.start, issuer.end),
+		subject: der.slice(subject.start, subject.end),
 		commonName,
 		notBefore,
 		notAfter,
 		publicKeyAlgorithm,
 		namedCurve,
 		publicKey,
-		message: copyOf(der, certificate.start, tbs.end),
+		message: der.slice(certificate.start, tbs.end),
 		signature,
 		dnsNames: extensions.dnsNames,
 		ipAddresses: extensions.ipAddresses,
@@ -438,6 +477,7 @@ export function parseCertificate(der: Readonly<uint8[]>): Result<X509Certificate
 		isCa: extensions.isCa,
 		pathLength: extensions.pathLength,
 		keyUsage: extensions.keyUsage,
+		extendedKeyUsage: extensions.extendedKeyUsage,
 	});
 }
 
@@ -489,14 +529,10 @@ function verifyRsa(
 	if (modulusLength != 128 && modulusLength != 256 && modulusLength != 384 && modulusLength != 512) {
 		return Result.err(X509Error.SignatureUnsupportedBitCount);
 	}
-	const modulus = copyOf(key, modulusStart, modulusElement.end);
-	const n = bigFromBytes(modulus);
+	const n = bigFromBytes(key.slice(modulusStart, modulusElement.end));
 	if (bitLength(n) < 512) return Result.err(X509Error.SignatureInvalid);
 	if (exponentLength > 4) return Result.err(X509Error.SignatureInvalid);
-	let exponentStart = exponentElement.start;
-	while (exponentStart + 1 < exponentElement.end && key[exponentStart] == 0) exponentStart += 1;
-	const exponent = copyOf(key, exponentStart, exponentElement.end);
-	const e = bigFromBytes(exponent);
+	const e = bigFromBytes(key.slice(exponentElement.start, exponentElement.end));
 	if (e % 2n == 0n || e < 2n || e >= n) return Result.err(X509Error.SignatureInvalid);
 	const publicKey: RsaPublicData = { n: modulus, e: exponent };
 	if (!rsaVerifyPkcs1(publicKey, hashName, message, signature)) return Result.err(X509Error.SignatureInvalid);
@@ -801,9 +837,26 @@ export class X509Bundle {
 	}
 }
 
+/** A TLS server's leaf: keyUsage, when present, allows digitalSignature, and extendedKeyUsage, when present, allows serverAuth. */
+function verifyServerUsage(leaf: Readonly<X509Certificate>): Result<void, X509Error> {
+	if (leaf.keyUsage >= 0 && (leaf.keyUsage & (1 << keyUsageDigitalSignature)) == 0) return Result.err(X509Error.KeyUsageMismatch);
+	const purposes = leaf.extendedKeyUsage;
+	if (purposes.length > 0 && !purposes.includes(oidServerAuth) && !purposes.includes(oidAnyExtendedKeyUsage)) {
+		return Result.err(X509Error.KeyUsageMismatch);
+	}
+	return Result.ok(null);
+}
+
+/** RFC 5280 4.2.1.9: `below` intermediates sit between `ca` and the leaf. */
+function verifyPathLength(ca: Readonly<X509Certificate>, below: int32): Result<void, X509Error> {
+	if (ca.pathLength >= 0 && below > ca.pathLength) return Result.err(X509Error.PathLengthExceeded);
+	return Result.ok(null);
+}
+
 /**
- * Verify a chain as a TLS server sends it, leaf first: the leaf matches `hostName` (skipped when null),
- * each certificate is issued by the next, and the walk stops at the first certificate a root in `roots` issued.
+ * Verify a chain as a TLS server sends it, leaf first: the leaf matches `hostName` (skipped when null) and may
+ * sign for a server, each certificate is issued by the next within its issuer's path length, and the walk stops
+ * at the first certificate a root in `roots` issued.
  */
 export function verifyChain(
 	chain: Readonly<X509Certificate[]>,
@@ -813,11 +866,15 @@ export function verifyChain(
 ): Result<void, X509Error> {
 	if (chain.length == 0) return Result.err(X509Error.EmptyChain);
 	if (hostName != null) try verifyHostName(chain[0], hostName as string);
+	try verifyServerUsage(chain[0]);
 	for (let i = 0; i < chain.length; i++) {
 		const subject = chain[i];
-		if (i > 0) try verifyIssuedBy(chain[i - 1], subject, nowSeconds);
+		if (i > 0) {
+			try verifyIssuedBy(chain[i - 1], subject, nowSeconds);
+			try verifyPathLength(subject, i - 1);
+		}
 		const trusted = roots.verify(subject, nowSeconds);
-		if (trusted.ok) return Result.ok(null);
+		if (trusted.ok) return verifyPathLength(roots.find(subject.issuer) as X509Certificate, i);
 		if (trusted.error != X509Error.IssuerNotFound) return Result.err(trusted.error);
 	}
 	return Result.err(X509Error.IssuerNotFound);

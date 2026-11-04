@@ -12,7 +12,8 @@ import {
 import { DerElement } from "./der";
 import {
 	rootRsaPem, otherRootPem, rootEdPem, interP384Pem, leafRsaPem, leafP256Pem, leafP384Pem, leafEdPem,
-	byLeafPem,
+	byLeafPem, constraintsRootPem, pathZeroPem, subCaPem, deepLeafPem, shallowLeafPem, clientLeafPem, agreeLeafPem,
+	criticalLeafPem, namedCaPem, namedLeafPem,
 } from "./x509Fixtures";
 import { encodeHex } from "../../core/encoding";
 
@@ -265,4 +266,123 @@ test "PEM text splits into one DER block per certificate" {
 	assert !unterminated.ok && unterminated.error == X509Error.MissingEndCertificateMarker;
 	const bad = pemCertificates("-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n");
 	assert !bad.ok && bad.error == X509Error.InvalidPem;
+}
+
+/** A DER element: `tag`, the shortest length form, then `content`. */
+function tlv(tag: int32, content: Readonly<uint8[]>): uint8[] {
+	const out: uint8[] = [tag as uint8];
+	const size = content.length as int32;
+	if (size >= 256) {
+		out.push(0x82);
+		out.push((size >> 8) as uint8);
+	} else if (size >= 128) {
+		out.push(0x81);
+	}
+	out.push((size & 255) as uint8);
+	for (const octet of content) out.push(octet);
+	return out;
+}
+
+function concat(parts: uint8[][]): uint8[] {
+	const out: uint8[] = [];
+	for (const part of parts) {
+		for (const octet of part) out.push(octet);
+	}
+	return out;
+}
+
+const ed25519Algorithm: uint8[] = tlv(0x30, [0x06, 0x03, 0x2b, 0x65, 0x70]);
+
+/** An Ed25519 v3 certificate shape (not validly signed) carrying `extensions`, each a whole Extension element. */
+function craftedCertificate(extensions: uint8[][]): uint8[] {
+	const name = tlv(0x30, tlv(0x31, tlv(0x30, concat([[0x06, 0x03, 0x55, 0x04, 0x03], tlv(0x0c, [0x78])]))));
+	const validity = tlv(0x30, concat([tlv(0x17, "250101000000Z".asBytes().slice(0)), tlv(0x17, "350101000000Z".asBytes().slice(0))]));
+	const key = tlv(0x30, concat([ed25519Algorithm, tlv(0x03, [0, ...new Array<uint8>(32)])]));
+	const tbs = tlv(0x30, concat([
+		tlv(0xa0, [0x02, 0x01, 0x02]), [0x02, 0x01, 0x01], ed25519Algorithm, name, validity, name, key,
+		tlv(0xa3, tlv(0x30, concat(extensions))),
+	]));
+	return tlv(0x30, concat([tbs, ed25519Algorithm, tlv(0x03, [0, ...new Array<uint8>(64)])]));
+}
+
+function extension(oid: uint8[], critical: boolean, value: uint8[]): uint8[] {
+	return tlv(0x30, concat([tlv(0x06, oid), critical ? [0x01, 0x01, 0xff] : [], tlv(0x04, value)]));
+}
+
+const basicConstraintsOid: uint8[] = [0x55, 0x1d, 0x13];
+const caFalse: uint8[] = tlv(0x30, []);
+
+function parseError(der: Readonly<uint8[]>): string {
+	const parsed = parseCertificate(der);
+	return parsed.ok ? "ok" : parsed.error.toString();
+}
+
+test "crafted DER: extensions are read once each and an unknown critical one refuses the certificate" {
+	assert parseError(craftedCertificate([extension(basicConstraintsOid, true, caFalse)])) == "ok";
+	assert parseError(craftedCertificate([extension([0x2a, 0x03, 0x04], false, [0x05, 0x00])])) == "ok";
+	assert parseError(craftedCertificate([extension([0x2a, 0x03, 0x04], true, [0x05, 0x00])])) == X509Error.UnsupportedCriticalExtension.toString();
+	const nameConstraints = extension([0x55, 0x1d, 0x1e], true, tlv(0x30, tlv(0xa0, tlv(0x30, tlv(0x82, "example.org".asBytes().slice(0))))));
+	assert parseError(craftedCertificate([nameConstraints])) == X509Error.UnsupportedCriticalExtension.toString();
+	const twice = extension(basicConstraintsOid, false, caFalse);
+	assert parseError(craftedCertificate([twice, twice])) == X509Error.DuplicateExtension.toString();
+	const wideBoolean = tlv(0x30, concat([tlv(0x06, basicConstraintsOid), [0x01, 0x02, 0x00, 0xff], tlv(0x04, caFalse)]));
+	assert parseError(craftedCertificate([wideBoolean])) == X509Error.FieldHasInvalidLength.toString();
+	const trailingInExtension = tlv(0x30, concat([tlv(0x06, basicConstraintsOid), tlv(0x04, caFalse), [0x05, 0x00]]));
+	assert parseError(craftedCertificate([trailingInExtension])) == X509Error.FieldHasInvalidLength.toString();
+	const emptyPurposes = extension([0x55, 0x1d, 0x25], false, tlv(0x30, []));
+	assert parseError(craftedCertificate([emptyPurposes])) == X509Error.FieldHasInvalidLength.toString();
+	const pathLengthTooWide = extension(basicConstraintsOid, true, tlv(0x30, concat([[0x01, 0x01, 0xff], tlv(0x02, [1, 0, 0, 0])])));
+	assert parseError(craftedCertificate([pathLengthTooWide])) == X509Error.FieldHasInvalidLength.toString();
+	const negativePathLength = extension(basicConstraintsOid, true, tlv(0x30, concat([[0x01, 0x01, 0xff], tlv(0x02, [0x80])])));
+	assert parseError(craftedCertificate([negativePathLength])) == X509Error.FieldHasInvalidLength.toString();
+}
+
+test "crafted DER: a non-minimal length, data after the signature and an unknown signature OID are refused" {
+	const der = derOf(leafEdPem);
+	assert der[1] == 0x81 || der[1] == 0x82;
+	const headerLength = der[1] == 0x81 ? 3 : 4;
+	const content = der.slice(headerLength);
+	const size = content.length as int32;
+	const widened: uint8[] = [0x30, 0x83, 0x00, (size >> 8) as uint8, (size & 255) as uint8, ...content];
+	assert parseError(widened) == X509Error.FieldHasInvalidLength.toString();
+	assert parseError(tlv(0x30, concat([content, [0x05, 0x00]]))) == X509Error.FieldHasInvalidLength.toString();
+	assert parseError(tlv(0x30, content)) == "ok";
+	const unknownAlgorithm = der.slice(0);
+	let last = -1;
+	for (let i = 0; i + 4 < unknownAlgorithm.length; i++) {
+		if (unknownAlgorithm[i] == 0x06 && unknownAlgorithm[i + 1] == 0x03 && unknownAlgorithm[i + 2] == 0x2b && unknownAlgorithm[i + 3] == 0x65 && unknownAlgorithm[i + 4] == 0x70) last = i;
+	}
+	assert last > 0;
+	unknownAlgorithm[last + 4] = 0x71;
+	assert parseError(unknownAlgorithm) == X509Error.UnrecognizedObjectId.toString();
+}
+
+function constraintsRoots(): X509Bundle {
+	const roots = new X509Bundle();
+	if (!roots.addPem(constraintsRootPem, now).ok) throw new Error("constraints root did not load");
+	return roots;
+}
+
+test "a CA's pathLenConstraint bounds the intermediates below it" {
+	const roots = constraintsRoots();
+	const pathZero = certificateOf(pathZeroPem);
+	assert pathZero.isCa && pathZero.pathLength == 0;
+	assert chainError([certificateOf(shallowLeafPem), pathZero], roots, "shallow.example.com", now) == "ok";
+	const deep = [certificateOf(deepLeafPem), certificateOf(subCaPem), pathZero];
+	assert chainError(deep, roots, "deep.example.com", now) == X509Error.PathLengthExceeded.toString();
+}
+
+test "a leaf whose key usage does not allow a TLS server is refused" {
+	const roots = constraintsRoots();
+	const client = certificateOf(clientLeafPem);
+	assert client.extendedKeyUsage.length == 1 && client.extendedKeyUsage[0] == "2b06010505070302";
+	assert chainError([client], roots, "client.example.com", now) == X509Error.KeyUsageMismatch.toString();
+	assert chainError([certificateOf(agreeLeafPem)], roots, "agree.example.com", now) == X509Error.KeyUsageMismatch.toString();
+	assert certificateOf(shallowLeafPem).extendedKeyUsage[0] == "2b06010505070301";
+}
+
+test "an unknown critical extension and critical nameConstraints refuse the certificate" {
+	assert parseError(derOf(criticalLeafPem)) == X509Error.UnsupportedCriticalExtension.toString();
+	assert parseError(derOf(namedCaPem)) == X509Error.UnsupportedCriticalExtension.toString();
+	assert parseError(derOf(namedLeafPem)) == "ok";
 }
