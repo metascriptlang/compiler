@@ -833,10 +833,11 @@ export class X509Bundle {
 		return null;
 	}
 
-	/** Verify `subject` against the root that issued it; `IssuerNotFound` when no root has its issuer name. */
+	/** Verify `subject` against the root that issued it, unexpired at `nowSeconds`; `IssuerNotFound` when no root has its issuer name. */
 	verify(subject: Readonly<X509Certificate>, nowSeconds: int64): Result<void, X509Error> {
 		const root = this.find(subject.issuer);
 		if (root == null) return Result.err(X509Error.IssuerNotFound);
+		if (nowSeconds > root.notAfter) return Result.err(X509Error.Expired);
 		return verifyIssuedBy(subject, root as X509Certificate, nowSeconds);
 	}
 }

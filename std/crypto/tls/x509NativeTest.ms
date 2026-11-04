@@ -148,6 +148,14 @@ test "a bundle skips a root that expired before now and a duplicate subject" {
 	assert duplicate.certificates[0].publicKeyAlgorithm == PublicKeyAlgorithm.Rsa;
 }
 
+test "a kept bundle refuses a root that expired after it was added" {
+	const roots = trustedRoots();
+	const chain = [certificateOf(leafP384Pem), certificateOf(interP384Pem)];
+	assert chainError(chain, roots, "p384.example.com", now) == "ok";
+	for (const root of roots.certificates) root.notAfter = now - 1;
+	assert chainError(chain, roots, "p384.example.com", now) == X509Error.Expired.toString();
+}
+
 test "a tampered certificate fails its signature" {
 	const der = derOf(leafP256Pem);
 	const parsed = parseCertificate(der);
