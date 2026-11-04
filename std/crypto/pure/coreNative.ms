@@ -13,6 +13,9 @@ import { bytesOf } from "./bytes";
 import { HashState } from "./state";
 import { hashKind, newHash, updateHash, finishHash, hashOf } from "./hash";
 import { HmacState, newHmac, updateHmac, finishHmac, hmacOf } from "./hmac";
+import { Ripemd160State, newRipemd160, updateRipemd160, finishRipemd160, ripemd160Of } from "./ripemd160";
+import { Sha3State, newSha3, updateSha3, finishSha3, sha3Of } from "./sha3";
+import { wipeBytes } from "./secret";
 import {
 	CryptoError, randomFailed, invalidAlgorithm, invalidInput,
 	invalidEncoding,
@@ -186,6 +189,87 @@ export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
 	return ((((acc as uint32) - one) >> 8) & one) == one;
 }
 
+// ===== Extended algorithm dispatch (ripemd160, sha3-*) =====
+
+const extKindRipemd160 = 10;
+const extKindSha3_224 = 11;
+const extKindSha3_256 = 12;
+const extKindSha3_384 = 13;
+const extKindSha3_512 = 14;
+
+/** Kind number for the five algorithms not in hashKind; -1 if unrecognised. */
+function extHashKind(algorithm: string): int32 {
+	if (algorithm == "ripemd160") return extKindRipemd160;
+	if (algorithm == "sha3-224") return extKindSha3_224;
+	if (algorithm == "sha3-256") return extKindSha3_256;
+	if (algorithm == "sha3-384") return extKindSha3_384;
+	if (algorithm == "sha3-512") return extKindSha3_512;
+	return -1;
+}
+
+function extSha3Bits(extKind: int32): int32 {
+	if (extKind == extKindSha3_224) return 224;
+	if (extKind == extKindSha3_256) return 256;
+	if (extKind == extKindSha3_384) return 384;
+	return 512;
+}
+
+function extBlockSize(extKind: int32): int32 {
+	if (extKind == extKindRipemd160) return 64;
+	return 200 - (extSha3Bits(extKind) >> 2);
+}
+
+function extDigest(extKind: int32, data: Readonly<uint8[]>): uint8[] {
+	if (extKind == extKindRipemd160) return ripemd160Of(data);
+	return sha3Of(extSha3Bits(extKind), data);
+}
+
+/** HMAC construction over an extended algorithm. Follows the same pad/key-hash/XOR reference as hmac.ms. */
+function extHmacOf(extKind: int32, key: Readonly<uint8[]>, data: Readonly<uint8[]>): uint8[] {
+	const blockSize = extBlockSize(extKind);
+	const pad = new Array<uint8>(blockSize);
+	if (key.length > blockSize) {
+		const kh = extDigest(extKind, key);
+		for (let i = 0; i < kh.length; i++) pad[i] = kh[i];
+		wipeBytes(kh);
+	} else {
+		for (let i = 0; i < key.length; i++) pad[i] = key[i];
+	}
+	const opad = new Array<uint8>(blockSize);
+	for (let i = 0; i < blockSize; i++) {
+		opad[i] = (pad[i] ^ 0x5c) as uint8;
+		pad[i] = (pad[i] ^ 0x36) as uint8;
+	}
+	let innerDigest: uint8[];
+	if (extKind == extKindRipemd160) {
+		const s = newRipemd160();
+		updateRipemd160(s, pad);
+		updateRipemd160(s, data);
+		innerDigest = finishRipemd160(s);
+	} else {
+		const s = newSha3(extSha3Bits(extKind));
+		updateSha3(s, pad);
+		updateSha3(s, data);
+		innerDigest = finishSha3(s);
+	}
+	wipeBytes(pad);
+	let result: uint8[];
+	if (extKind == extKindRipemd160) {
+		const outer = newRipemd160();
+		updateRipemd160(outer, opad);
+		updateRipemd160(outer, innerDigest);
+		result = finishRipemd160(outer);
+	} else {
+		const outer = newSha3(extSha3Bits(extKind));
+		updateSha3(outer, opad);
+		updateSha3(outer, innerDigest);
+		result = finishSha3(outer);
+	}
+	wipeBytes(innerDigest);
+	wipeBytes(opad);
+	return result;
+}
+
 // ===== Hash and HMAC =====
 
 export function digestSync(
@@ -193,13 +277,17 @@ export function digestSync(
 	data: Bytes,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
-	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	when (c) {
-		if (typeof data == "string") return Result.ok(hashOf(kind, data.asBytes()) as Buffer);
-		return Result.ok(hashOf(kind, data) as Buffer);
-	} else {
-		return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+	if (kind >= 0) {
+		when (c) {
+			if (typeof data == "string") return Result.ok(hashOf(kind, data.asBytes()) as Buffer);
+			return Result.ok(hashOf(kind, data) as Buffer);
+		} else {
+			return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+		}
 	}
+	const extKind = extHashKind(algorithm);
+	if (extKind < 0) return Result.err(invalidAlgorithm(algorithm));
+	return Result.ok(extDigest(extKind, bytesOf(data)) as Buffer);
 }
 
 export function hmacSync(
@@ -208,54 +296,162 @@ export function hmacSync(
 	data: Bytes,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
-	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer);
+	if (kind >= 0) return Result.ok(hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer);
+	const extKind = extHashKind(algorithm);
+	if (extKind < 0) return Result.err(invalidAlgorithm(algorithm));
+	return Result.ok(extHmacOf(extKind, bytesOf(key), bytesOf(data)) as Buffer);
 }
 
 export class Hasher {
-	_state: HashState;
+	_state: HashState | null;
+	_ripemd: Ripemd160State | null;
+	_sha3: Sha3State | null;
+	_extKind: int32;
 
 	static create(algorithm: HashAlgorithm): Hasher {
 		const kind = hashKind(algorithm);
-		if (kind < 0) throw new Error(`createHash: could not start "${algorithm}"`);
-		return { _state: newHash(kind) };
+		if (kind >= 0) {
+			return { _state: newHash(kind), _ripemd: null, _sha3: null, _extKind: -1 };
+		}
+		const extKind = extHashKind(algorithm);
+		if (extKind < 0) throw new Error(`createHash: could not start "${algorithm}"`);
+		if (extKind == extKindRipemd160) {
+			return { _state: null, _ripemd: newRipemd160(), _sha3: null, _extKind: extKind };
+		}
+		return { _state: null, _ripemd: null, _sha3: newSha3(extSha3Bits(extKind)), _extKind: extKind };
 	}
 
 	update(data: Bytes): Hasher {
-		if (this._state.finished) return this;
-		when (c) {
-			updateHash(this._state, typeof data == "string" ? data.asBytes() : data);
+		if (this._extKind < 0) {
+			const s = this._state;
+			if (s == null || s.finished) return this;
+			when (c) {
+				updateHash(s, typeof data == "string" ? data.asBytes() : data);
+			} else {
+				updateHash(s, bytesOf(data));
+			}
+		} else if (this._extKind == extKindRipemd160) {
+			const r = this._ripemd;
+			if (r == null || r.finished) return this;
+			updateRipemd160(r, bytesOf(data));
 		} else {
-			updateHash(this._state, bytesOf(data));
+			const h3 = this._sha3;
+			if (h3 == null || h3.finished) return this;
+			updateSha3(h3, bytesOf(data));
 		}
 		return this;
 	}
 
 	digest(): Buffer {
-		if (this._state.finished) return new Array<uint8>(0) as Buffer;
-		return finishHash(this._state) as Buffer;
+		if (this._extKind < 0) {
+			const s = this._state;
+			if (s == null || s.finished) return new Array<uint8>(0) as Buffer;
+			return finishHash(s) as Buffer;
+		} else if (this._extKind == extKindRipemd160) {
+			const r = this._ripemd;
+			if (r == null || r.finished) return new Array<uint8>(0) as Buffer;
+			return finishRipemd160(r) as Buffer;
+		} else {
+			const h3 = this._sha3;
+			if (h3 == null || h3.finished) return new Array<uint8>(0) as Buffer;
+			return finishSha3(h3) as Buffer;
+		}
 	}
 }
 
 export class Hmac {
-	_state: HmacState;
+	_state: HmacState | null;
+	_ripemdInner: Ripemd160State | null;
+	_sha3Inner: Sha3State | null;
+	_extOpad: uint8[];
+	_extKind: int32;
 	_done: boolean;
 
 	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
 		const kind = hashKind(algorithm);
-		if (kind < 0) throw new Error(`createHmac: could not start "${algorithm}"`);
-		return { _state: newHmac(kind, bytesOf(key)), _done: false };
+		if (kind >= 0) {
+			return { _state: newHmac(kind, bytesOf(key)), _ripemdInner: null, _sha3Inner: null, _extOpad: [], _extKind: -1, _done: false };
+		}
+		const extKind = extHashKind(algorithm);
+		if (extKind < 0) throw new Error(`createHmac: could not start "${algorithm}"`);
+		const rawKey = bytesOf(key);
+		const blockSize = extBlockSize(extKind);
+		const pad = new Array<uint8>(blockSize);
+		if (rawKey.length > blockSize) {
+			const kh = extDigest(extKind, rawKey);
+			for (let i = 0; i < kh.length; i++) pad[i] = kh[i];
+			wipeBytes(kh);
+		} else {
+			for (let i = 0; i < rawKey.length; i++) pad[i] = rawKey[i];
+		}
+		const opad = new Array<uint8>(blockSize);
+		for (let i = 0; i < blockSize; i++) {
+			opad[i] = (pad[i] ^ 0x5c) as uint8;
+			pad[i] = (pad[i] ^ 0x36) as uint8;
+		}
+		let ripemdInner: Ripemd160State | null = null;
+		let sha3Inner: Sha3State | null = null;
+		if (extKind == extKindRipemd160) {
+			const inner = newRipemd160();
+			updateRipemd160(inner, pad);
+			ripemdInner = inner;
+		} else {
+			const inner = newSha3(extSha3Bits(extKind));
+			updateSha3(inner, pad);
+			sha3Inner = inner;
+		}
+		wipeBytes(pad);
+		return { _state: null, _ripemdInner: ripemdInner, _sha3Inner: sha3Inner, _extOpad: opad, _extKind: extKind, _done: false };
 	}
 
 	update(data: Bytes): Hmac {
-		if (!this._done) updateHmac(this._state, bytesOf(data));
+		if (!this._done) {
+			if (this._extKind < 0) {
+				const s = this._state;
+				if (s != null) updateHmac(s, bytesOf(data));
+			} else if (this._extKind == extKindRipemd160) {
+				const r = this._ripemdInner;
+				if (r != null) updateRipemd160(r, bytesOf(data));
+			} else {
+				const h3 = this._sha3Inner;
+				if (h3 != null) updateSha3(h3, bytesOf(data));
+			}
+		}
 		return this;
 	}
 
 	digest(): Buffer {
 		if (this._done) return new Array<uint8>(0) as Buffer;
 		this._done = true;
-		return finishHmac(this._state) as Buffer;
+		if (this._extKind < 0) {
+			const s = this._state;
+			if (s == null) return new Array<uint8>(0) as Buffer;
+			return finishHmac(s) as Buffer;
+		}
+		let innerDigest: uint8[];
+		if (this._extKind == extKindRipemd160) {
+			const r = this._ripemdInner;
+			if (r == null) return new Array<uint8>(0) as Buffer;
+			innerDigest = finishRipemd160(r);
+			const outer = newRipemd160();
+			updateRipemd160(outer, this._extOpad);
+			updateRipemd160(outer, innerDigest);
+			const result = finishRipemd160(outer) as Buffer;
+			wipeBytes(innerDigest);
+			wipeBytes(this._extOpad);
+			return result;
+		} else {
+			const h3 = this._sha3Inner;
+			if (h3 == null) return new Array<uint8>(0) as Buffer;
+			innerDigest = finishSha3(h3);
+			const outer = newSha3(extSha3Bits(this._extKind));
+			updateSha3(outer, this._extOpad);
+			updateSha3(outer, innerDigest);
+			const result = finishSha3(outer) as Buffer;
+			wipeBytes(innerDigest);
+			wipeBytes(this._extOpad);
+			return result;
+		}
 	}
 }
 
@@ -267,17 +463,17 @@ export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
 	return Hmac.create(algorithm, key);
 }
 
-/** The hashes the portable kernels run today. */
+/** All hash algorithms the portable kernels support. */
 export function getHashes(): HashAlgorithm[] {
 	const all: HashAlgorithm[] = [
 		"sha256", "sha512", "sha384", "sha224", "sha1", "md5", "ripemd160",
 		"sha3-256", "sha3-384", "sha3-512", "sha3-224",
 	];
-	return all.filter((name) => hashKind(name) >= 0);
+	return all.filter((name) => hashKind(name) >= 0 || extHashKind(name) >= 0);
 }
 
 export function isHashSupported(algorithm: string): boolean {
-	return hashKind(algorithm) >= 0;
+	return hashKind(algorithm) >= 0 || extHashKind(algorithm) >= 0;
 }
 
 /** The digest of `data` as hex, or base64 when `encoding` says so; "" for an unknown hash. */
@@ -287,8 +483,13 @@ export function encodedHash(
 	encoding: string,
 ): string {
 	const kind = hashKind(algorithm);
-	if (kind < 0) return "";
-	const digest = hashOf(kind, data.asBytes().slice(0));
+	if (kind >= 0) {
+		const digest = hashOf(kind, data.asBytes().slice(0));
+		return encoding == "base64" ? digest.encodeBase64() : digest.encodeHex();
+	}
+	const extKind = extHashKind(algorithm);
+	if (extKind < 0) return "";
+	const digest = extDigest(extKind, data.asBytes().slice(0));
 	return encoding == "base64" ? digest.encodeBase64() : digest.encodeHex();
 }
 
