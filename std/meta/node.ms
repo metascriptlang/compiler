@@ -277,6 +277,8 @@ export enum BuiltinKind {
 	DynamicImport,
 	Echo,
 	Exit,
+	FfiHandle,
+	FfiVecBox,
 	Float64Bits,
 	Float64FromBits,
 	FutureCreateInline,

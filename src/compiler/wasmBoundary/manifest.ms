@@ -9,6 +9,7 @@ import {
 	FunctionDeclData,
 	SourceLocation,
 	makeLoc,
+	BuiltinKind,
 } from "../../ast/node";
 import {
 	ExportedSymInfo,
@@ -218,7 +219,7 @@ function refuse(
 }
 
 export function isHandleType(t: Type): boolean {
-	return getBuiltinKind(t) == "FfiHandle";
+	return getBuiltinKind(t) == BuiltinKind.FfiHandle;
 }
 
 export function handleTarget(t: Type): Type | null {
@@ -238,14 +239,14 @@ function isNominalTarget(target: Type): boolean {
 }
 
 export function vecBoxElement(target: Type): BoundaryKind | null {
-	if (getBuiltinKind(target) != "FfiVecBox") return null;
+	if (getBuiltinKind(target) != BuiltinKind.FfiVecBox) return null;
 	if (target.typeChildren.length != 1) return null;
 	const k = scalarKind(peeled(target.typeChildren[0]));
 	return k == BoundaryKind.Bool ? null : k;
 }
 
 function isVecBox(target: Type): boolean {
-	return getBuiltinKind(target) == "FfiVecBox";
+	return getBuiltinKind(target) == BuiltinKind.FfiVecBox;
 }
 
 function isExportedTarget(c: Collector, target: Type): boolean {

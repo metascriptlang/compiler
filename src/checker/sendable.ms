@@ -1004,7 +1004,7 @@ function lentHandleMisuse(node: Node | null, param: Symbol, inClosure: boolean):
 function refuseLentHandleUse(ctx: CheckerContext, fn: Node): void {
 	if (fn.paramSyms == null) return;
 	for (const param of fn.paramSyms!) {
-		if (param.symbolType == null || getBuiltinKind(param.symbolType) != "FfiHandle") continue;
+		if (param.symbolType == null || getBuiltinKind(param.symbolType) != BuiltinKind.FfiHandle) continue;
 		const site = lentHandleMisuse(routineBody(fn), param, false);
 		if (site == null) continue;
 		const at = param.declNode != null ? param.declNode!.location : fn.location;
@@ -1963,8 +1963,8 @@ function isViewCall(call: Node): boolean {
 	const m = callee.data as MemberExprData;
 	if (m.property != "view" || m.object.nodeType == null) return false;
 	const handle = peelThrough(m.object.nodeType!, PEEL_ALIAS);
-	if (getBuiltinKind(handle) != "FfiHandle" || handle.typeChildren.length != 1) return false;
-	return getBuiltinKind(handle.typeChildren[0]) == "FfiVecBox";
+	if (getBuiltinKind(handle) != BuiltinKind.FfiHandle || handle.typeChildren.length != 1) return false;
+	return getBuiltinKind(handle.typeChildren[0]) == BuiltinKind.FfiVecBox;
 }
 
 function viewCallbackOf(arg: Node): Node | null {
