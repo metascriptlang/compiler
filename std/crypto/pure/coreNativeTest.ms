@@ -163,6 +163,79 @@ test "ripemd160 and sha3 block/rate boundary streaming" {
 	check("sha3-512", [0, 1, 71, 72, 73, 144, 145]);
 }
 
+test "ripemd160 and sha3 HMAC known-answer vectors" {
+	// Source: msCryptoHmacSpanInto on rtx, msc 56ad1fdf80f (mbedTLS 3.6).
+	// ripemd160 TC1 and TC2 also match RFC 2286 §4.
+	const hk = (
+		name: HashAlgorithm, key: uint8[], data: string,
+	): string => {
+		const r = hmacSync(name, key, data);
+		assert r.ok;
+		return toHex(r.value);
+	};
+	const hs = (
+		name: HashAlgorithm, key: string, data: string,
+	): string => {
+		const r = hmacSync(name, key, data);
+		assert r.ok;
+		return toHex(r.value);
+	};
+	const k20 = new Array<uint8>(20);
+	for (let i = 0; i < 20; i++) k20[i] = 0x0b;
+	const k64 = new Array<uint8>(64);
+	for (let i = 0; i < 64; i++) k64[i] = ((i + 1) & 0xff) as uint8;
+	const k144 = new Array<uint8>(144);
+	for (let i = 0; i < 144; i++) k144[i] = (i & 0xff) as uint8;
+	assert hk("ripemd160", k20, "Hi There") ==
+		"24cb4bd67d20fc1a5d2ed7732dcc39377f0a5668";
+	assert hs("ripemd160", "Jefe", "what do ya want for nothing?") ==
+		"dda6c0213a485a9e24f4742064a7f033b43c4069";
+	assert hk("ripemd160", k64, "") ==
+		"c1edffe174a98da5305838d0c84d730d2102985c";
+	assert hk("ripemd160", k144, "abc") ==
+		"91f3329e7a29dd3850c1652151b3f8948f9405b4";
+	assert hk("sha3-224", k20, "Hi There") ==
+		"3b16546bbc7be2706a031dcafd56373d9884367641d8c59af3c860f7";
+	assert hs("sha3-224", "Jefe", "what do ya want for nothing?") ==
+		"7fdb8dd88bd2f60d1b798634ad386811c2cfc85bfaf5d52bbace5e66";
+	assert hk("sha3-224", k64, "") ==
+		"bad7a0fd4a08041258e8e66f2f1580e28386a349356a4f70bb57d791";
+	assert hk("sha3-224", k144, "abc") ==
+		"583706e41977d2c75bb9087022f41f6e2896cd1c108be1306446e9d2";
+	assert hk("sha3-256", k20, "Hi There") ==
+		"ba85192310dffa96e2a3a40e69774351140bb7185e1202cdcc917589f95e16bb";
+	assert hs("sha3-256", "Jefe", "what do ya want for nothing?") ==
+		"c7d4072e788877ae3596bbb0da73b887c9171f93095b294ae857fbe2645e1ba5";
+	assert hk("sha3-256", k64, "") ==
+		"4ddb0e9ad49040b573d03071f4d5b6ebb27649af43d644715cbf87db8f25d4c5";
+	assert hk("sha3-256", k144, "abc") ==
+		"cd96626a818d1598e85b9d68a7cb530bd17cc0825ea1a4aab91da41159403431";
+	assert hk("sha3-384", k20, "Hi There") ==
+		"68d2dcf7fd4ddd0a2240c8a437305f61fb7334cfb5d0226e1bc27dc10a2" +
+		"e723a20d370b47743130e26ac7e3d532886bd";
+	assert hs("sha3-384", "Jefe", "what do ya want for nothing?") ==
+		"f1101f8cbf9766fd6764d2ed61903f21ca9b18f57cf3e1a23ca13508a932" +
+		"43ce48c045dc007f26a21b3f5e0e9df4c20a";
+	assert hk("sha3-384", k64, "") ==
+		"4a6a48239b872dc99b644d486c5b2fa4fa6dcf2e59b34be6d0e5d02d65df7" +
+		"3374dcb31db384a43fc697add32c31bfd88";
+	assert hk("sha3-384", k144, "abc") ==
+		"741d9eba782cac10e2a8db156909371413b2e218c09b58e9e26521979225" +
+		"b3a7f6381dfa9f912b429f76561b94002a5f";
+	assert hk("sha3-512", k20, "Hi There") ==
+		"eb3fbd4b2eaab8f5c504bd3a41465aacec15770a7cabac531e482f860b5ec" +
+		"7ba47ccb2c6f2afce8f88d22b6dc61380f23a668fd3888bb80537c0a0b86407689e";
+	assert hs("sha3-512", "Jefe", "what do ya want for nothing?") ==
+		"5a4bfeab6166427c7a3647b747292b8384537cdb89afb3bf5665e4c5e70935" +
+		"0b287baec921fd7ca0ee7a0c31d022a95e1fc92ba9d77df883960275beb4e62024";
+	assert hk("sha3-512", k64, "") ==
+		"cc1d0a4c5220981a5d9f7bb034dab95cc4d0a7146644f0c65e3ed788c117c" +
+		"51678cdd04e50604b21bac1e73908f605b0f4615f1642e4f3654ecc576eed3dc147";
+	assert hk("sha3-512", k144, "abc") ==
+		"f6f5d31c9ecb74ffee3c0e36abf2b169080a8c347c271fa1bd7aae1988b7e" +
+		"b1a833014df2fdf50d18ff6c2c10129512d0aa25ea0b3d2542051a436bb60707232";
+}
+
 test "ripemd160 and sha3 HMAC with long key, empty and binary-NUL messages" {
 	const longKey = new Array<uint8>(200);
 	for (let i = 0; i < 200; i++) longKey[i] = (i & 255) as uint8;

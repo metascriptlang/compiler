@@ -72,17 +72,25 @@ test "hex and base64 match the vendor surface on random and invalid input" {
 	}
 }
 
-test "every hash the pure core lists is correctly reported, vendor hashes are a subset" {
+const nativeOnly: pure.HashAlgorithm[] = [
+	"ripemd160", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+];
+
+test "every hash the pure core lists is correctly reported" {
 	const names = pure.getHashes();
 	for (const name of vendor.getHashes()) assert names.includes(name);
 	for (const name of names) assert pure.isHashSupported(name);
+	when (c) {
+		assert names.length == 11;
+		for (const name of names) assert vendor.isHashSupported(name);
+	}
 	assert !pure.isHashSupported("SHA256") && !vendor.isHashSupported("SHA256");
 }
 
 test "streaming hash and HMAC match the vendor over random splits" {
 	const rng: Seeded = { state: 0x2545f491 };
 	for (const name of pure.getHashes()) {
-		if (!vendor.isHashSupported(name)) continue;
+		when (js) { if (nativeOnly.includes(name)) continue; }
 		for (let round = 0; round < 60; round++) {
 			const data = randomData(rng, sizeFor(rng, round));
 			const key = randomData(rng, below(rng, 200));
