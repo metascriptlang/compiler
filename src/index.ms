@@ -70,8 +70,9 @@ export function main(): int32 {
 
 	const opts = parseArgs();
 	const cmd = opts.command;
-	if (opts.eventsPath != "" && !(cmd == "run" && opts.isHcr && opts.target != Target.JS && opts.target != Target.Raiser)) {
-		console.log(`${error("error")}: --events works only with msc run --hcr`);
+	const hcrNative = opts.isHcr && opts.target != Target.JS && opts.target != Target.Raiser;
+	if (opts.eventsPath != "" && !(hcrNative && (cmd == "run" || (cmd == "build" && opts.watch)))) {
+		console.log(`${error("error")}: --events works only with msc run --hcr and msc build --hcr --watch`);
 		process.exit(1);
 	}
 

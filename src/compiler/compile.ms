@@ -3146,7 +3146,12 @@ function watchBuild(run: WatchRun): boolean {
 	const elapsed = Math.round(performance.now() - t0);
 	console.log(`watch: build ${run.step} ${label} in ${elapsed} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
 	if (label == "failed") emitEvent("build.failed", `,"build":${run.step},"ms":${elapsed},"diagnostics":[${eventDiagnostics.join(",")}]`);
-	else emitEvent("build.done", `,"build":${run.step},"ms":${elapsed},"checked":${session.check.rechecked.size},"lowered":${session.loweredCount}`);
+	else {
+		const rechecked: string[] = [];
+		for (const path of session.check.rechecked) rechecked.push(path);
+		rechecked.sort();
+		emitEvent("build.done", `,"build":${run.step},"ms":${elapsed},"checked":${session.check.rechecked.size},"lowered":${session.loweredCount},"rechecked":${jsonTexts(rechecked)}`);
+	}
 	run.step = run.step + 1;
 	return label != "failed";
 }
@@ -3167,7 +3172,16 @@ function watchNext(run: WatchRun, stopped: () => boolean): boolean {
 	return changed;
 }
 
+function openEvents(opts: CliOptions): void {
+	eventsPath = opts.eventsPath;
+	if (eventsPath != "" && eventsPath != "-" && !writeFile(eventsPath, "").ok) {
+		printError(`cannot create the events file '${eventsPath}'`);
+		exit(1);
+	}
+}
+
 export function cmdWatchC(entryPath: string, opts: CliOptions): void {
+	openEvents(opts);
 	const run = openWatch(entryPath, opts);
 	while (true) {
 		watchBuild(run);
@@ -3313,12 +3327,8 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions): void {
 	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
 	opts.hcrHost = true;
 	const host = buildHcrHost(dir);
+	openEvents(opts);
 	const events = opts.eventsPath;
-	eventsPath = events;
-	if (events != "" && events != "-" && !writeFile(events, "").ok) {
-		printError(`cannot create the events file '${events}'`);
-		exit(1);
-	}
 	const run = openWatch(entryPath, opts);
 	while (!watchBuild(run)) {
 		if (!watchNext(run, (): boolean => false)) {

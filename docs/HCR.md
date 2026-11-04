@@ -837,12 +837,14 @@ Not verified:
 
 `msc build <entry> --hcr --watch` builds once, then rebuilds after every save of a `.ms`,
 `.cms` or `.h` file under the project root (`std/fs/watch`), until it is killed.
-`--watch-replay=<file>` drives the same loop from a file of `<source> <target>` lines instead
-of the file system, one copy and one build per line; `hcrWatchWarm` runs it. With `--emit=c`,
+`--watch-replay=<file>` drives the same loop from a file of lines of `<source> <target>` pairs
+instead of the file system, one build per line after copying each pair; `hcrWatchWarm` runs it. With `--emit=c`,
 build *n* writes its C to `out/<mode>/watch<n>/`. Each build prints
 `watch: build <n> <built|rebuilt|up-to-date|failed> in <ms> ms (checked a/b, lowered c)`, and
-each trigger `watch: changed <paths>`. `--watch` without `--hcr` is refused; only the HCR path has a
-warm-against-cold check (`hcrWatchWarm`).
+each trigger `watch: changed <paths>`; `--events=<file>` also writes each build's `build.done` with the
+modules it rechecked. `--watch` without `--hcr` is refused; only the HCR path has a
+warm-against-cold check (`hcrWatchWarm`, and the metamorphic edit cases of `src/test/ic/`, which
+`hcrIcOracle` runs).
 
 The session (`src/compiler/buildSession.ms` `BuildSession`, `src/checker/orchestrator.ms`
 `CheckSession`) keeps, between builds, the graph-bound TransAm db and prelude context, each
