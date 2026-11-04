@@ -1,8 +1,6 @@
 import { encodeHex, decodeHex } from "../../core/encoding";
-import { add, sub, mul, sqr, inv, bigFromBytes, bigToBytes } from "./field25519";
-
-const a24 = 121665n;
-const swapMasks: Readonly<bigint[]> = [0n, (1n << 256n) - 1n];
+import { Fe, feZero, feOne, feFromBytes, feToBytes, feAdd, feSub, feMul, feSqr, feInv, feCMov } from "./ed25519Field";
+import { wipeBytes } from "./secret";
 
 /** The RFC 7748 Montgomery ladder: 255 steps that swap by mask, never by branch. An all-zero result means a low-order input. */
 export function x25519(scalar: Readonly<uint8[]>, u: Readonly<uint8[]>): uint8[] {
@@ -10,43 +8,45 @@ export function x25519(scalar: Readonly<uint8[]>, u: Readonly<uint8[]>): uint8[]
 	for (let i = 0; i < 32; i++) k[i] = scalar[i];
 	k[0] = k[0] & 248;
 	k[31] = (k[31] & 127) | 64;
-	const x1 = bigFromBytes(u, 0, 32) & ((1n << 255n) - 1n);
-	let x2 = 1n;
-	let z2 = 0n;
-	let x3 = x1;
-	let z3 = 1n;
-	let swap = 0;
+	const a24Bytes = new Array<uint8>(32);
+	a24Bytes[0] = 0x41;
+	a24Bytes[1] = 0xdb;
+	a24Bytes[2] = 0x01;
+	const a24 = feFromBytes(a24Bytes, 0);
+	const x1 = feFromBytes(u, 0);
+	let x2: Fe = feOne;
+	let z2: Fe = feZero;
+	let x3: Fe = x1;
+	let z3: Fe = feOne;
+	let swap: uint32 = 0;
 	for (let t = 254; t >= 0; t--) {
-		const bit = ((k[t >> 3] as int32) >> (t & 7)) & 1;
+		const bit = (((k[t >> 3] as int32) >> (t & 7)) & 1) as uint32;
 		swap = swap ^ bit;
-		const mask = swapMasks[swap];
-		const dx = mask & (x2 ^ x3);
-		x2 = x2 ^ dx;
-		x3 = x3 ^ dx;
-		const dz = mask & (z2 ^ z3);
-		z2 = z2 ^ dz;
-		z3 = z3 ^ dz;
+		const sx2 = feCMov(x2, x3, swap);
+		x3 = feCMov(x3, x2, swap);
+		x2 = sx2;
+		const sz2 = feCMov(z2, z3, swap);
+		z3 = feCMov(z3, z2, swap);
+		z2 = sz2;
 		swap = bit;
-		const a = add(x2, z2);
-		const aa = sqr(a);
-		const b = sub(x2, z2);
-		const bb = sqr(b);
-		const e = sub(aa, bb);
-		const c = add(x3, z3);
-		const d = sub(x3, z3);
-		const da = mul(d, a);
-		const cb = mul(c, b);
-		x3 = sqr(add(da, cb));
-		z3 = mul(x1, sqr(sub(da, cb)));
-		x2 = mul(aa, bb);
-		z2 = mul(e, add(aa, mul(a24, e)));
+		const a = feAdd(x2, z2);
+		const aa = feSqr(a);
+		const b = feSub(x2, z2);
+		const bb = feSqr(b);
+		const e = feSub(aa, bb);
+		const c = feAdd(x3, z3);
+		const d = feSub(x3, z3);
+		const da = feMul(d, a);
+		const cb = feMul(c, b);
+		x3 = feSqr(feAdd(da, cb));
+		z3 = feMul(x1, feSqr(feSub(da, cb)));
+		x2 = feMul(aa, bb);
+		z2 = feMul(e, feAdd(aa, feMul(a24, e)));
 	}
-	const mask = swapMasks[swap];
-	const dx = mask & (x2 ^ x3);
-	x2 = x2 ^ dx;
-	const dz = mask & (z2 ^ z3);
-	z2 = z2 ^ dz;
-	return bigToBytes(mul(x2, inv(z2)), 32);
+	x2 = feCMov(x2, x3, swap);
+	z2 = feCMov(z2, z3, swap);
+	wipeBytes(k);
+	return feToBytes(feMul(x2, feInv(z2)));
 }
 
 test "RFC 7748 5.2 first vector" {
