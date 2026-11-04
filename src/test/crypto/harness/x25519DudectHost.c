@@ -182,10 +182,10 @@ int main(int argc, char **argv) {
 	fromHex(publicPoint, publicPointHex);
 
 	MS_ENTRY_DATINIT();
-	MS_ENTRY_INIT();
 #ifdef MS_ENTRY_DEP_INIT
 	MS_ENTRY_DEP_INIT();
 #endif
+	MS_ENTRY_INIT();
 	printf("STAGE init ok\n");
 	printf("CONFIG measurementsPerBatch=%zu batches=%llu seed=0x%016llx kat=%d null=%d leakSpin=%llu\n", measurements,
 		(unsigned long long)batches, (unsigned long long)seed, checkKnownAnswer, nullExperiment, (unsigned long long)leakSpin);

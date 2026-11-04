@@ -30,6 +30,9 @@
 
 extern void MS_ENTRY_DATINIT(void);
 extern void MS_ENTRY_INIT(void);
+#ifdef MS_ENTRY_DEP_INIT
+extern void MS_ENTRY_DEP_INIT(void);
+#endif
 extern void x25519ScalarMult(uint8_t *output, const uint8_t *scalar, const uint8_t *point);
 extern void ref_crypto_x25519(uint8_t output[32], const uint8_t scalar[32], const uint8_t point[32]);
 
@@ -626,6 +629,9 @@ int main(int argc, char **argv) {
 	}
 
 	MS_ENTRY_DATINIT();
+#ifdef MS_ENTRY_DEP_INIT
+	MS_ENTRY_DEP_INIT();
+#endif
 	MS_ENTRY_INIT();
 	printf("STAGE init ok\n");
 	printf("diff candidate=%s seed=0x%llx samplesPerRandomAxis=%ld\n", candidateLabel, (unsigned long long)seed, randomSamples);

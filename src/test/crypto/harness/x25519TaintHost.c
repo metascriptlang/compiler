@@ -185,10 +185,10 @@ int main(int argc, char **argv) {
 
 	(void)requireTaintedOutput;
 	MS_ENTRY_DATINIT();
-	MS_ENTRY_INIT();
 #ifdef MS_ENTRY_DEP_INIT
 	MS_ENTRY_DEP_INIT();
 #endif
+	MS_ENTRY_INIT();
 	printf("STAGE init ok\n");
 
 	if (checkKnownAnswers) {
