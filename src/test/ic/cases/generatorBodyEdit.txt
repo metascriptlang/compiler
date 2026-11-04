@@ -1,0 +1,18 @@
+A generator consumed by a for-of in its importer gets one more yield; the importer's loop must see
+it, though no signature changes.
+#!FILE nums.ms
+export function* nums(): Iterator<int32> {
+	yield 1;
+	yield 2;
+}
+#!FILE main.ms
+import { nums } from "./nums";
+for (const n of nums()) console.log(`${n}`);
+#!STEP expect: 1\n2
+#!FILE nums.ms
+export function* nums(): Iterator<int32> {
+	yield 1;
+	yield 2;
+	yield 3;
+}
+#!STEP expect: 1\n2\n3

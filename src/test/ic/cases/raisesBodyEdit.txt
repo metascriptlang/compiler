@@ -1,0 +1,25 @@
+A body edit that makes a function throw, then stop throwing, changes how its importer calls it,
+though no signature changes.
+#!FILE a.ms
+export function f(x: int32): int32 {
+	return x + 1;
+}
+#!FILE main.ms
+import { f } from "./a";
+try {
+	console.log(`${f(1)}`);
+} catch (e) {
+	console.log("caught");
+}
+#!STEP expect: 2
+#!FILE a.ms
+export function f(x: int32): int32 {
+	if (x > 0) throw new Error("boom");
+	return x + 1;
+}
+#!STEP expect: caught
+#!FILE a.ms
+export function f(x: int32): int32 {
+	return x + 1;
+}
+#!STEP expect: 2

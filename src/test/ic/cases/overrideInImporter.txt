@@ -1,0 +1,42 @@
+An override added, changed and removed in an importing module changes which method a call through
+the base class runs; the module that declares the base and makes the call is never edited.
+#!XFAIL the override registry is a global with no edge to the module that lowers the call, so shape.ms is not relowered (cache-reuse step 1)
+#!FILE shape.ms
+export class Shape {
+	name(): string {
+		return "shape";
+	}
+}
+export function describe(s: Shape): string {
+	return s.name();
+}
+#!FILE circle.ms
+import { Shape } from "./shape";
+export class Circle extends Shape {
+}
+#!FILE main.ms
+import { describe } from "./shape";
+import { Circle } from "./circle";
+console.log(describe(new Circle()));
+#!STEP expect: shape
+#!FILE circle.ms
+import { Shape } from "./shape";
+export class Circle extends Shape {
+	override name(): string {
+		return "circle";
+	}
+}
+#!STEP expect: circle
+#!FILE circle.ms
+import { Shape } from "./shape";
+export class Circle extends Shape {
+	override name(): string {
+		return "round";
+	}
+}
+#!STEP expect: round
+#!FILE circle.ms
+import { Shape } from "./shape";
+export class Circle extends Shape {
+}
+#!STEP expect: shape

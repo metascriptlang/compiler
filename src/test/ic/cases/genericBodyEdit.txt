@@ -1,0 +1,20 @@
+A generic function is instantiated for its importer, so a body edit of the generic must reach the
+importer's instance; rewriting it unchanged afterwards rechecks nothing.
+#!FILE pick.ms
+export function first<T>(xs: T[]): T {
+	return xs[0];
+}
+#!FILE main.ms
+import { first } from "./pick";
+console.log(`${first<int32>([5, 6, 7])}`);
+#!STEP expect: 5
+#!FILE pick.ms
+export function first<T>(xs: T[]): T {
+	return xs[xs.length - 1];
+}
+#!STEP expect: 7
+#!FILE pick.ms
+export function first<T>(xs: T[]): T {
+	return xs[xs.length - 1];
+}
+#!STEP expect: 7; noop

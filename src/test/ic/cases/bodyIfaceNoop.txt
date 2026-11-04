@@ -1,0 +1,49 @@
+A private body edit stays in its module, a no-op rewrite changes nothing, and an interface edit
+reaches the importer.
+#!FILE a.ms
+function secret(): int32 {
+	return 41;
+}
+export function greet(): string {
+	return "hi";
+}
+export function value(): int32 {
+	return secret() + 1;
+}
+#!FILE main.ms
+import { greet, value } from "./a";
+console.log(`${greet()} ${value()}`);
+#!STEP expect: hi 42
+#!FILE a.ms
+function secret(): int32 {
+	return 999;
+}
+export function greet(): string {
+	return "hi";
+}
+export function value(): int32 {
+	return secret() + 1;
+}
+#!STEP expect: hi 1000; body-edit
+#!FILE a.ms
+function secret(): int32 {
+	return 999;
+}
+export function greet(): string {
+	return "hi";
+}
+export function value(): int32 {
+	return secret() + 1;
+}
+#!STEP expect: hi 1000; noop
+#!FILE a.ms
+function secret(): int32 {
+	return 999;
+}
+export function greet(): string {
+	return "hi";
+}
+export function value(): int64 {
+	return (secret() as int64) + 1;
+}
+#!STEP expect: hi 1000; iface-edit

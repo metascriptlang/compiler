@@ -1,0 +1,30 @@
+One step moves an exported function from one module to another and repoints its importer, so
+three modules change in one build; a.ms leaves the program and is not rechecked.
+#!FILE a.ms
+export function label(): string {
+	return "from a";
+}
+#!FILE b.ms
+export function other(): string {
+	return "b";
+}
+#!FILE main.ms
+import { label } from "./a";
+import { other } from "./b";
+console.log(`${label()} ${other()}`);
+#!STEP expect: from a b
+#!FILE a.ms
+export function unused(): int32 {
+	return 0;
+}
+#!FILE b.ms
+export function other(): string {
+	return "b";
+}
+export function label(): string {
+	return "from b";
+}
+#!FILE main.ms
+import { label, other } from "./b";
+console.log(`${label()} ${other()}`);
+#!STEP expect: from b b; rechecked: b.ms main.ms

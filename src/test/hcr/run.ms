@@ -715,6 +715,18 @@ function replayMatchesCold(tag: string, dir: string, fixture: string, restored: 
 	}
 }
 
+// The metamorphic edit cases of src/test/ic: every warm watch build against a cold build of the same sources.
+function icOracle(): void {
+	const tag = "hcrIcOracle";
+	env.set("MSC", MSC);
+	const ran = execFileResult(MSC, ["run", "--target=raiser", "src/test/ic/run.ms"], ROOT);
+	if (!succeeded(ran)) {
+		console.log(both(ran));
+		failWith(tag, "a metamorphic IC case failed");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function watchGenericLayout(): void {
 	const tag = "hcrWatchGenericLayout";
 	const dir = freshDir(`${TMP}/watchGenericLayout`);
@@ -2716,6 +2728,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRunEvents", run: runEvents },
 	{ name: "hcrWatchOwnOutput", run: watchOwnOutput },
 	{ name: "hcrRunBound", run: runBound },
+	{ name: "hcrIcOracle", run: icOracle },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

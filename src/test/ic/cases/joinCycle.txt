@@ -1,0 +1,24 @@
+A module joins an import cycle with the root and leaves it again; cross-cycle calls and
+initialization order must match a cold build.
+#!FILE b.ms
+export function fb(): int32 {
+	return 10;
+}
+#!FILE main.ms
+import { fb } from "./b";
+export function fa(): int32 {
+	return 1;
+}
+console.log(`${fa() + fb()}`);
+#!STEP expect: 11
+#!FILE b.ms
+import { fa } from "./main";
+export function fb(): int32 {
+	return fa() + 20;
+}
+#!STEP expect: 22
+#!FILE b.ms
+export function fb(): int32 {
+	return 30;
+}
+#!STEP expect: 31

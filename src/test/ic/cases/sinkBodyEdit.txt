@@ -1,0 +1,34 @@
+A body edit that starts and stops keeping a parameter changes whether the importer's argument is
+moved or copied, though no signature changes.
+#!FILE a.ms
+let kept: string[] = [];
+export function take(xs: string[]): int32 {
+	return xs.length;
+}
+export function keptCount(): int32 {
+	return kept.length;
+}
+#!FILE main.ms
+import { take, keptCount } from "./a";
+const v = ["a", "b"];
+console.log(`${take(v)} ${keptCount()}`);
+#!STEP expect: 2 0
+#!FILE a.ms
+let kept: string[] = [];
+export function take(xs: string[]): int32 {
+	kept = xs;
+	return xs.length;
+}
+export function keptCount(): int32 {
+	return kept.length;
+}
+#!STEP expect: 2 2
+#!FILE a.ms
+let kept: string[] = [];
+export function take(xs: string[]): int32 {
+	return xs.length;
+}
+export function keptCount(): int32 {
+	return kept.length;
+}
+#!STEP expect: 2 0
