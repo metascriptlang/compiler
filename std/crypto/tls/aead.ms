@@ -4,8 +4,8 @@
  * the portable kernels, sealing and opening in place.
  */
 
-import { expandKey, gcmEncryptInto, gcmDecryptInto } from "../pure/aes";
-import { keyWords, chacha20Poly1305SealInto, chacha20Poly1305OpenInto } from "../pure/chacha";
+import { KeySchedule, expandKey, wipeKeySchedule, gcmEncryptInto, gcmDecryptInto } from "../pure/aes";
+import { keyWords, chacha20Poly1305SealInto, chacha20Poly1305OpenInto, chacha20Poly1305SealAt, chacha20Poly1305OpenAt } from "../pure/chacha";
 import { kindSha256, kindSha384 } from "../pure/state";
 import { wipeBytes, wipeWords } from "../pure/secret";
 
@@ -110,104 +110,39 @@ export function aeadOpen(
 	return gcmDecryptInto(key.aesSchedule, nonce, aad, sealed, 0, length, sealed, length, out, 0) ? out : null;
 }
 
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) |
-		((data[at + 1] as uint32) << 8) |
-		((data[at + 2] as uint32) << 16) |
-		((data[at + 3] as uint32) << 24);
-}
-
-function rotl(x: uint32, n: uint32): uint32 {
-	return (x << n) | (x >> (32 - n));
-}
-
-function quarterRound(x: uint32[], a: int32, b: int32, c: int32, d: int32): void {
-	x[a] = x[a] + x[b];
-	x[d] = rotl(x[d] ^ x[a], 16);
-	x[c] = x[c] + x[d];
-	x[b] = rotl(x[b] ^ x[c], 12);
-	x[a] = x[a] + x[b];
-	x[d] = rotl(x[d] ^ x[a], 8);
-	x[c] = x[c] + x[d];
-	x[b] = rotl(x[b] ^ x[c], 7);
-}
-
-/** RFC 8439 2.3: the 64-byte block for `counter` under a 32-byte key and 12-byte nonce. */
-export function chachaBlock(
-	key: Readonly<uint8[]>,
-	counter: uint32,
-	nonce: Readonly<uint8[]>,
-): uint8[] {
-	const state = new Array<uint32>(16);
-	state[0] = 0x61707865;
-	state[1] = 0x3320646e;
-	state[2] = 0x79622d32;
-	state[3] = 0x6b206574;
-	for (let i = 0; i < 8; i++) state[4 + i] = load32(key, i * 4);
-	state[12] = counter;
-	for (let i = 0; i < 3; i++) state[13 + i] = load32(nonce, i * 4);
-	const x: uint32[] = [...state];
-	for (let round = 0; round < 10; round++) {
-		quarterRound(x, 0, 4, 8, 12);
-		quarterRound(x, 1, 5, 9, 13);
-		quarterRound(x, 2, 6, 10, 14);
-		quarterRound(x, 3, 7, 11, 15);
-		quarterRound(x, 0, 5, 10, 15);
-		quarterRound(x, 1, 6, 11, 12);
-		quarterRound(x, 2, 7, 8, 13);
-		quarterRound(x, 3, 4, 9, 14);
-	}
-	const out = new Array<uint8>(64);
-	for (let i = 0; i < 16; i++) {
-		const word = x[i] + state[i];
-		out[i * 4] = (word & 255) as uint8;
-		out[i * 4 + 1] = ((word >> 8) & 255) as uint8;
-		out[i * 4 + 2] = ((word >> 16) & 255) as uint8;
-		out[i * 4 + 3] = ((word >> 24) & 255) as uint8;
-	}
-	return out;
-}
-
-function chachaXor(
-	key: Readonly<uint8[]>,
-	nonce: Readonly<uint8[]>,
-	src: Readonly<uint8[]>,
-): uint8[] {
-	const out = new Array<uint8>(src.length);
-	let counter: uint32 = 1;
-	for (let at = 0; at < src.length; at += 64) {
-		const block = chachaBlock(key, counter, nonce);
-		counter = counter + 1;
-		for (let i = 0; i < 64 && at + i < src.length; i++) out[at + i] = src[at + i] ^ block[i];
-	}
-	return out;
-}
-
-function lengthOctets(value: int32): uint8[] {
-	const out = new Array<uint8>(8);
-	for (let i = 0; i < 4; i++) out[i] = ((value >> (8 * i)) & 255) as uint8;
-	return out;
-}
-
-function chachaPolyTag(
-	key: Readonly<uint8[]>,
+/** Seals `buf[at, +length)` in place and writes its tag to `buf[at + length, +aeadTagLength)`. */
+export function aeadSealAt(
+	key: AeadKey,
 	nonce: Readonly<uint8[]>,
 	aad: Readonly<uint8[]>,
-	cipher: Readonly<uint8[]>,
-	cipherLength: int32,
-): uint8[] {
-	const oneTimeKey = chachaBlock(key, 0, nonce);
-	const mac = newPoly1305(oneTimeKey, 0);
-	updatePoly1305(mac, aad, 0, aad.length as int32);
-	padPoly1305(mac);
-	updatePoly1305(mac, cipher, 0, cipherLength);
-	padPoly1305(mac);
-	updatePoly1305(mac, lengthOctets(aad.length as int32), 0, 8);
-	updatePoly1305(mac, lengthOctets(cipherLength), 0, 8);
-	const tag = new Array<uint8>(16);
-	finishPoly1305(mac, tag, 0);
-	wipeBytes(oneTimeKey);
-	return tag;
+	buf: uint8[],
+	at: int32,
+	length: int32,
+): void {
+	if (usesChacha(key.suite)) {
+		if (!chacha20Poly1305SealAt(key.chachaKey, nonce, aad, buf, at, length)) throw new Error(`chacha20-poly1305: bad nonce or range`);
+		return;
+	}
+	gcmEncryptInto(key.aesSchedule, nonce, aad, buf, at, length, buf, at, buf, at + length);
+}
+
+/** Opens `buf[at, +length)` in place once the tag after it verifies; false, with nothing written, when it does not. */
+export function aeadOpenAt(
+	key: AeadKey,
+	nonce: Readonly<uint8[]>,
+	aad: Readonly<uint8[]>,
+	buf: uint8[],
+	at: int32,
+	length: int32,
+): boolean {
+	if (usesChacha(key.suite)) return chacha20Poly1305OpenAt(key.chachaKey, nonce, aad, buf, at, length);
+	return gcmDecryptInto(key.aesSchedule, nonce, aad, buf, at, length, buf, at + length, buf, at);
+}
+
+function chachaKeyOf(key: Readonly<uint8[]>): uint32[] {
+	const words = new Array<uint32>(8);
+	if (!keyWords(key, words)) throw new Error(`chacha20-poly1305: key must be 32 bytes, got ${key.length}`);
+	return words;
 }
 
 /** RFC 8439 2.8 AEAD_CHACHA20_POLY1305 seal: cipher text || tag. */
