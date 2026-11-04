@@ -6,7 +6,7 @@
  * into whole records.
  */
 
-import { CipherSuite, AeadKey, newAeadKey, aeadSeal, aeadOpen, aeadTagLength, aeadNonceLength } from "./aead";
+import { CipherSuite, AeadKey, newAeadKey, aeadSealAt, aeadOpenAt, aeadTagLength, aeadNonceLength } from "./aead";
 import { hkdfExpandLabel } from "./keySchedule";
 import { wipeBytes } from "../pure/secret";
 
@@ -144,6 +144,52 @@ export enum RecordFailure {
 	SequenceExhausted,
 }
 
+function copyRange(out: uint8[], at: int32, data: Readonly<uint8[]>, from: int32, to: int32): void {
+	for (let i = from; i < to; i++) out[at + i - from] = data[i];
+}
+
+function putHeader(out: uint8[], at: int32, contentType: int32, length: int32): void {
+	out[at] = contentType as uint8;
+	out[at + 1] = 0x03;
+	out[at + 2] = 0x03;
+	out[at + 3] = ((length >> 8) & 255) as uint8;
+	out[at + 4] = (length & 255) as uint8;
+}
+
+/** Bytes of the protected record of `length` bytes of content, header included. */
+function sealedLength(keys: TrafficKeys, length: int32): int32 {
+	const body = keys.tls12 ? explicitNonceLength(keys) + length : length + 1;
+	return recordHeaderLength + body + aeadTagLength;
+}
+
+/**
+ * Writes the protected record of `data[from, to)` as `contentType` to `out` from `at`, sealing in place, and
+ * advances the sequence number; returns the end of the record.
+ */
+function sealInto(keys: TrafficKeys, contentType: int32, data: Readonly<uint8[]>, from: int32, to: int32, out: uint8[], at: int32): int32 {
+	const length = to - from;
+	const total = sealedLength(keys, length);
+	const bodyAt = at + recordHeaderLength;
+	if (keys.tls12) {
+		// The explicit nonce is the sequence number, which never repeats under one key.
+		const explicitLength = explicitNonceLength(keys);
+		const explicit = explicitLength > 0 ? sequenceOctets(keys.sequence) : [];
+		putHeader(out, at, contentType, total - recordHeaderLength);
+		copyRange(out, bodyAt, explicit, 0, explicitLength);
+		copyRange(out, bodyAt + explicitLength, data, from, to);
+		const aad = tls12AdditionalData(keys.sequence, contentType, length);
+		aeadSealAt(keys.key, tls12Nonce(keys, explicit), aad, out, bodyAt + explicitLength, length);
+	} else {
+		putHeader(out, at, contentApplicationData, total - recordHeaderLength);
+		copyRange(out, bodyAt, data, from, to);
+		out[bodyAt + length] = contentType as uint8;
+		const header = out.slice(at, bodyAt);
+		aeadSealAt(keys.key, recordNonce(keys.iv, keys.sequence), header, out, bodyAt, length + 1);
+	}
+	keys.sequence = keys.sequence + 1;
+	return at + total;
+}
+
 /** One protected record holding `data[from, to)` as `contentType`; advances the sequence number. */
 export function sealRecord(
 	keys: TrafficKeys,
@@ -153,28 +199,9 @@ export function sealRecord(
 	to: int32,
 ): Result<uint8[], RecordFailure> {
 	if (keys.sequence == exhaustedSequence) return Result.err(RecordFailure.SequenceExhausted);
-	if (keys.tls12) return Result.ok(sealTls12Record(keys, contentType, data.slice(from, to)));
-	const inner: uint8[] = [];
-	for (let i = from; i < to; i++) inner.push(data[i]);
-	inner.push(contentType as uint8);
-	const header = recordHeader(contentApplicationData, (inner.length as int32) + aeadTagLength);
-	const sealed = aeadSeal(keys.key, recordNonce(keys.iv, keys.sequence), header, inner);
-	keys.sequence = keys.sequence + 1;
-	const out: uint8[] = [...header];
-	for (let i = 0; i < sealed.length; i++) out.push(sealed[i]);
+	const out = new Array<uint8>(sealedLength(keys, to - from));
+	sealInto(keys, contentType, data, from, to, out, 0);
 	return Result.ok(out);
-}
-
-/** The explicit nonce is the sequence number, which never repeats under one key. */
-function sealTls12Record(keys: TrafficKeys, contentType: int32, plain: Readonly<uint8[]>): uint8[] {
-	const explicit = explicitNonceLength(keys) > 0 ? sequenceOctets(keys.sequence) : [];
-	const aad = tls12AdditionalData(keys.sequence, contentType, plain.length as int32);
-	const sealed = aeadSeal(keys.key, tls12Nonce(keys, explicit), aad, plain);
-	keys.sequence = keys.sequence + 1;
-	const out = recordHeader(contentType, (explicit.length + sealed.length) as int32);
-	for (let i = 0; i < explicit.length; i++) out.push(explicit[i]);
-	for (let i = 0; i < sealed.length; i++) out.push(sealed[i]);
-	return out;
 }
 
 /** Protected records of all of `data`, each at most 2^14 bytes of content. */
@@ -183,12 +210,17 @@ export function sealRecords(
 	contentType: int32,
 	data: Readonly<uint8[]>,
 ): Result<uint8[], RecordFailure> {
-	const out: uint8[] = [];
+	const length = data.length as int32;
+	const full = length / maxPlaintextLength;
+	const rest = length - full * maxPlaintextLength;
+	const total = full * sealedLength(keys, maxPlaintextLength) + (rest > 0 ? sealedLength(keys, rest) : 0);
+	const out = new Array<uint8>(total);
 	let at = 0;
-	while (at < data.length) {
-		const take = Math.min(data.length - at, maxPlaintextLength) as int32;
-		const record = try sealRecord(keys, contentType, data, at, at + take);
-		for (let i = 0; i < record.length; i++) out.push(record[i]);
+	let written = 0;
+	while (at < length) {
+		if (keys.sequence == exhaustedSequence) return Result.err(RecordFailure.SequenceExhausted);
+		const take = Math.min(length - at, maxPlaintextLength) as int32;
+		written = sealInto(keys, contentType, data, at, at + take, out, written);
 		at += take;
 	}
 	return Result.ok(out);
@@ -208,9 +240,9 @@ export interface InnerPlaintext {
 }
 
 /** One past the last nonzero byte of `plain`, 0 when all are zero, with no branch on the bytes (the padding length is secret). */
-function paddingStart(plain: Readonly<uint8[]>): int32 {
+function paddingStart(plain: Readonly<uint8[]>, length: int32): int32 {
 	let end = 0;
-	for (let i = 0; i < plain.length; i++) {
+	for (let i = 0; i < length; i++) {
 		const octet = plain[i] as int32;
 		const nonzero = (octet | -octet) >> 31;
 		end = (end & ~nonzero) | ((i + 1) & nonzero);
@@ -218,7 +250,7 @@ function paddingStart(plain: Readonly<uint8[]>): int32 {
 	return end;
 }
 
-/** Decrypts a protected record and strips its zero padding; advances the sequence number on success. */
+/** Decrypts a protected record in place in its body and strips its zero padding; advances the sequence number on success. */
 export function openRecord(
 	keys: TrafficKeys,
 	record: Record,
@@ -227,13 +259,16 @@ export function openRecord(
 	if (keys.tls12) return openTls12Record(keys, record);
 	if (record.body.length < aeadTagLength) return Result.err(RecordFailure.RecordOverflow);
 	if (record.body.length > maxCiphertextLength) return Result.err(RecordFailure.RecordOverflow);
-	const plain = aeadOpen(keys.key, recordNonce(keys.iv, keys.sequence), record.header, record.body);
-	if (plain == null) return Result.err(RecordFailure.BadRecordMac);
+	const plain = record.body;
+	const length = (plain.length as int32) - aeadTagLength;
+	if (!aeadOpenAt(keys.key, recordNonce(keys.iv, keys.sequence), record.header, plain, 0, length)) return Result.err(RecordFailure.BadRecordMac);
 	keys.sequence = keys.sequence + 1;
-	const end = paddingStart(plain);
+	const end = paddingStart(plain, length);
 	if (end == 0) return Result.err(RecordFailure.DecodeError);
 	if (end - 1 > maxPlaintextLength) return Result.err(RecordFailure.RecordOverflow);
-	return Result.ok({ contentType: plain[end - 1] as int32, content: plain.slice(0, end - 1) });
+	const contentType = plain[end - 1] as int32;
+	plain.setLength(end - 1);
+	return Result.ok({ contentType, content: plain });
 }
 
 function openTls12Record(keys: TrafficKeys, record: Record): Result<InnerPlaintext, RecordFailure> {
@@ -241,44 +276,67 @@ function openTls12Record(keys: TrafficKeys, record: Record): Result<InnerPlainte
 	const body = record.body;
 	if (body.length < explicitLength + aeadTagLength || body.length > maxCiphertextLength) return Result.err(RecordFailure.RecordOverflow);
 	const explicit = body.slice(0, explicitLength);
-	const sealed = body.slice(explicitLength);
-	const aad = tls12AdditionalData(keys.sequence, record.contentType, (sealed.length as int32) - aeadTagLength);
-	const plain = aeadOpen(keys.key, tls12Nonce(keys, explicit), aad, sealed);
-	if (plain == null) return Result.err(RecordFailure.BadRecordMac);
-	if (plain.length > maxPlaintextLength) return Result.err(RecordFailure.RecordOverflow);
+	const length = (body.length as int32) - explicitLength - aeadTagLength;
+	const aad = tls12AdditionalData(keys.sequence, record.contentType, length);
+	if (!aeadOpenAt(keys.key, tls12Nonce(keys, explicit), aad, body, explicitLength, length)) return Result.err(RecordFailure.BadRecordMac);
+	if (length > maxPlaintextLength) return Result.err(RecordFailure.RecordOverflow);
 	keys.sequence = keys.sequence + 1;
-	return Result.ok({ contentType: record.contentType, content: plain });
+	if (explicitLength == 0) {
+		body.setLength(length);
+		return Result.ok({ contentType: record.contentType, content: body });
+	}
+	return Result.ok({ contentType: record.contentType, content: body.slice(explicitLength, explicitLength + length) });
 }
 
-/** Bytes received but not yet cut into records. */
+/** Bytes received but not yet cut into records: `pending[start, pending.length)`. */
 export class RecordBuffer {
 	pending: uint8[];
+	start: int32;
 }
 
 export function newRecordBuffer(): RecordBuffer {
-	return { pending: [] };
+	return { pending: [], start: 0 };
 }
 
 export function append(this buffer: RecordBuffer, data: Readonly<uint8[]>): void {
-	for (let i = 0; i < data.length; i++) buffer.pending.push(data[i]);
+	if (buffer.start == buffer.pending.length) {
+		buffer.pending = data.slice(0);
+		buffer.start = 0;
+		return;
+	}
+	if (buffer.start > 0) {
+		buffer.pending = buffer.pending.slice(buffer.start);
+		buffer.start = 0;
+	}
+	const at = buffer.pending.length as int32;
+	buffer.pending.setLength(at + data.length);
+	copyRange(buffer.pending, at, data, 0, data.length as int32);
 }
 
 /** The length the next record needs, or -1 when its header has not arrived. */
 export function nextRecordLength(this buffer: RecordBuffer): int32 {
-	if (buffer.pending.length < recordHeaderLength) return -1;
-	return ((buffer.pending[3] as int32) << 8) | (buffer.pending[4] as int32);
+	const start = buffer.start;
+	if (buffer.pending.length - start < recordHeaderLength) return -1;
+	return ((buffer.pending[start + 3] as int32) << 8) | (buffer.pending[start + 4] as int32);
 }
 
 /** The next whole record, or null when more bytes are needed; check `nextRecordLength` against the limit first. */
 export function takeRecord(this buffer: RecordBuffer): Record | null {
 	const length = buffer.nextRecordLength();
-	if (length < 0 || buffer.pending.length < recordHeaderLength + length) return null;
-	const end = recordHeaderLength + length;
+	const start = buffer.start;
+	if (length < 0 || buffer.pending.length - start < recordHeaderLength + length) return null;
+	const bodyAt = start + recordHeaderLength;
+	const end = bodyAt + length;
 	const record: Record = {
-		contentType: buffer.pending[0] as int32,
-		header: buffer.pending.slice(0, recordHeaderLength),
-		body: buffer.pending.slice(recordHeaderLength, end),
+		contentType: buffer.pending[start] as int32,
+		header: buffer.pending.slice(start, bodyAt),
+		body: buffer.pending.slice(bodyAt, end),
 	};
-	buffer.pending = buffer.pending.slice(end);
+	if (end == buffer.pending.length) {
+		buffer.pending = [];
+		buffer.start = 0;
+	} else {
+		buffer.start = end;
+	}
 	return record;
 }
