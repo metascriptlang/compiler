@@ -6,6 +6,7 @@
 import { newHmac, updateHmac, finishHmacInto, hmacOf } from "../pure/hmac";
 import { hashOf } from "../pure/hash";
 import { newHashState } from "../pure/state";
+import { wipeBytes } from "../pure/secret";
 
 export function hashLength(kind: int32): int32 {
 	return newHashState(kind).outputSize;
@@ -47,6 +48,7 @@ export function hkdfExpand(
 		}
 		index += 1;
 	}
+	wipeBytes(block);
 	return out;
 }
 
@@ -101,6 +103,16 @@ export class KeySchedule {
 	serverApplicationSecret: uint8[];
 }
 
+function onDestroy(this schedule: KeySchedule): void {
+	wipeBytes(schedule.earlySecret);
+	wipeBytes(schedule.handshakeSecret);
+	wipeBytes(schedule.masterSecret);
+	wipeBytes(schedule.clientHandshakeSecret);
+	wipeBytes(schedule.serverHandshakeSecret);
+	wipeBytes(schedule.clientApplicationSecret);
+	wipeBytes(schedule.serverApplicationSecret);
+}
+
 /** Early, handshake and master secrets plus both handshake traffic secrets, from the (EC)DHE secret and Hash(ClientHello..ServerHello). */
 export function handshakeSchedule(
 	kind: int32,
@@ -113,7 +125,7 @@ export function handshakeSchedule(
 	const handshakeSalt = deriveSecret(kind, earlySecret, "derived", empty);
 	const handshakeSecret = hkdfExtract(kind, handshakeSalt, sharedSecret);
 	const masterSalt = deriveSecret(kind, handshakeSecret, "derived", empty);
-	return {
+	const schedule: KeySchedule = {
 		kind,
 		earlySecret,
 		handshakeSecret,
@@ -123,6 +135,9 @@ export function handshakeSchedule(
 		clientApplicationSecret: [],
 		serverApplicationSecret: [],
 	};
+	wipeBytes(handshakeSalt);
+	wipeBytes(masterSalt);
+	return schedule;
 }
 
 /** Both application traffic secrets from Hash(ClientHello..server Finished). */
@@ -142,7 +157,9 @@ export function finishedVerifyData(
 	transcriptHash: Readonly<uint8[]>,
 ): uint8[] {
 	const finishedKey = hkdfExpandLabel(kind, trafficSecret, "finished", [], hashLength(kind));
-	return hmacOf(kind, finishedKey, transcriptHash);
+	const verifyData = hmacOf(kind, finishedKey, transcriptHash);
+	wipeBytes(finishedKey);
+	return verifyData;
 }
 
 /** The TLS 1.2 PRF (RFC 5246 5): P_hash(secret, label + seed) cut to `length` bytes. */
@@ -162,7 +179,12 @@ export function tls12Prf(
 		for (let i = 0; i < labelSeed.length; i++) input.push(labelSeed[i]);
 		const block = hmacOf(kind, secret, input);
 		for (let i = 0; i < block.length && out.length < length; i++) out.push(block[i]);
-		a = hmacOf(kind, secret, a);
+		wipeBytes(block);
+		wipeBytes(input);
+		const next = hmacOf(kind, secret, a);
+		wipeBytes(a);
+		a = next;
 	}
+	wipeBytes(a);
 	return out;
 }

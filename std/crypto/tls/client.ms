@@ -28,10 +28,11 @@ import {
 } from "./aead";
 import { KeySchedule, handshakeSchedule, applicationSchedule, finishedVerifyData, tls12Prf } from "./keySchedule";
 import {
-	TrafficKeys, Record, RecordBuffer, OpenFailure, trafficKeysOf, tls12TrafficKeysOf, updatedTrafficKeys, plaintextRecords,
-	sealRecords, openRecord, newRecordBuffer, recordHeaderLength, maxCiphertextLength,
+	TrafficKeys, Record, RecordBuffer, RecordFailure, trafficKeysOf, tls12TrafficKeysOf, updatedTrafficKeys, plaintextRecords,
+	sealRecords, openRecord, newRecordBuffer, recordHeaderLength, maxCiphertextLength, maxPlaintextLength,
 	contentChangeCipherSpec, contentAlert, contentHandshake, contentApplicationData,
 } from "./record";
+import { wipeBytes } from "../pure/secret";
 
 /** The byte stream a connection runs over. */
 export abstract class TlsTransport {
@@ -85,6 +86,25 @@ const extensionCookie: int32 = 44;
 const extensionPskKeyExchangeModes: int32 = 45;
 const extensionKeyShare: int32 = 51;
 const extensionRenegotiationInfo: int32 = 0xff01;
+const extensionMaxFragmentLength: int32 = 1;
+const extensionUseSrtp: int32 = 14;
+const extensionHeartbeat: int32 = 15;
+const extensionClientCertificateType: int32 = 19;
+const extensionServerCertificateType: int32 = 20;
+const extensionRecordSizeLimit: int32 = 28;
+const extensionPreSharedKey: int32 = 41;
+const extensionEarlyData: int32 = 42;
+
+/** RFC 8446 4.2: the extensions each server message may carry; the ClientHello must also have carried them. */
+const tls13ServerHelloExtensions: Readonly<int32[]> = [extensionPreSharedKey, extensionKeyShare, extensionSupportedVersions];
+const helloRetryRequestExtensions: Readonly<int32[]> = [extensionKeyShare, extensionCookie, extensionSupportedVersions];
+const encryptedExtensions: Readonly<int32[]> = [
+	extensionServerName, extensionMaxFragmentLength, extensionSupportedGroups, extensionUseSrtp, extensionHeartbeat,
+	extensionAlpn, extensionClientCertificateType, extensionServerCertificateType, extensionRecordSizeLimit, extensionEarlyData,
+];
+
+/** The largest handshake message accepted; a certificate chain is the biggest a server sends. */
+export const maxHandshakeMessageLength: int32 = 1 << 18;
 
 const groupX25519: int32 = 0x001d;
 const groupSecp256r1: int32 = 0x0017;
@@ -129,6 +149,22 @@ function tlsError(message: string): CryptoError {
 
 function connectionError(message: string): CryptoError {
 	return cryptoError(CryptoErrorKind.ConnectionFailed, "tls13", message);
+}
+
+/** Refuses an extension the server may not send in this message or that `offered` lacks, and one it already sent. */
+function checkExtensionType(
+	type: int32,
+	allowed: Readonly<int32[]> | null,
+	offered: Readonly<int32[]>,
+	seen: int32[],
+	where: string,
+): Result<void, CryptoError> {
+	if ((allowed != null && !allowed.includes(type)) || !offered.includes(type)) {
+		return Result.err(tlsError("TlsUnsupportedExtension: extension " + String(type) + " in " + where));
+	}
+	if (seen.includes(type)) return Result.err(tlsError("TlsIllegalParameter: duplicate extension " + String(type) + " in " + where));
+	seen.push(type);
+	return Result.ok(null);
 }
 
 // ===== Encoding =====
@@ -216,6 +252,22 @@ function done(this d: Decoder): boolean {
 	return d.at >= d.end;
 }
 
+/** The extension types of the ClientHello `hs` sent last. */
+function offeredExtensions(hs: Tls13Handshake): int32[] {
+	const d = decoderOf(hs.clientHello);
+	d.takeBytes(4 + 2 + 32);
+	d.takeBytes(d.takeU8());
+	d.takeBytes(d.takeU16());
+	d.takeBytes(d.takeU8());
+	const extensions = decoderOf(d.takeBytes(d.takeU16()));
+	const types: int32[] = [];
+	while (!extensions.done()) {
+		types.push(extensions.takeU16());
+		extensions.takeBytes(extensions.takeU16());
+	}
+	return types;
+}
+
 function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
 	if (a.length != b.length) return false;
 	let diff = 0;
@@ -273,6 +325,19 @@ export class Tls13Handshake {
 	/** TLS 1.2: the server's read keys, installed by its ChangeCipherSpec. */
 	pendingServerKeys: TrafficKeys | null;
 	expectedServerFinished: uint8[];
+}
+
+/** Zeroes the ECDHE scalars once the shared secret is known. */
+function forgetKeyShares(hs: Tls13Handshake): void {
+	wipeBytes(hs.x25519Private);
+	wipeBytes(hs.p256Private);
+	wipeBytes(hs.p384Private);
+}
+
+function onDestroy(this hs: Tls13Handshake): void {
+	forgetKeyShares(hs);
+	wipeBytes(hs.preMasterSecret);
+	wipeBytes(hs.masterSecret);
 }
 
 function clientHelloOf(hs: Tls13Handshake, cookie: Readonly<uint8[]>): uint8[] {
@@ -494,9 +559,12 @@ function onHelloRetryRequest(
 	let version = 0;
 	let cookie: uint8[] = [];
 	let group = -1;
+	const seen: int32[] = [];
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const body = decoderOf(extensions.takeBytes(extensions.takeU16()));
+		if (extensions.bad) break;
+		try checkExtensionType(type, helloRetryRequestExtensions, [...offeredExtensions(hs), extensionCookie], seen, "HelloRetryRequest");
 		if (type == extensionSupportedVersions) version = body.takeU16();
 		else if (type == extensionCookie) cookie = body.takeBytes(body.takeU16());
 		else if (type == extensionKeyShare) group = body.takeU16();
@@ -542,22 +610,26 @@ function onServerHello(
 	let version = 0;
 	let group = -1;
 	let share: uint8[] = [];
+	const types: int32[] = [];
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
+		types.push(type);
 		if (type == extensionSupportedVersions) {
-			if (version != 0) return Result.err(tlsError("TlsIllegalParameter: duplicate supported_versions"));
 			version = ext.takeU16();
 		} else if (type == extensionKeyShare) {
-			if (group != -1) return Result.err(tlsError("TlsIllegalParameter: duplicate key_share"));
 			group = ext.takeU16();
 			share = ext.takeBytes(ext.takeU16());
 		}
-		if (ext.bad) return Result.err(tlsError("TlsDecodeError: ServerHello extension"));
+		const parsed = type == extensionSupportedVersions || type == extensionKeyShare;
+		if (ext.bad || (parsed && !ext.done())) return Result.err(tlsError("TlsDecodeError: ServerHello extension"));
 	}
 	if (d.bad || extensions.bad) return Result.err(tlsError("TlsDecodeError: ServerHello"));
 	if (version == 0 && hs.offerTls12 && !hs.retried) return onTls12ServerHello(hs, body, wrapped);
 	if (version != versionTls13) return Result.err(tlsError("TlsProtocolVersion: server did not select TLS 1.3"));
+	const seen: int32[] = [];
+	const offeredTypes = offeredExtensions(hs);
+	for (const type of types) try checkExtensionType(type, tls13ServerHelloExtensions, offeredTypes, seen, "ServerHello");
 	hs.version = versionTls13;
 	if (!sameBytes(sessionEcho, hs.sessionId)) return Result.err(tlsError("TlsIllegalParameter: session id echo"));
 	const suite = cipherSuiteOf(code);
@@ -571,6 +643,8 @@ function onServerHello(
 	}
 	updateHash(hs.transcript, wrapped);
 	hs.schedule = handshakeSchedule(suite.hashKind, shared, transcriptHash(hs));
+	wipeBytes(shared);
+	forgetKeyShares(hs);
 	hs.serverKeys = trafficKeysOf(suite, hs.schedule.serverHandshakeSecret);
 	hs.clientKeys = trafficKeysOf(suite, hs.schedule.clientHandshakeSecret);
 	hs.stage = Stage.EncryptedExtensions;
@@ -594,9 +668,13 @@ function onAlpn(hs: Tls13Handshake, ext: Decoder): Result<void, CryptoError> {
 function onEncryptedExtensions(hs: Tls13Handshake, body: Readonly<uint8[]>): Result<void, CryptoError> {
 	const d = decoderOf(body);
 	const extensions = decoderOf(d.takeBytes(d.takeU16()));
+	const offeredTypes = offeredExtensions(hs);
+	const seen: int32[] = [];
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
+		if (extensions.bad) break;
+		try checkExtensionType(type, encryptedExtensions, offeredTypes, seen, "EncryptedExtensions");
 		if (type == extensionAlpn) try onAlpn(hs, ext);
 		if (ext.bad) return Result.err(tlsError("TlsDecodeError: EncryptedExtensions extension"));
 	}
@@ -616,7 +694,7 @@ function onCertificate(
 	const chain: uint8[][] = [];
 	while (!list.done()) {
 		chain.push(list.takeBytes(list.takeU24()));
-		list.takeBytes(list.takeU16());
+		if (list.takeBytes(list.takeU16()).length > 0) return Result.err(tlsError("TlsUnsupportedExtension: CertificateEntry extensions were not requested"));
 	}
 	if (d.bad || list.bad || !d.done()) return Result.err(tlsError("TlsDecodeError: Certificate"));
 	try acceptChain(hs, chain, verifier);
@@ -781,12 +859,12 @@ function onServerFinished(
 		putU24(certificate, 0);
 		const message = handshakeMessage(handshakeCertificate, certificate);
 		updateHash(hs.transcript, message);
-		putBytes(flight, sealRecords(clientKeys, contentHandshake, message));
+		putBytes(flight, try sealed(clientKeys, contentHandshake, message));
 	}
 	const verifyData = finishedVerifyData(kind, hs.schedule.clientHandshakeSecret, transcriptHash(hs));
 	const finished = handshakeMessage(handshakeFinished, verifyData);
 	updateHash(hs.transcript, finished);
-	putBytes(flight, sealRecords(clientKeys, contentHandshake, finished));
+	putBytes(flight, try sealed(clientKeys, contentHandshake, finished));
 	if (!transport.send(flight)) return Result.err(connectionError("TlsWriteFailed"));
 	hs.stage = Stage.Done;
 	return Result.ok(null);
@@ -848,15 +926,18 @@ function onTls12ServerHello(hs: Tls13Handshake, body: Readonly<uint8[]>, wrapped
 	const code = d.takeU16();
 	d.takeU8();
 	const extensions = decoderOf(d.done() ? [] : d.takeBytes(d.takeU16()));
+	const offeredTypes = offeredExtensions(hs);
+	const seen: int32[] = [];
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
+		if (extensions.bad) break;
+		if (type == extensionKeyShare) return Result.err(tlsError("TlsUnsupportedExtension: key_share in a TLS 1.2 ServerHello"));
+		try checkExtensionType(type, null, offeredTypes, seen, "TLS 1.2 ServerHello");
 		if (type == extensionRenegotiationInfo) {
 			if (ext.takeU8() != 0 || !ext.done()) return Result.err(tlsError("TlsHandshakeFailure: renegotiation_info is not empty"));
 		} else if (type == extensionAlpn) {
 			try onAlpn(hs, ext);
-		} else if (type == extensionKeyShare) {
-			return Result.err(tlsError("TlsUnsupportedExtension: key_share in a TLS 1.2 ServerHello"));
 		}
 		if (ext.bad) return Result.err(tlsError("TlsDecodeError: ServerHello extension"));
 	}
@@ -949,6 +1030,7 @@ function onServerKeyExchange(hs: Tls13Handshake, body: Readonly<uint8[]>): Resul
 	const clientPublic = publicKeyOf(hs, group);
 	if (clientPublic == null) return Result.err(tlsError("TlsInsufficientEntropy: key exchange scalar out of range"));
 	hs.preMasterSecret = try sharedSecretOf(hs, group, point);
+	forgetKeyShares(hs);
 	hs.clientPublic = clientPublic;
 	hs.stage = Stage.ServerHelloDone;
 	return Result.ok(null);
@@ -979,6 +1061,12 @@ function installTls12Keys(hs: Tls13Handshake): void {
 	const serverIv = block.slice(2 * keyLength + ivLength, 2 * keyLength + 2 * ivLength);
 	hs.clientKeys = tls12TrafficKeysOf(suite, clientKey, clientIv);
 	hs.pendingServerKeys = tls12TrafficKeysOf(suite, serverKey, serverIv);
+	wipeBytes(block);
+	wipeBytes(clientKey);
+	wipeBytes(serverKey);
+	wipeBytes(clientIv);
+	wipeBytes(serverIv);
+	wipeBytes(hs.preMasterSecret);
 }
 
 /** Answers ServerHelloDone with [Certificate], ClientKeyExchange, ChangeCipherSpec and the encrypted Finished. */
@@ -1003,9 +1091,10 @@ function onServerHelloDone(hs: Tls13Handshake, body: Readonly<uint8[]>, transpor
 	const finished = handshakeMessage(handshakeFinished, tls12Prf(kind, hs.masterSecret, "client finished", transcriptHash(hs), 12));
 	updateHash(hs.transcript, finished);
 	hs.expectedServerFinished = tls12Prf(kind, hs.masterSecret, "server finished", transcriptHash(hs), 12);
+	wipeBytes(hs.masterSecret);
 	const flight = plaintextRecords(contentHandshake, plain, versionTls12);
 	putBytes(flight, [contentChangeCipherSpec as uint8, 0x03, 0x03, 0x00, 0x01, 0x01]);
-	putBytes(flight, sealRecords(clientKeys, contentHandshake, finished));
+	putBytes(flight, try sealed(clientKeys, contentHandshake, finished));
 	if (!transport.send(flight)) return Result.err(connectionError("TlsWriteFailed"));
 	hs.stage = Stage.Finished;
 	return Result.ok(null);
@@ -1048,17 +1137,46 @@ function readRecord(transport: TlsTransport, buffer: RecordBuffer): Result<Recor
 	}
 }
 
-function openFailureText(failure: OpenFailure): string {
+function recordFailureText(failure: RecordFailure): string {
 	return match (failure) {
-		OpenFailure.BadRecordMac => "TlsBadRecordMac",
-		OpenFailure.RecordOverflow => "TlsRecordOverflow",
-		OpenFailure.DecodeError => "TlsDecodeError",
+		RecordFailure.BadRecordMac => "TlsBadRecordMac",
+		RecordFailure.RecordOverflow => "TlsRecordOverflow",
+		RecordFailure.DecodeError => "TlsDecodeError",
+		RecordFailure.SequenceExhausted => "TlsSequenceExhausted: no record may follow under these keys",
 	};
+}
+
+/** `sealRecords` with its failure as the connection's error. */
+function sealed(keys: TrafficKeys, contentType: int32, data: Readonly<uint8[]>): Result<uint8[], CryptoError> {
+	const records = sealRecords(keys, contentType, data);
+	if (!records.ok) return Result.err(connectionError(recordFailureText(records.error)));
+	return Result.ok(records.value);
+}
+
+/** RFC 8446 6 and RFC 5246 7.2 alert descriptions, code then name. */
+const alertNames: Readonly<string[]> = [
+	"0", "close_notify", "10", "unexpected_message", "20", "bad_record_mac", "22", "record_overflow",
+	"40", "handshake_failure", "42", "bad_certificate", "43", "unsupported_certificate", "44", "certificate_revoked",
+	"45", "certificate_expired", "46", "certificate_unknown", "47", "illegal_parameter", "48", "unknown_ca",
+	"49", "access_denied", "50", "decode_error", "51", "decrypt_error", "70", "protocol_version",
+	"71", "insufficient_security", "80", "internal_error", "86", "inappropriate_fallback", "90", "user_canceled",
+	"100", "no_renegotiation", "109", "missing_extension", "110", "unsupported_extension", "112", "unrecognized_name",
+	"113", "bad_certificate_status_response", "115", "unknown_psk_identity", "116", "certificate_required",
+	"120", "no_application_protocol",
+];
+
+function alertName(description: int32): string {
+	const code = String(description);
+	for (let i = 0; i + 1 < alertNames.length; i += 2) {
+		if (alertNames[i] == code) return alertNames[i + 1];
+	}
+	return "unknown";
 }
 
 function alertError(content: Readonly<uint8[]>): CryptoError {
 	if (content.length != 2) return connectionError("TlsDecodeError: alert length");
-	return connectionError("TlsAlert: level " + String(content[0]) + " description " + String(content[1]));
+	const description = content[1] as int32;
+	return connectionError("TlsAlert: " + alertName(description) + " (level " + String(content[0]) + " description " + String(description) + ")");
 }
 
 /** Runs the handshake of `hs` over `transport`: sends its ClientHello, then reads until the server Finished is answered. */
@@ -1081,12 +1199,14 @@ export function completeHandshake(
 			}
 			continue;
 		}
+		if (serverKeys == null && record.body.length > maxPlaintextLength) return Result.err(tlsError("TlsRecordOverflow: plaintext record of " + String(record.body.length) + " bytes"));
+		if (serverKeys == null && record.body.length == 0) return Result.err(tlsError("TlsDecodeError: empty plaintext record"));
 		if (record.contentType == contentAlert && serverKeys == null) return Result.err(alertError(record.body));
 		if (record.contentType == contentHandshake && serverKeys == null) {
 			putBytes(messages, record.body);
 		} else if (serverKeys != null && (serverKeys.tls12 || record.contentType == contentApplicationData)) {
 			const opened = openRecord(serverKeys, record);
-			if (!opened.ok) return Result.err(tlsError(openFailureText(opened.error)));
+			if (!opened.ok) return Result.err(tlsError(recordFailureText(opened.error)));
 			const inner = opened.value;
 			if (inner.contentType == contentAlert) return Result.err(alertError(inner.content));
 			if (inner.contentType != contentHandshake) return Result.err(tlsError("TlsUnexpectedMessage: content type " + String(inner.contentType) + " during handshake"));
@@ -1098,6 +1218,7 @@ export function completeHandshake(
 		}
 		while (messages.length >= 4 && hs.stage != Stage.Done) {
 			const length = ((messages[1] as int32) << 16) | ((messages[2] as int32) << 8) | (messages[3] as int32);
+			if (length > maxHandshakeMessageLength) return Result.err(tlsError("TlsDecodeError: handshake message of " + String(length) + " bytes"));
 			if (messages.length < 4 + length) break;
 			const type = messages[0] as int32;
 			const wrapped = messages.slice(0, 4 + length);
@@ -1110,6 +1231,7 @@ export function completeHandshake(
 			}
 		}
 	}
+	if (messages.length > 0) return Result.err(tlsError("TlsUnexpectedMessage: handshake data after the server Finished"));
 	let readKeys = hs.serverKeys;
 	let writeKeys = hs.clientKeys;
 	if (hs.version == versionTls13) {
@@ -1171,7 +1293,7 @@ export class Tls13Client {
 
 function sendKeyUpdate(c: Tls13Client, requestPeer: boolean): Result<void, CryptoError> {
 	const message = handshakeMessage(handshakeKeyUpdate, [requestPeer ? 1 : 0]);
-	if (!c.transport.send(sealRecords(c.writeKeys, contentHandshake, message))) return Result.err(connectionError("TlsWriteFailed"));
+	if (!c.transport.send(try sealed(c.writeKeys, contentHandshake, message))) return Result.err(connectionError("TlsWriteFailed"));
 	c.writeKeys = updatedTrafficKeys(c.writeKeys);
 	return Result.ok(null);
 }
@@ -1190,6 +1312,7 @@ function onPostHandshake(c: Tls13Client, content: Readonly<uint8[]>): Result<voi
 			if (length != 1) return Result.err(connectionError("TlsDecodeError: KeyUpdate"));
 			const request = content[at + 4] as int32;
 			if (request > 1) return Result.err(connectionError("TlsIllegalParameter: KeyUpdate request"));
+			if (next != content.length) return Result.err(connectionError("TlsUnexpectedMessage: KeyUpdate is not the last message of its record"));
 			c.readKeys = updatedTrafficKeys(c.readKeys);
 			if (request == 1) try sendKeyUpdate(c, false);
 		} else if (type != handshakeNewSessionTicket) {
@@ -1206,7 +1329,7 @@ function pumpRecord(c: Tls13Client): Result<void, CryptoError> {
 	const allowed = c.version == versionTls12 ? record.contentType != contentChangeCipherSpec : record.contentType == contentApplicationData;
 	if (!allowed) return Result.err(connectionError("TlsUnexpectedMessage: record type " + String(record.contentType)));
 	const opened = openRecord(c.readKeys, record);
-	if (!opened.ok) return Result.err(connectionError(openFailureText(opened.error)));
+	if (!opened.ok) return Result.err(connectionError(recordFailureText(opened.error)));
 	const inner = opened.value;
 	if (inner.contentType == contentApplicationData) {
 		putBytes(c.plaintext, inner.content);
@@ -1236,7 +1359,7 @@ export function read(this c: Tls13Client, maxBytes: int32 = 16384): Result<uint8
 export function write(this c: Tls13Client, data: Readonly<uint8[]>): Result<void, CryptoError> {
 	if (c.sentCloseNotify) return Result.err(connectionError("TLS connection is closed"));
 	if (data.length == 0) return Result.ok(null);
-	if (!c.transport.send(sealRecords(c.writeKeys, contentApplicationData, data))) return Result.err(connectionError("TlsWriteFailed"));
+	if (!c.transport.send(try sealed(c.writeKeys, contentApplicationData, data))) return Result.err(connectionError("TlsWriteFailed"));
 	return Result.ok(null);
 }
 
@@ -1251,6 +1374,6 @@ export function updateKeys(this c: Tls13Client, requestPeer: boolean): Result<vo
 export function close(this c: Tls13Client): Result<void, CryptoError> {
 	if (c.sentCloseNotify) return Result.ok(null);
 	c.sentCloseNotify = true;
-	if (!c.transport.send(sealRecords(c.writeKeys, contentAlert, [1, alertCloseNotify as uint8]))) return Result.err(connectionError("TlsWriteFailed"));
+	if (!c.transport.send(try sealed(c.writeKeys, contentAlert, [1, alertCloseNotify as uint8]))) return Result.err(connectionError("TlsWriteFailed"));
 	return Result.ok(null);
 }

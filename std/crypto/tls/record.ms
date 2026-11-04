@@ -8,6 +8,7 @@
 
 import { CipherSuite, AeadKey, newAeadKey, aeadSeal, aeadOpen, aeadTagLength, aeadNonceLength } from "./aead";
 import { hkdfExpandLabel } from "./keySchedule";
+import { wipeBytes } from "../pure/secret";
 
 export const recordHeaderLength: int32 = 5;
 export const maxPlaintextLength: int32 = 1 << 14;
@@ -29,17 +30,28 @@ export class TrafficKeys {
 	tls12: boolean;
 }
 
+/** The sequence number no record may use: one more would wrap to 0 and repeat a nonce under the same key. */
+export const exhaustedSequence: uint64 = 0xffffffffffffffff;
+
+function onDestroy(this keys: TrafficKeys): void {
+	wipeBytes(keys.secret);
+	wipeBytes(keys.iv);
+}
+
 /** The key and IV of a traffic secret (RFC 8446 7.3), sequence number 0. */
 export function trafficKeysOf(suite: CipherSuite, secret: Readonly<uint8[]>): TrafficKeys {
 	const kind = suite.hashKind;
-	return {
+	const key = hkdfExpandLabel(kind, secret, "key", [], suite.keyLength);
+	const keys: TrafficKeys = {
 		suite,
 		secret: [...secret],
-		key: newAeadKey(suite.code, hkdfExpandLabel(kind, secret, "key", [], suite.keyLength)),
+		key: newAeadKey(suite.code, key),
 		iv: hkdfExpandLabel(kind, secret, "iv", [], aeadNonceLength),
 		sequence: 0,
 		tls12: false,
 	};
+	wipeBytes(key);
+	return keys;
 }
 
 /** TLS 1.2 keys from the key block: a 4-byte GCM salt with an explicit 8-byte nonce per record, or a 12-byte ChaCha20-Poly1305 IV. */
@@ -78,7 +90,9 @@ function tls12Nonce(keys: TrafficKeys, explicit: Readonly<uint8[]>): uint8[] {
 export function updatedTrafficKeys(keys: TrafficKeys): TrafficKeys {
 	const kind = keys.suite.hashKind;
 	const next = hkdfExpandLabel(kind, keys.secret, "traffic upd", [], keys.secret.length as int32);
-	return trafficKeysOf(keys.suite, next);
+	const updated = trafficKeysOf(keys.suite, next);
+	wipeBytes(next);
+	return updated;
 }
 
 /** The per-record nonce: the IV xored with the big-endian sequence number in its last 8 bytes. */
@@ -122,6 +136,14 @@ export function plaintextRecords(
 	return out;
 }
 
+export enum RecordFailure {
+	BadRecordMac,
+	RecordOverflow,
+	DecodeError,
+	/** The sequence number reached `exhaustedSequence`; the connection must end (or rekey) before another record. */
+	SequenceExhausted,
+}
+
 /** One protected record holding `data[from, to)` as `contentType`; advances the sequence number. */
 export function sealRecord(
 	keys: TrafficKeys,
@@ -129,8 +151,9 @@ export function sealRecord(
 	data: Readonly<uint8[]>,
 	from: int32,
 	to: int32,
-): uint8[] {
-	if (keys.tls12) return sealTls12Record(keys, contentType, data.slice(from, to));
+): Result<uint8[], RecordFailure> {
+	if (keys.sequence == exhaustedSequence) return Result.err(RecordFailure.SequenceExhausted);
+	if (keys.tls12) return Result.ok(sealTls12Record(keys, contentType, data.slice(from, to)));
 	const inner: uint8[] = [];
 	for (let i = from; i < to; i++) inner.push(data[i]);
 	inner.push(contentType as uint8);
@@ -139,7 +162,7 @@ export function sealRecord(
 	keys.sequence = keys.sequence + 1;
 	const out: uint8[] = [...header];
 	for (let i = 0; i < sealed.length; i++) out.push(sealed[i]);
-	return out;
+	return Result.ok(out);
 }
 
 /** The explicit nonce is the sequence number, which never repeats under one key. */
@@ -159,16 +182,16 @@ export function sealRecords(
 	keys: TrafficKeys,
 	contentType: int32,
 	data: Readonly<uint8[]>,
-): uint8[] {
+): Result<uint8[], RecordFailure> {
 	const out: uint8[] = [];
 	let at = 0;
 	while (at < data.length) {
 		const take = Math.min(data.length - at, maxPlaintextLength) as int32;
-		const record = sealRecord(keys, contentType, data, at, at + take);
+		const record = try sealRecord(keys, contentType, data, at, at + take);
 		for (let i = 0; i < record.length; i++) out.push(record[i]);
 		at += take;
 	}
-	return out;
+	return Result.ok(out);
 }
 
 /** A record as it arrived: outer content type, header and body. */
@@ -184,40 +207,45 @@ export interface InnerPlaintext {
 	content: uint8[];
 }
 
-export enum OpenFailure {
-	BadRecordMac,
-	RecordOverflow,
-	DecodeError,
+/** One past the last nonzero byte of `plain`, 0 when all are zero, with no branch on the bytes (the padding length is secret). */
+function paddingStart(plain: Readonly<uint8[]>): int32 {
+	let end = 0;
+	for (let i = 0; i < plain.length; i++) {
+		const octet = plain[i] as int32;
+		const nonzero = (octet | -octet) >> 31;
+		end = (end & ~nonzero) | ((i + 1) & nonzero);
+	}
+	return end;
 }
 
 /** Decrypts a protected record and strips its zero padding; advances the sequence number on success. */
 export function openRecord(
 	keys: TrafficKeys,
 	record: Record,
-): Result<InnerPlaintext, OpenFailure> {
+): Result<InnerPlaintext, RecordFailure> {
+	if (keys.sequence == exhaustedSequence) return Result.err(RecordFailure.SequenceExhausted);
 	if (keys.tls12) return openTls12Record(keys, record);
-	if (record.body.length < aeadTagLength) return Result.err(OpenFailure.RecordOverflow);
-	if (record.body.length > maxCiphertextLength) return Result.err(OpenFailure.RecordOverflow);
+	if (record.body.length < aeadTagLength) return Result.err(RecordFailure.RecordOverflow);
+	if (record.body.length > maxCiphertextLength) return Result.err(RecordFailure.RecordOverflow);
 	const plain = aeadOpen(keys.key, recordNonce(keys.iv, keys.sequence), record.header, record.body);
-	if (plain == null) return Result.err(OpenFailure.BadRecordMac);
+	if (plain == null) return Result.err(RecordFailure.BadRecordMac);
 	keys.sequence = keys.sequence + 1;
-	let end = plain.length as int32;
-	while (end > 0 && plain[end - 1] == 0) end -= 1;
-	if (end == 0) return Result.err(OpenFailure.DecodeError);
-	if (end - 1 > maxPlaintextLength) return Result.err(OpenFailure.RecordOverflow);
+	const end = paddingStart(plain);
+	if (end == 0) return Result.err(RecordFailure.DecodeError);
+	if (end - 1 > maxPlaintextLength) return Result.err(RecordFailure.RecordOverflow);
 	return Result.ok({ contentType: plain[end - 1] as int32, content: plain.slice(0, end - 1) });
 }
 
-function openTls12Record(keys: TrafficKeys, record: Record): Result<InnerPlaintext, OpenFailure> {
+function openTls12Record(keys: TrafficKeys, record: Record): Result<InnerPlaintext, RecordFailure> {
 	const explicitLength = explicitNonceLength(keys);
 	const body = record.body;
-	if (body.length < explicitLength + aeadTagLength || body.length > maxCiphertextLength) return Result.err(OpenFailure.RecordOverflow);
+	if (body.length < explicitLength + aeadTagLength || body.length > maxCiphertextLength) return Result.err(RecordFailure.RecordOverflow);
 	const explicit = body.slice(0, explicitLength);
 	const sealed = body.slice(explicitLength);
 	const aad = tls12AdditionalData(keys.sequence, record.contentType, (sealed.length as int32) - aeadTagLength);
 	const plain = aeadOpen(keys.key, tls12Nonce(keys, explicit), aad, sealed);
-	if (plain == null) return Result.err(OpenFailure.BadRecordMac);
-	if (plain.length > maxPlaintextLength) return Result.err(OpenFailure.RecordOverflow);
+	if (plain == null) return Result.err(RecordFailure.BadRecordMac);
+	if (plain.length > maxPlaintextLength) return Result.err(RecordFailure.RecordOverflow);
 	keys.sequence = keys.sequence + 1;
 	return Result.ok({ contentType: record.contentType, content: plain });
 }

@@ -12,8 +12,8 @@ import {
 	chachaPolySeal, chachaPolyOpen, aeadSeal, aeadTagLength,
 } from "./aead";
 import {
-	TrafficKeys, Record, OpenFailure, trafficKeysOf, sealRecord, openRecord, recordHeader, recordNonce,
-	contentApplicationData, contentHandshake,
+	TrafficKeys, Record, RecordFailure, trafficKeysOf, sealRecord, openRecord, recordHeader, recordNonce,
+	contentApplicationData, contentHandshake, exhaustedSequence, updatedTrafficKeys,
 } from "./record";
 import {
 	TlsTransport, CertificateVerifier, Tls13Options, Tls13Handshake, newHandshake, completeHandshake, signatureAcceptable, read, write, close,
@@ -298,12 +298,19 @@ function recordOf(bytes: Readonly<uint8[]>): Record {
 	return { contentType: bytes[0] as int32, header: bytes.slice(0, 5), body: bytes.slice(5) };
 }
 
+/** `sealRecord` for keys whose sequence number has room. */
+function sealedRecord(keys: TrafficKeys, contentType: int32, data: Readonly<uint8[]>, from: int32, to: int32): uint8[] {
+	const sealed = sealRecord(keys, contentType, data, from, to);
+	if (!sealed.ok) throw new Error("sealRecord failed");
+	return sealed.value;
+}
+
 test "records seal and open under every suite, with sequence numbers in step" {
 	for (const code of [suiteAes128GcmSha256, suiteAes256GcmSha384, suiteChacha20Poly1305Sha256]) {
 		const writer = keysFor(code);
 		const reader = keysFor(code);
 		for (let n = 0; n < 3; n++) {
-			const sealed = sealRecord(writer, contentHandshake, counting(n * 10), 0, n * 10);
+			const sealed = sealedRecord(writer, contentHandshake, counting(n * 10), 0, n * 10);
 			assert sealed[0] == 23 && sealed[1] == 3 && sealed[2] == 3;
 			assert sealed.length == 5 + n * 10 + 1 + aeadTagLength;
 			const opened = openRecord(reader, recordOf(sealed));
@@ -317,12 +324,12 @@ test "records seal and open under every suite, with sequence numbers in step" {
 
 test "a tampered record, header or sequence number is refused" {
 	const writer = keysFor(suiteAes128GcmSha256);
-	const sealed = sealRecord(writer, contentApplicationData, counting(20), 0, 20);
+	const sealed = sealedRecord(writer, contentApplicationData, counting(20), 0, 20);
 	const body = [...sealed];
 	body[9] = body[9] ^ 1;
 	const reader = keysFor(suiteAes128GcmSha256);
 	const first = openRecord(reader, recordOf(body));
-	assert !first.ok && first.error == OpenFailure.BadRecordMac;
+	assert !first.ok && first.error == RecordFailure.BadRecordMac;
 	assert reader.sequence == 0;
 	const header = [...sealed];
 	header[2] = 1;
@@ -333,7 +340,7 @@ test "a tampered record, header or sequence number is refused" {
 	assert openRecord(reader, recordOf(sealed)).ok;
 	const short = recordOf([23, 3, 3, 0, 4, 1, 2, 3, 4]);
 	const tooShort = openRecord(reader, short);
-	assert !tooShort.ok && tooShort.error == OpenFailure.RecordOverflow;
+	assert !tooShort.ok && tooShort.error == RecordFailure.RecordOverflow;
 }
 
 test "padding is stripped and an all-zero inner plaintext is refused" {
@@ -347,13 +354,18 @@ test "padding is stripped and an all-zero inner plaintext is refused" {
 	const opened = openRecord(reader, recordOf(padded));
 	assert opened.ok && opened.value.contentType == contentApplicationData;
 	assert opened.value.content.encodeHex() == "aabb";
+	const inner2: uint8[] = [0, 0xaa, 0, contentHandshake as uint8, 0, 0];
+	const header2 = recordHeader(contentApplicationData, inner2.length as int32 + aeadTagLength);
+	const zeroInside = [...header2, ...aeadSeal(writer.key, recordNonce(writer.iv, 1), header2, inner2)];
+	const keptZeros = openRecord(reader, recordOf(zeroInside));
+	assert keptZeros.ok && keptZeros.value.contentType == contentHandshake && keptZeros.value.content.encodeHex() == "00aa00";
 	const zeros = new Array<uint8>(6);
 	const zeroHeader = recordHeader(contentApplicationData, 6 + aeadTagLength);
 	const zeroRecord = [...zeroHeader];
-	const zeroSealed = aeadSeal(writer.key, recordNonce(writer.iv, 1), zeroHeader, zeros);
+	const zeroSealed = aeadSeal(writer.key, recordNonce(writer.iv, 2), zeroHeader, zeros);
 	for (let i = 0; i < zeroSealed.length; i++) zeroRecord.push(zeroSealed[i]);
 	const refused = openRecord(reader, recordOf(zeroRecord));
-	assert !refused.ok && refused.error == OpenFailure.DecodeError;
+	assert !refused.ok && refused.error == RecordFailure.DecodeError;
 }
 
 test "the nonce xors the big-endian sequence number into the IV's last 8 bytes" {
@@ -361,4 +373,39 @@ test "the nonce xors the big-endian sequence number into the IV's last 8 bytes" 
 	assert recordNonce(iv, 0).encodeHex() == "5d313eb2671276ee13000b30";
 	assert recordNonce(iv, 1).encodeHex() == "5d313eb2671276ee13000b31";
 	assert recordNonce(iv, 0x0102030405060708).encodeHex() == "5d313eb2661075ea16060c38";
+}
+
+test "no record is sealed or opened at the last sequence number" {
+	const writer = keysFor(suiteAes128GcmSha256);
+	writer.sequence = exhaustedSequence - 1;
+	const lastRecord = sealedRecord(writer, contentApplicationData, counting(4), 0, 4);
+	assert writer.sequence == exhaustedSequence;
+	const refused = sealRecord(writer, contentApplicationData, counting(4), 0, 4);
+	assert !refused.ok && refused.error == RecordFailure.SequenceExhausted;
+	const reader = keysFor(suiteAes128GcmSha256);
+	reader.sequence = exhaustedSequence - 1;
+	assert openRecord(reader, recordOf(lastRecord)).ok;
+	const exhausted = openRecord(reader, recordOf(lastRecord));
+	assert !exhausted.ok && exhausted.error == RecordFailure.SequenceExhausted;
+}
+
+test "traffic keys zero their secret, IV and AEAD key when dropped or replaced" {
+	let keys: TrafficKeys | null = keysFor(suiteAes128GcmSha256);
+	const secret = (keys as TrafficKeys).secret;
+	const iv = (keys as TrafficKeys).iv;
+	const key = (keys as TrafficKeys).key.key;
+	const schedule = (keys as TrafficKeys).key.aesSchedule;
+	assert secret[0] == 7 && orOf(iv) != 0 && orOf(key) != 0;
+	keys = updatedTrafficKeys(keys as TrafficKeys);
+	assert orOf((keys as TrafficKeys).secret) != 0;
+	assert orOf(secret) == 0 && orOf(iv) == 0 && orOf(key) == 0;
+	let words: uint32 = 0;
+	for (const word of schedule) words |= word;
+	assert schedule.length > 0 && words == 0;
+}
+
+function orOf(bytes: Readonly<uint8[]>): int32 {
+	let any = 0;
+	for (const octet of bytes) any |= octet as int32;
+	return any;
 }

@@ -13,7 +13,7 @@ import {
 	suiteEcdheRsaAes128GcmSha256, suiteEcdheEcdsaAes256GcmSha384, suiteEcdheEcdsaChacha20Poly1305Sha256,
 } from "./aead";
 import {
-	TrafficKeys, Record, OpenFailure, tls12TrafficKeysOf, sealRecord, openRecord,
+	TrafficKeys, Record, RecordFailure, tls12TrafficKeysOf, sealRecord, openRecord,
 	contentApplicationData, contentHandshake, contentAlert,
 } from "./record";
 import { TlsTransport, Tls13Handshake, newHandshake, completeHandshake, entropyLength } from "./client";
@@ -109,6 +109,13 @@ function recordOf(bytes: Readonly<uint8[]>): Record {
 	return { contentType: bytes[0] as int32, header: bytes.slice(0, 5), body: bytes.slice(5) };
 }
 
+/** `sealRecord` for keys whose sequence number has room. */
+function sealedRecord(keys: TrafficKeys, contentType: int32, data: Readonly<uint8[]>, from: int32, to: int32): uint8[] {
+	const sealed = sealRecord(keys, contentType, data, from, to);
+	if (!sealed.ok) throw new Error("sealRecord failed");
+	return sealed.value;
+}
+
 test "TLS 1.2 records seal and open under GCM with an explicit nonce and under ChaCha20-Poly1305 without one" {
 	for (const code of [suiteEcdheRsaAes128GcmSha256, suiteEcdheEcdsaAes256GcmSha384, suiteEcdheEcdsaChacha20Poly1305Sha256]) {
 		const writer = tls12Keys(code);
@@ -116,7 +123,7 @@ test "TLS 1.2 records seal and open under GCM with an explicit nonce and under C
 		const explicit = code == suiteEcdheEcdsaChacha20Poly1305Sha256 ? 0 : 8;
 		for (let n = 0; n < 3; n++) {
 			const type = n == 1 ? contentHandshake : contentApplicationData;
-			const sealed = sealRecord(writer, type, counting(n * 10), 0, n * 10);
+			const sealed = sealedRecord(writer, type, counting(n * 10), 0, n * 10);
 			assert sealed[0] == type && sealed[1] == 3 && sealed[2] == 3;
 			assert sealed.length == 5 + explicit + n * 10 + aeadTagLength;
 			if (explicit == 8) assert sealed[12] == n;
@@ -132,12 +139,12 @@ test "TLS 1.2 records seal and open under GCM with an explicit nonce and under C
 test "a tampered TLS 1.2 record, type, explicit nonce or sequence number is refused" {
 	for (const code of [suiteEcdheRsaAes128GcmSha256, suiteEcdheEcdsaChacha20Poly1305Sha256]) {
 		const writer = tls12Keys(code);
-		const sealed = sealRecord(writer, contentApplicationData, counting(20), 0, 20);
+		const sealed = sealedRecord(writer, contentApplicationData, counting(20), 0, 20);
 		const reader = tls12Keys(code);
 		const body = [...sealed];
 		body[sealed.length - 20] = body[sealed.length - 20] ^ 1;
 		const first = openRecord(reader, recordOf(body));
-		assert !first.ok && first.error == OpenFailure.BadRecordMac;
+		assert !first.ok && first.error == RecordFailure.BadRecordMac;
 		assert reader.sequence == 0;
 		const retyped = [...sealed];
 		retyped[0] = contentAlert as uint8;
@@ -150,7 +157,7 @@ test "a tampered TLS 1.2 record, type, explicit nonce or sequence number is refu
 		reader.sequence = 0;
 		assert openRecord(reader, recordOf(sealed)).ok;
 		const short = openRecord(reader, recordOf([23, 3, 3, 0, 4, 1, 2, 3, 4]));
-		assert !short.ok && short.error == OpenFailure.RecordOverflow;
+		assert !short.ok && short.error == RecordFailure.RecordOverflow;
 	}
 }
 
@@ -210,4 +217,41 @@ test "a HelloRetryRequest for P-384 is answered with a single P-384 key share" {
 	assert !done.ok && done.error.message == "TlsConnectionTruncated";
 	assert hs.retried && hs.shareGroups.length == 1 && hs.shareGroups[0] == 0x0018;
 	assert hs.clientHello.encodeHex().includes("00330067006500180061");
+}
+
+/** The handshake's error after a scripted server sends `incoming`. */
+function refusal(hs: Tls13Handshake, incoming: uint8[]): string {
+	const done = completeHandshake(hs, new ScriptedTransport(incoming), refuseAll);
+	return done.ok ? "connected" : done.error.message;
+}
+
+const x25519Share = "00330024001d0020" + "09".repeat(32);
+
+test "a ServerHello extension the ClientHello did not carry, or one sent twice, is refused" {
+	const unknown13 = handshakeOffering(false);
+	const withUnknown = serverHelloRecord(unknown13, counting(32), 0x1301, "002b00020304" + x25519Share + "fafa0000");
+	assert refusal(unknown13, withUnknown) == "TlsUnsupportedExtension: extension 64250 in ServerHello";
+	const twice13 = handshakeOffering(false);
+	assert refusal(twice13, serverHelloRecord(twice13, counting(32), 0x1301, "002b00020304002b00020304" + x25519Share)).includes("duplicate extension 43");
+	const unknown12 = handshakeOffering(true);
+	const extendedMasterSecret = serverHelloRecord(unknown12, counting(32), suiteEcdheRsaAes128GcmSha256, emptyRenegotiationInfo + "00170000");
+	assert refusal(unknown12, extendedMasterSecret) == "TlsUnsupportedExtension: extension 23 in TLS 1.2 ServerHello";
+	const twice12 = handshakeOffering(true);
+	assert refusal(twice12, serverHelloRecord(twice12, counting(32), suiteEcdheRsaAes128GcmSha256, emptyRenegotiationInfo + emptyRenegotiationInfo)).includes("duplicate extension 65281");
+}
+
+function plaintextRecord(type: int32, body: Readonly<uint8[]>): uint8[] {
+	return [type as uint8, 3, 3, ((body.length >> 8) & 255) as uint8, (body.length & 255) as uint8, ...body];
+}
+
+test "oversized, empty and unknown records, an oversized handshake message and an alert are refused by name" {
+	assert refusal(handshakeOffering(true), plaintextRecord(contentHandshake, new Array<uint8>((1 << 14) + 1))) == "TlsRecordOverflow: plaintext record of 16385 bytes";
+	const overCiphertext: uint8[] = [contentApplicationData as uint8, 3, 3, 0x41, 0x01];
+	assert refusal(handshakeOffering(true), overCiphertext) == "TlsRecordOverflow";
+	assert refusal(handshakeOffering(true), plaintextRecord(contentHandshake, [])) == "TlsDecodeError: empty plaintext record";
+	assert refusal(handshakeOffering(true), plaintextRecord(99, [1])) == "TlsUnexpectedMessage: record type 99";
+	assert refusal(handshakeOffering(true), plaintextRecord(contentHandshake, [2, 0x04, 0, 1])) == "TlsDecodeError: handshake message of 262145 bytes";
+	assert refusal(handshakeOffering(true), plaintextRecord(contentAlert, [2, 40])) == "TlsAlert: handshake_failure (level 2 description 40)";
+	assert refusal(handshakeOffering(true), plaintextRecord(contentAlert, [2, 40, 0])) == "TlsDecodeError: alert length";
+	assert refusal(handshakeOffering(true), plaintextRecord(contentHandshake, [1, 0, 0, 0])) == "TlsUnexpectedMessage: expected ServerHello";
 }
