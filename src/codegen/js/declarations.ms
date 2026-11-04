@@ -178,7 +178,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 	gen.indentLevel = gen.indentLevel + 1;
 	if (d.classDisplayName == "") throw new Error(`internal: class '${d.className}' has no source display name`);
 	emitIndent(gen);
-	emit(gen, `static [globalThis.Symbol.for("metascript.typeDisplayName")] = "${escapeJSString(d.classDisplayName)}";\n`);
+	emit(gen, `static get "metascript.typeDisplayName"() { return "${escapeJSString(d.classDisplayName)}"; }\n`);
 	const staticMethods: Node[] = [];
 	for (const member of d.classBody) {
 		if (generic && !isStaticClassState(member) && !(member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic)) continue;

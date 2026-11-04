@@ -72,7 +72,7 @@ export const ACTOR_EXIT_STOP: string[] = [
 	"\tif (stopped > 0) { globalThis.setImmediate(function () {}); return; }",
 	"\tfor (var a of parked) {",
 	"\t\tif (typeof a.onTerminate !== \"function\") continue;",
-	"\t\tproc.stderr.write(\"Warning: Detected unsettled await in actor \" + a.constructor[globalThis.Symbol.for(\"metascript.typeDisplayName\")] + \" at exit: its onTerminate cannot run\\n\");",
+	"\t\tproc.stderr.write(\"Warning: Detected unsettled await in actor \" + a.constructor[\"metascript.typeDisplayName\"] + \" at exit: its onTerminate cannot run\\n\");",
 	"\t\tproc.exitCode = 13;",
 	"\t}",
 	"});",

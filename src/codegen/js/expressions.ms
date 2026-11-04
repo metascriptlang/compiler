@@ -1002,7 +1002,7 @@ function emitDefectCall(gen: JSGenerator, message: string, location: SourceLocat
 function classDisplayName(gen: JSGenerator): string {
 	if (!gen.helpers.classNameRuntime) {
 		gen.helpers.classNameRuntime = true;
-		gen.staticSlots.push("function msClassDisplayName(v) { const c = v.constructor; const k = globalThis.Symbol.for(\"metascript.typeDisplayName\"); return globalThis.Object.prototype.hasOwnProperty.call(c, k) ? c[k] : c.name; }\n");
+		gen.staticSlots.push("function msClassDisplayName(v) { const c = v.constructor; const k = \"metascript.typeDisplayName\"; return globalThis.Object.prototype.hasOwnProperty.call(c, k) ? c[k] : c.name; }\n");
 	}
 	return "msClassDisplayName(v)";
 }
