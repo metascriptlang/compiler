@@ -40,21 +40,18 @@ function limbsCmpLt(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32 {
 	return c;
 }
 
+// The high word of a 32x32-bit product from 16-bit halves, so no 64-bit type reaches the JavaScript backend.
 function mulHi(x: uint32, y: uint32): uint32 {
-	when (c) {
-		return (((x as uint64) * (y as uint64)) >> 32) as uint32;
-	} else {
-		const x0 = x & 0xffff;
-		const x1 = x >> 16;
-		const y0 = y & 0xffff;
-		const y1 = y >> 16;
-		const w0 = x0 * y0;
-		const t = x1 * y0 + (w0 >> 16);
-		let w1 = t & 0xffff;
-		const w2 = t >> 16;
-		w1 += x0 * y1;
-		return x1 * y1 + w2 + (w1 >> 16);
-	}
+	const x0 = x & 0xffff;
+	const x1 = x >> 16;
+	const y0 = y & 0xffff;
+	const y1 = y >> 16;
+	const w0 = x0 * y0;
+	const t = x1 * y0 + (w0 >> 16);
+	let w1 = t & 0xffff;
+	const w2 = t >> 16;
+	w1 += x0 * y1;
+	return x1 * y1 + w2 + (w1 >> 16);
 }
 
 // The carry out of `a + b`, which wrapped to `sum`, without a comparison the compiler could branch on.
@@ -221,19 +218,30 @@ export function uintSub(x: uint32[], y: Readonly<uint32[]>): uint32 {
 }
 
 function mulAddLimb(z: uint32[], at: int32, x: Readonly<uint32[]>, y: uint32): uint32 {
-	let carry: uint32 = 0;
-	for (let j = 0; j < x.length; j++) {
-		const lo = x[j] * y;
-		const zj = z[at + j];
-		let zLo = zj + lo;
-		let zHi = mulHi(x[j], y) + carryOut(zj, lo, zLo);
-		const sum = zLo + carry;
-		zHi += carryOut(zLo, carry, sum);
-		zLo = sum;
-		z[at + j] = zLo & tMask;
-		carry = (zHi << 1) | (zLo >> tShift);
+	when (c) {
+		const y64 = y as uint64;
+		let carry: uint64 = 0;
+		for (let j = 0; j < x.length; j++) {
+			const wide = (z[at + j] as uint64) + (x[j] as uint64) * y64 + carry;
+			z[at + j] = (wide as uint32) & tMask;
+			carry = wide >> 31;
+		}
+		return carry as uint32;
+	} else {
+		let carry: uint32 = 0;
+		for (let j = 0; j < x.length; j++) {
+			const lo = x[j] * y;
+			const zj = z[at + j];
+			let zLo = zj + lo;
+			let zHi = mulHi(x[j], y) + carryOut(zj, lo, zLo);
+			const sum = zLo + carry;
+			zHi += carryOut(zLo, carry, sum);
+			zLo = sum;
+			z[at + j] = zLo & tMask;
+			carry = (zHi << 1) | (zLo >> tShift);
+		}
+		return carry;
 	}
-	return carry;
 }
 
 /** `acc += x * y` with all three the same length; returns 1 if any part of the product was discarded. */
@@ -556,37 +564,60 @@ export function sub(this m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]
 }
 
 function montgomeryLoop(m: Modulus, d: uint32[], a: Readonly<uint32[]>, b: Readonly<uint32[]>): uint32 {
-	const n = m.v.length;
-	const mv = m.v;
-	let overflow: uint32 = 0;
-	for (let i = 0; i < n; i++) {
-		const ai = a[i];
-		let lo = ai * b[0];
-		let zLo = d[0] + lo;
-		const f = (zLo * m.m0inv) & tMask;
-		let zHi = mulHi(ai, b[0]) + carryOut(d[0], lo, zLo);
-		lo = f * mv[0];
-		let sum = zLo + lo;
-		zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[0]);
-		zLo = sum;
-		let carry = (zHi << 1) | (zLo >> tShift);
-		for (let j = 1; j < n; j++) {
-			lo = ai * b[j];
-			zLo = d[j] + lo;
-			zHi = mulHi(ai, b[j]) + carryOut(d[j], lo, zLo);
-			lo = f * mv[j];
-			sum = zLo + lo;
-			zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[j]);
-			zLo = sum + carry;
-			zHi += carryOut(sum, carry, zLo);
-			d[j - 1] = zLo & tMask;
-			carry = (zHi << 1) | (zLo >> tShift);
+	when (c) {
+		const n = m.v.length;
+		const mv = m.v;
+		let overflow: uint64 = 0;
+		for (let i = 0; i < n; i++) {
+			const ai = a[i] as uint64;
+			let wide = (d[0] as uint64) + ai * (b[0] as uint64);
+			const f = ((wide as uint32) * m.m0inv) & tMask;
+			const f64 = f as uint64;
+			wide += f64 * (mv[0] as uint64);
+			let carry = wide >> 31;
+			for (let j = 1; j < n; j++) {
+				wide = (d[j] as uint64) + ai * (b[j] as uint64) + f64 * (mv[j] as uint64) + carry;
+				d[j - 1] = (wide as uint32) & tMask;
+				carry = wide >> 31;
+			}
+			wide = overflow + carry;
+			d[n - 1] = (wide as uint32) & tMask;
+			overflow = wide >> 31;
 		}
-		const z = overflow + carry;
-		d[n - 1] = z & tMask;
-		overflow = z >> tShift;
+		return overflow as uint32;
+	} else {
+		const n = m.v.length;
+		const mv = m.v;
+		let overflow: uint32 = 0;
+		for (let i = 0; i < n; i++) {
+			const ai = a[i];
+			let lo = ai * b[0];
+			let zLo = d[0] + lo;
+			const f = (zLo * m.m0inv) & tMask;
+			let zHi = mulHi(ai, b[0]) + carryOut(d[0], lo, zLo);
+			lo = f * mv[0];
+			let sum = zLo + lo;
+			zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[0]);
+			zLo = sum;
+			let carry = (zHi << 1) | (zLo >> tShift);
+			for (let j = 1; j < n; j++) {
+				lo = ai * b[j];
+				zLo = d[j] + lo;
+				zHi = mulHi(ai, b[j]) + carryOut(d[j], lo, zLo);
+				lo = f * mv[j];
+				sum = zLo + lo;
+				zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[j]);
+				zLo = sum + carry;
+				zHi += carryOut(sum, carry, zLo);
+				d[j - 1] = zLo & tMask;
+				carry = (zHi << 1) | (zLo >> tShift);
+			}
+			const z = overflow + carry;
+			d[n - 1] = z & tMask;
+			overflow = z >> tShift;
+		}
+		return overflow;
 	}
-	return overflow;
 }
 
 function montgomeryMul(m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
