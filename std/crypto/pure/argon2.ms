@@ -33,16 +33,20 @@ function carry(sum: uint32, addend: uint32): uint32 {
 	return sum < addend ? 1 : 0;
 }
 
-/** The high 32 bits of a * b, from 16-bit halves so no step leaves 32 bits. */
+/** The high 32 bits of a * b: one 64-bit product on C, 16-bit halves elsewhere so no step leaves 32 bits. */
 function mulHigh(a: uint32, b: uint32): uint32 {
-	const a0 = a & 0xffff;
-	const a1 = a >> 16;
-	const b0 = b & 0xffff;
-	const b1 = b >> 16;
-	const lh = a0 * b1;
-	const hl = a1 * b0;
-	const mid = ((a0 * b0) >> 16) + (lh & 0xffff) + (hl & 0xffff);
-	return a1 * b1 + (lh >> 16) + (hl >> 16) + (mid >> 16);
+	when (c) {
+		return (((a as uint64) * (b as uint64)) >> 32) as uint32;
+	} else {
+		const a0 = a & 0xffff;
+		const a1 = a >> 16;
+		const b0 = b & 0xffff;
+		const b1 = b >> 16;
+		const lh = a0 * b1;
+		const hl = a1 * b0;
+		const mid = ((a0 * b0) >> 16) + (lh & 0xffff) + (hl & 0xffff);
+		return a1 * b1 + (lh >> 16) + (hl >> 16) + (mid >> 16);
+	}
 }
 
 /** The BlaMka G of RFC 9106 3.6 on words a, b, c and d of the block, each held as its `w.low` and `w.high` halves. */
@@ -500,7 +504,7 @@ export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: 
 				}
 				let offset = l * laneLen + s * segmentLen + startPos;
 				for (let index = startPos; index < segmentLen; index++) {
-					const prev = offset % laneLen != 0 ? offset - 1 : offset + laneLen - 1;
+					const prev = s == 0 && index == 0 ? offset + laneLen - 1 : offset - 1;
 					let randL: uint32;
 					let randH: uint32;
 					if (dataIndependent) {
