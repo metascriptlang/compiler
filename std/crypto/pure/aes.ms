@@ -1,23 +1,13 @@
-import { newGhash, updateGhash, finishGhash } from "./ghash";
+import { newGhash, updateGhash, finishGhash, storeBE64 } from "./ghash";
 
 /**
- * AES with 4 T-tables, in GCM (12-byte nonce) and CBC with PKCS#7. Words are little-endian packs of four
- * bytes. Not constant-time: the S-box and T-table lookups are indexed by secret bytes, so their cache timing leaks
- * the key to a local observer. Prefer the WebCrypto forms where they exist.
+ * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: eight blocks run at once as 32 words, so the
+ * cipher reads no table indexed by the key or the data. The key schedule reads its S-box through a masked select
+ * over both 128-byte halves. A key schedule is the packed round keys, the same words for both directions.
  */
 
 function mul2(n: int32): int32 {
 	return (n << 1) ^ (0x11b & -(n >> 7));
-}
-
-function mul(a: int32, b: int32): int32 {
-	let res = 0;
-	let x = a;
-	for (let y = b; y > 0; y >>= 1) {
-		res ^= x & -(y & 1);
-		x = mul2(x);
-	}
-	return res;
 }
 
 function buildSbox(): uint8[] {
@@ -37,42 +27,21 @@ function buildSbox(): uint8[] {
 	return box;
 }
 
-function buildInverse(box: Readonly<uint8[]>): uint8[] {
-	const inverse = new Array<uint8>(256);
-	for (let i = 0; i < 256; i++) inverse[box[i]] = i as uint8;
-	return inverse;
-}
+const keySbox: Readonly<uint8[]> = buildSbox();
 
-function rotl8(n: uint32): uint32 {
-	return (n << 8) | (n >> 24);
+function sboxByte(n: uint32): uint32 {
+	const low = keySbox[n & 0x7f] as uint32;
+	const high = keySbox[0x80 | (n & 0x7f)] as uint32;
+	const mask = (0 as uint32) - (n >> 7);
+	return (high & mask) | (low & ~mask);
 }
-
-// T0, T1, T2, T3 back to back: the combined substitution and column mix of one byte lane each.
-function buildTables(box: Readonly<uint8[]>, decode: boolean): uint32[] {
-	const tables = new Array<uint32>(1024);
-	for (let j = 0; j < 256; j++) {
-		const s = box[j] as int32;
-		const t0: uint32 = decode
-			? ((mul(s, 11) as uint32) << 24) | ((mul(s, 13) as uint32) << 16) | ((mul(s, 9) as uint32) << 8) | (mul(s, 14) as uint32)
-			: ((mul(s, 3) as uint32) << 24) | ((s as uint32) << 16) | ((s as uint32) << 8) | (mul(s, 2) as uint32);
-		const t1 = rotl8(t0);
-		const t2 = rotl8(t1);
-		tables[j] = t0;
-		tables[256 + j] = t1;
-		tables[512 + j] = t2;
-		tables[768 + j] = rotl8(t2);
-	}
-	return tables;
-}
-
-// Each is built from a fresh table, never from another const, so each stays a const the spawn rule accepts.
-const sbox: Readonly<uint8[]> = buildSbox();
-const invSbox: Readonly<uint8[]> = buildInverse(buildSbox());
-const encTables: Readonly<uint32[]> = buildTables(buildSbox(), false);
-const decTables: Readonly<uint32[]> = buildTables(buildInverse(buildSbox()), true);
 
 function subWord(n: uint32): uint32 {
-	return (sbox[n & 0xff] as uint32) | ((sbox[(n >> 8) & 0xff] as uint32) << 8) | ((sbox[(n >> 16) & 0xff] as uint32) << 16) | ((sbox[n >> 24] as uint32) << 24);
+	return sboxByte(n & 0xff) | (sboxByte((n >> 8) & 0xff) << 8) | (sboxByte((n >> 16) & 0xff) << 16) | (sboxByte(n >> 24) << 24);
+}
+
+function rotl(n: uint32, by: uint32): uint32 {
+	return (n << by) | (n >> (32 - by));
 }
 
 function loadLE(data: Readonly<uint8[]>, at: int32): uint32 {
@@ -86,174 +55,517 @@ function storeLE(out: uint8[], at: int32, word: uint32): void {
 	out[at + 3] = (word >> 24) as uint8;
 }
 
-function storeBE32(out: uint8[], at: int32, word: uint32): void {
-	out[at] = (word >> 24) as uint8;
-	out[at + 1] = ((word >> 16) & 0xff) as uint8;
-	out[at + 2] = ((word >> 8) & 0xff) as uint8;
-	out[at + 3] = (word & 0xff) as uint8;
-}
-
 function swapBytes(n: uint32): uint32 {
 	return ((n & 0xff) << 24) | (((n >> 8) & 0xff) << 16) | (((n >> 16) & 0xff) << 8) | (n >> 24);
 }
 
-/** The encryption round keys of a 16-, 24- or 32-byte key. */
+function sbox(u: uint32[], at: int32): void {
+	const s0 = u[at + 4] ^ u[at + 16];
+	const s1 = u[at + 20] ^ u[at + 28];
+	const s2 = u[at + 12] ^ s0;
+	const s3 = u[at + 0] ^ u[at + 8];
+	const q0 = s1 ^ s2;
+	const s4 = u[at + 0] ^ u[at + 24];
+	const s5 = u[at + 8] ^ u[at + 24];
+	const s6 = u[at + 12] ^ s1;
+	const s7 = u[at + 20] ^ s3;
+	const q1 = s1 ^ s5;
+	const q2 = u[at + 8] ^ q0;
+	const q3 = s4 ^ s2;
+	const q4 = s3 ^ q0;
+	const s8 = u[at + 16] ^ s3;
+	const q5 = s6 ^ s8;
+	const q6 = u[at + 8] ^ u[at + 12];
+	const q7 = u[at + 24] ^ s2;
+	const s9 = u[at + 24] ^ s0;
+	const q8 = s3 ^ s9;
+	const q9 = s4 ^ s6;
+	const q10 = s0 ^ s5;
+	const q12 = u[at + 28] ^ s2;
+	const q13 = u[at + 4] ^ s7;
+	const q14 = u[at + 28] ^ s3;
+	const q15 = s2 ^ s7;
+	const q16 = u[at + 4] ^ s1;
+	const q17 = u[at + 4] ^ u[at + 28];
+	const q11 = u[at + 20];
+	const t20 = q6 & q12;
+	const t21 = q3 & q14;
+	const t22 = q1 & q16;
+	const t23 = q2 & q17;
+	const x0 = ((q3 | q14) ^ (q0 & q7)) ^ (t20 ^ t22);
+	const x1 = ((q4 | q13) ^ (q10 & q11)) ^ (t21 ^ t20);
+	const x2 = ((q2 | q17) ^ (q5 & q9)) ^ (t21 ^ t22);
+	const x3 = ((q8 | q15) ^ t23) ^ (t21 ^ (q4 & q13));
+	const a = x1 & ~x3;
+	const b = x0 & ~x3;
+	const c = x3 & ~x1;
+	const d = x2 & ~x1;
+	const e = x0 ^ a;
+	const y0 = x3 ^ (x2 & ~e);
+	const f = x1 ^ b;
+	const y1 = c ^ (x2 & f);
+	const g = x2 ^ c;
+	const y2 = x1 ^ (x0 & ~g);
+	const h = x3 ^ d;
+	const y3 = a ^ (x0 & h);
+	const y02 = y2 ^ y0;
+	const y13 = y3 ^ y1;
+	const y23 = y3 ^ y2;
+	const y01 = y1 ^ y0;
+	const y00 = y02 ^ y13;
+	const a0 = y01 & q11;
+	const a1 = y0 & q12;
+	const a2 = y1 & q0;
+	const a3 = y23 & q17;
+	const a4 = y2 & q5;
+	const a5 = y3 & q15;
+	const a6 = y13 & q14;
+	const a7 = y00 & q16;
+	const a8 = y02 & q13;
+	const a9 = y01 & q7;
+	const a10 = y0 & q10;
+	const a11 = y1 & q6;
+	const a12 = y23 & q2;
+	const a13 = y2 & q9;
+	const a14 = y3 & q8;
+	const a15 = y13 & q3;
+	const a16 = y00 & q1;
+	const a17 = y02 & q4;
+	const r0 = a1 ^ a5;
+	const r1 = a9 ^ a15;
+	const r2 = a4 ^ r0;
+	const r3 = a2 ^ a10;
+	const r4 = a11 ^ a17;
+	const r5 = a8 ^ r1;
+	const r6 = a0 ^ a16;
+	const r7 = a7 ^ a13;
+	const r8 = a11 ^ a14;
+	const r9 = r3 ^ r4;
+	const r10 = r5 ^ r6;
+	const r11 = r2 ^ r9;
+	const r12 = a3 ^ r0;
+	const r13 = r7 ^ r8;
+	const r14 = r12 ^ r13;
+	u[at + 0] = r10 ^ r14;
+	const r15 = a6 ^ a10;
+	const r16 = r15 ^ r2;
+	u[at + 4] = ~(r10 ^ r16);
+	u[at + 8] = ~(a2 ^ r2);
+	const r17 = a12 ^ a13;
+	const r18 = a15 ^ r17;
+	u[at + 12] = r18 ^ r11;
+	const r19 = a1 ^ a14;
+	const r20 = a17 ^ r3;
+	const r21 = r7 ^ r19;
+	const r22 = r5 ^ r20;
+	u[at + 16] = r21 ^ r22;
+	const r23 = a9 ^ a12;
+	u[at + 20] = r8 ^ r23;
+	u[at + 24] = ~(r1 ^ r4);
+	u[at + 28] = ~(a16 ^ r11);
+}
+
+function mixColumns(st: uint32[]): void {
+	const t2_0 = st[0] ^ st[1];
+	const t2_1 = st[1] ^ st[2];
+	const t2_2 = st[2] ^ st[3];
+	const t2_3 = st[3] ^ st[0];
+	let t0_0 = st[28] ^ st[29];
+	let t0_1 = st[29] ^ st[30];
+	let t0_2 = st[30] ^ st[31];
+	let t0_3 = st[31] ^ st[28];
+	let t = st[28];
+	st[28] = t2_0 ^ t0_2 ^ st[29];
+	st[29] = t2_1 ^ t0_2 ^ t;
+	t = st[30];
+	st[30] = t2_2 ^ t0_0 ^ st[31];
+	st[31] = t2_3 ^ t0_0 ^ t;
+	let t1_0 = st[24] ^ st[25];
+	let t1_1 = st[25] ^ st[26];
+	let t1_2 = st[26] ^ st[27];
+	let t1_3 = st[27] ^ st[24];
+	t = st[24];
+	st[24] = t0_0 ^ t2_0 ^ st[25] ^ t1_2;
+	let t_bis = st[25];
+	st[25] = t0_1 ^ t2_1 ^ t1_2 ^ t;
+	t = st[26];
+	st[26] = t0_2 ^ t2_2 ^ t1_3 ^ t_bis;
+	st[27] = t0_3 ^ t2_3 ^ t1_0 ^ t;
+	t0_0 = st[20] ^ st[21];
+	t0_1 = st[21] ^ st[22];
+	t0_2 = st[22] ^ st[23];
+	t0_3 = st[23] ^ st[20];
+	t = st[20];
+	st[20] = t1_0 ^ t0_1 ^ st[23];
+	t_bis = st[21];
+	st[21] = t1_1 ^ t0_2 ^ t;
+	t = st[22];
+	st[22] = t1_2 ^ t0_3 ^ t_bis;
+	st[23] = t1_3 ^ t0_0 ^ t;
+	t1_0 = st[16] ^ st[17];
+	t1_1 = st[17] ^ st[18];
+	t1_2 = st[18] ^ st[19];
+	t1_3 = st[19] ^ st[16];
+	t = st[16];
+	st[16] = t0_0 ^ t2_0 ^ t1_1 ^ st[19];
+	t_bis = st[17];
+	st[17] = t0_1 ^ t2_1 ^ t1_2 ^ t;
+	t = st[18];
+	st[18] = t0_2 ^ t2_2 ^ t1_3 ^ t_bis;
+	st[19] = t0_3 ^ t2_3 ^ t1_0 ^ t;
+	t0_0 = st[12] ^ st[13];
+	t0_1 = st[13] ^ st[14];
+	t0_2 = st[14] ^ st[15];
+	t0_3 = st[15] ^ st[12];
+	t = st[12];
+	st[12] = t1_0 ^ t2_0 ^ t0_1 ^ st[15];
+	t_bis = st[13];
+	st[13] = t1_1 ^ t2_1 ^ t0_2 ^ t;
+	t = st[14];
+	st[14] = t1_2 ^ t2_2 ^ t0_3 ^ t_bis;
+	st[15] = t1_3 ^ t2_3 ^ t0_0 ^ t;
+	t1_0 = st[8] ^ st[9];
+	t1_1 = st[9] ^ st[10];
+	t1_2 = st[10] ^ st[11];
+	t1_3 = st[11] ^ st[8];
+	t = st[8];
+	st[8] = t0_0 ^ t1_1 ^ st[11];
+	t_bis = st[9];
+	st[9] = t0_1 ^ t1_2 ^ t;
+	t = st[10];
+	st[10] = t0_2 ^ t1_3 ^ t_bis;
+	st[11] = t0_3 ^ t1_0 ^ t;
+	t0_0 = st[4] ^ st[5];
+	t0_1 = st[5] ^ st[6];
+	t0_2 = st[6] ^ st[7];
+	t0_3 = st[7] ^ st[4];
+	t = st[4];
+	st[4] = t1_0 ^ t0_1 ^ st[7];
+	t_bis = st[5];
+	st[5] = t1_1 ^ t0_2 ^ t;
+	t = st[6];
+	st[6] = t1_2 ^ t0_3 ^ t_bis;
+	st[7] = t1_3 ^ t0_0 ^ t;
+	t = st[0];
+	st[0] = t0_0 ^ t2_1 ^ st[3];
+	t_bis = st[1];
+	st[1] = t0_1 ^ t2_2 ^ t;
+	t = st[2];
+	st[2] = t0_2 ^ t2_3 ^ t_bis;
+	st[3] = t0_3 ^ t2_0 ^ t;
+}
+
+function subBytes(st: uint32[]): void {
+	sbox(st, 0);
+	sbox(st, 1);
+	sbox(st, 2);
+	sbox(st, 3);
+}
+
+function shiftRows(st: uint32[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		st[i + 1] = rotl(st[i + 1], 24);
+		st[i + 2] = rotl(st[i + 2], 16);
+		st[i + 3] = rotl(st[i + 3], 8);
+	}
+}
+
+function invShiftRows(st: uint32[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		st[i + 1] = rotl(st[i + 1], 8);
+		st[i + 2] = rotl(st[i + 2], 16);
+		st[i + 3] = rotl(st[i + 3], 24);
+	}
+}
+
+// MixColumns has order four, so its inverse is three applications.
+function invMixColumns(st: uint32[]): void {
+	mixColumns(st);
+	mixColumns(st);
+	mixColumns(st);
+}
+
+function invAffineGroup(st: uint32[], g: int32): void {
+	const a0 = ~st[g + 28];
+	const a1 = ~st[g + 24];
+	const a2 = st[g + 20];
+	const a3 = st[g + 16];
+	const a4 = st[g + 12];
+	const a5 = ~st[g + 8];
+	const a6 = ~st[g + 4];
+	const a7 = st[g];
+	st[g] = a1 ^ a4 ^ a6;
+	st[g + 4] = a0 ^ a3 ^ a5;
+	st[g + 8] = a7 ^ a2 ^ a4;
+	st[g + 12] = a6 ^ a1 ^ a3;
+	st[g + 16] = a5 ^ a0 ^ a2;
+	st[g + 20] = a4 ^ a7 ^ a1;
+	st[g + 24] = a3 ^ a6 ^ a0;
+	st[g + 28] = a2 ^ a5 ^ a7;
+}
+
+function invSubBytes(st: uint32[]): void {
+	for (let g = 0; g < 4; g++) invAffineGroup(st, g);
+	subBytes(st);
+	for (let g = 0; g < 4; g++) invAffineGroup(st, g);
+}
+
+function addRoundKey(st: uint32[], keys: Readonly<uint32[]>, round: int32): void {
+	const at = round * 32;
+	for (let i = 0; i < 32; i++) st[i] ^= keys[at + i];
+}
+
+function swapMove(st: uint32[], a: int32, b: int32, mask: uint32, n: uint32): void {
+	const tmp = (st[b] ^ (st[a] >> n)) & mask;
+	st[b] ^= tmp;
+	st[a] ^= tmp << n;
+}
+
+function transposeBits(st: uint32[]): void {
+	for (let k = 0; k < 4; k++) {
+		swapMove(st, k + 4, k, 0x55555555, 1);
+		swapMove(st, k + 12, k + 8, 0x55555555, 1);
+		swapMove(st, k + 20, k + 16, 0x55555555, 1);
+		swapMove(st, k + 28, k + 24, 0x55555555, 1);
+		swapMove(st, k + 8, k, 0x33333333, 2);
+		swapMove(st, k + 12, k + 4, 0x33333333, 2);
+		swapMove(st, k + 24, k + 16, 0x33333333, 2);
+		swapMove(st, k + 28, k + 20, 0x33333333, 2);
+		swapMove(st, k + 16, k, 0x0f0f0f0f, 4);
+		swapMove(st, k + 20, k + 4, 0x0f0f0f0f, 4);
+		swapMove(st, k + 24, k + 8, 0x0f0f0f0f, 4);
+		swapMove(st, k + 28, k + 12, 0x0f0f0f0f, 4);
+	}
+}
+
+function packState(st: uint32[]): void {
+	for (let i = 0; i < 32; i += 4) {
+		swapMove(st, i, i + 1, 0x00ff00ff, 8);
+		swapMove(st, i + 2, i + 3, 0x00ff00ff, 8);
+		swapMove(st, i, i + 2, 0x0000ffff, 16);
+		swapMove(st, i + 1, i + 3, 0x0000ffff, 16);
+	}
+	transposeBits(st);
+}
+
+function unpackState(st: uint32[]): void {
+	transposeBits(st);
+	for (let i = 0; i < 32; i += 4) {
+		swapMove(st, i, i + 2, 0x0000ffff, 16);
+		swapMove(st, i + 1, i + 3, 0x0000ffff, 16);
+		swapMove(st, i, i + 1, 0x00ff00ff, 8);
+		swapMove(st, i + 2, i + 3, 0x00ff00ff, 8);
+	}
+}
+
+function encryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
+	const rounds = keys.length / 32 - 1;
+	addRoundKey(st, keys, 0);
+	for (let r = 1; r < rounds; r++) {
+		subBytes(st);
+		shiftRows(st);
+		mixColumns(st);
+		addRoundKey(st, keys, r);
+	}
+	subBytes(st);
+	shiftRows(st);
+	addRoundKey(st, keys, rounds);
+}
+
+function decryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
+	const rounds = keys.length / 32 - 1;
+	addRoundKey(st, keys, rounds);
+	for (let r = rounds - 1; r > 0; r--) {
+		invShiftRows(st);
+		invSubBytes(st);
+		addRoundKey(st, keys, r);
+		invMixColumns(st);
+	}
+	invShiftRows(st);
+	invSubBytes(st);
+	addRoundKey(st, keys, 0);
+}
+
+/** The packed round keys of a 16-, 24- or 32-byte key: (rounds + 1) groups of 32 words, each the round key in all eight lanes. */
 export function expandKey(key: Readonly<uint8[]>): uint32[] {
 	if (key.length != 16 && key.length != 24 && key.length != 32) throw new Error(`aes: key must be 16, 24 or 32 bytes, got ${key.length}`);
 	const nk = key.length / 4;
-	const xk = new Array<uint32>(key.length + 28);
-	for (let i = 0; i < nk; i++) xk[i] = loadLE(key, i * 4);
+	const words = new Array<uint32>(key.length + 28);
+	for (let i = 0; i < nk; i++) words[i] = loadLE(key, i * 4);
 	let rcon: int32 = 1;
-	for (let i = nk; i < xk.length; i++) {
-		let t = xk[i - 1];
+	for (let i = nk; i < words.length; i++) {
+		let t = words[i - 1];
 		if (i % nk == 0) {
-			t = subWord((t << 24) | (t >> 8)) ^ (rcon as uint32);
+			t = subWord(rotl(t, 24)) ^ (rcon as uint32);
 			rcon = mul2(rcon);
 		} else if (nk > 6 && i % nk == 4) {
 			t = subWord(t);
 		}
-		xk[i] = xk[i - nk] ^ t;
+		words[i] = words[i - nk] ^ t;
 	}
-	return xk;
+	const roundKeys = words.length / 4;
+	const packed = new Array<uint32>(roundKeys * 32);
+	const st = new Array<uint32>(32);
+	for (let r = 0; r < roundKeys; r++) {
+		for (let i = 0; i < 32; i++) st[i] = words[r * 4 + (i & 3)];
+		packState(st);
+		for (let i = 0; i < 32; i++) packed[r * 32 + i] = st[i];
+	}
+	words.fill(0);
+	st.fill(0);
+	return packed;
 }
 
-/** The round keys for decryption: the encryption ones in reverse order, the middle ones through InvMixColumns. */
+/** The key schedule for decryption, which the bitsliced cipher shares with encryption. */
 export function expandKeyDecrypt(key: Readonly<uint8[]>): uint32[] {
-	const enc = expandKey(key);
-	const n = enc.length;
-	const xk = new Array<uint32>(n);
-	for (let i = 0; i < n; i += 4) {
-		for (let j = 0; j < 4; j++) xk[i + j] = enc[n - i - 4 + j];
-	}
-	for (let i = 4; i < n - 4; i++) {
-		const w = subWord(xk[i]);
-		xk[i] = decTables[w & 0xff] ^ decTables[256 + ((w >> 8) & 0xff)] ^ decTables[512 + ((w >> 16) & 0xff)] ^ decTables[768 + (w >> 24)];
-	}
-	return xk;
+	return expandKey(key);
 }
 
-/** One block through the cipher; `out` receives the four result words. */
-function encryptBlock(xk: Readonly<uint32[]>, w0: uint32, w1: uint32, w2: uint32, w3: uint32, out: uint32[]): void {
-	let s0 = w0 ^ xk[0];
-	let s1 = w1 ^ xk[1];
-	let s2 = w2 ^ xk[2];
-	let s3 = w3 ^ xk[3];
-	let k = 4;
-	const rounds = xk.length / 4 - 2;
-	for (let i = 0; i < rounds; i++) {
-		const t0 = xk[k] ^ encTables[s0 & 0xff] ^ encTables[256 + ((s1 >> 8) & 0xff)] ^ encTables[512 + ((s2 >> 16) & 0xff)] ^ encTables[768 + (s3 >> 24)];
-		const t1 = xk[k + 1] ^ encTables[s1 & 0xff] ^ encTables[256 + ((s2 >> 8) & 0xff)] ^ encTables[512 + ((s3 >> 16) & 0xff)] ^ encTables[768 + (s0 >> 24)];
-		const t2 = xk[k + 2] ^ encTables[s2 & 0xff] ^ encTables[256 + ((s3 >> 8) & 0xff)] ^ encTables[512 + ((s0 >> 16) & 0xff)] ^ encTables[768 + (s1 >> 24)];
-		const t3 = xk[k + 3] ^ encTables[s3 & 0xff] ^ encTables[256 + ((s0 >> 8) & 0xff)] ^ encTables[512 + ((s1 >> 16) & 0xff)] ^ encTables[768 + (s2 >> 24)];
-		k += 4;
-		s0 = t0;
-		s1 = t1;
-		s2 = t2;
-		s3 = t3;
+/** Eight blocks in flight: the bitsliced state and their bytes. */
+class Batch {
+	st: uint32[] = new Array<uint32>(32);
+	bytes: uint8[] = new Array<uint8>(128);
+}
+
+function wipe(batch: Batch): void {
+	batch.st.fill(0);
+	batch.bytes.fill(0);
+}
+
+// Loads `count` blocks of `src` from `at` into the state, zero blocks after them.
+function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int32): void {
+	const st = batch.st;
+	for (let block = 0; block < 8; block++) {
+		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? loadLE(src, at + block * 16 + w * 4) : 0;
 	}
-	out[0] = xk[k] ^ laneWord(sbox, s0, s1, s2, s3);
-	out[1] = xk[k + 1] ^ laneWord(sbox, s1, s2, s3, s0);
-	out[2] = xk[k + 2] ^ laneWord(sbox, s2, s3, s0, s1);
-	out[3] = xk[k + 3] ^ laneWord(sbox, s3, s0, s1, s2);
+	packState(st);
 }
 
-function decryptBlock(xk: Readonly<uint32[]>, w0: uint32, w1: uint32, w2: uint32, w3: uint32, out: uint32[]): void {
-	let s0 = w0 ^ xk[0];
-	let s1 = w1 ^ xk[1];
-	let s2 = w2 ^ xk[2];
-	let s3 = w3 ^ xk[3];
-	let k = 4;
-	const rounds = xk.length / 4 - 2;
-	for (let i = 0; i < rounds; i++) {
-		const t0 = xk[k] ^ decTables[s0 & 0xff] ^ decTables[256 + ((s3 >> 8) & 0xff)] ^ decTables[512 + ((s2 >> 16) & 0xff)] ^ decTables[768 + (s1 >> 24)];
-		const t1 = xk[k + 1] ^ decTables[s1 & 0xff] ^ decTables[256 + ((s0 >> 8) & 0xff)] ^ decTables[512 + ((s3 >> 16) & 0xff)] ^ decTables[768 + (s2 >> 24)];
-		const t2 = xk[k + 2] ^ decTables[s2 & 0xff] ^ decTables[256 + ((s1 >> 8) & 0xff)] ^ decTables[512 + ((s0 >> 16) & 0xff)] ^ decTables[768 + (s3 >> 24)];
-		const t3 = xk[k + 3] ^ decTables[s3 & 0xff] ^ decTables[256 + ((s2 >> 8) & 0xff)] ^ decTables[512 + ((s1 >> 16) & 0xff)] ^ decTables[768 + (s0 >> 24)];
-		k += 4;
-		s0 = t0;
-		s1 = t1;
-		s2 = t2;
-		s3 = t3;
+function storeBlocks(batch: Batch): void {
+	const st = batch.st;
+	unpackState(st);
+	for (let i = 0; i < 32; i++) storeLE(batch.bytes, i * 4, st[i]);
+}
+
+// The key stream of counters `first .. first + 7` under `nonce`; with `hashKey` block 0 is the all-zero block instead.
+function counterBlocks(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, first: uint32, hashKey: boolean): void {
+	const st = batch.st;
+	const n0 = loadLE(nonce, 0);
+	const n1 = loadLE(nonce, 4);
+	const n2 = loadLE(nonce, 8);
+	for (let block = 0; block < 8; block++) {
+		const zero = hashKey && block == 0;
+		st[block * 4] = zero ? 0 : n0;
+		st[block * 4 + 1] = zero ? 0 : n1;
+		st[block * 4 + 2] = zero ? 0 : n2;
+		st[block * 4 + 3] = zero ? 0 : swapBytes(first + (block as uint32));
 	}
-	out[0] = xk[k] ^ laneWord(invSbox, s0, s3, s2, s1);
-	out[1] = xk[k + 1] ^ laneWord(invSbox, s1, s0, s3, s2);
-	out[2] = xk[k + 2] ^ laneWord(invSbox, s2, s1, s0, s3);
-	out[3] = xk[k + 3] ^ laneWord(invSbox, s3, s2, s1, s0);
+	packState(st);
+	encryptState(keys, st);
+	storeBlocks(batch);
 }
 
-// The last round: one substituted byte lane from each argument, without the column mix.
-function laneWord(box: Readonly<uint8[]>, s0: uint32, s1: uint32, s2: uint32, s3: uint32): uint32 {
-	return (box[s0 & 0xff] as uint32) | ((box[(s1 >> 8) & 0xff] as uint32) << 8) | ((box[(s2 >> 16) & 0xff] as uint32) << 16) | ((box[s3 >> 24] as uint32) << 24);
-}
-
-// CTR over the last 32 bits of the counter block (SP 800-38D inc32), the counter starting at `counter`.
-function ctr32Xor(xk: Readonly<uint32[]>, n0: uint32, n1: uint32, n2: uint32, counter: uint32, src: Readonly<uint8[]>, from: int32, to: int32, dst: uint8[], dstAt: int32): void {
-	const block = new Array<uint32>(4);
-	const stream = new Array<uint8>(16);
-	let ctr = counter;
-	let at = from;
-	while (at < to) {
-		encryptBlock(xk, n0, n1, n2, swapBytes(ctr), block);
-		ctr = ctr + 1;
-		for (let i = 0; i < 4; i++) storeLE(stream, i * 4, block[i]);
-		const count = to - at < 16 ? to - at : 16;
-		for (let i = 0; i < count; i++) dst[dstAt + at - from + i] = src[at + i] ^ stream[i];
-		at += count;
+// dst[dstAt, +length) = src[srcAt, +length) ^ the key stream from counter 2, whose first 96 bytes are already at batch.bytes[32, 128).
+function ctrXor(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32): void {
+	const stream = batch.bytes;
+	let streamAt = 32;
+	let counter: uint32 = 8;
+	let done = 0;
+	while (done < length) {
+		if (streamAt == 128) {
+			counterBlocks(keys, batch, nonce, counter, false);
+			counter += 8;
+			streamAt = 0;
+		}
+		const count = Math.min(128 - streamAt, length - done);
+		for (let i = 0; i < count; i++) dst[dstAt + done + i] = src[srcAt + done + i] ^ stream[streamAt + i];
+		streamAt += count;
+		done += count;
 	}
 }
 
-function lengthBlock(aadLength: int32, dataLength: int32): uint8[] {
-	const out = new Array<uint8>(16);
-	const aad = aadLength as uint32;
-	const data = dataLength as uint32;
-	storeBE32(out, 0, aad >> 29);
-	storeBE32(out, 4, aad << 3);
-	storeBE32(out, 8, data >> 29);
-	storeBE32(out, 12, data << 3);
-	return out;
+function requireNonce(nonce: Readonly<uint8[]>): void {
+	if (nonce.length != 12) throw new Error(`aes-gcm: nonce must be 12 bytes, got ${nonce.length}`);
 }
 
-/** The 16-byte tag over `sealed[12, bodyEnd)` as cipher text, with the nonce at `sealed[0, 12)`. */
-function gcmTag(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, bodyEnd: int32, aad: Readonly<uint8[]>): uint8[] {
-	const block = new Array<uint32>(4);
-	const authKey = new Array<uint8>(16);
-	encryptBlock(xk, 0, 0, 0, 0, block);
-	for (let i = 0; i < 4; i++) storeLE(authKey, i * 4, block[i]);
-	const ghash = newGhash(authKey, aad.length + bodyEnd - 12);
+function requireRange(what: string, bytes: Readonly<uint8[]>, at: int32, length: int32): void {
+	if (at < 0 || length < 0 || at > bytes.length - length) throw new Error(`aes-gcm: ${what} range [${at}, +${length}) is outside its ${bytes.length} bytes`);
+}
+
+// The tag over `aad` and the cipher text `text[at, +length)` into `tag[0, 16)`; `keyed` starts with E(0) and E(J1).
+function gcmTag(keyed: Readonly<uint8[]>, aad: Readonly<uint8[]>, text: Readonly<uint8[]>, at: int32, length: int32, tag: uint8[]): void {
+	const ghash = newGhash(keyed);
 	updateGhash(ghash, aad, 0, aad.length);
-	updateGhash(ghash, sealed, 12, bodyEnd);
-	updateGhash(ghash, lengthBlock(aad.length, bodyEnd - 12), 0, 16);
-	const tag = new Array<uint8>(16);
+	updateGhash(ghash, text, at, at + length);
+	const lengths = new Array<uint8>(16);
+	storeBE64(lengths, 0, (aad.length as uint64) << 3);
+	storeBE64(lengths, 8, (length as uint64) << 3);
+	updateGhash(ghash, lengths, 0, 16);
 	finishGhash(ghash, tag, 0);
-	encryptBlock(xk, loadLE(sealed, 0), loadLE(sealed, 4), loadLE(sealed, 8), swapBytes(1), block);
-	const mask = new Array<uint8>(16);
-	for (let i = 0; i < 4; i++) storeLE(mask, i * 4, block[i]);
-	for (let i = 0; i < 16; i++) tag[i] = tag[i] ^ mask[i];
-	return tag;
+	for (let i = 0; i < 16; i++) tag[i] ^= keyed[16 + i];
+}
+
+/**
+ * AES-GCM encryption of `src[srcAt, +length)` into `dst[dstAt, +length)` (the two may be the same range) and its
+ * 16-byte tag into `tag[tagAt, +16)`. The nonce must be fresh for every call under one key.
+ */
+export function gcmEncryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32, tag: uint8[], tagAt: int32): void {
+	requireNonce(nonce);
+	requireRange("source", src, srcAt, length);
+	requireRange("destination", dst, dstAt, length);
+	requireRange("tag", tag, tagAt, 16);
+	const batch = new Batch();
+	counterBlocks(xk, batch, nonce, 0, true);
+	const authKey = batch.bytes.slice(0, 32);
+	ctrXor(xk, batch, nonce, src, srcAt, length, dst, dstAt);
+	const computed = new Array<uint8>(16);
+	gcmTag(authKey, aad, dst, dstAt, length, computed);
+	for (let i = 0; i < 16; i++) tag[tagAt + i] = computed[i];
+	authKey.fill(0);
+	wipe(batch);
+}
+
+/**
+ * AES-GCM decryption of `src[srcAt, +length)` into `dst[dstAt, +length)` once the tag at `tag[tagAt, +16)` verifies;
+ * false, with nothing written, when it does not.
+ */
+export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, tag: Readonly<uint8[]>, tagAt: int32, dst: uint8[], dstAt: int32): boolean {
+	requireNonce(nonce);
+	requireRange("source", src, srcAt, length);
+	requireRange("destination", dst, dstAt, length);
+	requireRange("tag", tag, tagAt, 16);
+	const batch = new Batch();
+	counterBlocks(xk, batch, nonce, 0, true);
+	const computed = new Array<uint8>(16);
+	gcmTag(batch.bytes, aad, src, srcAt, length, computed);
+	let diff: uint8 = 0;
+	for (let i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
+	computed.fill(0);
+	if (diff != 0) {
+		wipe(batch);
+		return false;
+	}
+	ctrXor(xk, batch, nonce, src, srcAt, length, dst, dstAt);
+	wipe(batch);
+	return true;
 }
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
 export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
-	if (nonce.length != 12) throw new Error(`aes-gcm: nonce must be 12 bytes, got ${nonce.length}`);
+	requireNonce(nonce);
 	const size = plain.length;
 	const sealed = new Array<uint8>(12 + size + 16);
 	for (let i = 0; i < 12; i++) sealed[i] = nonce[i];
-	ctr32Xor(xk, loadLE(nonce, 0), loadLE(nonce, 4), loadLE(nonce, 8), 2, plain, 0, size, sealed, 12);
-	const tag = gcmTag(xk, sealed, 12 + size, aad);
-	for (let i = 0; i < 16; i++) sealed[12 + size + i] = tag[i];
+	gcmEncryptInto(xk, nonce, aad, plain, 0, size, sealed, 12, sealed, 12 + size);
 	return sealed;
 }
 
 /** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
 export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
 	if (sealed.length < 28) return null;
-	const end = sealed.length - 16;
-	const tag = gcmTag(xk, sealed, end, aad);
-	let diff: uint8 = 0;
-	for (let i = 0; i < 16; i++) diff = diff | (tag[i] ^ sealed[end + i]);
-	if (diff != 0) return null;
-	const plain = new Array<uint8>(end - 12);
-	ctr32Xor(xk, loadLE(sealed, 0), loadLE(sealed, 4), loadLE(sealed, 8), 2, sealed, 12, end, plain, 0);
+	const size = sealed.length - 28;
+	const plain = new Array<uint8>(size);
+	if (!gcmDecryptInto(xk, sealed.slice(0, 12), aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
 	return plain;
 }
 
@@ -267,36 +579,20 @@ export function cbcEncrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, plain:
 	const size = plain.length;
 	const padding = 16 - (size % 16);
 	const out = new Array<uint8>(size + padding);
-	const block = new Array<uint32>(4);
-	const last = new Array<uint8>(16);
-	let p0 = loadLE(iv, 0);
-	let p1 = loadLE(iv, 4);
-	let p2 = loadLE(iv, 8);
-	let p3 = loadLE(iv, 12);
-	for (let at = 0; at < size + padding; at += 16) {
-		let w0: uint32;
-		let w1: uint32;
-		let w2: uint32;
-		let w3: uint32;
-		if (at + 16 <= size) {
-			w0 = loadLE(plain, at);
-			w1 = loadLE(plain, at + 4);
-			w2 = loadLE(plain, at + 8);
-			w3 = loadLE(plain, at + 12);
-		} else {
-			for (let i = 0; i < 16; i++) last[i] = at + i < size ? plain[at + i] : (padding as uint8);
-			w0 = loadLE(last, 0);
-			w1 = loadLE(last, 4);
-			w2 = loadLE(last, 8);
-			w3 = loadLE(last, 12);
+	const batch = new Batch();
+	const block = new Array<uint8>(16);
+	for (let i = 0; i < 16; i++) block[i] = iv[i];
+	for (let at = 0; at < out.length; at += 16) {
+		for (let i = 0; i < 16; i++) block[i] ^= at + i < size ? plain[at + i] : (padding as uint8);
+		loadBlocks(batch, block, 0, 1);
+		encryptState(xk, batch.st);
+		storeBlocks(batch);
+		for (let i = 0; i < 16; i++) {
+			block[i] = batch.bytes[i];
+			out[at + i] = block[i];
 		}
-		encryptBlock(xk, w0 ^ p0, w1 ^ p1, w2 ^ p2, w3 ^ p3, block);
-		p0 = block[0];
-		p1 = block[1];
-		p2 = block[2];
-		p3 = block[3];
-		for (let i = 0; i < 4; i++) storeLE(out, at + i * 4, block[i]);
 	}
+	wipe(batch);
 	return out;
 }
 
@@ -306,31 +602,24 @@ export function cbcDecrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, cipher
 	const size = cipher.length;
 	if (size == 0 || size % 16 != 0) return null;
 	const out = new Array<uint8>(size);
-	const block = new Array<uint32>(4);
-	let p0 = loadLE(iv, 0);
-	let p1 = loadLE(iv, 4);
-	let p2 = loadLE(iv, 8);
-	let p3 = loadLE(iv, 12);
-	for (let at = 0; at < size; at += 16) {
-		const c0 = loadLE(cipher, at);
-		const c1 = loadLE(cipher, at + 4);
-		const c2 = loadLE(cipher, at + 8);
-		const c3 = loadLE(cipher, at + 12);
-		decryptBlock(xk, c0, c1, c2, c3, block);
-		storeLE(out, at, block[0] ^ p0);
-		storeLE(out, at + 4, block[1] ^ p1);
-		storeLE(out, at + 8, block[2] ^ p2);
-		storeLE(out, at + 12, block[3] ^ p3);
-		p0 = c0;
-		p1 = c1;
-		p2 = c2;
-		p3 = c3;
+	const batch = new Batch();
+	for (let at = 0; at < size; at += 128) {
+		const count = Math.min(8, (size - at) / 16);
+		loadBlocks(batch, cipher, at, count);
+		decryptState(xk, batch.st);
+		storeBlocks(batch);
+		for (let i = 0; i < count * 16; i++) out[at + i] = batch.bytes[i] ^ (at + i < 16 ? iv[i] : cipher[at + i - 16]);
 	}
-	const pad = out[size - 1] as int32;
-	let valid = pad >= 1 && pad <= 16 ? 1 : 0;
+	wipe(batch);
+	const pad = out[size - 1] as uint32;
+	let bad: uint32 = ((pad - 1) >> 8) | ((16 - pad) >> 8);
 	for (let i = 0; i < 16; i++) {
-		if (i < pad && out[size - 1 - i] != pad) valid = 0;
+		const inPadding = (0 as uint32) - (((i as uint32) - pad) >> 31);
+		bad |= ((out[size - 1 - i] as uint32) ^ pad) & inPadding;
 	}
-	if (valid == 0) return null;
-	return out.slice(0, size - pad);
+	if (bad != 0) {
+		out.fill(0);
+		return null;
+	}
+	return out.slice(0, size - (pad as int32));
 }

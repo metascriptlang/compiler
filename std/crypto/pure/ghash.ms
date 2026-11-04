@@ -1,144 +1,128 @@
 /**
- * The GHASH of AES-GCM (NIST SP 800-38D) as a Shoup-style windowed table of the key's doubles, so a block costs
- * `128 / window` lookups. Blocks are read as little-endian words and the table holds the same words.
+ * The GHASH of AES-GCM (NIST SP 800-38D) without tables: each carry-less product is built from integer multiplies of
+ * operands masked to every fourth bit, so no memory access or branch depends on the key or the data. Blocks are read
+ * big-endian into two 64-bit halves, and the key is pre-multiplied by x so the products need no bit reflection.
  */
 export class Ghash {
-	s0: uint32;
-	s1: uint32;
-	s2: uint32;
-	s3: uint32;
-	window: int32;
-	windowSize: int32;
-	table: uint32[];
+	keyHi: uint64;
+	keyLo: uint64;
+	accHi: uint64;
+	accLo: uint64;
+	productHi: uint64;
+	productLo: uint64;
+	tail: uint8[];
 }
 
-function swapBytes(n: uint32): uint32 {
-	return ((n & 0xff) << 24) | (((n >> 8) & 0xff) << 16) | (((n >> 16) & 0xff) << 8) | (n >> 24);
+function wideProduct(a: uint32, b: uint32): uint64 {
+	return (a as uint64) * (b as uint64);
 }
 
-function loadBE(data: Readonly<uint8[]>, at: int32): uint32 {
-	return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
+function carrylessProduct32(x: uint32, y: uint32): uint64 {
+	const a0 = x & 0x11111111;
+	const a1 = x & 0x22222222;
+	const a2 = x & 0x44444444;
+	const a3 = x & 0x88888888;
+	const b0 = y & 0x11111111;
+	const b1 = y & 0x22222222;
+	const b2 = y & 0x44444444;
+	const b3 = y & 0x88888888;
+	const c0 = wideProduct(a0, b0) ^ wideProduct(a1, b3) ^ wideProduct(a2, b2) ^ wideProduct(a3, b1);
+	const c1 = wideProduct(a0, b1) ^ wideProduct(a1, b0) ^ wideProduct(a2, b3) ^ wideProduct(a3, b2);
+	const c2 = wideProduct(a0, b2) ^ wideProduct(a1, b1) ^ wideProduct(a2, b0) ^ wideProduct(a3, b3);
+	const c3 = wideProduct(a0, b3) ^ wideProduct(a1, b2) ^ wideProduct(a2, b1) ^ wideProduct(a3, b0);
+	return (c0 & 0x1111111111111111) | (c1 & 0x2222222222222222) | (c2 & 0x4444444444444444) | (c3 & 0x8888888888888888);
 }
 
-function loadLE(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
+// The 128-bit carry-less product of two 64-bit halves into `g.productHi:productLo`, Karatsuba over 32-bit quarters.
+function carrylessProduct64(g: Ghash, a: uint64, b: uint64): void {
+	const a0 = (a & 0xffffffff) as uint32;
+	const a1 = (a >> 32) as uint32;
+	const b0 = (b & 0xffffffff) as uint32;
+	const b1 = (b >> 32) as uint32;
+	const lo = carrylessProduct32(a0, b0);
+	const hi = carrylessProduct32(a1, b1);
+	const mid = carrylessProduct32(a0 ^ a1, b0 ^ b1) ^ lo ^ hi;
+	g.productLo = lo ^ (mid << 32);
+	g.productHi = hi ^ (mid >> 32);
 }
 
-function storeLE(out: uint8[], at: int32, word: uint32): void {
-	out[at] = (word & 0xff) as uint8;
-	out[at + 1] = ((word >> 8) & 0xff) as uint8;
-	out[at + 2] = ((word >> 16) & 0xff) as uint8;
-	out[at + 3] = (word >> 24) as uint8;
+// The low half of the reduction constant x^127 + x^126 + x^121, shifted down 64 bits.
+const reductionHalf: uint64 = 0xc200000000000000;
+
+// acc = (acc ^ block) * key, reduced modulo x^128 + x^127 + x^126 + x^121 + 1.
+function absorb(g: Ghash, blockHi: uint64, blockLo: uint64): void {
+	const xHi = g.accHi ^ blockHi;
+	const xLo = g.accLo ^ blockLo;
+	carrylessProduct64(g, xLo, g.keyLo);
+	const loHi = g.productHi;
+	const loLo = g.productLo;
+	carrylessProduct64(g, xHi, g.keyHi);
+	const hiHi = g.productHi;
+	const hiLo = g.productLo;
+	carrylessProduct64(g, xLo ^ xHi, g.keyLo ^ g.keyHi);
+	const midHi = g.productHi ^ loHi ^ hiHi;
+	const midLo = g.productLo ^ loLo ^ hiLo;
+	const highHi = hiHi;
+	const highLo = hiLo ^ midHi;
+	const lowHi = loHi ^ midLo;
+	const lowLo = loLo;
+	carrylessProduct64(g, lowLo, reductionHalf);
+	const bHi = lowLo ^ g.productHi;
+	const bLo = lowHi ^ g.productLo;
+	carrylessProduct64(g, bLo, reductionHalf);
+	g.accHi = bLo ^ g.productHi ^ highHi;
+	g.accLo = bHi ^ g.productLo ^ highLo;
 }
 
-// A precompute window of 2, 4 or 8 bits: a bigger one pays its larger table only on a longer message.
-function windowFor(bytes: int32): int32 {
-	if (bytes > 65536) return 8;
-	if (bytes > 1024) return 4;
-	return 2;
+function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
+	let out: uint64 = 0;
+	for (let i = 0; i < 8; i++) out = (out << 8) | (data[at + i] as uint64);
+	return out;
 }
 
-/** `key` is the 16-byte hash key H; `expectedLength` is the byte count about to be hashed, to size the table. */
-export function newGhash(key: Readonly<uint8[]>, expectedLength: int32): Ghash {
-	let k0 = loadBE(key, 0);
-	let k1 = loadBE(key, 4);
-	let k2 = loadBE(key, 8);
-	let k3 = loadBE(key, 12);
-	// doubles[i] = H * x^i in GHASH's bit order, stored as little-endian words
-	const doubles = new Array<uint32>(128 * 4);
-	for (let i = 0; i < 128; i++) {
-		doubles[i * 4] = swapBytes(k0);
-		doubles[i * 4 + 1] = swapBytes(k1);
-		doubles[i * 4 + 2] = swapBytes(k2);
-		doubles[i * 4 + 3] = swapBytes(k3);
-		const high = k3 & 1;
-		k3 = (k2 << 31) | (k3 >> 1);
-		k2 = (k1 << 31) | (k2 >> 1);
-		k1 = (k0 << 31) | (k1 >> 1);
-		k0 = (k0 >> 1) ^ (high == 1 ? (0xe1000000 as uint32) : (0 as uint32));
-	}
-	const window = windowFor(expectedLength);
-	const windows = 128 / window;
-	const windowSize = 1 << window;
-	const table = new Array<uint32>(windows * windowSize * 4);
-	for (let w = 0; w < windows; w++) {
-		for (let value = 0; value < windowSize; value++) {
-			let s0: uint32 = 0;
-			let s1: uint32 = 0;
-			let s2: uint32 = 0;
-			let s3: uint32 = 0;
-			for (let j = 0; j < window; j++) {
-				if (((value >> (window - j - 1)) & 1) == 0) continue;
-				const at = (window * w + j) * 4;
-				s0 = s0 ^ doubles[at];
-				s1 = s1 ^ doubles[at + 1];
-				s2 = s2 ^ doubles[at + 2];
-				s3 = s3 ^ doubles[at + 3];
-			}
-			const into = (w * windowSize + value) * 4;
-			table[into] = s0;
-			table[into + 1] = s1;
-			table[into + 2] = s2;
-			table[into + 3] = s3;
-		}
-	}
-	return { s0: 0, s1: 0, s2: 0, s3: 0, window, windowSize, table };
+export function storeBE64(out: uint8[], at: int32, value: uint64): void {
+	for (let i = 0; i < 8; i++) out[at + i] = ((value >> ((56 - 8 * i) as uint64)) & 0xff) as uint8;
 }
 
-function updateBlock(g: Ghash, w0: uint32, w1: uint32, w2: uint32, w3: uint32): void {
-	const x0 = w0 ^ g.s0;
-	const x1 = w1 ^ g.s1;
-	const x2 = w2 ^ g.s2;
-	const x3 = w3 ^ g.s3;
-	const window = g.window;
-	const windowSize = g.windowSize;
-	const mask = (windowSize - 1) as uint32;
-	const bits = window as uint32;
-	const table = g.table;
-	let o0: uint32 = 0;
-	let o1: uint32 = 0;
-	let o2: uint32 = 0;
-	let o3: uint32 = 0;
-	let w = 0;
-	for (let word = 0; word < 4; word++) {
-		const num = word == 0 ? x0 : word == 1 ? x1 : word == 2 ? x2 : x3;
-		for (let bytePos = 0; bytePos < 4; bytePos++) {
-			const byte = (num >> ((8 * bytePos) as uint32)) & 0xff;
-			for (let bitPos = 8 / window - 1; bitPos >= 0; bitPos--) {
-				const lookup = ((byte >> (bits * (bitPos as uint32))) & mask) as int32;
-				const at = (w * windowSize + lookup) * 4;
-				o0 = o0 ^ table[at];
-				o1 = o1 ^ table[at + 1];
-				o2 = o2 ^ table[at + 2];
-				o3 = o3 ^ table[at + 3];
-				w++;
-			}
-		}
-	}
-	g.s0 = o0;
-	g.s1 = o1;
-	g.s2 = o2;
-	g.s3 = o3;
+/** A GHASH under the 16-byte hash key H. */
+export function newGhash(key: Readonly<uint8[]>): Ghash {
+	const hHi = loadBE64(key, 0);
+	const hLo = loadBE64(key, 8);
+	const carry = (0 as uint64) - (hHi >> 63);
+	return {
+		keyHi: ((hHi << 1) | (hLo >> 63)) ^ (reductionHalf & carry),
+		keyLo: (hLo << 1) ^ ((1 as uint64) & carry),
+		accHi: 0,
+		accLo: 0,
+		productHi: 0,
+		productLo: 0,
+		tail: new Array<uint8>(16),
+	};
 }
 
 /** Absorbs `data[from, to)` as one segment, zero-padded to a whole block: AAD, cipher text and the length block are separate segments. */
 export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): void {
 	let at = from;
 	while (at + 16 <= to) {
-		updateBlock(g, loadLE(data, at), loadLE(data, at + 4), loadLE(data, at + 8), loadLE(data, at + 12));
+		absorb(g, loadBE64(data, at), loadBE64(data, at + 8));
 		at += 16;
 	}
 	if (at < to) {
-		const tail = new Array<uint8>(16);
-		for (let i = at; i < to; i++) tail[i - at] = data[i];
-		updateBlock(g, loadLE(tail, 0), loadLE(tail, 4), loadLE(tail, 8), loadLE(tail, 12));
+		const tail = g.tail;
+		for (let i = 0; i < 16; i++) tail[i] = at + i < to ? data[at + i] : 0;
+		absorb(g, loadBE64(tail, 0), loadBE64(tail, 8));
 	}
 }
 
-/** Writes the 16-byte hash to `out[at, at + 16)`. */
+/** Writes the 16-byte hash to `out[at, at + 16)` and wipes the state. */
 export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
-	storeLE(out, at, g.s0);
-	storeLE(out, at + 4, g.s1);
-	storeLE(out, at + 8, g.s2);
-	storeLE(out, at + 12, g.s3);
+	storeBE64(out, at, g.accHi);
+	storeBE64(out, at + 8, g.accLo);
+	g.keyHi = 0;
+	g.keyLo = 0;
+	g.accHi = 0;
+	g.accLo = 0;
+	g.productHi = 0;
+	g.productLo = 0;
+	for (let i = 0; i < 16; i++) g.tail[i] = 0;
 }
