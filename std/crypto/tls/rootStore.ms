@@ -210,8 +210,9 @@ export function loadRootStore(
 
 /**
  * The default root store, loaded on each call: a process-wide cache would
- * be module state shared across threads, and a Locked<T> payload cannot
- * own the anchors' memory.
+ * be module state shared across threads, and neither a Locked<T> payload nor
+ * an Arc<T> pointee can own the anchors' memory (compiler inbox
+ * 2026-11-04-design-a-process-wide-once-initialized-immutable-value).
  */
 export function defaultRootStore(): Result<RootStore, CryptoError> {
 	return loadRootStore(null);

@@ -9,7 +9,7 @@
  */
 
 import { env } from "std/process";
-import { tlsConnect, TlsConnection, read, write, close, peerCert, tlsClosedMessage } from "./native";
+import { tlsConnect, trustedRoots, TlsConnection, read, write, close, peerCert, tlsClosedMessage } from "./native";
 import { Tls13Client, versionTls12 } from "./client";
 
 function localDir(): string {
@@ -115,6 +115,28 @@ test "a missing CA file and a closed port fail with the index's messages" {
 	assert missing == `failed to load CA certificates from ${dir}/missing.pem`;
 	const closed = refusal("localhost", 1, `${dir}/ca.pem`);
 	assert closed == "TCP connect to localhost failed";
+}
+
+test "roots loaded once verify every connect that passes them, and never beside a caPath" {
+	const dir = localDir();
+	if (dir == "") return;
+	const roots = trustedRoots(`${dir}/ca.pem`);
+	assert roots.ok;
+	for (let i = 0; i < 2; i++) {
+		const r = tlsConnect("localhost", portOf("TLS_NATIVE_PORT"), { roots: roots.value, timeoutMs: 20000 });
+		if (!r.ok) console.log("held roots connect: " + r.error.message);
+		assert r.ok;
+		assert getPage(r.value, "localhost").startsWith("HTTP/1.0 200");
+		r.value.close();
+	}
+	const untrusted = trustedRoots(`${dir}/other.pem`);
+	assert untrusted.ok;
+	const refused = tlsConnect("localhost", portOf("TLS_NATIVE_PORT"), { roots: untrusted.value, timeoutMs: 20000 });
+	assert !refused.ok && refused.error.message.includes("not correctly signed");
+	const both = tlsConnect("localhost", portOf("TLS_NATIVE_PORT"), { caPath: `${dir}/ca.pem`, roots: roots.value });
+	assert !both.ok && both.error.message == "caPath and roots name two trust sets; pass one";
+	const missing = trustedRoots(`${dir}/missing.pem`);
+	assert !missing.ok && missing.error.message == `failed to load CA certificates from ${dir}/missing.pem`;
 }
 
 test "example.com answers over the default root store when the host is online" {

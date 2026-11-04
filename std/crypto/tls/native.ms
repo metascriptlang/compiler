@@ -42,6 +42,8 @@ export const tlsClosedMessage = "TLS connection is closed";
 
 export interface TlsOptions {
 	caPath?: string;
+	/** Roots from `trustedRoots`, kept by the caller and reused by each connect it passes them to; excludes `caPath`. */
+	roots?: X509Bundle;
 	timeoutMs?: int32;
 }
 
@@ -104,11 +106,25 @@ function bundleOf(store: RootStore, now: int64): X509Bundle {
 	return bundle;
 }
 
-/** The roots of `caPath`, else the default store; parsed per connect, since no cache may cross threads. */
 function rootsFor(caPath: string, now: int64): Result<X509Bundle, CryptoError> {
 	const store = caPath != "" ? loadRootStore(caPath) : defaultRootStore();
 	if (!store.ok) return Result.err(connectFailed(store.error.message));
 	return Result.ok(bundleOf(store.value, now));
+}
+
+function connectRoots(caPath: string, given: X509Bundle | null, now: int64): Result<X509Bundle, CryptoError> {
+	if (given == null) return rootsFor(caPath, now);
+	if (caPath != "") return Result.err(connectFailed("caPath and roots name two trust sets; pass one"));
+	return Result.ok(given as X509Bundle);
+}
+
+/**
+ * The roots of `caPath`, else of the default store, loaded and parsed once for the caller to pass as
+ * `roots` to every later connect. A connect without `roots` loads its own; CA files changed after this
+ * call are seen only by the next call.
+ */
+export function trustedRoots(caPath: string = ""): Result<X509Bundle, CryptoError> {
+	return rootsFor(caPath, nowSeconds());
 }
 
 function verifyText(error: X509Error): string {
@@ -173,7 +189,7 @@ export function tlsConnect(hostname: string, port: int32, opts: TlsOptions = {})
 	if (caPath.asBytes().length > 511) return Result.err(connectFailed("CA path is longer than 511 bytes"));
 	const timeoutMs = opts.timeoutMs ?? 0;
 	const now = nowSeconds();
-	const roots = try rootsFor(caPath, now);
+	const roots = try connectRoots(caPath, opts.roots ?? null, now);
 
 	const fd = createSocket();
 	if (fd < 0) return Result.err(connectFailed(`TCP connect to ${hostname} failed`));
