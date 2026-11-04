@@ -337,9 +337,17 @@ export function hmacSync(
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind >= 0) {
-		return Result.ok(
-			hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer,
-		);
+		when (c) {
+			return Result.ok(hmacOf(
+				kind,
+				typeof key == "string" ? key.asBytes() : key,
+				typeof data == "string" ? data.asBytes() : data,
+			) as Buffer);
+		} else {
+			return Result.ok(
+				hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer,
+			);
+		}
 	}
 	if (!isExtAlg(algorithm)) {
 		return Result.err(invalidAlgorithm(algorithm));

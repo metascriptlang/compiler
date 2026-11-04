@@ -1,4 +1,4 @@
-import { HashState, kindSha256, kindMd5, wipeHashState } from "./state";
+import { HashBytes, HashState, kindSha256, kindMd5, wipeHashState } from "./state";
 import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
 import { wipeBytes } from "./secret";
 
@@ -26,7 +26,7 @@ function requireKind(kind: int32): void {
 }
 
 /** Absorbs key ^ ipad into `inner` and key ^ opad into `outer`, hashing a key longer than one block first. */
-function absorbPads(key: Readonly<uint8[]>, inner: HashState, outer: HashState): void {
+function absorbPads(key: HashBytes, inner: HashState, outer: HashState): void {
 	const size = inner.blockSize;
 	const pad = new Array<uint8>(size);
 	if (key.length > size) {
@@ -83,7 +83,7 @@ export function finishHmac(hmac: HmacState): uint8[] {
 	return out;
 }
 
-export function hmacOf(kind: int32, key: Readonly<uint8[]>, data: Readonly<uint8[]>): uint8[] {
+export function hmacOf(kind: int32, key: HashBytes, data: HashBytes): uint8[] {
 	requireKind(kind);
 	const inner = newHash(kind);
 	const outer = newHash(kind);
