@@ -543,7 +543,7 @@ export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
 export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
-	requireNonce(nonce);
+	if (nonce.length != 12) throw new Error(`aes-gcm: nonce must be 12 bytes, got ${nonce.length}`);
 	const size = plain.length;
 	const sealed = new Array<uint8>(12 + size + 16);
 	for (let i = 0; i < 12; i++) sealed[i] = nonce[i];
@@ -554,9 +554,13 @@ export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]
 /** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
 export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
 	if (sealed.length < 28) return null;
-	const size = sealed.length - 28;
-	const plain = new Array<uint8>(size);
-	if (!gcmDecryptInto(xk, sealed.slice(0, 12), aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
+	const end = sealed.length - 16;
+	const tag = gcmTag(xk, sealed, end, aad);
+	let diff: uint8 = 0;
+	for (let i = 0; i < 16; i++) diff = diff | (tag[i] ^ sealed[end + i]);
+	if (diff != 0) return null;
+	const plain = new Array<uint8>(end - 12);
+	ctr32Xor(xk, loadLE(sealed, 0), loadLE(sealed, 4), loadLE(sealed, 8), 2, sealed, 12, end, plain, 0);
 	return plain;
 }
 
