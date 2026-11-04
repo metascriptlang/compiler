@@ -2,7 +2,7 @@
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, isDir, readDir, readFile, writeFile, appendFile, remove } from "std/fs";
+import { exists, isDir, readDir, readFile, writeFile, appendFile, remove, rename } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
 import { getDynamicField, jsonToStringArray } from "std/serialize/json/accessors";
 import { asString } from "std/serialize/json/types";
@@ -27,6 +27,8 @@ import { stringify, jsonString } from "std/core/json";
 import { createJSHelpers, escapeJSString, JsTreeLayout, createJsTreeLayout, relSpecBetween } from "../codegen/js/emit";
 import { generateRaiserProject, analyzeForRaiser, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
+import { collectNativeDemands, takeNativeDemands, bridgeSource, isProgramModule } from "../codegen/raiser/nativeBridge";
+import { loadBridgeLibrary } from "../raiser/nativeBridge";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute, RaiserContext } from "../raiser/context";
 import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
@@ -77,11 +79,11 @@ import { DepsSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } fr
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
-import { CliOptions, Target, MODE_DANGER } from "./options";
+import { CliOptions, Target, MODE_DANGER, MODE_RELEASE } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -5350,7 +5352,7 @@ function entryExports(unitCtxs: CheckerContext[], unitPaths: string[], entryPath
 	return entry != null ? entry.symbols : [];
 }
 
-export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
+export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false, buildNative: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
@@ -5423,7 +5425,10 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
+	collectNativeDemands(buildNative);
 	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
+	collectNativeDemands(false);
+	const demands = takeNativeDemands();
 	// Only a call the Raiser cannot run stops the build: other queued errors stay
 	// warnings, because a demanded std body can hold a site the run never reaches.
 	const hook = _diagnosticHook;
@@ -5435,7 +5440,99 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 		else printDiag(`${e.fatal ? red("raiser error") : yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
 	if (refused > 0) stopBuild();
+	if (demands.length > 0) loadNativeBridges(demands, unitPaths, unitCtxs, opts);
 	return raiserMod;
+}
+
+function includesHeader(including: string, header: string): boolean {
+	const text = readFile(including);
+	if (!text.ok) return false;
+	const name = basename(header);
+	for (const line of text.value.split("\n")) {
+		const t = line.trim();
+		if (t.startsWith("#") && t.includes("include") && (t.includes(`"${name}"`) || t.includes(`<${name}>`) || t.includes(`/${name}"`))) return true;
+	}
+	return false;
+}
+
+// A header another one includes is not included again, as the C backend emits its includes: a header
+// without an include guard would define its inline functions twice.
+function uncoveredHeaders(headers: string[]): string[] {
+	const kept: string[] = [];
+	for (const h of headers) {
+		let covered = false;
+		for (const other of headers) if (other != h && includesHeader(other, h) && !includesHeader(h, other)) covered = true;
+		if (!covered) kept.push(h);
+	}
+	return kept;
+}
+
+function quotedFlag(flag: string): string {
+	return `'${flag}'`;
+}
+
+function loadNativeBridges(demands: Symbol[], unitPaths: string[], unitCtxs: CheckerContext[], opts: CliOptions): void {
+	const root = resolveRuntimeDir();
+	const includes: string[] = [];
+	const sources: string[] = [];
+	const flags: string[] = ["-shared", "-fPIC", quotedFlag(`-iquote${root}`)];
+	const modules: string[] = [];
+	for (const sym of demands) if (!modules.includes(sym.modulePath)) modules.push(sym.modulePath);
+	for (const modPath of unitPaths) if (isProgramModule(modPath) && !modules.includes(modPath)) modules.push(modPath);
+	for (const modPath of modules) {
+		const at = unitPaths.indexOf(modPath);
+		if (at < 0) throw new Error(`internal: the native extern module ${modPath} is not a unit of the Raiser build`);
+		const ctx = unitCtxs[at];
+		const dir = dirname(modPath);
+		flags.push(quotedFlag(`-I${dir}`));
+		const passC = resolveIncludeFlags(ctx.compilerFlags, new HashSet<string>(), dir, root);
+		if (passC != "" && !flags.includes(passC)) flags.push(passC);
+		for (const header of ctx.includeDirectives.split("\n")) {
+			if (header == "") continue;
+			const path = header.startsWith("./") || header.startsWith("../") ? join(dir, header) : header;
+			if (!includes.includes(path)) includes.push(path);
+		}
+		for (const entry of ctx.compileDirectives.split("\n")) {
+			if (entry == "") continue;
+			const tab = entry.indexOf("\t");
+			const source = resolveCompileSource(tab < 0 ? entry : entry.slice(0, tab), dir, new HashSet<string>(), root);
+			if (sources.includes(source)) continue;
+			sources.push(source);
+			if (tab >= 0) flags.push(entry.slice(tab + 1));
+		}
+	}
+	const bridges = bridgeSource(demands, uncoveredHeaders(includes));
+	let inputs = bridges + flags.join(" ");
+	for (const path of sources.concat(includes)) {
+		const text = readFile(path);
+		if (text.ok) inputs = inputs + "\n" + path + "\n" + text.value;
+	}
+	const dir = join(cacheDir(), "raiser-native");
+	const key = hashContent(inputs);
+	const lib = join(dir, `${key}${soSuffix()}`);
+	if (!exists(lib)) {
+		ensureDir(dir);
+		const cFile = join(dir, `${key}.c`);
+		atomicWriteFile(cFile, bridges);
+		const staged = `${lib}.${performance.now()}.tmp`;
+		let ccFlags = flags.join(" ");
+		for (const source of sources) ccFlags = ccFlags + " " + quotedFlag(source);
+		const built = compileC(cFile, staged, ccFlags, opts.mode == MODE_DANGER ? MODE_DANGER : MODE_RELEASE, opts.ccCompiler, opts.ccBinary, opts.targetOs);
+		if (!built.ok) {
+			printDiag(`${red("raiser error")}: cannot build the native bridges of ${demands.map((d) => `'${d.nativeName}'`).join(", ")}: ${built.error.message}\n${built.error.errorOutput}`);
+			stopBuild();
+		}
+		const moved = rename(staged, lib);
+		if (!moved.ok && !exists(lib)) {
+			printDiag(`${red("raiser error")}: cannot place the native bridge library at ${lib}: ${moved.error.message}`);
+			stopBuild();
+		}
+	}
+	const refusal = loadBridgeLibrary(lib);
+	if (refusal != null) {
+		printDiag(`${red("raiser error")}: ${refusal}`);
+		stopBuild();
+	}
 }
 
 export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true): RaiserContext {
@@ -5451,7 +5548,7 @@ export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: R
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions, argv0: string = ""): void {
 	const t0 = performance.now();
-	const raiserMod = compileRaiser(filePath, opts, null, false);
+	const raiserMod = compileRaiser(filePath, opts, null, false, true);
 	if (opts.showTime) printTiming("compiled", t0);
 
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
