@@ -18,6 +18,7 @@
 #include "runtime/crypto/ciphers/poly1305x64.h"
 
 static inline void msPureHwWipe(void *p, size_t n) {
+	if (n == 0) return;
 	memset(p, 0, n);
 	__asm__ __volatile__("" : : "r"(p) : "memory");
 }
