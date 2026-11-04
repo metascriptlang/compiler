@@ -4,7 +4,7 @@
 // Recursive dispatch via match on value.kind.
 
 import { JsonKind, JsonValue } from "./types";
-import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
+import { jsonNull, jsonBool, jsonNumber, jsonInt, jsonString, jsonArray, jsonObject } from "./builder";
 
 // ===== Compact Stringify =====
 // color=false: {"key":"value","n":3}  (standard JSON)
@@ -12,105 +12,133 @@ import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } fro
 
 @compilerFunc
 export function stringify(value: JsonValue, color: boolean = false): string {
-	if (value == null) return color ? "\x1b[2mnull\x1b[0m" : "null";
-	return match (value.kind) {
-		JsonKind.Null => { return color ? "\x1b[2mnull\x1b[0m" : "null"; },
+	let out = "";
+	appendJson(out, value, color);
+	return out;
+}
+
+function appendJson(ref out: string, value: JsonValue, color: boolean): void {
+	if (value == null) {
+		out += color ? "\x1b[2mnull\x1b[0m" : "null";
+		return;
+	}
+	match (value.kind) {
 		JsonKind.Bool => {
-			const s = value.boolVal ? "true" : "false";
-			return color ? "\x1b[36m" + s + "\x1b[0m" : s;
+			if (color) out += "\x1b[36m";
+			out += value.boolVal ? "true" : "false";
+			if (color) out += "\x1b[0m";
 		},
 		JsonKind.Number => {
-			const s = jsonNumberStr(value.numVal);
-			return color ? "\x1b[33m" + s + "\x1b[0m" : s;
+			if (color) out += "\x1b[33m";
+			out += jsonNumberStr(value.numVal);
+			if (color) out += "\x1b[0m";
 		},
 		JsonKind.String => {
-			return color ? "\x1b[32m" + escapeString(value.strVal) + "\x1b[0m" : escapeString(value.strVal);
+			if (color) out += "\x1b[32m";
+			appendEscaped(out, value.strVal);
+			if (color) out += "\x1b[0m";
 		},
 		JsonKind.Array => {
-			let result = "[";
+			out += "[";
 			let i = 0;
 			while (i < value.items.length) {
-				if (i > 0) result += color ? ", " : ",";
-				result += stringify(value.items[i], color);
+				if (i > 0) out += color ? ", " : ",";
+				appendJson(out, value.items[i], color);
 				i = i + 1;
 			}
-			return result + "]";
+			out += "]";
 		},
 		JsonKind.Object => {
-			let result = color ? "{ " : "{";
+			out += color ? "{ " : "{";
 			let i = 0;
 			while (i < value.keys.length) {
-				if (i > 0) result += color ? ", " : ",";
+				if (i > 0) out += color ? ", " : ",";
 				if (color) {
-					result += value.keys[i] + ": " + stringify(value.values[i], true);
+					out += value.keys[i];
+					out += ": ";
 				} else {
-					result += escapeString(value.keys[i]) + ":" + stringify(value.values[i], false);
+					appendEscaped(out, value.keys[i]);
+					out += ":";
 				}
+				appendJson(out, value.values[i], color);
 				i = i + 1;
 			}
-			return result + (color ? " }" : "}");
+			out += color ? " }" : "}";
 		},
 		JsonKind.Int => {
-			const s = value.intVal.toString();
-			return color ? "\x1b[33m" + s + "\x1b[0m" : s;
+			if (color) out += "\x1b[33m";
+			out += value.intVal.toString();
+			if (color) out += "\x1b[0m";
 		},
-		_ => "null",
+		JsonKind.Null => { out += color ? "\x1b[2mnull\x1b[0m" : "null"; },
+		_ => { out += color ? "\x1b[2mnull\x1b[0m" : "null"; },
 	};
 }
 
 // ===== Pretty Stringify =====
 
 export function stringifyPretty(value: JsonValue, indent: number): string {
-	return prettyImpl(value, indent, 0);
+	let out = "";
+	appendPretty(out, value, indent, 0);
+	return out;
 }
 
-function prettyImpl(value: JsonValue, indent: number, depth: number): string {
-	if (value == null) return "null";
-	return match (value.kind) {
-		JsonKind.Null => "null",
-		JsonKind.Bool => { return value.boolVal ? "true" : "false"; },
-		JsonKind.Number => jsonNumberStr(value.numVal),
-		JsonKind.Int => value.intVal.toString(),
-		JsonKind.String => escapeString(value.strVal),
+function appendPretty(ref out: string, value: JsonValue, indent: number, depth: number): void {
+	if (value == null) {
+		out += "null";
+		return;
+	}
+	match (value.kind) {
+		JsonKind.Bool => { out += value.boolVal ? "true" : "false"; },
+		JsonKind.Number => { out += jsonNumberStr(value.numVal); },
+		JsonKind.Int => { out += value.intVal.toString(); },
+		JsonKind.String => { appendEscaped(out, value.strVal); },
 		JsonKind.Array => {
-			if (value.items.length == 0) return "[]";
-			const pad = makeIndent(indent, depth + 1);
-			const endPad = makeIndent(indent, depth);
-			let result = "[\n";
+			if (value.items.length == 0) {
+				out += "[]";
+				return;
+			}
+			out += "[\n";
 			let i = 0;
 			while (i < value.items.length) {
-				if (i > 0) result += ",\n";
-				result += pad + prettyImpl(value.items[i], indent, depth + 1);
+				if (i > 0) out += ",\n";
+				appendIndent(out, indent * (depth + 1));
+				appendPretty(out, value.items[i], indent, depth + 1);
 				i = i + 1;
 			}
-			return result + "\n" + endPad + "]";
+			out += "\n";
+			appendIndent(out, indent * depth);
+			out += "]";
 		},
 		JsonKind.Object => {
-			if (value.keys.length == 0) return "{}";
-			const pad = makeIndent(indent, depth + 1);
-			const endPad = makeIndent(indent, depth);
-			let result = "{\n";
+			if (value.keys.length == 0) {
+				out += "{}";
+				return;
+			}
+			out += "{\n";
 			let i = 0;
 			while (i < value.keys.length) {
-				if (i > 0) result += ",\n";
-				result += pad + escapeString(value.keys[i]) + ": " + prettyImpl(value.values[i], indent, depth + 1);
+				if (i > 0) out += ",\n";
+				appendIndent(out, indent * (depth + 1));
+				appendEscaped(out, value.keys[i]);
+				out += ": ";
+				appendPretty(out, value.values[i], indent, depth + 1);
 				i = i + 1;
 			}
-			return result + "\n" + endPad + "}";
+			out += "\n";
+			appendIndent(out, indent * depth);
+			out += "}";
 		},
-		_ => "null",
+		_ => { out += "null"; },
 	};
 }
 
-function makeIndent(size: number, depth: number): string {
-	let result = "";
+function appendIndent(ref out: string, total: number): void {
 	let i = 0;
-	const total = size * depth;
 	while (i < total) {
-		result += " ";
+		out += " ";
 		i = i + 1;
 	}
-	return result;
 }
 
 // ===== String Escaping =====
@@ -137,8 +165,8 @@ function isWtf8SurrogateCont(b: int32): boolean {
 	return b >= 160 && b <= 191;
 }
 
-function escapeString(s: string): string {
-	let result = "\"";
+function appendEscaped(ref result: string, s: string): void {
+	result += "\"";
 	let i = 0;
 	const len = s.byteLength;
 	// Walk byte-by-byte; every escape-relevant byte is ASCII. Plain content
@@ -174,7 +202,7 @@ function escapeString(s: string): string {
 		i = i + 1;
 	}
 	if (runStart < len) result += s.byteSlice(runStart, len);
-	return result + "\"";
+	result += "\"";
 }
 
 // ===== Tests =====
@@ -302,4 +330,37 @@ test "stringifyPretty keeps object keys in insertion order" {
 	const out = stringifyPretty(jsonObject(keys, vals), 0);
 	assert out.indexOf("\"10\"") < out.indexOf("\"9\""), out;
 	assert out.indexOf("\"9\"") < out.indexOf("\"1\""), out;
+}
+
+test "stringify escapes every control byte form" {
+	const s = "q\"b\\n\nr\rt\tb\u{8}f\u{c}z\u{0}u\u{1f}d\u{7f}";
+	assert stringify(jsonString(s)) == "\"q\\\"b\\\\n\\nr\\rt\\tb\\bf\\fz\\u0000u\\u001fd\u{7f}\"";
+}
+
+test "stringify nested arrays and objects" {
+	const innerKeys: string[] = ["k\"1", "k2"];
+	const innerVals: JsonValue[] = [jsonArray([jsonNumber(1.5), jsonInt(-7)]), jsonNull()];
+	const keys: string[] = ["a", "b"];
+	const vals: JsonValue[] = [jsonObject(innerKeys, innerVals), jsonArray([jsonArray([]), jsonBool(false)])];
+	assert stringify(jsonObject(keys, vals)) == "{\"a\":{\"k\\\"1\":[1.5,-7],\"k2\":null},\"b\":[[],false]}";
+}
+
+test "stringify color mode" {
+	const keys: string[] = ["k"];
+	const vals: JsonValue[] = [jsonArray([jsonNumber(1), jsonString("a"), jsonBool(true), jsonNull(), jsonInt(2)])];
+	const want = "{ k: [\x1b[33m1\x1b[0m, \x1b[32m\"a\"\x1b[0m, \x1b[36mtrue\x1b[0m, \x1b[2mnull\x1b[0m, \x1b[33m2\x1b[0m] }";
+	assert stringify(jsonObject(keys, vals), true) == want;
+}
+
+test "stringifyPretty nested with indent 2" {
+	const keys: string[] = ["a", "e", "o"];
+	const vals: JsonValue[] = [jsonArray([jsonNumber(1), jsonObject(["x"], [jsonString("y")])]), jsonArray([]), jsonObject([], [])];
+	const want = "{\n  \"a\": [\n    1,\n    {\n      \"x\": \"y\"\n    }\n  ],\n  \"e\": [],\n  \"o\": {}\n}";
+	assert stringifyPretty(jsonObject(keys, vals), 2) == want;
+}
+
+test "stringifyPretty scalars and non-finite" {
+	assert stringifyPretty(jsonNumber(0.0 / 0.0), 2) == "null";
+	assert stringifyPretty(jsonInt(5), 2) == "5";
+	assert stringifyPretty(jsonString("a\nb"), 4) == "\"a\\nb\"";
 }
