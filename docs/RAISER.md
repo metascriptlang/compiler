@@ -100,6 +100,17 @@ Per call, measured 2026-11-04 on rtx (Linux x86_64, Ryzen 9 9950X), one run of `
 | `implementRoutine` doing `Math.sqrt` | 34.1 |
 | the same loop compiled to C | 4.5 |
 
+## The program's own C
+
+`msc run --target=raiser` runs a program that calls its own C, through a header import (`import { f } from "./x.h"` with its companion `x.c`) or an `extern function` of an `@include`d header: codegen records each such extern a reached call names (a module outside std, a native name that is a C identifier), `src/codegen/raiser/nativeBridge.ms` writes one C bridge per extern and the `msRaiserBridges` table (ABI: `runtime/raiser/bridge.h`), and `compileRaiser` builds them with every `@compile` source of the program into `<cache>/raiser-native/<hash>.so` at `-O2`, loads it and registers each bridge as an in-place host function by its native name. The call site then resolves it like any std bridge. A bridge carries integers, enums, booleans and floats both ways and a `cstring` argument (a copy valid until the call returns, the C backend's contract); a pointer, struct, span, function or `cstring` result is refused at the call naming the parameter. An embedder registers no bridges this way: `evalModule` still refuses an extern with no registered routine.
+
+Per call, measured 2026-11-04 on an Apple M3 Max (load 12 at start), `src/bench/run.sh raiser 3` with a `--danger --cc=clang` candidate, µs per 1000 iterations of `acc = f(acc + 2.0)`:
+
+| `f` | raiser | c | luajit-joff | luajit-jon |
+|---|---|---|---|---|
+| `Math.sqrt`, std's in-place bridge | 22.9 | 4.23 | 8.19 | 4.26 |
+| `benchNativeSqrt` of the program's own C, generated bridge (LuaJIT: `ffi.C.sqrt`) | 25.8 | 4.23 | 27.1 | 4.30 |
+
 ## Execution budget
 
 The VM stops after `loopLimit` backward jumps (default 10M):
@@ -187,7 +198,7 @@ Exceptions follow a safepoint model. `Try` pushes a safepoint. `Catch` is never 
 
 ## Not built
 
-A grep over `src/raiser`, `src/codegen/raiser`, `src/compiler/meta` finds no `Call0`–`Call4` arity-specialized call, no `CallExtern` that calls linked natives through function pointers, and no IDE eval protocol (`evalForm`, watch opcode); a binary bytecode file format was not searched for. The dispatch loop in `vm.ms` is one `switch` marked `@computedGoto`, which the C backend emits as a table of label addresses.
+A grep over `src/raiser`, `src/codegen/raiser`, `src/compiler/meta` finds no `Call0`–`Call4` arity-specialized call, no `CallExtern` opcode (a native function of the program is reached through `CallHost` and its generated bridge, §The program's own C), and no IDE eval protocol (`evalForm`, watch opcode); a binary bytecode file format was not searched for. The dispatch loop in `vm.ms` is one `switch` marked `@computedGoto`, which the C backend emits as a table of label addresses.
 
 ## Out of scope
 
