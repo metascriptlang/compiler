@@ -144,3 +144,25 @@ export function finishedVerifyData(
 	const finishedKey = hkdfExpandLabel(kind, trafficSecret, "finished", [], hashLength(kind));
 	return hmacOf(kind, finishedKey, transcriptHash);
 }
+
+/** The TLS 1.2 PRF (RFC 5246 5): P_hash(secret, label + seed) cut to `length` bytes. */
+export function tls12Prf(
+	kind: int32,
+	secret: Readonly<uint8[]>,
+	label: string,
+	seed: Readonly<uint8[]>,
+	length: int32,
+): uint8[] {
+	const labelSeed: uint8[] = label.asBytes().slice(0);
+	for (let i = 0; i < seed.length; i++) labelSeed.push(seed[i]);
+	const out: uint8[] = [];
+	let a = hmacOf(kind, secret, labelSeed);
+	while (out.length < length) {
+		const input: uint8[] = [...a];
+		for (let i = 0; i < labelSeed.length; i++) input.push(labelSeed[i]);
+		const block = hmacOf(kind, secret, input);
+		for (let i = 0; i < block.length && out.length < length; i++) out.push(block[i]);
+		a = hmacOf(kind, secret, a);
+	}
+	return out;
+}

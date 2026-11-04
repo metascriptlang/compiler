@@ -1,5 +1,5 @@
 /**
- * The three TLS 1.3 cipher suites this client offers and their AEADs:
+ * The TLS 1.3 and TLS 1.2 ECDHE cipher suites this client offers and their AEADs:
  * AES-GCM from the portable AES kernel and the RFC 8439 ChaCha20-Poly1305
  * with a 96-bit nonce, built on the portable Poly1305.
  */
@@ -11,6 +11,13 @@ import { kindSha256, kindSha384 } from "../pure/state";
 export const suiteAes128GcmSha256: int32 = 0x1301;
 export const suiteAes256GcmSha384: int32 = 0x1302;
 export const suiteChacha20Poly1305Sha256: int32 = 0x1303;
+
+export const suiteEcdheEcdsaAes128GcmSha256: int32 = 0xc02b;
+export const suiteEcdheEcdsaAes256GcmSha384: int32 = 0xc02c;
+export const suiteEcdheRsaAes128GcmSha256: int32 = 0xc02f;
+export const suiteEcdheRsaAes256GcmSha384: int32 = 0xc030;
+export const suiteEcdheRsaChacha20Poly1305Sha256: int32 = 0xcca8;
+export const suiteEcdheEcdsaChacha20Poly1305Sha256: int32 = 0xcca9;
 
 export const aeadTagLength: int32 = 16;
 export const aeadNonceLength: int32 = 12;
@@ -30,6 +37,28 @@ export function cipherSuiteOf(code: int32): CipherSuite | null {
 	return null;
 }
 
+/** A TLS 1.2 suite's PRF hash and AEAD key length, or null when this client does not implement it. */
+export function tls12CipherSuiteOf(code: int32): CipherSuite | null {
+	if (code == suiteEcdheEcdsaAes128GcmSha256 || code == suiteEcdheRsaAes128GcmSha256) return { code, hashKind: kindSha256, keyLength: 16 };
+	if (code == suiteEcdheEcdsaAes256GcmSha384 || code == suiteEcdheRsaAes256GcmSha384) return { code, hashKind: kindSha384, keyLength: 32 };
+	if (code == suiteEcdheEcdsaChacha20Poly1305Sha256 || code == suiteEcdheRsaChacha20Poly1305Sha256) return { code, hashKind: kindSha256, keyLength: 32 };
+	return null;
+}
+
+/** Whether a TLS 1.2 suite's ServerKeyExchange is signed with ECDSA rather than RSA. */
+export function tls12SuiteSignsWithEcdsa(code: int32): boolean {
+	return code == suiteEcdheEcdsaAes128GcmSha256 || code == suiteEcdheEcdsaAes256GcmSha384 || code == suiteEcdheEcdsaChacha20Poly1305Sha256;
+}
+
+/** RFC 5288 3 and RFC 7905 2: the implicit IV a TLS 1.2 key block yields, 4 bytes for GCM and 12 for ChaCha20-Poly1305. */
+export function tls12FixedIvLength(code: int32): int32 {
+	return usesChacha(code) ? aeadNonceLength : 4;
+}
+
+function usesChacha(code: int32): boolean {
+	return code == suiteChacha20Poly1305Sha256 || code == suiteEcdheRsaChacha20Poly1305Sha256 || code == suiteEcdheEcdsaChacha20Poly1305Sha256;
+}
+
 /** One direction's AEAD key, expanded once. */
 export class AeadKey {
 	suite: int32;
@@ -39,7 +68,7 @@ export class AeadKey {
 
 export function newAeadKey(suite: int32, key: Readonly<uint8[]>): AeadKey {
 	const own: uint8[] = [...key];
-	const aesSchedule = suite == suiteChacha20Poly1305Sha256 ? [] : expandKey(own);
+	const aesSchedule = usesChacha(suite) ? [] : expandKey(own);
 	return { suite, key: own, aesSchedule };
 }
 
@@ -50,7 +79,7 @@ export function aeadSeal(
 	aad: Readonly<uint8[]>,
 	plain: Readonly<uint8[]>,
 ): uint8[] {
-	if (key.suite == suiteChacha20Poly1305Sha256) return chachaPolySeal(key.key, nonce, aad, plain);
+	if (usesChacha(key.suite)) return chachaPolySeal(key.key, nonce, aad, plain);
 	const sealed = gcmSealWithNonce(key.aesSchedule, nonce, plain, aad);
 	return sealed.slice(aeadNonceLength);
 }
@@ -63,7 +92,7 @@ export function aeadOpen(
 	sealed: Readonly<uint8[]>,
 ): uint8[] | null {
 	if (sealed.length < aeadTagLength) return null;
-	if (key.suite == suiteChacha20Poly1305Sha256) return chachaPolyOpen(key.key, nonce, aad, sealed);
+	if (usesChacha(key.suite)) return chachaPolyOpen(key.key, nonce, aad, sealed);
 	const joined: uint8[] = [...nonce];
 	for (let i = 0; i < sealed.length; i++) joined.push(sealed[i]);
 	return gcmOpen(key.aesSchedule, joined, aad);
