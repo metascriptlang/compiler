@@ -1,4 +1,7 @@
-/** The running state of one Poly1305 MAC: 32-bit limbs with 64-bit products, fixed storage so no call allocates. */
+/**
+ * The running state of one Poly1305 MAC: 32-bit limbs with 64-bit products,
+ * fixed storage so no call allocates.
+ */
 export class Poly1305State {
 	r: uint32[4];
 	pad: uint32[4];
@@ -7,22 +10,50 @@ export class Poly1305State {
 	filled: int32;
 }
 
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
+/** The little-endian 32-bit word of `data` at `at`. */
+export function load32(data: Readonly<uint8[]>, at: int32): uint32 {
+	return (
+		(data[at] as uint32) |
+		((data[at + 1] as uint32) << 8) |
+		((data[at + 2] as uint32) << 16) |
+		((data[at + 3] as uint32) << 24)
+	);
 }
 
-export function newPoly1305(key: Readonly<uint8[]>, keyOff: int32): Poly1305State {
+export function newPoly1305(
+	key: Readonly<uint8[]>,
+	keyOff: int32,
+): Poly1305State {
 	return {
-		r: [load32(key, keyOff) & 0x0fffffff, load32(key, keyOff + 4) & 0x0ffffffc, load32(key, keyOff + 8) & 0x0ffffffc, load32(key, keyOff + 12) & 0x0ffffffc],
-		pad: [load32(key, keyOff + 16), load32(key, keyOff + 20), load32(key, keyOff + 24), load32(key, keyOff + 28)],
+		r: [
+			load32(key, keyOff) & 0x0fffffff,
+			load32(key, keyOff + 4) & 0x0ffffffc,
+			load32(key, keyOff + 8) & 0x0ffffffc,
+			load32(key, keyOff + 12) & 0x0ffffffc,
+		],
+		pad: [
+			load32(key, keyOff + 16),
+			load32(key, keyOff + 20),
+			load32(key, keyOff + 24),
+			load32(key, keyOff + 28),
+		],
 		h: [0, 0, 0, 0, 0],
 		block: new Array<uint8>(16),
 		filled: 0,
 	};
 }
 
-/** Absorbs `blocks` 16-byte blocks of `data` from `off`; `hibit` is 1 for a full block and 0 for the padded last one. */
-function absorb(s: Poly1305State, data: Readonly<uint8[]>, off: int32, blocks: int32, hibit: uint32): void {
+/**
+ * Absorbs `blocks` 16-byte blocks of `data` from `off`; `hibit` is 1 for a full
+ * block and 0 for the padded last one.
+ */
+function absorb(
+	s: Poly1305State,
+	data: Readonly<uint8[]>,
+	off: int32,
+	blocks: int32,
+	hibit: uint32,
+): void {
 	const r0 = s.r[0] as uint64;
 	const r1 = s.r[1] as uint64;
 	const r2 = s.r[2] as uint64;
@@ -72,7 +103,12 @@ function absorb(s: Poly1305State, data: Readonly<uint8[]>, off: int32, blocks: i
 	s.h[4] = h4;
 }
 
-export function updatePoly1305(s: Poly1305State, data: Readonly<uint8[]>, off: int32, length: int32): void {
+export function updatePoly1305(
+	s: Poly1305State,
+	data: Readonly<uint8[]>,
+	off: int32,
+	length: int32,
+): void {
 	let at = off;
 	const end = off + length;
 	if (s.filled > 0) {
@@ -95,7 +131,10 @@ export function updatePoly1305(s: Poly1305State, data: Readonly<uint8[]>, off: i
 	}
 }
 
-/** Zero-fills the buffered partial block to 16 bytes and absorbs it, as AEAD padding does. */
+/**
+ * Zero-fills the buffered partial block to 16 bytes and absorbs it, as AEAD
+ * padding does.
+ */
 export function padPoly1305(s: Poly1305State): void {
 	if (s.filled == 0) return;
 	for (let i = s.filled; i < 16; i++) s.block[i] = 0;
@@ -104,7 +143,11 @@ export function padPoly1305(s: Poly1305State): void {
 }
 
 /** Writes the 16-byte tag to `out` at `outOff` and wipes the state. */
-export function finishPoly1305(s: Poly1305State, out: uint8[], outOff: int32): void {
+export function finishPoly1305(
+	s: Poly1305State,
+	out: uint8[],
+	outOff: int32,
+): void {
 	if (s.filled > 0) {
 		s.block[s.filled] = 1;
 		for (let i = s.filled + 1; i < 16; i++) s.block[i] = 0;
