@@ -12,6 +12,7 @@
 import { Node, NodeKind, NodeFlag, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type } from "../../ast/node";
 import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
 import { isLocation } from "../../checker/assignable";
+import { sameType } from "../../checker/compat";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { forEachChild } from "../../ast/visitor";
@@ -65,11 +66,22 @@ function checkMaybeRead(n: Node): void {
 	const carrier = d.object != null ? d.object.nodeType : null;
 	if (d.property != "value" || carrier == null || !isMaybeType(carrier)) return;
 	const loc = n.location;
+	d.object = withoutIdentityCasts(d.object);
 	const check = isLocation(d.object) ? "msMaybeAccess" : "msMaybeAccessVal";
 	const call = makeCall(runtimeRef(check, loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
 	call.nodeType = carrier;
 	d.object = call;
 	n.flags = n.flags.excl(NodeFlag.ConvCheck);
+}
+
+function withoutIdentityCasts(n: Node): Node {
+	let cur = n;
+	while (cur.kind == NodeKind.TypeAssertion && !cur.flags.has(NodeFlag.ObjCheck) && !cur.flags.has(NodeFlag.ConvCheck)) {
+		const inner = (cur.data as TypeAssertionData).asExpr;
+		if (inner == null || !sameType(inner.nodeType, cur.nodeType)) break;
+		cur = inner;
+	}
+	return cur;
 }
 
 export function lowerNullable(program: Node, ctx: TransformContext): Node {
