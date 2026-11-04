@@ -1,0 +1,106 @@
+import { argon2HashRawSync, argon2HashSync, argon2VerifySync } from "std/crypto/argon2";
+import { rawString } from "std/core/buffer/bytes";
+import { Argon2Mode, argon2Encode, argon2Raw, argon2VerifyEncoded } from "./argon2";
+
+@include("runtime/crypto/kdf/argon2Oracle.h");
+@compile("runtime/crypto/kdf/argon2Oracle.c");
+extern function vendorRaw(password: string, salt: string, secret: string, ad: string, mode: int32, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string from "msArgon2OracleRaw";
+extern function vendorEncoded(password: string, salt: string, mode: int32, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string from "msArgon2OracleEncoded";
+extern function vendorVerify(encoded: string, password: string, mode: int32): int32 from "msArgon2OracleVerify";
+
+class Rng {
+	state: uint32;
+}
+
+function next(rng: Rng, bound: int32): int32 {
+	let x = rng.state;
+	x = x ^ (x << 13);
+	x = x ^ (x >> 17);
+	x = x ^ (x << 5);
+	rng.state = x;
+	return (x % (bound as uint32)) as int32;
+}
+
+function randomBytes(rng: Rng, length: int32): uint8[] {
+	const out = new Array<uint8>(length);
+	for (let i = 0; i < length; i++) out[i] = next(rng, 256) as uint8;
+	return out;
+}
+
+const modes: Argon2Mode[] = [Argon2Mode.Argon2d, Argon2Mode.Argon2i, Argon2Mode.Argon2id];
+
+function modeNumber(mode: Argon2Mode): int32 {
+	return match (mode) {
+		Argon2Mode.Argon2d => 0,
+		Argon2Mode.Argon2i => 1,
+		Argon2Mode.Argon2id => 2,
+	};
+}
+
+function sameAsVendor(pure: Result<uint8[], string>, vendor: string): boolean {
+	if (!pure.ok) return vendor == "";
+	return vendor != "" && rawString(pure.value) == vendor;
+}
+
+test "pure argon2 raw matches the vendor over seeded inputs, modes, secret and ad" {
+	const rng: Rng = { state: 0x9e3779b9 };
+	const passwordLengths = [0, 1, 63, 64, 65, 127, 128, 129, 1024, 2048];
+	for (let i = 0; i < 48; i++) {
+		const mode = modes[i % 3];
+		const parallelism = 1 + next(rng, 4);
+		const memoryCost = 8 * parallelism + next(rng, i < 6 ? 1024 - 8 * parallelism : 96);
+		const timeCost = 1 + next(rng, 3);
+		const hashLen = 4 + next(rng, 125);
+		const password = randomBytes(rng, i < passwordLengths.length ? passwordLengths[i] : next(rng, 300));
+		const salt = randomBytes(rng, 8 + next(rng, 72));
+		const secret = randomBytes(rng, i % 2 == 0 ? 0 : next(rng, 64));
+		const ad = randomBytes(rng, i % 4 < 2 ? 0 : next(rng, 64));
+		const pure = argon2Raw(password, salt, timeCost, memoryCost, parallelism, hashLen, mode, secret, ad);
+		const vendor = vendorRaw(rawString(password), rawString(salt), rawString(secret), rawString(ad), modeNumber(mode), timeCost, memoryCost, parallelism, hashLen);
+		assert pure.ok;
+		assert sameAsVendor(pure, vendor);
+	}
+}
+
+test "pure argon2 refuses exactly the parameters the vendor refuses" {
+	const rng: Rng = { state: 12345 };
+	const empty: uint8[] = [];
+	const cases: int32[][] = [[1, 8, 1, 4, 8], [0, 8, 1, 4, 8], [1, 7, 1, 4, 8], [1, 15, 2, 4, 8], [1, 16, 2, 4, 8], [1, 8, 1, 3, 8], [1, 8, 1, 4, 7], [1, 8, 0, 4, 8], [1, 8, 1, 0, 0]];
+	for (const c of cases) {
+		const password = randomBytes(rng, 16);
+		const salt = randomBytes(rng, c[4]);
+		const pure = argon2Raw(password, salt, c[0], c[1], c[2], c[3]);
+		const vendor = vendorRaw(rawString(password), rawString(salt), "", "", 2, c[0], c[1], c[2], c[3]);
+		assert sameAsVendor(pure, vendor);
+		const publicRaw = argon2HashRawSync(password, salt, c[0], c[1], c[2], c[3]);
+		assert publicRaw.ok == pure.ok;
+		assert !publicRaw.ok || rawString(publicRaw.value) == rawString(pure.ok ? pure.value : empty);
+	}
+}
+
+test "encoded hashes cross-verify between pure and vendor in every mode" {
+	const rng: Rng = { state: 777 };
+	for (let i = 0; i < 9; i++) {
+		const mode = modes[i % 3];
+		const parallelism = 1 + next(rng, 4);
+		const memoryCost = 8 * parallelism + next(rng, 64);
+		const timeCost = 1 + next(rng, 3);
+		const password = randomBytes(rng, next(rng, 40));
+		const salt = randomBytes(rng, 8 + next(rng, 24));
+		const wrong = randomBytes(rng, 1 + password.length);
+		const ours = argon2Encode(password, salt, timeCost, memoryCost, parallelism, 32, mode);
+		assert ours.ok;
+		const theirs = vendorEncoded(rawString(password), rawString(salt), modeNumber(mode), timeCost, memoryCost, parallelism, 32);
+		assert theirs == ours.value;
+		assert vendorVerify(ours.value, rawString(password), modeNumber(mode)) == 1;
+		assert vendorVerify(ours.value, rawString(wrong), modeNumber(mode)) == 0;
+		assert argon2VerifyEncoded(theirs, password);
+		assert !argon2VerifyEncoded(theirs, wrong);
+		if (mode == Argon2Mode.Argon2id) {
+			const publicEncoded = argon2HashSync(password, salt, timeCost, memoryCost, parallelism, 32);
+			assert publicEncoded.ok && publicEncoded.value == ours.value;
+			assert argon2VerifySync(ours.value, password);
+			assert !argon2VerifySync(ours.value, wrong);
+		}
+	}
+}
