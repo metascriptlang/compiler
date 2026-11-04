@@ -389,19 +389,22 @@ test "no record is sealed or opened at the last sequence number" {
 	assert !exhausted.ok && exhausted.error == RecordFailure.SequenceExhausted;
 }
 
+// A replaced key is wiped by its destroy hook, which runs on C; JS has no destroy hooks.
 test "traffic keys zero their secret, IV and AEAD key when dropped or replaced" {
-	let keys: TrafficKeys | null = keysFor(suiteAes128GcmSha256);
-	const secret = (keys as TrafficKeys).secret;
-	const iv = (keys as TrafficKeys).iv;
-	const key = (keys as TrafficKeys).key.key;
-	const schedule = (keys as TrafficKeys).key.aesSchedule;
-	assert secret[0] == 7 && orOf(iv) != 0 && orOf(key) != 0;
-	keys = updatedTrafficKeys(keys as TrafficKeys);
-	assert orOf((keys as TrafficKeys).secret) != 0;
-	assert orOf(secret) == 0 && orOf(iv) == 0 && orOf(key) == 0;
-	let words: uint32 = 0;
-	for (const word of schedule) words |= word;
-	assert schedule.length > 0 && words == 0;
+	when (c) {
+		let keys: TrafficKeys | null = keysFor(suiteAes128GcmSha256);
+		const secret = (keys as TrafficKeys).secret;
+		const iv = (keys as TrafficKeys).iv;
+		const key = (keys as TrafficKeys).key.key;
+		const schedule = (keys as TrafficKeys).key.aesSchedule;
+		assert secret[0] == 7 && orOf(iv) != 0 && orOf(key) != 0;
+		keys = updatedTrafficKeys(keys as TrafficKeys);
+		assert orOf((keys as TrafficKeys).secret) != 0;
+		assert orOf(secret) == 0 && orOf(iv) == 0 && orOf(key) == 0;
+		let nonzero = false;
+		for (const word of schedule) if (word != 0) nonzero = true;
+		assert schedule.length > 0 && !nonzero;
+	}
 }
 
 function orOf(bytes: Readonly<uint8[]>): int32 {
