@@ -407,6 +407,10 @@ export function heapHandleCharCodeAt(arr: RaiserArrayHeap, h: int64, idx: int64)
 	return textCharCodeAt(textOf(h), idx);
 }
 
+export function heapHandleLength(h: int64): int64 {
+	return textLength(textOf(h));
+}
+
 export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
 	return textByteAt(textOf(h), idx);
 }
