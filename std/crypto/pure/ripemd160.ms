@@ -5,48 +5,8 @@
 
 import { encodeHex } from "../../core/encoding";
 
-// idxL[g*16..g*16+15] = Rho160^g applied to Id160; verifiable at reference source line ~270.
-const idxL: uint8[80] = [
-	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-	7, 4, 13, 1, 10, 6, 15, 3, 12, 0, 9, 5, 2, 14, 11, 8,
-	3, 10, 14, 4, 9, 15, 8, 1, 2, 7, 0, 6, 13, 11, 5, 12,
-	1, 9, 11, 10, 0, 8, 12, 4, 13, 3, 7, 15, 14, 5, 6, 2,
-	4, 0, 5, 9, 7, 12, 2, 10, 14, 1, 3, 8, 11, 6, 15, 13,
-];
-
-// idxR[g*16..g*16+15] = Rho160^g applied to Pi160 = (9i+5) mod 16.
-const idxR: uint8[80] = [
-	5, 14, 7, 0, 9, 2, 11, 4, 13, 6, 15, 8, 1, 10, 3, 12,
-	6, 11, 3, 7, 0, 13, 5, 10, 14, 15, 8, 12, 4, 9, 1, 2,
-	15, 5, 1, 3, 7, 14, 6, 9, 11, 8, 12, 2, 10, 0, 4, 13,
-	8, 6, 4, 1, 3, 11, 15, 0, 5, 12, 2, 13, 9, 7, 10, 14,
-	12, 15, 10, 4, 1, 5, 8, 7, 6, 2, 13, 14, 0, 3, 9, 11,
-];
-
-// sL[g*16+i] = shifts160[g][ idxL[g*16+i] ]; reference shiftsL160[].
-const sL: uint8[80] = [
-	11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8,
-	7, 6, 8, 13, 11, 9, 7, 15, 7, 12, 15, 9, 11, 7, 13, 12,
-	11, 13, 6, 7, 14, 9, 13, 15, 14, 8, 13, 6, 5, 12, 7, 5,
-	11, 12, 14, 15, 14, 15, 9, 8, 9, 14, 5, 6, 8, 6, 5, 12,
-	9, 15, 5, 11, 6, 8, 13, 12, 5, 12, 13, 14, 11, 8, 5, 6,
-];
-
-// sR[g*16+i] = shifts160[g][ idxR[g*16+i] ]; reference shiftsR160[].
-const sR: uint8[80] = [
-	8, 9, 9, 11, 13, 15, 15, 5, 7, 7, 8, 11, 14, 14, 12, 6,
-	9, 13, 15, 7, 12, 8, 9, 11, 7, 7, 12, 7, 6, 15, 13, 11,
-	9, 7, 15, 11, 8, 6, 6, 14, 12, 13, 5, 14, 13, 13, 7, 5,
-	15, 5, 8, 11, 14, 14, 6, 14, 6, 9, 12, 9, 12, 5, 15, 8,
-	8, 5, 12, 9, 12, 5, 14, 6, 8, 13, 6, 5, 15, 13, 11, 11,
-];
-
-const KL: uint32[5] = [0x00000000, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e];
-const KR: uint32[5] = [0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0x00000000];
-
 export class Ripemd160State {
 	h: uint32[5];
-	w: uint32[16];
 	block: uint8[];
 	filled: int32;
 	lengthLow: uint32;
@@ -57,7 +17,6 @@ export class Ripemd160State {
 export function newRipemd160(): Ripemd160State {
 	return {
 		h: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0],
-		w: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 		block: new Array<uint8>(64),
 		filled: 0,
 		lengthLow: 0,
@@ -70,23 +29,23 @@ function rotl(v: uint32, c: uint32): uint32 {
 	return (v << c) | (v >> (32 - c));
 }
 
-function f(group: int32, x: uint32, y: uint32, z: uint32): uint32 {
-	if (group == 0) return x ^ y ^ z;
-	if (group == 1) return (x & y) | (~x & z);
-	if (group == 2) return (x | ~y) ^ z;
-	if (group == 3) return (x & z) | (y & ~z);
-	return x ^ (y | ~z);
-}
-
 function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int32): void {
-	for (let i = 0; i < 16; i++) {
-		const at = off + i * 4;
-		s.w[i] =
-			(data[at] as uint32) |
-			((data[at + 1] as uint32) << 8) |
-			((data[at + 2] as uint32) << 16) |
-			((data[at + 3] as uint32) << 24);
-	}
+	const w0 = (data[off + 0] as uint32) | ((data[off + 1] as uint32) << 8) | ((data[off + 2] as uint32) << 16) | ((data[off + 3] as uint32) << 24);
+	const w1 = (data[off + 4] as uint32) | ((data[off + 5] as uint32) << 8) | ((data[off + 6] as uint32) << 16) | ((data[off + 7] as uint32) << 24);
+	const w2 = (data[off + 8] as uint32) | ((data[off + 9] as uint32) << 8) | ((data[off + 10] as uint32) << 16) | ((data[off + 11] as uint32) << 24);
+	const w3 = (data[off + 12] as uint32) | ((data[off + 13] as uint32) << 8) | ((data[off + 14] as uint32) << 16) | ((data[off + 15] as uint32) << 24);
+	const w4 = (data[off + 16] as uint32) | ((data[off + 17] as uint32) << 8) | ((data[off + 18] as uint32) << 16) | ((data[off + 19] as uint32) << 24);
+	const w5 = (data[off + 20] as uint32) | ((data[off + 21] as uint32) << 8) | ((data[off + 22] as uint32) << 16) | ((data[off + 23] as uint32) << 24);
+	const w6 = (data[off + 24] as uint32) | ((data[off + 25] as uint32) << 8) | ((data[off + 26] as uint32) << 16) | ((data[off + 27] as uint32) << 24);
+	const w7 = (data[off + 28] as uint32) | ((data[off + 29] as uint32) << 8) | ((data[off + 30] as uint32) << 16) | ((data[off + 31] as uint32) << 24);
+	const w8 = (data[off + 32] as uint32) | ((data[off + 33] as uint32) << 8) | ((data[off + 34] as uint32) << 16) | ((data[off + 35] as uint32) << 24);
+	const w9 = (data[off + 36] as uint32) | ((data[off + 37] as uint32) << 8) | ((data[off + 38] as uint32) << 16) | ((data[off + 39] as uint32) << 24);
+	const w10 = (data[off + 40] as uint32) | ((data[off + 41] as uint32) << 8) | ((data[off + 42] as uint32) << 16) | ((data[off + 43] as uint32) << 24);
+	const w11 = (data[off + 44] as uint32) | ((data[off + 45] as uint32) << 8) | ((data[off + 46] as uint32) << 16) | ((data[off + 47] as uint32) << 24);
+	const w12 = (data[off + 48] as uint32) | ((data[off + 49] as uint32) << 8) | ((data[off + 50] as uint32) << 16) | ((data[off + 51] as uint32) << 24);
+	const w13 = (data[off + 52] as uint32) | ((data[off + 53] as uint32) << 8) | ((data[off + 54] as uint32) << 16) | ((data[off + 55] as uint32) << 24);
+	const w14 = (data[off + 56] as uint32) | ((data[off + 57] as uint32) << 8) | ((data[off + 58] as uint32) << 16) | ((data[off + 59] as uint32) << 24);
+	const w15 = (data[off + 60] as uint32) | ((data[off + 61] as uint32) << 8) | ((data[off + 62] as uint32) << 16) | ((data[off + 63] as uint32) << 24);
 	let al = s.h[0];
 	let bl = s.h[1];
 	let cl = s.h[2];
@@ -97,36 +56,326 @@ function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int32): void 
 	let cr = s.h[2];
 	let dr = s.h[3];
 	let er = s.h[4];
-	for (let group = 0; group < 5; group++) {
-		const rGroup = 4 - group;
-		const kl = KL[group];
-		const kr = KR[group];
-		const base = group * 16;
-		for (let i = 0; i < 16; i++) {
-			const tl =
-				rotl(
-					al + f(group, bl, cl, dl) + s.w[idxL[base + i] as int32] + kl,
-					sL[base + i] as uint32,
-				) + el;
-			al = el;
-			el = dl;
-			dl = rotl(cl, 10);
-			cl = bl;
-			bl = tl;
-		}
-		for (let i = 0; i < 16; i++) {
-			const tr =
-				rotl(
-					ar + f(rGroup, br, cr, dr) + s.w[idxR[base + i] as int32] + kr,
-					sR[base + i] as uint32,
-				) + er;
-			ar = er;
-			er = dr;
-			dr = rotl(cr, 10);
-			cr = br;
-			br = tr;
-		}
-	}
+	al = rotl(al + (bl ^ cl ^ dl) + w0, 11) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ bl ^ cl) + w1, 14) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ al ^ bl) + w2, 15) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ el ^ al) + w3, 12) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ dl ^ el) + w4, 5) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ cl ^ dl) + w5, 8) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ bl ^ cl) + w6, 7) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ al ^ bl) + w7, 9) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ el ^ al) + w8, 11) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ dl ^ el) + w9, 13) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ cl ^ dl) + w10, 14) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ bl ^ cl) + w11, 15) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ al ^ bl) + w12, 6) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ el ^ al) + w13, 7) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ dl ^ el) + w14, 9) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ cl ^ dl) + w15, 8) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & bl) | (~al & cl)) + w7 + 0x5a827999, 7) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & al) | (~el & bl)) + w4 + 0x5a827999, 6) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & el) | (~dl & al)) + w13 + 0x5a827999, 8) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & dl) | (~cl & el)) + w1 + 0x5a827999, 13) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & cl) | (~bl & dl)) + w10 + 0x5a827999, 11) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & bl) | (~al & cl)) + w6 + 0x5a827999, 9) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & al) | (~el & bl)) + w15 + 0x5a827999, 7) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & el) | (~dl & al)) + w3 + 0x5a827999, 15) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & dl) | (~cl & el)) + w12 + 0x5a827999, 7) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & cl) | (~bl & dl)) + w0 + 0x5a827999, 12) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & bl) | (~al & cl)) + w9 + 0x5a827999, 15) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & al) | (~el & bl)) + w5 + 0x5a827999, 9) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & el) | (~dl & al)) + w2 + 0x5a827999, 11) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & dl) | (~cl & el)) + w14 + 0x5a827999, 7) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & cl) | (~bl & dl)) + w11 + 0x5a827999, 13) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & bl) | (~al & cl)) + w8 + 0x5a827999, 12) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el | ~al) ^ bl) + w3 + 0x6ed9eba1, 11) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl | ~el) ^ al) + w10 + 0x6ed9eba1, 13) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl | ~dl) ^ el) + w14 + 0x6ed9eba1, 6) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl | ~cl) ^ dl) + w4 + 0x6ed9eba1, 7) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al | ~bl) ^ cl) + w9 + 0x6ed9eba1, 14) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el | ~al) ^ bl) + w15 + 0x6ed9eba1, 9) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl | ~el) ^ al) + w8 + 0x6ed9eba1, 13) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl | ~dl) ^ el) + w1 + 0x6ed9eba1, 15) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl | ~cl) ^ dl) + w2 + 0x6ed9eba1, 14) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al | ~bl) ^ cl) + w7 + 0x6ed9eba1, 8) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el | ~al) ^ bl) + w0 + 0x6ed9eba1, 13) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl | ~el) ^ al) + w6 + 0x6ed9eba1, 6) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl | ~dl) ^ el) + w13 + 0x6ed9eba1, 5) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl | ~cl) ^ dl) + w11 + 0x6ed9eba1, 12) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al | ~bl) ^ cl) + w5 + 0x6ed9eba1, 7) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el | ~al) ^ bl) + w12 + 0x6ed9eba1, 5) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & al) | (el & ~al)) + w1 + 0x8f1bbcdc, 11) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & el) | (dl & ~el)) + w9 + 0x8f1bbcdc, 12) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & dl) | (cl & ~dl)) + w11 + 0x8f1bbcdc, 14) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & cl) | (bl & ~cl)) + w10 + 0x8f1bbcdc, 15) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & bl) | (al & ~bl)) + w0 + 0x8f1bbcdc, 14) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & al) | (el & ~al)) + w8 + 0x8f1bbcdc, 15) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & el) | (dl & ~el)) + w12 + 0x8f1bbcdc, 9) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & dl) | (cl & ~dl)) + w4 + 0x8f1bbcdc, 8) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & cl) | (bl & ~cl)) + w13 + 0x8f1bbcdc, 9) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & bl) | (al & ~bl)) + w3 + 0x8f1bbcdc, 14) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & al) | (el & ~al)) + w7 + 0x8f1bbcdc, 5) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + ((cl & el) | (dl & ~el)) + w15 + 0x8f1bbcdc, 6) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + ((bl & dl) | (cl & ~dl)) + w14 + 0x8f1bbcdc, 8) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + ((al & cl) | (bl & ~cl)) + w5 + 0x8f1bbcdc, 6) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + ((el & bl) | (al & ~bl)) + w6 + 0x8f1bbcdc, 5) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + ((dl & al) | (el & ~al)) + w2 + 0x8f1bbcdc, 12) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ (dl | ~el)) + w4 + 0xa953fd4e, 9) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ (cl | ~dl)) + w0 + 0xa953fd4e, 15) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ (bl | ~cl)) + w5 + 0xa953fd4e, 5) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ (al | ~bl)) + w9 + 0xa953fd4e, 11) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ (el | ~al)) + w7 + 0xa953fd4e, 6) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ (dl | ~el)) + w12 + 0xa953fd4e, 8) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ (cl | ~dl)) + w2 + 0xa953fd4e, 13) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ (bl | ~cl)) + w10 + 0xa953fd4e, 12) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ (al | ~bl)) + w14 + 0xa953fd4e, 5) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ (el | ~al)) + w1 + 0xa953fd4e, 12) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ (dl | ~el)) + w3 + 0xa953fd4e, 13) + al;
+	dl = rotl(dl, 10);
+	al = rotl(al + (bl ^ (cl | ~dl)) + w8 + 0xa953fd4e, 14) + el;
+	cl = rotl(cl, 10);
+	el = rotl(el + (al ^ (bl | ~cl)) + w11 + 0xa953fd4e, 11) + dl;
+	bl = rotl(bl, 10);
+	dl = rotl(dl + (el ^ (al | ~bl)) + w6 + 0xa953fd4e, 8) + cl;
+	al = rotl(al, 10);
+	cl = rotl(cl + (dl ^ (el | ~al)) + w15 + 0xa953fd4e, 5) + bl;
+	el = rotl(el, 10);
+	bl = rotl(bl + (cl ^ (dl | ~el)) + w13 + 0xa953fd4e, 6) + al;
+	dl = rotl(dl, 10);
+	ar = rotl(ar + (br ^ (cr | ~dr)) + w5 + 0x50a28be6, 8) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ (br | ~cr)) + w14 + 0x50a28be6, 9) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ (ar | ~br)) + w7 + 0x50a28be6, 9) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ (er | ~ar)) + w0 + 0x50a28be6, 11) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ (dr | ~er)) + w9 + 0x50a28be6, 13) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ (cr | ~dr)) + w2 + 0x50a28be6, 15) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ (br | ~cr)) + w11 + 0x50a28be6, 15) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ (ar | ~br)) + w4 + 0x50a28be6, 5) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ (er | ~ar)) + w13 + 0x50a28be6, 7) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ (dr | ~er)) + w6 + 0x50a28be6, 7) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ (cr | ~dr)) + w15 + 0x50a28be6, 8) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ (br | ~cr)) + w8 + 0x50a28be6, 11) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ (ar | ~br)) + w1 + 0x50a28be6, 14) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ (er | ~ar)) + w10 + 0x50a28be6, 14) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ (dr | ~er)) + w3 + 0x50a28be6, 12) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ (cr | ~dr)) + w12 + 0x50a28be6, 6) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & cr) | (br & ~cr)) + w6 + 0x5c4dd124, 9) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & br) | (ar & ~br)) + w11 + 0x5c4dd124, 13) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & ar) | (er & ~ar)) + w3 + 0x5c4dd124, 15) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & er) | (dr & ~er)) + w7 + 0x5c4dd124, 7) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & dr) | (cr & ~dr)) + w0 + 0x5c4dd124, 12) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & cr) | (br & ~cr)) + w13 + 0x5c4dd124, 8) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & br) | (ar & ~br)) + w5 + 0x5c4dd124, 9) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & ar) | (er & ~ar)) + w10 + 0x5c4dd124, 11) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & er) | (dr & ~er)) + w14 + 0x5c4dd124, 7) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & dr) | (cr & ~dr)) + w15 + 0x5c4dd124, 7) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & cr) | (br & ~cr)) + w8 + 0x5c4dd124, 12) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & br) | (ar & ~br)) + w12 + 0x5c4dd124, 7) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & ar) | (er & ~ar)) + w4 + 0x5c4dd124, 6) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & er) | (dr & ~er)) + w9 + 0x5c4dd124, 15) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & dr) | (cr & ~dr)) + w1 + 0x5c4dd124, 13) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & cr) | (br & ~cr)) + w2 + 0x5c4dd124, 11) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er | ~ar) ^ br) + w15 + 0x6d703ef3, 9) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr | ~er) ^ ar) + w5 + 0x6d703ef3, 7) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr | ~dr) ^ er) + w1 + 0x6d703ef3, 15) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br | ~cr) ^ dr) + w3 + 0x6d703ef3, 11) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar | ~br) ^ cr) + w7 + 0x6d703ef3, 8) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er | ~ar) ^ br) + w14 + 0x6d703ef3, 6) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr | ~er) ^ ar) + w6 + 0x6d703ef3, 6) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr | ~dr) ^ er) + w9 + 0x6d703ef3, 14) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br | ~cr) ^ dr) + w11 + 0x6d703ef3, 12) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar | ~br) ^ cr) + w8 + 0x6d703ef3, 13) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er | ~ar) ^ br) + w12 + 0x6d703ef3, 5) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr | ~er) ^ ar) + w2 + 0x6d703ef3, 14) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr | ~dr) ^ er) + w10 + 0x6d703ef3, 13) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br | ~cr) ^ dr) + w0 + 0x6d703ef3, 13) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar | ~br) ^ cr) + w4 + 0x6d703ef3, 7) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er | ~ar) ^ br) + w13 + 0x6d703ef3, 5) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & er) | (~dr & ar)) + w8 + 0x7a6d76e9, 15) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & dr) | (~cr & er)) + w6 + 0x7a6d76e9, 5) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & cr) | (~br & dr)) + w4 + 0x7a6d76e9, 8) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & br) | (~ar & cr)) + w1 + 0x7a6d76e9, 11) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & ar) | (~er & br)) + w3 + 0x7a6d76e9, 14) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & er) | (~dr & ar)) + w11 + 0x7a6d76e9, 14) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & dr) | (~cr & er)) + w15 + 0x7a6d76e9, 6) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & cr) | (~br & dr)) + w0 + 0x7a6d76e9, 14) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & br) | (~ar & cr)) + w5 + 0x7a6d76e9, 6) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & ar) | (~er & br)) + w12 + 0x7a6d76e9, 9) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & er) | (~dr & ar)) + w2 + 0x7a6d76e9, 12) + br;
+	er = rotl(er, 10);
+	br = rotl(br + ((cr & dr) | (~cr & er)) + w13 + 0x7a6d76e9, 9) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + ((br & cr) | (~br & dr)) + w9 + 0x7a6d76e9, 12) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + ((ar & br) | (~ar & cr)) + w7 + 0x7a6d76e9, 5) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + ((er & ar) | (~er & br)) + w10 + 0x7a6d76e9, 15) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + ((dr & er) | (~dr & ar)) + w14 + 0x7a6d76e9, 8) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ dr ^ er) + w12, 8) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ cr ^ dr) + w15, 5) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ br ^ cr) + w10, 12) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ ar ^ br) + w4, 9) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ er ^ ar) + w1, 12) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ dr ^ er) + w5, 5) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ cr ^ dr) + w8, 14) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ br ^ cr) + w7, 6) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ ar ^ br) + w6, 8) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ er ^ ar) + w2, 13) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ dr ^ er) + w13, 6) + ar;
+	dr = rotl(dr, 10);
+	ar = rotl(ar + (br ^ cr ^ dr) + w14, 5) + er;
+	cr = rotl(cr, 10);
+	er = rotl(er + (ar ^ br ^ cr) + w0, 15) + dr;
+	br = rotl(br, 10);
+	dr = rotl(dr + (er ^ ar ^ br) + w3, 13) + cr;
+	ar = rotl(ar, 10);
+	cr = rotl(cr + (dr ^ er ^ ar) + w9, 11) + br;
+	er = rotl(er, 10);
+	br = rotl(br + (cr ^ dr ^ er) + w11, 11) + ar;
+	dr = rotl(dr, 10);
 	const t = s.h[1] + cl + dr;
 	s.h[1] = s.h[2] + dl + er;
 	s.h[2] = s.h[3] + el + ar;
