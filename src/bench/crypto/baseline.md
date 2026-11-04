@@ -39,27 +39,26 @@ The rows behind node are the 25519 field (Monocypher's 10x25.5-bit limbs) and, w
 
 ## rtx — AMD Ryzen 9 9950X, Linux x86_64, node 24.1.0
 
-Commit `54aa2c34607` (its bench sources differ from `2ff2a96f6a8` in comments only), tree `1aab71df209`, 2026-11-03,
-load 38.7 before, 20.4 after (32 threads), so the spread is wider than on m1m. oci-u, the earlier x86 host, was
-terminated that day and rtx was drained the same night: rerun this table when an x86 Linux host returns.
+Commit `2c3a0e48024`, tree `184c43ae6c1`, 2026-11-04, load 14.7 before, 6.5 after (32 threads).
 
 | row | unit | candidate | node |
 |---|---|---|---|
-| sha256 digest 32 B | us/op | 0.048 | 0.983 |
-| sha256 digest 1 KB | MB/s | 2293 | 758 |
-| sha256 digest 64 KB | MB/s | 2565 | 2492 |
-| sha256 digest 1 MB | MB/s | 2579 | 2558 |
-| sha512 digest 64 B | us/op | 0.207 | 1.496 |
-| sha512 digest 1 MB | MB/s | 700 | 1495 |
-| hmac-sha256 32 B | us/op | 0.194 | 1.702 |
-| pbkdf2-sha256 100k | us/op | 8221 | 13275 |
-| hkdf-sha256 32 B | us/op | 0.471 | 6.645 |
-| randomBytes 32 B | us/op | 0.14 | 1.658 |
-| ed25519 sign 64 B | us/op | 21.9 | 17.5 |
-| ed25519 verify 64 B | us/op | 75.5 | 74.1 |
-| x25519 shared | us/op | 50.8 | 30.4 |
-| aes-256-gcm seal 1 MB | MB/s | 5433 | 2310 |
-| chacha20-poly1305 seal 1 MB | MB/s | 3432 | 2655 |
-| sha256 stream 16x64 KB | MB/s | 2576 | 2613 |
+| sha256 digest 32 B | us/op | 0.047 | 0.851 |
+| sha256 digest 1 KB | MB/s | 2344 | 856 |
+| sha256 digest 64 KB | MB/s | 2611 | 2564 |
+| sha256 digest 1 MB | MB/s | 2648 | 2713 |
+| sha512 digest 64 B | us/op | 0.202 | 1.287 |
+| sha512 digest 1 MB | MB/s | 741 | 1564 |
+| hmac-sha256 32 B | us/op | 0.174 | 1.207 |
+| pbkdf2-sha256 100k | us/op | 7839 | 11521 |
+| hkdf-sha256 32 B | us/op | 0.442 | 5.604 |
+| randomBytes 32 B | us/op | 0.134 | 1.494 |
+| ed25519 sign 64 B | us/op | 20.8 | 17.0 |
+| ed25519 verify 64 B | us/op | 57.8 | 46.1 |
+| x25519 shared | us/op | 39.7 | 21.3 |
+| aes-256-gcm seal 1 MB | MB/s | 6890 | 3324 |
+| chacha20-poly1305 seal 1 MB | MB/s | 3594 | 3432 |
+| sha256 stream 16x64 KB | MB/s | 2631 | 2593 |
 
-The rows behind node are sha512 at 1 MB (half of node's speed; on m1m it ties), ed25519 sign and x25519.
+The rows behind node are sha512 at 1 MB (half of node's speed; on m1m it ties), the three 25519 rows, and, within
+3%, sha256 at 1 MB.
