@@ -205,33 +205,42 @@ function fillRepeated(
 	if (written < total) cMemcpy(at + written, at, (total - written) as uint64);
 }
 
-// One byte through memchr, up to four through a first/last byte filter, longer needles
-// through a Horspool skip table. Callers guarantee 0 < needleLength <= hayLength.
+const horspoolMinNeedle = 7;
+
+// Each candidate from memchr on the first byte is compared out, as long as the bytes compared stay
+// below a budget that grows with the scan; past it, a Horspool skip table bounds the worst case.
+// Callers guarantee 0 < needleLength <= hayLength.
 function findBytes(
 	hay: Ptr<uint8>,
 	hayLength: int64,
 	needle: Ptr<uint8>,
 	needleLength: int64,
 ): int64 {
-	if (needleLength == 1) {
-		const found = cMemchr(hay, needle[0] as int32, hayLength as uint64);
-		return found == null ? -1 : (found as Ptr<uint8>) - hay;
+	const last = hayLength - needleLength;
+	const first = needle[0] as int32;
+	const budgeted = needleLength >= horspoolMinNeedle;
+	let badness = -10 - needleLength * 4;
+	let at: int64 = 0;
+	while (at <= last) {
+		badness += 1;
+		if (budgeted && badness > 0) return horspool(hay, hayLength, needle, needleLength, at);
+		const hit = cMemchr(hay + at, first, (last - at + 1) as uint64);
+		if (hit == null) return -1;
+		at = (hit as Ptr<uint8>) - hay;
+		let j: int64 = 1;
+		while (j < needleLength && hay[at + j] == needle[j]) j += 1;
+		if (j == needleLength) return at;
+		badness += j;
+		at += 1;
 	}
-	if (needleLength <= 4) {
-		const end = hayLength - needleLength + 1;
-		const first = needle[0];
-		const last = needle[needleLength - 1];
-		let at: int64 = 0;
-		while (at < end && !(hay[at] == first && hay[at + needleLength - 1] == last &&
-				(needleLength == 2 || cMemcmp(hay + at, needle, needleLength as uint64) == 0))) {
-			at += 1;
-		}
-		return at < end ? at : -1;
-	}
+	return -1;
+}
+
+function horspool(hay: Ptr<uint8>, hayLength: int64, needle: Ptr<uint8>, needleLength: int64, from: int64): int64 {
 	let pastLast: int32[256] = [];
 	const table = (pastLast as Span<int32>) as Ptr<int32>;
 	for (let i: int64 = 0; i < needleLength - 1; i++) table[needle[i]] = (i + 1) as int32;
-	let i = needleLength - 1;
+	let i = from + needleLength - 1;
 	let found: int64 = -1;
 	while (found < 0 && i < hayLength) {
 		let j = needleLength - 1;

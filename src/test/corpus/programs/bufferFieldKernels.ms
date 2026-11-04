@@ -3,7 +3,7 @@
 // @stdout: writes entries=828 digest=774397002
 // @stdout: variable entries=600 digest=581789803
 // @stdout: floats entries=436 digest=812692326
-// @stdout: search entries=795 digest=794806609
+// @stdout: search entries=807 digest=463268746
 // @stdout: fill entries=94 digest=96635134
 // @stdout: strings entries=74 digest=544307510
 
@@ -192,6 +192,18 @@ function checkSearch(): void {
 			note(hay.indexOfBuffer(needle, 0));
 			note(hay.lastIndexOfBuffer(needle, 300 - width));
 		}
+	}
+	const runs = Buffer.alloc(2000);
+	for (let i: int32 = 0; i < 2000; i++) runs.set(i, 97);
+	for (const width of [2, 6, 7, 16]) {
+		const needle = Buffer.alloc(width);
+		for (let i: int32 = 0; i < width; i++) needle.set(i, 97);
+		needle.set(width - 1, 98);
+		note(runs.indexOfBuffer(needle, 0));
+		runs.set(1990, 98);
+		note(runs.indexOfBuffer(needle, 0));
+		note(runs.indexOfBuffer(needle, 1990));
+		runs.set(1990, 97);
 	}
 	section("search");
 }
