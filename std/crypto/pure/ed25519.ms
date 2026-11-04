@@ -109,7 +109,8 @@ function neg(p: Readonly<Point>): Point {
 	return { x: feNeg(p.x), y: p.y, z: p.z, t: feNeg(p.t) };
 }
 
-function dbl(p: Readonly<Point>): Point {
+/** 2p; dbl never reads T, so `withT` false skips its product when only another dbl reads the result. */
+function dbl(p: Readonly<Point>, withT: boolean = true): Point {
 	const t0 = feSqr(feAddLoose(p.x, p.y));
 	let x = feSqr(p.x);
 	let z = feSqr(p.y);
@@ -117,7 +118,12 @@ function dbl(p: Readonly<Point>): Point {
 	z = feSub(z, x);
 	x = feSubLoose(t0, y);
 	const t = feSubLoose(feAdd(feSqr(p.z), feSqr(p.z)), z);
-	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
+	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: withT ? feMul(x, y) : p.t };
+}
+
+/** 16p, Zig's shift(p, 4). */
+function shift4(p: Readonly<Point>): Point {
+	return dbl(dbl(dbl(dbl(p, false), false), false));
 }
 
 function addPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
@@ -225,7 +231,7 @@ function mulBase(s: Readonly<uint8[]>): Point | null {
 	const e = slide(s);
 	let q = identity();
 	for (let i = 1; i < 64; i += 2) q = addNiels(q, selectBase(i >> 1, e[i]));
-	q = dbl(dbl(dbl(dbl(q))));
+	q = shift4(q);
 	for (let i = 0; i < 64; i += 2) q = addNiels(q, selectBase(i >> 1, e[i]));
 	if (isIdentityX(q)) return null;
 	return q;
@@ -247,7 +253,7 @@ function mulDoubleBasePublic(s1: Readonly<uint8[]>, p2: Point, s2: Readonly<uint
 		if (slot2 > 0) q = addPoints(q, pc2[slot2]);
 		else if (slot2 < 0) q = subPoints(q, pc2[-slot2]);
 		if (pos == 0) break;
-		q = dbl(dbl(dbl(dbl(q))));
+		q = shift4(q);
 		pos -= 1;
 	}
 	return q;
