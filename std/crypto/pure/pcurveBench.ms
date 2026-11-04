@@ -52,6 +52,8 @@ for (const curve of curves) {
 	const vendorVerifyRate: number[] = [];
 	const pureEcdh: number[] = [];
 	const vendorEcdhRate: number[] = [];
+	const pureKeygen: number[] = [];
+	const vendorKeygen: number[] = [];
 	for (let round = 0; round < 5; round++) {
 		pureSign.push(opsPerSecond(() => { sink += must(ecdsaSignSync(key, "bench message", hash)).length; }));
 		vendorSignRate.push(opsPerSecond(() => { sink += must(vendorSign(vendorKey, "bench message", hash)).length; }));
@@ -59,9 +61,12 @@ for (const curve of curves) {
 		vendorVerifyRate.push(opsPerSecond(() => { if (vendorVerify(vendorKey.publicKey(), "bench message", pureSig, hash)) sink += 1; }));
 		pureEcdh.push(opsPerSecond(() => { sink += must(ecdhSync(key, peer.publicKey())).length; }));
 		vendorEcdhRate.push(opsPerSecond(() => { sink += must(vendorEcdh(vendorKey, vendorPeer)).length; }));
+		pureKeygen.push(opsPerSecond(() => { if (EcPrivateKey.generateSync(curve).ok) sink += 1; }));
+		vendorKeygen.push(opsPerSecond(() => { if (VendorPrivateKey.generateSync(curve).ok) sink += 1; }));
 	}
 	report(`${curve} sign`, pureSign, vendorSignRate);
 	report(`${curve} verify`, pureVerify, vendorVerifyRate);
 	report(`${curve} ecdh`, pureEcdh, vendorEcdhRate);
+	report(`${curve} keygen`, pureKeygen, vendorKeygen);
 }
 console.log(`sink ${sink}`);
