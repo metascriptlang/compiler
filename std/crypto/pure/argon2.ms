@@ -2,6 +2,7 @@ import { newBlake2b, updateBlake2b, finishBlake2bInto } from "./blake2b";
 
 const noKey: Readonly<uint8[]> = [];
 const syncPoints = 4;
+const maxWords = 2147483647;
 
 /** Scratch for one Argon2 run: the block under compression, the address blocks and the byte forms the hashes read. */
 class Argon2Work {
@@ -10,10 +11,12 @@ class Argon2Work {
 	h0: uint8[];
 	bytes: uint8[];
 	word: uint8[];
+	chain: uint8[];
+	last: uint32[];
 }
 
 function newWork(): Argon2Work {
-	return { buf: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4) };
+	return { buf: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4), chain: new Array<uint8>(64), last: new Array<uint32>(256) };
 }
 
 function put32(out: uint8[], at: int32, value: number): void {
@@ -137,7 +140,7 @@ function hPrime(w: Argon2Work, data: Readonly<uint8[]>, length: int32, outLength
 		finishBlake2bInto(s, out, outOff);
 		return;
 	}
-	const v = new Array<uint8>(64);
+	const v = w.chain;
 	const first = newBlake2b(64, noKey);
 	updateBlake2b(first, w.word, 0, 4);
 	updateBlake2b(first, data, 0, length);
@@ -329,19 +332,58 @@ export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: 
 		}
 	}
 
-	const last = new Array<uint32>(256);
+	const last = w.last;
 	for (let l = 0; l < parallelism; l++) {
 		for (let j = 0; j < 256; j++) last[j] = last[j] ^ memory[256 * (laneLen * l + laneLen - 1) + j];
 	}
 	wordsToBytes(last, 0, w.bytes);
 	const out = new Array<uint8>(hashLen);
 	hPrime(w, w.bytes, 1024, hashLen, out, 0);
+	memory.fill(0);
+	wipeWork(w);
 	return out;
 }
 
-const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function wipeWork(w: Argon2Work): void {
+	for (let i = 0; i < 256; i++) w.buf[i] = 0;
+	w.address.fill(0);
+	w.h0.fill(0);
+	w.bytes.fill(0);
+	w.word.fill(0);
+	w.chain.fill(0);
+	w.last.fill(0);
+}
 
-/** Standard base64 without padding, as the encoded hash string carries salt and hash. */
+function maskEq(x: uint32, y: uint32): uint32 {
+	return (((0 - (x ^ y)) >> 8) & 0xff) ^ 0xff;
+}
+
+function maskGt(x: uint32, y: uint32): uint32 {
+	return ((y - x) >> 8) & 0xff;
+}
+
+function maskGe(x: uint32, y: uint32): uint32 {
+	return maskGt(y, x) ^ 0xff;
+}
+
+function sextetChar(x: uint32): uint32 {
+	return (maskGt(26, x) & (x + 65))
+		| (maskGe(x, 26) & maskGt(52, x) & (x + 71))
+		| (maskGe(x, 52) & maskGt(62, x) & (x - 4))
+		| (maskEq(x, 62) & 43)
+		| (maskEq(x, 63) & 47);
+}
+
+/** The sextet of a base64 character, or 0xff for any other; `sextetChar` and this branch on no data bit. */
+function charSextet(c: uint32): uint32 {
+	const x = (maskGe(c, 65) & maskGe(90, c) & (c - 65))
+		| (maskGe(c, 97) & maskGe(122, c) & (c - 71))
+		| (maskGe(c, 48) & maskGe(57, c) & (c + 4))
+		| (maskEq(c, 43) & 62)
+		| (maskEq(c, 47) & 63);
+	return x | (maskEq(x, 0) & (maskEq(c, 65) ^ 0xff));
+}
+
 export function base64NoPad(data: Readonly<uint8[]>): string {
 	let out = "";
 	let acc: uint32 = 0;
@@ -351,10 +393,10 @@ export function base64NoPad(data: Readonly<uint8[]>): string {
 		bits += 8;
 		while (bits >= 6) {
 			bits -= 6;
-			out += alphabet[((acc >> (bits as uint32)) & 63) as int32];
+			out += String.fromCharCode(sextetChar((acc >> (bits as uint32)) & 63) as int32);
 		}
 	}
-	if (bits > 0) out += alphabet[((acc << ((6 - bits) as uint32)) & 63) as int32];
+	if (bits > 0) out += String.fromCharCode(sextetChar((acc << ((6 - bits) as uint32)) & 63) as int32);
 	return out;
 }
 
@@ -364,9 +406,11 @@ function fromBase64NoPad(text: string): uint8[] | null {
 	let acc: uint32 = 0;
 	let bits = 0;
 	for (let i = 0; i < text.length; i++) {
-		const index = alphabet.indexOf(text[i]);
-		if (index < 0) return null;
-		acc = ((acc << 6) | (index as uint32)) & 0xffffff;
+		const code = text.charCodeAt(i);
+		if (code > 127) return null;
+		const sextet = charSextet(code as uint32);
+		if (sextet == 0xff) return null;
+		acc = ((acc << 6) | sextet) & 0xffffff;
 		bits += 6;
 		if (bits >= 8) {
 			bits -= 8;
@@ -446,7 +490,9 @@ export function defaultArgon2Bounds(): Argon2Bounds {
 export function argon2Raw(password: Readonly<uint8[]>, salt: Readonly<uint8[]>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32, mode: Argon2Mode = Argon2Mode.Argon2id, secret: Readonly<uint8[]> = noKey, ad: Readonly<uint8[]> = noKey): Result<uint8[], string> {
 	const problem = argon2Problem(timeCost, memoryCost, parallelism, hashLen, salt.length);
 	if (problem != "") return Result.err(problem);
-	const memory = new Array<uint32>(argon2Words(memoryCost, parallelism) as int32);
+	const words = argon2Words(memoryCost, parallelism);
+	if (words > maxWords) return Result.err("Memory allocation error");
+	const memory = new Array<uint32>(words as int32);
 	return Result.ok(argon2Fill(memory, password, salt, secret, ad, mode, timeCost, memoryCost, parallelism, argon2Version, hashLen));
 }
 
@@ -463,7 +509,9 @@ export function argon2VerifyEncoded(encoded: string, password: Readonly<uint8[]>
 	const fields = decodeArgon2(encoded);
 	if (fields == null || (fields.version != 0x10 && fields.version != 0x13)) return false;
 	if (fields.memoryCost > bounds.memoryCost || fields.timeCost > bounds.timeCost || fields.parallelism > bounds.parallelism) return false;
-	const memory = new Array<uint32>(argon2Words(fields.memoryCost as int32, fields.parallelism as int32) as int32);
+	const words = argon2Words(fields.memoryCost as int32, fields.parallelism as int32);
+	if (words > maxWords) return false;
+	const memory = new Array<uint32>(words as int32);
 	const got = argon2Fill(memory, password, fields.salt, noKey, noKey, fields.mode, fields.timeCost as int32, fields.memoryCost as int32, fields.parallelism as int32, fields.version as int32, fields.hash.length as int32);
 	let diff: uint8 = 0;
 	for (let i = 0; i < got.length; i++) diff |= got[i] ^ fields.hash[i];
