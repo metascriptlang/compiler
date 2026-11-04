@@ -197,13 +197,48 @@ export function argon2Words(memoryCost: int32, parallelism: int32): number {
 	return 256 * 4 * parallelism * Math.floor(memoryCost / (syncPoints * parallelism));
 }
 
+export enum Argon2Mode {
+	Argon2d,
+	Argon2i,
+	Argon2id,
+}
+
+function modeId(mode: Argon2Mode): int32 {
+	return match (mode) {
+		Argon2Mode.Argon2d => 0,
+		Argon2Mode.Argon2i => 1,
+		Argon2Mode.Argon2id => 2,
+	};
+}
+
+export function argon2ModeName(mode: Argon2Mode): string {
+	return match (mode) {
+		Argon2Mode.Argon2d => "argon2d",
+		Argon2Mode.Argon2i => "argon2i",
+		Argon2Mode.Argon2id => "argon2id",
+	};
+}
+
+function modeOfName(name: string): Argon2Mode | null {
+	if (name == "argon2d") return Argon2Mode.Argon2d;
+	if (name == "argon2i") return Argon2Mode.Argon2i;
+	if (name == "argon2id") return Argon2Mode.Argon2id;
+	return null;
+}
+
 /**
  * Argon2id (RFC 9106) of `password` and `salt`, `hashLen` bytes, with no secret and no associated data.
  * `memory` is `argon2Words(memoryCost, parallelism)` words the caller allocates; the parameters were checked
  * with `argon2Problem`. `version` 0x10 overwrites on later passes, any other value (0x13) xors.
  */
 export function argon2idHash(memory: uint32[], password: Readonly<uint8[]>, salt: Readonly<uint8[]>, timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): uint8[] {
+	return argon2Fill(memory, password, salt, noKey, noKey, Argon2Mode.Argon2id, timeCost, memoryCost, parallelism, version, hashLen);
+}
+
+/** Argon2 of any mode with the optional `secret` (keyed hashing) and associated data `ad`; memory and checks as `argon2idHash`. */
+export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: Readonly<uint8[]>, secret: Readonly<uint8[]>, ad: Readonly<uint8[]>, mode: Argon2Mode, timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): uint8[] {
 	const w = newWork();
+	const typeId = modeId(mode);
 	const laneLen = 4 * (Math.floor(memoryCost / (syncPoints * parallelism)) as int32);
 	const memoryBlocks = laneLen * parallelism;
 	const segmentLen = laneLen / syncPoints;
@@ -219,7 +254,7 @@ export function argon2idHash(memory: uint32[], password: Readonly<uint8[]>, salt
 	updateBlake2b(initial, w.word, 0, 4);
 	put32(w.word, 0, version);
 	updateBlake2b(initial, w.word, 0, 4);
-	put32(w.word, 0, 2);
+	put32(w.word, 0, typeId);
 	updateBlake2b(initial, w.word, 0, 4);
 	put32(w.word, 0, password.length as int32);
 	updateBlake2b(initial, w.word, 0, 4);
@@ -227,9 +262,12 @@ export function argon2idHash(memory: uint32[], password: Readonly<uint8[]>, salt
 	put32(w.word, 0, salt.length as int32);
 	updateBlake2b(initial, w.word, 0, 4);
 	updateBlake2b(initial, salt, 0, salt.length as int32);
-	put32(w.word, 0, 0);
+	put32(w.word, 0, secret.length as int32);
 	updateBlake2b(initial, w.word, 0, 4);
+	updateBlake2b(initial, secret, 0, secret.length as int32);
+	put32(w.word, 0, ad.length as int32);
 	updateBlake2b(initial, w.word, 0, 4);
+	updateBlake2b(initial, ad, 0, ad.length as int32);
 	finishBlake2bInto(initial, w.h0, 0);
 
 	for (let l = 0; l < parallelism; l++) {
@@ -245,13 +283,13 @@ export function argon2idHash(memory: uint32[], password: Readonly<uint8[]>, salt
 
 	w.address[256 + 6] = memoryBlocks as uint32;
 	w.address[256 + 8] = timeCost as uint32;
-	w.address[256 + 10] = 2;
+	w.address[256 + 10] = typeId as uint32;
 	for (let r = 0; r < timeCost; r++) {
 		const needXor = r != 0 && version != 0x10;
 		w.address[256 + 0] = r as uint32;
 		for (let s = 0; s < syncPoints; s++) {
 			w.address[256 + 4] = s as uint32;
-			const dataIndependent = r == 0 && s < 2;
+			const dataIndependent = mode == Argon2Mode.Argon2i || (mode == Argon2Mode.Argon2id && r == 0 && s < 2);
 			for (let l = 0; l < parallelism; l++) {
 				w.address[256 + 2] = l as uint32;
 				w.address[256 + 12] = 0;
@@ -352,8 +390,8 @@ function minimalDecimal(text: string): number {
 	return value > 4294967295 ? -1 : value;
 }
 
-/** The fields of `$argon2id[$v=V]$m=M,t=T,p=P$salt$hash`. */
 export class Argon2Encoded {
+	mode: Argon2Mode;
 	version: number;
 	memoryCost: number;
 	timeCost: number;
@@ -362,11 +400,12 @@ export class Argon2Encoded {
 	hash: uint8[];
 }
 
-/** The fields of an argon2id encoding, or null for any string the reference decoder or its input checks refuse. */
-export function decodeArgon2id(encoded: string): Argon2Encoded | null {
+export function decodeArgon2(encoded: string): Argon2Encoded | null {
 	const parts = encoded.split("$");
 	const hasVersion = parts.length == 6;
-	if ((!hasVersion && parts.length != 5) || parts[0] != "" || parts[1] != "argon2id") return null;
+	if ((!hasVersion && parts.length != 5) || parts[0] != "") return null;
+	const mode = modeOfName(parts[1]);
+	if (mode == null) return null;
 	let version: number = 0x10;
 	if (hasVersion) {
 		if (!parts[2].startsWith("v=")) return null;
@@ -382,5 +421,51 @@ export function decodeArgon2id(encoded: string): Argon2Encoded | null {
 	const hash = fromBase64NoPad(parts[parts.length - 1]);
 	if (memoryCost < 0 || timeCost < 0 || parallelism < 0 || salt == null || hash == null) return null;
 	if (argon2Problem(timeCost, memoryCost, parallelism, hash.length, salt.length) != "") return null;
-	return { version, memoryCost, timeCost, parallelism, salt, hash };
+	return { mode, version, memoryCost, timeCost, parallelism, salt, hash };
+}
+
+export function decodeArgon2id(encoded: string): Argon2Encoded | null {
+	const fields = decodeArgon2(encoded);
+	if (fields == null || fields.mode != Argon2Mode.Argon2id) return null;
+	return fields;
+}
+
+export const argon2Version: int32 = 0x13;
+
+/** The most an untrusted encoded hash may ask of `argon2VerifyEncoded`: its m, t and p are read from the string. */
+export class Argon2Bounds {
+	memoryCost: number;
+	timeCost: number;
+	parallelism: number;
+}
+
+export function defaultArgon2Bounds(): Argon2Bounds {
+	return { memoryCost: 262144, timeCost: 12, parallelism: 16 };
+}
+
+export function argon2Raw(password: Readonly<uint8[]>, salt: Readonly<uint8[]>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32, mode: Argon2Mode = Argon2Mode.Argon2id, secret: Readonly<uint8[]> = noKey, ad: Readonly<uint8[]> = noKey): Result<uint8[], string> {
+	const problem = argon2Problem(timeCost, memoryCost, parallelism, hashLen, salt.length);
+	if (problem != "") return Result.err(problem);
+	const memory = new Array<uint32>(argon2Words(memoryCost, parallelism) as int32);
+	return Result.ok(argon2Fill(memory, password, salt, secret, ad, mode, timeCost, memoryCost, parallelism, argon2Version, hashLen));
+}
+
+export function argon2Encode(password: Readonly<uint8[]>, salt: Readonly<uint8[]>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32, mode: Argon2Mode = Argon2Mode.Argon2id): Result<string, string> {
+	const raw = try argon2Raw(password, salt, timeCost, memoryCost, parallelism, hashLen, mode);
+	return Result.ok("$" + argon2ModeName(mode) + "$v=" + argon2Version + "$m=" + memoryCost + ",t=" + timeCost + ",p=" + parallelism + "$" + base64NoPad(salt) + "$" + base64NoPad(raw));
+}
+
+/**
+ * True only when `password` hashes to the encoded hash. False for a wrong password and for every
+ * string it did not check: malformed, a version other than 0x10 or 0x13, or asking for more than `bounds`.
+ */
+export function argon2VerifyEncoded(encoded: string, password: Readonly<uint8[]>, bounds: Argon2Bounds = defaultArgon2Bounds()): boolean {
+	const fields = decodeArgon2(encoded);
+	if (fields == null || (fields.version != 0x10 && fields.version != 0x13)) return false;
+	if (fields.memoryCost > bounds.memoryCost || fields.timeCost > bounds.timeCost || fields.parallelism > bounds.parallelism) return false;
+	const memory = new Array<uint32>(argon2Words(fields.memoryCost as int32, fields.parallelism as int32) as int32);
+	const got = argon2Fill(memory, password, fields.salt, noKey, noKey, fields.mode, fields.timeCost as int32, fields.memoryCost as int32, fields.parallelism as int32, fields.version as int32, fields.hash.length as int32);
+	let diff: uint8 = 0;
+	for (let i = 0; i < got.length; i++) diff |= got[i] ^ fields.hash[i];
+	return diff == 0;
 }
