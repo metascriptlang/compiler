@@ -65,6 +65,31 @@ export function seqSetFlags(c: int64, cyclic: boolean, uncounted: boolean): void
 }
 
 @inline
+export function seqCount(c: int64): int64 {
+	return ld64(c);
+}
+
+@inline
+export function seqClassWidth(c: int64): int64 {
+	return ld64(c + 16) & (CLASS_MASK | (7 << WIDTH_SHIFT));
+}
+
+@inline
+export function seqLoadWide(c: int64, i: int64): int64 {
+	return ld64(ld64(c + 8) + PAYLOAD_DATA + (i << 3));
+}
+
+@inline
+export function seqPushWideInPlace(c: int64, v: int64): boolean {
+	const p = ld64(c + 8);
+	const n = ld64(c);
+	if (p == 0 || n >= ld64(p)) return false;
+	st64(p + PAYLOAD_DATA + (n << 3), v);
+	st64(c, n + 1);
+	return true;
+}
+
+@inline
 export function seqBase(c: int64): int64 {
 	return ld64(c + 24);
 }

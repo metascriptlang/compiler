@@ -1,4 +1,4 @@
-import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset } from "./vmSeq";
+import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace } from "./vmSeq";
 import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
 // Raiser VM — Bytecode executor
 
@@ -3468,6 +3468,35 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				}
 				break;
 			}
+			case RaiserOpcode.LoadIndex: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const handle = slots[fb + ib];
+				const idx = slots[fb + ic];
+				if (!isSeqHandle(handle)) { slow = true; break; }
+				const cell = seqCellOf(handle);
+				when (mode != "danger") { if (!isLiveCell(cell)) { slow = true; break; } }
+				const cls = ia & 7;
+				if (seqClassWidth(cell) != (cls as int64) || cls == CLS_DYN || idx < 0 || idx >= seqCount(cell)) { slow = true; break; }
+				if (cls == CLS_REF) writeRef(vm, fb + (ia >> 3), seqLoadWide(cell, idx));
+				else slots[fb + (ia >> 3)] = seqLoadWide(cell, idx);
+				break;
+			}
+			case RaiserOpcode.ArrayPush: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const handle = slots[fb + ia];
+				if (!isSeqHandle(handle)) { slow = true; break; }
+				const cell = seqCellOf(handle);
+				when (mode != "danger") { if (!isLiveCell(cell)) { slow = true; break; } }
+				const cls = ib & 7;
+				if (seqClassWidth(cell) != (cls as int64) || cls == CLS_DYN || seqBase(cell) != 0) { slow = true; break; }
+				const v = slots[fb + (ib >> 3)];
+				if (!seqPushWideInPlace(cell, v)) { slow = true; break; }
+				if (cls == CLS_REF) holdShell(vm, v);
+				break;
+			}
 			case RaiserOpcode.AddI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -3649,7 +3678,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
