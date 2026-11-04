@@ -15,6 +15,10 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.LoadConst => "LoadConst",
 		RaiserOpcode.Move => "Move",
 		RaiserOpcode.MoveW => "MoveW",
+		RaiserOpcode.MoveN => "MoveN",
+		RaiserOpcode.ZeroN => "ZeroN",
+		RaiserOpcode.LoadFrame => "LoadFrame",
+		RaiserOpcode.StoreFrame => "StoreFrame",
 		RaiserOpcode.MoveR => "MoveR",
 		RaiserOpcode.BeqR => "BeqR",
 		RaiserOpcode.BneR => "BneR",
@@ -218,6 +222,10 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const name = opName(op);
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
+	if (op == RaiserOpcode.MoveN) return `${name} ${ra} ${regText(op, 1, inst.b)} words ${inst.c}`;
+	if (op == RaiserOpcode.ZeroN) return `${name} ${ra} words ${inst.b}`;
+	if (op == RaiserOpcode.LoadFrame) return `${name} ${ra} ${regText(op, 1, inst.b)} +${inst.c} kind ${inst.slot}`;
+	if (op == RaiserOpcode.StoreFrame) return `${name} ${ra} +${inst.b} ${regText(op, 2, inst.c)} kind ${inst.slot}`;
 	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved) return `${name} ${ra}`;
 	if (op == RaiserOpcode.DestroyValue) return `${name} ${ra} plan ${inst.c}`;
 	if (op == RaiserOpcode.SinkValue || op == RaiserOpcode.AssignInPlace) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
@@ -314,4 +322,15 @@ test "immediate operands print as numbers" {
 test "branch operands print the register or the immediate and the offset" {
 	assert disasmInst(raiserABC(RaiserOpcode.BrGeI64, 1, 2, branchField(-4))) == "BrGeI64 R1 R2 ->-4";
 	assert disasmInst(raiserABC(RaiserOpcode.BrLtI64Imm, 0, immField(10), branchField(40000))) == "BrLtI64Imm R0 #10 ->40000";
+}
+
+test "frame data disassembly distinguishes Word counts byte offsets and scalar kind" {
+	assert disasmInst(raiserABC(RaiserOpcode.MoveN, 3, 0, 2)) == "MoveN W3 W0 words 2";
+	assert disasmInst(raiserABC(RaiserOpcode.ZeroN, 3, 2, 0)) == "ZeroN W3 words 2";
+	const load = raiserABC(RaiserOpcode.LoadFrame, operandTagged(4, RaiserRegClass.Float), 0, 4);
+	load.slot = 9;
+	assert disasmInst(load) == "LoadFrame F4 W0 +4 kind 9";
+	const store = raiserABC(RaiserOpcode.StoreFrame, 0, 4, operandTagged(4, RaiserRegClass.Float));
+	store.slot = 9;
+	assert disasmInst(store) == "StoreFrame W0 +4 F4 kind 9";
 }

@@ -240,9 +240,13 @@ export enum RaiserOpcode {
 	UIntToF64,        // ABC: floats[A] = words[B] read as an unsigned 64-bit integer; the layout's form of a Conv to F64 from U64
 	LoadConstW,       // ABx: R[A] = the raw word of constant K[Bx], a Word, Bool or Float register; the layout's form of such a LoadConst
 	UnownedRc,        // ABC: the count of Unowned<T> edges to the object in refs[A] goes up by one when B = 1, down by one when B = 0; nil stays as it is
+	MoveN,
+	ZeroN,
+	LoadFrame,
+	StoreFrame,
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.UnownedRc;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreFrame;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -333,6 +337,10 @@ export function opRoleLetters(op: RaiserOpcode): string {
 			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv | RaiserOpcode.UnionConv => "x--",
 		RaiserOpcode.Move => "xx-",
 		RaiserOpcode.MoveW => "ww-",
+		RaiserOpcode.MoveN => "ii-",
+		RaiserOpcode.ZeroN => "i--",
+		RaiserOpcode.LoadFrame => "xi-",
+		RaiserOpcode.StoreFrame => "i-x",
 		RaiserOpcode.MoveR => "yy-",
 		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
@@ -639,7 +647,7 @@ export function slotArrayWidth(slot: number): ElemWidth {
 
 export function carriesSlot(op: RaiserOpcode): boolean {
 	return match (op) {
-		RaiserOpcode.NewArray | RaiserOpcode.ArraySlice => true,
+		RaiserOpcode.NewArray | RaiserOpcode.ArraySlice | RaiserOpcode.LoadFrame | RaiserOpcode.StoreFrame => true,
 		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
 		_ => false,
 	};
@@ -858,5 +866,23 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.FutureRead, 0) == RaiserRole.Any && opRole(RaiserOpcode.FutureRead, 1) == RaiserRole.None;
 	assert opRole(RaiserOpcode.IntToF64, 0) == RaiserRole.Float && opRole(RaiserOpcode.UIntToF64, 1) == RaiserRole.Int;
 	assert opRole(RaiserOpcode.LoadConstW, 0) == RaiserRole.Word && opRole(RaiserOpcode.LoadConstW, 1) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
+	assert opRole(RaiserOpcode.UnownedRc, 0) == RaiserRole.Slot && opRole(RaiserOpcode.UnownedRc, 1) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Any;
+}
+
+test "frame data opcodes append to the numeric ABI and pack scalar MemKind in slot" {
+	assert (RaiserOpcode.MoveN as int32) == (RaiserOpcode.UnownedRc as int32) + 1;
+	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.StoreFrame as int32);
+	assert opRoleLetters(RaiserOpcode.MoveN) == "ii-";
+	assert opRoleLetters(RaiserOpcode.ZeroN) == "i--";
+	assert opRoleLetters(RaiserOpcode.LoadFrame) == "xi-";
+	assert opRoleLetters(RaiserOpcode.StoreFrame) == "i-x";
+	for (const op of [RaiserOpcode.LoadFrame, RaiserOpcode.StoreFrame]) {
+		const inst = raiserABC(op, 17, 8, 23);
+		inst.slot = 9;
+		const packed = packInstruction(inst);
+		assert packedOp(packed) == op && packedA(packed) == 17 && packedB(packed) == 8;
+		assert ((packed >> 40) & 65535) == 23 && ((packed >> 56) & 255) == 9;
+	}
 }

@@ -1,5 +1,6 @@
 import { elemWidthBytes, seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqUnowned, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace, seqDataAt, seqWidth } from "./vmSeq";
-import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
+import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots, copyBytes, zeroRange, memLoad, memStore } from "./memory";
+import { MemKind } from "./layout";
 // Raiser VM — Bytecode executor
 
 import {
@@ -3788,6 +3789,10 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleLength(text);
 				break;
 			}
+			case RaiserOpcode.MoveN: case RaiserOpcode.ZeroN: case RaiserOpcode.LoadFrame: case RaiserOpcode.StoreFrame: {
+				slow = true;
+				break;
+			}
 			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Catch: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.UnownedRc: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
@@ -3891,6 +3896,28 @@ function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 // A generic opcode, its register operands retagged. Heap opcodes answer true when handled here.
 function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, pc: int32): boolean {
 	match (op) {
+		RaiserOpcode.MoveN => {
+			const base = vm.regs.slots as int64;
+			copyBytes(base + (absOf(vm, ia) as int64) * 8,
+				base + (absOf(vm, ib) as int64) * 8, (ic as int64) * 8);
+		},
+		RaiserOpcode.ZeroN => {
+			zeroRange((vm.regs.slots as int64) + (absOf(vm, ia) as int64) * 8,
+				(ib as int64) * 8);
+		},
+		RaiserOpcode.LoadFrame => {
+			const kind = ((func.packed[pc] >> 56) & 255) as MemKind;
+			const address = (vm.regs.slots as int64) +
+				(absOf(vm, ib) as int64) * 8 + (ic as int64);
+			const value = memLoad(address, kind);
+			vm.regs.slots[absOf(vm, ia)] = (ia & 7) == CLS_BOOL ? (value == 0 ? 0 : 1) : value;
+		},
+		RaiserOpcode.StoreFrame => {
+			const kind = ((func.packed[pc] >> 56) & 255) as MemKind;
+			const address = (vm.regs.slots as int64) +
+				(absOf(vm, ia) as int64) * 8 + (ib as int64);
+			memStore(address, kind, vm.regs.slots[absOf(vm, ic)]);
+		},
 		RaiserOpcode.CopyValue => {
 			const source = getDyn(vm, ib);
 			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source, func.copyPlans, ic as int32);
@@ -9748,4 +9775,198 @@ test "placed: RcDec on a Dyn register frees the object it holds the last referen
 	const vm = execModule(createRaiserModule("placed", [main], 0));
 	assert vm.error == "", vm.error;
 	assert heapBoxLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0, `${heapBoxLive(vm.arrayHeap)} ${vmLiveCount(vm)}`;
+}
+
+function frameField(op: RaiserOpcode, a: int32, b: int32, c: int32, kind: MemKind): RaiserInstruction {
+	const inst = raiserABC(op, a, b, c);
+	inst.slot = kind as int32;
+	return inst;
+}
+
+function execFrameData(code: RaiserInstruction[], constants: RaiserValue[], classes: RaiserRegClass[], inferred: boolean): RaiserVM {
+	const func = createRaiserFunction("frameData", code, constants, 0, 0,
+		classes.length, inferred ? null : classes);
+	return execModule(createRaiserModule("frameData", [func], 0));
+}
+
+test "MoveN copies overlapping opaque Word ranges in both directions" {
+	const word = RaiserRegClass.Word;
+	for (const inferred of [false, true]) {
+		for (const backward of [false, true]) {
+			const vm = execFrameData([
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),
+				raiserABx(RaiserOpcode.LoadConst, 2, 2),
+				raiserABx(RaiserOpcode.LoadConst, 3, 3),
+				raiserABx(RaiserOpcode.LoadConst, 4, 4),
+				raiserABx(RaiserOpcode.LoadConst, 5, 5),
+				raiserABC(RaiserOpcode.MoveN, backward ? 0 : 1, backward ? 1 : 0, 4),
+				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+			], [raiserInt(11), raiserInt(22), raiserInt(33), raiserInt(44), raiserInt(55), raiserInt(66)],
+			[word, word, word, word, word, word], inferred);
+			assert vm.error == "", vm.error;
+			const expected: int64[] = backward ? [22, 33, 44, 55, 55, 66] : [11, 11, 22, 33, 44, 66];
+			for (let r = 0; r < 6; r += 1) {
+				assert vm.regs.slots[r] == expected[r], `R${r} backward=${backward}`;
+			}
+		}
+	}
+}
+
+test "ZeroN clears the whole Word range without changing its neighbours" {
+	const word = RaiserRegClass.Word;
+	for (const inferred of [false, true]) {
+		const vm = execFrameData([
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 0),
+			raiserABx(RaiserOpcode.LoadConst, 3, 0),
+			raiserABx(RaiserOpcode.LoadConst, 4, 0),
+			raiserABx(RaiserOpcode.LoadConst, 5, 0),
+			raiserABC(RaiserOpcode.ZeroN, 1, 4, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		], [raiserInt(-1)], [word, word, word, word, word, word], inferred);
+		assert vm.error == "", vm.error;
+		assert vm.regs.slots[0] == -1 && vm.regs.slots[5] == -1;
+		for (let r = 1; r < 5; r += 1) assert vm.regs.slots[r] == 0;
+	}
+}
+
+test "frame fields pack narrow integers and F64 using true memory widths" {
+	const word = RaiserRegClass.Word;
+	const float = RaiserRegClass.Float;
+	for (const inferred of [false, true]) {
+		const vm = execFrameData([
+			raiserABC(RaiserOpcode.ZeroN, 0, 2, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 0),
+			raiserABx(RaiserOpcode.LoadConst, 3, 1),
+			raiserABx(RaiserOpcode.LoadConst, 4, 2),
+			raiserABx(RaiserOpcode.LoadConst, 5, 3),
+			raiserABx(RaiserOpcode.LoadConst, 6, 4),
+			raiserABx(RaiserOpcode.LoadConst, 7, 5),
+			frameField(RaiserOpcode.StoreFrame, 0, 0, 3, MemKind.I8),
+			frameField(RaiserOpcode.StoreFrame, 0, 1, 4, MemKind.U8),
+			frameField(RaiserOpcode.StoreFrame, 0, 2, 5, MemKind.I16),
+			frameField(RaiserOpcode.StoreFrame, 0, 4, 6, MemKind.U32),
+			frameField(RaiserOpcode.StoreFrame, 0, 8, 7, MemKind.F64),
+			frameField(RaiserOpcode.LoadFrame, 8, 0, 0, MemKind.I8),
+			frameField(RaiserOpcode.LoadFrame, 9, 0, 1, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 10, 0, 2, MemKind.I16),
+			frameField(RaiserOpcode.LoadFrame, 11, 0, 4, MemKind.U32),
+			frameField(RaiserOpcode.LoadFrame, 12, 0, 8, MemKind.F64),
+			frameField(RaiserOpcode.LoadFrame, 13, 0, 2, MemKind.U16),
+			frameField(RaiserOpcode.LoadFrame, 14, 0, 4, MemKind.I32),
+			raiserABC(RaiserOpcode.Halt, 12, 0, 0),
+		], [raiserInt(77), raiserInt(-2), raiserInt(200), raiserInt(-300), raiserInt(4000000000), raiserFloat(2.5)],
+		[word, word, word, word, word, word, word, float, word, word, word, word, float, word, word], inferred);
+		assert vm.error == "", vm.error;
+		assert vm.regs.slots[2] == 77;
+		assert vm.regs.slots[8] == -2 && vm.regs.slots[9] == 200;
+		assert vm.regs.slots[10] == -300 && vm.regs.slots[11] == 4000000000;
+		assert vm.exitValue.floatVal == 2.5;
+		assert vm.regs.slots[13] == 65236 && vm.regs.slots[14] == -294967296;
+	}
+}
+
+test "two F32 frame fields share one Word and preserve negative zero and subnormals" {
+	const word = RaiserRegClass.Word;
+	const float = RaiserRegClass.Float;
+	const negativeZero: int64 = -9223372036854775807 - 1;
+	for (const inferred of [false, true]) {
+		const vm = execFrameData([
+			raiserABC(RaiserOpcode.ZeroN, 0, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),
+			raiserABx(RaiserOpcode.LoadConst, 6, 3),
+			frameField(RaiserOpcode.StoreFrame, 0, 0, 2, MemKind.F32),
+			frameField(RaiserOpcode.StoreFrame, 0, 4, 3, MemKind.F32),
+			frameField(RaiserOpcode.LoadFrame, 4, 0, 0, MemKind.F32),
+			frameField(RaiserOpcode.LoadFrame, 5, 0, 4, MemKind.F32),
+			frameField(RaiserOpcode.StoreFrame, 0, 0, 6, MemKind.F32),
+			frameField(RaiserOpcode.LoadFrame, 7, 0, 0, MemKind.F32),
+			frameField(RaiserOpcode.LoadFrame, 8, 0, 0, MemKind.U32),
+			frameField(RaiserOpcode.LoadFrame, 9, 0, 4, MemKind.U32),
+			raiserABC(RaiserOpcode.Halt, 7, 0, 0),
+		], [raiserInt(77), raiserFloat(1.5), raiserFloat(msBitsFloat64(negativeZero)), raiserFloat(1.401298464324817e-45)],
+		[word, word, float, float, float, float, float, float, word, word], inferred);
+		assert vm.error == "", vm.error;
+		assert vm.regs.slots[1] == 77 && vm.regs.slots[4] == msFloat64Bits(1.5);
+		assert vm.regs.slots[5] == negativeZero;
+		assert vm.exitValue.floatVal == 1.401298464324817e-45;
+		assert vm.regs.slots[8] == 1 && vm.regs.slots[9] == 0x80000000;
+	}
+}
+
+test "frame byte fields store Bool values and normalize Bool loads without widening storage" {
+	const word = RaiserRegClass.Word;
+	const bool = RaiserRegClass.Bool;
+	for (const inferred of [false, true]) {
+		const vm = execFrameData([
+			raiserABC(RaiserOpcode.ZeroN, 0, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),
+			raiserABx(RaiserOpcode.LoadConst, 5, 1),
+			raiserABx(RaiserOpcode.LoadConst, 6, 1),
+			frameField(RaiserOpcode.StoreFrame, 0, 7, 1, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 2, 0, 7, MemKind.U8),
+			frameField(RaiserOpcode.StoreFrame, 0, 6, 3, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 6, 0, 6, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 4, 0, 6, MemKind.U8),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			frameField(RaiserOpcode.StoreFrame, 0, 7, 1, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 5, 0, 7, MemKind.U8),
+			frameField(RaiserOpcode.LoadFrame, 7, 0, 6, MemKind.U8),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		], [raiserBool(true), raiserBool(false), raiserInt(255)],
+		[word, bool, bool, word, word, bool, bool, word], inferred);
+		assert vm.error == "", vm.error;
+		assert vm.regs.slots[2] == 1 && vm.regs.slots[6] == 1 && vm.regs.slots[5] == 0;
+		assert vm.regs.slots[4] == 255 && vm.regs.slots[7] == 255;
+		assert vm.regs.slots[0] == 0x00FF000000000000;
+	}
+}
+
+test "frame data treats real heap handle bits as inert numeric payloads" {
+	const word = RaiserRegClass.Word;
+	for (const inferred of [false, true]) {
+		const vm = execFrameData([
+			raiserABC(RaiserOpcode.NewObject, 6, 0, 0),
+			raiserABC(RaiserOpcode.Conv, 4, 6, RaiserConvClass.HandleBits as int32),
+			frameField(RaiserOpcode.StoreFrame, 0, 0, 4, MemKind.U64),
+			frameField(RaiserOpcode.StoreFrame, 0, 8, 4, MemKind.Ptr),
+			raiserABC(RaiserOpcode.MoveN, 2, 0, 2),
+			raiserABC(RaiserOpcode.ZeroN, 0, 2, 0),
+			frameField(RaiserOpcode.LoadFrame, 5, 2, 8, MemKind.Ptr),
+			raiserABC(RaiserOpcode.RcHeld, 6, 7, 0),
+			raiserABC(RaiserOpcode.RcDec, 6, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 5, 0, 0),
+		], [], [word, word, word, word, word, word, RaiserRegClass.Ref, word], inferred);
+		assert vm.error == "", vm.error;
+		assert vm.regs.slots[0] == 0 && vm.regs.slots[1] == 0;
+		assert vm.regs.slots[4] != 0 && vm.regs.slots[2] == vm.regs.slots[4];
+		assert vm.regs.slots[3] == vm.regs.slots[4] && vm.exitValue.intVal == vm.regs.slots[4];
+		assert vm.regs.slots[7] == 1 && vm.regs.slots[6] == 0;
+	}
+}
+
+test "frame data uses the active physical frame base rather than entry storage" {
+	const word = RaiserRegClass.Word;
+	const callee = createRaiserFunction("packedLocal", [
+		raiserABC(RaiserOpcode.ZeroN, 0, 2, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		frameField(RaiserOpcode.StoreFrame, 0, 8, 2, MemKind.I64),
+		raiserABC(RaiserOpcode.MoveN, 0, 1, 1),
+		frameField(RaiserOpcode.LoadFrame, 3, 0, 0, MemKind.I64),
+		raiserABC(RaiserOpcode.Ret, 3, 0, 0),
+	], [raiserInt(123)], 0, 0, 4, [word, word, word, word]);
+	const entry = createRaiserFunction("entry", [
+		raiserABx(RaiserOpcode.LoadConst, 5, 0),
+		raiserABC(RaiserOpcode.Call, 0, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserInt(77)], 0, 0, 6, [word, word, word, word, word, word]);
+	const vm = execModule(createRaiserModule("frameBase", [entry, callee], 0));
+	assert vm.error == "", vm.error;
+	assert vm.exitValue.intVal == 123 && vm.regs.slots[5] == 77;
 }
