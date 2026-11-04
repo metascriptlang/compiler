@@ -187,7 +187,7 @@ function signExtend(v: int64, width: int64): int64 {
 }
 
 export function memLoad(a: int64, kind: MemKind): int64 {
-	if (kind == MemKind.F32 || kind == MemKind.Block) throw new Error(`internal: a typed load of kind ${kind as number} is not provided`);
+	if (kind == MemKind.Block) throw new Error(`internal: a typed load of kind ${kind as number} is not provided`);
 	checkAligned(a, memKindWidth(kind));
 	return match (kind) {
 		MemKind.U8 => (a as Ptr<uint8>)[0] as int64,
@@ -197,19 +197,21 @@ export function memLoad(a: int64, kind: MemKind): int64 {
 		MemKind.I16 => (a as Ptr<int16>)[0] as int64,
 		MemKind.I32 => (a as Ptr<int32>)[0] as int64,
 		MemKind.I64 | MemKind.U64 | MemKind.Ptr | MemKind.F64 => (a as Ptr<int64>)[0],
-		MemKind.F32 | MemKind.Block => 0,
+		MemKind.F32 => msFloat64Bits((a as Ptr<float32>)[0] as float64),
+		MemKind.Block => 0,
 	};
 }
 
 export function memStore(a: int64, kind: MemKind, v: int64): void {
-	if (kind == MemKind.F32 || kind == MemKind.Block) throw new Error(`internal: a typed store of kind ${kind as number} is not provided`);
+	if (kind == MemKind.Block) throw new Error(`internal: a typed store of kind ${kind as number} is not provided`);
 	checkAligned(a, memKindWidth(kind));
 	match (kind) {
 		MemKind.U8 | MemKind.I8 => { (a as Ptr<uint8>)[0] = (v & 0xFF) as uint8; },
 		MemKind.U16 | MemKind.I16 => { (a as Ptr<uint16>)[0] = (v & 0xFFFF) as uint16; },
 		MemKind.U32 | MemKind.I32 => { (a as Ptr<uint32>)[0] = (v & 0xFFFFFFFF) as uint32; },
 		MemKind.I64 | MemKind.U64 | MemKind.Ptr | MemKind.F64 => { (a as Ptr<int64>)[0] = v; },
-		MemKind.F32 | MemKind.Block => {},
+		MemKind.F32 => { (a as Ptr<float32>)[0] = msBitsFloat64(v) as float32; },
+		MemKind.Block => {},
 	}
 }
 
@@ -593,6 +595,37 @@ test "typed loads and stores keep their lane, widen by sign, and leave their nei
 	let refused = "";
 	try { memLoad(a, MemKind.Block); } catch (e) { refused = e.message; }
 	assert refused.includes("is not provided"), refused;
+}
+
+test "a float32 memory lane widens to register bits and stores only its four bytes" {
+	const mem = createVmMemory();
+	const a = heapAlloc(mem, 16);
+	memStore(a, MemKind.U32, 0x12345678);
+	memStore(a + 8, MemKind.U32, 0x76543210);
+	memStore(a + 4, MemKind.F32, msFloat64Bits(1.5));
+	assert memLoad(a + 4, MemKind.F32) == msFloat64Bits(1.5);
+	assert memLoad(a + 4, MemKind.U32) == 0x3FC00000;
+	memStore(a + 4, MemKind.F32, msFloat64Bits(-2.25));
+	assert memLoad(a + 4, MemKind.F32) == msFloat64Bits(-2.25);
+	assert memLoad(a, MemKind.U32) == 0x12345678;
+	assert memLoad(a + 8, MemKind.U32) == 0x76543210;
+}
+
+test "float32 memory conversion keeps negative zero, subnormals, NaN and rounding" {
+	const mem = createVmMemory();
+	const a = heapAlloc(mem, 8);
+	memStore(a, MemKind.U32, 0x80000000);
+	const negativeZero = memLoad(a, MemKind.F32);
+	assert negativeZero == -9223372036854775807 - 1;
+	memStore(a, MemKind.F32, negativeZero);
+	assert memLoad(a, MemKind.U32) == 0x80000000;
+	memStore(a, MemKind.U32, 1);
+	assert msBitsFloat64(memLoad(a, MemKind.F32)) == 1.401298464324817e-45;
+	memStore(a, MemKind.U32, 0x7FC00001);
+	const nan = msBitsFloat64(memLoad(a, MemKind.F32));
+	assert nan != nan;
+	memStore(a, MemKind.F32, msFloat64Bits(1.000000059604644775390625));
+	assert memLoad(a, MemKind.F32) == msFloat64Bits(1.0);
 }
 
 test "a ref cell carries the 24 byte header: count, type index, root index and allocation size ahead of the object" {
