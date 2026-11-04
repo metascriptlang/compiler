@@ -65,6 +65,7 @@ import { lowerIterInline, offerIterBodies } from "./lowering/iterInline";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
+import { lowerDiscriminantTags } from "./native/discriminantTagLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
@@ -285,6 +286,7 @@ export function transformProgramTail(head: TransformHead, asyncModuleBody: boole
 	flowLap("pass.lowerResultConstructors");
 	result = lowerTypeof(result, ctx);
 	flowLap("pass.lowerTypeof");
+	if (!jsBackend) { result = lowerDiscriminantTags(result, ctx); flowLap("pass.lowerDiscriminantTags"); }
 	if (runs(result, ctx, fact(ModuleFact.Switch), "pass.lowerSwitch")) result = lowerSwitch(result, ctx);
 	flowLap("pass.lowerSwitch");
 	result = lowerMatch(result, ctx);
