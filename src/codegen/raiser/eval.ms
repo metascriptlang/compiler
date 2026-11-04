@@ -2553,7 +2553,7 @@ test "engine: a for loop tests its bound with one compare-and-skip and keeps no 
 
 test "engine: a counted for loop steps, counts and tests its bound in one instruction at the bottom" {
 	const big = compiledFunc("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 50000000; i = i + 1) { s = s + i; } return s; } console.log(`${f()}`);", "f");
-	assert big.code.length == 7 && opName(big.code[2].op) == "LoadConst" && opName(big.code[3].op) == "BrGeI64" && opName(big.code[5].op) == "ForLtI64", disasmFunc(big);
+	assert big.code.length == 7 && opName(big.code[2].op) == "LoadConstW" && opName(big.code[3].op) == "BrGeI64" && opName(big.code[5].op) == "ForLtI64", disasmFunc(big);
 	assert branchOffset(big.code[5].c) == -2 && countNamed(big, "Jump") == 0, disasmFunc(big);
 	const imm = compiledFunc("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; ++i) { s += i; } return s; } console.log(`${f()}`);", "f");
 	assert countNamed(imm, "ForLtI64Imm") == 1 && countNamed(imm, "Jump") == 0, disasmFunc(imm);
@@ -2655,7 +2655,7 @@ test "engine: a widening integer conversion emits no instruction, a narrowing on
 test "engine: an if on a comparison emits no bool constant and no compare against zero" {
 	const f = compiledFunc("function f(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1, 2)}`);", "f");
 	const text = disasmFunc(f);
-	assert opName(f.code[0].op) == "BrGeI64" && countNamed(f, "Jump") == 0 && countNamed(f, "LoadConst") == 0, text;
+	assert opName(f.code[0].op) == "BrGeI64" && countNamed(f, "Jump") == 0 && countNamed(f, "LoadConst") + countNamed(f, "LoadConstW") == 0, text;
 }
 
 function condForms(op: string, ty: string, a: string, b: string): string {
@@ -2960,13 +2960,13 @@ test "engine: a literal loop condition is no test" {
 
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
-	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
+	assert countNamed(fib, "LoadConst") + countNamed(fib, "LoadConstW") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
 	assert fib.code.length == 8, disasmFunc(fib);
 	const run = compiledFunc("function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 5000000; i = i + 1) { s = s + i; } return s; } console.log(`${run()}`);", "run");
 	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "ForLtI64") == 1, disasmFunc(run);
-	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
+	assert countNamed(run, "LoadConstW") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
 	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
-	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
+	assert countNamed(wh, "LoadConst") + countNamed(wh, "LoadConstW") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
 	assert countNamed(wh, "Jump") == 0 && backBranchSpan(wh) == 3, disasmFunc(wh);
 	const ctx = evalVM("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }"
 		+ " function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${fib(15)} ${w(7)}`);");

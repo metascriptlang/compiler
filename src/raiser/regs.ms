@@ -184,6 +184,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 		if (op == RaiserOpcode.StoreSlot && inst.c < regCount && inst.slot < TYPED_SLOTS) op = typedSlot(op, classes[inst.c as int32]);
 		if (inst.a < regCount && (op == RaiserOpcode.BeqI64 || op == RaiserOpcode.BneI64 || op == RaiserOpcode.BrEqI64 || op == RaiserOpcode.BrNeI64)) op = ranked(op, classes[inst.a as int32]);
 		if (op == RaiserOpcode.Conv) op = typedConv(inst, classes, regCount);
+		if (op == RaiserOpcode.LoadConst && inst.a < regCount && (inst.b * 256 + inst.c) < constants.length && !inRefFile(classes[inst.a as int32])) op = RaiserOpcode.LoadConstW;
 		const fields: int32[] = [inst.a as int32, inst.b as int32, inst.c as int32];
 		for (let slot = 0; slot < 3; slot += 1) {
 			const role = opRole(op, slot);
@@ -201,7 +202,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 			if (role == RaiserRole.Any ? rank > MAX_TAGGED_RANK : rank > MAX_FIELD) throw new Error(`internal: operand ${slot == 0 ? "A" : slot == 1 ? "B" : "C"} of instruction ${pc} of ${name} names R${reg}, which is rank ${rank} of its file, past what an operand of this opcode holds`);
 			fields[slot] = role == RaiserRole.Any ? regOps[reg] : rank;
 		}
-		if (op == RaiserOpcode.LoadConst) {
+		if (op == RaiserOpcode.LoadConst || op == RaiserOpcode.LoadConstW) {
 			const index = (inst.b * 256 + inst.c) as int32;
 			const dest = classes[inst.a as int32];
 			if (index < constants.length && (constantMask(constants[index]) & classBit(dest)) == 0) throw new Error(`internal: LoadConst at instruction ${pc} of ${name} loads a constant of value kind ${constants[index].kind} into R${inst.a}, a ${regClassLetter(dest)} register`);

@@ -133,6 +133,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.CollectCycles => "CollectCycles",
 		RaiserOpcode.IntToF64 => "IntToF64",
 		RaiserOpcode.UIntToF64 => "UIntToF64",
+		RaiserOpcode.LoadConstW => "LoadConstW",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",
@@ -186,7 +187,7 @@ export function opName(op: RaiserOpcode): string {
 // --- Format helpers ---
 
 function isABxOp(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
+	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.LoadConstW || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
 }
 
 function isImmCompare(op: RaiserOpcode): boolean {
@@ -239,7 +240,7 @@ export function disasmFunc(func: RaiserFunction): string {
 	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
 		let line = `  ${i}: ${disasmInst(inst)}`;
-		if (inst.op == RaiserOpcode.LoadConst) {
+		if (inst.op == RaiserOpcode.LoadConst || inst.op == RaiserOpcode.LoadConstW) {
 			const cIdx = getBx(inst);
 			if (cIdx < getFuncConstLen(func)) {
 				const cVal = getFuncConst(func, cIdx);

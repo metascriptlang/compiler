@@ -2675,6 +2675,11 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				}
 				break;
 			}
+			case RaiserOpcode.LoadConstW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				slots[fb + ia] = func.constWords[((word >> 24) & 65535) * 256 + ((word >> 40) & 65535)];
+				break;
+			}
 			case RaiserOpcode.MoveW: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -5724,6 +5729,18 @@ function execConv(value: RaiserValue, cls: RaiserConvClass, from: int32 = -1): R
 		],
 		[value]
 	));
+}
+
+test "a word, bool or float constant loads as its raw word, and a ref constant stays a LoadConst" {
+	const word = RaiserRegClass.Word;
+	const f = createRaiserFunction("consts", [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABx(RaiserOpcode.LoadConst, 1, 1), raiserABx(RaiserOpcode.LoadConst, 2, 2), raiserABx(RaiserOpcode.LoadConst, 3, 3),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	], [raiserInt(-7), raiserFloat(2.5), raiserBool(true), raiserConstString("s")], 0, 0, 4, [word, RaiserRegClass.Float, RaiserRegClass.Bool, RaiserRegClass.Ref]);
+	assert f.code[0].op == RaiserOpcode.LoadConstW && f.code[1].op == RaiserOpcode.LoadConstW && f.code[2].op == RaiserOpcode.LoadConstW && f.code[3].op == RaiserOpcode.LoadConst;
+	const vm = execModule(createRaiserModule("consts", [f], 0));
+	assert vm.error == "" && vm.exitValue.floatVal == 2.5, `${vm.error} ${vm.exitValue.floatVal}`;
+	assert vm.regs.slots[0] == -7 && vm.regs.slots[2] == 1, `${vm.regs.slots[0]} ${vm.regs.slots[2]}`;
 }
 
 test "a Conv to F64 from a Word register runs as the integer conversion the layout chose for it" {

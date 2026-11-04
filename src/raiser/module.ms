@@ -6,6 +6,8 @@ import { RaiserCopyPlan } from "./valueCopy";
 import { layoutRegisters } from "./regs";
 import { HostEntry } from "./hostRegistry";
 
+extern function msFloat64Bits(d: float64): int64;
+
 // --- Function ---
 
 export interface RaiserFunction {
@@ -15,6 +17,7 @@ export interface RaiserFunction {
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
+	constWords: int64[];  // constants[i] as the word a Word, Bool or Float register holds (float bits), 0 for any other kind
 	hostCache: (HostEntry | null)[];  // CallHost entry resolved once per constant index, null = not resolved yet
 	nameIds: int64[];     // the interned handle of constants[i] when it is a string, -1 otherwise, so a cached field access compares integers
 	names: string[];      // constants[i] read as text, "" for a non-string; a cache miss in LoadField and StoreField compares it
@@ -77,14 +80,16 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	const names: string[] = [];
 	const hostCache: (HostEntry | null)[] = [];
 	const nameIds: int64[] = [];
+	const constWords: int64[] = [];
 	for (const c of constants) {
+		constWords.push(c.kind == RaiserValueKind.Float ? msFloat64Bits(c.floatVal) : c.kind == RaiserValueKind.Int || c.kind == RaiserValueKind.Bool ? c.intVal : 0);
 		names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
 		hostCache.push(null);
 		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
 	}
 	const ownRefs: int32[] = [];
 	for (let r = arity as int32; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, constWords, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 	bindReturns(func);
 	return func;
 }
@@ -217,5 +222,5 @@ test "module entry function" {
 	assert getFuncName(entry) == "test";
 	assert getFuncCodeLen(entry) == 2;
 	const inst0 = getFuncInst(entry, 0);
-	assert inst0.op == RaiserOpcode.LoadConst;
+	assert inst0.op == RaiserOpcode.LoadConstW;
 }
