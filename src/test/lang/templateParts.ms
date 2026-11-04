@@ -46,3 +46,24 @@ test "template parts: nested templates and an empty head" {
 	assert `${i}${i}` == "77";
 	assert `${i}` + `${i}` == "77";
 }
+
+type TplId = distinct int32;
+function valueOf(this d: TplId): string { return "vo"; }
+type TplTagged<T> = distinct int32;
+function valueOf<T>(this d: TplTagged<T>): string { return "tv"; }
+type TplMeters = distinct number;
+
+test "template parts: a distinct cast to its base prints the base, a cast through valueOf owns its text" {
+	const id = (7 as int32) as TplId;
+	const tagged = (5 as int32) as TplTagged<string>;
+	const m = (1.5 as number) as TplMeters;
+	assert `${id as int32}|${id as number}|${id as int64}|${tagged as int32}|${m as number}` == "7|7|7|5|1.5";
+	assert (id as int32).toString() == "7";
+	assert (tagged as int32).toString() == "5";
+	assert (m as number).toString() == "1.5";
+	const parts: string[] = [];
+	parts.push(`${(id as string | null)!}`);
+	parts.push((id as string | null)!);
+	parts.push(`${(tagged as string | null)!}`);
+	assert parts.join("|") == "vo|vo|tv";
+}
