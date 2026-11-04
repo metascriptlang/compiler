@@ -194,7 +194,12 @@ export function digestSync(
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+	when (c) {
+		if (typeof data == "string") return Result.ok(hashOf(kind, data.asBytes()) as Buffer);
+		return Result.ok(hashOf(kind, data) as Buffer);
+	} else {
+		return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+	}
 }
 
 export function hmacSync(
@@ -217,7 +222,12 @@ export class Hasher {
 	}
 
 	update(data: Bytes): Hasher {
-		if (!this._state.finished) updateHash(this._state, bytesOf(data));
+		if (this._state.finished) return this;
+		when (c) {
+			updateHash(this._state, typeof data == "string" ? data.asBytes() : data);
+		} else {
+			updateHash(this._state, bytesOf(data));
+		}
 		return this;
 	}
 
