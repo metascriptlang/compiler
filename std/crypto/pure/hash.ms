@@ -1,9 +1,8 @@
-import { HashState, newHashState, kindSha256, kindSha224, kindSha512, kindSha384, kindSha1, kindMd5 } from "./state";
+import { HashState, HashBytes, newHashState, wipeHashState, kindSha256, kindSha224, kindSha512, kindSha384, kindSha1, kindMd5 } from "./state";
 import { initSha2, compress256, compress512 } from "./sha2";
 import { initSha1, compressSha1 } from "./sha1";
 import { initMd5, compressMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
-import { wipeBytes, wipeWords } from "./secret";
 
 /** The kind number of a hash name, or -1 when the portable code has no such hash. */
 export function hashKind(algorithm: string): int32 {
@@ -39,7 +38,7 @@ export function copyHash(from: Readonly<HashState>, to: HashState): void {
 	to.finished = from.finished;
 }
 
-function compressBlock(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+function compressBlock(h: HashState, data: HashBytes, off: int32): void {
 	if (h.kind == kindSha256 || h.kind == kindSha224) compress256(h, data, off);
 	else if (h.kind == kindSha512 || h.kind == kindSha384) compress512(h, data, off);
 	else if (h.kind == kindSha1) compressSha1(h, data, off);
@@ -51,26 +50,30 @@ export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 	const size = h.blockSize;
 	const end = data.length as int32;
 	let at = 0;
+	let filled = h.filled;
 	h.length += end;
-	if (h.filled > 0) {
-		while (at < end && h.filled < size) {
-			h.block[h.filled] = data[at];
-			h.filled += 1;
-			at += 1;
+	if (filled > 0) {
+		const take = end < size - filled ? end : size - filled;
+		for (let i = 0; i < take; i++) h.block[filled + i] = data[i];
+		filled += take;
+		at = take;
+		if (filled < size) {
+			h.filled = filled;
+			return;
 		}
-		if (h.filled < size) return;
 		compressBlock(h, h.block, 0);
-		h.filled = 0;
+		filled = 0;
 	}
 	while (at + size <= end) {
 		compressBlock(h, data, at);
 		at += size;
 	}
 	while (at < end) {
-		h.block[h.filled] = data[at];
-		h.filled += 1;
+		h.block[filled] = data[at];
+		filled += 1;
 		at += 1;
 	}
+	h.filled = filled;
 }
 
 function putLength(h: HashState, at: int32): void {
@@ -94,35 +97,31 @@ export function finishHashInto(h: HashState, out: uint8[]): void {
 	if (h.finished) throw new Error("hash already finished");
 	const size = h.blockSize;
 	const lengthBytes = size == 128 ? 16 : 8;
-	h.block[h.filled] = 0x80;
-	h.filled += 1;
-	if (h.filled > size - lengthBytes) {
-		while (h.filled < size) {
-			h.block[h.filled] = 0;
-			h.filled += 1;
-		}
+	let filled = h.filled;
+	h.block[filled] = 0x80;
+	filled += 1;
+	if (filled > size - lengthBytes) {
+		for (let i = filled; i < size; i++) h.block[i] = 0;
 		compressBlock(h, h.block, 0);
-		h.filled = 0;
+		filled = 0;
 	}
-	while (h.filled < size) {
-		h.block[h.filled] = 0;
-		h.filled += 1;
-	}
+	for (let i = filled; i < size - 8; i++) h.block[i] = 0;
 	putLength(h, size - 8);
 	compressBlock(h, h.block, 0);
+	h.filled = 0;
 	h.finished = true;
-	for (let i = 0; i < h.outputSize; i++) {
-		const word = h.state[i >> 2];
-		const shift = (h.kind == kindMd5 ? (i & 3) * 8 : 24 - (i & 3) * 8) as uint32;
-		out[i] = ((word >> shift) & 255) as uint8;
+	const length = h.outputSize;
+	if (h.kind == kindMd5) {
+		for (let i = 0; i < length; i++) out[i] = ((h.state[i >> 2] >> ((8 * (i & 3)) as uint32)) & 255) as uint8;
+	} else {
+		for (let i = 0; i < length; i++) out[i] = ((h.state[i >> 2] >> ((24 - 8 * (i & 3)) as uint32)) & 255) as uint8;
 	}
 }
 
 export function finishHash(h: HashState): uint8[] {
 	const out = new Array<uint8>(h.outputSize);
 	finishHashInto(h, out);
-	wipeWords(h.state);
-	wipeBytes(h.block);
+	wipeHashState(h);
 	return out;
 }
 

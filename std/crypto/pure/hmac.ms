@@ -1,6 +1,6 @@
-import { HashState, kindSha256, kindMd5 } from "./state";
+import { HashState, kindSha256, kindMd5, wipeHashState } from "./state";
 import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
-import { wipeBytes, wipeWords } from "./secret";
+import { wipeBytes } from "./secret";
 
 const pbkdf2MaxLength = 1048576;
 
@@ -13,17 +13,11 @@ export class HmacState {
 	innerDigest: uint8[];
 }
 
-function wipeHash(h: HashState): void {
-	wipeWords(h.state);
-	wipeWords(h.schedule);
-	wipeBytes(h.block);
-}
-
 function wipeHmac(hmac: HmacState): void {
-	wipeHash(hmac.inner);
-	wipeHash(hmac.outer);
-	wipeHash(hmac.innerKeyed);
-	wipeHash(hmac.outerKeyed);
+	wipeHashState(hmac.inner);
+	wipeHashState(hmac.outer);
+	wipeHashState(hmac.innerKeyed);
+	wipeHashState(hmac.outerKeyed);
 	wipeBytes(hmac.innerDigest);
 }
 
@@ -93,12 +87,9 @@ export function hmacOf(kind: int32, key: Readonly<uint8[]>, data: Readonly<uint8
 	absorbPads(key, inner, outer);
 	updateHash(inner, data);
 	const innerDigest = finishHash(inner);
-	wipeHash(inner);
 	updateHash(outer, innerDigest);
 	wipeBytes(innerDigest);
-	const out = finishHash(outer);
-	wipeHash(outer);
-	return out;
+	return finishHash(outer);
 }
 
 export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: int32, length: int32): uint8[] {

@@ -1,4 +1,4 @@
-import { HashState } from "./state";
+import { HashState, HashBytes } from "./state";
 
 export function initSha1(h: HashState): void {
 	h.state[0] = 0x67452301;
@@ -13,7 +13,7 @@ function rotl(v: uint32, c: uint32): uint32 {
 }
 
 when (!js) {
-	function compressSha1Block(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+	function compressSha1Block(h: HashState, data: HashBytes, off: int32): void {
 		let w0: uint32 = ((data[off + 0] as uint32) << 24) | ((data[off + 1] as uint32) << 16) | ((data[off + 2] as uint32) << 8) | (data[off + 3] as uint32);
 		let w1: uint32 = ((data[off + 4] as uint32) << 24) | ((data[off + 5] as uint32) << 16) | ((data[off + 6] as uint32) << 8) | (data[off + 7] as uint32);
 		let w2: uint32 = ((data[off + 8] as uint32) << 24) | ((data[off + 9] as uint32) << 16) | ((data[off + 10] as uint32) << 8) | (data[off + 11] as uint32);
@@ -321,6 +321,6 @@ when (js) {
 	}
 }
 
-export function compressSha1(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+export function compressSha1(h: HashState, data: HashBytes, off: int32): void {
 	compressSha1Block(h, data, off);
 }

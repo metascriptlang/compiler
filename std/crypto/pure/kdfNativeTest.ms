@@ -258,7 +258,7 @@ test "streaming hmac matches one-shot and restarts on the same key after finishi
 	assert finishHmac(hmac).encodeHex() == expected;
 }
 
-function allZero(bytes: Readonly<uint8[]>): boolean {
+function allZero(bytes: Readonly<Span<uint8>>): boolean {
 	for (let i = 0; i < bytes.length; i++) if (bytes[i] != 0) return false;
 	return true;
 }
