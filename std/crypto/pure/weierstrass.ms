@@ -149,6 +149,11 @@ export function ecPrivateToPkcs8(key: EcPrivateData): uint8[] {
 	return derSequence([derSmallInteger(0), algorithm, derOctets(sec1Body(key, false))]);
 }
 
+/** DER writes an integer in its fewest bytes: a leading zero only before a byte with the top bit set. */
+function derMinimal(buf: Readonly<uint8[]>, item: DerItem): boolean {
+	return item.end - item.body < 2 || buf[item.body] != 0 || (buf[item.body + 1] & 0x80) != 0;
+}
+
 export function ecdsaDerToRaw(sig: Readonly<uint8[]>, size: int32): uint8[] | null {
 	const root = derRoot(sig, tagSequence);
 	if (root == null) return null;
@@ -156,6 +161,7 @@ export function ecdsaDerToRaw(sig: Readonly<uint8[]>, size: int32): uint8[] | nu
 	if (parts == null || parts.length != 2) return null;
 	const out: uint8[] = new Array<uint8>(2 * size);
 	for (let k = 0; k < 2; k++) {
+		if (!derMinimal(sig, parts[k])) return null;
 		const value = derUnsigned(sig, parts[k]);
 		if (value == null || value.length > size) return null;
 		const pad = k * size + size - value.length;
