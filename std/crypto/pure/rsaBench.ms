@@ -6,9 +6,24 @@
 // operations per second of both over ROUNDS rounds and pure / vendor time (below 1 is pure faster). Key generation
 // is random in its cost, so its row is the median of KEYGEN_RUNS single runs per side.
 
-import { RsaPrivateKey, CryptoError, signSync, verifySync, encryptSync, decryptSync } from "std/crypto/rsa";
+import {
+	RsaPrivateKey,
+	CryptoError,
+	signSync,
+	verifySync,
+	encryptSync,
+	decryptSync,
+} from "std/crypto/rsa";
 import { pemDecode } from "./pem";
-import { rsaPrivateFromPkcs8, rsaPublicOf, rsaGenerate, rsaSignPkcs1, rsaVerifyPkcs1, rsaOaepEncrypt, rsaOaepDecrypt } from "./rsa";
+import {
+	rsaPrivateFromPkcs8,
+	rsaPublicOf,
+	rsaGenerate,
+	rsaSignPkcs1,
+	rsaVerifyPkcs1,
+	rsaOaepEncrypt,
+	rsaOaepDecrypt,
+} from "./rsa";
 import { keyAPkcs8 } from "./rsaFixtures";
 
 const ROUND_MS = 300.0;
@@ -43,7 +58,12 @@ function fixed(value: number): string {
 	return (Math.round(value * 1000.0) / 1000.0).toString();
 }
 
-function row(name: string, rounds: int32, pure: () => number, vendor: () => number): void {
+function row(
+	name: string,
+	rounds: int32,
+	pure: () => number,
+	vendor: () => number,
+): void {
 	const pureMs: number[] = [];
 	const vendorMs: number[] = [];
 	for (let r = 0; r < rounds; r++) {
@@ -52,7 +72,9 @@ function row(name: string, rounds: int32, pure: () => number, vendor: () => numb
 	}
 	const p = median(pureMs);
 	const v = median(vendorMs);
-	console.log(`${name}: pure ${fixed(1000.0 / p)} op/s (${fixed(p)} ms), vendor ${fixed(1000.0 / v)} op/s (${fixed(v)} ms), pure/vendor ${fixed(p / v)}`);
+	console.log(
+		`${name}: pure ${fixed(1000.0 / p)} op/s (${fixed(p)} ms), vendor ${fixed(1000.0 / v)} op/s (${fixed(v)} ms), pure/vendor ${fixed(p / v)}`,
+	);
 }
 
 function once(op: () => void): number {
@@ -73,32 +95,69 @@ const signature = rsaSignPkcs1(pure, "sha256", message);
 const sealed = rsaOaepEncrypt(pub, message);
 if (signature == null || sealed == null) throw new Error("pure setup failed");
 
-row("sign pkcs1 sha256", ROUNDS, () => msPerCall(() => {
-	const s = rsaSignPkcs1(pure, "sha256", message);
-	if (s != null) sink += s[0] as int32;
-}), () => msPerCall(() => {
-	sink += must(signSync(vendor, message, "sha256", "pkcs1v15"))[0] as int32;
-}));
-row("verify pkcs1 sha256", ROUNDS, () => msPerCall(() => {
-	if (rsaVerifyPkcs1(pub, "sha256", message, signature)) sink += 1;
-}), () => msPerCall(() => {
-	if (verifySync(vendorPublic, message, signature, "sha256", "pkcs1v15")) sink += 1;
-}));
-row("decrypt oaep sha256", ROUNDS, () => msPerCall(() => {
-	const opened = rsaOaepDecrypt(pure, sealed);
-	if (opened != null) sink += opened.length;
-}), () => msPerCall(() => {
-	sink += must(decryptSync(vendor, sealed)).length;
-}));
-row("encrypt oaep sha256", ROUNDS, () => msPerCall(() => {
-	const c = rsaOaepEncrypt(pub, message);
-	if (c != null) sink += c[0] as int32;
-}), () => msPerCall(() => {
-	sink += must(encryptSync(vendorPublic, message))[0] as int32;
-}));
-row("generate 2048", KEYGEN_RUNS, () => once(() => {
-	sink += rsaGenerate(2048).n.length;
-}), () => once(() => {
-	sink += must(RsaPrivateKey.generateSync(2048)).exportPemSync().ok ? 1 : 0;
-}));
+row(
+	"sign pkcs1 sha256",
+	ROUNDS,
+	() =>
+		msPerCall(() => {
+			const s = rsaSignPkcs1(pure, "sha256", message);
+			if (s != null) sink += s[0] as int32;
+		}),
+	() =>
+		msPerCall(() => {
+			sink += must(signSync(vendor, message, "sha256", "pkcs1v15"))[0] as int32;
+		}),
+);
+row(
+	"verify pkcs1 sha256",
+	ROUNDS,
+	() =>
+		msPerCall(() => {
+			if (rsaVerifyPkcs1(pub, "sha256", message, signature)) sink += 1;
+		}),
+	() =>
+		msPerCall(() => {
+			if (
+				verifySync(vendorPublic, message, signature, "sha256", "pkcs1v15")
+			) sink += 1;
+		}),
+);
+row(
+	"decrypt oaep sha256",
+	ROUNDS,
+	() =>
+		msPerCall(() => {
+			const opened = rsaOaepDecrypt(pure, sealed);
+			if (opened != null) sink += opened.length;
+		}),
+	() =>
+		msPerCall(() => {
+			sink += must(decryptSync(vendor, sealed)).length;
+		}),
+);
+row(
+	"encrypt oaep sha256",
+	ROUNDS,
+	() =>
+		msPerCall(() => {
+			const c = rsaOaepEncrypt(pub, message);
+			if (c != null) sink += c[0] as int32;
+		}),
+	() =>
+		msPerCall(() => {
+			sink += must(encryptSync(vendorPublic, message))[0] as int32;
+		}),
+);
+row(
+	"generate 2048",
+	KEYGEN_RUNS,
+	() =>
+		once(() => {
+			sink += rsaGenerate(2048).n.length;
+		}),
+	() =>
+		once(() => {
+			sink += must(RsaPrivateKey.generateSync(2048)).exportPemSync().ok ? 1 : 0;
+		}),
+);
 console.log(`sink ${sink}`);

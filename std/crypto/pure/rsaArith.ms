@@ -5,17 +5,50 @@
  */
 
 import {
-	Modulus, modulusFromUint, uintFromBytes, uintToBytes, uintToMinimalBytes, uintWiden, uintCompare, uintAdd,
-	uintSub, uintMul, uintMulAdd, uintIsOne, uintIsZero, uintBitLenPublic, uintTrailingZeroBitsPublic,
-	uintShiftRightPublic, uintDivRem, uintDivRemPublic, uintGcd, uintGcdModinvOdd, uintWipe, limbsFor,
-	feFromBytes, reduce, sub, mul, sq, pow, powPublic, isMinusOne,
+	Modulus,
+	modulusFromUint,
+	uintFromBytes,
+	uintToBytes,
+	uintToMinimalBytes,
+	uintWiden,
+	uintCompare,
+	uintAdd,
+	uintSub,
+	uintMul,
+	uintMulAdd,
+	uintIsOne,
+	uintIsZero,
+	uintBitLenPublic,
+	uintTrailingZeroBitsPublic,
+	uintShiftRightPublic,
+	uintDivRem,
+	uintDivRemPublic,
+	uintGcd,
+	uintGcdModinvOdd,
+	uintWipe,
+	limbsFor,
+	feFromBytes,
+	reduce,
+	sub,
+	mul,
+	sq,
+	pow,
+	powPublic,
+	isMinusOne,
 } from "./ff";
-import { RsaPublicData, RsaPrivateData, rsaModulusBytes, wipeBytes } from "./rsaKey";
+import {
+	RsaPublicData,
+	RsaPrivateData,
+	rsaModulusBytes,
+	wipeBytes,
+} from "./rsaKey";
 import { randomOctets } from "./random";
 
 function uintOf(bytes: Readonly<uint8[]>): uint32[] {
 	const value = uintFromBytes(bytes, limbsFor(bytes.length * 8 + 1));
-	if (value == null) throw new Error("rsa: an integer does not fit its own width");
+	if (value == null) throw new Error(
+		"rsa: an integer does not fit its own width",
+	);
 	return value;
 }
 
@@ -24,7 +57,11 @@ function modulusOf(bytes: Readonly<uint8[]>): Modulus | null {
 }
 
 // `a * b mod m == 1` for any non-zero `m`.
-function productIsOneMod(a: Readonly<uint32[]>, b: Readonly<uint32[]>, m: Readonly<uint32[]>): boolean {
+function productIsOneMod(
+	a: Readonly<uint32[]>,
+	b: Readonly<uint32[]>,
+	m: Readonly<uint32[]>,
+): boolean {
 	return uintIsOne(uintDivRem(uintMul(a, b), m).remainder);
 }
 
@@ -42,14 +79,23 @@ export function rsaKeyConsistent(key: RsaPrivateData): boolean {
 	const width = n.length;
 	if (p.length > width || q.length > width) return false;
 	const product = new Array<uint32>(width);
-	if (uintMulAdd(product, uintWiden(p, width), uintWiden(q, width)) != 0 || uintCompare(product, n) != 0) return false;
+	if (
+		uintMulAdd(product, uintWiden(p, width), uintWiden(q, width)) != 0 ||
+		uintCompare(product, n) != 0
+	) return false;
 	const e = uintOf(key.e);
-	if (!productIsOneMod(e, uintOf(key.dp), minusOne(p)) || !productIsOneMod(e, uintOf(key.dq), minusOne(q))) return false;
+	if (
+		!productIsOneMod(e, uintOf(key.dp), minusOne(p)) ||
+		!productIsOneMod(e, uintOf(key.dq), minusOne(q))
+	) return false;
 	return productIsOneMod(uintOf(key.qi), q, p);
 }
 
 // `input^e mod n` as modulus-size bytes; null when the input is not below n.
-export function rsaPublicOperation(key: RsaPublicData, input: Readonly<uint8[]>): uint8[] | null {
+export function rsaPublicOperation(
+	key: RsaPublicData,
+	input: Readonly<uint8[]>,
+): uint8[] | null {
 	const m = modulusOf(key.n);
 	if (m == null) return null;
 	const x = m.feFromBytes(input);
@@ -97,7 +143,9 @@ function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
 	const r = uintOf(randomOctets(28));
 	const blinded = uintMul(minusOne(p), r);
 	const exponent = uintOf(d);
-	if (uintAdd(blinded, exponent) != 0) throw new Error("rsa: a blinded exponent overflowed its width");
+	if (uintAdd(blinded, exponent) != 0) throw new Error(
+		"rsa: a blinded exponent overflowed its width",
+	);
 	const bytes = uintToMinimalBytes(blinded);
 	uintWipe(r);
 	uintWipe(blinded);
@@ -106,7 +154,10 @@ function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
 }
 
 // Blinded CRT checked against the public operation, as `mbedtls_rsa_private`; null when the input is not below n.
-export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]>): uint8[] | null {
+export function rsaPrivateOperation(
+	key: RsaPrivateData,
+	input: Readonly<uint8[]>,
+): uint8[] | null {
 	const n = modulusOf(key.n);
 	const mp = modulusOf(key.p);
 	const mq = modulusOf(key.q);
@@ -130,9 +181,21 @@ export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]
 	const result = uintWiden(m2, width);
 	const overflow = uintMulAdd(result, uintWiden(h, width), uintWiden(q, width));
 	const check = n.powPublic(result, key.e);
-	const consistent = overflow == 0 && check != null && uintCompare(check, t) == 0;
+	const consistent =
+		overflow == 0 && check != null && uintCompare(check, t) == 0;
 	const opened = n.mul(result, blinding.vf);
-	for (const scratch of [p, q, qi, t, m1, m2, h, result, blinding.vi, blinding.vf]) uintWipe(scratch);
+	for (const scratch of [
+		p,
+		q,
+		qi,
+		t,
+		m1,
+		m2,
+		h,
+		result,
+		blinding.vi,
+		blinding.vf,
+	]) uintWipe(scratch);
 	if (!consistent) return null;
 	const out = uintToBytes(opened, rsaModulusBytes(key.n));
 	uintWipe(opened);
@@ -162,7 +225,9 @@ const smallPrimes: Readonly<int32[]> = oddPrimesBelow1000();
 function checkSmallFactors(x: Readonly<uint32[]>): int32 {
 	if ((x[0] & 1) == 0) return -1;
 	for (const prime of smallPrimes) {
-		if (uintDivRemPublic(uintWiden(x, x.length), prime) == 0) return uintBitLenPublic(x) <= 10 && x[0] == (prime as uint32) ? 1 : -1;
+		if (
+			uintDivRemPublic(uintWiden(x, x.length), prime) == 0
+		) return uintBitLenPublic(x) <= 10 && x[0] == (prime as uint32) ? 1 : -1;
 	}
 	return 0;
 }
@@ -193,7 +258,9 @@ function millerRabin(x: Readonly<uint32[]>, rounds: int32): boolean {
 		let count = 0;
 		while (true) {
 			const drawn = uintFromBytes(randomOctets(size), m.v.length);
-			if (drawn == null) throw new Error("rsa: a Miller-Rabin base does not fit its modulus");
+			if (drawn == null) throw new Error(
+				"rsa: a Miller-Rabin base does not fit its modulus",
+			);
 			a = drawn;
 			if (uintBitLenPublic(a) > k) keepLowBits(a, k - 1);
 			if (count > 30) return false;
@@ -232,7 +299,11 @@ function generatePrime(bits: int32): uint32[] {
 	const size = ((bits + 31) >> 5) * 4;
 	while (true) {
 		const bytes = randomOctets(size);
-		const top = ((bytes[0] as uint32) << 24) | ((bytes[1] as uint32) << 16) | ((bytes[2] as uint32) << 8) | (bytes[3] as uint32);
+		const top =
+			((bytes[0] as uint32) << 24) |
+			((bytes[1] as uint32) << 16) |
+			((bytes[2] as uint32) << 8) |
+			(bytes[3] as uint32);
 		if (top < 0xb504f334) continue;
 		const x = uintOf(bytes);
 		if (size * 8 > bits) uintShiftRightPublic(x, size * 8 - bits);
@@ -244,7 +315,10 @@ function generatePrime(bits: int32): uint32[] {
 }
 
 // `a^-1 mod n` for an even n with 1 < a < n and a odd, as `mbedtls_mpi_inv_mod_even_in_range`; null when there is none.
-function inverseModEven(a: Readonly<uint32[]>, n: Readonly<uint32[]>): uint32[] | null {
+function inverseModEven(
+	a: Readonly<uint32[]>,
+	n: Readonly<uint32[]>,
+): uint32[] | null {
 	const found = uintGcdModinvOdd(uintDivRem(n, a).remainder, a);
 	if (!uintIsOne(found.gcd)) return null;
 	const t = uintMul(found.inverse, n);
@@ -257,13 +331,20 @@ function inverseModEven(a: Readonly<uint32[]>, n: Readonly<uint32[]>): uint32[] 
 }
 
 // `a^-1 mod n` for an odd n, as `mbedtls_mpi_inv_mod_odd`; null when there is none.
-function inverseModOdd(a: Readonly<uint32[]>, n: Readonly<uint32[]>): uint32[] | null {
+function inverseModOdd(
+	a: Readonly<uint32[]>,
+	n: Readonly<uint32[]>,
+): uint32[] | null {
 	const found = uintGcdModinvOdd(uintDivRem(a, n).remainder, n);
 	return uintIsOne(found.gcd) ? found.inverse : null;
 }
 
 // `e^-1 mod lcm(p - 1, q - 1)`, as `mbedtls_rsa_deduce_private_exponent`.
-function privateExponent(p: Readonly<uint32[]>, q: Readonly<uint32[]>, e: Readonly<uint32[]>): uint32[] | null {
+function privateExponent(
+	p: Readonly<uint32[]>,
+	q: Readonly<uint32[]>,
+	e: Readonly<uint32[]>,
+): uint32[] | null {
 	const k = minusOne(p);
 	const l = minusOne(q);
 	const g = uintGcd(k, l);
@@ -276,7 +357,9 @@ function privateExponent(p: Readonly<uint32[]>, q: Readonly<uint32[]>, e: Readon
 
 /** A key with e = 65537, as `mbedtls_rsa_gen_key`: |p - q| > 2^(bits/2 - 100), p > q, d > 2^(bits/2). */
 export function rsaGenerateKey(bits: int32): RsaPrivateData {
-	if (bits < 1024 || bits % 2 != 0) throw new Error(`rsaGenerateKey: ${bits} bits is not an even size of at least 1024`);
+	if (bits < 1024 || bits % 2 != 0) throw new Error(
+		`rsaGenerateKey: ${bits} bits is not an even size of at least 1024`,
+	);
 	const eBytes: uint8[] = [1, 0, 1];
 	const e = uintOf(eBytes);
 	while (true) {
@@ -299,12 +382,20 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		}
 		const n = uintMul(p, q);
 		const qi = inverseModOdd(q, p);
-		if (qi == null || uintBitLenPublic(n) != bits) throw new Error("rsaGenerate: the generated primes do not form a key");
+		if (qi == null || uintBitLenPublic(n) != bits) throw new Error(
+			"rsaGenerate: the generated primes do not form a key",
+		);
 		const dp = uintDivRem(d, minusOne(p)).remainder;
 		const dq = uintDivRem(d, minusOne(q)).remainder;
 		const key: RsaPrivateData = {
-			n: uintToMinimalBytes(n), e: eBytes, d: uintToMinimalBytes(d), p: uintToMinimalBytes(p),
-			q: uintToMinimalBytes(q), dp: uintToMinimalBytes(dp), dq: uintToMinimalBytes(dq), qi: uintToMinimalBytes(qi),
+			n: uintToMinimalBytes(n),
+			e: eBytes,
+			d: uintToMinimalBytes(d),
+			p: uintToMinimalBytes(p),
+			q: uintToMinimalBytes(q),
+			dp: uintToMinimalBytes(dp),
+			dq: uintToMinimalBytes(dq),
+			qi: uintToMinimalBytes(qi),
 		};
 		for (const scratch of [p, q, d, dp, dq, qi]) uintWipe(scratch);
 		return key;

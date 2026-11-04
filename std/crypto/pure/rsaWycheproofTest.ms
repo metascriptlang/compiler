@@ -1,7 +1,22 @@
 import { readFile } from "std/fs";
 import { decodeHex } from "../../core/encoding";
-import { JsonKind, JsonValue, getDynamicField, asString, asInt32, at, length, parseJson } from "std/core/json";
-import { rsaPublicFromSpki, rsaPrivateFromPkcs8, rsaVerifyPkcs1, rsaVerifyPss, rsaOaepDecrypt } from "./rsa";
+import {
+	JsonKind,
+	JsonValue,
+	getDynamicField,
+	asString,
+	asInt32,
+	at,
+	length,
+	parseJson,
+} from "std/core/json";
+import {
+	rsaPublicFromSpki,
+	rsaPrivateFromPkcs8,
+	rsaVerifyPkcs1,
+	rsaVerifyPss,
+	rsaOaepDecrypt,
+} from "./rsa";
 
 const vectorDir = "std/crypto/test/vectors/";
 
@@ -16,7 +31,12 @@ class Tally {
 	failures: string[] = [];
 }
 
-function record(tally: Tally, file: string, test: JsonValue, accepted: boolean): void {
+function record(
+	tally: Tally,
+	file: string,
+	test: JsonValue,
+	accepted: boolean,
+): void {
 	const tcId = test.getDynamicField("tcId").asInt32();
 	const result = test.getDynamicField("result").asString();
 	tally.total++;
@@ -54,7 +74,9 @@ function runSignatures(tally: Tally, file: string, pss: boolean): int32 {
 	const groups = root.getDynamicField("testGroups");
 	for (let g = 0; g < groups.length(); g++) {
 		const group = groups.at(g);
-		const key = rsaPublicFromSpki(group.getDynamicField("publicKeyDer").asString().decodeHex());
+		const key = rsaPublicFromSpki(
+			group.getDynamicField("publicKeyDer").asString().decodeHex(),
+		);
 		const hash = hashName(group.getDynamicField("sha").asString());
 		const tests = group.getDynamicField("tests");
 		for (let t = 0; t < tests.length(); t++) {
@@ -62,9 +84,15 @@ function runSignatures(tally: Tally, file: string, pss: boolean): int32 {
 			const message = test.getDynamicField("msg").asString().decodeHex();
 			const signature = test.getDynamicField("sig").asString().decodeHex();
 			let accepted = false;
-			if (key != null) accepted = pss ? rsaVerifyPss(key, hash, message, signature) : rsaVerifyPkcs1(key, hash, message, signature);
+			if (key != null) accepted = pss
+				? rsaVerifyPss(key, hash, message, signature)
+				: rsaVerifyPkcs1(key, hash, message, signature);
 			// Verification takes any salt length, as the native backend's PSA_ALG_RSA_PSS_ANY_SALT does.
-			if (pss && accepted && test.getDynamicField("comment").asString().startsWith("s_len changed")) {
+			if (
+				pss &&
+				accepted &&
+				test.getDynamicField("comment").asString().startsWith("s_len changed")
+			) {
 				tally.total++;
 				tally.otherSaltAccepted++;
 				continue;
@@ -87,14 +115,22 @@ function report(name: string, tally: Tally, expected: int32): boolean {
 }
 
 test "every Wycheproof RSA PKCS#1 v1.5 2048-bit signature case" {
-	for (const file of ["rsa_signature_2048_sha256_test.json", "rsa_signature_2048_sha384_test.json", "rsa_signature_2048_sha512_test.json"]) {
+	for (const file of [
+		"rsa_signature_2048_sha256_test.json",
+		"rsa_signature_2048_sha384_test.json",
+		"rsa_signature_2048_sha512_test.json",
+	]) {
 		const tally = new Tally();
 		assert report(file, tally, runSignatures(tally, file, false));
 	}
 }
 
 test "every Wycheproof RSA-PSS 2048-bit signature case" {
-	for (const file of ["rsa_pss_2048_sha256_mgf1_32_test.json", "rsa_pss_2048_sha384_mgf1_48_test.json", "rsa_pss_2048_sha256_mgf1_0_test.json"]) {
+	for (const file of [
+		"rsa_pss_2048_sha256_mgf1_32_test.json",
+		"rsa_pss_2048_sha384_mgf1_48_test.json",
+		"rsa_pss_2048_sha256_mgf1_0_test.json",
+	]) {
 		const tally = new Tally();
 		assert report(file, tally, runSignatures(tally, file, true));
 	}
@@ -107,7 +143,9 @@ test "every Wycheproof RSA-OAEP SHA-256 decryption case without a label" {
 	const tally = new Tally();
 	for (let g = 0; g < groups.length(); g++) {
 		const group = groups.at(g);
-		const key = rsaPrivateFromPkcs8(group.getDynamicField("privateKeyPkcs8").asString().decodeHex());
+		const key = rsaPrivateFromPkcs8(
+			group.getDynamicField("privateKeyPkcs8").asString().decodeHex(),
+		);
 		assert key != null;
 		const tests = group.getDynamicField("tests");
 		for (let t = 0; t < tests.length(); t++) {
@@ -116,10 +154,25 @@ test "every Wycheproof RSA-OAEP SHA-256 decryption case without a label" {
 				tally.skipped++;
 				continue;
 			}
-			const opened = rsaOaepDecrypt(key, test.getDynamicField("ct").asString().decodeHex());
-			const matches = opened != null && opened.encodeHex() == test.getDynamicField("msg").asString();
-			record(tally, file, test, opened != null && (matches || test.getDynamicField("result").asString() != "valid"));
+			const opened = rsaOaepDecrypt(
+				key,
+				test.getDynamicField("ct").asString().decodeHex(),
+			);
+			const matches =
+				opened != null &&
+				opened.encodeHex() == test.getDynamicField("msg").asString();
+			record(
+				tally,
+				file,
+				test,
+				opened != null &&
+					(matches || test.getDynamicField("result").asString() != "valid"),
+			);
 		}
 	}
-	assert report(`${file} (label cases skipped: rsaOaepDecrypt takes no label)`, tally, root.getDynamicField("numberOfTests").asInt32());
+	assert report(
+		`${file} (label cases skipped: rsaOaepDecrypt takes no label)`,
+		tally,
+		root.getDynamicField("numberOfTests").asInt32(),
+	);
 }

@@ -4,21 +4,37 @@
  */
 
 import { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
-import { bigFromBytes, bigToBytes, bitLength, mod, modPow, modInverse, gcd, randomBelow, randomOctets } from "./bigint";
+import {
+	bigFromBytes,
+	bigToBytes,
+	bitLength,
+	mod,
+	modPow,
+	modInverse,
+	gcd,
+	randomBelow,
+	randomOctets,
+} from "./bigint";
 
 function minimal(value: bigint): uint8[] {
 	const size = (bitLength(value) + 7) >> 3;
 	return bigToBytes(value, size > 0 ? size : 1);
 }
 
-export function rsaPublicOperation(key: RsaPublicData, input: Readonly<uint8[]>): uint8[] | null {
+export function rsaPublicOperation(
+	key: RsaPublicData,
+	input: Readonly<uint8[]>,
+): uint8[] | null {
 	const n = bigFromBytes(key.n);
 	const x = bigFromBytes(input);
 	if (x >= n) return null;
 	return bigToBytes(modPow(x, bigFromBytes(key.e), n), rsaModulusBytes(key.n));
 }
 
-export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]>): uint8[] | null {
+export function rsaPrivateOperation(
+	key: RsaPrivateData,
+	input: Readonly<uint8[]>,
+): uint8[] | null {
 	const x = bigFromBytes(input);
 	if (x >= bigFromBytes(key.n)) return null;
 	const result = privateOperation(key, x);
@@ -32,7 +48,10 @@ export function rsaKeyConsistent(key: RsaPrivateData): boolean {
 	const p = bigFromBytes(key.p);
 	const q = bigFromBytes(key.q);
 	if (p * q != n) return false;
-	if ((e * bigFromBytes(key.dp)) % (p - 1n) != 1n || (e * bigFromBytes(key.dq)) % (q - 1n) != 1n) return false;
+	if (
+		(e * bigFromBytes(key.dp)) % (p - 1n) != 1n ||
+		(e * bigFromBytes(key.dq)) % (q - 1n) != 1n
+	) return false;
 	return (bigFromBytes(key.qi) * q) % p == 1n;
 }
 
@@ -121,8 +140,14 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		const lambda = ((big - 1n) * (little - 1n)) / gcd(big - 1n, little - 1n);
 		const d = modInverse(e, lambda);
 		return {
-			n: minimal(n), e: minimal(e), d: minimal(d), p: minimal(big), q: minimal(little), dp: minimal(d % (big - 1n)),
-			dq: minimal(d % (little - 1n)), qi: minimal(modInverse(little, big)),
+			n: minimal(n),
+			e: minimal(e),
+			d: minimal(d),
+			p: minimal(big),
+			q: minimal(little),
+			dp: minimal(d % (big - 1n)),
+			dq: minimal(d % (little - 1n)),
+			qi: minimal(modInverse(little, big)),
 		};
 	}
 }

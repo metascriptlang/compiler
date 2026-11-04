@@ -103,14 +103,20 @@ function decodeBytes(limbs: uint32[], bytes: Readonly<uint8[]>): uint32 {
 }
 
 /** Big-endian bytes into `limbs` limbs, or null when the value does not fit. */
-export function uintFromBytes(bytes: Readonly<uint8[]>, limbs: int32): uint32[] | null {
+export function uintFromBytes(
+	bytes: Readonly<uint8[]>,
+	limbs: int32,
+): uint32[] | null {
 	const out = new Array<uint32>(limbs);
 	if (decodeBytes(out, bytes) != 0) return null;
 	return out;
 }
 
 /** Big-endian bytes of exactly `size`, or null when the value does not fit. */
-export function uintToBytes(x: Readonly<uint32[]>, size: int32): uint8[] | null {
+export function uintToBytes(
+	x: Readonly<uint32[]>,
+	size: int32,
+): uint8[] | null {
 	const bytes = new Array<uint8>(size);
 	if (size == 0) return orLimbs(x, 0) == 0 ? bytes : null;
 	let shift: int32 = 0;
@@ -119,7 +125,8 @@ export function uintToBytes(x: Readonly<uint32[]>, size: int32): uint8[] | null 
 		let remaining = tBits;
 		let limb = x[i];
 		while (remaining >= 8) {
-			bytes[outI] = ((bytes[outI] as uint32) | ((limb << (shift as uint32)) & 0xff)) as uint8;
+			bytes[outI] = ((bytes[outI] as uint32) |
+				((limb << (shift as uint32)) & 0xff)) as uint8;
 			const consumed = 8 - shift;
 			limb = limb >> (consumed as uint32);
 			remaining -= consumed;
@@ -140,13 +147,17 @@ export function uintToBytes(x: Readonly<uint32[]>, size: int32): uint8[] | null 
 export function uintToMinimalBytes(x: Readonly<uint32[]>): uint8[] {
 	const size = (uintBitLenPublic(x) + 7) >> 3;
 	const bytes = uintToBytes(x, size > 0 ? size : 1);
-	if (bytes == null) throw new Error("uintToMinimalBytes: the bit length does not fit its own size");
+	if (bytes == null) throw new Error(
+		"uintToMinimalBytes: the bit length does not fit its own size",
+	);
 	return bytes;
 }
 
 /** A copy zero-extended (or trimmed of zero limbs) to `limbs` limbs. */
 export function uintWiden(x: Readonly<uint32[]>, limbs: int32): uint32[] {
-	if (orLimbs(x, limbs) != 0) throw new Error("uintWiden: the value does not fit the width");
+	if (orLimbs(x, limbs) != 0) throw new Error(
+		"uintWiden: the value does not fit the width",
+	);
 	const out = new Array<uint32>(limbs);
 	for (let i = 0; i < limbs && i < x.length; i++) out[i] = x[i];
 	return out;
@@ -171,7 +182,10 @@ export function uintIsOne(x: Readonly<uint32[]>): boolean {
 }
 
 /** -1, 0 or 1; both operands have the same length. */
-export function uintCompare(x: Readonly<uint32[]>, y: Readonly<uint32[]>): int32 {
+export function uintCompare(
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): int32 {
 	return (limbsCmpLt(y, x) as int32) - (limbsCmpLt(x, y) as int32);
 }
 
@@ -187,7 +201,11 @@ function condSwap(x: uint32[], y: uint32[], on: uint32): void {
 	}
 }
 
-function conditionalAdd(x: uint32[], on: uint32, y: Readonly<uint32[]>): uint32 {
+function conditionalAdd(
+	x: uint32[],
+	on: uint32,
+	y: Readonly<uint32[]>,
+): uint32 {
 	let carry: uint32 = 0;
 	for (let i = 0; i < x.length; i++) {
 		const res = x[i] + (i < y.length ? y[i] : 0) + carry;
@@ -197,7 +215,11 @@ function conditionalAdd(x: uint32[], on: uint32, y: Readonly<uint32[]>): uint32 
 	return carry;
 }
 
-function conditionalSub(x: uint32[], on: uint32, y: Readonly<uint32[]>): uint32 {
+function conditionalSub(
+	x: uint32[],
+	on: uint32,
+	y: Readonly<uint32[]>,
+): uint32 {
 	let borrow: uint32 = 0;
 	for (let i = 0; i < x.length; i++) {
 		const res = x[i] - (i < y.length ? y[i] : 0) - borrow;
@@ -217,7 +239,12 @@ export function uintSub(x: uint32[], y: Readonly<uint32[]>): uint32 {
 	return conditionalSub(x, 1, y);
 }
 
-function mulAddLimb(z: uint32[], at: int32, x: Readonly<uint32[]>, y: uint32): uint32 {
+function mulAddLimb(
+	z: uint32[],
+	at: int32,
+	x: Readonly<uint32[]>,
+	y: uint32,
+): uint32 {
 	when (c) {
 		const y64 = y as uint64;
 		let carry: uint64 = 0;
@@ -245,7 +272,11 @@ function mulAddLimb(z: uint32[], at: int32, x: Readonly<uint32[]>, y: uint32): u
 }
 
 /** `acc += x * y` with all three the same length; returns 1 if any part of the product was discarded. */
-export function uintMulAdd(acc: uint32[], x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32 {
+export function uintMulAdd(
+	acc: uint32[],
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32 {
 	const n = acc.length;
 	const wide = new Array<uint32>(2 * n);
 	for (let i = 0; i < n; i++) wide[i] = acc[i];
@@ -255,10 +286,15 @@ export function uintMulAdd(acc: uint32[], x: Readonly<uint32[]>, y: Readonly<uin
 }
 
 /** The full product, `x.length + y.length` limbs wide. */
-export function uintMul(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
+export function uintMul(
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] {
 	const width = x.length + y.length;
 	const acc = new Array<uint32>(width);
-	if (uintMulAdd(acc, uintWiden(x, width), uintWiden(y, width)) != 0) throw new Error("uintMul: the product overflowed its own width");
+	if (
+		uintMulAdd(acc, uintWiden(x, width), uintWiden(y, width)) != 0
+	) throw new Error("uintMul: the product overflowed its own width");
 	return acc;
 }
 
@@ -294,7 +330,10 @@ export function uintShiftRightPublic(x: uint32[], shift: int32): void {
 	const active = x.length - limbShift;
 	for (let i = 0; i < active; i++) {
 		const lo = x[i + limbShift] >> bitShift;
-		const hi = i + limbShift + 1 < x.length && bitShift != 0 ? x[i + limbShift + 1] << (tShift - bitShift) : 0;
+		const hi =
+			i + limbShift + 1 < x.length && bitShift != 0
+				? x[i + limbShift + 1] << (tShift - bitShift)
+				: 0;
 		x[i] = (lo | hi) & tMask;
 	}
 	for (let i = active; i < x.length; i++) x[i] = 0;
@@ -307,7 +346,10 @@ function shiftLeft(x: uint32[], shift: int32): void {
 	while (i != 0) {
 		i -= 1;
 		const hi = i >= limbShift ? x[i - limbShift] << bitShift : 0;
-		const lo = i >= limbShift + 1 && bitShift != 0 ? x[i - limbShift - 1] >> (tShift - bitShift) : 0;
+		const lo =
+			i >= limbShift + 1 && bitShift != 0
+				? x[i - limbShift - 1] >> (tShift - bitShift)
+				: 0;
 		x[i] = (hi | lo) & tMask;
 	}
 }
@@ -326,7 +368,9 @@ function shiftRightByOneWithCarry(x: uint32[], carry: uint32): uint32 {
 
 /** Divides in place by a divisor below 2^21 and returns the remainder. */
 export function uintDivRemPublic(x: uint32[], divisor: int32): int32 {
-	if (divisor <= 0 || divisor >= 0x200000) throw new Error(`uintDivRemPublic: divisor ${divisor} is outside 1 .. 2^21 - 1`);
+	if (divisor <= 0 || divisor >= 0x200000) throw new Error(
+		`uintDivRemPublic: divisor ${divisor} is outside 1 .. 2^21 - 1`,
+	);
 	let rem = 0;
 	let i = x.length;
 	while (i != 0) {
@@ -367,7 +411,11 @@ function shiftIn(m: Readonly<uint32[]>, x: uint32[], y: uint32): uint32 {
 	return quotient;
 }
 
-function reduceInto(m: Readonly<uint32[]>, x: Readonly<uint32[]>, quotient: uint32[] | null): uint32[] {
+function reduceInto(
+	m: Readonly<uint32[]>,
+	x: Readonly<uint32[]>,
+	quotient: uint32[] | null,
+): uint32[] {
 	const n = m.length;
 	const wide = x.length >= n ? x : uintWiden(x, n);
 	const out = new Array<uint32>(n);
@@ -391,7 +439,10 @@ function reduceInto(m: Readonly<uint32[]>, x: Readonly<uint32[]>, quotient: uint
 }
 
 /** Quotient and remainder by any non-zero divisor (odd or even), with the remainder as wide as the divisor's active limbs. */
-export function uintDivRem(x: Readonly<uint32[]>, divisor: Readonly<uint32[]>): DivRem {
+export function uintDivRem(
+	x: Readonly<uint32[]>,
+	divisor: Readonly<uint32[]>,
+): DivRem {
 	if (uintIsZero(divisor)) throw new Error("uintDivRem: division by zero");
 	const m = normalize(divisor);
 	const quotient = new Array<uint32>(Math.max(x.length, m.length) as int32);
@@ -409,7 +460,10 @@ function div2ModOdd(x: uint32[], n: Readonly<uint32[]>): void {
  * The GCD of `a` and an odd `n`, and the inverse of `a` mod `n` (meaningful when the GCD is 1), with
  * `a <= n`, in constant time.
  */
-export function uintGcdModinvOdd(a: Readonly<uint32[]>, n: Readonly<uint32[]>): GcdInverse {
+export function uintGcdModinvOdd(
+	a: Readonly<uint32[]>,
+	n: Readonly<uint32[]>,
+): GcdInverse {
 	const limbs = n.length;
 	if (!uintIsOdd(n)) throw new Error("uintGcdModinvOdd: the modulus is even");
 	const aLimbs = Math.min(a.length, limbs) as int32;
@@ -457,7 +511,10 @@ export function uintGcdModinvOdd(a: Readonly<uint32[]>, n: Readonly<uint32[]>): 
  * The greatest common divisor, with gcd(x, 0) = x; null when both are zero. As `mbedtls_mpi_gcd`: the common
  * power of two is set aside (its count is not constant-time), then the constant-time odd GCD runs.
  */
-export function uintGcd(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] | null {
+export function uintGcd(
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] | null {
 	if (uintIsZero(x) && uintIsZero(y)) return null;
 	const len = Math.max(x.length, y.length) as int32;
 	if (uintIsZero(x)) return uintWiden(y, len);
@@ -526,7 +583,10 @@ export function one(this m: Modulus): uint32[] {
 }
 
 /** A field element from big-endian bytes, or null when the value is not below the modulus. */
-export function feFromBytes(this m: Modulus, bytes: Readonly<uint8[]>): uint32[] | null {
+export function feFromBytes(
+	this m: Modulus,
+	bytes: Readonly<uint8[]>,
+): uint32[] | null {
 	const fe = uintFromBytes(bytes, m.v.length);
 	if (fe == null || limbsCmpLt(fe, m.v) == 0) return null;
 	return fe;
@@ -548,7 +608,11 @@ export function reduce(this m: Modulus, x: Readonly<uint32[]>): uint32[] {
 	return reduceInto(m.v, x, null);
 }
 
-export function add(this m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
+export function add(
+	this m: Modulus,
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] {
 	const out = uintWiden(x, x.length);
 	const overflow = uintAdd(out, y);
 	const underflow = limbsCmpLt(out, m.v);
@@ -556,14 +620,23 @@ export function add(this m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]
 	return out;
 }
 
-export function sub(this m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
+export function sub(
+	this m: Modulus,
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] {
 	const out = uintWiden(x, x.length);
 	const underflow = uintSub(out, y);
 	conditionalAdd(out, underflow, m.v);
 	return out;
 }
 
-function montgomeryLoop(m: Modulus, d: uint32[], a: Readonly<uint32[]>, b: Readonly<uint32[]>): uint32 {
+function montgomeryLoop(
+	m: Modulus,
+	d: uint32[],
+	a: Readonly<uint32[]>,
+	b: Readonly<uint32[]>,
+): uint32 {
 	when (c) {
 		const n = m.v.length;
 		const mv = m.v;
@@ -620,7 +693,11 @@ function montgomeryLoop(m: Modulus, d: uint32[], a: Readonly<uint32[]>, b: Reado
 	}
 }
 
-function montgomeryMul(m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
+function montgomeryMul(
+	m: Modulus,
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] {
 	const d = m.zero();
 	const overflow = montgomeryLoop(m, d, x, y);
 	const underflow = limbsCmpLt(d, m.v);
@@ -636,8 +713,15 @@ function fromMontgomery(m: Modulus, x: Readonly<uint32[]>): uint32[] {
 	return montgomeryMul(m, x, m.one());
 }
 
-export function mul(this m: Modulus, x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
-	return fromMontgomery(m, montgomeryMul(m, toMontgomery(m, x), toMontgomery(m, y)));
+export function mul(
+	this m: Modulus,
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+): uint32[] {
+	return fromMontgomery(
+		m,
+		montgomeryMul(m, toMontgomery(m, x), toMontgomery(m, y)),
+	);
 }
 
 export function sq(this m: Modulus, x: Readonly<uint32[]>): uint32[] {
@@ -645,7 +729,12 @@ export function sq(this m: Modulus, x: Readonly<uint32[]>): uint32[] {
 	return fromMontgomery(m, montgomeryMul(m, xm, xm));
 }
 
-function powInternal(m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>, isPublic: boolean): uint32[] | null {
+function powInternal(
+	m: Modulus,
+	x: Readonly<uint32[]>,
+	e: Readonly<uint8[]>,
+	isPublic: boolean,
+): uint32[] | null {
 	let acc = 0;
 	for (let i = 0; i < e.length; i++) acc |= e[i] as int32;
 	if (acc == 0) return null;
@@ -675,7 +764,11 @@ function powInternal(m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>, is
 					if (k == 0) continue;
 					t0 = pc[(k as int32) - 1];
 				} else {
-					for (let i = 0; i < 15; i++) cmov(t0, 1 ^ isNonZero(k ^ ((i + 1) as uint32)), pc[i]);
+					for (let i = 0; i < 15; i++) cmov(
+						t0,
+						1 ^ isNonZero(k ^ ((i + 1) as uint32)),
+						pc[i],
+					);
 				}
 				const t1 = montgomeryMul(m, out, t0);
 				if (isPublic) {
@@ -694,11 +787,19 @@ function powInternal(m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>, is
 }
 
 /** `x^e` mod m with a secret big-endian exponent, in constant time; null for a zero exponent. */
-export function pow(this m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>): uint32[] | null {
+export function pow(
+	this m: Modulus,
+	x: Readonly<uint32[]>,
+	e: Readonly<uint8[]>,
+): uint32[] | null {
 	return powInternal(m, x, e, false);
 }
 
 /** `x^e` mod m with a public big-endian exponent; still constant-time in `x`. */
-export function powPublic(this m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>): uint32[] | null {
+export function powPublic(
+	this m: Modulus,
+	x: Readonly<uint32[]>,
+	e: Readonly<uint8[]>,
+): uint32[] | null {
 	return powInternal(m, x, e, true);
 }
