@@ -2,8 +2,8 @@ import { argon2HashRawSync, argon2HashSync, argon2VerifySync } from "std/crypto/
 import { rawString } from "std/core/buffer/bytes";
 import { Argon2Mode, argon2Encode, argon2Raw, argon2VerifyEncoded } from "./argon2";
 
-@include("runtime/crypto/kdf/argon2Oracle.h");
-@compile("runtime/crypto/kdf/argon2Oracle.c");
+@include("src/test/crypto/argon2Oracle.h");
+@compile("src/test/crypto/argon2Oracle.c");
 extern function vendorRaw(password: string, salt: string, secret: string, ad: string, mode: int32, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string from "msArgon2OracleRaw";
 extern function vendorEncoded(password: string, salt: string, mode: int32, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string from "msArgon2OracleEncoded";
 extern function vendorVerify(encoded: string, password: string, mode: int32): int32 from "msArgon2OracleVerify";
