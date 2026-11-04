@@ -15,7 +15,7 @@ import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
 import { hashOf, newHash, updateHash, finishHash } from "./hash";
 import { wipeBytes } from "./secret";
-import { baseTableFe } from "./ed25519BaseTable";
+import { baseTableFe, baseOddTableFe } from "./ed25519BaseTable";
 import {
 	Fe,
 	feZero,
@@ -121,57 +121,110 @@ function neg(p: Readonly<Point>): Point {
 	return { x: feNeg(p.x), y: p.y, z: p.z, t: feNeg(p.t) };
 }
 
+/** (X : Y : Z) without T, all a doubling reads. */
+struct Projective {
+	x: Fe;
+	y: Fe;
+	z: Fe;
+}
+
 /**
- * 2p; dbl never reads T, so `withT` false skips its product when only another
- * dbl reads the result.
+ * ref10's completed point, x = X/Z and y = Y/T: what a doubling or an addition
+ * yields before its last products. Its fields may be loose, so only feMul reads
+ * them.
  */
-function dbl(p: Readonly<Point>, withT: boolean = true): Point {
-	const t0 = feSqr(feAddLoose(p.x, p.y));
-	let x = feSqr(p.x);
-	let z = feSqr(p.y);
-	const y = feAdd(z, x);
-	z = feSub(z, x);
-	x = feSubLoose(t0, y);
-	const t = feSubLoose(feAdd(feSqr(p.z), feSqr(p.z)), z);
+struct Completed {
+	x: Fe;
+	y: Fe;
+	z: Fe;
+	t: Fe;
+}
+
+/** ref10's cached form of a point: Y + X, Y - X, Z and 2dT. */
+struct Cached {
+	yPlusX: Fe;
+	yMinusX: Fe;
+	z: Fe;
+	t2d: Fe;
+}
+
+function toProjective(c: Readonly<Completed>): Projective {
+	return { x: feMul(c.x, c.t), y: feMul(c.y, c.z), z: feMul(c.z, c.t) };
+}
+
+function toExtended(c: Readonly<Completed>): Point {
 	return {
-		x: feMul(x, t),
-		y: feMul(y, z),
-		z: feMul(z, t),
-		t: withT ? feMul(x, y) : p.t,
+		x: feMul(c.x, c.t),
+		y: feMul(c.y, c.z),
+		z: feMul(c.z, c.t),
+		t: feMul(c.x, c.y),
 	};
+}
+
+function toCached(p: Readonly<Point>): Cached {
+	return {
+		yPlusX: feAdd(p.y, p.x),
+		yMinusX: feSub(p.y, p.x),
+		z: p.z,
+		t2d: feMul(p.t, edwardsD2),
+	};
+}
+
+/** 2p, ref10's ge_p2_dbl. */
+function doubled(p: Readonly<Projective>): Completed {
+	const xx = feSqr(p.x);
+	const yy = feSqr(p.y);
+	const zz = feSqr(p.z);
+	const sum = feAdd(yy, xx);
+	const difference = feSub(yy, xx);
+	return {
+		x: feSubLoose(feSqr(feAddLoose(p.x, p.y)), sum),
+		y: sum,
+		z: difference,
+		t: feSubLoose(feAdd(zz, zz), difference),
+	};
+}
+
+function dbl(p: Readonly<Point>): Point {
+	return toExtended(doubled({ x: p.x, y: p.y, z: p.z }));
 }
 
 /** 16p, Zig's shift(p, 4). */
 function shift4(p: Readonly<Point>): Point {
-	return dbl(dbl(dbl(dbl(p, false), false), false));
+	let q = toProjective(doubled({ x: p.x, y: p.y, z: p.z }));
+	q = toProjective(doubled(q));
+	q = toProjective(doubled(q));
+	return toExtended(doubled(q));
+}
+
+/** p + q, ref10's ge_add. */
+function addCached(p: Readonly<Point>, q: Readonly<Cached>): Completed {
+	const a = feMul(feSubLoose(p.y, p.x), q.yMinusX);
+	const b = feMul(feAddLoose(p.y, p.x), q.yPlusX);
+	const c = feMul(p.t, q.t2d);
+	const z = feMul(p.z, q.z);
+	const d = feAdd(z, z);
+	return {
+		x: feSubLoose(b, a),
+		y: feAddLoose(b, a),
+		z: feAddLoose(d, c),
+		t: feSubLoose(d, c),
+	};
+}
+
+function negCached(q: Readonly<Cached>): Cached {
+	return { yPlusX: q.yMinusX, yMinusX: q.yPlusX, z: q.z, t2d: feNeg(q.t2d) };
 }
 
 function addPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
-	const a = feMul(feSubLoose(p.y, p.x), feSubLoose(q.y, q.x));
-	const b = feMul(feAddLoose(p.x, p.y), feAddLoose(q.x, q.y));
-	const c = feMul(feMul(p.t, q.t), edwardsD2);
-	let d = feMul(p.z, q.z);
-	d = feAdd(d, d);
-	const x = feSubLoose(b, a);
-	const y = feAddLoose(b, a);
-	const z = feAddLoose(d, c);
-	const t = feSubLoose(d, c);
-	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
+	return toExtended(addCached(p, toCached(q)));
 }
 
 function subPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
 	return addPoints(p, neg(q));
 }
 
-function precompute(p: Point, count: int32): Point[] {
-	const pc: Point[] = [identity(), p];
-	for (let i = 2; i <= count; i++) {
-		pc.push(i % 2 == 0 ? dbl(pc[i / 2]) : addPoints(pc[i - 1], p));
-	}
-	return pc;
-}
-
-/** Entry 8i + j - 1 of ./ed25519BaseTable, [j * 256^i]B. */
+/** Entry 8i + j - 1 of baseTableFe, [j * 256^i]B. */
 function baseNiels(entry: int32): Niels {
 	return {
 		yPlusX: baseTableFe[3 * entry],
@@ -180,19 +233,31 @@ function baseNiels(entry: int32): Niels {
 	};
 }
 
-/**
- * p + q for an affine q: addPoints without the products Z1 * Z2 and T2 * 2d.
- */
-function addNiels(p: Readonly<Point>, q: Readonly<Niels>): Point {
+/** Entry k of baseOddTableFe, [2k + 1]B. */
+function baseOddNiels(entry: int32): Niels {
+	return {
+		yPlusX: baseOddTableFe[3 * entry],
+		yMinusX: baseOddTableFe[3 * entry + 1],
+		xy2d: baseOddTableFe[3 * entry + 2],
+	};
+}
+
+/** p + q for an affine q, ref10's ge_madd: no Z1 * Z2 and no T2 * 2d. */
+function addNielsCompleted(p: Readonly<Point>, q: Readonly<Niels>): Completed {
 	const a = feMul(feSubLoose(p.y, p.x), q.yMinusX);
 	const b = feMul(feAddLoose(p.x, p.y), q.yPlusX);
 	const c = feMul(p.t, q.xy2d);
 	const d = feAdd(p.z, p.z);
-	const x = feSubLoose(b, a);
-	const y = feAddLoose(b, a);
-	const z = feAddLoose(d, c);
-	const t = feSubLoose(d, c);
-	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
+	return {
+		x: feSubLoose(b, a),
+		y: feAddLoose(b, a),
+		z: feAddLoose(d, c),
+		t: feSubLoose(d, c),
+	};
+}
+
+function addNiels(p: Readonly<Point>, q: Readonly<Niels>): Point {
+	return toExtended(addNielsCompleted(p, q));
 }
 
 function negNiels(p: Readonly<Niels>): Niels {
@@ -232,6 +297,41 @@ function slide(s: Readonly<uint8[]>): int32[] {
 }
 
 /**
+ * ref10's slide: s as 256 signed digits, each zero or odd and below
+ * 2^(width - 1) in magnitude, with at least width - 1 zeros after every
+ * nonzero digit. Variable time.
+ */
+function slideWindows(s: Readonly<uint8[]>, width: int32): int32[] {
+	const reduced = ((s[31] as int32) & 0x80) == 0 ? s : scalarReduce32(s);
+	const limit = (1 << (width - 1)) - 1;
+	const r = new Array<int32>(256);
+	for (let i = 0; i < 256; i++) {
+		r[i] = ((reduced[i >> 3] as int32) >> (i & 7)) & 1;
+	}
+	for (let i = 0; i < 256; i++) {
+		if (r[i] == 0) continue;
+		for (let b = 1; b < width && i + b < 256; b++) {
+			if (r[i + b] == 0) continue;
+			const shifted = r[i + b] << b;
+			if (r[i] + shifted <= limit) {
+				r[i] += shifted;
+				r[i + b] = 0;
+			} else if (r[i] - shifted >= -limit) {
+				r[i] -= shifted;
+				for (let k = i + b; k < 256; k++) {
+					if (r[k] == 0) {
+						r[k] = 1;
+						break;
+					}
+					r[k] = 0;
+				}
+			} else break;
+		}
+	}
+	return r;
+}
+
+/**
  * [s]B in constant time from radix-16 signed digits, ref10's
  * ge_scalarmult_base; null for the identity.
  */
@@ -245,32 +345,56 @@ function mulBase(s: Readonly<uint8[]>): Point | null {
 	return q;
 }
 
+const baseWindowWidth = 8;
+const pointWindowWidth = 4;
+
+/** [p], [3p], [5p], ... up to the 2^(pointWindowWidth - 2) odd multiples. */
+function oddMultiples(p: Readonly<Point>, twice: Readonly<Point>): Cached[] {
+	const table: Cached[] = [toCached(p)];
+	const step = toCached(twice);
+	let multiple = p;
+	for (let i = 1; i < 1 << (pointWindowWidth - 2); i++) {
+		multiple = toExtended(addCached(multiple, step));
+		table.push(toCached(multiple));
+	}
+	return table;
+}
+
 /**
- * [s1]B + [s2]p2 in variable time; null when p2 generates a small-order group.
+ * [s1]B + [s2]p2 in variable time, ref10's ge_double_scalarmult_vartime: signed
+ * sliding windows over both scalars from the top nonzero digit, odd multiples
+ * of B from a static table and of p2 from a small one, and T computed only
+ * before an addition. Null when p2 generates a small-order group.
  */
 function mulDoubleBasePublic(
 	s1: Readonly<uint8[]>,
-	p2: Point,
+	p2: Readonly<Point>,
 	s2: Readonly<uint8[]>,
 ): Point | null {
-	const pc2 = precompute(p2, 8);
-	if (isIdentityX(pc2[4])) return null;
-	const e1 = slide(s1);
-	const e2 = slide(s2);
-	let q = identity();
-	let pos = 63;
-	while (true) {
-		const slot1 = e1[pos];
-		if (slot1 > 0) q = addNiels(q, baseNiels(slot1 - 1));
-		else if (slot1 < 0) q = addNiels(q, negNiels(baseNiels(-slot1 - 1)));
-		const slot2 = e2[pos];
-		if (slot2 > 0) q = addPoints(q, pc2[slot2]);
-		else if (slot2 < 0) q = subPoints(q, pc2[-slot2]);
-		if (pos == 0) break;
-		q = shift4(q);
-		pos -= 1;
+	const twice = dbl(p2);
+	if (isIdentityX(dbl(twice))) return null;
+	const table = oddMultiples(p2, twice);
+	const e1 = slideWindows(s1, baseWindowWidth);
+	const e2 = slideWindows(s2, pointWindowWidth);
+	let top = 255;
+	while (top >= 0 && e1[top] == 0 && e2[top] == 0) top -= 1;
+	let r: Completed = { x: feZero, y: feOne, z: feOne, t: feOne };
+	for (let i = top; i >= 0; i--) {
+		r = doubled(toProjective(r));
+		const digit1 = e1[i];
+		if (digit1 > 0) {
+			r = addNielsCompleted(toExtended(r), baseOddNiels(digit1 >> 1));
+		} else if (digit1 < 0) {
+			const entry = negNiels(baseOddNiels(-digit1 >> 1));
+			r = addNielsCompleted(toExtended(r), entry);
+		}
+		const digit2 = e2[i];
+		if (digit2 > 0) r = addCached(toExtended(r), table[digit2 >> 1]);
+		else if (digit2 < 0) {
+			r = addCached(toExtended(r), negCached(table[-digit2 >> 1]));
+		}
 	}
-	return q;
+	return toExtended(r);
 }
 
 function sha512Of(parts: Readonly<uint8[]>[]): uint8[] {
@@ -458,4 +582,80 @@ test "every base table entry is [j * 256^i]B in niels form" {
 		}
 		for (let k = 0; k < 8; k++) row = dbl(row);
 	}
+}
+
+test "every odd base table entry is [2k + 1]B in niels form" {
+	const base = fromBytes("5866666666666666666666666666666666666666666666666666666666666666".decodeHex(), 0) as Point;
+	const twice = dbl(base);
+	let p = base;
+	for (let k = 0; k < 1 << (baseWindowWidth - 2); k++) {
+		const zi = feInv(p.z);
+		const x = feMul(p.x, zi);
+		const y = feMul(p.y, zi);
+		const n = baseOddNiels(k);
+		assert feEqual(n.yPlusX, feAdd(y, x));
+		assert feEqual(n.yMinusX, feSub(y, x));
+		assert feEqual(n.xy2d, feMul(feMul(x, y), edwardsD2));
+		p = addPoints(p, twice);
+	}
+	assert baseOddTableFe.length == 3 << (baseWindowWidth - 2);
+}
+
+/** [s]p by plain double-and-add over all 256 bits, with no reduction. */
+function mulPlain(p: Readonly<Point>, s: Readonly<uint8[]>): Point {
+	let q = identity();
+	for (let i = 255; i >= 0; i--) {
+		q = dbl(q);
+		if ((((s[i >> 3] as int32) >> (i & 7)) & 1) == 1) q = addPoints(q, p);
+	}
+	return q;
+}
+
+function randomScalar(state: uint32[]): uint8[] {
+	const out = new Array<uint8>(32);
+	for (let i = 0; i < 32; i++) {
+		let x = state[0];
+		x = x ^ (x << 13);
+		x = x ^ (x >> 17);
+		x = x ^ (x << 5);
+		state[0] = x;
+		out[i] = (x & 255) as uint8;
+	}
+	return out;
+}
+
+test "the double multiplication equals mulBase plus a plain multiplication" {
+	const edges = [
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"0100000000000000000000000000000000000000000000000000000000000000",
+		"ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+		"edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0f",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		"0000000000000000000000000000000000000000000000000000000000000080",
+	];
+	const scalars: uint8[][] = [];
+	for (const hex of edges) scalars.push(hex.decodeHex());
+	const state: uint32[] = [0x9e3779b9];
+	for (let i = 0; i < 6; i++) scalars.push(randomScalar(state));
+	const p = mulBase(randomScalar(state)) as Point;
+	for (let i = 0; i < scalars.length; i++) {
+		const s1 = scalars[i];
+		const s2 = scalars[(i * 5 + 3) % scalars.length];
+		const viaBase = mulBase(s1);
+		const plain = mulPlain(p, s2);
+		const expected = viaBase == null ? plain : addPoints(viaBase, plain);
+		const actual = mulDoubleBasePublic(s1, p, s2) as Point;
+		assert toBytes(actual).encodeHex() == toBytes(expected).encodeHex();
+	}
+}
+
+test "the double multiplication refuses a small-order point" {
+	const zeroY = new Array<uint8>(32);
+	const identityY = new Array<uint8>(32);
+	identityY[0] = 1;
+	const one = identityY.slice(0);
+	assert mulDoubleBasePublic(one, fromBytes(identityY, 0) as Point, one) == null;
+	assert mulDoubleBasePublic(one, fromBytes(zeroY, 0) as Point, one) == null;
 }
