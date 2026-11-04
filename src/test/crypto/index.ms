@@ -1,6 +1,7 @@
 // Crypto — Comprehensive Test Suite
 
 import "./aeadOracle";
+import "./x25519Wycheproof";
 
 import { CryptoError, CryptoErrorKind, HashAlgorithm, createHash, createHmac, digestSync, fromBase64, fromHex,
 	hmacSync, isHashSupported, md5Sync, randomBytesSync, randomIntSync, randomUUIDSync, sha1Sync, sha256,
