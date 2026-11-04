@@ -2477,6 +2477,25 @@ test "engine: a slot of a word or ref register is read and written by the typed 
 	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
 }
 
+test "engine: a union's literal discriminant is read at the slot every member lays it in, and by name when the slots differ" {
+	const decl = "type C = { kind: 'circle'; r: float64 }; type R = { kind: 'rect'; w: float64; h: float64 }; type S = C | R;";
+	const body = " function area(s: S): float64 { switch (s.kind) { case 'circle': return s.r * s.r; case 'rect': return s.w * s.h; } }"
+		+ " function areaIf(s: S): float64 { if (s.kind === 'circle') return s.r; return s.w; }"
+		+ " const xs: S[] = [{ kind: 'circle', r: 2 }, { kind: 'rect', w: 3, h: 4 }]; let t = 0.0; for (const s of xs) t += area(s) + areaIf(s); console.log(`${t}`);";
+	const aligned = decl + body;
+	for (const name of ["area", "areaIf"]) {
+		const f = compiledFunc(aligned, name);
+		assert countNamed(f, "LoadField") == 0 && countNamed(f, "LoadSlotR") == 1, disasmFunc(f);
+	}
+	const shifted = "type C = { r: float64; kind: 'circle' }; type R = { kind: 'rect'; w: float64; h: float64 }; type S = C | R;" + body;
+	assert countNamed(compiledFunc(shifted, "areaIf"), "LoadField") == 1, disasmFunc(compiledFunc(shifted, "areaIf"));
+	for (const code of [aligned, shifted]) {
+		const vm = evalVM(code);
+		assert vm.error == "", vm.error;
+		assert vm.output == "21\n", vm.output;
+	}
+}
+
 test "engine: a struct is copied into a held struct and zeroed through typed slots, nested and inside an array" {
 	const decl = "struct V { x: int64; y: int64; z: int64; } struct B { a: V; n: int64; } let zz: V; let zb: B;";
 	const flat = decl + " function f(): string { let p: V = { x: 1, y: 2, z: 3 }; let q: V = { x: 0, y: 0, z: 0 }; q = p; p.x = 9; return `${q.x} ${q.y} ${q.z} ${p.x} ${zz.x}`; } console.log(f());";

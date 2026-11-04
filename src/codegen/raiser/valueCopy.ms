@@ -2,7 +2,7 @@ import { Type, TypeKind, TypeFlag, AttachedOp } from "../../ast/node";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { TAG_FIELD, VALUE_FIELD } from "../../transform/lowering/unionTagLower";
 import { getOpByKey } from "../c/types";
-import { isSlotUnion } from "../../checker/fit";
+import { isSlotUnion, storesUnionTag } from "../../checker/fit";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isDiscriminatedUnion, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot, ElemWidth } from "../../raiser/bytecode";
@@ -511,10 +511,30 @@ export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[
 // A slot opcode moves the slot's word as it is, so a field goes by slot only when the value's
 // register is of the class its slot holds; any other register converts by name.
 export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	const slot = layoutOf(t).indexOf(name);
+	const laid = bySlot == RaiserOpcode.LoadSlot ? memberLayingAlike(s, t, name) : t;
+	const slot = layoutOf(laid).indexOf(name);
 	if (slot < 0 || slot > MAX_SLOT) return raiserABC(byName, a, b, c);
 	const value = bySlot == RaiserOpcode.LoadSlot ? a : c;
-	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
+	return classOfReg(s, value as int32) == slotKindsOf(s, laid)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
+}
+
+function memberLayingAlike(s: RaiserCompState, t: Type | null, name: string): Type | null {
+	const shape = peelToStructOrUnion(t);
+	if (shape == null || shape.kind != TypeKind.Union || isMaybeType(shape) || unwrapRefNullUnion(shape) != null || storesUnionTag(shape)) return t;
+	let first: Type | null = null;
+	let slot: number = -1;
+	let cls = RaiserRegClass.Dyn;
+	for (const m of shape.typeChildren) {
+		const at = layoutOf(m).indexOf(name);
+		if (at < 0) return null;
+		const k = slotKindsOf(s, m)[at];
+		if (first == null) {
+			first = m;
+			slot = at;
+			cls = k;
+		} else if (at != slot || k != cls) return null;
+	}
+	return first;
 }
 
 // An array holds its elements in the register class of their type, each as wide in memory as the type is.
