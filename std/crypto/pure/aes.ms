@@ -1,6 +1,7 @@
 import { newGhash, updateGhash, finishGhash, storeBE32 } from "./ghash";
 
 when (c) {
+	import { Buffer } from "std/core/buffer";
 	import { aesHwAvailable, aesGcmHwSeal, aesGcmHwOpen, aesGcmHwOpenFresh, aesCbcHwEncrypt, aesCbcHwDecrypt } from "./hw";
 }
 
@@ -1021,6 +1022,11 @@ when (c) {
 	function roundsOf(keys: Readonly<Word[]>): int32 {
 		return keys[keys.length - 1] as int32;
 	}
+
+	/** An output array every byte of which the caller writes before it is read, so it is not zeroed first. */
+	function outputArray(size: int32): uint8[] {
+		return Buffer.allocUnsafe(size);
+	}
 } else {
 	function hwTailWords(rounds: int32): int32 {
 		return 0;
@@ -1030,6 +1036,10 @@ when (c) {
 
 	function roundsOf(keys: Readonly<Word[]>): int32 {
 		return keys.length / KEY_WORDS - 1;
+	}
+
+	function outputArray(size: int32): uint8[] {
+		return new Array<uint8>(size);
 	}
 }
 
@@ -1280,7 +1290,7 @@ export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
 	requireNonce(nonce);
 	const size = plain.length;
-	const sealed = new Array<uint8>(12 + size + 16);
+	const sealed = outputArray(12 + size + 16);
 	for (let i = 0; i < 12; i++) sealed[i] = nonce[i];
 	gcmEncryptInto(xk, nonce, aad, plain, 0, size, sealed, 12, sealed, 12 + size);
 	return sealed;
@@ -1290,13 +1300,13 @@ export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>,
 export function gcmOpen(xk: Readonly<Word[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
 	if (sealed.length < 28) return null;
 	const size = sealed.length - 28;
-	const plain = new Array<uint8>(size);
 	when (c) {
 		if (aesHwAvailable()) {
-			const nonce = sealed.slice(0, 12);
-			return aesGcmHwOpenFresh(xk, nonce, aad, sealed, 12, size, sealed, 12 + size, plain, 0) ? plain : null;
+			const fresh = outputArray(size);
+			return aesGcmHwOpenFresh(xk, sealed[0..12], aad, sealed, 12, size, sealed, 12 + size, fresh, 0) ? fresh : null;
 		}
 	}
+	const plain = new Array<uint8>(size);
 	if (!gcmDecryptInto(xk, sealed.slice(0, 12), aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
 	return plain;
 }
@@ -1310,7 +1320,7 @@ export function cbcEncrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, plain: R
 	requireIv(iv);
 	const size = plain.length;
 	const padding = 16 - (size % 16);
-	const out = new Array<uint8>(size + padding);
+	const out = outputArray(size + padding);
 	when (c) {
 		if (aesHwAvailable()) {
 			for (let i = 0; i < size; i++) out[i] = plain[i];
@@ -1363,7 +1373,7 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: 
 	requireIv(iv);
 	const size = cipher.length;
 	if (size == 0 || size % 16 != 0) return null;
-	const out = new Array<uint8>(size);
+	const out = outputArray(size);
 	let decrypted = false;
 	when (c) {
 		if (aesHwAvailable()) {
