@@ -190,6 +190,9 @@ function writeDigest(state: Readonly<Span<uint32>>, out: uint8[], words: int32, 
 /** Pads, compresses the last block(s) and writes the digest to `out`; the state is finished afterwards. */
 export function finishHashInto(h: HashState, out: uint8[]): void {
 	if (h.finished) throw new Error("hash already finished");
+	if (out.length < h.outputSize) {
+		throw new Error("hash: output is shorter than the digest");
+	}
 	const md5 = h.kind == kindMd5;
 	const blocks = padInto(h.block, h.filled, h.blockSize, h.length, md5);
 	compressRun(h, h.block, 0, blocks);

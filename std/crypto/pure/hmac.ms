@@ -65,6 +65,9 @@ export function updateHmac(hmac: HmacState, data: Readonly<uint8[]>): void {
 
 /** Writes the MAC to `out` and restarts the state on the same key. */
 export function finishHmacInto(hmac: HmacState, out: uint8[]): void {
+	if (out.length < hmac.inner.outputSize) {
+		throw new Error("hmac: output is shorter than the digest");
+	}
 	finishHashInto(hmac.inner, hmac.innerDigest);
 	copyHash(hmac.outerKeyed, hmac.outer);
 	updateHash(hmac.outer, hmac.innerDigest);
