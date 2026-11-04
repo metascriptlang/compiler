@@ -51,6 +51,26 @@ export function allocHeapText(mem: VmMemory, text: string, rc: int64, typeIndex:
 	return cell;
 }
 
+export function allocHeapTextToFill(mem: VmMemory, len: int64, rc: int64): int64 {
+	const cell = newCell(mem, STRING_VALUE_SIZE, 8, TEXT_TYPE_INDEX, false);
+	setCellRc(cell, rc);
+	st64(cell, len);
+	st64(cell + 8, 0);
+	if (len == 0) return cell;
+	const payload = heapAllocUninit(mem, payloadBytes(len));
+	st64(payload, len);
+	stByte(payload + PAYLOAD_DATA + len, 0);
+	st64(cell + 8, payload);
+	return cell;
+}
+
+// Never null, as seqDataAt.
+@inline
+export function textDataAt(at: int64): int64 {
+	const p = ld64(at + 8);
+	return p == 0 ? at : p + PAYLOAD_DATA;
+}
+
 function isLiteralPayload(payload: int64): boolean {
 	return (ld64(payload) & STRLIT_FLAG) != 0;
 }

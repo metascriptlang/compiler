@@ -1,11 +1,11 @@
-import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace } from "./vmSeq";
+import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace, seqDataAt, seqWidth } from "./vmSeq";
 import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
 // Raiser VM — Bytecode executor
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot, ElemWidth
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants,
@@ -14,7 +14,7 @@ import {
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
-	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copiesAsValue, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
+	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copiesAsValue, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringDataAt, heapAllocStringUnfilled, heapAllocBytes, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown, CLOSURE_LAYOUT,
 } from "./value";
 import {
@@ -274,6 +274,7 @@ export interface RaiserVM {
 	hostArgsAt: int32;
 	hostResult: int32;
 	floorPending: boolean;
+	inPlaceHost: int32;
 }
 
 interface RaiserRun {
@@ -368,7 +369,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -744,6 +745,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		vmError(vm, `vmCallFunction: function index out of bounds: ${funcIdx}`);
 		return raiserNil();
 	}
+	if (refusedInPlaceRerun(vm)) return raiserNil();
 	const callee = getModuleFunc(vm.mod, funcIdx);
 	settleFloor(vm);
 	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
@@ -817,7 +819,14 @@ function settleFloor(vm: RaiserVM): void {
 	vm.floorPending = false;
 }
 
+function refusedInPlaceRerun(vm: RaiserVM): boolean {
+	if (vm.inPlaceHost < 0) return false;
+	raiseFromHost(`internal: the in-place host function '${_inPlaceHostNames[vm.inPlaceHost]}' tried to run the VM again, which would move the arguments and views it reads`, true);
+	return true;
+}
+
 export function vmReleaseHeaps(vm: RaiserVM): void {
+	if (refusedInPlaceRerun(vm)) return;
 	settleFloor(vm);
 	if (hasFloor(vm)) return;
 	clearObjectHeap(vm.objectHeap);
@@ -5461,11 +5470,12 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const outerFloor = vm.floor;
 	const outerPending = vm.floorPending;
 	const suspended = vm.suspendedRuns.length;
+	const outerInPlace = vm.inPlaceHost;
 	vm.floorPending = true;
+	vm.inPlaceHost = inPlace;
 	let result = raiserNil();
 	if (inPlace >= 0) {
 		_inPlaceHostFns[inPlace](vm);
-		if (!vm.floorPending) raiseFromHost("internal: an in-place host function re-entered the VM, so its registers moved under it", true);
 	} else {
 		const args: RaiserValue[] = [];
 		const argc = func.blocks[ic + 1] as int32;
@@ -5482,6 +5492,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	vm.floor = outerFloor;
 	vm.floorPending = outerPending;
+	vm.inPlaceHost = outerInPlace;
 	if (swapState) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 		setActiveProgramArgv(prevArgv);
@@ -5511,6 +5522,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 export type RaiserInPlaceHostFn = (vm: RaiserVM) => void;
 
 const _inPlaceHostFns: RaiserInPlaceHostFn[] = [];
+const _inPlaceHostNames: string[] = [];
 
 function boxedCallOfInPlace(args: RaiserValue[]): RaiserValue {
 	raiseFromHost("internal: an in-place host function was called with boxed arguments", true);
@@ -5521,6 +5533,51 @@ export function registerInPlaceHostFn(name: string, inPlace: RaiserInPlaceHostFn
 	registerHostFn(name, boxedCallOfInPlace, capability);
 	setHostEntryInPlace(name, _inPlaceHostFns.length as int32);
 	_inPlaceHostFns.push(inPlace);
+	_inPlaceHostNames.push(name);
+}
+
+// Valid only until the bridge returns: VM code after it may grow (move) or free the payload.
+export struct HostView {
+	at: int64;
+	len: int64;
+}
+
+function refuseHostArg(vm: RaiserVM, i: int32, what: string): HostView {
+	raiseFromHost(`internal: the host function '${_inPlaceHostNames[vm.inPlaceHost]}' reads argument ${i} as ${what}`, true);
+	return { at: vm.regs.slots as int64, len: 0 };
+}
+
+export function hostArgElems(vm: RaiserVM, i: int32, width: ElemWidth): HostView {
+	const v = hostArg(vm, i);
+	if (v.kind != RaiserValueKind.Array) return refuseHostArg(vm, i, `an array of width ${width as int32}, got a value of kind ${v.kind as int32}`);
+	const c = seqCellOf(v.intVal);
+	const cls = seqClass(c);
+	if (cls == RaiserRegClass.Dyn || cls == RaiserRegClass.Ref || seqWidth(c) != width) {
+		return refuseHostArg(vm, i, `an array of width ${width as int32}, got one of class ${regClassLetter(cls)} and width ${seqWidth(c) as int32}`);
+	}
+	return { at: seqDataAt(c), len: seqLen(c) as int64 };
+}
+
+export function hostArgBytes(vm: RaiserVM, i: int32): HostView {
+	return hostArgElems(vm, i, ElemWidth.U8);
+}
+
+export function hostArgText(vm: RaiserVM, i: int32): HostView {
+	const v = hostArg(vm, i);
+	if (v.kind != RaiserValueKind.String) return refuseHostArg(vm, i, `a string, got a value of kind ${v.kind as int32}`);
+	return { at: heapStringDataAt(v), len: heapStringByteLength(vm.arrayHeap, v) };
+}
+
+export function hostReturnBytesToFill(vm: RaiserVM, len: int64): int64 {
+	const handle = heapAllocBytes(vm.arrayHeap, len);
+	setRegRef(vm, vm.hostResult, RaiserValueKind.Array, handle);
+	return seqDataAt(seqCellOf(handle));
+}
+
+export function hostReturnTextToFill(vm: RaiserVM, len: int64): int64 {
+	const text = heapAllocStringUnfilled(vm.arrayHeap, len);
+	setRegRef(vm, vm.hostResult, RaiserValueKind.String, text.intVal);
+	return heapStringDataAt(text);
 }
 
 function hostArgOperand(vm: RaiserVM, i: int32): int32 {
@@ -7329,9 +7386,9 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 	assert vm.floor == 0 && vm.floor == 0;
 }
 
-test "an in-place host call that runs the VM again is refused, because its argument and result registers moved under it" {
+test "an in-place host call that tries to run the VM again is refused before any instruction runs, naming the bridge" {
 	_resetHostRegistryForTests();
-	const inner = createRaiserFunction("inner", [raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.Ret, 1, 0, 0)], [raiserInt(100)], 1, 0, 4);
+	const inner = createRaiserFunction("inner", [raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.Print, 1, 0, 0), raiserABC(RaiserOpcode.Ret, 1, 0, 0)], [raiserInt(100)], 1, 0, 4);
 	const outerCode: RaiserInstruction[] = [
 		raiserABx(RaiserOpcode.LoadConst, 1, 1),
 		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
@@ -7342,7 +7399,69 @@ test "an in-place host call that runs the VM again is refused, because its argum
 	const vm = createVM(createRaiserModule("t", funcs, 0));
 	registerInPlaceHostFn("reenter", (v: RaiserVM): void => { hostReturnInt(v, vmCallFunction(v, 0, [raiserInt(1)]).intVal); });
 	vmCallFunction(vm, 1, [raiserInt(5)]);
-	assert vm.error.startsWith("internal: an in-place host function re-entered the VM"), vm.error;
+	assert vm.output == "", vm.output;
+	assert vm.error.startsWith("internal: the in-place host function 'reenter' tried to run the VM again"), vm.error;
+}
+
+function hostCallVM(name: string, fill: (vm: RaiserVM) => RaiserValue): RaiserVM {
+	const outer = createRaiserFunction("outer", [
+		raiserABC(RaiserOpcode.Move, 3, 0, 0),
+		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	], [raiserConstString(name)], 1, 0, 8);
+	const vm = createVM(createRaiserModule("t", [outer], 0));
+	vmCallFunction(vm, 0, [fill(vm)]);
+	return vm;
+}
+
+function int32Array(vm: RaiserVM): RaiserValue {
+	const h = heapAllocArrayOf(vm.arrayHeap, RaiserRegClass.Word, ElemWidth.I32);
+	for (const n of [7, -2, 300000]) heapArrayPush(vm.arrayHeap, h, raiserInt(n));
+	return raiserArray(h);
+}
+
+test "a host view reads an array argument's elements where the VM keeps them, at their width, and refuses another width naming the bridge" {
+	_resetHostRegistryForTests();
+	registerInPlaceHostFn("sumI32", (v: RaiserVM): void => {
+		const view = hostArgElems(v, 0, ElemWidth.I32);
+		let sum: int64 = 0;
+		for (let i: int64 = 0; i < view.len; i += 1) sum += (view.at as Ptr<int32>)[i] as int64;
+		hostReturnInt(v, sum);
+	});
+	const ints = hostCallVM("sumI32", int32Array);
+	assert ints.error == "", ints.error;
+	assert ints.exitValue.intVal == 300005, `${ints.exitValue.intVal}`;
+	const bytes = hostCallVM("sumI32", (vm: RaiserVM): RaiserValue => raiserArray(heapAllocArrayOf(vm.arrayHeap, RaiserRegClass.Word, ElemWidth.U8)));
+	assert bytes.error.startsWith("internal: the host function 'sumI32' reads argument 0 as an array of width 1, got one of class W and width 6"), bytes.error;
+	const tagged = hostCallVM("sumI32", (vm: RaiserVM): RaiserValue => raiserArray(heapAllocArray(vm.arrayHeap)));
+	assert tagged.error.indexOf("got one of class D") >= 0, tagged.error;
+}
+
+test "a host bridge reads a string argument's bytes where the VM keeps them and fills a fresh uint8 result in place" {
+	_resetHostRegistryForTests();
+	registerInPlaceHostFn("reversed", (v: RaiserVM): void => {
+		const text = hostArgText(v, 0);
+		const out = hostReturnBytesToFill(v, text.len) as Ptr<uint8>;
+		for (let i: int64 = 0; i < text.len; i += 1) out[i] = (text.at as Ptr<uint8>)[text.len - 1 - i];
+	});
+	const vm = hostCallVM("reversed", (vm: RaiserVM): RaiserValue => heapAllocString(vm.arrayHeap, "abé"));
+	assert vm.error == "", vm.error;
+	const h = vm.exitValue.intVal;
+	assert vm.exitValue.kind == RaiserValueKind.Array && heapArrayClass(vm.arrayHeap, h) == RaiserRegClass.Word && seqWidth(seqCellOf(h)) == ElemWidth.U8;
+	assert heapArrayLen(vm.arrayHeap, h) == 4 && heapArrayGet(vm.arrayHeap, h, 0).intVal == 0xA9 && heapArrayGet(vm.arrayHeap, h, 3).intVal == 97;
+}
+
+test "a host bridge holding a view that tries to run the VM again is refused, and the view still reads what it took" {
+	_resetHostRegistryForTests();
+	const seen: int64[] = [];
+	registerInPlaceHostFn("viewThenRun", (v: RaiserVM): void => {
+		const view = hostArgElems(v, 0, ElemWidth.I32);
+		vmCallFunction(v, 0, [raiserInt(1)]);
+		seen.push((view.at as Ptr<int32>)[2] as int64);
+	});
+	const vm = hostCallVM("viewThenRun", int32Array);
+	assert vm.error.startsWith("internal: the in-place host function 'viewThenRun' tried to run the VM again"), vm.error;
+	assert seen.length == 1 && seen[0] == 300000, `${seen.length}`;
 }
 
 test "vmCallFunction: a host call made two frames deep returns through the frames it left" {

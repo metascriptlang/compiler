@@ -1,12 +1,12 @@
-import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto } from "./vmSeq";
+import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto, seqSetLenUnfilled, seqDataAt } from "./vmSeq";
 // Raiser VM — Value representation
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
 import { RaiserRegClass, ElemWidth, regClassLetter, TYPED_SLOTS } from "./bytecode";
-import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx, cellRootIdx } from "./memory";
+import { VmMemory, createVmMemory, reserveSlots, st64, liveCellBlocks, refBlockOffset, ld64, ldByte, isHeapBlock, isConstMemory, cellRc, setCellRc, cellTypeIndex, disposeCell, newCell, setCellRootIdx, cellRootIdx, copyBytes } from "./memory";
 import { bigToString, bigIsZero } from "./bigint";
-import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend } from "./vmString";
+import { EMPTY_TEXT, constMemory, allocConstText, allocHeapText, freeHeapText, textRc, setTextRc, textLoad, textByteLength, textLength, textEquals, textLess, textLessEq, textSlice, textCharCodeAt, textByteAt, textConcat, textAppend, allocHeapTextToFill, textDataAt } from "./vmString";
 
 @include("runtime/core/hashBits.h");
 extern function msBitsFloat64(u: int64): float64;
@@ -348,6 +348,21 @@ export function heapStringLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
 
 export function heapStringByteLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
 	return textByteLength(textOfValue(v));
+}
+
+export function heapStringDataAt(v: RaiserValue): int64 {
+	return textDataAt(textOfValue(v));
+}
+
+export function heapAllocStringUnfilled(arr: RaiserArrayHeap, len: int64): RaiserValue {
+	if (len == 0) return { kind: RaiserValueKind.String, intVal: emptyTextHandle(), floatVal: 0.0 };
+	return { kind: RaiserValueKind.String, intVal: heapTextHandle(allocHeapTextToFill(arr.mem, len, OWNED_BY_RECEIVER_RC as int64)), floatVal: 0.0 };
+}
+
+export function heapAllocStringOfBytes(arr: RaiserArrayHeap, at: int64, len: int64): RaiserValue {
+	const text = heapAllocStringUnfilled(arr, len);
+	copyBytes(heapStringDataAt(text), at, len);
+	return text;
 }
 
 export function heapStringSlice(arr: RaiserArrayHeap, v: RaiserValue, start: int32, end: int32): string {
@@ -692,6 +707,24 @@ export function heapAllocArray(heap: RaiserArrayHeap): int64 {
 export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClass, width: ElemWidth = ElemWidth.Wide): int64 {
 	const stored = elemClass == RaiserRegClass.Bool ? ElemWidth.U8 : elemClass == RaiserRegClass.Float ? (width == ElemWidth.F32 ? ElemWidth.F32 : ElemWidth.Wide) : elemClass == RaiserRegClass.Word && width != ElemWidth.F32 ? width : ElemWidth.Wide;
 	return seqNew(heap.mem, elemClass, stored, false, false, OWNED_BY_RECEIVER_RC as int64) | (RaiserHeapKind.Seq as int64);
+}
+
+export function heapAllocBytes(heap: RaiserArrayHeap, len: int64): int64 {
+	const handle = heapAllocArrayOf(heap, RaiserRegClass.Word, ElemWidth.U8);
+	seqSetLenUnfilled(heap.mem, seqCellOf(handle), len);
+	return handle;
+}
+
+export function heapAllocBytesOf(heap: RaiserArrayHeap, at: int64, len: int64): int64 {
+	const handle = heapAllocArrayOf(heap, RaiserRegClass.Word, ElemWidth.U8);
+	heapArrayAssignBytes(heap, handle, at, len);
+	return handle;
+}
+
+export function heapArrayAssignBytes(heap: RaiserArrayHeap, handle: int64, at: int64, len: int64): void {
+	const c = seqCellOf(handle);
+	seqSetLenUnfilled(heap.mem, c, len);
+	copyBytes(seqDataAt(c), at, len);
 }
 
 // A view (a slice) owns no elements: it stands on the plain array it views, which it keeps alive through RC, the

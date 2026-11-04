@@ -48,6 +48,13 @@ export function seqClass(c: int64): RaiserRegClass {
 	return (ld64(c + 16) & CLASS_MASK) as RaiserRegClass;
 }
 
+// Never null: C's memcpy and the hash kernels take a null source as undefined even for zero bytes.
+@inline
+export function seqDataAt(c: int64): int64 {
+	const p = ld64(c + 8);
+	return p == 0 ? c : p + PAYLOAD_DATA;
+}
+
 export function seqWidth(c: int64): ElemWidth {
 	return ((ld64(c + 16) >> WIDTH_SHIFT) & 7) as ElemWidth;
 }
@@ -198,6 +205,11 @@ export function seqSetLen(mem: VmMemory, c: int64, n: int64): void {
 		const bytes = (n - len) << shift;
 		zeroRange(at, bytes);
 	}
+	st64(c, n);
+}
+
+export function seqSetLenUnfilled(mem: VmMemory, c: int64, n: int64): void {
+	reserve(mem, c, n);
 	st64(c, n);
 }
 
