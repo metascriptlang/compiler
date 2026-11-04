@@ -231,6 +231,11 @@ export function constNameIds(names: string[]): int64[] {
 	return ids;
 }
 
+@inline
+export function bothInternedConstants(a: int64, b: int64): boolean {
+	return handleTag(a) == (RaiserHeapKind.ConstString as int64) && handleTag(b) == (RaiserHeapKind.ConstString as int64);
+}
+
 function constText(handle: int64): string {
 	return textLoad(textAddress(handle));
 }
@@ -498,6 +503,15 @@ export function raiserToString(arr: RaiserArrayHeap, v: RaiserValue): string {
 }
 
 // --- Tests ---
+test "a text interned twice is one constant handle, so two different constant handles are different texts" {
+	const circle = raiserConstString("circle").intVal;
+	const rect = raiserConstString("rect").intVal;
+	assert raiserConstString("circ" + "le").intVal == circle;
+	assert circle != rect && bothInternedConstants(circle, rect);
+	const arr = createArrayHeap();
+	assert !bothInternedConstants(circle, heapAllocString(arr, "circle").intVal);
+}
+
 test "nil" {
 	const v = raiserNil();
 	assert v.kind == RaiserValueKind.Nil;
