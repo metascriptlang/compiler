@@ -5417,8 +5417,10 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const suspended = vm.suspendedRuns.length;
 	vm.floorPending = true;
 	let result = raiserNil();
-	if (inPlace >= 0) _inPlaceHostFns[inPlace](vm);
-	else result = fn(args);
+	if (inPlace >= 0) {
+		_inPlaceHostFns[inPlace](vm);
+		if (!vm.floorPending) raiseFromHost("internal: an in-place host function re-entered the VM, so its registers moved under it", true);
+	} else result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
 		vm.suspendedRuns.shrink(suspended);
@@ -7238,6 +7240,22 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 	assert r.intVal == 218;
 	assert vm.suspendedRuns.length == 0;
 	assert vm.floor == 0 && vm.floor == 0;
+}
+
+test "an in-place host call that runs the VM again is refused, because its argument and result registers moved under it" {
+	_resetHostRegistryForTests();
+	const inner = createRaiserFunction("inner", [raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.Ret, 1, 0, 0)], [raiserInt(100)], 1, 0, 4);
+	const outerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const outer = createRaiserFunction("outer", outerCode, [raiserConstString("reenter"), raiserInt(7)], 1, 0, 8);
+	const funcs: RaiserFunction[] = [inner, outer];
+	const vm = createVM(createRaiserModule("t", funcs, 0));
+	registerInPlaceHostFn("reenter", (v: RaiserVM): void => { hostReturnInt(v, vmCallFunction(v, 0, [raiserInt(1)]).intVal); });
+	vmCallFunction(vm, 1, [raiserInt(5)]);
+	assert vm.error.startsWith("internal: an in-place host function re-entered the VM"), vm.error;
 }
 
 test "vmCallFunction: a host call made two frames deep returns through the frames it left" {
