@@ -115,6 +115,39 @@ test "a ref array receiver is the write a ref argument is, through every field p
 	assert !js.startsWith("ERROR:"), js;
 }
 
+test "a ref receiver or a value Vec mutated in place must name a place, not a copy of one" {
+	const head = "struct Inner { columns: Vec<string>; n: int32; }\nfunction grow(this ref v: Vec<string>): void { v.push(\"x\"); }\nfunction bump(this ref i: Inner): void { i.n = i.n + 1; }\nfunction mk(): Vec<string> { return []; }\nfunction mkI(): Inner { return { columns: [], n: 0 }; }\n";
+	const refused = [
+		"let f = true; let v: Vec<string> = []; let o: Vec<string> = []; (f ? v : o).grow();",
+		"mk().grow();",
+		"let v: Vec<string> = []; (v as Vec<string>).grow();",
+		"let v: Vec<string> = []; v!.grow();",
+		"let f = true; let s: Inner = mkI(); let o: Inner = mkI(); (f ? s : o).bump();",
+		"mkI().bump();",
+		"let v: Vec<string> = []; v!.push(\"x\");",
+		"let f = true; let v: Vec<string> = []; let o: Vec<string> = []; (f ? v : o).push(\"x\");",
+		"let f = true; let s: Inner = mkI(); let o: Inner = mkI(); (f ? s : o).columns.push(\"x\");",
+		"let s: Inner | null = mkI(); let o: Inner = mkI(); (s ?? o).columns.push(\"x\");",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: source }], "test/receiver.ms");
+		assert !c.ok && (c.error.contains("parameter requires a variable") || c.error.contains("would be lost")), body;
+		assert js.startsWith("ERROR:"), body;
+	}
+	const legal = head + `function run(): void {
+	let v: Vec<string> = []; v.grow(); (v).grow();
+	let s: Inner = mkI(); s.bump(); s.columns.grow();
+	const sorted = mk().concat(["b", "a"]).sort();
+	console.log(v.length, s.n, s.columns.length, sorted.length);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: legal }], "test/receiver.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "a read-only array view refuses a receiver declared T[] or Span<T>" {
 	const head = "function zero(this arr: int32[]): void { arr[0] = 0; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nfunction firstOf<T>(this arr: Vec<T>): T { return arr[0]; }\n";
 	const refused = [
