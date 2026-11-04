@@ -177,17 +177,28 @@ function startIetf(w: ChaChaWork, key: Readonly<uint32[]>, nonce: Readonly<uint8
 /** IETF ChaCha20 (RFC 8439, 12-byte nonce): XORs `src` with the keystream from block `counter` into `dst` of the same length; false on a bad nonce or length. */
 export function chacha20Xor(key: Readonly<uint32[]>, nonce: Readonly<uint8[]>, counter: uint32, src: Readonly<uint8[]>, dst: uint8[]): boolean {
 	if (nonce.length != 12 || dst.length != src.length) return false;
+	const blocks = ((src.length as int64) + 63) >> 6;
+	if (blocks > 4294967296 - (counter as int64)) return false;
 	const w = newWork();
 	startIetf(w, key, nonce);
 	chachaXor(w, counter, src, 0, dst, 0, src.length as int32);
+	wipeWork(w);
 	return true;
 }
 
-function putLengths(w: ChaChaWork, aadLength: int32, textLength: int32): void {
-	for (let i = 0; i < 4; i++) {
-		w.lengths[i] = ((aadLength >> (8 * i)) & 255) as uint8;
-		w.lengths[8 + i] = ((textLength >> (8 * i)) & 255) as uint8;
+function putLengths(w: ChaChaWork, aadLength: int64, textLength: int64): void {
+	for (let i = 0; i < 8; i++) {
+		w.lengths[i] = ((aadLength >> ((8 * i) as int64)) & 255) as uint8;
+		w.lengths[8 + i] = ((textLength >> ((8 * i) as int64)) & 255) as uint8;
 	}
+}
+
+/** Zeroes the subkey, keystream block and one-time key a call leaves behind. */
+function wipeWork(w: ChaChaWork): void {
+	for (let i = 0; i < 8; i++) w.key[i] = 0;
+	for (let i = 0; i < 16; i++) w.block[i] = 0;
+	for (let i = 0; i < 32; i++) w.authKey[i] = 0;
+	for (let i = 0; i < 16; i++) w.tag[i] = 0;
 }
 
 /** The Poly1305 tag of aad || pad || cipherText || pad || lengths over the one-time key from block 0, into `w.tag`. */
@@ -198,7 +209,7 @@ function computeTag(w: ChaChaWork, aad: Readonly<uint8[]>, cipher: Readonly<uint
 	padPoly1305(mac);
 	updatePoly1305(mac, cipher, cipherOff, cipherLength);
 	padPoly1305(mac);
-	putLengths(w, aad.length as int32, cipherLength);
+	putLengths(w, aad.length as int64, cipherLength as int64);
 	updatePoly1305(mac, w.lengths, 0, 16);
 	finishPoly1305(mac, w.tag, 0);
 }
@@ -215,6 +226,7 @@ export function xchachaSealInto(key: Readonly<uint32[]>, aad: Readonly<uint8[]>,
 	chachaXor(w, 1, plain, 0, out, 24, length);
 	computeTag(w, aad, out, 24, length);
 	for (let i = 0; i < 16; i++) out[24 + length + i] = w.tag[i];
+	wipeWork(w);
 	return true;
 }
 
@@ -225,9 +237,10 @@ export function xchachaOpenInto(key: Readonly<uint32[]>, aad: Readonly<uint8[]>,
 	const w = newWork();
 	startCipher(w, key, sealed);
 	computeTag(w, aad, sealed, 24, length);
-	if (!tagMatches(w, sealed, 24 + length)) return false;
-	chachaXor(w, 1, sealed, 24, out, 0, length);
-	return true;
+	const matched = tagMatches(w, sealed, 24 + length);
+	if (matched) chachaXor(w, 1, sealed, 24, out, 0, length);
+	wipeWork(w);
+	return matched;
 }
 
 function tagMatches(w: ChaChaWork, sealed: Readonly<uint8[]>, at: int32): boolean {
@@ -245,6 +258,7 @@ export function chacha20Poly1305SealInto(key: Readonly<uint32[]>, nonce: Readonl
 	chachaXor(w, 1, plain, 0, out, 0, length);
 	computeTag(w, aad, out, 0, length);
 	for (let i = 0; i < 16; i++) out[length + i] = w.tag[i];
+	wipeWork(w);
 	return true;
 }
 
@@ -255,7 +269,8 @@ export function chacha20Poly1305OpenInto(key: Readonly<uint32[]>, nonce: Readonl
 	const w = newWork();
 	startIetf(w, key, nonce);
 	computeTag(w, aad, sealed, 0, length);
-	if (!tagMatches(w, sealed, length)) return false;
-	chachaXor(w, 1, sealed, 0, out, 0, length);
-	return true;
+	const matched = tagMatches(w, sealed, length);
+	if (matched) chachaXor(w, 1, sealed, 0, out, 0, length);
+	wipeWork(w);
+	return matched;
 }
