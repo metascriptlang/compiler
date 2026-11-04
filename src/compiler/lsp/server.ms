@@ -9,7 +9,8 @@ import {
 } from "./protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbSetFileText, dbStats, getFileId } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbSetFileText, dbStats, getFileId, dbTypeCheck } from "../transam/index";
+import { TaQueryKind } from "../transam/revision";
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
@@ -20,7 +21,7 @@ import { env } from "std/process";
 import { newCliOptions, applyProjectConfig } from "../options";
 import { buildResolverConfig } from "../compile";
 import { resetCancel } from "../transam/cancel";
-import { CompletionCache, createCompletionCache, clearCompletionCache, markDependentsStale } from "./handlers/shared";
+import { CompletionCache, createCompletionCache, clearCompletionCache, markDependentsStale, markDocumentOpen, markDocumentClosed } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
 import { projectUniverse, entryRoots } from "./projectUniverse";
 
@@ -1213,6 +1214,38 @@ test "dependents stopped while checked are published after the next batch, uncha
 	assert r.exitCode == 0;
 	assert publishesOf(r, userUri) == "[]";
 	assert publishesOf(r, depUri) == "[] [] []";
+}
+
+function dependentChecksAfterLeafEdit(db: TransAmDb, root: string, leaf: string): int32 {
+	const before = db.cache.recomputed[TaQueryKind.TypeCheck as int32];
+	dbSetFileText(db, `${root}/leaf.ms`, leaf);
+	if (!checkDependentsUnlessStopped(db, `${root}/leaf.ms`)) return -1;
+	return db.cache.recomputed[TaQueryKind.TypeCheck as int32] - before;
+}
+
+test "a dependency edit checks only the open dependents, and an error still reaches them through a closed one" {
+	const root = "/lsp-open-dependents";
+	const state = createServerState();
+	const db = state.db;
+	dbSetFileText(db, `${root}/leaf.ms`, "export function n(): int32 { return 1; }\n");
+	dbSetFileText(db, `${root}/mid.ms`, "export { n } from \"./leaf\";\n");
+	dbSetFileText(db, `${root}/top.ms`, "import { n } from \"./mid\";\nexport const t: int32 = n();\n");
+	markDocumentOpen(`${root}/top.ms`);
+	try {
+		dbTypeCheck(db, `${root}/top.ms`);
+		assert dependentChecksAfterLeafEdit(db, root, "export function n(): string { return \"x\"; }\n") == 1;
+		const wire = buildTransitiveDiagnosticsWire(db, `${root}/leaf.ms`);
+		assert wire.indexOf("lsp-open-dependents/top.ms", 0) >= 0;
+		assert wire.indexOf("is not assignable to type 'int32'", 0) >= 0;
+		assert wire.indexOf("lsp-open-dependents/mid.ms", 0) < 0;
+		markDocumentOpen(`${root}/mid.ms`);
+		assert dependentChecksAfterLeafEdit(db, root, "export function n(): int32 { return 2; }\n") == 2;
+		const opened = buildTransitiveDiagnosticsWire(db, `${root}/leaf.ms`);
+		assert opened.indexOf("lsp-open-dependents/mid.ms", 0) >= 0;
+	} finally {
+		markDocumentClosed(`${root}/top.ms`);
+		markDocumentClosed(`${root}/mid.ms`);
+	}
 }
 
 test "navigation reports a broken project config instead of treating it as inferred" {
