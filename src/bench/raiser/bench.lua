@@ -35,6 +35,34 @@ end
 
 local sink = 0
 
+local function area(s)
+	local k = s.kind
+	if k == "circle" then return s.r * s.r * 3.0 elseif k == "rect" then return s.w * s.h end
+end
+
+local function nArea(s)
+	local k = s.kind
+	if k == 0 then return s.r * s.r * 3.0 elseif k == 1 then return s.w * s.h end
+end
+
+local function tArea(s)
+	if s.kind == 0 then return s.r * s.r * 3.0 end
+	return s.w * s.h
+end
+
+local shapes, nShapes, tagged = {}, {}, {}
+for i = 0, 999 do
+	if i % 3 == 0 then
+		shapes[i + 1] = { kind = "circle", r = i }
+		nShapes[i + 1] = { kind = 0, r = i }
+		tagged[i + 1] = { kind = 0, r = i, w = 0, h = 0 }
+	else
+		shapes[i + 1] = { kind = "rect", w = i, h = 2 }
+		nShapes[i + 1] = { kind = 1, w = i, h = 2 }
+		tagged[i + 1] = { kind = 1, r = 0, w = i, h = 2 }
+	end
+end
+
 local function fib(n)
 	if n < 2 then return n end
 	return fib(n - 1) + fib(n - 2)
@@ -148,6 +176,24 @@ bench("object alloc 1k", 0, function()
 		s = s + p.x
 	end
 	sink = sink + s
+end)
+
+bench("union string tag 1k", 0, function()
+	local xs, a = shapes, 0.0
+	for i = 1, #xs do a = a + area(xs[i]) end
+	sink = sink + a
+end)
+
+bench("union number tag 1k", 0, function()
+	local xs, a = nShapes, 0.0
+	for i = 1, #xs do a = a + nArea(xs[i]) end
+	sink = sink + a
+end)
+
+bench("int tag record 1k", 0, function()
+	local xs, a = tagged, 0.0
+	for i = 1, #xs do a = a + tArea(xs[i]) end
+	sink = sink + a
 end)
 
 if sink < 0 then print("unreachable", sink) end

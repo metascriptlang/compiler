@@ -33,6 +33,35 @@ function must<T>(result: Result<T, CryptoError>): T {
 	return result.value;
 }
 
+type Circle = { kind: "circle"; r: float64 };
+type Rect = { kind: "rect"; w: float64; h: float64 };
+type Shape = Circle | Rect;
+type NCircle = { kind: 0; r: float64 };
+type NRect = { kind: 1; w: float64; h: float64 };
+type NShape = NCircle | NRect;
+type Tagged = { kind: int32; r: float64; w: float64; h: float64 };
+
+function area(s: Shape): float64 {
+	switch (s.kind) {
+		case "circle": return s.r * s.r * 3.0;
+		case "rect": return s.w * s.h;
+	}
+}
+
+function nArea(s: NShape): float64 {
+	switch (s.kind) {
+		case 0: return s.r * s.r * 3.0;
+		case 1: return s.w * s.h;
+	}
+}
+
+function tArea(s: Tagged): float64 {
+	switch (s.kind) {
+		case 0: return s.r * s.r * 3.0;
+		default: return s.w * s.h;
+	}
+}
+
 const scale = makeScale(3);
 const point = new P(0, 0);
 const origin = new P(1, 2);
@@ -43,6 +72,21 @@ for (let i: int64 = 0; i < 1000; i = i + 1) ints.push(i);
 
 const table = new Map<int64, int64>();
 for (let i: int64 = 0; i < 1000; i = i + 1) table.set(i * 7919, i);
+
+const shapes: Shape[] = [];
+const nShapes: NShape[] = [];
+const tagged: Tagged[] = [];
+for (let i = 0; i < 1000; i = i + 1) {
+	if (i % 3 == 0) {
+		shapes.push({ kind: "circle", r: i });
+		nShapes.push({ kind: 0, r: i });
+		tagged.push({ kind: 0, r: i, w: 0, h: 0 });
+	} else {
+		shapes.push({ kind: "rect", w: i, h: 2 });
+		nShapes.push({ kind: 1, w: i, h: 2 });
+		tagged.push({ kind: 1, r: 0, w: i, h: 2 });
+	}
+}
 
 const b64k = Buffer.alloc(65536);
 for (let i = 0; i < 65536; i++) b64k.set(i, (i * 31 + 7) & 255);
@@ -135,6 +179,24 @@ bench("object alloc 1k", 0, () => {
 		s = s + p.x;
 	}
 	sink += s as float64;
+});
+bench("union string tag 1k", 0, () => {
+	const xs = shapes;
+	let a: float64 = 0;
+	for (const s of xs) a = a + area(s);
+	sink += a;
+});
+bench("union number tag 1k", 0, () => {
+	const xs = nShapes;
+	let a: float64 = 0;
+	for (const s of xs) a = a + nArea(s);
+	sink += a;
+});
+bench("int tag record 1k", 0, () => {
+	const xs = tagged;
+	let a: float64 = 0;
+	for (const s of xs) a = a + tArea(s);
+	sink += a;
 });
 bench("sha256 64 KB host bridge", 65536, () => { sink += must(digestSync("sha256", b64k)).length; });
 
