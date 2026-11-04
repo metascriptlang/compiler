@@ -4,6 +4,7 @@
  */
 
 import { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
+import { Modulus } from "./ff";
 import {
 	bigFromBytes,
 	bigToBytes,
@@ -19,6 +20,11 @@ import {
 function minimal(value: bigint): uint8[] {
 	const size = (bitLength(value) + 7) >> 3;
 	return bigToBytes(value, size > 0 ? size : 1);
+}
+
+/** Null: the BigInt arithmetic keeps no per-key constants. */
+export function rsaModulusOf(bytes: Readonly<uint8[]>): Modulus | null {
+	return null;
 }
 
 export function rsaPublicOperation(
@@ -148,6 +154,9 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 			dp: minimal(d % (big - 1n)),
 			dq: minimal(d % (little - 1n)),
 			qi: minimal(modInverse(little, big)),
+			nModulus: null,
+			pModulus: null,
+			qModulus: null,
 		};
 	}
 }

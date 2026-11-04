@@ -37,6 +37,7 @@ import {
 	rsaPrivateOperation,
 	rsaKeyConsistent,
 	rsaGenerateKey,
+	rsaModulusOf,
 } from "./rsaArith";
 import { randomOctets } from "./random";
 import { hashKind, hashOf } from "./hash";
@@ -77,7 +78,7 @@ function publicFromSequence(
 	if (
 		!atLeastThree(e) || (e[e.length - 1] & 1) == 0 || !below(e, n)
 	) return null;
-	return { n, e };
+	return { n, e, nModulus: rsaModulusOf(n) };
 }
 
 export function rsaPublicFromPkcs1(
@@ -155,6 +156,9 @@ function privateFromSequence(
 		dp: values[5],
 		dq: values[6],
 		qi: values[7],
+		nModulus: rsaModulusOf(values[0]),
+		pModulus: rsaModulusOf(values[3]),
+		qModulus: rsaModulusOf(values[4]),
 	};
 	if (
 		bytesBitLength(key.n) < rsaMinBits ||
@@ -218,7 +222,7 @@ export function rsaPrivateToPkcs8(key: RsaPrivateData): uint8[] {
 }
 
 export function rsaPublicOf(key: RsaPrivateData): RsaPublicData {
-	return { n: key.n, e: key.e };
+	return { n: key.n, e: key.e, nModulus: key.nModulus };
 }
 
 const digestPrefixSha1: Readonly<uint8[]> = [

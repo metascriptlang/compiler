@@ -51,7 +51,8 @@ function uintOf(bytes: Readonly<uint8[]>): uint32[] {
 	return value;
 }
 
-function modulusOf(bytes: Readonly<uint8[]>): Modulus | null {
+/** The Montgomery constants of a key integer, built once per key; null when it is no odd modulus above 2. */
+export function rsaModulusOf(bytes: Readonly<uint8[]>): Modulus | null {
 	return modulusFromUint(uintOf(bytes));
 }
 
@@ -95,7 +96,7 @@ export function rsaPublicOperation(
 	key: RsaPublicData,
 	input: Readonly<uint8[]>,
 ): uint8[] | null {
-	const m = modulusOf(key.n);
+	const m = key.nModulus;
 	if (m == null) return null;
 	const x = m.feFromBytes(input);
 	if (x == null) return null;
@@ -157,9 +158,9 @@ export function rsaPrivateOperation(
 	key: RsaPrivateData,
 	input: Readonly<uint8[]>,
 ): uint8[] | null {
-	const n = modulusOf(key.n);
-	const mp = modulusOf(key.p);
-	const mq = modulusOf(key.q);
+	const n = key.nModulus;
+	const mp = key.pModulus;
+	const mq = key.qModulus;
 	if (n == null || mp == null || mq == null) return null;
 	const c = n.feFromBytes(input);
 	if (c == null) return null;
@@ -395,6 +396,9 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 			dp: uintToMinimalBytes(dp),
 			dq: uintToMinimalBytes(dq),
 			qi: uintToMinimalBytes(qi),
+			nModulus: modulusFromUint(n),
+			pModulus: modulusFromUint(p),
+			qModulus: modulusFromUint(q),
 		};
 		for (const scratch of [p, q, d, dp, dq, qi]) wipeWords(scratch);
 		return key;

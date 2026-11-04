@@ -1,9 +1,15 @@
 /** RSA key integers as minimal big-endian bytes, shared by the key encodings and both arithmetic backends. */
 
-/** Key integers as minimal big-endian bytes. */
+import { Modulus } from "./ff";
+
+/**
+ * Key integers as minimal big-endian bytes. The `Modulus` fields carry the Montgomery constants the C arithmetic
+ * built once when the key was made (`rsaModulusOf`); they are null on JavaScript and for an unusable modulus.
+ */
 export interface RsaPublicData {
 	n: uint8[];
 	e: uint8[];
+	nModulus: Modulus | null;
 }
 
 export interface RsaPrivateData {
@@ -15,6 +21,9 @@ export interface RsaPrivateData {
 	dp: uint8[];
 	dq: uint8[];
 	qi: uint8[];
+	nModulus: Modulus | null;
+	pModulus: Modulus | null;
+	qModulus: Modulus | null;
 }
 
 /** The bit length of a big-endian integer. */
