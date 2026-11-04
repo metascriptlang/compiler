@@ -243,6 +243,7 @@ export function liftWrites(ctx: TransformContext): WriteEffects {
 
 function heldUncounted(state: LiftState, t: Type | null): boolean {
 	const held = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (held != null && held.kind == TypeKind.Function) return held == t && classifyType(t, state.ctx, false).rcKind == RcKind.Closure;
 	return held != null && (isAwaitable(t) || held.kind == TypeKind.Ref &&
 		held.typeReturn != null && held.typeReturn.kind == TypeKind.Struct) &&
 		classifyType(t, state.ctx, false).rcKind == RcKind.Ref;
