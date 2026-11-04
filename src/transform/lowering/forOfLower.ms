@@ -9,7 +9,7 @@
 //                             if (arr.length != $len) throw "..." } }
 
 import {
-	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
+	Node, NodeKind, NodeFlag, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 	ArrayAccessData, NumberLiteralData, TryCatchStmtData, BinaryExprData, UpdateExprData, OutExprData,
 } from "../../ast/node";
@@ -174,7 +174,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array;
 	const elemArrType = isRefArray ? iterType.typeReturn : iterType;
 	const isString = iterType != null && iterType.kind == TypeKind.String;
-	const lengthCanChange = isString || (elemArrType != null && elemArrType.kind == TypeKind.Array);
+	const lengthCanChange = (isString && !ctx.jsBackend) || (elemArrType != null && elemArrType.kind == TypeKind.Array);
 
 	// A value iterable reached from a symbol is read at its location each element: a snapshot of a
 	// value is a heap copy whenever the body writes through the same root, and an address taken once
@@ -219,6 +219,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const elemType = elemArrType != null && elemArrType.typeReturn != null ? elemArrType.typeReturn : noneType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
 		const elemAccess = makeArrayAccess(clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		elemAccess.flags = elemAccess.flags.incl(NodeFlag.InBounds);
 		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);
 		elemDecl.resolvedSym = elemSym;
 		// Propagate element type for nativeLower (tuple → member access)
@@ -242,6 +243,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const itemAccess = isString
 			? makeCall(runtimeRef("msStringByteAt", loc), [clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc)], loc)
 			: makeArrayAccess(clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		itemAccess.flags = itemAccess.flags.incl(NodeFlag.InBounds);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		if (bindingSym != null) {
 			itemDecl.resolvedSym = bindingSym;

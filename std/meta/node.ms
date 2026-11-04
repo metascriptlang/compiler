@@ -472,6 +472,7 @@ export enum NodeFlag {
 	ConstData,     // transform: every element of this array literal is deep-constant data, so codegen copies one static initializer
 	DecoratorRefused, // checker: a decorator on this declaration was refused, so a check that would only follow from it skips the declaration
 	LendsPastCall, // checker: this call of an async routine returns while a spawn it started still borrows from the caller, so a scope exit joins its promise
+	InBounds,      // transform: the for-of lowering's own element read, whose index the loop keeps below the length its tail guard rechecks
 }
 
 // ===== Node Kind Enum =====

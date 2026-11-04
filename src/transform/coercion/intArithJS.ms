@@ -26,13 +26,13 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, NodeFlag, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNodeAt, ForStmtData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, jsGlobalRef } from "../util";
+import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, jsGlobalRef, markBoundedCounterStep } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 import { cloneIfPure } from "../place";
 import { is64Kind, isSignedKind, bitsOfKind } from "../numKinds";
@@ -41,8 +41,18 @@ import { isShiftOp } from "../../ast/operators";
 export { cloneIfPure } from "../place";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
+	walkNode(program, markForCounterStep);
 	walkNode(program, (node: Node): Node => materializeIntOp(node, ctx));
 	return program;
+}
+
+function markForCounterStep(node: Node): Node {
+	if (node.kind != NodeKind.ForStmt) return node;
+	const d = node.data as ForStmtData;
+	if (d.forInit == null || d.forCondition == null || d.forUpdate == null || d.forInit.kind != NodeKind.VariableDecl) return node;
+	const sym = d.forInit.resolvedSym;
+	if (sym != null && (d.forInit.data as VariableDeclData).declKind == DeclKind.Let) markBoundedCounterStep(sym, d.forCondition, [d.forBody], d.forUpdate);
+	return node;
 }
 
 function materializeIntOp(node: Node, ctx: TransformContext): Node {
@@ -247,7 +257,8 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	const step = d.updateOp == "++" ? "+" : "-";
 	if (isSignedKind(t.kind) || t.kind == TypeKind.Char) {
-		const checked = makeBinary(d.updateArg, "=", overflowChecked(makeBinary(readBack, step, stepOne(t, loc), loc), t, loc, ctx), loc);
+		const sum = makeBinary(readBack, step, stepOne(t, loc), loc);
+		const checked = makeBinary(d.updateArg, "=", node.flags.has(NodeFlag.NoOverflowCheck) ? wrapSigned(sum, t, loc) : overflowChecked(sum, t, loc, ctx), loc);
 		if (d.isPrefix) return checked;
 		const before = makeBinary(checked, d.updateOp == "++" ? "-" : "+", stepOne(t, loc), loc);
 		before.nodeType = t;
@@ -331,7 +342,8 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 	}
 	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location, ctx), node.location);
 	if (wrapsAtWidth(base) && isSignedKind(t.kind)) {
-		return makeBinary(d.left, "=", overflowChecked(makeBinary(readBack, base, d.right, node.location), t, node.location, ctx), node.location);
+		const sum = makeBinary(readBack, base, d.right, node.location);
+		return makeBinary(d.left, "=", node.flags.has(NodeFlag.NoOverflowCheck) ? wrapSigned(sum, t, node.location) : overflowChecked(sum, t, node.location, ctx), node.location);
 	}
 	if (isShiftOp(base) || base == "&" || base == "|" || base == "^") {
 		const bin = makeBinary(readBack, base, d.right, node.location);

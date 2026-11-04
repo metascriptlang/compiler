@@ -1,13 +1,14 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, BinaryExprData, UpdateExprData, UnaryExprData, NumberLiteralData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
 import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric, peelTransparentInstance } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
+import { isAssignOp } from "../ast/operators";
 import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -603,6 +604,66 @@ export function makeCounterStep(counter: Symbol, t: Type, loc: SourceLocation): 
 	const next = makeBinary(current, "+", makeNumber(1, loc), loc);
 	next.flags = next.flags.incl(NodeFlag.NoOverflowCheck);
 	return makeExprStmt(makeAssign(target, next, loc), loc);
+}
+
+export function markBoundedCounterStep(sym: Symbol, test: Node, body: Node[], step: Node): void {
+	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Int32 || test.kind != NodeKind.BinaryExpr) return;
+	const t = test.data as BinaryExprData;
+	if (t.operator != "<" || !namesSymbol(t.left, sym) || !fitsInt32(t.right) || writesSymbol(t.right, sym)) return;
+	for (const stmt of body) {
+		if (writesSymbol(stmt, sym)) return;
+	}
+	if (step.kind == NodeKind.UpdateExpr) {
+		const u = step.data as UpdateExprData;
+		if (u.updateOp == "++" && namesSymbol(u.updateArg, sym)) step.flags = step.flags.incl(NodeFlag.NoOverflowCheck);
+		return;
+	}
+	if (step.kind != NodeKind.BinaryExpr) return;
+	const assign = step.data as BinaryExprData;
+	if (!namesSymbol(assign.left, sym)) return;
+	if (assign.operator == "+=" && isOne(assign.right)) {
+		step.flags = step.flags.incl(NodeFlag.NoOverflowCheck);
+	} else if (assign.operator == "=" && assign.right.kind == NodeKind.BinaryExpr) {
+		const sum = assign.right.data as BinaryExprData;
+		if (sum.operator == "+" && namesSymbol(sum.left, sym) && isOne(sum.right)) assign.right.flags = assign.right.flags.incl(NodeFlag.NoOverflowCheck);
+	}
+}
+
+function isOne(node: Node): boolean {
+	return node.kind == NodeKind.NumberLiteral && (node.data as NumberLiteralData).intVal == 1;
+}
+
+function namesSymbol(node: Node, sym: Symbol): boolean {
+	return node.kind == NodeKind.Identifier && node.resolvedSym == sym;
+}
+
+function fitsInt32(node: Node): boolean {
+	if (node.nodeType == null) return false;
+	return match (node.nodeType.kind) {
+		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8 | TypeKind.Uint16 | TypeKind.Uint8 => true,
+		_ => false,
+	};
+}
+
+function writesSymbol(node: Node, sym: Symbol): boolean {
+	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator) && namesSymbol((node.data as BinaryExprData).left, sym)) return true;
+	if (node.kind == NodeKind.UpdateExpr && namesSymbol((node.data as UpdateExprData).updateArg, sym)) return true;
+	if ((node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.OutExpr) && mentionsSymbol(node, sym)) return true;
+	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&" && mentionsSymbol(node, sym)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && writesSymbol(child, sym)) found = true;
+	});
+	return found;
+}
+
+function mentionsSymbol(node: Node, sym: Symbol): boolean {
+	if (namesSymbol(node, sym)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && mentionsSymbol(child, sym)) found = true;
+	});
+	return found;
 }
 
 export function makeReturn(arg: Node | null, loc: SourceLocation): Node {

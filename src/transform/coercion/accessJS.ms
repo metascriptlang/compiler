@@ -1,4 +1,4 @@
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, NewExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, NewExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { isRoutineNode } from "../../ast/shape";
 import { TransformContext, freshTempSym } from "../context";
@@ -177,7 +177,7 @@ function checkedArrayPlace(arr: Node, index: Node, loc: SourceLocation): Node | 
 
 function checkedAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
-	if (isRange(d.index) || indexedType(d.array) == null) return node;
+	if (isRange(d.index) || indexedType(d.array) == null || node.flags.has(NodeFlag.InBounds)) return node;
 	const loc = node.location;
 	const span = isSpan(d.array);
 	let access = span ? checkedSpanPlace(d.array, d.index, loc) : checkedArrayPlace(d.array, d.index, loc);

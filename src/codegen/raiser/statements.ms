@@ -24,6 +24,7 @@ import {
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
+import { markBoundedCounterStep } from "../../transform/util";
 import { compileOwnershipStmt } from "./drcLower";
 import { emitZeroValue, regClassOf, allocFor, zeroIsNil } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
@@ -136,7 +137,7 @@ function compileBlock(s: RaiserCompState, node: Node): void {
 	for (let i = 0; i < d.statements.length; i += 1) {
 		const stmt = d.statements[i];
 		if (stmt.kind == NodeKind.VariableDecl && i + 1 < d.statements.length && d.statements[i + 1].kind == NodeKind.WhileStmt) {
-			markBoundedCounterStep(s, stmt, d.statements[i + 1]);
+			markWhileCounterStep(s, stmt, d.statements[i + 1]);
 		}
 		compileStmt(s, stmt);
 		resetTemps(s, enclosingRegs);
@@ -326,67 +327,14 @@ function isRepeatableTest(node: Node): boolean {
 	};
 }
 
-// `let i: int32 = ..; while (i < bound) { ..; i = i + 1; }` with a bound of at most INT32_MAX: the step
-// runs only after the test passed, and nothing else in the loop writes i, so i + 1 <= bound fits int32
-// and its range check can never fire. The step node is flagged, as the for-of lowering flags its own.
-function markBoundedCounterStep(s: RaiserCompState, decl: Node, loop: Node): void {
+function markWhileCounterStep(s: RaiserCompState, decl: Node, loop: Node): void {
 	const sym = decl.resolvedSym;
-	if (sym == null || (decl.data as VariableDeclData).declKind != DeclKind.Let || sym.symbolType.kind != TypeKind.Int32 || resolveGlobal(s, sym) >= 0) return;
+	if (sym == null || (decl.data as VariableDeclData).declKind != DeclKind.Let || resolveGlobal(s, sym) >= 0) return;
 	const w = loop.data as WhileStmtData;
-	if (w.whileCondition.kind != NodeKind.BinaryExpr || w.whileBody.kind != NodeKind.BlockStmt) return;
-	const test = w.whileCondition.data as BinaryExprData;
-	if (test.operator != "<" || !namesSymbol(test.left, sym) || !fitsInt32(test.right) || writesSymbol(test.right, sym)) return;
+	if (w.whileBody.kind != NodeKind.BlockStmt) return;
 	const body = (w.whileBody.data as BlockStmtData).statements;
 	if (body.length == 0 || body[body.length - 1].kind != NodeKind.ExprStmt) return;
-	for (let i = 0; i < body.length - 1; i += 1) {
-		if (writesSymbol(body[i], sym)) return;
-	}
-	const step = (body[body.length - 1].data as ExprStmtData).expr;
-	if (step.kind == NodeKind.UpdateExpr) {
-		const u = step.data as UpdateExprData;
-		if (u.updateOp == "++" && namesSymbol(u.updateArg, sym)) step.flags = step.flags.incl(NodeFlag.NoOverflowCheck);
-	} else if (step.kind == NodeKind.BinaryExpr) {
-		const assign = step.data as BinaryExprData;
-		if (assign.operator != "=" || !namesSymbol(assign.left, sym) || assign.right.kind != NodeKind.BinaryExpr) return;
-		const sum = assign.right.data as BinaryExprData;
-		if (sum.operator == "+" && namesSymbol(sum.left, sym) && sum.right.kind == NodeKind.NumberLiteral && (sum.right.data as NumberLiteralData).intVal == 1) {
-			assign.right.flags = assign.right.flags.incl(NodeFlag.NoOverflowCheck);
-		}
-	}
-}
-
-function namesSymbol(node: Node, sym: Symbol): boolean {
-	return node.kind == NodeKind.Identifier && node.resolvedSym == sym;
-}
-
-function fitsInt32(node: Node): boolean {
-	if (node.nodeType == null) return false;
-	return match (node.nodeType.kind) {
-		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8 | TypeKind.Uint16 | TypeKind.Uint8 => true,
-		_ => false,
-	};
-}
-
-// Any write to `sym` in the subtree, nested functions included, and any way to hand out its address.
-function writesSymbol(node: Node, sym: Symbol): boolean {
-	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator) && namesSymbol((node.data as BinaryExprData).left, sym)) return true;
-	if (node.kind == NodeKind.UpdateExpr && namesSymbol((node.data as UpdateExprData).updateArg, sym)) return true;
-	if ((node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.OutExpr) && mentionsSymbol(node, sym)) return true;
-	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&" && mentionsSymbol(node, sym)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && writesSymbol(child, sym)) found = true;
-	});
-	return found;
-}
-
-function mentionsSymbol(node: Node, sym: Symbol): boolean {
-	if (namesSymbol(node, sym)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && mentionsSymbol(child, sym)) found = true;
-	});
-	return found;
+	markBoundedCounterStep(sym, w.whileCondition, body.slice(0, body.length - 1), (body[body.length - 1].data as ExprStmtData).expr);
 }
 
 // A loop whose condition is one `i >= bound` exit branch, after at most a constant load of the bound, and
