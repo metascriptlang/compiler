@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -89,6 +89,7 @@ let assumedOpen = false;
 let uncheckedBodiesReported = false;
 let inAsync = false;
 let ownParams: string[] = [];
+let ownResult: Type | null = null;
 interface DeferredCheck {
 	site: Node;
 	rule: string;
@@ -198,6 +199,23 @@ function declaredExtern(flags: string): boolean {
 	return routineFlagSet(flags).has(RoutineFlag.Extern);
 }
 
+function routineResult(decl: Node): Type | null {
+	const t = decl.resolvedSym != null && decl.resolvedSym!.symbolType != null ? decl.resolvedSym!.symbolType : decl.nodeType;
+	return t != null && t.kind == TypeKind.Function ? t.typeReturn : null;
+}
+
+function expressionResultStore(decl: Node): EffectCause | null {
+	if (decl.kind != NodeKind.ArrowFunction) return null;
+	const body = (decl.data as ArrowFunctionData).arrowBody;
+	return body.kind == NodeKind.BlockStmt ? null : resultStoreOf(body);
+}
+
+function resultStoreOf(value: Node | null): EffectCause | null {
+	if (value == null || ownResult == null || returnsView(ownResult) || holdsNoCount(ownResult) || ownResult!.kind == TypeKind.Lent) return null;
+	const what = borrowedOf(value);
+	return what != null && what.kind == BorrowKind.ModuleConst ? storeCause(value, what, "into the owned result it returns") : null;
+}
+
 function routineParams(decl: Node): string[] {
 	return match (decl.kind) {
 		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).params,
@@ -220,13 +238,16 @@ function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): Effect
 	const outerAsync = inAsync;
 	const outerSyms = viewSyms;
 	const outerParams = viewParams;
+	const outerResult = ownResult;
 	ownParams = routineParams(decl);
+	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewSyms = [];
 	viewParams = views;
 	if (e == Effect.StoresBorrowed) scanFlows(routineBody(decl));
-	const c = walkEffect(routineBody(decl), e);
+	const c = (e == Effect.StoresBorrowed ? expressionResultStore(decl) : null) ?? walkEffect(routineBody(decl), e);
 	ownParams = outer;
+	ownResult = outerResult;
 	inAsync = outerAsync;
 	viewSyms = outerSyms;
 	viewParams = outerParams;
@@ -249,11 +270,14 @@ function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
 	const outer = ownParams;
 	const outerAsync = inAsync;
 	const outerParams = viewParams;
+	const outerResult = ownResult;
 	ownParams = routineParams(decl);
+	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewParams = viewParams.filter((p: string): boolean => !ownParams.includes(p));
-	const c = walkChildren(decl, e);
+	const c = (e == Effect.StoresBorrowed ? expressionResultStore(decl) : null) ?? walkChildren(decl, e);
 	ownParams = outer;
+	ownResult = outerResult;
 	inAsync = outerAsync;
 	viewParams = outerParams;
 	return c;
@@ -936,6 +960,7 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(node) ?? newEffect(node, e) : newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
 		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
+		NodeKind.ReturnStmt => e == Effect.StoresBorrowed ? resultStoreOf((node.data as ReturnStmtData).argument) : null,
 		_ => null,
 	};
 	if (here != null) return here;
