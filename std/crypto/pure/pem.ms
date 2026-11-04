@@ -16,7 +16,7 @@ export function pemDecode(text: string): PemBlock | null {
 	const footer = `-----END ${label}-----`;
 	const bodyEnd = text.indexOf(footer, bodyStart);
 	if (bodyEnd < 0) return null;
-	const body = text.slice(bodyStart, bodyEnd).replace(/[ \t\r\n]/g, "");
+	const body = text.slice(bodyStart, bodyEnd).split("\n").map((line) => line.trim()).join("");
 	if (body.length == 0) return null;
 	const der = body.decodeBase64();
 	if (der.length == 0) return null;
