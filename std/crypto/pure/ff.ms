@@ -451,6 +451,10 @@ export function uintDivRem(
 	return { quotient, remainder };
 }
 
+function copyLimbs(x: uint32[], y: Readonly<uint32[]>): void {
+	for (let i = 0; i < x.length; i++) x[i] = y[i];
+}
+
 function div2ModOdd(x: uint32[], n: Readonly<uint32[]>): void {
 	const c = conditionalAdd(x, x[0] & 1, n);
 	shiftRightByOneWithCarry(x, 0);
@@ -468,43 +472,41 @@ export function uintGcdModinvOdd(
 	const limbs = n.length;
 	if (!uintIsOdd(n)) throw new Error("uintGcdModinvOdd: the modulus is even");
 	const aLimbs = Math.min(a.length, limbs) as int32;
-	let u = uintWiden(a, limbs);
-	let v = uintWiden(n, limbs);
-	let q = new Array<uint32>(limbs);
-	let r = new Array<uint32>(limbs);
+	const u = uintWiden(a, limbs);
+	const v = uintWiden(n, limbs);
+	const q = new Array<uint32>(limbs);
+	const r = new Array<uint32>(limbs);
 	r[0] = 1;
 	const steps = (aLimbs + limbs) * tBits;
+	const d = new Array<uint32>(limbs);
+	const dq = new Array<uint32>(limbs);
 	for (let i = 0; i < steps; i++) {
 		const uOdd = u[0] & 1;
 		const vOdd = v[0] & 1;
 		const uOddVOdd = uOdd & vOdd;
-		const uOddVEven = uOdd & (vOdd ^ 1);
+		const uEven = uOdd ^ 1;
+		const notBothOdd = uOddVOdd ^ 1;
 
-		const d = uintWiden(v, limbs);
+		// u, v = (u when both are odd, else v - u), (v when u is odd and v even, v - u when both are odd, else u) / 2
+		copyLimbs(d, v);
 		uintSub(d, u);
-		const t1 = uintWiden(d, limbs);
-		cmov(t1, uOddVOdd, u);
-		const t2 = uintWiden(u, limbs);
-		cmov(t2, uOddVEven, v);
-		cmov(t2, uOddVOdd, d);
-		shiftRightByOneWithCarry(t2, 0);
-		u = t1;
-		v = t2;
+		cmov(v, uOddVOdd, d);
+		cmov(v, uEven, u);
+		cmov(u, notBothOdd, d);
+		shiftRightByOneWithCarry(v, 0);
 		const swap = limbsCmpLt(v, u);
 		condSwap(u, v, swap);
 
-		const dq = uintWiden(q, limbs);
+		copyLimbs(dq, q);
 		conditionalAdd(dq, uintSub(dq, r), n);
-		const t3 = uintWiden(dq, limbs);
-		cmov(t3, uOddVOdd, r);
-		const t4 = uintWiden(r, limbs);
-		cmov(t4, uOddVEven, q);
-		cmov(t4, uOddVOdd, dq);
-		div2ModOdd(t4, n);
-		r = t3;
-		q = t4;
+		cmov(q, uOddVOdd, dq);
+		cmov(q, uEven, r);
+		cmov(r, notBothOdd, dq);
+		div2ModOdd(q, n);
 		condSwap(r, q, swap);
 	}
+	uintWipe(d);
+	uintWipe(dq);
 	return { gcd: v, inverse: q };
 }
 
