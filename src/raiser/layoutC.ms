@@ -7,7 +7,8 @@ import { getTypeDesc } from "../codegen/c/types";
 import { mangleFieldName } from "../codegen/c/names";
 import { cwd, execFileCapture } from "std/process";
 import { writeFile, exists } from "std/fs";
-import { MemKind, VmLayout, VmLayouts, createVmLayouts, vmLayoutOf, vmCellOf, CELL_HEADER_SIZE } from "./layout";
+import { MemKind, VmLayout, CELL_HEADER_SIZE } from "./layout";
+import { createVmLayouts, vmLayoutOf, vmCellOf } from "../codegen/raiser/layout";
 
 function declared(t: Type): Type {
 	t.sym = makeSymbol(t.typeName, SymbolKind.Struct, t, false);
