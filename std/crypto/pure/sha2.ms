@@ -622,14 +622,13 @@ function compress256Unrolled(st: HashState, data: Readonly<uint8[]>, off: int32)
 }
 
 function compress256Loop(h: HashState, data: Readonly<uint8[]>, off: int32): void {
-	let w: uint32[64] = [];
-	for (let i = 0; i < 16; i++) w[i] = load32(data, off + i * 4);
+	for (let i = 0; i < 16; i++) h.schedule[i] = load32(data, off + i * 4);
 	for (let i = 16; i < 64; i++) {
-		const w15 = w[i - 15];
-		const w2 = w[i - 2];
+		const w15 = h.schedule[i - 15];
+		const w2 = h.schedule[i - 2];
 		const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >> 3);
 		const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >> 10);
-		w[i] = s1 + w[i - 7] + s0 + w[i - 16];
+		h.schedule[i] = s1 + h.schedule[i - 7] + s0 + h.schedule[i - 16];
 	}
 	let a = h.state[0];
 	let b = h.state[1];
@@ -641,7 +640,7 @@ function compress256Loop(h: HashState, data: Readonly<uint8[]>, off: int32): voi
 	let hh = h.state[7];
 	for (let i = 0; i < 64; i++) {
 		const sigma1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-		const t1 = hh + sigma1 + ((e & f) ^ (~e & g)) + k256[i] + w[i];
+		const t1 = hh + sigma1 + ((e & f) ^ (~e & g)) + k256[i] + h.schedule[i];
 		const sigma0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
 		const t2 = sigma0 + ((a & b) ^ (a & c) ^ (b & c));
 		hh = g;
@@ -1053,28 +1052,27 @@ function carry(sum: uint32, addend: uint32): uint32 {
 }
 
 function compress512Split(h: HashState, data: Readonly<uint8[]>, off: int32): void {
-	let w: uint32[160] = [];
-	for (let i = 0; i < 32; i++) w[i] = load32(data, off + i * 4);
+	for (let i = 0; i < 32; i++) h.schedule[i] = load32(data, off + i * 4);
 	for (let i = 16; i < 80; i++) {
-		const w15h = w[(i - 15) * 2];
-		const w15l = w[(i - 15) * 2 + 1];
+		const w15h = h.schedule[(i - 15) * 2];
+		const w15l = h.schedule[(i - 15) * 2 + 1];
 		const s0h = rotrHigh(w15h, w15l, 1) ^ rotrHigh(w15h, w15l, 8) ^ (w15h >> 7);
 		const s0l = rotrLow(w15h, w15l, 1) ^ rotrLow(w15h, w15l, 8) ^ shrLow(w15h, w15l, 7);
-		const w2h = w[(i - 2) * 2];
-		const w2l = w[(i - 2) * 2 + 1];
+		const w2h = h.schedule[(i - 2) * 2];
+		const w2l = h.schedule[(i - 2) * 2 + 1];
 		const s1h = rotrHigh(w2h, w2l, 19) ^ rotrHigh(w2h, w2l, 61) ^ (w2h >> 6);
 		const s1l = rotrLow(w2h, w2l, 19) ^ rotrLow(w2h, w2l, 61) ^ shrLow(w2h, w2l, 6);
 		let lo = s0l + s1l;
 		let hi = s0h + s1h + carry(lo, s0l);
-		const x7l = w[(i - 7) * 2 + 1];
+		const x7l = h.schedule[(i - 7) * 2 + 1];
 		const l7 = lo + x7l;
-		hi = hi + w[(i - 7) * 2] + carry(l7, lo);
+		hi = hi + h.schedule[(i - 7) * 2] + carry(l7, lo);
 		lo = l7;
-		const x16l = w[(i - 16) * 2 + 1];
+		const x16l = h.schedule[(i - 16) * 2 + 1];
 		const l16 = lo + x16l;
-		hi = hi + w[(i - 16) * 2] + carry(l16, lo);
-		w[i * 2] = hi;
-		w[i * 2 + 1] = l16;
+		hi = hi + h.schedule[(i - 16) * 2] + carry(l16, lo);
+		h.schedule[i * 2] = hi;
+		h.schedule[i * 2 + 1] = l16;
 	}
 	let ah = h.state[0];
 	let al = h.state[1];
@@ -1106,8 +1104,8 @@ function compress512Split(h: HashState, data: Readonly<uint8[]>, off: int32): vo
 		next = t1l + k512[i * 2 + 1];
 		t1h = t1h + k512[i * 2] + carry(next, t1l);
 		t1l = next;
-		next = t1l + w[i * 2 + 1];
-		t1h = t1h + w[i * 2] + carry(next, t1l);
+		next = t1l + h.schedule[i * 2 + 1];
+		t1h = t1h + h.schedule[i * 2] + carry(next, t1l);
 		t1l = next;
 		const s0h = rotrHigh(ah, al, 28) ^ rotrHigh(ah, al, 34) ^ rotrHigh(ah, al, 39);
 		const s0l = rotrLow(ah, al, 28) ^ rotrLow(ah, al, 34) ^ rotrLow(ah, al, 39);
