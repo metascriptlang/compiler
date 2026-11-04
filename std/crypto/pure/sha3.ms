@@ -25,7 +25,7 @@ const RC_HI: uint32[24] = [
 when (c) {
 	export class Sha3State {
 		st: uint64[25];
-		buf: uint8[];
+		buf: uint8[144];
 		rate: int32;
 		bits: int32;
 		filled: int32;
@@ -175,12 +175,12 @@ when (c) {
 	}
 
 
-	function laneAt(data: Readonly<uint8[]>, at: int64): uint64 {
+	function laneAt(data: Readonly<Span<uint8>>, at: int64): uint64 {
 		return (data[at] as uint64) | ((data[at + 1] as uint64) << 8) | ((data[at + 2] as uint64) << 16) | ((data[at + 3] as uint64) << 24)
 			| ((data[at + 4] as uint64) << 32) | ((data[at + 5] as uint64) << 40) | ((data[at + 6] as uint64) << 48) | ((data[at + 7] as uint64) << 56);
 	}
 
-	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int64, len: int32): void {
+	function addBytes(state: Sha3State, data: Readonly<Span<uint8>>, at: int64, len: int32): void {
 		let i = 0;
 		while (i + 8 <= len) {
 			state.st[i >> 3] ^= laneAt(data, at + i);
@@ -199,6 +199,11 @@ when (c) {
 
 	function wipeLanes(state: Sha3State): void {
 		wipeWords64(state.st);
+	}
+
+	/** The pending-input buffer, inline in the state and sized for the widest rate (SHA3-224). */
+	function zeroBuffer(rate: int32): uint8[144] {
+		return [0];
 	}
 
 	function zeroLanes(): uint64[25] {
@@ -466,6 +471,10 @@ when (c) {
 		wipeWords(state.st);
 	}
 
+	function zeroBuffer(rate: int32): uint8[] {
+		return new Array<uint8>(rate);
+	}
+
 	function zeroLanes(): uint32[50] {
 		return [
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -480,7 +489,7 @@ export function newSha3(bits: int32): Sha3State {
 	const rate = 200 - (bits >> 2);
 	return {
 		st: zeroLanes(),
-		buf: new Array<uint8>(rate),
+		buf: zeroBuffer(rate),
 		rate,
 		bits,
 		filled: 0,

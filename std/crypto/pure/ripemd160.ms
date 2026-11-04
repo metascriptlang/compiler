@@ -6,9 +6,26 @@
 import { encodeHex } from "../../core/encoding";
 import { wipeBytes } from "./secret";
 
+// On C the pending block lives inside the state, so a digest allocates only the state and its output.
+when (!js) {
+	type BlockBytes = Readonly<Span<uint8>>;
+	type Block = uint8[64];
+
+	function zeroBlock(): Block {
+		return [0];
+	}
+} else {
+	type BlockBytes = Readonly<uint8[]>;
+	type Block = uint8[];
+
+	function zeroBlock(): Block {
+		return new Array<uint8>(64);
+	}
+}
+
 export class Ripemd160State {
 	h: uint32[5];
-	block: uint8[];
+	block: Block;
 	filled: int32;
 	lengthLow: uint32;
 	lengthHigh: uint32;
@@ -18,7 +35,7 @@ export class Ripemd160State {
 export function newRipemd160(): Ripemd160State {
 	return {
 		h: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0],
-		block: new Array<uint8>(64),
+		block: zeroBlock(),
 		filled: 0,
 		lengthLow: 0,
 		lengthHigh: 0,
@@ -26,7 +43,7 @@ export function newRipemd160(): Ripemd160State {
 	};
 }
 
-function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int64): void {
+function compress(s: Ripemd160State, data: BlockBytes, off: int64): void {
 	const w0 = (data[off + 0] as uint32) | ((data[off + 1] as uint32) << 8) | ((data[off + 2] as uint32) << 16) | ((data[off + 3] as uint32) << 24);
 	const w1 = (data[off + 4] as uint32) | ((data[off + 5] as uint32) << 8) | ((data[off + 6] as uint32) << 16) | ((data[off + 7] as uint32) << 24);
 	const w2 = (data[off + 8] as uint32) | ((data[off + 9] as uint32) << 8) | ((data[off + 10] as uint32) << 16) | ((data[off + 11] as uint32) << 24);
@@ -869,43 +886,43 @@ export function updateRipemd160(s: Ripemd160State, data: Readonly<uint8[]>): voi
 	s.lengthHigh += (end >> 32) as uint32;
 	if (low < s.lengthLow) s.lengthHigh += 1;
 	s.lengthLow = low;
-	if (s.filled > 0) {
-		while (at < end && s.filled < 64) {
-			s.block[s.filled] = data[at];
-			s.filled += 1;
-			at += 1;
+	let filled = s.filled;
+	if (filled > 0) {
+		const take = end < 64 - filled ? end : (64 - filled) as int64;
+		for (let i: int64 = 0; i < take; i++) s.block[filled + i] = data[i];
+		filled += take as int32;
+		at = take;
+		if (filled < 64) {
+			s.filled = filled;
+			return;
 		}
-		if (s.filled < 64) return;
 		compress(s, s.block, 0);
-		s.filled = 0;
+		filled = 0;
 	}
 	while (at + 64 <= end) {
 		compress(s, data, at);
 		at += 64;
 	}
 	while (at < end) {
-		s.block[s.filled] = data[at];
-		s.filled += 1;
+		s.block[filled] = data[at];
+		filled += 1;
 		at += 1;
 	}
+	s.filled = filled;
 }
 
 export function finishRipemd160(s: Ripemd160State): uint8[] {
 	if (s.finished) throw new Error("ripemd160: already finished");
-	s.block[s.filled] = 0x80;
-	s.filled += 1;
-	if (s.filled > 56) {
-		while (s.filled < 64) {
-			s.block[s.filled] = 0;
-			s.filled += 1;
-		}
+	let filled = s.filled;
+	s.block[filled] = 0x80;
+	filled += 1;
+	if (filled > 56) {
+		for (let i = filled; i < 64; i++) s.block[i] = 0;
 		compress(s, s.block, 0);
-		s.filled = 0;
+		filled = 0;
 	}
-	while (s.filled < 56) {
-		s.block[s.filled] = 0;
-		s.filled += 1;
-	}
+	for (let i = filled; i < 56; i++) s.block[i] = 0;
+	s.filled = 0;
 	const low = s.lengthLow << 3;
 	const high = (s.lengthHigh << 3) | (s.lengthLow >> 29);
 	for (let i = 0; i < 4; i++) {

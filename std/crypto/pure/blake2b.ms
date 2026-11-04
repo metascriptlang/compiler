@@ -1,3 +1,5 @@
+import { wipeBytes, wipeWords64 } from "./secret";
+
 const iv: uint64[8] = [
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
 	0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
@@ -6,7 +8,7 @@ const iv: uint64[8] = [
 /** The running state of one BLAKE2b hash, with fixed typed storage so no call allocates a table. */
 export class Blake2bState {
 	h: uint64[8];
-	block: uint8[];
+	block: uint8[128];
 	outputSize: int32;
 	filled: int32;
 	length: number;
@@ -17,7 +19,7 @@ export class Blake2bState {
 export function newBlake2b(outputSize: int32, key: Readonly<uint8[]>): Blake2bState {
 	const s: Blake2bState = {
 		h: [0, 0, 0, 0, 0, 0, 0, 0],
-		block: new Array<uint8>(128),
+		block: [0],
 		outputSize,
 		filled: 0,
 		length: 0,
@@ -33,27 +35,28 @@ export function newBlake2b(outputSize: int32, key: Readonly<uint8[]>): Blake2bSt
 	return s;
 }
 
-function load32(data: Readonly<uint8[]>, at: int32): uint32 {
+@inline
+function wordLE(data: Readonly<Span<uint8>>, at: int32): uint32 {
 	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
 }
 
-function compress(s: Blake2bState, data: Readonly<uint8[]>, off: int32, isLast: boolean): void {
-	const m0: uint64 = (load32(data, off + 0) as uint64) | ((load32(data, off + 4) as uint64) << 32);
-	const m1: uint64 = (load32(data, off + 8) as uint64) | ((load32(data, off + 12) as uint64) << 32);
-	const m2: uint64 = (load32(data, off + 16) as uint64) | ((load32(data, off + 20) as uint64) << 32);
-	const m3: uint64 = (load32(data, off + 24) as uint64) | ((load32(data, off + 28) as uint64) << 32);
-	const m4: uint64 = (load32(data, off + 32) as uint64) | ((load32(data, off + 36) as uint64) << 32);
-	const m5: uint64 = (load32(data, off + 40) as uint64) | ((load32(data, off + 44) as uint64) << 32);
-	const m6: uint64 = (load32(data, off + 48) as uint64) | ((load32(data, off + 52) as uint64) << 32);
-	const m7: uint64 = (load32(data, off + 56) as uint64) | ((load32(data, off + 60) as uint64) << 32);
-	const m8: uint64 = (load32(data, off + 64) as uint64) | ((load32(data, off + 68) as uint64) << 32);
-	const m9: uint64 = (load32(data, off + 72) as uint64) | ((load32(data, off + 76) as uint64) << 32);
-	const m10: uint64 = (load32(data, off + 80) as uint64) | ((load32(data, off + 84) as uint64) << 32);
-	const m11: uint64 = (load32(data, off + 88) as uint64) | ((load32(data, off + 92) as uint64) << 32);
-	const m12: uint64 = (load32(data, off + 96) as uint64) | ((load32(data, off + 100) as uint64) << 32);
-	const m13: uint64 = (load32(data, off + 104) as uint64) | ((load32(data, off + 108) as uint64) << 32);
-	const m14: uint64 = (load32(data, off + 112) as uint64) | ((load32(data, off + 116) as uint64) << 32);
-	const m15: uint64 = (load32(data, off + 120) as uint64) | ((load32(data, off + 124) as uint64) << 32);
+function compress(s: Blake2bState, data: Readonly<Span<uint8>>, off: int32, isLast: boolean): void {
+	const m0: uint64 = (wordLE(data, off + 0) as uint64) | ((wordLE(data, off + 4) as uint64) << 32);
+	const m1: uint64 = (wordLE(data, off + 8) as uint64) | ((wordLE(data, off + 12) as uint64) << 32);
+	const m2: uint64 = (wordLE(data, off + 16) as uint64) | ((wordLE(data, off + 20) as uint64) << 32);
+	const m3: uint64 = (wordLE(data, off + 24) as uint64) | ((wordLE(data, off + 28) as uint64) << 32);
+	const m4: uint64 = (wordLE(data, off + 32) as uint64) | ((wordLE(data, off + 36) as uint64) << 32);
+	const m5: uint64 = (wordLE(data, off + 40) as uint64) | ((wordLE(data, off + 44) as uint64) << 32);
+	const m6: uint64 = (wordLE(data, off + 48) as uint64) | ((wordLE(data, off + 52) as uint64) << 32);
+	const m7: uint64 = (wordLE(data, off + 56) as uint64) | ((wordLE(data, off + 60) as uint64) << 32);
+	const m8: uint64 = (wordLE(data, off + 64) as uint64) | ((wordLE(data, off + 68) as uint64) << 32);
+	const m9: uint64 = (wordLE(data, off + 72) as uint64) | ((wordLE(data, off + 76) as uint64) << 32);
+	const m10: uint64 = (wordLE(data, off + 80) as uint64) | ((wordLE(data, off + 84) as uint64) << 32);
+	const m11: uint64 = (wordLE(data, off + 88) as uint64) | ((wordLE(data, off + 92) as uint64) << 32);
+	const m12: uint64 = (wordLE(data, off + 96) as uint64) | ((wordLE(data, off + 100) as uint64) << 32);
+	const m13: uint64 = (wordLE(data, off + 104) as uint64) | ((wordLE(data, off + 108) as uint64) << 32);
+	const m14: uint64 = (wordLE(data, off + 112) as uint64) | ((wordLE(data, off + 116) as uint64) << 32);
+	const m15: uint64 = (wordLE(data, off + 120) as uint64) | ((wordLE(data, off + 124) as uint64) << 32);
 	let v0 = s.h[0];
 	let v1 = s.h[1];
 	let v2 = s.h[2];
