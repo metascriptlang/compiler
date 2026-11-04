@@ -1,5 +1,5 @@
-import { hmacOf, pbkdf2Of, hkdfOf } from "./hmac";
-import { kindSha1, kindSha256, kindSha384, kindSha512, kindMd5 } from "./state";
+import { hmacOf, newHmac, updateHmac, finishHmac, pbkdf2Of, hkdfOf } from "./hmac";
+import { kindSha1, kindSha224, kindSha256, kindSha384, kindSha512, kindMd5 } from "./state";
 import { encodeHex } from "../../core/encoding";
 
 function rep(count: int32, value: uint8): uint8[] {
@@ -210,4 +210,50 @@ test "hmac refuses an unknown hash kind" {
 	assert hmacRefused(-1);
 	assert hmacRefused(99);
 	assert hkdfRefused(99, 32);
+}
+
+test "hmac vectors from RFC 4231 and RFC 2202" {
+	const short = rep(20, 0x0b);
+	assert hmacOf(kindSha256, short, text("Hi There")).encodeHex() == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
+	assert hmacOf(kindSha512, short, text("Hi There")).encodeHex() == "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854";
+	assert hmacOf(kindSha1, short, text("Hi There")).encodeHex() == "b617318655057264e28bc0b6fb378c8ef146be00";
+	assert hmacOf(kindMd5, rep(16, 0x0b), text("Hi There")).encodeHex() == "9294727a3638bb1c13f48ef8158bfc9d";
+	const long = rep(131, 0xaa);
+	assert hmacOf(kindSha256, long, text("Test Using Larger Than Block-Size Key - Hash Key First")).encodeHex() == "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54";
+}
+
+test "pbkdf2 vectors from RFC 6070 and the SHA-256 companion" {
+	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 1, 20).encodeHex() == "0c60c80f961f0e71f3a9b524af6012062fe037a6";
+	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 2, 20).encodeHex() == "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957";
+	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 4096, 20).encodeHex() == "4b007901b765489abead49d926f721d065a429c1";
+	assert pbkdf2Of(kindSha256, text("password"), text("salt"), 1, 32).encodeHex() == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
+}
+
+test "hkdf vectors from RFC 5869" {
+	const salt = seq(0x00, 13);
+	const info = seq(0xf0, 10);
+	assert hkdfOf(kindSha256, rep(22, 0x0b), salt, info, 42).encodeHex() == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865";
+	const none = new Array<uint8>(0);
+	assert hkdfOf(kindSha256, rep(22, 0x0b), none, none, 42).encodeHex() == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8";
+}
+
+test "RFC4231 TC5 truncated output compares the 128-bit prefix" {
+	const key = rep(20, 0x0c);
+	const data = text("Test With Truncation");
+	assert hmacOf(kindSha224, key, data).slice(0, 16).encodeHex() == "0e2aea68a90c8d37c988bcdb9fca6fa8";
+	assert hmacOf(kindSha256, key, data).slice(0, 16).encodeHex() == "a3b6167473100ee06e0c796c2955552b";
+	assert hmacOf(kindSha384, key, data).slice(0, 16).encodeHex() == "3abf34c3503b2a23a46efc619baef897";
+	assert hmacOf(kindSha512, key, data).slice(0, 16).encodeHex() == "415fad6271580a531d4179bc891d87a6";
+}
+
+test "streaming hmac matches one-shot and restarts on the same key after finishing" {
+	const key = rep(131, 0xaa);
+	const data = seq(0, 200);
+	const expected = hmacOf(kindSha256, key, data).encodeHex();
+	const hmac = newHmac(kindSha256, key);
+	updateHmac(hmac, data.slice(0, 7));
+	updateHmac(hmac, data.slice(7, 200));
+	assert finishHmac(hmac).encodeHex() == expected;
+	updateHmac(hmac, data);
+	assert finishHmac(hmac).encodeHex() == expected;
 }

@@ -1,5 +1,4 @@
-import { HashState, kindSha1, kindSha256, kindSha512, kindMd5 } from "./state";
-import { encodeHex } from "../../core/encoding";
+import { HashState, kindSha256, kindMd5 } from "./state";
 import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
 
 const pbkdf2MaxLength = 1048576;
@@ -134,41 +133,4 @@ export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8
 		index += 1;
 	}
 	return out;
-}
-
-function repeated(count: int32, value: uint8): uint8[] {
-	const out = new Array<uint8>(count);
-	for (let i = 0; i < count; i++) out[i] = value;
-	return out;
-}
-
-function text(value: string): uint8[] {
-	return value.asBytes().slice(0);
-}
-
-test "hmac vectors from RFC 4231 and RFC 2202" {
-	const short = repeated(20, 0x0b);
-	assert hmacOf(kindSha256, short, text("Hi There")).encodeHex() == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
-	assert hmacOf(kindSha512, short, text("Hi There")).encodeHex() == "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854";
-	assert hmacOf(kindSha1, short, text("Hi There")).encodeHex() == "b617318655057264e28bc0b6fb378c8ef146be00";
-	assert hmacOf(kindMd5, repeated(16, 0x0b), text("Hi There")).encodeHex() == "9294727a3638bb1c13f48ef8158bfc9d";
-	const long = repeated(131, 0xaa);
-	assert hmacOf(kindSha256, long, text("Test Using Larger Than Block-Size Key - Hash Key First")).encodeHex() == "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54";
-}
-
-test "pbkdf2 vectors from RFC 6070 and the SHA-256 companion" {
-	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 1, 20).encodeHex() == "0c60c80f961f0e71f3a9b524af6012062fe037a6";
-	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 2, 20).encodeHex() == "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957";
-	assert pbkdf2Of(kindSha1, text("password"), text("salt"), 4096, 20).encodeHex() == "4b007901b765489abead49d926f721d065a429c1";
-	assert pbkdf2Of(kindSha256, text("password"), text("salt"), 1, 32).encodeHex() == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
-}
-
-test "hkdf vectors from RFC 5869" {
-	const salt = new Array<uint8>(13);
-	for (let i = 0; i < 13; i++) salt[i] = i as uint8;
-	const info = new Array<uint8>(10);
-	for (let i = 0; i < 10; i++) info[i] = (0xf0 + i) as uint8;
-	assert hkdfOf(kindSha256, repeated(22, 0x0b), salt, info, 42).encodeHex() == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865";
-	const none = new Array<uint8>(0);
-	assert hkdfOf(kindSha256, repeated(22, 0x0b), none, none, 42).encodeHex() == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8";
 }
