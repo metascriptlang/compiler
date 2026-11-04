@@ -1568,6 +1568,33 @@ export function rcDecIsLast(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap,
 	return last;
 }
 
+export function rcDecUnlessLast(objHeap: RaiserObjectHeap, handle: int64): boolean {
+	if (handle == 0) return true;
+	when (mode != "danger") { checkHeapKind(handle); }
+	match (handleHeapKind(handle)) {
+		RaiserHeapKind.Seq => {
+			const cell = seqCellOf(handle);
+			const rc = cellRc(cell);
+			if (rc <= 1) return false;
+			setCellRc(cell, rc - 1);
+		},
+		RaiserHeapKind.String => {
+			const cell = textAddress(handle);
+			const rc = textRc(cell);
+			if (rc <= 1) return false;
+			setTextRc(cell, rc - 1);
+		},
+		RaiserHeapKind.Object => {
+			const data: Cursor<RaiserObjectData> = objHeap.objects[handleIndex(handle)];
+			if (data.rc <= 1) return false;
+			data.rc = data.rc - 1;
+		},
+		RaiserHeapKind.None | RaiserHeapKind.ConstString => {},
+		_ => { return false; },
+	}
+	return true;
+}
+
 // The count a cell holds: 0 for nil and for handles that are not counted.
 export function rcCountOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): int32 {
 	if (handle == 0) return 0;

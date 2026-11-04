@@ -8,7 +8,7 @@ import {
 	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayWidth, arrayClassSlot, ElemWidth
 } from "./bytecode";
 import {
-	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants,
+	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants, rcDecUnlessLast,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
@@ -2639,8 +2639,6 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
 // vm.ip, vm.funcIdx, vm.base and vm.base are written back before any call that reads
 // them; between calls the running frame lives in dispatch's locals.
-// Any edit to dispatch re-allocates the registers of its hot locals (slots, code, ip): one added case measured
-// +1..4% on call-heavy programs, so a new opcode's fast path goes into vmStepHeap and leaves dispatch's code as it is.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -3704,7 +3702,44 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.RcInc: case RaiserOpcode.RcDec: case RaiserOpcode.WasMoved: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.RcInc: {
+				const handle = innerHandle(vm, slots[fb + (((word >> 8) & 65535) as int32)]);
+				if (handle != 0) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, handle);
+				break;
+			}
+			case RaiserOpcode.RcDec: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const cyclic = ((word >> 24) & 65535) == 1;
+				if (!cyclic && vm.sched.futures.counts.dead.length == 0 && rcDecUnlessLast(vm.objectHeap, slots[fb + ia])) break;
+				vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget;
+				vmRcDec(vm, ia, cyclic);
+				if (vm.halted) vmNoteSite(vm, func, pc);
+				if (vm.halted || vm.yielded) return;
+				ip = vm.ip;
+				fb = vm.base;
+				if (vm.funcIdx != funcIdx) {
+					funcIdx = vm.funcIdx;
+					func = mod.functions[funcIdx];
+					code = func.packed;
+					if (code.length != func.code.length) assertPacked(func);
+				}
+				slots = vm.regs.slots;
+				objects = vm.objectHeap.objects;
+				budget = vm.loopLimit - vm.loopCount;
+				break;
+			}
+			case RaiserOpcode.WasMoved: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const at = fb + (ia >> 3);
+				const moved = slots[at];
+				slots[at] = 0;
+				if (inRefFile((ia & 7) as RaiserRegClass)) {
+					if (((word >> 24) & 65535) == 1) vmFreeMovedCell(vm, moved);
+					else releaseShell(vm, moved);
+				}
+				break;
+			}
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -8981,6 +9016,32 @@ test "placed: RcKeptCheck passes a destroy routine that kept nothing and fails o
 	assert clean.error == "" && vmLiveCount(clean) == 0, clean.error;
 	const kept = keptRoutine(true);
 	assert kept.error.includes("onDestroy kept a reference to the Cell it destroys"), kept.error;
+}
+
+test "an RcDec of a shared cell only counts down, and the last one runs the destroy routine before the caller's next instruction" {
+	const cell = createClassType("Cell", -1, [], [], []);
+	cell.destroyFn = 1;
+	const main = mainWithClasses([
+		raiserABC(RaiserOpcode.NewObject, 0, 1, 0),
+		raiserABC(RaiserOpcode.LoadInt, 1, immField(7), 0),
+		raiserABC(RaiserOpcode.RcInc, 0, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.RcDec, 0, 0, 0),
+		raiserABC(RaiserOpcode.AddI64Imm, 2, 1, immField(1)),
+		raiserABC(RaiserOpcode.Print, 2, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+	], [RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Word], [cell], []);
+	const destroy = createRaiserFunction("destroy", [
+		raiserABC(RaiserOpcode.LoadInt, 1, immField(99), 0),
+		raiserABC(RaiserOpcode.Print, 1, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], [], 1, 1, 2, [RaiserRegClass.Ref, RaiserRegClass.Word]);
+	const vm = execModule(createRaiserModule("placed", [main, destroy], 0));
+	assert vm.error == "", vm.error;
+	assert vm.output == "7\n99\n8\n", vm.output;
+	assert vm.exitValue.intVal == 8;
+	assert vmLiveCount(vm) == 0;
 }
 
 test "WasMoved clears a word register to 0 and a ref register to nil without touching a count" {
