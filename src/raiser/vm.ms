@@ -5570,6 +5570,10 @@ export function hostReturnBool(vm: RaiserVM, b: boolean): void {
 	setRegBool(vm, vm.hostResult, b);
 }
 
+export function hostArgBool(vm: RaiserVM, i: int32): boolean {
+	return hostArgInt(vm, i) != 0;
+}
+
 // --- Stack trace ---
 
 export function vmDumpStack(vm: RaiserVM): string {

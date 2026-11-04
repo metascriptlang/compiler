@@ -8,7 +8,7 @@ import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
 import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
-import { vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
+import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -43,6 +43,21 @@ export interface Routine {
 }
 
 export { RaiserValue, RaiserValueKind } from "../raiser/value";
+export {
+	RaiserVM,
+	RaiserInPlaceHostFn,
+	hostArgCount,
+	hostArgInt,
+	hostArgFloat,
+	hostArgBool,
+	hostArgString,
+	hostArg,
+	hostReturnInt,
+	hostReturnFloat,
+	hostReturnBool,
+	hostReturnString,
+	hostReturn,
+} from "../raiser/vm";
 export {
 	RaiserHostFn,
 	RaiserHostValue,
@@ -163,6 +178,16 @@ export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
 		} catch (e) {
 			raiseFromHost(e.message, false);
 			return boxVoid();
+		}
+	});
+}
+
+export function implementRoutineInPlace(nativeName: string, impl: RaiserInPlaceHostFn): void {
+	registerInPlaceHostFn(nativeName, (call: RaiserVM): void => {
+		try {
+			impl(call);
+		} catch (e) {
+			raiseFromHost(e.message, false);
 		}
 	});
 }
@@ -484,6 +509,41 @@ test "a host routine that throws raises into the script's catch" {
 	const r = callRoutine(interp, routineOf(interp, "guarded"), []);
 	assert r.ok, r.ok ? "" : r.error;
 	if (r.ok) assert r.value.text() == "caught: host refused";
+	removeAll(dir);
+}
+
+test "an in-place host routine reads int, float, bool and string arguments where the VM keeps them and writes its result there" {
+	implementRoutineInPlace("embedTest.mix", (call: RaiserVM): void => {
+		hostReturnString(call, `${hostArgInt(call, 0)} ${hostArgFloat(call, 1)} ${hostArgBool(call, 2)} ${hostArgString(call, 3)} ${hostArgCount(call)}`);
+	});
+	implementRoutineInPlace("embedTest.scale", (call: RaiserVM): void => {
+		hostReturnFloat(call, hostArgFloat(call, 0) * (hostArgInt(call, 1) as number));
+	});
+	implementRoutineInPlace("embedTest.odd", (call: RaiserVM): void => {
+		hostReturnBool(call, hostArgInt(call, 0) % 2 == 1);
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function mix(n: int64, x: number, b: boolean, s: string): string from "embedTest.mix";\n`
+		+ `extern function scale(x: number, k: int32): number from "embedTest.scale";\n`
+		+ `extern function odd(n: int32): boolean from "embedTest.odd";\n`
+		+ `export function run(n: int32): string { return mix(n * 2, scale(1.5, n), odd(n), "s" + n.toString()); }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	assert routineValue(interp, "run", [hostValue(boxInt(3))]).text() == "6 4.5 true s3 4";
+	assert routineValue(interp, "run", [hostValue(boxInt(4))]).text() == "8 6 false s4 4";
+	removeAll(dir);
+}
+
+test "an in-place host routine that throws raises into the script's catch, and the next call runs" {
+	implementRoutineInPlace("embedTest.failInPlace", (call: RaiserVM): void => {
+		if (hostArgInt(call, 0) < 0) throw new Error(`in-place refused ${hostArgInt(call, 0)}`);
+		hostReturnInt(call, hostArgInt(call, 0) + 1);
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function step(n: int32): int32 from "embedTest.failInPlace";\n`
+		+ `export function guarded(n: int32): string { try { return "got " + step(n).toString(); } catch (e) { return "caught: " + e.message; } }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	assert routineValue(interp, "guarded", [hostValue(boxInt(-2))]).text() == "caught: in-place refused -2";
+	assert routineValue(interp, "guarded", [hostValue(boxInt(6))]).text() == "got 7";
 	removeAll(dir);
 }
 
