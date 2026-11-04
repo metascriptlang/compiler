@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser error: 'corpus802Twice' cannot run on the Raiser: no host bridge for 'corpus802Twice'
 // Parity program — a C header imported from modules in different directories names one file,
 // so its companion `.c` compiles and links once; the second path reaches it through `..`.
 // Axes: importers one directory apart (`lib/` and `app/`), two levels apart (`a/b/` and `c/d/`).
