@@ -41,6 +41,7 @@ test "moduleConstShare: a local bound from a module const that tasks share takes
 	const shapes = [
 		{ name: "a local bound to its closure field", probe: "function probe(i: uint32): uint32 { const k = T.keyOf; return k(i); }" },
 		{ name: "a local copy of the const", probe: "function probe(i: uint32): uint32 { const t = T; return t.keyOf(i); }" },
+		{ name: "a closure calling that local", probe: "function probe(i: uint32): uint32 { const k = T.keyOf; const g = (): uint32 => k(i); return g(); }" },
 	];
 	for (const arm of [{ name: "plain", decls: PLAIN }, { name: "Readonly", decls: READONLY }]) {
 		for (const shape of shapes) {

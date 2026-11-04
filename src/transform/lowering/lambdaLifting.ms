@@ -1525,6 +1525,16 @@ test "a shared env holds an inferred nullable ref read two called closures deep 
 	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Cursor, envDump(stmts);
 }
 
+test "a shared env holds a lent closure local its called closure calls uncounted" {
+	const stmts = checkedLifted(LENT + "function f(a: Readonly<Item>, pick: (x: int32) => int32): int32 { const k = pick; const g = (): int32 => k(a.v); return g(); }");
+	assert envFieldKind(stmts, "Env_f_shared", "k") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a shared env keeps a closure local counted when the closure that calls it is returned" {
+	const stmts = checkedLifted(LENT + "function f(pick: (x: int32) => int32): () => int32 { const k = pick; const g = (): int32 => k(1); return g; }");
+	assert envFieldKind(stmts, "Env_f_shared", "k") == TypeKind.Function, envDump(stmts);
+}
+
 test "a shared env keeps a nullable ref counted when its closure is returned" {
 	const stmts = checkedLifted(LENT + "function f(a: Item): () => boolean { const best = a.next; const get = (): boolean => best != null; return get; }");
 	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Union, envDump(stmts);
