@@ -1,9 +1,11 @@
 import { newGhash, updateGhash, finishGhash, storeBE64 } from "./ghash";
 
 /**
- * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: eight blocks run at once as 32 words, so the
- * cipher reads no table indexed by the key or the data. The key schedule reads its S-box through a masked select
- * over both 128-byte halves. A key schedule is the packed round keys, the same words for both directions.
+ * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: `8 * LANES` blocks run at once as 32 words
+ * of `LANES` 32-bit lanes (blocks `8g .. 8g + 7` in lane `g`; two lanes in a uint64 on C, one uint32 on JS, where a
+ * uint64 is a BigInt), so the cipher reads no table indexed by the key or the data. The key schedule reads its S-box
+ * through a masked select over both 128-byte halves. A key schedule is the packed round keys, the same words for both
+ * directions.
  */
 
 function mul2(n: int32): int32 {
@@ -44,6 +46,49 @@ function rotl(n: uint32, by: uint32): uint32 {
 	return (n << by) | (n >> (32 - by));
 }
 
+when (c) {
+	type Word = uint64;
+	const LANES: int32 = 2;
+
+	function splatWord(x: uint32): Word {
+		return (x as uint64) | ((x as uint64) << 32);
+	}
+
+	function laneWord(lo: uint32, hi: uint32): Word {
+		return (lo as uint64) | ((hi as uint64) << 32);
+	}
+
+	function laneOf(w: Word, g: int32): uint32 {
+		return ((w >> ((32 * g) as uint64)) & 0xffffffff) as uint32;
+	}
+
+	function laneRotl(x: Word, by: Word): Word {
+		const low = splatWord(((1 as uint32) << (by as uint32)) - 1);
+		return ((x << by) & ~low) | ((x >> (32 - by)) & low);
+	}
+} else {
+	type Word = uint32;
+	const LANES: int32 = 1;
+
+	function splatWord(x: uint32): Word {
+		return x;
+	}
+
+	function laneWord(lo: uint32, hi: uint32): Word {
+		return lo;
+	}
+
+	function laneOf(w: Word, g: int32): uint32 {
+		return w;
+	}
+
+	function laneRotl(x: Word, by: Word): Word {
+		return rotl(x, by);
+	}
+}
+
+const NBLOCKS: int32 = 8 * LANES;
+
 function loadLE(data: Readonly<uint8[]>, at: int32): uint32 {
 	return (data[at] as uint32) | ((data[at + 1] as uint32) << 8) | ((data[at + 2] as uint32) << 16) | ((data[at + 3] as uint32) << 24);
 }
@@ -59,7 +104,7 @@ function swapBytes(n: uint32): uint32 {
 	return ((n & 0xff) << 24) | (((n >> 8) & 0xff) << 16) | (((n >> 16) & 0xff) << 8) | (n >> 24);
 }
 
-function sbox(u: uint32[], at: int32): void {
+function sbox(u: Word[], at: int32): void {
 	const s0 = u[at + 4] ^ u[at + 16];
 	const s1 = u[at + 20] ^ u[at + 28];
 	const s2 = u[at + 12] ^ s0;
@@ -165,7 +210,7 @@ function sbox(u: uint32[], at: int32): void {
 	u[at + 28] = ~(a16 ^ r11);
 }
 
-function mixColumns(st: uint32[]): void {
+function mixColumns(st: Word[]): void {
 	const t2_0 = st[0] ^ st[1];
 	const t2_1 = st[1] ^ st[2];
 	const t2_2 = st[2] ^ st[3];
@@ -255,37 +300,37 @@ function mixColumns(st: uint32[]): void {
 	st[3] = t0_3 ^ t2_0 ^ t;
 }
 
-function subBytes(st: uint32[]): void {
+function subBytes(st: Word[]): void {
 	sbox(st, 0);
 	sbox(st, 1);
 	sbox(st, 2);
 	sbox(st, 3);
 }
 
-function shiftRows(st: uint32[]): void {
+function shiftRows(st: Word[]): void {
 	for (let i = 0; i < 32; i += 4) {
-		st[i + 1] = rotl(st[i + 1], 24);
-		st[i + 2] = rotl(st[i + 2], 16);
-		st[i + 3] = rotl(st[i + 3], 8);
+		st[i + 1] = laneRotl(st[i + 1], 24);
+		st[i + 2] = laneRotl(st[i + 2], 16);
+		st[i + 3] = laneRotl(st[i + 3], 8);
 	}
 }
 
-function invShiftRows(st: uint32[]): void {
+function invShiftRows(st: Word[]): void {
 	for (let i = 0; i < 32; i += 4) {
-		st[i + 1] = rotl(st[i + 1], 8);
-		st[i + 2] = rotl(st[i + 2], 16);
-		st[i + 3] = rotl(st[i + 3], 24);
+		st[i + 1] = laneRotl(st[i + 1], 8);
+		st[i + 2] = laneRotl(st[i + 2], 16);
+		st[i + 3] = laneRotl(st[i + 3], 24);
 	}
 }
 
 // MixColumns has order four, so its inverse is three applications.
-function invMixColumns(st: uint32[]): void {
+function invMixColumns(st: Word[]): void {
 	mixColumns(st);
 	mixColumns(st);
 	mixColumns(st);
 }
 
-function invAffineGroup(st: uint32[], g: int32): void {
+function invAffineGroup(st: Word[], g: int32): void {
 	const a0 = ~st[g + 28];
 	const a1 = ~st[g + 24];
 	const a2 = st[g + 20];
@@ -304,24 +349,24 @@ function invAffineGroup(st: uint32[], g: int32): void {
 	st[g + 28] = a2 ^ a5 ^ a7;
 }
 
-function invSubBytes(st: uint32[]): void {
+function invSubBytes(st: Word[]): void {
 	for (let g = 0; g < 4; g++) invAffineGroup(st, g);
 	subBytes(st);
 	for (let g = 0; g < 4; g++) invAffineGroup(st, g);
 }
 
-function addRoundKey(st: uint32[], keys: Readonly<uint32[]>, round: int32): void {
+function addRoundKey(st: Word[], keys: Readonly<Word[]>, round: int32): void {
 	const at = round * 32;
 	for (let i = 0; i < 32; i++) st[i] ^= keys[at + i];
 }
 
-function swapMove(st: uint32[], a: int32, b: int32, mask: uint32, n: uint32): void {
-	const tmp = (st[b] ^ (st[a] >> n)) & mask;
+function swapMove(st: Word[], a: int32, b: int32, mask: uint32, n: Word): void {
+	const tmp = (st[b] ^ (st[a] >> n)) & splatWord(mask);
 	st[b] ^= tmp;
 	st[a] ^= tmp << n;
 }
 
-function transposeBits(st: uint32[]): void {
+function transposeBits(st: Word[]): void {
 	for (let k = 0; k < 4; k++) {
 		swapMove(st, k + 4, k, 0x55555555, 1);
 		swapMove(st, k + 12, k + 8, 0x55555555, 1);
@@ -338,7 +383,7 @@ function transposeBits(st: uint32[]): void {
 	}
 }
 
-function packState(st: uint32[]): void {
+function packState(st: Word[]): void {
 	for (let i = 0; i < 32; i += 4) {
 		swapMove(st, i, i + 1, 0x00ff00ff, 8);
 		swapMove(st, i + 2, i + 3, 0x00ff00ff, 8);
@@ -348,7 +393,7 @@ function packState(st: uint32[]): void {
 	transposeBits(st);
 }
 
-function unpackState(st: uint32[]): void {
+function unpackState(st: Word[]): void {
 	transposeBits(st);
 	for (let i = 0; i < 32; i += 4) {
 		swapMove(st, i, i + 2, 0x0000ffff, 16);
@@ -358,7 +403,7 @@ function unpackState(st: uint32[]): void {
 	}
 }
 
-function encryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
+function encryptState(keys: Readonly<Word[]>, st: Word[]): void {
 	const rounds = keys.length / 32 - 1;
 	addRoundKey(st, keys, 0);
 	for (let r = 1; r < rounds; r++) {
@@ -372,7 +417,7 @@ function encryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
 	addRoundKey(st, keys, rounds);
 }
 
-function decryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
+function decryptState(keys: Readonly<Word[]>, st: Word[]): void {
 	const rounds = keys.length / 32 - 1;
 	addRoundKey(st, keys, rounds);
 	for (let r = rounds - 1; r > 0; r--) {
@@ -386,8 +431,8 @@ function decryptState(keys: Readonly<uint32[]>, st: uint32[]): void {
 	addRoundKey(st, keys, 0);
 }
 
-/** The packed round keys of a 16-, 24- or 32-byte key: (rounds + 1) groups of 32 words, each the round key in all eight lanes. */
-export function expandKey(key: Readonly<uint8[]>): uint32[] {
+/** The packed round keys of a 16-, 24- or 32-byte key: (rounds + 1) groups of 32 words, each the round key in every block. */
+export function expandKey(key: Readonly<uint8[]>): Word[] {
 	if (key.length != 16 && key.length != 24 && key.length != 32) throw new Error(`aes: key must be 16, 24 or 32 bytes, got ${key.length}`);
 	const nk = key.length / 4;
 	const words = new Array<uint32>(key.length + 28);
@@ -404,10 +449,10 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 		words[i] = words[i - nk] ^ t;
 	}
 	const roundKeys = words.length / 4;
-	const packed = new Array<uint32>(roundKeys * 32);
-	const st = new Array<uint32>(32);
+	const packed = new Array<Word>(roundKeys * 32);
+	const st = new Array<Word>(32);
 	for (let r = 0; r < roundKeys; r++) {
-		for (let i = 0; i < 32; i++) st[i] = words[r * 4 + (i & 3)];
+		for (let i = 0; i < 32; i++) st[i] = splatWord(words[r * 4 + (i & 3)]);
 		packState(st);
 		for (let i = 0; i < 32; i++) packed[r * 32 + i] = st[i];
 	}
@@ -417,14 +462,14 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 }
 
 /** The key schedule for decryption, which the bitsliced cipher shares with encryption. */
-export function expandKeyDecrypt(key: Readonly<uint8[]>): uint32[] {
+export function expandKeyDecrypt(key: Readonly<uint8[]>): Word[] {
 	return expandKey(key);
 }
 
-/** Eight blocks in flight: the bitsliced state and their bytes. */
+/** `NBLOCKS` blocks in flight: the bitsliced state and their bytes. */
 class Batch {
-	st: uint32[] = new Array<uint32>(32);
-	bytes: uint8[] = new Array<uint8>(128);
+	st: Word[] = new Array<Word>(32);
+	bytes: uint8[] = new Array<uint8>(NBLOCKS * 16);
 }
 
 function wipe(batch: Batch): void {
@@ -435,8 +480,12 @@ function wipe(batch: Batch): void {
 // Loads `count` blocks of `src` from `at` into the state, zero blocks after them.
 function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int32): void {
 	const st = batch.st;
-	for (let block = 0; block < 8; block++) {
-		for (let w = 0; w < 4; w++) st[block * 4 + w] = block < count ? loadLE(src, at + block * 16 + w * 4) : 0;
+	for (let p = 0; p < 8; p++) {
+		for (let w = 0; w < 4; w++) {
+			const lo = p < count ? loadLE(src, at + p * 16 + w * 4) : 0;
+			const hi = p + 8 < count ? loadLE(src, at + (p + 8) * 16 + w * 4) : 0;
+			st[p * 4 + w] = laneWord(lo, hi);
+		}
 	}
 	packState(st);
 }
@@ -444,40 +493,43 @@ function loadBlocks(batch: Batch, src: Readonly<uint8[]>, at: int32, count: int3
 function storeBlocks(batch: Batch): void {
 	const st = batch.st;
 	unpackState(st);
-	for (let i = 0; i < 32; i++) storeLE(batch.bytes, i * 4, st[i]);
+	for (let g = 0; g < LANES; g++) {
+		for (let i = 0; i < 32; i++) storeLE(batch.bytes, g * 128 + i * 4, laneOf(st[i], g));
+	}
 }
 
-// The key stream of counters `first .. first + 7` under `nonce`; with `hashKey` block 0 is the all-zero block instead.
-function counterBlocks(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, first: uint32, hashKey: boolean): void {
+// The key stream of counters `first .. first + NBLOCKS - 1` under `nonce`; with `hashKey` block 0 is the all-zero block instead.
+function counterBlocks(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, first: uint32, hashKey: boolean): void {
 	const st = batch.st;
 	const n0 = loadLE(nonce, 0);
 	const n1 = loadLE(nonce, 4);
 	const n2 = loadLE(nonce, 8);
-	for (let block = 0; block < 8; block++) {
-		const zero = hashKey && block == 0;
-		st[block * 4] = zero ? 0 : n0;
-		st[block * 4 + 1] = zero ? 0 : n1;
-		st[block * 4 + 2] = zero ? 0 : n2;
-		st[block * 4 + 3] = zero ? 0 : swapBytes(first + (block as uint32));
+	for (let p = 0; p < 8; p++) {
+		const zero = hashKey && p == 0;
+		st[p * 4] = laneWord(zero ? 0 : n0, n0);
+		st[p * 4 + 1] = laneWord(zero ? 0 : n1, n1);
+		st[p * 4 + 2] = laneWord(zero ? 0 : n2, n2);
+		st[p * 4 + 3] = laneWord(zero ? 0 : swapBytes(first + (p as uint32)), swapBytes(first + ((p + 8) as uint32)));
 	}
 	packState(st);
 	encryptState(keys, st);
 	storeBlocks(batch);
 }
 
-// dst[dstAt, +length) = src[srcAt, +length) ^ the key stream from counter 2, whose first 96 bytes are already at batch.bytes[32, 128).
-function ctrXor(keys: Readonly<uint32[]>, batch: Batch, nonce: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32): void {
+// dst[dstAt, +length) = src[srcAt, +length) ^ the key stream from counter 2, whose first blocks are already at batch.bytes[32, NBLOCKS * 16).
+function ctrXor(keys: Readonly<Word[]>, batch: Batch, nonce: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32): void {
 	const stream = batch.bytes;
+	const end = NBLOCKS * 16;
 	let streamAt = 32;
-	let counter: uint32 = 8;
+	let counter = NBLOCKS as uint32;
 	let done = 0;
 	while (done < length) {
-		if (streamAt == 128) {
+		if (streamAt == end) {
 			counterBlocks(keys, batch, nonce, counter, false);
-			counter += 8;
+			counter += NBLOCKS as uint32;
 			streamAt = 0;
 		}
-		const count = Math.min(128 - streamAt, length - done);
+		const count = Math.min(end - streamAt, length - done);
 		for (let i = 0; i < count; i++) dst[dstAt + done + i] = src[srcAt + done + i] ^ stream[streamAt + i];
 		streamAt += count;
 		done += count;
@@ -509,7 +561,7 @@ function gcmTag(keyed: Readonly<uint8[]>, aad: Readonly<uint8[]>, text: Readonly
  * AES-GCM encryption of `src[srcAt, +length)` into `dst[dstAt, +length)` (the two may be the same range) and its
  * 16-byte tag into `tag[tagAt, +16)`. The nonce must be fresh for every call under one key.
  */
-export function gcmEncryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32, tag: uint8[], tagAt: int32): void {
+export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, dst: uint8[], dstAt: int32, tag: uint8[], tagAt: int32): void {
 	requireNonce(nonce);
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
@@ -529,7 +581,7 @@ export function gcmEncryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
  * AES-GCM decryption of `src[srcAt, +length)` into `dst[dstAt, +length)` once the tag at `tag[tagAt, +16)` verifies;
  * false, with nothing written, when it does not.
  */
-export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, tag: Readonly<uint8[]>, tagAt: int32, dst: uint8[], dstAt: int32): boolean {
+export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, aad: Readonly<uint8[]>, src: Readonly<uint8[]>, srcAt: int32, length: int32, tag: Readonly<uint8[]>, tagAt: int32, dst: uint8[], dstAt: int32): boolean {
 	requireNonce(nonce);
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
@@ -551,7 +603,7 @@ export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 }
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
-export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
+export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, plain: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] {
 	requireNonce(nonce);
 	const size = plain.length;
 	const sealed = new Array<uint8>(12 + size + 16);
@@ -561,7 +613,7 @@ export function gcmSealWithNonce(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]
 }
 
 /** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
-export function gcmOpen(xk: Readonly<uint32[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
+export function gcmOpen(xk: Readonly<Word[]>, sealed: Readonly<uint8[]>, aad: Readonly<uint8[]>): uint8[] | null {
 	if (sealed.length < 28) return null;
 	const size = sealed.length - 28;
 	const plain = new Array<uint8>(size);
@@ -574,7 +626,7 @@ function requireIv(iv: Readonly<uint8[]>): void {
 }
 
 /** AES-CBC with PKCS#7 padding; `iv` is 16 bytes. */
-export function cbcEncrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, plain: Readonly<uint8[]>): uint8[] {
+export function cbcEncrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, plain: Readonly<uint8[]>): uint8[] {
 	requireIv(iv);
 	const size = plain.length;
 	const padding = 16 - (size % 16);
@@ -597,14 +649,14 @@ export function cbcEncrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, plain:
 }
 
 /** The plain text of an AES-CBC cipher text, or null for an empty or ragged input or bad padding; `xk` is from `expandKeyDecrypt`. */
-export function cbcDecrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>): uint8[] | null {
+export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: Readonly<uint8[]>): uint8[] | null {
 	requireIv(iv);
 	const size = cipher.length;
 	if (size == 0 || size % 16 != 0) return null;
 	const out = new Array<uint8>(size);
 	const batch = new Batch();
-	for (let at = 0; at < size; at += 128) {
-		const count = Math.min(8, (size - at) / 16);
+	for (let at = 0; at < size; at += NBLOCKS * 16) {
+		const count = Math.min(NBLOCKS, (size - at) / 16);
 		loadBlocks(batch, cipher, at, count);
 		decryptState(xk, batch.st);
 		storeBlocks(batch);
