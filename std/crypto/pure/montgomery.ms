@@ -28,9 +28,14 @@ export function zeroLimbs(): Limbs {
 
 /** `a` when `flag` is 0, `b` when it is 1, without a branch. */
 export function select(md: Readonly<Modulus>, flag: uint32, a: Limbs, b: Limbs): Limbs {
+	return md.words == 8 ? selectWords(flag, a, b, 8) : selectWords(flag, a, b, 12);
+}
+
+@inline
+function selectWords(flag: uint32, a: Limbs, b: Limbs, n: int32): Limbs {
 	const mask = (0 as uint32) - flag;
 	let out = zeroLimbs();
-	for (let i = 0; i < md.words; i++) out[i] = (a[i] & ~mask) | (b[i] & mask);
+	for (let i = 0; i < n; i++) out[i] = (a[i] & ~mask) | (b[i] & mask);
 	return out;
 }
 
@@ -42,20 +47,25 @@ export function nonzero(md: Readonly<Modulus>, a: Limbs): uint32 {
 }
 
 /** `t` minus m when that does not borrow past `top`, the bit above the low limbs; `t` is below 2m. */
-function subtractOnce(md: Readonly<Modulus>, t: Limbs, top: uint32): Limbs {
+@inline
+function subtractOnce(md: Readonly<Modulus>, t: Limbs, top: uint32, n: int32): Limbs {
 	let d = zeroLimbs();
 	let borrow: uint64 = 0;
-	for (let i = 0; i < md.words; i++) {
+	for (let i = 0; i < n; i++) {
 		const x = (t[i] as uint64) - (md.m[i] as uint64) - borrow;
 		d[i] = x as uint32;
 		borrow = x >> 63;
 	}
-	const under = (((top as uint64) - borrow) >> 63) as uint32;
-	return select(md, under, d, t);
+	return selectWords((((top as uint64) - borrow) >> 63) as uint32, d, t, n);
 }
 
+/** One routine per limb count, so the C compiler unrolls each with its count known. */
 export function mul(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
-	const n = md.words;
+	return md.words == 8 ? mulWords(md, a, b, 8) : mulWords(md, a, b, 12);
+}
+
+@inline
+function mulWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 	let t: uint32[14] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 	for (let i = 0; i < n; i++) {
 		const bi = b[i] as uint64;
@@ -82,7 +92,7 @@ export function mul(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
 	}
 	let low = zeroLimbs();
 	for (let i = 0; i < n; i++) low[i] = t[i];
-	return subtractOnce(md, low, t[n]);
+	return subtractOnce(md, low, t[n], n);
 }
 
 export function square(md: Readonly<Modulus>, a: Limbs): Limbs {
@@ -90,20 +100,30 @@ export function square(md: Readonly<Modulus>, a: Limbs): Limbs {
 }
 
 export function add(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
+	return md.words == 8 ? addWords(md, a, b, 8) : addWords(md, a, b, 12);
+}
+
+@inline
+function addWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 	let s = zeroLimbs();
 	let carry: uint64 = 0;
-	for (let i = 0; i < md.words; i++) {
+	for (let i = 0; i < n; i++) {
 		const x = (a[i] as uint64) + (b[i] as uint64) + carry;
 		s[i] = x as uint32;
 		carry = x >> 32;
 	}
-	return subtractOnce(md, s, carry as uint32);
+	return subtractOnce(md, s, carry as uint32, n);
 }
 
 export function sub(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
+	return md.words == 8 ? subWords(md, a, b, 8) : subWords(md, a, b, 12);
+}
+
+@inline
+function subWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 	let d = zeroLimbs();
 	let borrow: uint64 = 0;
-	for (let i = 0; i < md.words; i++) {
+	for (let i = 0; i < n; i++) {
 		const x = (a[i] as uint64) - (b[i] as uint64) - borrow;
 		d[i] = x as uint32;
 		borrow = x >> 63;
@@ -111,7 +131,7 @@ export function sub(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
 	const mask = (0 as uint32) - (borrow as uint32);
 	let out = zeroLimbs();
 	let carry: uint64 = 0;
-	for (let i = 0; i < md.words; i++) {
+	for (let i = 0; i < n; i++) {
 		const x = (d[i] as uint64) + ((md.m[i] & mask) as uint64) + carry;
 		out[i] = x as uint32;
 		carry = x >> 32;
@@ -180,7 +200,7 @@ export function fromBytes(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from:
 
 /** Big-endian bytes, `4 * words` of them, reduced by one subtraction, so exact when m > 2^(32 * words - 1). */
 export function reduceBytes(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from: int32): Limbs {
-	return subtractOnce(md, load(md, bytes, from), 0);
+	return subtractOnce(md, load(md, bytes, from), 0, md.words);
 }
 
 /** Plain limbs as `4 * words` big-endian bytes. */
