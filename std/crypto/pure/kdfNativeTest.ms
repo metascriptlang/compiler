@@ -257,3 +257,19 @@ test "streaming hmac matches one-shot and restarts on the same key after finishi
 	updateHmac(hmac, data);
 	assert finishHmac(hmac).encodeHex() == expected;
 }
+
+function allZero(bytes: Readonly<uint8[]>): boolean {
+	for (let i = 0; i < bytes.length; i++) if (bytes[i] != 0) return false;
+	return true;
+}
+
+test "finishing an hmac wipes the inner digest and the outer block and still restarts on the key" {
+	const hmac = newHmac(kindSha256, rep(131, 0xaa));
+	updateHmac(hmac, text("message"));
+	const first = finishHmac(hmac).encodeHex();
+	assert allZero(hmac.innerDigest);
+	assert allZero(hmac.outer.block);
+	updateHmac(hmac, text("message"));
+	assert finishHmac(hmac).encodeHex() == first;
+	assert first == hmacOf(kindSha256, rep(131, 0xaa), text("message")).encodeHex();
+}
