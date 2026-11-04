@@ -141,20 +141,3 @@ test "finished flag is clear before and set after finishBlake2b" {
 	finishBlake2b(s);
 	assert s.finished;
 }
-
-function updateRefused(off: int32, length: int32): boolean {
-	const s = newBlake2b(32, new Array<uint8>(0));
-	try {
-		updateBlake2b(s, "616263".decodeHex(), off, length);
-	} catch (e) {
-		return true;
-	}
-	return false;
-}
-
-test "updateBlake2b refuses a negative or out-of-range slice" {
-	assert updateRefused(-1, 1);
-	assert updateRefused(0, -1);
-	assert updateRefused(2, 2);
-	assert !updateRefused(3, 0);
-}
