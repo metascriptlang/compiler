@@ -1,0 +1,40 @@
+import { x25519 } from "./x25519";
+import { encodeHex } from "../../core/encoding";
+import { X25519PrivateKey, X25519PublicKey, sharedSecretSync } from "../x25519/index";
+
+function nextSeed(seed: uint32): uint32 {
+	return seed * 1664525 + 1013904223;
+}
+
+function vendorHex(scalar: uint8[], u: uint8[]): string {
+	const key = X25519PrivateKey.fromRawSync(scalar);
+	const peer = X25519PublicKey.importSync(u);
+	if (!key.ok || !peer.ok) return "vendor refused the key";
+	const shared = sharedSecretSync(key.value, peer.value);
+	return shared.ok ? encodeHex(shared.value) : "vendor refused the result";
+}
+
+test "pure x25519 matches the vendor on seeded scalars and points, high bit set and non-canonical u included" {
+	let seed: uint32 = 2551;
+	let checked = 0;
+	for (let round = 0; round < 400; round++) {
+		const scalar = new Array<uint8>(32);
+		const u = new Array<uint8>(32);
+		for (let i = 0; i < 32; i++) {
+			seed = nextSeed(seed);
+			scalar[i] = (seed >> 24) as uint8;
+			seed = nextSeed(seed);
+			u[i] = (seed >> 24) as uint8;
+		}
+		if (round < 20) {
+			// u = p + round + 2, a non-canonical encoding of round + 2, alternately with bit 255 set, which the ladder ignores.
+			for (let i = 1; i < 31; i++) u[i] = 0xff;
+			u[0] = (0xed + round + 2) as uint8;
+			u[31] = round % 2 == 0 ? 0x7f : 0xff;
+			if (u[0] < 0xed) continue;
+		}
+		assert encodeHex(x25519(scalar, u)) == vendorHex(scalar, u);
+		checked += 1;
+	}
+	assert checked >= 390;
+}
