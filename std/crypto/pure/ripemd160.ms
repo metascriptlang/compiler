@@ -25,7 +25,7 @@ export function newRipemd160(): Ripemd160State {
 	};
 }
 
-function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int32): void {
+function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int64): void {
 	const w0 = (data[off + 0] as uint32) | ((data[off + 1] as uint32) << 8) | ((data[off + 2] as uint32) << 16) | ((data[off + 3] as uint32) << 24);
 	const w1 = (data[off + 4] as uint32) | ((data[off + 5] as uint32) << 8) | ((data[off + 6] as uint32) << 16) | ((data[off + 7] as uint32) << 24);
 	const w2 = (data[off + 8] as uint32) | ((data[off + 9] as uint32) << 8) | ((data[off + 10] as uint32) << 16) | ((data[off + 11] as uint32) << 24);
@@ -862,9 +862,10 @@ function compress(s: Ripemd160State, data: Readonly<uint8[]>, off: int32): void 
 
 export function updateRipemd160(s: Ripemd160State, data: Readonly<uint8[]>): void {
 	if (s.finished) throw new Error("ripemd160: already finished");
-	const end = data.length as int32;
-	let at = 0;
-	const low = s.lengthLow + (end as uint32);
+	const end = data.length as int64;
+	let at: int64 = 0;
+	const low = s.lengthLow + ((end & 0xffffffff) as uint32);
+	s.lengthHigh += (end >> 32) as uint32;
 	if (low < s.lengthLow) s.lengthHigh += 1;
 	s.lengthLow = low;
 	if (s.filled > 0) {
