@@ -7,6 +7,8 @@ const maxWords = 2147483647;
 /** Scratch for one Argon2 run: the block under compression, the address blocks and the byte forms the hashes read. */
 class Argon2Work {
 	buf: uint32[256];
+	wide: uint64[128];
+	input: uint64[128];
 	address: uint32[];
 	h0: uint8[];
 	bytes: uint8[];
@@ -16,7 +18,7 @@ class Argon2Work {
 }
 
 function newWork(): Argon2Work {
-	return { buf: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4), chain: new Array<uint8>(64), last: new Array<uint32>(256) };
+	return { buf: [0], wide: [0], input: [0], address: new Array<uint32>(768), h0: new Array<uint8>(72), bytes: new Array<uint8>(1024), word: new Array<uint8>(4), chain: new Array<uint8>(64), last: new Array<uint32>(256) };
 }
 
 function put32(out: uint8[], at: int32, value: number): void {
@@ -106,8 +108,254 @@ function permute(w: Argon2Work, i0: int32, i1: int32, i2: int32, i3: int32, i4: 
 	mixG(w, i3, i4, i9, i14);
 }
 
+function fBlaMka(x: uint64, y: uint64): uint64 {
+	return x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff);
+}
+
+function rotr64(x: uint64, n: uint64): uint64 {
+	return (x >> n) | (x << (64 - n));
+}
+
+/** The BlaMka round over row `at` of `w.wide`; constant offsets let the C compiler keep the words in vector registers. */
+function roundRow(w: Argon2Work, at: int64): void {
+	let v0 = w.wide[at];
+	let v1 = w.wide[at + 1];
+	let v2 = w.wide[at + 2];
+	let v3 = w.wide[at + 3];
+	let v4 = w.wide[at + 4];
+	let v5 = w.wide[at + 5];
+	let v6 = w.wide[at + 6];
+	let v7 = w.wide[at + 7];
+	let v8 = w.wide[at + 8];
+	let v9 = w.wide[at + 9];
+	let v10 = w.wide[at + 10];
+	let v11 = w.wide[at + 11];
+	let v12 = w.wide[at + 12];
+	let v13 = w.wide[at + 13];
+	let v14 = w.wide[at + 14];
+	let v15 = w.wide[at + 15];
+	v0 = fBlaMka(v0, v4);
+	v12 = rotr64(v12 ^ v0, 32);
+	v8 = fBlaMka(v8, v12);
+	v4 = rotr64(v4 ^ v8, 24);
+	v0 = fBlaMka(v0, v4);
+	v12 = rotr64(v12 ^ v0, 16);
+	v8 = fBlaMka(v8, v12);
+	v4 = rotr64(v4 ^ v8, 63);
+	v1 = fBlaMka(v1, v5);
+	v13 = rotr64(v13 ^ v1, 32);
+	v9 = fBlaMka(v9, v13);
+	v5 = rotr64(v5 ^ v9, 24);
+	v1 = fBlaMka(v1, v5);
+	v13 = rotr64(v13 ^ v1, 16);
+	v9 = fBlaMka(v9, v13);
+	v5 = rotr64(v5 ^ v9, 63);
+	v2 = fBlaMka(v2, v6);
+	v14 = rotr64(v14 ^ v2, 32);
+	v10 = fBlaMka(v10, v14);
+	v6 = rotr64(v6 ^ v10, 24);
+	v2 = fBlaMka(v2, v6);
+	v14 = rotr64(v14 ^ v2, 16);
+	v10 = fBlaMka(v10, v14);
+	v6 = rotr64(v6 ^ v10, 63);
+	v3 = fBlaMka(v3, v7);
+	v15 = rotr64(v15 ^ v3, 32);
+	v11 = fBlaMka(v11, v15);
+	v7 = rotr64(v7 ^ v11, 24);
+	v3 = fBlaMka(v3, v7);
+	v15 = rotr64(v15 ^ v3, 16);
+	v11 = fBlaMka(v11, v15);
+	v7 = rotr64(v7 ^ v11, 63);
+	v0 = fBlaMka(v0, v5);
+	v15 = rotr64(v15 ^ v0, 32);
+	v10 = fBlaMka(v10, v15);
+	v5 = rotr64(v5 ^ v10, 24);
+	v0 = fBlaMka(v0, v5);
+	v15 = rotr64(v15 ^ v0, 16);
+	v10 = fBlaMka(v10, v15);
+	v5 = rotr64(v5 ^ v10, 63);
+	v1 = fBlaMka(v1, v6);
+	v12 = rotr64(v12 ^ v1, 32);
+	v11 = fBlaMka(v11, v12);
+	v6 = rotr64(v6 ^ v11, 24);
+	v1 = fBlaMka(v1, v6);
+	v12 = rotr64(v12 ^ v1, 16);
+	v11 = fBlaMka(v11, v12);
+	v6 = rotr64(v6 ^ v11, 63);
+	v2 = fBlaMka(v2, v7);
+	v13 = rotr64(v13 ^ v2, 32);
+	v8 = fBlaMka(v8, v13);
+	v7 = rotr64(v7 ^ v8, 24);
+	v2 = fBlaMka(v2, v7);
+	v13 = rotr64(v13 ^ v2, 16);
+	v8 = fBlaMka(v8, v13);
+	v7 = rotr64(v7 ^ v8, 63);
+	v3 = fBlaMka(v3, v4);
+	v14 = rotr64(v14 ^ v3, 32);
+	v9 = fBlaMka(v9, v14);
+	v4 = rotr64(v4 ^ v9, 24);
+	v3 = fBlaMka(v3, v4);
+	v14 = rotr64(v14 ^ v3, 16);
+	v9 = fBlaMka(v9, v14);
+	v4 = rotr64(v4 ^ v9, 63);
+	w.wide[at] = v0;
+	w.wide[at + 1] = v1;
+	w.wide[at + 2] = v2;
+	w.wide[at + 3] = v3;
+	w.wide[at + 4] = v4;
+	w.wide[at + 5] = v5;
+	w.wide[at + 6] = v6;
+	w.wide[at + 7] = v7;
+	w.wide[at + 8] = v8;
+	w.wide[at + 9] = v9;
+	w.wide[at + 10] = v10;
+	w.wide[at + 11] = v11;
+	w.wide[at + 12] = v12;
+	w.wide[at + 13] = v13;
+	w.wide[at + 14] = v14;
+	w.wide[at + 15] = v15;
+}
+
+/** The BlaMka round over column pair `at` of `w.wide`. */
+function roundColumn(w: Argon2Work, at: int64): void {
+	let v0 = w.wide[at];
+	let v1 = w.wide[at + 1];
+	let v2 = w.wide[at + 16];
+	let v3 = w.wide[at + 17];
+	let v4 = w.wide[at + 32];
+	let v5 = w.wide[at + 33];
+	let v6 = w.wide[at + 48];
+	let v7 = w.wide[at + 49];
+	let v8 = w.wide[at + 64];
+	let v9 = w.wide[at + 65];
+	let v10 = w.wide[at + 80];
+	let v11 = w.wide[at + 81];
+	let v12 = w.wide[at + 96];
+	let v13 = w.wide[at + 97];
+	let v14 = w.wide[at + 112];
+	let v15 = w.wide[at + 113];
+	v0 = fBlaMka(v0, v4);
+	v12 = rotr64(v12 ^ v0, 32);
+	v8 = fBlaMka(v8, v12);
+	v4 = rotr64(v4 ^ v8, 24);
+	v0 = fBlaMka(v0, v4);
+	v12 = rotr64(v12 ^ v0, 16);
+	v8 = fBlaMka(v8, v12);
+	v4 = rotr64(v4 ^ v8, 63);
+	v1 = fBlaMka(v1, v5);
+	v13 = rotr64(v13 ^ v1, 32);
+	v9 = fBlaMka(v9, v13);
+	v5 = rotr64(v5 ^ v9, 24);
+	v1 = fBlaMka(v1, v5);
+	v13 = rotr64(v13 ^ v1, 16);
+	v9 = fBlaMka(v9, v13);
+	v5 = rotr64(v5 ^ v9, 63);
+	v2 = fBlaMka(v2, v6);
+	v14 = rotr64(v14 ^ v2, 32);
+	v10 = fBlaMka(v10, v14);
+	v6 = rotr64(v6 ^ v10, 24);
+	v2 = fBlaMka(v2, v6);
+	v14 = rotr64(v14 ^ v2, 16);
+	v10 = fBlaMka(v10, v14);
+	v6 = rotr64(v6 ^ v10, 63);
+	v3 = fBlaMka(v3, v7);
+	v15 = rotr64(v15 ^ v3, 32);
+	v11 = fBlaMka(v11, v15);
+	v7 = rotr64(v7 ^ v11, 24);
+	v3 = fBlaMka(v3, v7);
+	v15 = rotr64(v15 ^ v3, 16);
+	v11 = fBlaMka(v11, v15);
+	v7 = rotr64(v7 ^ v11, 63);
+	v0 = fBlaMka(v0, v5);
+	v15 = rotr64(v15 ^ v0, 32);
+	v10 = fBlaMka(v10, v15);
+	v5 = rotr64(v5 ^ v10, 24);
+	v0 = fBlaMka(v0, v5);
+	v15 = rotr64(v15 ^ v0, 16);
+	v10 = fBlaMka(v10, v15);
+	v5 = rotr64(v5 ^ v10, 63);
+	v1 = fBlaMka(v1, v6);
+	v12 = rotr64(v12 ^ v1, 32);
+	v11 = fBlaMka(v11, v12);
+	v6 = rotr64(v6 ^ v11, 24);
+	v1 = fBlaMka(v1, v6);
+	v12 = rotr64(v12 ^ v1, 16);
+	v11 = fBlaMka(v11, v12);
+	v6 = rotr64(v6 ^ v11, 63);
+	v2 = fBlaMka(v2, v7);
+	v13 = rotr64(v13 ^ v2, 32);
+	v8 = fBlaMka(v8, v13);
+	v7 = rotr64(v7 ^ v8, 24);
+	v2 = fBlaMka(v2, v7);
+	v13 = rotr64(v13 ^ v2, 16);
+	v8 = fBlaMka(v8, v13);
+	v7 = rotr64(v7 ^ v8, 63);
+	v3 = fBlaMka(v3, v4);
+	v14 = rotr64(v14 ^ v3, 32);
+	v9 = fBlaMka(v9, v14);
+	v4 = rotr64(v4 ^ v9, 24);
+	v3 = fBlaMka(v3, v4);
+	v14 = rotr64(v14 ^ v3, 16);
+	v9 = fBlaMka(v9, v14);
+	v4 = rotr64(v4 ^ v9, 63);
+	w.wide[at] = v0;
+	w.wide[at + 1] = v1;
+	w.wide[at + 16] = v2;
+	w.wide[at + 17] = v3;
+	w.wide[at + 32] = v4;
+	w.wide[at + 33] = v5;
+	w.wide[at + 48] = v6;
+	w.wide[at + 49] = v7;
+	w.wide[at + 64] = v8;
+	w.wide[at + 65] = v9;
+	w.wide[at + 80] = v10;
+	w.wide[at + 81] = v11;
+	w.wide[at + 96] = v12;
+	w.wide[at + 97] = v13;
+	w.wide[at + 112] = v14;
+	w.wide[at + 113] = v15;
+}
+
+/** The compression function on native 64-bit words, for a backend where uint64 is a machine word. */
+function compressWide(w: Argon2Work, x: Span<uint32>, xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
+	const xAt = xPos as int64;
+	const yAt = yPos as int64;
+	const outAt = outPos as int64;
+	for (let i: int64 = 0; i < 128; i++) {
+		const lo = x[xAt + 2 * i] ^ x[yAt + 2 * i];
+		const hi = x[xAt + 2 * i + 1] ^ x[yAt + 2 * i + 1];
+		const v = (lo as uint64) | ((hi as uint64) << 32);
+		w.input[i] = v;
+		w.wide[i] = v;
+	}
+	for (let i: int64 = 0; i < 128; i += 16) roundRow(w, i);
+	for (let i: int64 = 0; i < 16; i += 2) roundColumn(w, i);
+	if (needXor) {
+		for (let i: int64 = 0; i < 128; i++) {
+			const v = w.input[i] ^ w.wide[i];
+			x[outAt + 2 * i] = x[outAt + 2 * i] ^ ((v & 0xffffffff) as uint32);
+			x[outAt + 2 * i + 1] = x[outAt + 2 * i + 1] ^ ((v >> 32) as uint32);
+		}
+	} else {
+		for (let i: int64 = 0; i < 128; i++) {
+			const v = w.input[i] ^ w.wide[i];
+			x[outAt + 2 * i] = (v & 0xffffffff) as uint32;
+			x[outAt + 2 * i + 1] = (v >> 32) as uint32;
+		}
+	}
+}
+
 /** The compression function: out (xor-accumulated when `needXor`) from the blocks at `xPos` and `yPos` of `x`. */
 function compressBlock(w: Argon2Work, x: uint32[], xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
+	when (c) {
+		compressWide(w, x, xPos, yPos, outPos, needXor);
+	} else {
+		compressPairs(w, x, xPos, yPos, outPos, needXor);
+	}
+}
+
+/** The compression function on (low, high) 32-bit pairs, for a backend whose 64-bit integers are not machine words. */
+function compressPairs(w: Argon2Work, x: uint32[], xPos: int32, yPos: int32, outPos: int32, needXor: boolean): void {
 	if (needXor) {
 		for (let i = 0; i < 256; i++) {
 			const r = x[xPos + i] ^ x[yPos + i];
@@ -346,6 +594,10 @@ export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: 
 
 function wipeWork(w: Argon2Work): void {
 	for (let i = 0; i < 256; i++) w.buf[i] = 0;
+	for (let i = 0; i < 128; i++) {
+		w.wide[i] = 0;
+		w.input[i] = 0;
+	}
 	w.address.fill(0);
 	w.h0.fill(0);
 	w.bytes.fill(0);
