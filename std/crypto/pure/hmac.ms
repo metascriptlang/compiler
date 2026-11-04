@@ -1,8 +1,8 @@
 import { HashState, kindSha1, kindSha256, kindSha512, kindMd5 } from "./state";
+import { encodeHex } from "../../core/encoding";
+import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
 
 const pbkdf2MaxLength = 1048576;
-import { encodeHex } from "../../core/encoding";
-import { newHash, copyHash, updateHash, finishHashInto, hashOf } from "./hash";
 
 /** HMAC with the keyed pad blocks absorbed once, so each message restarts from a copy instead of rehashing the key. */
 export class HmacState {
@@ -13,26 +13,33 @@ export class HmacState {
 	innerDigest: uint8[];
 }
 
-export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
+function requireKind(kind: int32): void {
 	if (kind < kindSha256 || kind > kindMd5) throw new Error(`hmac: unknown hash kind ${kind}`);
-	const probe = newHash(kind);
-	const size = probe.blockSize;
-	const keyBlock = new Array<uint8>(size);
-	const shortKey = key.length > size ? hashOf(kind, key) : key;
-	for (let i = 0; i < shortKey.length; i++) keyBlock[i] = shortKey[i];
+}
+
+/** Absorbs key ^ ipad into `inner` and key ^ opad into `outer`, hashing a key longer than one block first. */
+function absorbPads(key: Readonly<uint8[]>, inner: HashState, outer: HashState): void {
+	const size = inner.blockSize;
 	const pad = new Array<uint8>(size);
+	const shortKey = key.length > size ? hashOf(inner.kind, key) : key;
+	for (let i = 0; i < shortKey.length; i++) pad[i] = shortKey[i];
+	for (let i = 0; i < size; i++) pad[i] = pad[i] ^ 0x36;
+	updateHash(inner, pad);
+	for (let i = 0; i < size; i++) pad[i] = pad[i] ^ (0x36 ^ 0x5c);
+	updateHash(outer, pad);
+}
+
+export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
+	requireKind(kind);
 	const innerKeyed = newHash(kind);
-	for (let i = 0; i < size; i++) pad[i] = keyBlock[i] ^ 0x36;
-	updateHash(innerKeyed, pad);
 	const outerKeyed = newHash(kind);
-	for (let i = 0; i < size; i++) pad[i] = keyBlock[i] ^ 0x5c;
-	updateHash(outerKeyed, pad);
+	absorbPads(key, innerKeyed, outerKeyed);
 	const hmac: HmacState = {
 		inner: newHash(kind),
 		outer: newHash(kind),
 		innerKeyed,
 		outerKeyed,
-		innerDigest: new Array<uint8>(probe.outputSize),
+		innerDigest: new Array<uint8>(innerKeyed.outputSize),
 	};
 	copyHash(innerKeyed, hmac.inner);
 	return hmac;
@@ -58,9 +65,13 @@ export function finishHmac(hmac: HmacState): uint8[] {
 }
 
 export function hmacOf(kind: int32, key: Readonly<uint8[]>, data: Readonly<uint8[]>): uint8[] {
-	const hmac = newHmac(kind, key);
-	updateHmac(hmac, data);
-	return finishHmac(hmac);
+	requireKind(kind);
+	const inner = newHash(kind);
+	const outer = newHash(kind);
+	absorbPads(key, inner, outer);
+	updateHash(inner, data);
+	updateHash(outer, finishHash(inner));
+	return finishHash(outer);
 }
 
 export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: int32, length: int32): uint8[] {
@@ -98,7 +109,7 @@ export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonl
 }
 
 export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8[]>, info: Readonly<uint8[]>, length: int32): uint8[] {
-	if (kind < kindSha256 || kind > kindMd5) throw new Error(`hkdf: unknown hash kind ${kind}`);
+	requireKind(kind);
 	const size = newHash(kind).outputSize;
 	if (length < 1) throw new Error("hkdf: length must be at least 1");
 	if (length > 255 * size) throw new Error(`hkdf: length must be at most ${255 * size}`);
