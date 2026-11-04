@@ -1,7 +1,7 @@
 // Buffer text codecs with the decoding rules of Node's Buffer: hex stops at the first pair that is
 // not two hex digits; base64 takes both alphabets, skips any other byte and stops at `=`.
 
-import { hexDigitValue, encodeBase64, encodeHex } from "../encoding";
+import { hexDigitValue, encodeBase64 } from "../encoding";
 import { EncodingBytes, newEncodingOutput, freshEncodingOutputBytes } from "../encoding/output";
 
 const equalsSign: uint8 = 61;
@@ -512,6 +512,8 @@ test "base64url encode is base64 with the url digits and no padding" {
 }
 
 when (c) {
+	import { encodeHex } from "../encoding";
+
 	function filled(size: int64): uint8[] {
 		const bytes: uint8[] = [];
 		for (let i: int64 = 0; i < size; i++) bytes.push(0xEE);
