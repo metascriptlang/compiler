@@ -253,7 +253,6 @@ export interface RaiserVM {
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
-	hostHeld: RaiserValue[];  // the arguments a host call holds a count on through the run, which the host releases after it
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
@@ -369,7 +368,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, hostHeld: [], sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
