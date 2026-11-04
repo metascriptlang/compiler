@@ -534,12 +534,346 @@ export function uintGcd(
 	return g;
 }
 
-/** An odd modulus above 2 with its Montgomery constants; build it with `modulusFromUint` or `modulusFromBytes`. */
+/** Zeroes secret scratch once it is no longer needed. */
+export function uintWipe(x: uint32[]): void {
+	for (let i = 0; i < x.length; i++) x[i] = 0;
+}
+
+when (c) {
+	@include("runtime/core/mulWide.h");
+	extern function msMulHi64(a: uint64, b: uint64): uint64;
+
+	const zero64: uint64 = 0;
+	const one64: uint64 = 1;
+
+	interface WideSetup {
+		w: uint64[];
+		rr: uint64[];
+		one: uint64[];
+		m0inv: uint64;
+	}
+
+	function wideLimbsFor(bits: int32): int32 {
+		return (bits + 63) >> 6;
+	}
+
+	// 31-bit limbs into `size` 64-bit limbs; the value must fit.
+	function toWide(x: Readonly<uint32[]>, size: int32): uint64[] {
+		const out = new Array<uint64>(size);
+		let acc: uint64 = 0;
+		let accBits: uint64 = 0;
+		let o = 0;
+		for (let i = 0; i < x.length; i++) {
+			const limb = x[i] as uint64;
+			acc |= limb << accBits;
+			accBits += 31;
+			if (accBits >= 64) {
+				accBits -= 64;
+				if (o < size) out[o] = acc;
+				o += 1;
+				acc = limb >> (31 - accBits);
+			}
+		}
+		if (o < size) out[o] = acc;
+		return out;
+	}
+
+	// 64-bit limbs into `size` 31-bit limbs; the value must fit.
+	function fromWide(x: Readonly<uint64[]>, size: int32): uint32[] {
+		const out = new Array<uint32>(size);
+		let acc: uint64 = 0;
+		let accBits: uint64 = 0;
+		let i = 0;
+		for (let o = 0; o < size; o++) {
+			if (accBits < 31) {
+				const next = i < x.length ? x[i] : zero64;
+				i += 1;
+				out[o] = ((acc | (next << accBits)) as uint32) & tMask;
+				acc = next >> (31 - accBits);
+				accBits += 33;
+			} else {
+				out[o] = (acc as uint32) & tMask;
+				acc = acc >> 31;
+				accBits -= 31;
+			}
+		}
+		return out;
+	}
+
+	// out = (x - m when x >= m or `carry` is set, else x), for x below 2m with its bit 64n in `carry`.
+	function wideReduceOnce(
+		out: uint64[],
+		x: Readonly<uint64[]>,
+		carry: uint64,
+		m: Readonly<uint64[]>,
+	): void {
+		const n = m.length;
+		let borrow: uint64 = 0;
+		for (let j = 0; j < n; j++) {
+			const xj = x[j];
+			const mj = m[j];
+			const d = xj - mj - borrow;
+			borrow = ((~xj & mj) | (~(xj ^ mj) & d)) >> 63;
+			out[j] = d;
+		}
+		const keep = zero64 - (borrow & (carry ^ 1));
+		for (let j = 0; j < n; j++) out[j] = (out[j] & ~keep) | (x[j] & keep);
+	}
+
+	// out = a * b / R mod m for a, b below m (a below R and b below m is enough); `t` is n + 1 limbs of scratch.
+	// `out` may be `a` or `b`.
+	function wideMontMul(
+		m: Readonly<uint64[]>,
+		m0inv: uint64,
+		out: uint64[],
+		a: Readonly<uint64[]>,
+		b: Readonly<uint64[]>,
+		t: uint64[],
+	): void {
+		const n = m.length;
+		for (let j = 0; j <= n; j++) t[j] = 0;
+		const b0 = b[0];
+		const m0 = m[0];
+		for (let i = 0; i < n; i++) {
+			const ai = a[i];
+			let lo = ai * b0;
+			let hi = msMulHi64(ai, b0);
+			lo += t[0];
+			hi += lo < t[0] ? one64 : zero64;
+			let c1 = hi;
+			const f = lo * m0inv;
+			let lo2 = f * m0;
+			let hi2 = msMulHi64(f, m0);
+			lo2 += lo;
+			hi2 += lo2 < lo ? one64 : zero64;
+			let c2 = hi2;
+			for (let j = 1; j < n; j++) {
+				const bj = b[j];
+				const tj = t[j];
+				lo = ai * bj;
+				hi = msMulHi64(ai, bj);
+				lo += tj;
+				hi += lo < tj ? one64 : zero64;
+				lo += c1;
+				hi += lo < c1 ? one64 : zero64;
+				c1 = hi;
+				const mj = m[j];
+				lo2 = f * mj;
+				hi2 = msMulHi64(f, mj);
+				lo2 += lo;
+				hi2 += lo2 < lo ? one64 : zero64;
+				lo2 += c2;
+				hi2 += lo2 < c2 ? one64 : zero64;
+				c2 = hi2;
+				t[j - 1] = lo2;
+			}
+			let top = t[n] + c1;
+			let carry = top < c1 ? one64 : zero64;
+			top += c2;
+			carry += top < c2 ? one64 : zero64;
+			t[n - 1] = top;
+			t[n] = carry;
+		}
+		wideReduceOnce(out, t, t[n], m);
+	}
+
+	// x = 2x mod m for x below m.
+	function wideDouble(x: uint64[], m: Readonly<uint64[]>, t: uint64[]): void {
+		const n = m.length;
+		let carry: uint64 = 0;
+		for (let j = 0; j < n; j++) {
+			const xj = x[j];
+			t[j] = (xj << 1) | carry;
+			carry = xj >> 63;
+		}
+		wideReduceOnce(x, t, carry, m);
+	}
+
+	function wideSetup(v: Readonly<uint32[]>, bits: int32): WideSetup {
+		const n = wideLimbsFor(bits);
+		const w = toWide(v, n);
+		const m0 = w[0];
+		let y = m0;
+		for (let i = 0; i < 5; i++) y = y * (2 - m0 * y);
+		const m0inv = zero64 - y;
+		const t = new Array<uint64>(n + 1);
+		// R mod m: 2^(bits - 1) is below m, then doubled up to 2^(64n).
+		const one = new Array<uint64>(n);
+		one[(bits - 1) >> 6] = one64 << (((bits - 1) & 63) as uint64);
+		for (let i = bits - 1; i < 64 * n; i++) wideDouble(one, w, t);
+		// R^2 mod m is 2^(64n) in Montgomery form: square-and-double over the bits of 64n from Montgomery one.
+		const rr = new Array<uint64>(n);
+		for (let j = 0; j < n; j++) rr[j] = one[j];
+		const e = 64 * n;
+		let bit = 31 - clz32(e as uint32);
+		while (bit >= 0) {
+			wideMontMul(w, m0inv, rr, rr, rr, t);
+			if (((e >> bit) & 1) != 0) wideDouble(rr, w, t);
+			bit -= 1;
+		}
+		return { w, rr, one, m0inv };
+	}
+
+	function wideToMont(m: Modulus, x: Readonly<uint32[]>, t: uint64[]): uint64[] {
+		const out = toWide(x, m.w.length);
+		wideMontMul(m.w, m.wm0inv, out, out, m.wrr, t);
+		return out;
+	}
+
+	function wideFromMont(m: Modulus, x: uint64[], t: uint64[]): uint32[] {
+		const unit = new Array<uint64>(m.w.length);
+		unit[0] = 1;
+		wideMontMul(m.w, m.wm0inv, x, x, unit, t);
+		return fromWide(x, m.v.length);
+	}
+
+	function wideMul(
+		m: Modulus,
+		x: Readonly<uint32[]>,
+		y: Readonly<uint32[]>,
+	): uint32[] {
+		const n = m.w.length;
+		const t = new Array<uint64>(n + 1);
+		const xw = toWide(x, n);
+		const yw = wideToMont(m, y, t);
+		wideMontMul(m.w, m.wm0inv, xw, xw, yw, t);
+		const out = fromWide(xw, m.v.length);
+		wideWipe(xw);
+		wideWipe(yw);
+		return out;
+	}
+
+	// Any integer reduced mod m: Horner over n-limb chunks in Montgomery form, each chunk entering as chunk * R^2 / R.
+	function wideReduce(m: Modulus, x: Readonly<uint32[]>): uint32[] {
+		const n = m.w.length;
+		const chunks = (wideLimbsFor(x.length * tBits) + n - 1) / n;
+		const xw = toWide(x, chunks * n);
+		const t = new Array<uint64>(n + 1);
+		const acc = new Array<uint64>(n);
+		const chunk = new Array<uint64>(n);
+		let k = chunks;
+		while (k > 0) {
+			k -= 1;
+			wideMontMul(m.w, m.wm0inv, acc, acc, m.wrr, t);
+			for (let j = 0; j < n; j++) chunk[j] = xw[k * n + j];
+			wideMontMul(m.w, m.wm0inv, chunk, chunk, m.wrr, t);
+			let carry: uint64 = 0;
+			for (let j = 0; j < n; j++) {
+				const s = acc[j] + chunk[j];
+				const c = s < acc[j] ? one64 : zero64;
+				const s2 = s + carry;
+				carry = c + (s2 < s ? one64 : zero64);
+				t[j] = s2;
+			}
+			wideReduceOnce(acc, t, carry, m.w);
+		}
+		const out = wideFromMont(m, acc, t);
+		wideWipe(xw);
+		wideWipe(chunk);
+		return out;
+	}
+
+	function wideWipe(x: uint64[]): void {
+		for (let i = 0; i < x.length; i++) x[i] = 0;
+	}
+
+	// The window width mbedTLS's exponentiation takes for an exponent of this many bits.
+	function windowBits(exponentBits: int32): int32 {
+		if (exponentBits > 671) return 6;
+		if (exponentBits > 239) return 5;
+		if (exponentBits > 79) return 4;
+		return 1;
+	}
+
+	function widePow(
+		m: Modulus,
+		x: Readonly<uint32[]>,
+		e: Readonly<uint8[]>,
+		isPublic: boolean,
+	): uint32[] {
+		const n = m.w.length;
+		const t = new Array<uint64>(n + 1);
+		const xm = wideToMont(m, x, t);
+		const out = new Array<uint64>(n);
+		const totalBits = e.length * 8;
+		const wsize = windowBits(totalBits);
+		if (isPublic && wsize == 1) {
+			let started = false;
+			for (let s = 0; s < e.length; s++) {
+				const b = e[s] as uint32;
+				let j = 7;
+				while (true) {
+					if (started) wideMontMul(m.w, m.wm0inv, out, out, out, t);
+					if (((b >> (j as uint32)) & 1) != 0) {
+						if (started) {
+							wideMontMul(m.w, m.wm0inv, out, out, xm, t);
+						} else {
+							for (let i = 0; i < n; i++) out[i] = xm[i];
+							started = true;
+						}
+					}
+					if (j == 0) break;
+					j -= 1;
+				}
+			}
+			return wideFromMont(m, out, t);
+		}
+		const count = 1 << wsize;
+		const table: uint64[][] = [m.wone, xm];
+		for (let i = 2; i < count; i++) {
+			const entry = new Array<uint64>(n);
+			wideMontMul(m.w, m.wm0inv, entry, table[i - 1], xm, t);
+			table.push(entry);
+		}
+		for (let i = 0; i < n; i++) out[i] = m.wone[i];
+		const selected = new Array<uint64>(n);
+		let window: int32 = 0;
+		let windowFill = 0;
+		for (let bitAt = totalBits - 1; bitAt >= 0; bitAt--) {
+			wideMontMul(m.w, m.wm0inv, out, out, out, t);
+			const bit = ((e[e.length - 1 - (bitAt >> 3)] as int32) >> (bitAt & 7)) & 1;
+			window = (window << 1) | bit;
+			windowFill += 1;
+			if (windowFill == wsize || bitAt == 0) {
+				if (isPublic) {
+					wideMontMul(m.w, m.wm0inv, out, out, table[window], t);
+				} else {
+					for (let i = 0; i < n; i++) selected[i] = 0;
+					for (let k = 0; k < count; k++) {
+						const diff = (k ^ window) as uint32;
+						const hit = zero64 - ((((diff | ((0 as uint32) - diff)) >> 31) ^ 1) as uint64);
+						const entry = table[k];
+						for (let i = 0; i < n; i++) selected[i] |= entry[i] & hit;
+					}
+					wideMontMul(m.w, m.wm0inv, out, out, selected, t);
+				}
+				window = 0;
+				windowFill = 0;
+			}
+		}
+		const result = wideFromMont(m, out, t);
+		if (!isPublic) {
+			for (let i = 1; i < count; i++) wideWipe(table[i]);
+			wideWipe(selected);
+		}
+		return result;
+	}
+}
+
+/**
+ * An odd modulus above 2 with its Montgomery constants; build it with `modulusFromUint` or `modulusFromBytes`.
+ * On C the Montgomery work runs on 64-bit limbs (`w`, with R = 2^(64 * w.length)) and `rr` stays empty; on
+ * JavaScript it runs on the 31-bit limbs and the 64-bit fields stay empty.
+ */
 export struct Modulus {
 	v: uint32[];
 	rr: uint32[];
 	m0inv: uint32;
 	leading: int32;
+	w: uint64[];
+	wrr: uint64[];
+	wone: uint64[];
+	wm0inv: uint64;
 }
 
 function computeM0Inv(lo: uint32): uint32 {
@@ -553,11 +887,35 @@ export function modulusFromUint(value: Readonly<uint32[]>): Modulus | null {
 	const v = normalize(value);
 	const hi = v[v.length - 1];
 	if (v.length < 2 && v[0] < 3) return null;
-	const n = v.length;
-	const rr = new Array<uint32>(n);
-	rr[n - 1] = 1;
-	for (let i = n - 1; i < 2 * n; i++) shiftIn(v, rr, 0);
-	return { v, rr, m0inv: computeM0Inv(v[0]), leading: clz32(hi) - 1 };
+	const leading = clz32(hi) - 1;
+	when (c) {
+		const wide = wideSetup(v, v.length * tBits - leading);
+		return {
+			v,
+			rr: [],
+			m0inv: computeM0Inv(v[0]),
+			leading,
+			w: wide.w,
+			wrr: wide.rr,
+			wone: wide.one,
+			wm0inv: wide.m0inv,
+		};
+	} else {
+		const n = v.length;
+		const rr = new Array<uint32>(n);
+		rr[n - 1] = 1;
+		for (let i = n - 1; i < 2 * n; i++) shiftIn(v, rr, 0);
+		return {
+			v,
+			rr,
+			m0inv: computeM0Inv(v[0]),
+			leading,
+			w: [],
+			wrr: [],
+			wone: [],
+			wm0inv: 0,
+		};
+	}
 }
 
 export function modulusFromBytes(bytes: Readonly<uint8[]>): Modulus | null {
@@ -603,7 +961,11 @@ function xorLimbs(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] {
 
 /** Reduces an integer of any length to a field element. */
 export function reduce(this m: Modulus, x: Readonly<uint32[]>): uint32[] {
-	return reduceInto(m.v, x, null);
+	when (c) {
+		return wideReduce(m, x);
+	} else {
+		return reduceInto(m.v, x, null);
+	}
 }
 
 export function add(
@@ -716,15 +1078,23 @@ export function mul(
 	x: Readonly<uint32[]>,
 	y: Readonly<uint32[]>,
 ): uint32[] {
-	return fromMontgomery(
-		m,
-		montgomeryMul(m, toMontgomery(m, x), toMontgomery(m, y)),
-	);
+	when (c) {
+		return wideMul(m, x, y);
+	} else {
+		return fromMontgomery(
+			m,
+			montgomeryMul(m, toMontgomery(m, x), toMontgomery(m, y)),
+		);
+	}
 }
 
 export function sq(this m: Modulus, x: Readonly<uint32[]>): uint32[] {
-	const xm = toMontgomery(m, x);
-	return fromMontgomery(m, montgomeryMul(m, xm, xm));
+	when (c) {
+		return wideMul(m, x, x);
+	} else {
+		const xm = toMontgomery(m, x);
+		return fromMontgomery(m, montgomeryMul(m, xm, xm));
+	}
 }
 
 function powInternal(
@@ -736,6 +1106,19 @@ function powInternal(
 	let acc = 0;
 	for (let i = 0; i < e.length; i++) acc |= e[i] as int32;
 	if (acc == 0) return null;
+	when (c) {
+		return widePow(m, x, e, isPublic);
+	} else {
+		return narrowPow(m, x, e, isPublic);
+	}
+}
+
+function narrowPow(
+	m: Modulus,
+	x: Readonly<uint32[]>,
+	e: Readonly<uint8[]>,
+	isPublic: boolean,
+): uint32[] {
 	let out = toMontgomery(m, m.one());
 	if (isPublic && (e.length < 3 || (e.length == 3 && e[0] <= 0x0f))) {
 		const xm = toMontgomery(m, x);
