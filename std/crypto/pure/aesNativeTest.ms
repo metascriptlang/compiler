@@ -225,6 +225,21 @@ test "CBC-256 round trip at every length up to two blocks" {
 	}
 }
 
+test "CBC round trip across every pass size of each key size" {
+	const iv = cbcIv.decodeHex();
+	for (const keyHex of [cbcKey128, k128f + "0001020304050607", cbcKey256]) {
+		const xk  = expandKey(keyHex.decodeHex());
+		const xkD = expandKeyDecrypt(keyHex.decodeHex());
+		for (let blocks = 1; blocks <= 40; blocks++) {
+			const plain = new Array<uint8>(blocks * 16 - 1);
+			for (let i = 0; i < plain.length; i++) plain[i] = ((i * 7 + blocks) & 0xff) as uint8;
+			const back = cbcDecrypt(xkD, iv, cbcEncrypt(xk, iv, plain));
+			assert back != null;
+			if (back != null) assert eqHex(back, plain.encodeHex());
+		}
+	}
+}
+
 test "CBC tampered last block fails padding" {
 	const xk  = expandKey(cbcKey128.decodeHex());
 	const xkD = expandKeyDecrypt(cbcKey128.decodeHex());
