@@ -41,22 +41,29 @@ export function compressMd5(h: HashState, data: Readonly<uint8[]>, off: int32): 
 	let b = h.state[1];
 	let c = h.state[2];
 	let d = h.state[3];
-	for (let i = 0; i < 64; i++) {
-		let mix: uint32 = 0;
-		let word = i;
-		if (i < 16) {
-			mix = (b & c) | (~b & d);
-		} else if (i < 32) {
-			mix = (d & b) | (~d & c);
-			word = (5 * i + 1) & 15;
-		} else if (i < 48) {
-			mix = b ^ c ^ d;
-			word = (3 * i + 5) & 15;
-		} else {
-			mix = c ^ (b | ~d);
-			word = (7 * i) & 15;
-		}
-		const next = b + rotl(a + mix + k[i] + h.schedule[word], shifts[i]);
+	for (let i = 0; i < 16; i++) {
+		const next = b + rotl(a + ((b & c) | (~b & d)) + k[i] + h.schedule[i], shifts[i]);
+		a = d;
+		d = c;
+		c = b;
+		b = next;
+	}
+	for (let i = 16; i < 32; i++) {
+		const next = b + rotl(a + ((d & b) | (~d & c)) + k[i] + h.schedule[(5 * i + 1) & 15], shifts[i]);
+		a = d;
+		d = c;
+		c = b;
+		b = next;
+	}
+	for (let i = 32; i < 48; i++) {
+		const next = b + rotl(a + (b ^ c ^ d) + k[i] + h.schedule[(3 * i + 5) & 15], shifts[i]);
+		a = d;
+		d = c;
+		c = b;
+		b = next;
+	}
+	for (let i = 48; i < 64; i++) {
+		const next = b + rotl(a + (c ^ (b | ~d)) + k[i] + h.schedule[(7 * i) & 15], shifts[i]);
 		a = d;
 		d = c;
 		c = b;

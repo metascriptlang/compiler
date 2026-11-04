@@ -25,23 +25,32 @@ export function compressSha1(h: HashState, data: Readonly<uint8[]>, off: int32):
 	let c = h.state[2];
 	let d = h.state[3];
 	let e = h.state[4];
-	for (let i = 0; i < 80; i++) {
-		let mix: uint32 = 0;
-		let k: uint32 = 0;
-		if (i < 20) {
-			mix = (b & c) ^ (~b & d);
-			k = 0x5a827999;
-		} else if (i < 40) {
-			mix = b ^ c ^ d;
-			k = 0x6ed9eba1;
-		} else if (i < 60) {
-			mix = (b & c) ^ (b & d) ^ (c & d);
-			k = 0x8f1bbcdc;
-		} else {
-			mix = b ^ c ^ d;
-			k = 0xca62c1d6;
-		}
-		const next = rotl(a, 5) + mix + e + k + h.schedule[i];
+	for (let i = 0; i < 20; i++) {
+		const next = rotl(a, 5) + ((b & c) ^ (~b & d)) + e + 0x5a827999 + h.schedule[i];
+		e = d;
+		d = c;
+		c = rotl(b, 30);
+		b = a;
+		a = next;
+	}
+	for (let i = 20; i < 40; i++) {
+		const next = rotl(a, 5) + (b ^ c ^ d) + e + 0x6ed9eba1 + h.schedule[i];
+		e = d;
+		d = c;
+		c = rotl(b, 30);
+		b = a;
+		a = next;
+	}
+	for (let i = 40; i < 60; i++) {
+		const next = rotl(a, 5) + ((b & c) ^ (b & d) ^ (c & d)) + e + 0x8f1bbcdc + h.schedule[i];
+		e = d;
+		d = c;
+		c = rotl(b, 30);
+		b = a;
+		a = next;
+	}
+	for (let i = 60; i < 80; i++) {
+		const next = rotl(a, 5) + (b ^ c ^ d) + e + 0xca62c1d6 + h.schedule[i];
 		e = d;
 		d = c;
 		c = rotl(b, 30);
