@@ -305,6 +305,27 @@ test "the counter of a for-of over an array or a string steps without an overflo
 	}
 }
 
+test "the step of an int32 counter below an int32 bound wraps instead of checking overflow" {
+	for (const step of ["i++", "i += 1", "i = i + 1"]) {
+		const result = compileToJSBare(`function f(xs: int32[]): int32 { let t: int32 = 0; for (let i: int32 = 0; i < xs.length; ${step}) { t = t ^ xs[i]; } return t; }`);
+		assert result.ok, step;
+		assert !result.value.contains("msOverflowI32"), result.value;
+	}
+}
+
+test "the step of a counter keeps its overflow check when the body writes it or the bound is not int32" {
+	const sources = [
+		"function f(xs: int32[]): int32 { let t: int32 = 0; for (let i: int32 = 0; i < xs.length; i++) { t = t ^ xs[i]; if (t == 3) i = 0; } return t; }",
+		"function f(xs: int32[], n: int64): int32 { let t: int32 = 0; for (let i: int32 = 0; i < n; i++) { t = t ^ i; } return t; }",
+		"function f(xs: int32[]): int32 { let t: int32 = 0; for (let i: int32 = 0; i <= xs.length; i++) { t = t ^ i; } return t; }",
+	];
+	for (const src of sources) {
+		const result = compileToJSBare(src);
+		assert result.ok, src;
+		assert result.value.contains("msOverflowI32"), src;
+	}
+}
+
 test "a char step stores the checked step, prefix and postfix" {
 	for (const step of ["c++", "++c", "c--", "--c"]) {
 		const result = compileToJSBare(`function f(c: char): char { ${step}; return c; }`);

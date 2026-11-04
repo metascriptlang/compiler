@@ -1,5 +1,6 @@
 // @stdout: array raised after 2: the length of the array changed while iterating over it
-// note: an uncaught length change of a for-of array ends the program with Nim's items message; a string that grows while iterated raises too, as Nim's items does for string. The loop used to read past the end or skip what was added.
+// @stdout: string finished 97,98,99, | same-length string finished 97,98,99,
+// note: an uncaught length change of a for-of array ends the program with Nim's items message. A for-of over a string iterates the string it started with, as TS does, since a string cannot change in place. The loop used to read past the end or skip what was added.
 
 function grownString(): string {
 	let s = "abc";
