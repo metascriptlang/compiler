@@ -49,7 +49,8 @@ export class Ripemd160State {
 	w: uint32[16];
 	block: uint8[];
 	filled: int32;
-	length: number;
+	lengthLow: uint32;
+	lengthHigh: uint32;
 	finished: boolean;
 }
 
@@ -59,7 +60,8 @@ export function newRipemd160(): Ripemd160State {
 		w: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 		block: new Array<uint8>(64),
 		filled: 0,
-		length: 0,
+		lengthLow: 0,
+		lengthHigh: 0,
 		finished: false,
 	};
 }
@@ -137,7 +139,9 @@ export function updateRipemd160(s: Ripemd160State, data: Readonly<uint8[]>): voi
 	if (s.finished) throw new Error("ripemd160: already finished");
 	const end = data.length as int32;
 	let at = 0;
-	s.length += end;
+	const low = s.lengthLow + (end as uint32);
+	if (low < s.lengthLow) s.lengthHigh += 1;
+	s.lengthLow = low;
 	if (s.filled > 0) {
 		while (at < end && s.filled < 64) {
 			s.block[s.filled] = data[at];
@@ -175,9 +179,8 @@ export function finishRipemd160(s: Ripemd160State): uint8[] {
 		s.block[s.filled] = 0;
 		s.filled += 1;
 	}
-	const bits = s.length * 8;
-	const high = Math.floor(bits / 4294967296) as uint32;
-	const low = (bits - Math.floor(bits / 4294967296) * 4294967296) as uint32;
+	const low = s.lengthLow << 3;
+	const high = (s.lengthHigh << 3) | (s.lengthLow >> 29);
 	for (let i = 0; i < 4; i++) {
 		const shift = (8 * i) as uint32;
 		s.block[56 + i] = ((low >> shift) & 255) as uint8;
@@ -265,10 +268,14 @@ test "ripemd160 finish after finish throws" {
 	assert threw;
 }
 
-function hashRepeat(byte: uint8, n: int32): string {
+function repeatA(n: int32): uint8[] {
 	const data = new Array<uint8>(n);
-	for (let i = 0; i < n; i++) data[i] = byte;
-	return ripemd160Of(data).encodeHex();
+	for (let i = 0; i < n; i++) data[i] = 0x61;
+	return data;
+}
+
+function hashRepeatA(n: int32): string {
+	return ripemd160Of(repeatA(n)).encodeHex();
 }
 
 test "ripemd160 a" {
@@ -276,13 +283,21 @@ test "ripemd160 a" {
 }
 
 test "ripemd160 padding boundaries 55 56 64" {
-	assert hashRepeat(0x61, 55) == "0d8a8c9063a48576a7c97e9f95253a6e53ff6765";
-	assert hashRepeat(0x61, 56) == "e72334b46c83cc70bef979e15453706c95b888be";
-	assert hashRepeat(0x61, 64) == "9dfb7d374ad924f3f88de96291c33e9abed53e32";
+	assert hashRepeatA(55) == "0d8a8c9063a48576a7c97e9f95253a6e53ff6765";
+	assert hashRepeatA(56) == "e72334b46c83cc70bef979e15453706c95b888be";
+	assert hashRepeatA(64) == "9dfb7d374ad924f3f88de96291c33e9abed53e32";
 }
 
 test "ripemd160 million a" {
-	assert hashRepeat(0x61, 1000000) == "52783243c1697bdbe16d37f97f68f08325dc1528";
+	assert hashRepeatA(1000000) == "52783243c1697bdbe16d37f97f68f08325dc1528";
+}
+
+test "ripemd160 byte counter carries into the high word" {
+	const s = newRipemd160();
+	s.lengthLow = 0xffffffc0;
+	updateRipemd160(s, repeatA(64));
+	assert s.lengthLow == 0;
+	assert s.lengthHigh == 1;
 }
 
 test "ripemd160 streaming split across blocks" {
