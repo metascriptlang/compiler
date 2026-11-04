@@ -31,11 +31,12 @@ function stateWords(kind: int32): int32 {
 
 // On C the compression keeps its message schedule in locals and the pending block lives inside
 // the state, so a digest allocates nothing but the state itself; the JS kernels loop over a
-// schedule kept in the state and a block array.
+// schedule kept in the state and a block array. The block holds two blocks, so the padding that
+// spills into a second block is compressed in one run.
 when (!js) {
 	/** The bytes a compression reads: the caller's input or the state's pending block. */
 	export type HashBytes = Readonly<Span<uint8>>;
-	type HashBlock = uint8[128];
+	type HashBlock = uint8[256];
 	type HashSchedule = uint32[1];
 
 	function zeroBlock(size: int32): HashBlock {
@@ -51,7 +52,7 @@ when (!js) {
 	type HashSchedule = uint32[160];
 
 	function zeroBlock(size: int32): HashBlock {
-		return new Array<uint8>(size);
+		return new Array<uint8>(2 * size);
 	}
 
 	function zeroSchedule(): HashSchedule {
@@ -100,5 +101,5 @@ export function newHashState(kind: int32): HashState {
 export function wipeHashState(h: HashState): void {
 	wipeWords(h.state[0..stateWords(h.kind)]);
 	wipeWords(h.schedule);
-	wipeBytes(h.block[0..h.blockSize]);
+	wipeBytes(h.block[0..2 * h.blockSize]);
 }

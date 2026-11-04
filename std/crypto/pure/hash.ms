@@ -5,7 +5,17 @@ import { initMd5, compressMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
 
 when (!js) {
+	import { Buffer } from "std/core/buffer";
 	import { sha256HwBlocks, sha512HwBlocks } from "./hw";
+
+	/** The digest array; finishHashInto writes every byte, so it is not zeroed first. */
+	function digestArray(size: int32): uint8[] {
+		return Buffer.allocUnsafe(size);
+	}
+} else {
+	function digestArray(size: int32): uint8[] {
+		return new Array<uint8>(size);
+	}
 }
 
 /** The kind number of a hash name, or -1 when the portable code has no such hash. */
@@ -92,16 +102,28 @@ export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 	h.filled = filled;
 }
 
+/** The message length in bits at `block[at, +8)`: little-endian for MD5, big-endian for the others. */
 function putLength(h: HashState, at: int32): void {
-	const bits = h.length * 8;
-	const high = Math.floor(bits / 4294967296) as uint32;
-	const low = (bits - Math.floor(bits / 4294967296) * 4294967296) as uint32;
-	for (let i = 0; i < 4; i++) {
-		const shift = (8 * i) as uint32;
-		if (h.kind == kindMd5) {
+	let high: uint32 = 0;
+	let low: uint32 = 0;
+	when (js) {
+		const bits = h.length * 8;
+		high = Math.floor(bits / 4294967296) as uint32;
+		low = (bits - Math.floor(bits / 4294967296) * 4294967296) as uint32;
+	} else {
+		const bytes = h.length as uint64;
+		high = (bytes >> 29) as uint32;
+		low = (bytes << 3) as uint32;
+	}
+	if (h.kind == kindMd5) {
+		for (let i = 0; i < 4; i++) {
+			const shift = (8 * i) as uint32;
 			h.block[at + i] = ((low >> shift) & 255) as uint8;
 			h.block[at + 4 + i] = ((high >> shift) & 255) as uint8;
-		} else {
+		}
+	} else {
+		for (let i = 0; i < 4; i++) {
+			const shift = (8 * i) as uint32;
 			h.block[at + 7 - i] = ((low >> shift) & 255) as uint8;
 			h.block[at + 3 - i] = ((high >> shift) & 255) as uint8;
 		}
@@ -116,26 +138,35 @@ export function finishHashInto(h: HashState, out: uint8[]): void {
 	let filled = h.filled;
 	h.block[filled] = 0x80;
 	filled += 1;
-	if (filled > size - lengthBytes) {
-		for (let i = filled; i < size; i++) h.block[i] = 0;
-		compressRun(h, h.block, 0, 1);
-		filled = 0;
-	}
-	for (let i = filled; i < size - 8; i++) h.block[i] = 0;
-	putLength(h, size - 8);
-	compressRun(h, h.block, 0, 1);
+	const blocks = filled > size - lengthBytes ? 2 : 1;
+	const end = blocks * size;
+	for (let i = filled; i < end - 8; i++) h.block[i] = 0;
+	putLength(h, end - 8);
+	compressRun(h, h.block, 0, blocks);
 	h.filled = 0;
 	h.finished = true;
-	const length = h.outputSize;
+	const words = h.outputSize >> 2;
 	if (h.kind == kindMd5) {
-		for (let i = 0; i < length; i++) out[i] = ((h.state[i >> 2] >> ((8 * (i & 3)) as uint32)) & 255) as uint8;
+		for (let w = 0; w < words; w++) {
+			const word = h.state[w];
+			out[4 * w] = (word & 255) as uint8;
+			out[4 * w + 1] = ((word >> 8) & 255) as uint8;
+			out[4 * w + 2] = ((word >> 16) & 255) as uint8;
+			out[4 * w + 3] = (word >> 24) as uint8;
+		}
 	} else {
-		for (let i = 0; i < length; i++) out[i] = ((h.state[i >> 2] >> ((24 - 8 * (i & 3)) as uint32)) & 255) as uint8;
+		for (let w = 0; w < words; w++) {
+			const word = h.state[w];
+			out[4 * w] = (word >> 24) as uint8;
+			out[4 * w + 1] = ((word >> 16) & 255) as uint8;
+			out[4 * w + 2] = ((word >> 8) & 255) as uint8;
+			out[4 * w + 3] = (word & 255) as uint8;
+		}
 	}
 }
 
 export function finishHash(h: HashState): uint8[] {
-	const out = new Array<uint8>(h.outputSize);
+	const out = digestArray(h.outputSize);
 	finishHashInto(h, out);
 	wipeHashState(h);
 	return out;
