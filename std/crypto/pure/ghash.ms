@@ -15,37 +15,73 @@ export class Ghash {
 	tail: uint8[];
 }
 
-function wideProduct(a: uint32, b: uint32): uint64 {
-	return (a as uint64) * (b as uint64);
-}
+when (c) {
+	@include("runtime/core/mulWide.h");
 
-function carrylessProduct32(x: uint32, y: uint32): uint64 {
-	const a0 = x & 0x11111111;
-	const a1 = x & 0x22222222;
-	const a2 = x & 0x44444444;
-	const a3 = x & 0x88888888;
-	const b0 = y & 0x11111111;
-	const b1 = y & 0x22222222;
-	const b2 = y & 0x44444444;
-	const b3 = y & 0x88888888;
-	const c0 = wideProduct(a0, b0) ^ wideProduct(a1, b3) ^ wideProduct(a2, b2) ^ wideProduct(a3, b1);
-	const c1 = wideProduct(a0, b1) ^ wideProduct(a1, b0) ^ wideProduct(a2, b3) ^ wideProduct(a3, b2);
-	const c2 = wideProduct(a0, b2) ^ wideProduct(a1, b1) ^ wideProduct(a2, b0) ^ wideProduct(a3, b3);
-	const c3 = wideProduct(a0, b3) ^ wideProduct(a1, b2) ^ wideProduct(a2, b1) ^ wideProduct(a3, b0);
-	return (c0 & 0x1111111111111111) | (c1 & 0x2222222222222222) | (c2 & 0x4444444444444444) | (c3 & 0x8888888888888888);
-}
+	extern function msMulHi64(a: uint64, b: uint64): uint64;
 
-// The 128-bit carry-less product of two 64-bit halves into `g.productHi:productLo`, Karatsuba over 32-bit quarters.
-function carrylessProduct64(g: Ghash, a: uint64, b: uint64): void {
-	const a0 = (a & 0xffffffff) as uint32;
-	const a1 = (a >> 32) as uint32;
-	const b0 = (b & 0xffffffff) as uint32;
-	const b1 = (b >> 32) as uint32;
-	const lo = carrylessProduct32(a0, b0);
-	const hi = carrylessProduct32(a1, b1);
-	const mid = carrylessProduct32(a0 ^ a1, b0 ^ b1) ^ lo ^ hi;
-	g.productLo = lo ^ (mid << 32);
-	g.productHi = hi ^ (mid >> 32);
+	// The 128-bit carry-less product of two 64-bit halves into `g.productHi:productLo`, from sixteen 64x64 integer
+	// products of operands masked to every fourth bit. `x` leaves out its lowest four bits so no product column can
+	// carry into the next one of its group; `extra` adds those four bits' products back.
+	function carrylessProduct64(g: Ghash, x: uint64, y: uint64): void {
+		const x0 = x & 0x1111111111111110;
+		const x1 = x & 0x2222222222222220;
+		const x2 = x & 0x4444444444444440;
+		const x3 = x & 0x8888888888888880;
+		const y0 = y & 0x1111111111111111;
+		const y1 = y & 0x2222222222222222;
+		const y2 = y & 0x4444444444444444;
+		const y3 = y & 0x8888888888888888;
+		const z0Lo = (x0 * y0) ^ (x1 * y3) ^ (x2 * y2) ^ (x3 * y1);
+		const z0Hi = msMulHi64(x0, y0) ^ msMulHi64(x1, y3) ^ msMulHi64(x2, y2) ^ msMulHi64(x3, y1);
+		const z1Lo = (x0 * y1) ^ (x1 * y0) ^ (x2 * y3) ^ (x3 * y2);
+		const z1Hi = msMulHi64(x0, y1) ^ msMulHi64(x1, y0) ^ msMulHi64(x2, y3) ^ msMulHi64(x3, y2);
+		const z2Lo = (x0 * y2) ^ (x1 * y1) ^ (x2 * y0) ^ (x3 * y3);
+		const z2Hi = msMulHi64(x0, y2) ^ msMulHi64(x1, y1) ^ msMulHi64(x2, y0) ^ msMulHi64(x3, y3);
+		const z3Lo = (x0 * y3) ^ (x1 * y2) ^ (x2 * y1) ^ (x3 * y0);
+		const z3Hi = msMulHi64(x0, y3) ^ msMulHi64(x1, y2) ^ msMulHi64(x2, y1) ^ msMulHi64(x3, y0);
+		const e0 = ((0 as uint64) - (x & 1)) & y;
+		const e1 = ((0 as uint64) - ((x >> 1) & 1)) & y;
+		const e2 = ((0 as uint64) - ((x >> 2) & 1)) & y;
+		const e3 = ((0 as uint64) - ((x >> 3) & 1)) & y;
+		g.productLo = (z0Lo & 0x1111111111111111) ^ (z1Lo & 0x2222222222222222) ^ (z2Lo & 0x4444444444444444) ^ (z3Lo & 0x8888888888888888) ^
+			e0 ^ (e1 << 1) ^ (e2 << 2) ^ (e3 << 3);
+		g.productHi = (z0Hi & 0x1111111111111111) ^ (z1Hi & 0x2222222222222222) ^ (z2Hi & 0x4444444444444444) ^ (z3Hi & 0x8888888888888888) ^
+			(e1 >> 63) ^ (e2 >> 62) ^ (e3 >> 61);
+	}
+} else {
+	function wideProduct(a: uint32, b: uint32): uint64 {
+		return (a as uint64) * (b as uint64);
+	}
+
+	function carrylessProduct32(x: uint32, y: uint32): uint64 {
+		const a0 = x & 0x11111111;
+		const a1 = x & 0x22222222;
+		const a2 = x & 0x44444444;
+		const a3 = x & 0x88888888;
+		const b0 = y & 0x11111111;
+		const b1 = y & 0x22222222;
+		const b2 = y & 0x44444444;
+		const b3 = y & 0x88888888;
+		const c0 = wideProduct(a0, b0) ^ wideProduct(a1, b3) ^ wideProduct(a2, b2) ^ wideProduct(a3, b1);
+		const c1 = wideProduct(a0, b1) ^ wideProduct(a1, b0) ^ wideProduct(a2, b3) ^ wideProduct(a3, b2);
+		const c2 = wideProduct(a0, b2) ^ wideProduct(a1, b1) ^ wideProduct(a2, b0) ^ wideProduct(a3, b3);
+		const c3 = wideProduct(a0, b3) ^ wideProduct(a1, b2) ^ wideProduct(a2, b1) ^ wideProduct(a3, b0);
+		return (c0 & 0x1111111111111111) | (c1 & 0x2222222222222222) | (c2 & 0x4444444444444444) | (c3 & 0x8888888888888888);
+	}
+
+	// The 128-bit carry-less product of two 64-bit halves into `g.productHi:productLo`, Karatsuba over 32-bit quarters.
+	function carrylessProduct64(g: Ghash, a: uint64, b: uint64): void {
+		const a0 = (a & 0xffffffff) as uint32;
+		const a1 = (a >> 32) as uint32;
+		const b0 = (b & 0xffffffff) as uint32;
+		const b1 = (b >> 32) as uint32;
+		const lo = carrylessProduct32(a0, b0);
+		const hi = carrylessProduct32(a1, b1);
+		const mid = carrylessProduct32(a0 ^ a1, b0 ^ b1) ^ lo ^ hi;
+		g.productLo = lo ^ (mid << 32);
+		g.productHi = hi ^ (mid >> 32);
+	}
 }
 
 // The carry-less product of `v` and 0xc200000000000000 (x^63 + x^62 + x^57, the reduction constant shifted down
