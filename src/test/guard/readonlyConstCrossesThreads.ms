@@ -4,7 +4,7 @@
 // class or of a struct with a T[], tuple, interface or plain function field, a Readonly const that names a value another
 // binding holds, or one returned by a call on a receiver that is not fresh (a method, an extension
 // or a chained receiver that may keep the result), is refused on C and JS, and a write through an
-// alias of the const is refused.
+// alias of the const, a cast, a non-null assertion, an alias of its type or an `out` argument is refused.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent; GUARD-CHECK-FAIL can
 //   only claim an error.
@@ -21,6 +21,7 @@ const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const MODULE_STATE_RULE = "module state crosses threads only as";
 const WRITE_RULE = "cannot write through Readonly";
 const CAPTURE_RULE = "cannot be captured by a Sendable function";
+const CONST_RULE = "is const (use 'let')";
 
 let failed = 0;
 
@@ -34,7 +35,7 @@ if (!isFile(msc)) {
 	exit(1);
 }
 
-enum Expect { Clean, ModuleState, CaptureRefused, WriteRefused }
+enum Expect { Clean, ModuleState, CaptureRefused, WriteRefused, ConstWriteRefused }
 
 interface Case {
 	name: string;
@@ -317,6 +318,37 @@ const cases: Case[] = [
 			+ "function poke(): void { const alias = lit; alias.n = 2; }\n"
 			+ "poke();\n",
 	},
+	{
+		name: "a push into a plain const's Vec field through a cast",
+		expect: Expect.ConstWriteRefused,
+		text: "struct Table { name: string; columns: Vec<string>; }\n"
+			+ "const T: Table = { name: \"a\", columns: [\"id\"] };\n"
+			+ "(T as Table).columns.push(\"x\");\n",
+	},
+	{
+		name: "a push into a nullable const's Vec field through a non-null assertion",
+		expect: Expect.ConstWriteRefused,
+		text: "struct Table { name: string; columns: Vec<string>; }\n"
+			+ "function mk(): Table | null { return { name: \"a\", columns: [\"id\"] }; }\n"
+			+ "const T: Table | null = mk();\n"
+			+ "T!.columns.push(\"x\");\n",
+	},
+	{
+		name: "a push into a const's Vec field when the const's type is an alias of the struct",
+		expect: Expect.ConstWriteRefused,
+		text: "struct Table { name: string; columns: Vec<string>; }\n"
+			+ "type Alias = Table;\n"
+			+ "const T: Alias = { name: \"a\", columns: [\"id\"] };\n"
+			+ "T.columns.push(\"x\");\n",
+	},
+	{
+		name: "a const's Vec field passed as an out argument",
+		expect: Expect.ConstWriteRefused,
+		text: "struct Table { name: string; columns: Vec<string>; }\n"
+			+ "function refill(out v: Vec<string>): void { v = [\"p\"]; }\n"
+			+ "const T: Table = { name: \"a\", columns: [\"id\"] };\n"
+			+ "refill(out T.columns);\n",
+	},
 ];
 
 let slot = 0;
@@ -342,6 +374,9 @@ for (const c of cases) {
 			},
 			Expect.WriteRefused => {
 				if (r.exitCode == 0 || !out.includes(WRITE_RULE)) report(`${name}: write not refused: ${out}`);
+			},
+			Expect.ConstWriteRefused => {
+				if (r.exitCode == 0 || !out.includes(CONST_RULE)) report(`${name}: write through the const not refused: ${out}`);
 			},
 		};
 	}
