@@ -9,7 +9,7 @@ import {
 	hashKind, newHash, updateHash, finishHash, hashOf,
 } from "./hash";
 import {
-	HmacState, newHmac, updateHmac, finishHmac, hmacOf,
+	HmacState, newHmac, updateHmac, finishHmac, hmacOf, wipeHmac,
 } from "./hmac";
 import {
 	Ripemd160State,
@@ -442,7 +442,9 @@ export class Hmac {
 		this._done = true;
 		const ctx = this._ctx;
 		if (ctx instanceof HmacState) {
-			return finishHmac(ctx) as Buffer;
+			const buf = finishHmac(ctx);
+			wipeHmac(ctx);
+			return buf as Buffer;
 		}
 		return finishExtHmac(ctx) as Buffer;
 	}

@@ -4,6 +4,7 @@ import {
 	hmacSync, getHashes, isHashSupported, encodedHash, base64String,
 	HashAlgorithm,
 } from "./coreNative";
+import { HmacState } from "./hmac";
 import { CryptoError } from "../errors";
 
 function got<T>(result: Result<T, CryptoError>): T {
@@ -258,5 +259,30 @@ test "ripemd160 and sha3 HMAC with long key, empty and binary-NUL messages" {
 		const m3 = createHmac(name, "k");
 		m3.update(nulMsg);
 		assert toHex(m3.digest()) == toHex(r3.value);
+	}
+}
+
+test "Hmac.digest wipes old-six key-cache state on consume" {
+	const oldSix: HashAlgorithm[] = ["sha256", "sha512", "sha384", "sha224", "sha1", "md5"];
+	const key = "pintest-key";
+	const data = "pintest-data";
+	for (const name of oldSix) {
+		const ref = hmacSync(name, key, data);
+		assert ref.ok;
+		const expected = toHex(ref.value);
+		const m = createHmac(name, key);
+		m.update(data);
+		const mac = toHex(m.digest());
+		assert mac == expected;
+		const ctx = m._ctx;
+		assert ctx instanceof HmacState;
+		for (let i = 0; i < 16; i++) assert ctx.innerKeyed.state[i] == 0;
+		for (let i = 0; i < 16; i++) assert ctx.outerKeyed.state[i] == 0;
+		for (let i = 0; i < 16; i++) assert ctx.inner.state[i] == 0;
+		for (let i = 0; i < 16; i++) assert ctx.outer.state[i] == 0;
+		for (const b of ctx.innerDigest) assert b == 0;
+		assert m.digest().length == 0;
+		m.update(data);
+		assert m.digest().length == 0;
 	}
 }

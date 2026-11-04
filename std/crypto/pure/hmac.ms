@@ -13,7 +13,7 @@ export class HmacState {
 	innerDigest: uint8[];
 }
 
-function wipeHmac(hmac: HmacState): void {
+export function wipeHmac(hmac: HmacState): void {
 	wipeHashState(hmac.inner);
 	wipeHashState(hmac.outer);
 	wipeHashState(hmac.innerKeyed);
