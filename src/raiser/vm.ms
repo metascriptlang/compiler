@@ -766,21 +766,18 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		i = i + 1;
 	}
 	if (runDropped && vm.dropped.length > 0) vmDrain(vm);
-	execLoop(vm);
+	runToHalt(vm);
 	return vm.exitValue;
 }
 
 export function vmCallHeld(vm: RaiserVM, funcIdx: number, args: RaiserValue[], sinks: boolean[]): RaiserValue {
-	const outer = vm.hostHeld;
 	const held: RaiserValue[] = [];
 	for (let i = 0; i < args.length; i += 1) {
 		rcIncref(vm.arrayHeap, vm.objectHeap, args[i]);
 		if (!sinks[i]) held.push(args[i]);
 	}
-	vm.hostHeld = held;
 	const result = vmCallFunction(vm, funcIdx, args, true);
 	for (const arg of held) vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, arg);
-	vm.hostHeld = outer;
 	return result;
 }
 
@@ -1929,7 +1926,6 @@ function vmProgramLedger(vm: RaiserVM): void {
 	const ev = vm.sched.modules;
 	const extra: RaiserValue[] = [vm.exitValue];
 	const names: string[] = ["the program's result"];
-	for (const arg of vm.hostHeld) { extra.push(arg); names.push("an argument the host holds"); }
 	for (const st of ev.states) { extra.push(st.error); names.push("module state error"); }
 	for (const job of ev.pending) { extra.push(job.error); names.push("module state error"); }
 	const sharing: RaiserStrand[] = [main];
@@ -2505,7 +2501,13 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 	return false;
 }
 
+// A program's run ends with the exit ledger; a call into a module that already ran is not its end.
 export function execLoop(vm: RaiserVM): void {
+	runToHalt(vm);
+	if (vm.halted && vm.sched.strands.items.length > 0) vmProgramLedger(vm);
+}
+
+function runToHalt(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
 	// expand.ms, the rgen tests), so whichever strand ran last, the mirror
@@ -2517,7 +2519,6 @@ export function execLoop(vm: RaiserVM): void {
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
 		vm.globals = main.globals;
-		if (vm.halted) vmProgramLedger(vm);
 	}
 }
 
