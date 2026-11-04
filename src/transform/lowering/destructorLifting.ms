@@ -27,6 +27,7 @@ import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBod
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
+import { parseNumberLiteral } from "../../utils/string";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
@@ -1404,6 +1405,11 @@ function armDiscriminantLiteral(member: Type, disc: string, loc: SourceLocation)
 	if (field == null) throw new Error(`internal: arm '${member.typeName}' of a struct and ref union has no discriminant field '${disc}'`);
 	if (field.kind == TypeKind.StringLiteral) return makeString(field.typeName, loc);
 	if (field.kind == TypeKind.BooleanLiteral) return makeBool(field.typeName == "true", loc);
+	if (field.kind == TypeKind.NumberLiteral) {
+		const n = makeNumber(parseNumberLiteral(field.typeName), loc);
+		n.nodeType = field.typeReturn;
+		return n;
+	}
 	if (field.kind == TypeKind.EnumLiteral && field.typeReturn != null) {
 		const members = field.typeReturn;
 		return makeNumber(enumMemberValue(members, members.typeNames.indexOf(field.typeNames[0]) as int32), loc);

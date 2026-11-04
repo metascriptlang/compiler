@@ -1083,20 +1083,25 @@ export function getDiscriminantName(t: Readonly<Type | null>): string {
 // Checks enum-based DUs first, then string-literal DUs.
 export interface DiscriminantInfo {
 	isStringDU: boolean;
+	isNumberDU: boolean;
 	discField: string;
 }
 
 export function detectUnionDiscriminant(unionType: Type | null, fieldName: string): DiscriminantInfo {
 	if (isDiscriminatedUnion(unionType) && getDiscriminantName(unionType) == fieldName) {
-		return { isStringDU: false, discField: fieldName };
+		return { isStringDU: false, isNumberDU: false, discField: fieldName };
 	}
 	if (unionType != null && unionType.kind == TypeKind.Union) {
 		const sdf = findSharedStringDiscriminant(unionType);
 		if (sdf != "" && sdf == fieldName) {
-			return { isStringDU: true, discField: sdf };
+			return { isStringDU: true, isNumberDU: false, discField: sdf };
+		}
+		const ndf = findSharedNumberDiscriminant(unionType);
+		if (ndf != "" && ndf == fieldName) {
+			return { isStringDU: false, isNumberDU: true, discField: ndf };
 		}
 	}
-	return { isStringDU: false, discField: "" };
+	return { isStringDU: false, isNumberDU: false, discField: "" };
 }
 
 // Find variant index by field name, peeling Ref/Ptr per variant to reach the
@@ -1299,10 +1304,8 @@ export function literalTagDiscriminant(unionType: Type | null): string {
 		const dt = unionType.typeExtra;
 		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String || dt.kind == TypeKind.Enum) ? getDiscriminantName(unionType) : "";
 	}
-	const strDisc = findSharedStringDiscriminant(unionType);
-	if (strDisc != "") return strDisc;
-	const boolDisc = findSharedBooleanDiscriminant(unionType);
-	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(unionType);
+	const unitDisc = findSharedUnitDiscriminant(unionType);
+	return unitDisc != "" ? unitDisc : findSharedEnumDiscriminant(unionType);
 }
 
 export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: string): boolean {
@@ -1530,6 +1533,21 @@ export function findSharedStringDiscriminant(unionType: Readonly<Type | null>): 
 	return findSharedLiteralDiscriminant(unionType, TypeKind.StringLiteral);
 }
 
+// A number-literal discriminant (`kind: 0` | `kind: 1`): a unit literal like a string one, so it
+// discriminates as it does in TS.
+export function findSharedNumberDiscriminant(unionType: Readonly<Type | null>): string {
+	return findSharedLiteralDiscriminant(unionType, TypeKind.NumberLiteral);
+}
+
+// Any unit literal that tells the members apart and that no enum or match declaration stamps:
+// string, boolean or number.
+export function findSharedUnitDiscriminant(unionType: Readonly<Type | null>): string {
+	const s = findSharedStringDiscriminant(unionType);
+	if (s != "") return s;
+	const b = findSharedBooleanDiscriminant(unionType);
+	return b != "" ? b : findSharedNumberDiscriminant(unionType);
+}
+
 // Tier 2 (boolean): detect a boolean-literal discriminant shared by every variant.
 // Variants must each have the same field name with a BooleanLiteral type and
 // distinct values (true vs false).
@@ -1581,6 +1599,16 @@ function findVariantByLiteralDiscriminant(unionType: Readonly<Type | null>, disc
 				return i;
 			}
 		}
+	}
+	return -1;
+}
+
+// The variant whose number-literal discriminant equals `value` (`0` and `0.0` are one value, as in TS).
+export function findVariantByNumberDiscriminant(unionType: Readonly<Type | null>, discFieldName: string, value: number): int32 {
+	if (unionType == null || unionType.typeChildren == null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		const ft = findFieldInVariant(unionType.typeChildren[i], discFieldName);
+		if (ft != null && ft.kind == TypeKind.NumberLiteral && parseNumberLiteral(ft.typeName) == value) return i;
 	}
 	return -1;
 }

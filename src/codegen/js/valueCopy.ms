@@ -11,7 +11,7 @@ import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
-import { findSharedBooleanDiscriminant, findSharedStringDiscriminant, isNullableShape, isStructType, needsValueCopy, peelToStruct, setRepr, valueCopyRepr } from "../../checker/types";
+import { findSharedUnitDiscriminant, isNullableShape, isStructType, needsValueCopy, peelToStruct, setRepr, valueCopyRepr } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName, jsPropertyKey, jsPropertyAccess, escapeJSString, identFromKey } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
@@ -122,8 +122,7 @@ function keyOf(t: Type, open: Type[]): string {
 }
 
 function sharedDiscriminant(union: Type): string {
-	const name = findSharedStringDiscriminant(union);
-	return name != "" ? name : findSharedBooleanDiscriminant(union);
+	return findSharedUnitDiscriminant(union);
 }
 
 // An ordinary `S | R` holds a value-struct arm by value, as on C, but carries no

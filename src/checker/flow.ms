@@ -26,7 +26,7 @@ import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	createStringLiteral, createBooleanLiteral, booleanLiteralValue, createEnumLiteral, literalDiscValue, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
 	detectUnionDiscriminant, enumMemberLiteralOf,
-	findVariantByStringDiscriminant, findFieldInVariant,
+	findVariantByStringDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
@@ -1560,9 +1560,7 @@ function skipsExhaustiveSwitch(clause: FlowSwitchClauseData | null): boolean {
 	const sd = clause.switchStatement.data as SwitchStmtData;
 	const disc = sd.switchDisc;
 	if (disc == null || disc.nodeType == null || isTypeofOperand(disc)) return false;
-	// checkSwitch widens a number-literal discriminant in place, so its declared type is the one left to read.
-	let members = literalMemberKeys(disc.nodeType);
-	if (members == null && disc.kind == NodeKind.Identifier && disc.resolvedSym != null && disc.resolvedSym.symbolType != null) members = literalMemberKeys(disc.resolvedSym.symbolType);
+	const members = switchMemberKeys(disc);
 	if (members == null || members.length == 0) return false;
 	let testCount = 0;
 	for (const c of sd.switchCases) testCount += (c.data as SwitchCaseData).caseTests.length;
@@ -1579,6 +1577,26 @@ function skipsExhaustiveSwitch(clause: FlowSwitchClauseData | null): boolean {
 		if (!held.has(key)) return false;
 	}
 	return true;
+}
+
+function switchMemberKeys(disc: Node): string[] | null {
+	const own = disc.nodeType != null ? literalMemberKeys(disc.nodeType) : null;
+	if (own != null) return own;
+	// checkSwitch widens a number-literal discriminant in place, so its declared type is the one left to read.
+	if (disc.kind == NodeKind.Identifier && disc.resolvedSym != null && disc.resolvedSym.symbolType != null) return literalMemberKeys(disc.resolvedSym.symbolType);
+	return disc.kind == NodeKind.MemberExpr ? discriminantMemberKeys(disc.data as MemberExprData) : null;
+}
+
+function discriminantMemberKeys(md: MemberExprData): string[] | null {
+	const u = md.object.nodeType != null ? peelToStructOrUnion(md.object.nodeType) : null;
+	if (u == null || u.kind != TypeKind.Union) return null;
+	const keys: string[] = [];
+	for (const m of u.typeChildren) {
+		const ft = m != null ? findFieldInVariant(m, md.property) : null;
+		if (ft == null || (ft.kind != TypeKind.StringLiteral && ft.kind != TypeKind.NumberLiteral && ft.kind != TypeKind.BooleanLiteral && ft.kind != TypeKind.EnumLiteral)) return null;
+		keys.push(caseLiteralKey(ft));
+	}
+	return keys;
 }
 
 function literalMemberKeys(t: Type): string[] | null {
@@ -2211,6 +2229,10 @@ export function narrowTypeByDiscriminantProperty(
 		const litValue = stringLiteralValueOf(valueExpr);
 		if (litValue == null) return t;
 		variantIdx = findVariantByStringDiscriminant(t, info.discField, litValue);
+	} else if (info.isNumberDU) {
+		const lit = valueExpr != null ? caseLiteralOf(valueExpr) : null;
+		if (lit == null || lit.kind != TypeKind.NumberLiteral) return t;
+		variantIdx = findVariantByNumberDiscriminant(t, info.discField, parseNumberLiteral(lit.typeName));
 	} else {
 		const lit = enumMemberLiteralOf(valueExpr);
 		if (lit == null) return t;
@@ -2247,6 +2269,10 @@ function soleVariantHolds(t: Type, propName: string, valueExpr: Node | null): bo
 	if (field == null || valueExpr == null) return false;
 	if (field.kind == TypeKind.BooleanLiteral) {
 		return valueExpr.kind == NodeKind.BooleanLiteral && booleanLiteralValue(field) == (valueExpr.data as BooleanLiteralData).boolValue;
+	}
+	if (field.kind == TypeKind.NumberLiteral) {
+		const lit = caseLiteralOf(valueExpr);
+		return lit != null && lit.kind == TypeKind.NumberLiteral && parseNumberLiteral(lit.typeName) == parseNumberLiteral(field.typeName);
 	}
 	const wanted = field.kind == TypeKind.EnumLiteral ? enumMemberLiteralOf(valueExpr) : field.kind == TypeKind.StringLiteral ? createStringLiteral(stringLiteralValueOf(valueExpr) ?? "\u0000none") : null;
 	return wanted != null && wanted.kind == field.kind && literalDiscValue(wanted) == literalDiscValue(field);

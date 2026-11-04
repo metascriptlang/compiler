@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag,
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound } from "./types";
+import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedNumberDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
 import { stdSymbol, markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, routineFlags, routineSuspends, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
@@ -2544,6 +2544,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		// pure name-based findUnionVariant misses.
 		let varIdx = -1;
 		const stringDiscName = findSharedStringDiscriminant(objExpected);
+		const numberDiscName = stringDiscName == "" ? findSharedNumberDiscriminant(objExpected) : "";
+		if (numberDiscName != "") varIdx = numberDiscriminatedVariant(ctx, node, d, objExpected, numberDiscName);
 		if (stringDiscName != "") {
 			const spreadDisc = spreadGivenLast(ctx, d, stringDiscName);
 			// Look for the discriminant field in the literal
@@ -2613,10 +2615,11 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				? findFieldInVariant(variant, key)
 				: null;
 			checkExpr(ctx, d.properties[fi], fieldExpected);
-			if (stringDiscName != "" && variant != null && key != "" && key != stringDiscName && fieldExpected == null) {
-				// Resolved to a specific variant via string discriminant, but this field
+			const litDiscName = stringDiscName != "" ? stringDiscName : numberDiscName;
+			if (litDiscName != "" && variant != null && key != "" && key != litDiscName && fieldExpected == null) {
+				// Resolved to a specific variant via a literal discriminant, but this field
 				// doesn't belong to it — report.
-				addError(ctx, `Field '${key}' does not exist on the ${stringDiscName}-matched variant`,
+				addError(ctx, `Field '${key}' does not exist on the ${litDiscName}-matched variant`,
 					node.location.line, node.location.column);
 			}
 		}
@@ -2695,6 +2698,20 @@ function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
 		return (refusal != UnknownRefusal.Value && !isArrayShaped(bare) && !isStdCollection(bare)) || isFunctionKind(target);
 	}
 	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
+}
+
+// The member a written object names by its number-literal discriminant (`{ kind: 1, ... }`), as a string one names it.
+function numberDiscriminatedVariant(ctx: CheckerContext, node: Node, d: ObjectLiteralData, union: Type, disc: string): int32 {
+	const spreadDisc = spreadGivenLast(ctx, d, disc);
+	const at = d.keys.indexOf(disc);
+	const written = spreadDisc != null ? spreadDisc : at >= 0 && at < d.properties.length ? constLiteralType(d.properties[at]) : null;
+	if (written == null) {
+		if (at < 0) addError(ctx, `Object literal missing discriminant field '${disc}' for union`, node.location.line, node.location.column);
+		return -1;
+	}
+	const vi = written.kind == TypeKind.NumberLiteral ? findVariantByNumberDiscriminant(union, disc, parseNumberLiteral(written.typeName)) : -1;
+	if (vi < 0) addError(ctx, `No variant of union has ${disc} = ${typeDisplayName(written)}`, node.location.line, node.location.column);
+	return vi;
 }
 
 function constLiteralType(node: Node): Type | null {

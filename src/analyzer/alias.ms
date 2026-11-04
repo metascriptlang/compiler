@@ -13,7 +13,7 @@
 
 import { Node, NodeKind, Symbol, Type, TypeKind, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
-import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, isTagCarriedUnion, matchUnionBehindInstance, instantiatedUnionBehind, isCountedRef, isLiteralSet, createRef, createArray } from "../checker/types";
+import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedUnitDiscriminant, findSharedEnumDiscriminant, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, isTagCarriedUnion, matchUnionBehindInstance, instantiatedUnionBehind, isCountedRef, isLiteralSet, createRef, createArray } from "../checker/types";
 import { makeHiddenDeref } from "../transform/util";
 import { getBody, makeTestSym, attachSymAll } from "./testSupport";
 
@@ -120,7 +120,7 @@ function readsUnionDiscriminant(md: MemberExprData): boolean {
 	if (u == null || u.kind != TypeKind.Union) return false;
 	const p = md.property;
 	return (isDiscriminatedUnion(u) && getDiscriminantName(u) == p)
-		|| findSharedStringDiscriminant(u) == p || findSharedBooleanDiscriminant(u) == p
+		|| findSharedUnitDiscriminant(u) == p
 		|| findSharedEnumDiscriminant(u) == p;
 }
 

@@ -1,7 +1,7 @@
 import { AttachedOp, Node, NodeKind, ProgramData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
-import { findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
+import { findSharedUnitDiscriminant } from "../../checker/types";
 import { checkProgram } from "../../checker/checkPass";
 import { getDeclName } from "../../checker/collectPass";
 import { getOpByKey } from "../../codegen/c/types";
@@ -75,16 +75,14 @@ function isEliminable(node: Node): boolean {
 		// eliminated before destructorLifting saw it, leaving `<Name>Destroy`
 		// undefined at link time. Detect three DU shapes:
 		//  - Stamped (typeNames[0] + typeExtra): match-type or boolean DU.
-		//  - Boolean-discriminator union: detected via findSharedBooleanDiscriminant.
-		//  - String-discriminator union: detected via findSharedStringDiscriminant.
+		//  - A union whose members share a string, boolean or number literal field (findSharedUnitDiscriminant).
 		// Other aliases stay eliminable (transparent to the C emitter).
 		const sym = node.resolvedSym;
 		if (sym != null && sym.symbolType != null) {
 			const t = sym.symbolType;
 			if (t.kind == TypeKind.Union) {
 				if (t.typeNames != null && t.typeNames.length > 0 && t.typeExtra != null) return false;
-				if (findSharedBooleanDiscriminant(t) != "") return false;
-				if (findSharedStringDiscriminant(t) != "") return false;
+				if (findSharedUnitDiscriminant(t) != "") return false;
 			}
 		}
 		return true;
