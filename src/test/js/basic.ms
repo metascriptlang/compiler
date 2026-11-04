@@ -249,3 +249,11 @@ test "E2E JS: a nullish read of a field through a ref parameter dereferences the
 	assert js.value.contains("(q[0][q[1]].o !== null) ? q[0][q[1]].o :");
 	assert !js.value.contains("][0][q[0][q[1]][1]]");
 }
+
+test "E2E JS: a class display name is a static getter under a plain key, so a bundler can drop an unused class" {
+	const js = compileToJS("class Unused { value: int32 = 0; }\nclass Used { value: int32 = 1; }\nclass Sub extends Used { more: int32 = 2; }\nconsole.log(new Sub().value);");
+	assert js.ok;
+	assert js.value.contains("static get \"metascript.typeDisplayName\"() { return \"Unused\"; }");
+	assert js.value.contains("static get \"metascript.typeDisplayName\"() { return \"Sub\"; }");
+	assert !js.value.contains("Symbol.for(\"metascript.typeDisplayName\")");
+}
