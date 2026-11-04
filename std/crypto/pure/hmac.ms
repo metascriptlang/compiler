@@ -1,4 +1,6 @@
 import { HashState, kindSha1, kindSha256, kindSha512, kindMd5 } from "./state";
+
+const pbkdf2MaxLength = 1048576;
 import { encodeHex } from "../../core/encoding";
 import { newHash, copyHash, updateHash, finishHashInto, hashOf } from "./hash";
 
@@ -12,6 +14,7 @@ export class HmacState {
 }
 
 export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
+	if (kind < kindSha256 || kind > kindMd5) throw new Error(`hmac: unknown hash kind ${kind}`);
 	const probe = newHash(kind);
 	const size = probe.blockSize;
 	const keyBlock = new Array<uint8>(size);
@@ -61,6 +64,8 @@ export function hmacOf(kind: int32, key: Readonly<uint8[]>, data: Readonly<uint8
 }
 
 export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: int32, length: int32): uint8[] {
+	if (iterations < 1) throw new Error("pbkdf2: iterations must be at least 1");
+	if (length < 1 || length > pbkdf2MaxLength) throw new Error(`pbkdf2: keyLength must be between 1 and ${pbkdf2MaxLength}`);
 	const hmac = newHmac(kind, password);
 	const size = hmac.inner.outputSize;
 	const out = new Array<uint8>(length);
@@ -93,7 +98,10 @@ export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonl
 }
 
 export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8[]>, info: Readonly<uint8[]>, length: int32): uint8[] {
+	if (kind < kindSha256 || kind > kindMd5) throw new Error(`hkdf: unknown hash kind ${kind}`);
 	const size = newHash(kind).outputSize;
+	if (length < 1) throw new Error("hkdf: length must be at least 1");
+	if (length > 255 * size) throw new Error(`hkdf: length must be at most ${255 * size}`);
 	const zeros = new Array<uint8>(size);
 	const prk = hmacOf(kind, salt.length == 0 ? zeros : salt, ikm);
 	const hmac = newHmac(kind, prk);
