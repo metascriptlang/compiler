@@ -57,6 +57,11 @@ function mulHi(x: uint32, y: uint32): uint32 {
 	}
 }
 
+// The carry out of `a + b`, which wrapped to `sum`, without a comparison the compiler could branch on.
+function carryOut(a: uint32, b: uint32, sum: uint32): uint32 {
+	return ((a & b) | ((a | b) & ~sum)) >> 31;
+}
+
 function clz32(x: uint32): int32 {
 	let n = 32;
 	let rest = x;
@@ -219,10 +224,12 @@ function mulAddLimb(z: uint32[], at: int32, x: Readonly<uint32[]>, y: uint32): u
 	let carry: uint32 = 0;
 	for (let j = 0; j < x.length; j++) {
 		const lo = x[j] * y;
-		let zLo = z[at + j] + lo;
-		let zHi = mulHi(x[j], y) + ((zLo < lo ? 1 : 0) as uint32);
-		zLo += carry;
-		zHi += (zLo < carry ? 1 : 0) as uint32;
+		const zj = z[at + j];
+		let zLo = zj + lo;
+		let zHi = mulHi(x[j], y) + carryOut(zj, lo, zLo);
+		const sum = zLo + carry;
+		zHi += carryOut(zLo, carry, sum);
+		zLo = sum;
 		z[at + j] = zLo & tMask;
 		carry = (zHi << 1) | (zLo >> tShift);
 	}
@@ -324,34 +331,7 @@ export function uintDivRemPublic(x: uint32[], divisor: int32): int32 {
 	return rem;
 }
 
-/** The greatest common divisor, with gcd(x, 0) = x; null when both are zero. */
-export function uintGcdPublic(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] | null {
-	if (uintIsZero(x) && uintIsZero(y)) return null;
-	const len = Math.max(x.length, y.length) as int32;
-	if (uintIsZero(x)) return uintWiden(y, len);
-	if (uintIsZero(y)) return uintWiden(x, len);
-	let a = uintWiden(x, len);
-	let b = uintWiden(y, len);
-	const aShift = uintTrailingZeroBitsPublic(a);
-	const bShift = uintTrailingZeroBitsPublic(b);
-	uintShiftRightPublic(a, aShift);
-	uintShiftRightPublic(b, bShift);
-	while (true) {
-		const order = uintCompare(a, b);
-		if (order == 0) break;
-		if (order < 0) {
-			const t = a;
-			a = b;
-			b = t;
-		}
-		uintSub(a, b);
-		uintShiftRightPublic(a, uintTrailingZeroBitsPublic(a));
-	}
-	shiftLeft(a, Math.min(aShift, bShift) as int32);
-	return a;
-}
-
-// Computes x << tShift + y (mod m) in place and returns the 31 quotient bits that the reduction subtracted.
+// Computes x << tBits + y (mod m) in place and returns the 31 quotient bits that the reduction subtracted.
 function shiftIn(m: Readonly<uint32[]>, x: uint32[], y: uint32): uint32 {
 	const n = m.length;
 	const d = new Array<uint32>(n);
@@ -465,6 +445,32 @@ export function uintGcdModinvOdd(a: Readonly<uint32[]>, n: Readonly<uint32[]>): 
 	return { gcd: v, inverse: q };
 }
 
+/**
+ * The greatest common divisor, with gcd(x, 0) = x; null when both are zero. As `mbedtls_mpi_gcd`: the common
+ * power of two is set aside (its count is not constant-time), then the constant-time odd GCD runs.
+ */
+export function uintGcd(x: Readonly<uint32[]>, y: Readonly<uint32[]>): uint32[] | null {
+	if (uintIsZero(x) && uintIsZero(y)) return null;
+	const len = Math.max(x.length, y.length) as int32;
+	if (uintIsZero(x)) return uintWiden(y, len);
+	if (uintIsZero(y)) return uintWiden(x, len);
+	const a = uintWiden(x, len);
+	const b = uintWiden(y, len);
+	const aShift = uintTrailingZeroBitsPublic(a);
+	const bShift = uintTrailingZeroBitsPublic(b);
+	uintShiftRightPublic(a, aShift);
+	uintShiftRightPublic(b, bShift);
+	condSwap(a, b, limbsCmpLt(b, a));
+	const g = uintGcdModinvOdd(a, b).gcd;
+	shiftLeft(g, Math.min(aShift, bShift) as int32);
+	return g;
+}
+
+/** Zeroes secret scratch once it is no longer needed. */
+export function uintWipe(x: uint32[]): void {
+	for (let i = 0; i < x.length; i++) x[i] = 0;
+}
+
 /** An odd modulus above 2 with its Montgomery constants; build it with `modulusFromUint` or `modulusFromBytes`. */
 export struct Modulus {
 	v: uint32[];
@@ -558,20 +564,21 @@ function montgomeryLoop(m: Modulus, d: uint32[], a: Readonly<uint32[]>, b: Reado
 		let lo = ai * b[0];
 		let zLo = d[0] + lo;
 		const f = (zLo * m.m0inv) & tMask;
-		let zHi = mulHi(ai, b[0]) + ((zLo < lo ? 1 : 0) as uint32);
+		let zHi = mulHi(ai, b[0]) + carryOut(d[0], lo, zLo);
 		lo = f * mv[0];
-		zLo += lo;
-		zHi += ((zLo < lo ? 1 : 0) as uint32) + mulHi(f, mv[0]);
+		let sum = zLo + lo;
+		zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[0]);
+		zLo = sum;
 		let carry = (zHi << 1) | (zLo >> tShift);
 		for (let j = 1; j < n; j++) {
 			lo = ai * b[j];
 			zLo = d[j] + lo;
-			zHi = mulHi(ai, b[j]) + ((zLo < lo ? 1 : 0) as uint32);
+			zHi = mulHi(ai, b[j]) + carryOut(d[j], lo, zLo);
 			lo = f * mv[j];
-			zLo += lo;
-			zHi += ((zLo < lo ? 1 : 0) as uint32) + mulHi(f, mv[j]);
-			zLo += carry;
-			zHi += (zLo < carry ? 1 : 0) as uint32;
+			sum = zLo + lo;
+			zHi += carryOut(zLo, lo, sum) + mulHi(f, mv[j]);
+			zLo = sum + carry;
+			zHi += carryOut(sum, carry, zLo);
 			d[j - 1] = zLo & tMask;
 			carry = (zHi << 1) | (zLo >> tShift);
 		}
@@ -646,6 +653,10 @@ function powInternal(m: Modulus, x: Readonly<uint32[]>, e: Readonly<uint8[]>, is
 					cmov(out, isNonZero(k), t1);
 				}
 			}
+		}
+		if (!isPublic) {
+			for (const entry of pc) uintWipe(entry);
+			uintWipe(t0);
 		}
 	}
 	return fromMontgomery(m, out);

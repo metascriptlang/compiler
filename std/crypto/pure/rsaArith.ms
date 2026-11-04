@@ -1,16 +1,16 @@
 /**
  * RSA arithmetic on `ff` limbs for the C backend (the JavaScript backend uses `rsaArith.jms` on BigInt).
- * Private operations use CRT with a secret-exponent constant-time power; key generation and inversion follow
- * mbedTLS (`mbedtls_rsa_gen_key`, `mbedtls_mpi_gen_prime`, `mbedtls_mpi_inv_mod`).
+ * Private operations, key generation and inversion follow mbedTLS (`mbedtls_rsa_private` with its base and
+ * exponent blinding, `mbedtls_rsa_gen_key`, `mbedtls_mpi_gen_prime`, `mbedtls_mpi_inv_mod`).
  */
 
 import {
-	Modulus, modulusFromUint, uintFromBytes, uintToBytes, uintToMinimalBytes, uintWiden, uintCompare, uintSub,
-	uintMul, uintMulAdd, uintIsOne, uintBitLenPublic, uintTrailingZeroBitsPublic, uintShiftRightPublic,
-	uintDivRem, uintDivRemPublic, uintGcdPublic, uintGcdModinvOdd, limbsFor, feFromBytes, reduce, sub, mul, sq,
-	pow, powPublic, isMinusOne,
+	Modulus, modulusFromUint, uintFromBytes, uintToBytes, uintToMinimalBytes, uintWiden, uintCompare, uintAdd,
+	uintSub, uintMul, uintMulAdd, uintIsOne, uintIsZero, uintBitLenPublic, uintTrailingZeroBitsPublic,
+	uintShiftRightPublic, uintDivRem, uintDivRemPublic, uintGcd, uintGcdModinvOdd, uintWipe, limbsFor,
+	feFromBytes, reduce, sub, mul, sq, pow, powPublic, isMinusOne,
 } from "./ff";
-import { RsaPublicData, RsaPrivateData, rsaModulusBytes, sameBytes } from "./rsaKey";
+import { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
 import { randomOctets } from "./random";
 
 function uintOf(bytes: Readonly<uint8[]>): uint32[] {
@@ -59,7 +59,57 @@ export function rsaPublicOperation(key: RsaPublicData, input: Readonly<uint8[]>)
 	return uintToBytes(y, rsaModulusBytes(key.n));
 }
 
-// CRT with a check that the result opens back to the input; null when the input is not below n.
+interface Blinding {
+	vi: uint32[];
+	vf: uint32[];
+}
+
+// A uniform value in [1, n), as `mbedtls_mpi_random` with a minimum of 1.
+function randomBelow(n: Modulus): uint32[] {
+	const bits = uintBitLenPublic(n.v);
+	const size = (bits + 7) >> 3;
+	for (let count = 0; count < 30; count++) {
+		const bytes = randomOctets(size);
+		bytes[0] = ((bytes[0] as int32) & (0xff >> (size * 8 - bits))) as uint8;
+		const x = n.feFromBytes(bytes);
+		if (x != null && !uintIsZero(x)) return x;
+	}
+	throw new Error("rsa: the random source gives no value below the modulus");
+}
+
+// Vi = Vf^-e mod n for a random Vf, as `rsa_prepare_blinding` on a fresh context.
+function blindingPair(n: Modulus, e: Readonly<uint8[]>): Blinding {
+	for (let count = 0; count < 10; count++) {
+		const vf = randomBelow(n);
+		const found = uintGcdModinvOdd(vf, n.v);
+		if (uintIsOne(found.gcd)) {
+			const vi = n.powPublic(found.inverse, e);
+			uintWipe(found.inverse);
+			if (vi == null) break;
+			return { vi, vf };
+		}
+	}
+	throw new Error("rsa: no blinding value is invertible modulo n");
+}
+
+// (p - 1) * r + d for a random 28-byte r, as mbedTLS's exponent blinding.
+function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
+	const r = uintOf(randomOctets(28));
+	const blinded = uintMul(minusOne(p), r);
+	const exponent = uintOf(d);
+	if (uintAdd(blinded, exponent) != 0) throw new Error("rsa: a blinded exponent overflowed its width");
+	const bytes = uintToMinimalBytes(blinded);
+	uintWipe(r);
+	uintWipe(blinded);
+	uintWipe(exponent);
+	return bytes;
+}
+
+function wipeBytes(bytes: uint8[]): void {
+	for (let i = 0; i < bytes.length; i++) bytes[i] = 0;
+}
+
+// Blinded CRT checked against the public operation, as `mbedtls_rsa_private`; null when the input is not below n.
 export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]>): uint8[] | null {
 	const n = modulusOf(key.n);
 	const mp = modulusOf(key.p);
@@ -67,18 +117,29 @@ export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]
 	if (n == null || mp == null || mq == null) return null;
 	const c = n.feFromBytes(input);
 	if (c == null) return null;
-	const m1 = mp.pow(mp.reduce(c), key.dp);
-	const m2 = mq.pow(mq.reduce(c), key.dq);
+	const p = uintOf(key.p);
+	const q = uintOf(key.q);
+	const qi = uintOf(key.qi);
+	const blinding = blindingPair(n, key.e);
+	const t = n.mul(c, blinding.vi);
+	const dpBlinded = blindedExponent(p, key.dp);
+	const dqBlinded = blindedExponent(q, key.dq);
+	const m1 = mp.pow(mp.reduce(t), dpBlinded);
+	const m2 = mq.pow(mq.reduce(t), dqBlinded);
+	wipeBytes(dpBlinded);
+	wipeBytes(dqBlinded);
 	if (m1 == null || m2 == null) return null;
-	const h = mp.mul(mp.reduce(uintOf(key.qi)), mp.sub(m1, mp.reduce(m2)));
+	const h = mp.mul(mp.reduce(qi), mp.sub(m1, mp.reduce(m2)));
 	const width = c.length;
 	const result = uintWiden(m2, width);
-	if (uintMulAdd(result, uintWiden(h, width), uintWiden(uintOf(key.q), width)) != 0) return null;
-	const size = rsaModulusBytes(key.n);
-	const out = uintToBytes(result, size);
-	const back = out == null ? null : rsaPublicOperation({ n: key.n, e: key.e }, out);
-	const padded = uintToBytes(c, size);
-	if (out == null || back == null || padded == null || !sameBytes(back, padded)) return null;
+	const overflow = uintMulAdd(result, uintWiden(h, width), uintWiden(q, width));
+	const check = n.powPublic(result, key.e);
+	const consistent = overflow == 0 && check != null && uintCompare(check, t) == 0;
+	const opened = n.mul(result, blinding.vf);
+	for (const scratch of [p, q, qi, t, m1, m2, h, result, blinding.vi, blinding.vf]) uintWipe(scratch);
+	if (!consistent) return null;
+	const out = uintToBytes(opened, rsaModulusBytes(key.n));
+	uintWipe(opened);
 	return out;
 }
 
@@ -195,6 +256,7 @@ function inverseModEven(a: Readonly<uint32[]>, n: Readonly<uint32[]>): uint32[] 
 	const k = uintDivRem(t, a).quotient;
 	const out = uintWiden(n, n.length);
 	uintSub(out, k);
+	for (const scratch of [found.inverse, t, k]) uintWipe(scratch);
 	return out;
 }
 
@@ -208,9 +270,12 @@ function inverseModOdd(a: Readonly<uint32[]>, n: Readonly<uint32[]>): uint32[] |
 function privateExponent(p: Readonly<uint32[]>, q: Readonly<uint32[]>, e: Readonly<uint32[]>): uint32[] | null {
 	const k = minusOne(p);
 	const l = minusOne(q);
-	const g = uintGcdPublic(k, l);
+	const g = uintGcd(k, l);
 	if (g == null) return null;
-	return inverseModEven(e, uintDivRem(uintMul(k, l), g).quotient);
+	const lcm = uintDivRem(uintMul(k, l), g).quotient;
+	const d = inverseModEven(e, lcm);
+	for (const scratch of [k, l, g, lcm]) uintWipe(scratch);
+	return d;
 }
 
 /** A key with e = 65537, as `mbedtls_rsa_gen_key`: |p - q| > 2^(bits/2 - 100), p > q, d > 2^(bits/2). */
@@ -231,14 +296,21 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 			q = t;
 		}
 		const d = privateExponent(p, q, e);
-		if (d == null || uintBitLenPublic(d) <= (bits + 1) / 2) continue;
+		if (d == null || uintBitLenPublic(d) <= (bits + 1) / 2) {
+			for (const scratch of [p, q]) uintWipe(scratch);
+			if (d != null) uintWipe(d);
+			continue;
+		}
 		const n = uintMul(p, q);
 		const qi = inverseModOdd(q, p);
 		if (qi == null || uintBitLenPublic(n) != bits) throw new Error("rsaGenerate: the generated primes do not form a key");
-		return {
-			n: uintToMinimalBytes(n), e: eBytes, d: uintToMinimalBytes(d), p: uintToMinimalBytes(p), q: uintToMinimalBytes(q),
-			dp: uintToMinimalBytes(uintDivRem(d, minusOne(p)).remainder), dq: uintToMinimalBytes(uintDivRem(d, minusOne(q)).remainder),
-			qi: uintToMinimalBytes(qi),
+		const dp = uintDivRem(d, minusOne(p)).remainder;
+		const dq = uintDivRem(d, minusOne(q)).remainder;
+		const key: RsaPrivateData = {
+			n: uintToMinimalBytes(n), e: eBytes, d: uintToMinimalBytes(d), p: uintToMinimalBytes(p),
+			q: uintToMinimalBytes(q), dp: uintToMinimalBytes(dp), dq: uintToMinimalBytes(dq), qi: uintToMinimalBytes(qi),
 		};
+		for (const scratch of [p, q, d, dp, dq, qi]) uintWipe(scratch);
+		return key;
 	}
 }

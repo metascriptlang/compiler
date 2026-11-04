@@ -1,6 +1,6 @@
 import {
 	Modulus, modulusFromBytes, uintFromBytes, uintToBytes, uintToMinimalBytes, limbsFor, uintDivRem,
-	uintDivRemPublic, uintGcdPublic, uintGcdModinvOdd, uintMul, uintIsOne, uintBitLenPublic,
+	uintDivRemPublic, uintGcd, uintGcdModinvOdd, uintMul, uintIsOne, uintBitLenPublic,
 	feFromBytes, reduce, add, sub, mul, sq, pow, powPublic, one, bits,
 } from "./ff";
 
@@ -106,7 +106,7 @@ test "division of any divisor gives Python's quotient and remainder" {
 }
 
 test "gcd and the odd-modulus inverse" {
-	const gcd = uintGcdPublic(uintOf("0f" + "00".repeat(25)), uintOf("0150" + "00".repeat(12)));
+	const gcd = uintGcd(uintOf("0f" + "00".repeat(25)), uintOf("0150" + "00".repeat(12)));
 	assert gcd != null && hexOf(gcd) == "30" + "00".repeat(12);
 	const found = uintGcdModinvOdd(uintOf(inverseA), uintOf(inverseN));
 	assert uintIsOne(found.gcd) && hexOf(found.inverse) == inverseOfA;
