@@ -203,3 +203,11 @@ test "chacha20 keystream continues across the 64-byte block boundary" {
 	for (let i = 0; i < 66; i++) assert whole[64 + i] == second[i];
 	assert whole.slice(0, 64).encodeHex() == "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e";
 }
+
+test "chacha20 refuses a length that would wrap the 32-bit block counter" {
+	const key = rfcKey("00".repeat(32));
+	const nonce = "00".repeat(12).decodeHex();
+	assert chacha20Xor(key, nonce, 0xffffffff, new Array<uint8>(64), new Array<uint8>(64));
+	assert !chacha20Xor(key, nonce, 0xffffffff, new Array<uint8>(65), new Array<uint8>(65));
+	assert !chacha20Xor(key, nonce, 0xfffffffe, new Array<uint8>(129), new Array<uint8>(129));
+}
