@@ -27,12 +27,20 @@ when (c) {
 		accLo: uint64;
 		productHi: uint64;
 		productLo: uint64;
+		wide3: uint64;
+		wide2: uint64;
+		wide1: uint64;
+		wide0: uint64;
+		powers: uint64[];
 		tail: uint8[];
 	}
 
 	function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
 		return ((loadBE32(data, at) as uint64) << 32) | (loadBE32(data, at + 4) as uint64);
 	}
+
+	const AGGREGATE: int32 = 4;
+	const AGGREGATE_FROM: int32 = 512;
 
 	@include("runtime/core/mulWide.h");
 
@@ -75,29 +83,82 @@ when (c) {
 		g.productLo = (v << 63) ^ (v << 62) ^ (v << 57);
 	}
 
-	// acc = (acc ^ block) * key, reduced modulo x^128 + x^127 + x^126 + x^121 + 1.
-	function absorb(g: Ghash, data: Readonly<uint8[]>, at: int32): void {
-		const xHi = g.accHi ^ loadBE64(data, at);
-		const xLo = g.accLo ^ loadBE64(data, at + 8);
-		carrylessProduct64(g, xLo, g.keyLo);
+	// wide ^= x * k as an unreduced 256-bit product.
+	function accumulate(g: Ghash, xHi: uint64, xLo: uint64, kHi: uint64, kLo: uint64): void {
+		carrylessProduct64(g, xLo, kLo);
 		const loHi = g.productHi;
 		const loLo = g.productLo;
-		carrylessProduct64(g, xHi, g.keyHi);
+		carrylessProduct64(g, xHi, kHi);
 		const hiHi = g.productHi;
 		const hiLo = g.productLo;
-		carrylessProduct64(g, xLo ^ xHi, g.keyLo ^ g.keyHi);
+		carrylessProduct64(g, xLo ^ xHi, kLo ^ kHi);
 		const midHi = g.productHi ^ loHi ^ hiHi;
 		const midLo = g.productLo ^ loLo ^ hiLo;
-		const highHi = hiHi;
-		const highLo = hiLo ^ midHi;
-		const lowHi = loHi ^ midLo;
-		const lowLo = loLo;
-		timesReduction(g, lowLo);
-		const bHi = lowLo ^ g.productHi;
-		const bLo = lowHi ^ g.productLo;
+		g.wide3 ^= hiHi;
+		g.wide2 ^= hiLo ^ midHi;
+		g.wide1 ^= loHi ^ midLo;
+		g.wide0 ^= loLo;
+	}
+
+	// acc = wide reduced modulo x^128 + x^127 + x^126 + x^121 + 1; wide = 0.
+	function reduceWide(g: Ghash): void {
+		timesReduction(g, g.wide0);
+		const bHi = g.wide0 ^ g.productHi;
+		const bLo = g.wide1 ^ g.productLo;
 		timesReduction(g, bLo);
-		g.accHi = bLo ^ g.productHi ^ highHi;
-		g.accLo = bHi ^ g.productLo ^ highLo;
+		g.accHi = bLo ^ g.productHi ^ g.wide3;
+		g.accLo = bHi ^ g.productLo ^ g.wide2;
+		g.wide3 = 0;
+		g.wide2 = 0;
+		g.wide1 = 0;
+		g.wide0 = 0;
+	}
+
+	// acc = (acc ^ block) * key, reduced.
+	function absorb(g: Ghash, data: Readonly<uint8[]>, at: int32): void {
+		accumulate(g, g.accHi ^ loadBE64(data, at), g.accLo ^ loadBE64(data, at + 8), g.keyHi, g.keyLo);
+		reduceWide(g);
+	}
+
+	// Absorbs the blocks of a long segment AGGREGATE at a time from `from`; returns where it stopped.
+	function absorbMany(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): int32 {
+		let at = from;
+		if (to - from < AGGREGATE_FROM) return at;
+		if (g.powers.length == 0) computePowers(g);
+		while (at + 16 * AGGREGATE <= to) {
+			absorbAggregated(g, data, at);
+			at += 16 * AGGREGATE;
+		}
+		return at;
+	}
+
+	// powers[2i, 2i + 2) = key^(i + 1) for i < AGGREGATE, in the key's pre-multiplied form.
+	function computePowers(g: Ghash): void {
+		const powers = new Array<uint64>(2 * AGGREGATE);
+		powers[0] = g.keyHi;
+		powers[1] = g.keyLo;
+		const accHi = g.accHi;
+		const accLo = g.accLo;
+		for (let i = 1; i < AGGREGATE; i++) {
+			accumulate(g, powers[2 * i - 2], powers[2 * i - 1], g.keyHi, g.keyLo);
+			reduceWide(g);
+			powers[2 * i] = g.accHi;
+			powers[2 * i + 1] = g.accLo;
+		}
+		g.accHi = accHi;
+		g.accLo = accLo;
+		g.powers = powers;
+	}
+
+	// acc = (acc ^ X0) * H^n ^ X1 * H^(n - 1) ^ ... ^ X(n-1) * H with one reduction, for the n = AGGREGATE blocks at `at`.
+	function absorbAggregated(g: Ghash, data: Readonly<uint8[]>, at: int32): void {
+		const powers = g.powers;
+		accumulate(g, g.accHi ^ loadBE64(data, at), g.accLo ^ loadBE64(data, at + 8), powers[2 * AGGREGATE - 2], powers[2 * AGGREGATE - 1]);
+		for (let i = 1; i < AGGREGATE; i++) {
+			const k = 2 * (AGGREGATE - 1 - i);
+			accumulate(g, loadBE64(data, at + 16 * i), loadBE64(data, at + 16 * i + 8), powers[k], powers[k + 1]);
+		}
+		reduceWide(g);
 	}
 
 	function keyedGhash(key: Readonly<uint8[]>): Ghash {
@@ -111,6 +172,11 @@ when (c) {
 			accLo: 0,
 			productHi: 0,
 			productLo: 0,
+			wide3: 0,
+			wide2: 0,
+			wide1: 0,
+			wide0: 0,
+			powers: [],
 			tail: new Array<uint8>(16),
 		};
 	}
@@ -129,6 +195,7 @@ when (c) {
 		g.accLo = 0;
 		g.productHi = 0;
 		g.productLo = 0;
+		g.powers.fill(0);
 	}
 } else {
 	export class Ghash {
@@ -198,6 +265,10 @@ when (c) {
 		storeBE32(out, at + 12, g.acc3);
 	}
 
+	function absorbMany(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): int32 {
+		return from;
+	}
+
 	function wipeState(g: Ghash): void {
 		g.h0 = 0;
 		g.h1 = 0;
@@ -217,7 +288,7 @@ export function newGhash(key: Readonly<uint8[]>): Ghash {
 
 /** Absorbs `data[from, to)` as one segment, zero-padded to a whole block: AAD, cipher text and the length block are separate segments. */
 export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): void {
-	let at = from;
+	let at = absorbMany(g, data, from, to);
 	while (at + 16 <= to) {
 		absorb(g, data, at);
 		at += 16;
