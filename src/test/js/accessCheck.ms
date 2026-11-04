@@ -13,6 +13,13 @@ test "a for-of element read is not checked, the length guard after each element 
 	assert result.value.contains("the length of the array changed while iterating over it"), result.value;
 }
 
+test "a for-of element read of a span keeps the view offset and drops only the check" {
+	const result = compileToJSBare("function f(xs: Span<int32>): int32 { let t: int32 = 0; for (const x of xs) { t = t ^ x; } return t; }");
+	assert result.ok;
+	assert !result.value.contains("msIndexFail"), result.value;
+	assert result.value.contains("xs.base[(xs.off + "), result.value;
+}
+
 test "a for-of over a string has no length guard" {
 	const result = compileToJSBare("function f(s: string): int32 { let t: int32 = 0; for (const c of s) { t = t ^ (c as int32); } return t; }");
 	assert result.ok;
