@@ -296,6 +296,17 @@ function _stdFsChangeStamp(args: RaiserValue[]): RaiserValue {
 	return boxString(changeStamp(unboxString(args[0])));
 }
 
+function _stdProcessExecFileResult(args: RaiserValue[]): RaiserValue {
+	const r = execFileResult(unboxString(args[0]), args.length > 1 ? _unboxStringArrayArg(args[1]) : [], args.length > 2 ? unboxString(args[2]) : "");
+	return _toVm(hostObject(
+		["started", "pipeOk", "exitCode", "signal", "output", "errorOutput", "startErrno"],
+		[
+			hostValue(boxBool(r.started)), hostValue(boxBool(r.pipeOk)), hostValue(boxInt(r.exitCode)), hostValue(boxInt(r.signal)),
+			hostString(r.output), hostString(r.errorOutput), hostValue(boxInt(r.startErrno)),
+		],
+	));
+}
+
 // --- File system bridges ---
 
 function _bridgeMsFsExists(args: RaiserValue[]): RaiserValue {
@@ -1714,6 +1725,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
+	registerHostFn("std/process.execFileResult", _stdProcessExecFileResult);
 	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn, HostCapability.ChildProcess);
 	registerHostFn(
 		"msProcChildSpawnEnv", _bridgeMsProcChildSpawnEnv,
