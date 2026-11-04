@@ -2946,6 +2946,18 @@ test "engine: a constructor stores no zero a fresh object's word, float or bool 
 	assert vm.error == "" && vm.output == "3 0 false [] 4\n", `${vm.error} ${vm.output}`;
 }
 
+test "engine: a literal loop condition is no test" {
+	const code = "function w(n: int64): int64 { let i: int64 = 0; while (true) { i = i + 1; if (i >= n) break; } return i; }"
+		+ " function d(n: int64): int64 { let i: int64 = n; do { i = i + 1; } while (false); while (true) { if (i > 9) return i; i = i * 2; } return 0; }"
+		+ " console.log(`${w(3)} ${d(2)}`);";
+	for (const name of ["w", "d"]) {
+		const f = gapFunc(code, name);
+		assert countNamed(f, "BTruthy") == 0 && countNamed(f, "LoadConst") == 0, disasmFunc(f);
+	}
+	const vm = evalVM(code);
+	assert vm.error == "" && vm.output == "3 12\n", `${vm.error} ${vm.output}`;
+}
+
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);

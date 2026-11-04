@@ -1205,6 +1205,7 @@ function jumpIfValue(s: RaiserCompState, reg: int32, whenTrue: boolean): int32[]
 }
 
 export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): int32[] {
+	if (node.kind == NodeKind.BooleanLiteral) return (node.data as BooleanLiteralData).boolValue == whenTrue ? [emitJumpPlaceholder(s)] : [];
 	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "!") {
 		return condJumps(s, (node.data as UnaryExprData).operand, !whenTrue);
 	}
