@@ -1,5 +1,7 @@
-// Pure XChaCha20-Poly1305 seal against the native surface, interleaved, median ns/byte per size.
-//   msc build std/crypto/pure/chachaBench.ms --danger --output=out/bench && out/bench
+// Pure XChaCha20-Poly1305 seal against the native surface, interleaved, median
+// ns/byte per size.
+//   msc build std/crypto/pure/chachaBench.ms --danger --output=out/bench &&
+// out/bench
 
 import { Buffer } from "std/core/buffer";
 import { ChaChaKey, sealSync } from "../chacha20";
@@ -15,7 +17,7 @@ function nsPerByte(op: () => void, size: int32): number {
 		const start = performance.now();
 		for (let i = 0; i < calls; i++) op();
 		const elapsed = performance.now() - start;
-		if (elapsed >= MIN_ROUND_MS) return elapsed * 1000000.0 / calls / size;
+		if (elapsed >= MIN_ROUND_MS) return (elapsed * 1000000.0) / calls / size;
 		calls = calls * 4;
 	}
 }
@@ -40,15 +42,24 @@ for (const size of [64, 1024, 65536]) {
 	const pure: number[] = [];
 	const vendor: number[] = [];
 	for (let r = 0; r < ROUNDS; r++) {
-		pure.push(nsPerByte(() => {
-			const out = new Array<uint8>(size + 40);
-			xchachaSealInto(words, aad, data, out);
-			sink += out[size + 39];
-		}, size));
-		vendor.push(nsPerByte(() => { const v = sealSync(vendorKey, data, aad); if (v.ok) sink += v.value[size + 39]; }, size));
+		pure.push(
+			nsPerByte(() => {
+				const out = new Array<uint8>(size + 40);
+				xchachaSealInto(words, aad, data, out);
+				sink += out[size + 39];
+			}, size),
+		);
+		vendor.push(
+			nsPerByte(() => {
+				const v = sealSync(vendorKey, data, aad);
+				if (v.ok) sink += v.value[size + 39];
+			}, size),
+		);
 	}
 	const p = median(pure);
 	const v = median(vendor);
-	console.log(`${size} B  pure ${p.toFixed(2)} ns/B  vendor ${v.toFixed(2)} ns/B  pure/vendor ${(p / v).toFixed(2)}`);
+	console.log(
+		`${size} B  pure ${p.toFixed(2)} ns/B  vendor ${v.toFixed(2)} ns/B  pure/vendor ${(p / v).toFixed(2)}`,
+	);
 }
 console.log(`sink ${sink}`);

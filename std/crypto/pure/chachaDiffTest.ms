@@ -30,11 +30,26 @@ function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
 function differentialSizes(): int32[] {
 	const sizes: int32[] = [];
 	for (let i = 0; i <= 300; i++) sizes.push(i);
-	for (const edge of [383, 384, 385, 511, 512, 513, 1023, 1024, 1025, 2047, 2048]) sizes.push(edge);
+	for (const edge of [
+		383,
+		384,
+		385,
+		511,
+		512,
+		513,
+		1023,
+		1024,
+		1025,
+		2047,
+		2048,
+	]) sizes.push(edge);
 	return sizes;
 }
 
-/** Vendor and pure agree on the sealed bytes for one nonce, open each other's output, and both refuse one flipped byte. */
+/**
+ * Vendor and pure agree on the sealed bytes for one nonce, open each other's
+ * output, and both refuse one flipped byte.
+ */
 function agreeOnce(rng: Rng, size: int32): boolean {
 	const raw = randomBuffer(rng, 32);
 	const vendorKey = ChaChaKey.import(raw);
@@ -52,7 +67,10 @@ function agreeOnce(rng: Rng, size: int32): boolean {
 	if (!sameBytes(pureSealed, vendorSealed.value)) return false;
 
 	const pureOpened = new Array<uint8>(size);
-	if (!xchachaOpenInto(kw, aad, vendorSealed.value, pureOpened) || !sameBytes(pureOpened, plain)) return false;
+	if (
+		!xchachaOpenInto(kw, aad, vendorSealed.value, pureOpened) ||
+		!sameBytes(pureOpened, plain)
+	) return false;
 	const vendorOpened = openSync(vendorKey.value, pureSealed, aad);
 	if (!vendorOpened.ok || !sameBytes(vendorOpened.value, plain)) return false;
 
@@ -60,7 +78,10 @@ function agreeOnce(rng: Rng, size: int32): boolean {
 	const at = (nextWord(rng) % (forged.length as uint32)) as int32;
 	forged[at] = forged[at] ^ ((1 << (nextWord(rng) % 8)) as uint8);
 	const pureForged = new Array<uint8>(size);
-	return !xchachaOpenInto(kw, aad, forged, pureForged) && !openSync(vendorKey.value, forged, aad).ok;
+	return (
+		!xchachaOpenInto(kw, aad, forged, pureForged) &&
+		!openSync(vendorKey.value, forged, aad).ok
+	);
 }
 
 test "pure xchacha20poly1305 matches the native surface byte for byte over seeded inputs" {
@@ -69,7 +90,9 @@ test "pure xchacha20poly1305 matches the native surface byte for byte over seede
 	for (let round = 0; round < 2; round++) {
 		for (const size of differentialSizes()) {
 			const agreed = agreeOnce(rng, size);
-			if (!agreed) console.log(`differential mismatch at size ${size}, round ${round}`);
+			if (!agreed) console.log(
+				`differential mismatch at size ${size}, round ${round}`,
+			);
 			assert agreed;
 			cases += 1;
 		}
