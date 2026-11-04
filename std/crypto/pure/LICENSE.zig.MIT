@@ -1,3 +1,6 @@
+std/crypto/pure/pcurve.ms and the ECDSA checks of std/crypto/pure/weierstrass.ms follow Zig's
+std.crypto.pcurves and std.crypto.ecdsa (https://github.com/ziglang/zig).
+
 The MIT License (Expat)
 
 Copyright (c) Zig contributors
