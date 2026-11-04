@@ -97,6 +97,7 @@ import "./refParamWrites";
 import "./parameterHookDemand";
 import "./arrayText";
 import "./arrayIteration";
+import "./arraySpread";
 import "./iteratorHelpers";
 import "./iteratorStatics";
 import "./iteratorZipBuffer";
