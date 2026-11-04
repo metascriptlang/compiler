@@ -5,7 +5,7 @@
 //
 // Each round times the pure call and then the vendor call, each looped for at least ROUND_MS; a row prints the median
 // operations per second of both over ROUNDS rounds and pure / vendor time (below 1 is pure faster). Key generation
-// is random in its cost, so its row is the median of KEYGEN_RUNS single runs per side.
+// is random in its cost, so its row is the median of KEYGEN_RUNS single runs per side; the mean ratio steadies it.
 
 import {
 	RsaPrivateKey,
@@ -55,6 +55,12 @@ function median(values: number[]): number {
 	return sorted[(sorted.length / 2) as int32];
 }
 
+function mean(values: number[]): number {
+	let sum = 0.0;
+	for (const value of values) sum += value;
+	return sum / values.length;
+}
+
 function fixed(value: number): string {
 	return (Math.round(value * 1000.0) / 1000.0).toString();
 }
@@ -74,7 +80,7 @@ function row(
 	const p = median(pureMs);
 	const v = median(vendorMs);
 	console.log(
-		`${name}: pure ${fixed(1000.0 / p)} op/s (${fixed(p)} ms), vendor ${fixed(1000.0 / v)} op/s (${fixed(v)} ms), pure/vendor ${fixed(p / v)}`,
+		`${name}: pure ${fixed(1000.0 / p)} op/s (${fixed(p)} ms), vendor ${fixed(1000.0 / v)} op/s (${fixed(v)} ms), pure/vendor ${fixed(p / v)}, mean ratio ${fixed(mean(pureMs) / mean(vendorMs))}`,
 	);
 }
 
@@ -169,5 +175,5 @@ function benchKey(bits: int32, pem: string, keygenRuns: int32): void {
 }
 
 benchKey(2048, keyAPkcs8, KEYGEN_RUNS);
-benchKey(3072, key3072Pkcs8, 9);
+benchKey(3072, key3072Pkcs8, 25);
 console.log(`sink ${sink}`);
