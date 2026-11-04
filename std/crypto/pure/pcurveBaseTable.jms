@@ -1,4 +1,4 @@
 /** JavaScript multiplies by the base point on ./bigCurve and carries no table. */
-export const p256WindowHex: Readonly<string[]> = [];
+export const p256Windows: Readonly<uint32[]> = [];
 
-export const p384WindowHex: Readonly<string[]> = [];
+export const p384Windows: Readonly<uint32[]> = [];

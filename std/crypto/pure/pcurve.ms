@@ -12,7 +12,7 @@ import {
 	invert, pow, fromBytes, toBytes, toMontgomery, fromMontgomery,
 } from "./montgomery";
 import { valueBarrier } from "./secret";
-import { p256WindowHex, p384WindowHex } from "./pcurveBaseTable";
+import { p256Windows, p384Windows } from "./pcurveBaseTable";
 
 export struct CurveMath {
 	field: Modulus;
@@ -383,29 +383,6 @@ function baseMultiples(cm: Readonly<CurveMath>): Point[16] {
 		return p256Base;
 	}
 }
-
-/** The windows of ./pcurveBaseTable as a flat array: window i, entry j at `(16 * i + 2 * (j - 1)) * words`, x then y, Montgomery form. */
-function loadWindows(cm: Readonly<CurveMath>, hex: Readonly<string[]>): uint32[] {
-	const f = cm.field;
-	const size = 4 * f.words;
-	const out = new Array<uint32>(16 * hex.length * f.words);
-	let at = 0;
-	for (const window of hex) {
-		const bytes = window.decodeHex();
-		if (bytes.length != 16 * size) throw new Error("pcurve base table: a window is not 8 points long");
-		for (let from = 0; from < bytes.length; from += size) {
-			const plain = fromBytes(f, bytes, from);
-			if (plain == null) throw new Error("pcurve base table: a coordinate is not below p");
-			const v = toMontgomery(f, plain);
-			for (let w = 0; w < f.words; w++) out[at + w] = v[w];
-			at += f.words;
-		}
-	}
-	return out;
-}
-
-const p256Windows: Readonly<uint32[]> = loadWindows(p256Math, p256WindowHex);
-const p384Windows: Readonly<uint32[]> = loadWindows(p384Math, p384WindowHex);
 
 /** Entry `slot` (0 to 8) of window `window`, read by touching all eight entries; slot 0 reads as x = 0, the identity. */
 @inline
