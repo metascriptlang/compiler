@@ -2910,6 +2910,21 @@ test "engine: a guarded module binding read is checked by a statement before it 
 	assert vm.error == "" && vm.output == "9 12\n", `${vm.error} ${vm.output}`;
 }
 
+test "engine: a checked read of a scalar or null tests for nil and unboxes, with no host call" {
+	const code = "function geti(k: int64): int64 { const v: int64 | null = k > 3 ? null : k * 10; if (v !== null) return v; return -1; }"
+		+ " function getf(v: float64 | null): float64 { if (v !== null) return v; return -1.5; }"
+		+ " function forced(v: int64 | null): int64 { return v as int64; }"
+		+ " console.log(`${geti(3)} ${geti(4)} ${getf(2.5)} ${getf(null)} ${forced(7)}`);";
+	for (const name of ["geti", "getf", "forced"]) {
+		const f = gapFunc(code, name);
+		assert countNamed(f, "CallHost") == 0, disasmFunc(f);
+	}
+	const vm = evalVM(code);
+	assert vm.error == "" && vm.output == "30 -1 2.5 -1.5 7\n", `${vm.error} ${vm.output}`;
+	const absent = evalVM("function forced(v: int64 | null): int64 { return v as int64; } console.log(`${forced(null)}`);");
+	assert absent.error.includes("member 'int64' is not accessible for type 'int64 | null' using 'null'"), absent.error;
+}
+
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);

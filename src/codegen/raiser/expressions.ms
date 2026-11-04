@@ -1,7 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
-import { isRuntimeProcSym } from "../../transform/util";
+import { isRuntimeProcSym, isRuntimeProcCall } from "../../transform/util";
 import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
@@ -36,7 +36,7 @@ import {
 	isLocalString, declareLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
-	callRaiserStmtCompiler, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
+	callRaiserStmtCompiler, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
 import { raiserStructSlotUnion } from "../../analyzer/classify";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
@@ -1931,6 +1931,21 @@ function compileNamespaceObject(s: RaiserCompState, member: Node): void {
 	if (object.kind != NodeKind.Identifier && !isNamespaceRef(object)) compileExpr(s, object);
 }
 
+// A checked read of `T | null` is a nil test and the unbox its destination takes; the message the host
+// bridge would raise is a trap on the path that finds nil.
+function compileMaybeGetCall(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const held = compileExpr(s, d.arguments[0]);
+	const isNil = allocBool(s);
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, held, RaiserValueKind.Nil as number));
+	const present = jumpIfValue(s, isNil, false);
+	emitTrap(s, (d.arguments[1].data as StringLiteralData).value + (d.arguments[2].data as StringLiteralData).value + "'");
+	patchJumpsTo(s, present, codeLen(s));
+	const dest = allocFor(s, node.nodeType);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest, held, 0));
+	return dest;
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const outerSite = setRaiserCallSite(node);
 	defer setRaiserCallSite(outerSite);
@@ -2014,6 +2029,10 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == BuiltinKind.HiXorLo && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
+	}
+	if (isRuntimeProcCall(node, "msMaybeGet") && d.arguments.length == 3
+		&& d.arguments[1].kind == NodeKind.StringLiteral && d.arguments[2].kind == NodeKind.StringLiteral) {
+		return compileMaybeGetCall(s, node);
 	}
 	if ((builtinKind == BuiltinKind.LoadLE64 || builtinKind == BuiltinKind.LoadLE32) && d.arguments.length == 2) {
 		return compileLoadLECall(s, node, builtinKind == BuiltinKind.LoadLE64 ? 8 : 4);
