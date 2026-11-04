@@ -888,7 +888,13 @@ function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerCon
 // Register a single file's exports into the ExportRegistry.
 // Used by import completion when the target module hasn't been processed as a dependency yet.
 export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
-	if (findModuleExports(db.exportRegistry, filePath) != null) return;
+	const fileId = getFileId(db.fileInput, filePath);
+	if (findModuleExports(db.exportRegistry, filePath) != null) {
+		if (fileId < 0 || collectedAtOf(db.exportStore, fileId) == null) return;
+		dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
+		if (!exportsStale(db, fileId)) return;
+		retireExportEntry(db, filePath);
+	}
 	const parsed = preCheckParse(db, filePath, "dbEnsureModuleExports");
 	if (parsed == null) return;
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
@@ -898,13 +904,18 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	depMod.imports = buildImportEntries(db, filePath);
 	tmpCtx.currentModule = depMod;
 	const collected = cloneNodeForCheck(parsed.program);
+	const adoption = earlyAdoptions(db, filePath);
+	tmpCtx.adoptedDecls = adoption.decls;
+	tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);
 	collectTopLevel(tmpCtx, collected);
 	db.cache.collected += 1;
 	resolveDeclarations(tmpCtx, collected);
-	db.trees.set(exportNodeKey(getFileId(db.fileInput, filePath)), collected);
+	verifyAdoption(adoption);
+	db.trees.set(exportNodeKey(fileId), collected);
 	const exports = collectExports(tmpCtx, filePath);
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
+		markExportsCollected(db, filePath, fileId);
 	}
 	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx), decoratorRewritesTop(tmpCtx, collected));
 }
@@ -3409,5 +3420,68 @@ test "a class keeps its identity across an edit of its module, so no Box is not 
 		const run = earlyEdited(`/earlyIdentity${i}`, edits[i]);
 		assert run[1].indexOf("not a Box") < 0 && run[1].indexOf("is not a class") < 0, run[1];
 		assert run[1] == run[2], `${run[1]} | ${run[2]}`;
+	}
+}
+
+test "a registered entry whose import's implementation changed is collected again, a current one is served as held" {
+	const root = "/ensureStale";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/leaf.ms`, "export type T = int32;\n");
+	dbSetFileText(db, `${root}/mid.ms`, 'import { T } from "./leaf";\nexport const x: T = 1;\n');
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/mid.ms`), getFileId(db.fileInput, `${root}/leaf.ms`));
+	dbEnsureModuleExports(db, `${root}/mid.ms`);
+	const first = findExportedSymbol(db.exportRegistry, `${root}/mid.ms`, "x").sym.symbolType.kind as int32;
+	const held = db.cache.collected;
+	dbEnsureModuleExports(db, `${root}/mid.ms`);
+	assert db.cache.collected == held, `${db.cache.collected - held} collections of a current entry`;
+	dbSetFileText(db, `${root}/leaf.ms`, "export type T = string;\n");
+	dbEnsureModuleExports(db, `${root}/mid.ms`);
+	const second = findExportedSymbol(db.exportRegistry, `${root}/mid.ms`, "x").sym.symbolType.kind as int32;
+	assert first != second, `${first} | ${second}`;
+	dbSetFileText(db, `${root}/leaf.ms`, "// head\nexport type T = string;\n");
+	const kept = db.cache.collected;
+	dbEnsureModuleExports(db, `${root}/mid.ms`);
+	assert db.cache.collected - kept == 1, `${db.cache.collected - kept} collections after a comment edit`;
+}
+
+const CYCLE_A = 'import { B, hb } from "./b";\nexport class A {\n\tv: int32 = 1;\n}\nexport function mk(): B {\n\treturn new B();\n}\nexport const av = hb();\n';
+const CYCLE_B = 'import { A } from "./a";\nexport class B {\n\tw: int32 = 2;\n}\nexport function mkA(): A {\n\treturn new A();\n}\nexport function hb() {\n\treturn 1;\n}\n';
+const CYCLE_C = 'import { av, A, mk } from "./a";\nconst k: int32 = av;\nconst a: A = new A();\nconst b = mk();\nconst e: string = b.w;\n';
+
+function cycleDb(root: string, b: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/a.ms`, CYCLE_A);
+	dbSetFileText(db, `${root}/b.ms`, b);
+	dbSetFileText(db, `${root}/c.ms`, CYCLE_C);
+	const a = getFileId(db.fileInput, `${root}/a.ms`);
+	const bId = getFileId(db.fileInput, `${root}/b.ms`);
+	const c = getFileId(db.fileInput, `${root}/c.ms`);
+	recordModuleImport(db.moduleDeps, a, bId);
+	recordModuleImport(db.moduleDeps, bId, a);
+	recordModuleImport(db.moduleDeps, c, a);
+	return db;
+}
+
+function cycleMessages(db: TransAmDb, root: string): string {
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, `${root}/c.ms`).errors) messages.push(`${e.line}: ${e.message}`);
+	return messages.join("; ");
+}
+
+test "an edit of a module in an import cycle answers as a fresh db" {
+	const edits = [
+		["comment", "// head\n" + CYCLE_B, false],
+		["body", CYCLE_B.replace("return 1;", 'return "s";'), true],
+	];
+	for (const edit of edits) {
+		const root = `/cycle${edit[0]}`;
+		const db = cycleDb(root, CYCLE_B);
+		const before = cycleMessages(db, root);
+		assert before != "", "the project has an error to keep";
+		dbSetFileText(db, `${root}/b.ms`, edit[1] as string);
+		const after = cycleMessages(db, root);
+		const fresh = cycleMessages(cycleDb(`${root}Fresh`, edit[1] as string), `${root}Fresh`);
+		assert after == fresh, `${edit[0]}: ${after} | ${fresh}`;
+		assert (after != before) == (edit[2] as boolean), `${edit[0]}: ${before} | ${after}`;
 	}
 }
