@@ -135,3 +135,4 @@ import "./readonlyArrayPrefix";
 import "./overrideModifier";
 import "./unicodeLineTerminators";
 import "./constructorOverloads";
+import "./templateParts";

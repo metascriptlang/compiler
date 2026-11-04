@@ -123,3 +123,4 @@ import "./nullableDeclaredUnionJoin";
 import "./declaredUnionIntoAnonymousCarrier";
 import "./loopSpanCacheEmit";
 import "./literalTagDispatch";
+import "./templateIntPartEmit";
