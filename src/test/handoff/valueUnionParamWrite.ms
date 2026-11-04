@@ -23,6 +23,8 @@ test "valueUnionParamWrite: a write through a value-union parameter is refused l
 		{ name: "a nested field write", body: "export function run(x: Pair): void { if (x.ok) { x.inner.n = 1; } }", refusal: "cannot mutate value-type parameter 'x'" },
 		{ name: "a generic value union", body: "export function run(x: Either<string, string>): void { if (x.ok) { x.value = \"changed\"; } }", refusal: "cannot mutate value-type parameter 'x'" },
 		{ name: "a const binding", body: "export function run(): void { const x: Pair = { ok: true, value: \"a\", n: 1, inner: { n: 1 } }; if (x.ok) { x.value = \"changed\"; } }", refusal: "'x' is const" },
+		{ name: "a nested field write to a const binding", body: "export function run(): void { const x: Pair = { ok: true, value: \"a\", n: 1, inner: { n: 1 } }; if (x.ok) { x.inner.n = 2; } }", refusal: "'x' is const" },
+		{ name: "a const binding of a generic value union", body: "export function run(): void { const x: Either<string, string> = { ok: true, value: \"a\" }; if (x.ok) { x.value = \"changed\"; } }", refusal: "'x' is const" },
 		{ name: "a for-of element", body: "export function run(xs: Pair[]): void { for (const x of xs) { if (x.ok) { x.value = \"changed\"; } } }", refusal: "cannot mutate value-type loop variable 'x'" },
 	];
 	for (const item of refused) {
