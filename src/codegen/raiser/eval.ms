@@ -19,9 +19,10 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapBoxLive, stringHandleRc, heapSeqHandles, heapObjectCellHandles, heapArrayIsView, heapArrayClass, raiserToFloat, raiserToBool, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapBoxLive, stringHandleRc, heapSeqHandles, heapObjectCellHandles, heapArrayIsView, heapArrayClass, raiserToFloat, raiserToBool, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType, seqCellOf } from "../../raiser/value";
+import { seqWidth } from "../../raiser/vmSeq";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot, ElemWidth } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { ModuleGraph, createModuleGraph } from "../../module/graph";
@@ -1619,6 +1620,21 @@ test "engine: a little-endian load past the end of the view is an index error" {
 		+ " const b = 'abcdefghé'.asBytes();"
 		+ " console.log(`${load64(b, 3)}`);");
 	assert ctx.error != "";
+}
+
+test "engine: the bytes of a string reach VM code as a uint8 array, the shape VM code builds for uint8[]" {
+	const vm = evalLive("const b = 'héllo'.asBytes(); const copy: uint8[] = []; for (const x of b) copy.push(x); console.log(`${b.length} ${b[1]} ${copy[5]}`);");
+	assert vm.error.includes("out of bounds"), vm.error;
+	assert vm.output == "6 195 111\n", vm.output;
+	let bytes = 0;
+	let other = 0;
+	const heap = vm.arrayHeap;
+	for (const h of heapSeqHandles(heap)) {
+		if (heapArrayIsView(heap, h) || heapArrayLen(heap, h) != 6) continue;
+		if (heapArrayClass(heap, h) == RaiserRegClass.Word && seqWidth(seqCellOf(h)) == ElemWidth.U8) bytes += 1;
+		else other += 1;
+	}
+	assert bytes == 2 && other == 0, `${bytes} ${other}`;
 }
 
 test "engine: hashFarm runs on the host bridge, not as a VM body" {

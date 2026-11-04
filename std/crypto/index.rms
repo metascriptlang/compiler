@@ -9,14 +9,15 @@
 // after a suspension, and these bodies never suspend.
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString } from "std/core/buffer/bytes";
+import { Bytes } from "std/core/buffer/bytes";
 import { encodeHex, encodeBase64 } from "../core/encoding";
 import { CryptoError, CryptoErrorKind, hashFailed } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 extern function msCryptoInit(): boolean from "msCryptoInit";
 extern function msCryptoCleanup(): void from "msCryptoCleanup";
-extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string from "msCryptoHashString";
+extern function digestOfText(algorithm: string, data: string): Buffer from "msCryptoDigest";
+extern function digestOfBytes(algorithm: string, data: Readonly<uint8[]>): Buffer from "msCryptoDigest";
 
 export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
@@ -32,11 +33,11 @@ export function cleanup(): void {
 }
 
 export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
-	const hex = msCryptoHashString(algorithm, rawString(data), "hex");
-	if (hex == "") {
+	const out = typeof data == "string" ? digestOfText(algorithm, data) : digestOfBytes(algorithm, data);
+	if (out.length == 0) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
-	return Result.ok(Buffer.fromString(hex, "hex"));
+	return Result.ok(out);
 }
 
 export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {

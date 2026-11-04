@@ -3,11 +3,10 @@
 // shims the C tier links from runtime/io/streams.h. File I/O: std/fs.
 
 import { Buffer } from "std/core/buffer";
-import { rawBuffer } from "std/core/buffer/bytes";
 
 extern function msStdinDisableBuffering(): void from "msStdinDisableBuffering";
 extern function msReadLine(): string from "msReadLine";
-extern function msReadBytes(n: number): string from "msReadBytes";
+extern function msReadBytes(n: number): Buffer from "msReadBytes";
 extern function msStdinHasData(): number from "msStdinHasData";
 extern function msWriteStdout(s: string): void from "msWriteStdout";
 extern function msWriteStderr(s: string): void from "msWriteStderr";
@@ -17,7 +16,7 @@ export function readLine(): string {
 }
 
 export function readBytes(n: number): Buffer {
-	return rawBuffer(msReadBytes(n));
+	return msReadBytes(n);
 }
 
 export function writeStdout(s: string): void {

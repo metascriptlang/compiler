@@ -39,11 +39,16 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet, heapArraySetLen, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
+	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
+	heapObjectSetField, heapAllocBytesOf, heapArrayAssignBytes, heapAllocStringOfBytes,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
-import { RaiserVM, registerInPlaceHostFn, hostArg, hostArgCount, hostArgFloat, hostArgInt, hostArgString, hostReturn, hostReturnFloat, hostReturnInt, hostReturnString, hostReturnBool } from "../../raiser/vm";
+import {
+	RaiserVM, registerInPlaceHostFn, hostArg, hostArgCount, hostArgFloat, hostArgInt, hostArgString, hostArgBytes, hostArgText,
+	hostReturn, hostReturnFloat, hostReturnInt, hostReturnString, hostReturnBool, hostReturnBytesToFill, hostReturnTextToFill,
+} from "../../raiser/vm";
+import { copyBytes } from "../../raiser/memory";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
@@ -68,8 +73,8 @@ import {
 } from "std/fs";
 import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
-import { rawString } from "std/core/buffer/bytes";
-import { utf8Text } from "std/core/string/bytes";
+import { utf8String, findBytesFrom, byteEqAt, asciiWords } from "std/core/string/bytes";
+import { wellFormedPrefix } from "std/core/string/utf8Repair";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
 import { asciiLower, asciiUpper, isSpaceByte, repeat, reverse, equalsIgnoreCase } from "std/core/string/shared";
@@ -167,12 +172,15 @@ function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
 	return _vmStringResult(readFile(_readForBuild(unboxString(args[0]))));
 }
 
-function _stdFsReadFileBytes(args: RaiserValue[]): RaiserValue {
-	const r = readFileBytes(_readForBuild(unboxString(args[0])));
-	if (!r.ok) return _toVm(_vmFailure(r.error));
-	const items: RaiserHostValue[] = [];
-	for (const b of r.value) items.push(hostValue(boxInt(b)));
-	return _toVm(_vmSuccess(hostArray(items)));
+function _stdFsReadFileBytes(vm: RaiserVM): void {
+	const r = readFileBytes(_readForBuild(hostArgString(vm, 0)));
+	if (!r.ok) {
+		hostReturn(vm, _toVm(_vmFailure(r.error)));
+		return;
+	}
+	const result = _toVm(_vmSuccess(hostValue(raiserNil())));
+	heapObjectSetField(vm.arrayHeap, vm.objectHeap, result.intVal, "value", raiserArray(heapAllocBytesOf(vm.arrayHeap, bufferData(r.value) as int64, r.value.length as int64)));
+	hostReturn(vm, result);
 }
 
 function _stdFsReadLines(args: RaiserValue[]): RaiserValue {
@@ -187,12 +195,21 @@ function _stdFsWriteFile(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(writeFile(unboxString(args[0]), unboxString(args[1])));
 }
 
-function _stdFsWriteFileBytes(args: RaiserValue[]): RaiserValue {
+function _stdFsWriteFileBytes(vm: RaiserVM): void {
+	const path = hostArgString(vm, 0);
+	const bytes = hostArgBytes(vm, 1);
+	const content = Buffer.allocUnsafe(bytes.len as number);
+	copyBytes(bufferData(content) as int64, bytes.at, bytes.len);
+	hostReturn(vm, _vmVoidResult(writeFileBytes(path, content)));
+}
+
+@include("runtime/core/buffer.h");
+extern function bufferData(buf: Readonly<uint8[]>): Ptr<uint8> from "msBufferData";
+
+function _vmBytesText(bytes: Readonly<uint8[]>): RaiserValue {
 	const heap = activeHostArrayHeap();
 	if (heap == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
-	const bytes: uint8[] = [];
-	for (let i: int32 = 0; i < heapArrayLen(heap, args[1].intVal); i += 1) bytes.push(heapArrayGet(heap, args[1].intVal, i).intVal as uint8);
-	return _vmVoidResult(writeFileBytes(unboxString(args[0]), bytes));
+	return heapAllocStringOfBytes(heap, bufferData(bytes) as int64, bytes.length as int64);
 }
 
 function _stdFsAppendFile(args: RaiserValue[]): RaiserValue {
@@ -328,7 +345,7 @@ function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
 	registerCompileTimeRead(resolve(path, cwd()));
 	if (r.ok) {
 		_lastFsErrno = 0;
-		return boxString(rawString(r.value));
+		return _vmBytesText(r.value);
 	}
 	_setFsErrno(r.error.kind);
 	return boxString("");
@@ -708,8 +725,9 @@ function _bridgeMsReadLine(args: RaiserValue[]): RaiserValue {
 	return boxString(readLine());
 }
 
-function _bridgeMsReadBytes(args: RaiserValue[]): RaiserValue {
-	return boxString(rawString(readBytes(unboxFloat(args[0]))));
+function _bridgeMsReadBytes(vm: RaiserVM): void {
+	const bytes = readBytes(hostArgFloat(vm, 0));
+	hostReturn(vm, raiserArray(heapAllocBytesOf(vm.arrayHeap, bufferData(bytes) as int64, bytes.length as int64)));
 }
 
 function _bridgeMsStdinHasData(args: RaiserValue[]): RaiserValue {
@@ -822,6 +840,20 @@ function _bridgeMsCryptoCleanup(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 	return boxString(msCryptoHashString(unboxString(args[0]), unboxString(args[1]), unboxString(args[2])));
+}
+
+extern function msCryptoHashSize(algorithm: string): number;
+extern function msCryptoHashSpanInto(algorithm: string, data: Readonly<Span<uint8>>, output: Ptr<uint8>, capacity: int64): int64;
+
+function _bridgeMsCryptoDigest(vm: RaiserVM): void {
+	const algorithm = hostArgString(vm, 0);
+	const data = hostArg(vm, 1).kind == RaiserValueKind.String ? hostArgText(vm, 1) : hostArgBytes(vm, 1);
+	const size = msCryptoHashSize(algorithm) as int64;
+	const out = hostReturnBytesToFill(vm, size) as Ptr<uint8>;
+	const view = (data.at as Readonly<Ptr<uint8>>)[0..data.len];
+	if (size > 0 && msCryptoHashSpanInto(algorithm, view, out, size) != size) {
+		raiseFromHost(`internal: the ${algorithm} digest failed on ${data.len} bytes`, true);
+	}
 }
 
 // --- Macro Node child accessors ---
@@ -1032,48 +1064,29 @@ function _bridgeMsStringFromCodePoint(vm: RaiserVM): void {
 // Tier 1 — string ↔ VM-heap byte-array kernels. These cross the VM-heap
 // boundary (host zero-copy view vs VM heap array), which MS cannot express
 // from either side; every derived string algorithm is Tier 2
-// (std/core/string/shared.ms). The only bridges that CREATE a VM heap value.
+// (std/core/string/shared.ms).
 function _bridgeMsAsBytes(vm: RaiserVM): void {
 	const arg = hostArg(vm, 0);
-	const text = unboxString(arg);
-	const bytes = text.asBytes();
+	const text = hostArgText(vm, 0);
 	const heap = vm.arrayHeap;
-	const placed = arg.kind == RaiserValueKind.String;
-	let handle = placed ? stringBytesHandle(heap, arg) : 0;
+	let handle = stringBytesHandle(heap, arg);
 	if (handle == 0) {
-		handle = heapAllocArray(heap);
-		if (placed) setStringBytesHandle(heap, arg, handle);
+		handle = heapAllocBytesOf(heap, text.at, text.len);
+		setStringBytesHandle(heap, arg, handle);
 	} else {
-		heapArraySetLen(heap, handle, 0);
-	}
-	let i = 0;
-	while (i < bytes.length) {
-		heapArrayPush(heap, handle, boxInt(bytes[i]));
-		i = i + 1;
+		heapArrayAssignBytes(heap, handle, text.at, text.len);
 	}
 	hostReturn(vm, raiserArray(handle));
 }
 
 function _bridgeMsRawString(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const handle = hostArg(vm, 0).intVal;
-	const len = heapArrayLen(heap, handle);
-	const bytes = Buffer.alloc(0);
-	for (let i = 0; i < len; i = i + 1) bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
-	hostReturnString(vm, rawString(bytes));
+	const bytes = hostArgBytes(vm, 0);
+	copyBytes(hostReturnTextToFill(vm, bytes.len), bytes.at, bytes.len);
 }
 
 function _bridgeMsAsString(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const handle = hostArg(vm, 0).intVal;
-	const len = heapArrayLen(heap, handle);
-	const bytes: uint8[] = [];
-	let i = 0;
-	while (i < len) {
-		bytes.push(heapArrayGet(heap, handle, i).intVal as uint8);
-		i = i + 1;
-	}
-	hostReturnString(vm, bytes.asString());
+	const bytes = hostArgBytes(vm, 0);
+	hostReturnString(vm, utf8String((bytes.at as Readonly<Ptr<uint8>>)[0..bytes.len], true));
 }
 
 // split: the std extension is pure MetaScript (std/core/string/shared.ms) and
@@ -1205,11 +1218,13 @@ function _bridgeMsStringReplaceAll(vm: RaiserVM): void {
 }
 
 function _bridgeMsStringByteLength(vm: RaiserVM): void {
-	hostReturnInt(vm, hostArgString(vm, 0).byteLength() as int64);
+	hostReturnInt(vm, hostArgText(vm, 0).len);
 }
 
 function _bridgeMsStringByteAt(vm: RaiserVM): void {
-	hostReturnInt(vm, hostArgString(vm, 0).byteAt(unboxInt(hostArg(vm, 1)) as int32) as int64);
+	const text = hostArgText(vm, 0);
+	const idx = hostArgInt(vm, 1);
+	hostReturnInt(vm, idx < 0 || idx >= text.len ? -1 : (text.at as Ptr<uint8>)[idx] as int64);
 }
 
 function _bridgeStdHashFarm(vm: RaiserVM): void {
@@ -1217,72 +1232,88 @@ function _bridgeStdHashFarm(vm: RaiserVM): void {
 }
 
 function _bridgeMsStringByteSlice(vm: RaiserVM): void {
-	hostReturnString(vm, hostArgString(vm, 0).byteSlice(unboxInt(hostArg(vm, 1)) as int32, unboxInt(hostArg(vm, 2)) as int32));
+	const text = hostArgText(vm, 0);
+	const start = hostArgInt(vm, 1);
+	const end = hostArgInt(vm, 2);
+	const from = start < 0 ? 0 : start > text.len ? text.len : start;
+	const to = end < from ? from : end > text.len ? text.len : end;
+	if (wellFormedPrefix(((text.at + from) as Readonly<Ptr<uint8>>)[0..to - from], 0, true) == to - from) {
+		copyBytes(hostReturnTextToFill(vm, to - from), text.at + from, to - from);
+		return;
+	}
+	hostReturnString(vm, hostArgString(vm, 0).byteSlice(from as int32, to as int32));
 }
 
 function _bridgeMsStringByteIndexOf(vm: RaiserVM): void {
-	hostReturnInt(vm, hostArgString(vm, 0).byteIndexOf(hostArgString(vm, 1), unboxInt(hostArg(vm, 2)) as int32) as int64);
+	const hay = hostArgText(vm, 0);
+	const needle = hostArgText(vm, 1);
+	const start = hostArgInt(vm, 2);
+	if (needle.len == 0) { hostReturnInt(vm, start); return; }
+	hostReturnInt(vm, findBytesFrom((hay.at as Readonly<Ptr<uint8>>)[0..hay.len], (needle.at as Readonly<Ptr<uint8>>)[0..needle.len], start < 0 ? 0 : start));
 }
 
 function _bridgeMsStringByteLastIndexOf(vm: RaiserVM): void {
-	hostReturnInt(vm, hostArgString(vm, 0).byteLastIndexOf(hostArgString(vm, 1), unboxInt(hostArg(vm, 2)) as int32) as int64);
+	const hay = hostArgText(vm, 0);
+	const needle = hostArgText(vm, 1);
+	const startIdx = hostArgInt(vm, 2);
+	if (needle.len == 0) { hostReturnInt(vm, hay.len); return; }
+	let i = hay.len - needle.len;
+	if (startIdx >= 0 && startIdx < i) i = startIdx;
+	const hb = (hay.at as Readonly<Ptr<uint8>>)[0..hay.len];
+	const nb = (needle.at as Readonly<Ptr<uint8>>)[0..needle.len];
+	while (i >= 0 && !byteEqAt(hb, i, nb)) i -= 1;
+	hostReturnInt(vm, i < 0 ? -1 : i);
 }
 
 function _bridgeMsUtf8Text(vm: RaiserVM): void {
-	hostReturnString(vm, utf8Text(hostArgString(vm, 0), unboxBool(hostArg(vm, 1))));
+	const raw = hostArg(vm, 0);
+	const text = hostArgText(vm, 0);
+	const surrogates = unboxBool(hostArg(vm, 1));
+	const data = (text.at as Readonly<Ptr<uint8>>)[0..text.len];
+	if (wellFormedPrefix(data, 0, surrogates) == text.len) {
+		rcIncref(vm.arrayHeap, vm.objectHeap, raw);
+		hostReturn(vm, raw);
+		return;
+	}
+	hostReturnString(vm, utf8String(data, surrogates));
 }
 
 function _bridgeMsStringIsAscii(vm: RaiserVM): void {
-	for (const byte of hostArgString(vm, 0).asBytes()) {
-		if (byte >= 0x80) { hostReturnBool(vm, false); return; }
-	}
-	hostReturnBool(vm, true);
+	const text = hostArgText(vm, 0);
+	const bytes = text.at as Readonly<Ptr<uint8>>;
+	let i = asciiWords(bytes, text.len >> 3) << 3;
+	while (i < text.len && bytes[i] < 0x80) i += 1;
+	hostReturnBool(vm, i == text.len);
 }
 
-function spanByte(heap: RaiserArrayHeap, span: RaiserValue, i: int64): int64 {
-	return heapArrayGet(heap, span.intVal, i).intVal;
-}
-
-function spanMismatch(heap: RaiserArrayHeap, a: RaiserValue, aAt: int64, b: RaiserValue, n: int64): int64 {
-	let i: int64 = 0;
-	while (i < n && spanByte(heap, a, aAt + i) == spanByte(heap, b, i)) i = i + 1;
-	return i;
-}
+@include("runtime/core/string.h");
+extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
+extern function msEqualMem(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean;
+extern function msMemMismatch(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): int64;
 
 function _bridgeMsMemChr(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const span = hostArg(vm, 0);
-	const byte = unboxInt(hostArg(vm, 3)) as int64;
-	let i = unboxInt(hostArg(vm, 1)) as int64;
-	const end = unboxInt(hostArg(vm, 2)) as int64;
-	while (i < end) {
-		if (spanByte(heap, span, i) == byte) { hostReturnInt(vm, i); return; }
-		i = i + 1;
-	}
-	hostReturnInt(vm, -1);
+	const hay = hostArgBytes(vm, 0);
+	const from = hostArgInt(vm, 1);
+	const end = hostArgInt(vm, 2);
+	hostReturnInt(vm, msMemChr((hay.at as Readonly<Ptr<uint8>>)[0..hay.len], from, end, hostArgInt(vm, 3) as uint8));
 }
 
 function _bridgeMsMemEqAt(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const needle = hostArg(vm, 2);
-	const n = heapArrayLen(heap, needle.intVal);
-	hostReturnBool(vm, spanMismatch(heap, hostArg(vm, 0), unboxInt(hostArg(vm, 1)) as int64, needle, n) == n);
+	const hay = hostArgBytes(vm, 0);
+	const needle = hostArgBytes(vm, 2);
+	hostReturnBool(vm, byteEqAt((hay.at as Readonly<Ptr<uint8>>)[0..hay.len], hostArgInt(vm, 1), (needle.at as Readonly<Ptr<uint8>>)[0..needle.len]));
 }
 
 function _bridgeMsEqualMem(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const a = hostArg(vm, 0);
-	const n = heapArrayLen(heap, a.intVal);
-	hostReturnBool(vm, spanMismatch(heap, a, 0, hostArg(vm, 1), n) == n);
+	const a = hostArgBytes(vm, 0);
+	const b = hostArgBytes(vm, 1);
+	hostReturnBool(vm, msEqualMem((a.at as Readonly<Ptr<uint8>>)[0..a.len], (b.at as Readonly<Ptr<uint8>>)[0..b.len]));
 }
 
 function _bridgeMsMemMismatch(vm: RaiserVM): void {
-	const heap = vm.arrayHeap;
-	const a = hostArg(vm, 0);
-	const b = hostArg(vm, 1);
-	const aLen = heapArrayLen(heap, a.intVal);
-	const bLen = heapArrayLen(heap, b.intVal);
-	hostReturnInt(vm, spanMismatch(heap, a, 0, b, aLen < bLen ? aLen : bLen));
+	const a = hostArgBytes(vm, 0);
+	const b = hostArgBytes(vm, 1);
+	hostReturnInt(vm, msMemMismatch((a.at as Readonly<Ptr<uint8>>)[0..a.len], (b.at as Readonly<Ptr<uint8>>)[0..b.len]));
 }
 
 // --- Whole-function callbacks, keyed by the routine's qualified name ---
@@ -1611,7 +1642,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
 	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
-	registerHostFn("std/fs.readFileBytes", _stdFsReadFileBytes, HostCapability.FileRead);
+	registerInPlaceHostFn("std/fs.readFileBytes", _stdFsReadFileBytes, HostCapability.FileRead);
 	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
 	registerHostFn("std/fs.readDir",     _stdFsReadDir, HostCapability.FileRead);
 	registerHostFn("std/fs.exists",      _stdFsExists, HostCapability.FileRead);
@@ -1624,7 +1655,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.changedTime", _stdFsChangedTime, HostCapability.FileRead);
 	registerHostFn("std/fs.changeStamp", _stdFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
-	registerHostFn("std/fs.writeFileBytes", _stdFsWriteFileBytes);
+	registerInPlaceHostFn("std/fs.writeFileBytes", _stdFsWriteFileBytes);
 	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
 	registerHostFn("std/fs.writeLines",  _stdFsWriteLines);
 	registerHostFn("std/fs.copyFile",    _stdFsCopyFile);
@@ -1704,7 +1735,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcChildFree", _bridgeMsProcChildFree);
 	registerHostFn("msStdinDisableBuffering", _bridgeMsStdinDisableBuffering);
 	registerHostFn("msReadLine",            _bridgeMsReadLine);
-	registerHostFn("msReadBytes",           _bridgeMsReadBytes);
+	registerInPlaceHostFn("msReadBytes",    _bridgeMsReadBytes);
 	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
 	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout);
 	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr);
@@ -1725,6 +1756,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
 	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
 	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
+	registerInPlaceHostFn("msCryptoDigest", _bridgeMsCryptoDigest);
 	registerInPlaceHostFn("msStringSplit",         _bridgeMsStringSplit, HostCapability.Pure);
 	registerInPlaceHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral, HostCapability.Pure);
 	registerInPlaceHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
