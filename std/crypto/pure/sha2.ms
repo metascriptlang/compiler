@@ -11,7 +11,6 @@ const k256: uint32[64] = [
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
-// 64-bit round constants as (high, low) pairs: JS has no cheap 64-bit integer.
 const k512: uint32[160] = [
 	0x428a2f98, 0xd728ae22, 0x71374491, 0x23ef65cd, 0xb5c0fbcf, 0xec4d3b2f,
 	0xe9b5dba5, 0x8189dbbc, 0x3956c25b, 0xf348b538, 0x59f111f1, 0xb605d019,
@@ -74,13 +73,14 @@ function load32(data: Readonly<uint8[]>, at: int32): uint32 {
 }
 
 export function compress256(h: HashState, data: Readonly<uint8[]>, off: int32): void {
-	for (let i = 0; i < 16; i++) h.schedule[i] = load32(data, off + i * 4);
+	let w: uint32[64] = [];
+	for (let i = 0; i < 16; i++) w[i] = load32(data, off + i * 4);
 	for (let i = 16; i < 64; i++) {
-		const w15 = h.schedule[i - 15];
-		const w2 = h.schedule[i - 2];
+		const w15 = w[i - 15];
+		const w2 = w[i - 2];
 		const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >> 3);
 		const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >> 10);
-		h.schedule[i] = s1 + h.schedule[i - 7] + s0 + h.schedule[i - 16];
+		w[i] = s1 + w[i - 7] + s0 + w[i - 16];
 	}
 	let a = h.state[0];
 	let b = h.state[1];
@@ -92,7 +92,7 @@ export function compress256(h: HashState, data: Readonly<uint8[]>, off: int32): 
 	let hh = h.state[7];
 	for (let i = 0; i < 64; i++) {
 		const sigma1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-		const t1 = hh + sigma1 + ((e & f) ^ (~e & g)) + k256[i] + h.schedule[i];
+		const t1 = hh + sigma1 + ((e & f) ^ (~e & g)) + k256[i] + w[i];
 		const sigma0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
 		const t2 = sigma0 + ((a & b) ^ (a & c) ^ (b & c));
 		hh = g;
@@ -114,130 +114,60 @@ export function compress256(h: HashState, data: Readonly<uint8[]>, off: int32): 
 	h.state[7] = h.state[7] + hh;
 }
 
-// A 64-bit word is two uint32 halves; each helper returns the high or the low half of one operation.
-function rotrHigh(hi: uint32, lo: uint32, n: uint32): uint32 {
-	if (n < 32) return (hi >> n) | (lo << (32 - n));
-	if (n == 32) return lo;
-	return (lo >> (n - 32)) | (hi << (64 - n));
+function rotr64(v: uint64, c: uint64): uint64 {
+	return (v >> c) | (v << (64 - c));
 }
 
-function rotrLow(hi: uint32, lo: uint32, n: uint32): uint32 {
-	if (n < 32) return (hi << (32 - n)) | (lo >> n);
-	if (n == 32) return hi;
-	return (hi >> (n - 32)) | (lo << (64 - n));
-}
-
-function shrLow(hi: uint32, lo: uint32, n: uint32): uint32 {
-	return (hi << (32 - n)) | (lo >> n);
-}
-
-function carry(sum: uint32, addend: uint32): uint32 {
-	return sum < addend ? 1 : 0;
+function k64(i: int32): uint64 {
+	return ((k512[i * 2] as uint64) << 32) | (k512[i * 2 + 1] as uint64);
 }
 
 export function compress512(h: HashState, data: Readonly<uint8[]>, off: int32): void {
-	for (let i = 0; i < 32; i++) h.schedule[i] = load32(data, off + i * 4);
+	let w: uint64[80] = [];
+	for (let i = 0; i < 16; i++) {
+		w[i] = ((load32(data, off + i * 8) as uint64) << 32) | (load32(data, off + i * 8 + 4) as uint64);
+	}
 	for (let i = 16; i < 80; i++) {
-		const w15h = h.schedule[(i - 15) * 2];
-		const w15l = h.schedule[(i - 15) * 2 + 1];
-		const s0h = rotrHigh(w15h, w15l, 1) ^ rotrHigh(w15h, w15l, 8) ^ (w15h >> 7);
-		const s0l = rotrLow(w15h, w15l, 1) ^ rotrLow(w15h, w15l, 8) ^ shrLow(w15h, w15l, 7);
-		const w2h = h.schedule[(i - 2) * 2];
-		const w2l = h.schedule[(i - 2) * 2 + 1];
-		const s1h = rotrHigh(w2h, w2l, 19) ^ rotrHigh(w2h, w2l, 61) ^ (w2h >> 6);
-		const s1l = rotrLow(w2h, w2l, 19) ^ rotrLow(w2h, w2l, 61) ^ shrLow(w2h, w2l, 6);
-		let lo = s0l + s1l;
-		let hi = s0h + s1h + carry(lo, s0l);
-		const x7l = h.schedule[(i - 7) * 2 + 1];
-		const l7 = lo + x7l;
-		hi = hi + h.schedule[(i - 7) * 2] + carry(l7, lo);
-		lo = l7;
-		const x16l = h.schedule[(i - 16) * 2 + 1];
-		const l16 = lo + x16l;
-		hi = hi + h.schedule[(i - 16) * 2] + carry(l16, lo);
-		h.schedule[i * 2] = hi;
-		h.schedule[i * 2 + 1] = l16;
+		const w15 = w[i - 15];
+		const w2 = w[i - 2];
+		const s0 = rotr64(w15, 1) ^ rotr64(w15, 8) ^ (w15 >> 7);
+		const s1 = rotr64(w2, 19) ^ rotr64(w2, 61) ^ (w2 >> 6);
+		w[i] = s1 + w[i - 7] + s0 + w[i - 16];
 	}
-	let ah = h.state[0];
-	let al = h.state[1];
-	let bh = h.state[2];
-	let bl = h.state[3];
-	let ch = h.state[4];
-	let cl = h.state[5];
-	let dh = h.state[6];
-	let dl = h.state[7];
-	let eh = h.state[8];
-	let el = h.state[9];
-	let fh = h.state[10];
-	let fl = h.state[11];
-	let gh = h.state[12];
-	let gl = h.state[13];
-	let hh = h.state[14];
-	let hl = h.state[15];
+	let v: uint64[8] = [];
+	for (let i = 0; i < 8; i++) v[i] = ((h.state[i * 2] as uint64) << 32) | (h.state[i * 2 + 1] as uint64);
+	let a = v[0];
+	let b = v[1];
+	let c = v[2];
+	let d = v[3];
+	let e = v[4];
+	let f = v[5];
+	let g = v[6];
+	let hh = v[7];
 	for (let i = 0; i < 80; i++) {
-		const s1h = rotrHigh(eh, el, 14) ^ rotrHigh(eh, el, 18) ^ rotrHigh(eh, el, 41);
-		const s1l = rotrLow(eh, el, 14) ^ rotrLow(eh, el, 18) ^ rotrLow(eh, el, 41);
-		const chooseh = (eh & fh) ^ (~eh & gh);
-		const choosel = (el & fl) ^ (~el & gl);
-		// t1 = hh + s1 + choose + k + w, accumulated one 64-bit addend at a time
-		let t1l = hl + s1l;
-		let t1h = hh + s1h + carry(t1l, hl);
-		let next = t1l + choosel;
-		t1h = t1h + chooseh + carry(next, t1l);
-		t1l = next;
-		next = t1l + k512[i * 2 + 1];
-		t1h = t1h + k512[i * 2] + carry(next, t1l);
-		t1l = next;
-		next = t1l + h.schedule[i * 2 + 1];
-		t1h = t1h + h.schedule[i * 2] + carry(next, t1l);
-		t1l = next;
-		const s0h = rotrHigh(ah, al, 28) ^ rotrHigh(ah, al, 34) ^ rotrHigh(ah, al, 39);
-		const s0l = rotrLow(ah, al, 28) ^ rotrLow(ah, al, 34) ^ rotrLow(ah, al, 39);
-		const majh = (ah & bh) ^ (ah & ch) ^ (bh & ch);
-		const majl = (al & bl) ^ (al & cl) ^ (bl & cl);
-		hh = gh;
-		hl = gl;
-		gh = fh;
-		gl = fl;
-		fh = eh;
-		fl = el;
-		const newEl = dl + t1l;
-		eh = dh + t1h + carry(newEl, dl);
-		el = newEl;
-		dh = ch;
-		dl = cl;
-		ch = bh;
-		cl = bl;
-		bh = ah;
-		bl = al;
-		let t2l = s0l + majl;
-		const t2h = s0h + majh + carry(t2l, s0l);
-		const newAl = t1l + t2l;
-		ah = t1h + t2h + carry(newAl, t1l);
-		al = newAl;
+		const sigma1 = rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41);
+		const t1 = hh + sigma1 + ((e & f) ^ (~e & g)) + k64(i) + w[i];
+		const sigma0 = rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39);
+		const t2 = sigma0 + ((a & b) ^ (a & c) ^ (b & c));
+		hh = g;
+		g = f;
+		f = e;
+		e = d + t1;
+		d = c;
+		c = b;
+		b = a;
+		a = t1 + t2;
 	}
-	let sum = h.state[1] + al;
-	h.state[0] = h.state[0] + ah + carry(sum, al);
-	h.state[1] = sum;
-	sum = h.state[3] + bl;
-	h.state[2] = h.state[2] + bh + carry(sum, bl);
-	h.state[3] = sum;
-	sum = h.state[5] + cl;
-	h.state[4] = h.state[4] + ch + carry(sum, cl);
-	h.state[5] = sum;
-	sum = h.state[7] + dl;
-	h.state[6] = h.state[6] + dh + carry(sum, dl);
-	h.state[7] = sum;
-	sum = h.state[9] + el;
-	h.state[8] = h.state[8] + eh + carry(sum, el);
-	h.state[9] = sum;
-	sum = h.state[11] + fl;
-	h.state[10] = h.state[10] + fh + carry(sum, fl);
-	h.state[11] = sum;
-	sum = h.state[13] + gl;
-	h.state[12] = h.state[12] + gh + carry(sum, gl);
-	h.state[13] = sum;
-	sum = h.state[15] + hl;
-	h.state[14] = h.state[14] + hh + carry(sum, hl);
-	h.state[15] = sum;
+	v[0] = v[0] + a;
+	v[1] = v[1] + b;
+	v[2] = v[2] + c;
+	v[3] = v[3] + d;
+	v[4] = v[4] + e;
+	v[5] = v[5] + f;
+	v[6] = v[6] + g;
+	v[7] = v[7] + hh;
+	for (let i = 0; i < 8; i++) {
+		h.state[i * 2] = (v[i] >> 32) as uint32;
+		h.state[i * 2 + 1] = (v[i] & 0xffffffff) as uint32;
+	}
 }
