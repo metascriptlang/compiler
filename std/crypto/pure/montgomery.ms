@@ -25,17 +25,27 @@ export struct Modulus {
 	invExp: Limbs;
 }
 
+/**
+ * A limb count as a type: each kernel instantiates once per count, so its loops have a constant trip
+ * count even where clang does not inline it (arm64 left an int count's loops rolled, 2-2.6x slower).
+ */
+type Words8 = uint32[8];
+type Words12 = uint32[12];
+const words8: Words8 = [0, 0, 0, 0, 0, 0, 0, 0];
+const words12: Words12 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
 export function zeroLimbs(): Limbs {
 	return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 }
 
 /** `a` when `flag` is 0, `b` when it is 1, without a branch. */
 export function select(md: Readonly<Modulus>, flag: uint32, a: Limbs, b: Limbs): Limbs {
-	return md.words == 8 ? selectWords(flag, a, b, 8) : selectWords(flag, a, b, 12);
+	return md.words == 8 ? selectWords(flag, a, b, words8) : selectWords(flag, a, b, words12);
 }
 
 @inline
-function selectWords(flag: uint32, a: Limbs, b: Limbs, n: int32): Limbs {
+function selectWords<W>(flag: uint32, a: Limbs, b: Limbs, words: W): Limbs {
+	const n = words.length;
 	const mask = (0 as uint32) - valueBarrier(flag);
 	let out = zeroLimbs();
 	for (let i = 0; i < n; i++) out[i] = (a[i] & ~mask) | (b[i] & mask);
@@ -51,7 +61,8 @@ export function nonzero(md: Readonly<Modulus>, a: Limbs): uint32 {
 
 /** `t` minus m when that does not borrow past `top`, the bit above the low limbs; `t` is below 2m. */
 @inline
-function subtractOnce(md: Readonly<Modulus>, t: Limbs, top: uint32, n: int32): Limbs {
+function subtractOnce<W>(md: Readonly<Modulus>, t: Limbs, top: uint32, words: W): Limbs {
+	const n = words.length;
 	let d = zeroLimbs();
 	let borrow: uint64 = 0;
 	for (let i = 0; i < n; i++) {
@@ -59,16 +70,16 @@ function subtractOnce(md: Readonly<Modulus>, t: Limbs, top: uint32, n: int32): L
 		d[i] = x as uint32;
 		borrow = x >> 63;
 	}
-	return selectWords((((top as uint64) - borrow) >> 63) as uint32, d, t, n);
+	return selectWords((((top as uint64) - borrow) >> 63) as uint32, d, t, words);
 }
 
-/** One routine per limb count, so the C compiler unrolls each with its count known. */
 export function mul(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
-	return md.words == 8 ? mulWords(md, a, b, 8) : mulWords(md, a, b, 12);
+	return md.words == 8 ? mulWords(md, a, b, words8) : mulWords(md, a, b, words12);
 }
 
 @inline
-function mulWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
+function mulWords<W>(md: Readonly<Modulus>, a: Limbs, b: Limbs, words: W): Limbs {
+	const n = words.length;
 	let t: uint32[14] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 	for (let i = 0; i < n; i++) {
 		const bi = b[i] as uint64;
@@ -95,7 +106,7 @@ function mulWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 	}
 	let low = zeroLimbs();
 	for (let i = 0; i < n; i++) low[i] = t[i];
-	return subtractOnce(md, low, t[n], n);
+	return subtractOnce(md, low, t[n], words);
 }
 
 export function square(md: Readonly<Modulus>, a: Limbs): Limbs {
@@ -103,11 +114,12 @@ export function square(md: Readonly<Modulus>, a: Limbs): Limbs {
 }
 
 export function add(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
-	return md.words == 8 ? addWords(md, a, b, 8) : addWords(md, a, b, 12);
+	return md.words == 8 ? addWords(md, a, b, words8) : addWords(md, a, b, words12);
 }
 
 @inline
-function addWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
+function addWords<W>(md: Readonly<Modulus>, a: Limbs, b: Limbs, words: W): Limbs {
+	const n = words.length;
 	let s = zeroLimbs();
 	let carry: uint64 = 0;
 	for (let i = 0; i < n; i++) {
@@ -115,15 +127,16 @@ function addWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 		s[i] = x as uint32;
 		carry = x >> 32;
 	}
-	return subtractOnce(md, s, carry as uint32, n);
+	return subtractOnce(md, s, carry as uint32, words);
 }
 
 export function sub(md: Readonly<Modulus>, a: Limbs, b: Limbs): Limbs {
-	return md.words == 8 ? subWords(md, a, b, 8) : subWords(md, a, b, 12);
+	return md.words == 8 ? subWords(md, a, b, words8) : subWords(md, a, b, words12);
 }
 
 @inline
-function subWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
+function subWords<W>(md: Readonly<Modulus>, a: Limbs, b: Limbs, words: W): Limbs {
+	const n = words.length;
 	let d = zeroLimbs();
 	let borrow: uint64 = 0;
 	for (let i = 0; i < n; i++) {
@@ -203,7 +216,8 @@ export function fromBytes(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from:
 
 /** Big-endian bytes, `4 * words` of them, reduced by one subtraction, so exact when m > 2^(32 * words - 1). */
 export function reduceBytes(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from: int32): Limbs {
-	return subtractOnce(md, load(md, bytes, from), 0, md.words);
+	const t = load(md, bytes, from);
+	return md.words == 8 ? subtractOnce(md, t, 0, words8) : subtractOnce(md, t, 0, words12);
 }
 
 /** Plain limbs as `4 * words` big-endian bytes. */
