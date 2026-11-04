@@ -7,6 +7,8 @@ import { valueBarrier } from "./secret";
  * which branches on its exponent, so the exponent must be public.
  */
 
+import { valueBarrier } from "./secret";
+
 /** 12 limbs hold a 384-bit value; a 256-bit modulus uses the low 8 and keeps the rest zero. */
 export type Limbs = uint32[12];
 
@@ -34,7 +36,7 @@ export function select(md: Readonly<Modulus>, flag: uint32, a: Limbs, b: Limbs):
 
 @inline
 function selectWords(flag: uint32, a: Limbs, b: Limbs, n: int32): Limbs {
-	const mask = valueBarrier((0 as uint32) - flag);
+	const mask = (0 as uint32) - valueBarrier(flag);
 	let out = zeroLimbs();
 	for (let i = 0; i < n; i++) out[i] = (a[i] & ~mask) | (b[i] & mask);
 	return out;
@@ -129,7 +131,7 @@ function subWords(md: Readonly<Modulus>, a: Limbs, b: Limbs, n: int32): Limbs {
 		d[i] = x as uint32;
 		borrow = x >> 63;
 	}
-	const mask = (0 as uint32) - (borrow as uint32);
+	const mask = (0 as uint32) - valueBarrier(borrow as uint32);
 	let out = zeroLimbs();
 	let carry: uint64 = 0;
 	for (let i = 0; i < n; i++) {
