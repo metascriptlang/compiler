@@ -92,6 +92,20 @@ function rawHex(der: Readonly<uint8[]>, size: int32): string {
 	return raw.encodeHex();
 }
 
+function signAndVerify(pem: string, size: int32): string {
+	const key = got(EcPrivateKey.importPemSync(pem));
+	const sig = got(ecdsaSignSync(key, "sample", "sha256"));
+	if (!ecdsaVerifySync(key.publicKey(), "sample", sig, "sha256")) return "refused";
+	return rawHex(sig, size);
+}
+
+test "a worker thread signs and verifies with the base tables on both curves" {
+	const p256Task = spawn((): string => signAndVerify(rfcP256Pem, 32));
+	const p384Task = spawn((): string => signAndVerify(rfcP384Pem, 48));
+	assert await p256Task == "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8";
+	assert await p384Task == signAndVerify(rfcP384Pem, 48);
+}
+
 test "p256 RFC 6979 A.2.5: public point and deterministic signatures" {
 	const key = got(EcPrivateKey.importPemSync(rfcP256Pem));
 	assert key.curve == "p256";
