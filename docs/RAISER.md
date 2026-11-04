@@ -80,6 +80,26 @@ Host errors distinguish recoverable exceptions from fatal runtime checks (`hostR
 
 Measured 2026-10-07 on `wt/danger-bound-checks`: `./msc.final run --target=<c|js|raiser> src/test/corpus/programs/asTaggedUnionInTryStops.ms` and `asTaggedMaybeInTryStops.ms` each exit 1 after `before 3` and `before 7`, respectively; neither prints `caught` or `after`. The old Raiser candidate printed both. Both member diagnostics now match across C/JS/Raiser. `./msc.fatal test src/raiser/vm.ms --tests-in-dir` passes 186 tests, including a fatal host error followed by a recoverable one that prints `host failure` and `finally`. This does not verify value-named union conversions such as `Point | string`.
 
+## Embedding — host routines
+
+An embedder (`src/embed/index.ms`) implements a function a script declares as `extern function f(…): T from "<nativeName>"` in one of two forms:
+
+| Form | Signature | Use it for |
+|---|---|---|
+| `implementRoutineInPlace(nativeName, impl)` | `impl(call: RaiserVM): void` reads its arguments with `hostArgInt`, `hostArgFloat`, `hostArgBool`, `hostArgString` (`hostArgCount`, `hostArg` for any value) and writes its result with `hostReturnInt`, `hostReturnFloat`, `hostReturnBool`, `hostReturnString` (`hostReturn` for any value) | numbers, booleans and strings: the arguments are read in the caller's registers and the result is written in place, the shape of std's own in-place bridges |
+| `implementRoutine(nativeName, impl)` | `impl(args: RaiserValue[]): RaiserValue` | structs, arrays and nested values, through `unboxValue` / `boxValue` (a deep copy) |
+
+In both forms a `throw` inside `impl` raises into the script's `catch`; uncaught, it comes back to the host as `Result.err` of `callRoutine`. An in-place routine must not call back into the VM (`callRoutine`), because the registers it reads would move; the VM stops the run with an internal error (`src/raiser/vm.ms` test "an in-place host call that runs the VM again is refused").
+
+Per call, measured 2026-11-04 on rtx (Linux x86_64, Ryzen 9 9950X), one run of `examples/embedGameLoop/host.ms` built `--danger`: a script loop of 10⁶ iterations of `acc = f(acc + 2.0)` where `f` is `Math.sqrt`, in ns per iteration:
+
+| `f` | ns |
+|---|---|
+| std's in-place bridge (`Math.sqrt`) | 28.4 |
+| `implementRoutineInPlace` doing `Math.sqrt` | 28.2 |
+| `implementRoutine` doing `Math.sqrt` | 34.1 |
+| the same loop compiled to C | 4.5 |
+
 ## Execution budget
 
 The VM stops after `loopLimit` backward jumps (default 10M):
