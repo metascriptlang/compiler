@@ -171,7 +171,7 @@ test "E2E C: a counter the compiler keeps below a length steps at int64 without 
 	const cases: string[][] = [
 		["forOf", "function forOf(xs: int32[]): void { for (const x of xs) console.log(x); }"],
 		["forOfString", "function forOfString(s: string): void { for (const c of s) console.log(c); }"],
-		["spread", "function spread(xs: int32[]): int32[] { return [...xs]; }"],
+		["spread", "function spread(xs: string[]): string[] { return [...xs]; }"],
 		["rest", "function rest(xs: int32[]): void { const [a, ...r] = xs; console.log(r.length); }"],
 	];
 	for (const c of cases) {
