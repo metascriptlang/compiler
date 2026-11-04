@@ -614,13 +614,13 @@ function takeGraphParse(db: TransAmDb, filePath: string, source: string): Parsed
 	return parsed;
 }
 
-// The parse of a file as it was before any check. A loaded graph parses every module again on each
-// load, so a parse an earlier revision's check took is replaced by the graph's.
+// The parse of a file as it was before any check. A parse a check took is replaced by the graph's,
+// or parsed again where the graph holds no tree (a module the prelude seed added).
 function preCheckParse(db: TransAmDb, filePath: string, reader: string): ParsedModule | null {
 	const parsed = dbParsed(db, filePath);
 	if (parsed == null || parsed.consumedBy == "") return parsed;
 	const fileId = getFileId(db.fileInput, filePath);
-	const loaded = takeGraphParse(db, filePath, db.preprocessCache.get(fileId) ?? "");
+	const loaded = adoptLoaderParse(db, filePath, db.preprocessCache.get(fileId) ?? "");
 	if (loaded == null) throw new Error(`internal: ${reader} read the parse of ${filePath} after ${parsed.consumedBy} took it`);
 	db.parses.set(fileId, loaded);
 	return loaded;
@@ -2695,6 +2695,35 @@ test "a dependent checked after its dependency gives the same diagnostics whethe
 	const once = graphMessages(false);
 	assert once.indexOf("string") >= 0;
 	assert once == graphMessages(true);
+}
+
+function seededRebuildMessages(chain: string[]): string {
+	const entries: MapEntry[] = [{ entryPath: "/seed/out.ms", entrySource: "export function out(): int32 {\n\treturn 1;\n}\n" }];
+	let previous = "out";
+	for (const name of chain) {
+		entries.push({ entryPath: `/seed/${name}.ms`, entrySource: `import { ${previous} } from "./${previous}";\nexport function ${name}(): int32 {\n\treturn ${previous}();\n}\n` });
+		previous = name;
+	}
+	const main = `import { ${previous} } from "./${previous}";\nconst v: int32 = ${previous}();\n`;
+	entries.push({ entryPath: "/seed/main.ms", entrySource: main });
+	const db = createTransAmDb(100, true);
+	const first = loadModuleGraph("/seed/main.ms", createMapProvider(entries));
+	dbBindGraph(db, first);
+	const messages: string[] = [];
+	for (const path of first.loadOrder) messages.push(checkMessages(db, path));
+	entries[entries.length - 1] = { entryPath: "/seed/main.ms", entrySource: main + "const w: int32 = v;\n" };
+	const second = loadModuleGraph("/seed/main.ms", createMapProvider(entries));
+	for (const name of chain) findModule(second, `/seed/${name}.ms`)!.program = null;
+	dbBindGraph(db, second);
+	for (const path of second.loadOrder) messages.push(checkMessages(db, path));
+	return messages.join("");
+}
+
+test "a warm build collects again a module the graph holds no tree of, after its check took the parse" {
+	for (const chain of [["rep"], ["rep", "lib"]]) {
+		const messages = seededRebuildMessages(chain);
+		assert messages == "", `${chain.join(">")}: ${messages}`;
+	}
 }
 
 // ===== Change-revision pins =====
