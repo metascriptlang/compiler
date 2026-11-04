@@ -261,58 +261,123 @@ const attributeNames: Readonly<string[]> = [
 	"550408", "ST",
 	"55040a", "O",
 	"55040b", "OU",
+	"2a864886f70d010901", "emailAddress",
 	"550405", "serialNumber",
+	"550410", "postalAddress",
+	"550411", "postalCode",
 	"550404", "SN",
 	"55042a", "GN",
+	"55042b", "initials",
+	"55042c", "generationQualifier",
 	"55040c", "title",
-	"550411", "postalCode",
-	"2a864886f70d010901", "emailAddress",
+	"55042e", "dnQualifier",
+	"550441", "pseudonym",
+	"0992268993f22c640101", "uid",
 	"0992268993f22c640119", "DC",
+	"55042d", "uniqueIdentifier",
 ];
 
-function attributeName(oidHex: string): string {
+function attributeName(oidHex: string): string | null {
 	for (let i = 0; i + 1 < attributeNames.length; i += 2) {
 		if (attributeNames[i] == oidHex) return attributeNames[i + 1];
 	}
-	return "??";
+	return null;
 }
 
-function escapedValue(text: string): string {
+/** An OID's content octets in dotted form, or null when they do not decode. */
+function dottedOid(octets: Readonly<uint8[]>): string | null {
+	if (octets.length == 0) return null;
 	let out = "";
-	for (let i = 0; i < text.length; i++) {
-		const one = text.slice(i, i + 1);
-		if (",=+<>#;\"\\".includes(one)) out += "\\";
-		out += one;
+	let arc: int64 = 0;
+	let first = true;
+	for (let i = 0; i < octets.length; i++) {
+		const octet = octets[i] as int64;
+		if (arc > 0x00ffffffffffff) return null;
+		arc = (arc << 7) | (octet & 0x7f);
+		if ((octet & 0x80) != 0) continue;
+		if (first) {
+			const top: int64 = arc < 40 ? 0 : arc < 80 ? 1 : 2;
+			out = `${top}.${arc - top * 40}`;
+			first = false;
+		} else {
+			out += `.${arc}`;
+		}
+		arc = 0;
+	}
+	return (octets[octets.length - 1] & 0x80) != 0 ? null : out;
+}
+
+const tagUtf8String: int32 = 0x0c;
+const tagPrintableString: int32 = 0x13;
+const tagIa5String: int32 = 0x16;
+const hexDigits = "0123456789ABCDEF";
+
+function hexByte(octet: int32): string {
+	return hexDigits.slice(octet >> 4, (octet >> 4) + 1) + hexDigits.slice(octet & 15, (octet & 15) + 1);
+}
+
+/** RFC 4514 section 2.4 escaping, bytes outside printable ASCII as `\HH`; null for a NUL byte. */
+function escapedValue(octets: Readonly<uint8[]>): string | null {
+	let out = "";
+	const last = octets.length - 1;
+	for (let i = 0; i < octets.length; i++) {
+		const octet = octets[i] as int32;
+		if (octet == 0) return null;
+		const one = String.fromCharCode(octet);
+		const special = ",=+<>;\"\\".includes(one) || (i == 0 && (one == "#" || one == " ")) || (i == last && one == " ");
+		if (special) out += "\\";
+		out += octet < 32 || octet >= 127 ? "\\" + hexByte(octet) : one;
 	}
 	return out;
 }
 
-/** A Name's content as `CN=host, O=org`, RDNs in encoded order and a multi-valued RDN joined by ` + `. */
+/**
+ * A Name's content as mbedTLS prints it (`CN=host, O=org`): RDNs in encoded order, a multi-valued
+ * RDN joined by ` + `, a value that is not UTF8, Printable or IA5 String as `#` and its DER in hex,
+ * an attribute without a short name by its dotted OID. Empty when it does not fit 255 bytes.
+ */
 export function distinguishedNameText(name: Readonly<uint8[]>): string {
 	let out = "";
 	let at = 0;
 	const end = name.length as int32;
 	while (at < end) {
 		const rdn = derElementAt(name, at, end);
-		if (rdn == null) return out;
+		if (rdn == null) return "";
 		let inner = rdn.start;
 		let first = true;
 		while (inner < rdn.end) {
 			const pair = derElementAt(name, inner, rdn.end);
-			if (pair == null) return out;
+			if (pair == null) return "";
 			const type = derElementAt(name, pair.start, pair.end);
-			if (type == null) return out;
+			if (type == null) return "";
 			const value = derElementAt(name, type.end, pair.end);
-			if (value == null) return out;
+			if (value == null) return "";
 			if (out.length > 0) out += first ? ", " : " + ";
-			const label = attributeName(encodeHex(name.slice(type.start, type.end)));
-			out += label + "=" + escapedValue(name.slice(value.start, value.end).asString());
+			const oid = name.slice(type.start, type.end);
+			const label = attributeName(encodeHex(oid));
+			const tag = value.identifier;
+			let hex = tag != tagUtf8String && tag != tagPrintableString && tag != tagIa5String;
+			if (label != null) {
+				out += label + "=";
+			} else {
+				const dotted = dottedOid(oid);
+				out += dotted != null ? dotted + "=" : "??=";
+				if (dotted != null) hex = true;
+			}
+			if (hex) {
+				out += "#";
+				for (let i = type.end; i < value.end; i++) out += hexByte(name[i] as int32);
+			} else {
+				const text = escapedValue(name.slice(value.start, value.end));
+				if (text == null) return "";
+				out += text;
+			}
 			first = false;
 			inner = pair.end;
 		}
 		at = rdn.end;
 	}
-	return out;
+	return out.asBytes().length > 255 ? "" : out;
 }
 
 export function peerCert(this conn: TlsConnection): string {
@@ -328,7 +393,7 @@ function onDestroy(this conn: TlsConnection): void {
 }
 
 test "a distinguished name prints as RDNs in order with escaped values" {
-	// SEQUENCE content: SET{ CN=a,b } SET{ O=x + OU=y }
+	// SET{ CN=a,b } SET{ O=x + OU=y }
 	const name: uint8[] = [
 		0x31, 0x0c, 0x30, 0x0a, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x03, 0x61, 0x2c, 0x62,
 		0x31, 0x14,
@@ -336,4 +401,16 @@ test "a distinguished name prints as RDNs in order with escaped values" {
 		0x30, 0x08, 0x06, 0x03, 0x55, 0x04, 0x0b, 0x0c, 0x01, 0x79,
 	];
 	assert distinguishedNameText(name) == "CN=a\\,b, O=x + OU=y";
+}
+
+test "a distinguished name prints short names, dotted OIDs and hex values like mbedTLS" {
+	// SET{ C=US (PrintableString) } SET{ DC=" #x" (IA5String) } SET{ 1.2.3=z } SET{ CN=BMPString "a" }
+	const name: uint8[] = [
+		0x31, 0x0b, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x06, 0x13, 0x02, 0x55, 0x53,
+		0x31, 0x13, 0x30, 0x11, 0x06, 0x0a, 0x09, 0x92, 0x26, 0x89, 0x93, 0xf2, 0x2c, 0x64, 0x01, 0x19,
+		0x16, 0x03, 0x20, 0x23, 0x78,
+		0x31, 0x09, 0x30, 0x07, 0x06, 0x02, 0x2a, 0x03, 0x0c, 0x01, 0x7a,
+		0x31, 0x0b, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x03, 0x1e, 0x02, 0x00, 0x61,
+	];
+	assert distinguishedNameText(name) == "C=US, DC=\\ #x, 1.2.3=#0C017A, CN=#1E020061";
 }
