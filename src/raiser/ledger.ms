@@ -117,9 +117,16 @@ function freeFlags(count: int32, freeList: int64[]): boolean[] {
 	return free;
 }
 
+let audits: int64 = 0;
+
+export function ledgerAudits(): int64 {
+	return audits;
+}
+
 // "" when every live item's count is the number of references the roots and the live items
 // make to it; otherwise the message that names the first disagreement.
 export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: RaiserValue[], where: string, rootNames: string[] = []): string {
+	audits += 1;
 	const tally: LedgerTally = {
 		strings: new HashMap<int64, int32>(), seqs: new HashMap<int64, int32>(),
 		objects: zeros(obj.objects.length), boxes: new HashMap<int64, int32>(), holders: new HashMap<int64, string[]>(),

@@ -10,6 +10,7 @@ import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "..
 import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
+import { ledgerAudits } from "../raiser/ledger";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
 import { join } from "std/fs/path";
@@ -496,6 +497,45 @@ test "a script calls a function the host implements" {
 	assert seen.length == 2;
 	assert seen[0] == 1;
 	assert seen[1] == 40;
+	removeAll(dir);
+}
+
+test "a host call, a ref argument and a host call nested in one audit no heap, keep the module's state and leave its heap as they found it" {
+	const nested: Interpreter[] = [];
+	implementRoutine("embedTest.reenter", (args: RaiserValue[]): RaiserValue => {
+		const inner = callRoutine(nested[0], routineOf(nested[0], "size"), [hostString(unboxValue(args[0]).text())]);
+		if (!inner.ok) throw new Error(inner.error);
+		return boxInt(unboxInt(inner.value.root) * 10);
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `interface Cell { n: int32; tag: string; }\n`
+		+ `const cells: Cell[] = [];\n`
+		+ `for (let i: int32 = 0; i < 1000; i += 1) cells.push({ n: i, tag: \`cell \${i}\` });\n`
+		+ `let calls: int32 = 0;\n`
+		+ `export function noop(): void {}\n`
+		+ `export function count(): int32 { calls += 1; return calls; }\n`
+		+ `export function size(s: string): int32 { return s.length; }\n`
+		+ `extern function reenter(s: string): int32 from "embedTest.reenter";\n`
+		+ `export function outer(s: string): int32 { return reenter(s) + cells.length; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	nested.push(interp);
+	const vm = interp.run!.vm!;
+	const audits = ledgerAudits();
+	let objects = 0;
+	let cells = 0;
+	for (let round = 0; round < 100; round += 1) {
+		routineValue(interp, "noop", []);
+		assert unboxInt(routineValue(interp, "count", []).root) == round + 1;
+		assert unboxInt(routineValue(interp, "size", [hostString(`round ${round}`)]).root) == `round ${round}`.length;
+		assert unboxInt(routineValue(interp, "outer", [hostString("hey")]).root) == 1030;
+		if (round == 0) {
+			objects = vm.objectHeap.objects.length;
+			cells = liveCellBlocks(vm.arrayHeap.mem).length;
+		}
+	}
+	assert ledgerAudits() == audits, `${ledgerAudits() - audits} heap audits ran in 400 host calls`;
+	assert vm.objectHeap.objects.length == objects;
+	assert liveCellBlocks(vm.arrayHeap.mem).length == cells;
 	removeAll(dir);
 }
 
