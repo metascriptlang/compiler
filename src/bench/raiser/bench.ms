@@ -35,6 +35,7 @@ function must<T>(result: Result<T, CryptoError>): T {
 
 const scale = makeScale(3);
 const point = new P(0, 0);
+const origin = new P(1, 2);
 let counter: int64 = 1;
 
 const ints: int64[] = [];
@@ -65,6 +66,11 @@ bench("fib(25) recursion", 0, () => { sink += fib(25) as float64; });
 bench("module variable read 1k", 0, () => {
 	let s: int64 = 0;
 	for (let i: int64 = 0; i < 1000; i = i + 1) s = s + counter;
+	sink += s as float64;
+});
+bench("module object read 1k", 0, () => {
+	let s: int64 = 0;
+	for (let i: int64 = 0; i < 1000; i = i + 1) s = s + origin.x;
 	sink += s as float64;
 });
 bench("field read/write 1k", 0, () => {

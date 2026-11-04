@@ -50,6 +50,7 @@ end
 
 local scale = makeScale(3)
 local point = { x = 0, y = 0 }
+local origin = { x = 1, y = 2 }
 local counter = 1
 local sqrt = math.sqrt
 
@@ -78,6 +79,11 @@ bench("fib(25) recursion", 0, function() sink = sink + fib(25) end)
 bench("module variable read 1k", 0, function()
 	local s = 0
 	for _ = 0, 999 do s = s + counter end
+	sink = sink + s
+end)
+bench("module object read 1k", 0, function()
+	local s = 0
+	for _ = 0, 999 do s = s + origin.x end
 	sink = sink + s
 end)
 bench("field read/write 1k", 0, function()
