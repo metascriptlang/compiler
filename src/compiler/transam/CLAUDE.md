@@ -28,6 +28,7 @@ Demand-driven cache of compilation results with red-green invalidation and chang
 | `hash.ms` | `taHashString`, `transAmHashNode`, `nodeText`, `surfaceText`, `TaText` |
 | `digest.ms` | `ifaceDigest` (a check's exact interface text), `implDigest` |
 | `outputs.ms` | `TaOutputStore`, `outputChangedAt` |
+| `exportStore.ms` | `TaExportStore`: the exports a written module held (`keepPreviousExports`), a module's implementation `changedAt` (`recordImpl`) and the revision its exports were collected at (`markCollected`) |
 | `adopt.ms` | `adoptDecls`, `verifyAdoption` |
 | `absentProbes.ms` | `TaAbsentProbes`, `enterCheckProbes`, `leaveCheckProbes`, `knownAbsentAt`, `recordAbsentAt` |
 | `cancel.ms` | `getCancelVersion`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |

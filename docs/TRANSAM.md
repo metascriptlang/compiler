@@ -105,12 +105,16 @@ Import edges are recorded into the module dep graph while a module's exports are
 1. `setFileText` compares the two texts; identical content returns false and nothing else happens. A difference records the file's `changedAt` and moves the durability change markers at the revision of the write, the next revision.
 2. The revision increments.
 3. A path under the configured std root gets HIGH durability.
-4. The `ExportRegistry` entries of the file and its transitive importers are dropped; std paths are kept.
-5. The next query call verifies lazily through `tryMarkGreen`.
+4. The file's `ExportRegistry` entry is set aside (`TaExportStore.previous`, so the next collection adopts its Symbols) and its `registeredAt` reset; std paths keep their entry. Its importers' entries stay.
+5. The next query call verifies lazily through `tryMarkGreen`. The export walk (`dbEnsureExportsRegistered`) collects the file again, and an importer's entry only when `exportsStale` says so: some module in an import's closure has an implementation (`implStamp`: the tree without comments and positions) that changed after the importer was collected.
 
 A type check of a module whose dependency declares a macro runs a full check of that dependency first; `checkInProgress` guards that pre-check against cycles.
 
-An import a db only binds, outside a loaded graph (`db.bound`), is reused while its import closure lists the same files in the same order and every `Parse` and `TypeCheck` entry in it has the `changedAt` it had at bind. A bound-only module has no `TypeCheck` entry, so an entry absent at bind must still be absent.
+An import a db only binds, outside a loaded graph (`db.bound`), is reused while its import closure lists the same files in the same order, its own text and `Parse` are as at bind, and each other module in the closure has the implementation stamp and `TypeCheck` `changedAt` it had at bind. A bound-only module has no `TypeCheck` entry, so an entry absent at bind must still be absent. A comment or a position moves no implementation stamp, so such an edit of an import keeps every importer's unit and registered exports; any other edit moves the stamp of its module and of everything that imports it.
+
+The stamp is the implementation and not the export surface because a Symbol caches a type inferred from a body (`export function g() { return 1; }`, `export const gv = g();`) and only a new bind or collection redoes it: a surface compared by resolved export types let an importer keep `gv: int32` after `g` began returning a string (pinned in `index.ms`, "an exported body edit that changes an inferred type reaches the importers a bind reused"). Cutting off a body edit that keeps the exports needs each inference to record the bodies it read against the Symbol it cached; that is not built.
+
+Measured on rtx, `src/compiler/lsp/handlers/completion.ms` (385 modules), `msc build --danger --lto=off` probe, 15 rounds of a comment-only edit of `src/utils/path.ms` followed by a recheck of the entry, host shared with other jobs: two runs each, before p50 3073 and 3209 ms, p95 11715 and 11483 ms, 240 binds and 239 collections per round; after p50 101 and 102 ms, p95 111 and 113 ms, 2 binds (the entry and `path.ms`) and 1 collection per round; entry errors 0 before and after.
 
 An import resolves by resolver priority every time (`dbResolveImport`), whichever candidate the db already holds. A candidate path with no file is an input of its own (`getInputId`, absent until a write): the check that resolved an import, and the `Preprocess` that probed a header's companion `.c`, depend on each such path, so creating a file at a higher-priority path changes what they read. An empty file is a file.
 

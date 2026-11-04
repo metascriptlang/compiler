@@ -20,6 +20,7 @@ import {
 } from "./revision";
 import { taHashString } from "./hash";
 import { ifaceDigest, implDigest } from "./digest";
+import { TaExportStore, createExportStore, keepPreviousExports, previousExports, forgetPreviousExports, forgetCollected, forgetAllCollected, markCollected, collectedAtOf, knownImplChangedAt, recordImpl, closureChangedAt, setClosureChangedAt } from "./exportStore";
 import { intrinsicBuiltins } from "../../checker/decoratorHelpers";
 import { installBodyReadSink } from "../../checker/bodyReads";
 import {
@@ -143,6 +144,9 @@ export class TransAmDb {
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: CancelCtx;
 	exportRegistry: ExportRegistry;
+	exportStore: TaExportStore;                // the exports a written module held, and what says whether a module's registered exports are current
+	ensuring: HashSet<string>;                 // modules whose imports dbEnsureExportsRegistered is walking
+	backEdges: int32;                          // imports of a module in `ensuring`, counted as the walk meets them
 	stdPath: string;
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext | null;
@@ -208,6 +212,9 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
 		exportRegistry: createExportRegistry(),
+		exportStore: createExportStore(),
+		ensuring: new HashSet<string>(),
+		backEdges: 0,
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null,
@@ -264,7 +271,7 @@ export function dbSetFileText(db: TransAmDb, filePath: string, rawSource: string
 	if (isStdPathFor(db, filePath)) {
 		setFileDurability(db.fileInput, fileId, TaDurability.High, revision);
 	}
-	dbInvalidateExports(db, fileId);
+	dbRetireExports(db, fileId);
 	return true;
 }
 
@@ -307,6 +314,7 @@ function dbForgetAllExports(db: TransAmDb): void {
 		removeExportEntry(db.exportRegistry, path);
 		resetRegisteredAt(db.moduleDeps, getFileId(db.fileInput, path));
 	}
+	forgetAllCollected(db.exportStore);
 }
 
 function sameGlobalImports(a: TaGlobalImport[], b: TaGlobalImport[]): boolean {
@@ -415,17 +423,35 @@ function sameContexts(a: CheckerContext[], b: CheckerContext[]): boolean {
 	return true;
 }
 
-// Remove ExportRegistry entries for a file and its transitive dependents
+// A written module's exports are collected again; the Symbols it held wait for that collection to adopt, and its
+// importers are collected again only when the new export surface differs (exportsStale).
+// G3: Skip std/ paths — their exports are immutable for the session
+function dbRetireExports(db: TransAmDb, fileId: int32): void {
+	const path = getFilePath(db.fileInput, fileId);
+	if (path != "" && !isStdPathFor(db, path)) retireExportEntry(db, path);
+	resetRegisteredAt(db.moduleDeps, fileId);
+}
+
+function retireExportEntry(db: TransAmDb, path: string): void {
+	const entry = findModuleExports(db.exportRegistry, path);
+	if (entry == null) return;
+	keepPreviousExports(db.exportStore, path, entry.symbols);
+	removeExportEntry(db.exportRegistry, path);
+}
+
+// Remove ExportRegistry entries for a file and its transitive dependents, and what would adopt their Symbols
 // G3: Skip std/ paths — their exports are immutable for the session
 function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
-	const path = getFilePath(db.fileInput, fileId);
-	if (path != "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
-	resetRegisteredAt(db.moduleDeps, fileId);
-	const deps = getTransitiveDependents(db.moduleDeps, fileId);
-	for (let i = 0; i < deps.length; i = i + 1) {
-		const depPath = getFilePath(db.fileInput, deps[i]);
-		if (depPath != "" && !isStdPathFor(db, depPath)) removeExportEntry(db.exportRegistry, depPath);
-		resetRegisteredAt(db.moduleDeps, deps[i]);
+	const all = getTransitiveDependents(db.moduleDeps, fileId);
+	all.push(fileId);
+	for (const id of all) {
+		const path = getFilePath(db.fileInput, id);
+		if (path != "" && !isStdPathFor(db, path)) {
+			removeExportEntry(db.exportRegistry, path);
+			forgetPreviousExports(db.exportStore, path);
+			forgetCollected(db.exportStore, id);
+		}
+		resetRegisteredAt(db.moduleDeps, id);
 	}
 }
 
@@ -680,6 +706,15 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 	if (fileId < 0) return;
 	dbRecordDepImports(db, filePath);
 
+	db.ensuring.add(filePath);
+	try {
+		registerImportExports(db, fileId, visited, startVersion);
+	} finally {
+		db.ensuring.delete(filePath);
+	}
+}
+
+function registerImportExports(db: TransAmDb, fileId: int32, visited: HashSet<string>, startVersion: int32): void {
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
 		// G5: Bail early if cancelled (new keystroke arrived)
@@ -692,10 +727,18 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const registeredAt = getRegisteredAt(db.moduleDeps, depId);
 		if (registeredAt != null && registeredAt >= db.revision.value) continue;
 
-		// Skip if already registered (but still recurse for transitive deps).
+		if (db.ensuring.has(depPath)) db.backEdges += 1;
+		const edgesBefore = db.backEdges;
+
+		// An entry still held is kept while no import's export surface changed after it was registered; the
+		// walk still recurses for transitive deps.
 		if (findModuleExports(db.exportRegistry, depPath) != null) {
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
-			continue;
+			if (findModuleExports(db.exportRegistry, depPath) != null && !exportsStale(db, depId)) {
+				if (db.backEdges == edgesBefore) setRegisteredAt(db.moduleDeps, depId, db.revision.value);
+				continue;
+			}
+			retireExportEntry(db, depPath);
 		}
 
 		const depParse = preCheckParse(db, depPath, "dbEnsureExportsRegistered");
@@ -726,7 +769,52 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion, decoratorRewritesTop(tmpCtx, collected));
+		markExportsCollected(db, depPath, depId);
 	}
+}
+
+// Registered exports are out of date when the implementation of an import, or of anything it imports, changed after
+// they were collected: a type a Symbol of theirs inferred from a body is cached on it.
+function exportsStale(db: TransAmDb, depId: int32): boolean {
+	const collectedAt = collectedAtOf(db.exportStore, depId) ?? -1;
+	for (const importedId of getDirectImports(db.moduleDeps, depId)) {
+		if (importClosureChangedAt(db, importedId) > collectedAt) return true;
+	}
+	return false;
+}
+
+function importClosureChangedAt(db: TransAmDb, fileId: int32): int32 {
+	const held = closureChangedAt(db.exportStore, fileId, db.revision.value);
+	if (held != null) return held;
+	let latest = -1;
+	const seen = new HashSet<int32>();
+	const pending: int32[] = [fileId];
+	while (pending.length > 0) {
+		const id = pending.pop()!;
+		if (id < 0 || seen.has(id)) continue;
+		seen.add(id);
+		const at = implStamp(db, id);
+		if (at > latest) latest = at;
+		for (const next of getDirectImports(db.moduleDeps, id)) pending.push(next);
+	}
+	setClosureChangedAt(db.exportStore, fileId, db.revision.value, latest);
+	return latest;
+}
+
+// The revision a module's tree, without comments and positions, last changed at; what a bind or an inference that
+// reads another module's body can see.
+function implStamp(db: TransAmDb, fileId: int32): int32 {
+	const fileAt = getFileChangedAt(db.fileInput, fileId) ?? ABSENT_ENTRY;
+	const known = knownImplChangedAt(db.exportStore, fileId, fileAt);
+	if (known != null) return known;
+	const path = getFilePath(db.fileInput, fileId);
+	const parsed = path != "" ? dbParsed(db, path) : null;
+	return recordImpl(db.exportStore, fileId, fileAt, parsed != null ? implDigest(parsed.program) : null, db.revision.value);
+}
+
+function markExportsCollected(db: TransAmDb, path: string, fileId: int32): void {
+	markCollected(db.exportStore, fileId, db.revision.value);
+	forgetPreviousExports(db.exportStore, path);
 }
 
 function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): boolean {
@@ -735,6 +823,7 @@ function registerCheckedExports(db: TransAmDb, depPath: string, depId: int32): b
 	if (!dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, depId))) return false;
 	updateModuleExports(db.exportRegistry, depPath, collectExports(ctx, depPath));
 	setRegisteredAt(db.moduleDeps, depId, db.revision.value);
+	markExportsCollected(db, depPath, depId);
 	return true;
 }
 
@@ -837,10 +926,11 @@ function earlyAdoptions(db: TransAmDb, filePath: string): Adoption {
 	const checkedCtx = db.contexts.get(checkCtxKey(fileId));
 	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), filePath);
 	const entry = findModuleExports(db.exportRegistry, filePath);
+	const held = entry != null ? entry.symbols : previousExports(db.exportStore, filePath);
 	const parsed = dbTree(db, exportNodeKey(fileId));
-	if (entry == null || parsed == null) return new Adoption();
+	if (held == null || parsed == null) return new Adoption();
 	const exported: Symbol[] = [];
-	for (const info of entry.symbols) exported.push(info.sym);
+	for (const info of held) exported.push(info.sym);
 	return adoptDecls(parsed, exported, filePath);
 }
 
@@ -905,7 +995,9 @@ function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports
 function boundInputsUnchanged(db: TransAmDb, filePath: string): boolean {
 	const entry = db.bound.get(filePath);
 	if (entry == null) return false;
-	return entry.revision == db.revision.value || sameInputs(entry.inputs, bindInputs(db, filePath));
+	if (entry.revision == db.revision.value) return true;
+	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
+	return sameInputs(entry.inputs, bindInputs(db, filePath));
 }
 
 function sameInputs(a: int32[], b: int32[]): boolean {
@@ -916,23 +1008,34 @@ function sameInputs(a: int32[], b: int32[]): boolean {
 	return true;
 }
 
+// What a bound unit read: its own text, and of each module in its import closure the implementation and the check it
+// was bound against. A comment or a position moves neither, so an edit that leaves the closure's trees equal keeps the
+// unit; any other edit may reach an inference cached on a Symbol, which only a new bind redoes.
 function bindInputs(db: TransAmDb, filePath: string): int32[] {
 	const inputs: int32[] = [];
+	const rootId = getFileId(db.fileInput, filePath);
 	const seen = new HashSet<int32>();
-	const pending: int32[] = [getFileId(db.fileInput, filePath)];
+	const pending: int32[] = [rootId];
 	while (pending.length > 0) {
 		const fileId = pending.pop()!;
 		if (fileId < 0 || seen.has(fileId)) continue;
 		seen.add(fileId);
 		inputs.push(fileId);
-		inputs.push(getFileChangedAt(db.fileInput, fileId) ?? ABSENT_ENTRY);
-		for (const kind of [TaQueryKind.Parse, TaQueryKind.TypeCheck]) {
-			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
-			inputs.push(entry != null ? entry.changedAt : ABSENT_ENTRY);
+		if (fileId == rootId) {
+			inputs.push(getFileChangedAt(db.fileInput, fileId) ?? ABSENT_ENTRY);
+			inputs.push(changedAtOf(db, TaQueryKind.Parse, fileId));
+		} else {
+			inputs.push(implStamp(db, fileId));
 		}
+		inputs.push(changedAtOf(db, TaQueryKind.TypeCheck, fileId));
 		for (const depId of getDirectImports(db.moduleDeps, fileId)) pending.push(depId);
 	}
 	return inputs;
+}
+
+function changedAtOf(db: TransAmDb, kind: TaQueryKind, fileId: int32): int32 {
+	const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+	return entry != null ? entry.changedAt : ABSENT_ENTRY;
 }
 
 function reusableBound(db: TransAmDb, filePath: string): BoundModule | null {
@@ -1034,6 +1137,7 @@ function forgetClientsOfDiscardedUnit(db: TransAmDb, fileId: int32): void {
 	dbInvalidateExports(db, fileId);
 	for (const clientId of getTransitiveDependents(db.moduleDeps, fileId)) {
 		cacheRemove(db.cache, createQueryKey(TaQueryKind.TypeCheck, clientId));
+		db.bound.delete(getFilePath(db.fileInput, clientId));
 	}
 }
 
@@ -3207,4 +3311,103 @@ test "a loaded module binds a user-decorated class export of a module only regis
 	const dep = 'import { keep } from "./keep";\n@keep\nexport class C {\n\tv: int32 = 1;\n}\n';
 	const failure = userDecoratedImportErrors("/userDecoClass", dep, 'import { C } from "./dep";\nexport const v: int32 = new C().v;\n');
 	assert failure == "", failure;
+}
+
+// ===== Early cutoff of bound units =====
+
+const EARLY_LEAF = "export class Box {\n\tv: int32 = 1;\n\tget(): int32 {\n\t\treturn this.v;\n\t}\n}\nexport function id(a: int32): int32 {\n\treturn a;\n}\nexport function num(): int32 {\n\treturn 1;\n}\nexport function g() {\n\treturn 1;\n}\n";
+const EARLY_MID = 'import { Box, id, num, g } from "./leaf";\nexport function make(): Box {\n\treturn new Box();\n}\nexport function twice(a: int32): int32 {\n\treturn id(a) * 2;\n}\nexport const numRef = num;\nexport const gv = g();\n';
+const EARLY_TOP = 'import { make, twice, numRef, gv } from "./mid";\nimport { Box, g } from "./leaf";\nconst b: Box = make();\nconst n: int32 = b.v;\nconst s: string = twice(1);\nconst m: int32 = numRef();\nconst k: int32 = g();\nconst kv: int32 = gv;\n';
+
+function earlyDb(root: string, leaf: string): TransAmDb {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, `${root}/leaf.ms`, leaf);
+	dbSetFileText(db, `${root}/mid.ms`, EARLY_MID);
+	dbSetFileText(db, `${root}/top.ms`, EARLY_TOP);
+	const leafId = getFileId(db.fileInput, `${root}/leaf.ms`);
+	const midId = getFileId(db.fileInput, `${root}/mid.ms`);
+	const topId = getFileId(db.fileInput, `${root}/top.ms`);
+	recordModuleImport(db.moduleDeps, midId, leafId);
+	recordModuleImport(db.moduleDeps, topId, midId);
+	recordModuleImport(db.moduleDeps, topId, leafId);
+	return db;
+}
+
+function earlyMessages(db: TransAmDb, root: string): string {
+	const messages: string[] = [];
+	for (const e of dbTypeCheck(db, `${root}/top.ms`).errors) messages.push(`${e.line}: ${e.message}`);
+	return messages.join("; ");
+}
+
+// What a db that never saw the previous leaf answers: the answer an edited db must give.
+function earlyFreshMessages(root: string, leaf: string): string {
+	return earlyMessages(earlyDb(root, leaf), root);
+}
+
+function earlyEdited(root: string, edited: string): string[] {
+	const db = earlyDb(root, EARLY_LEAF);
+	const before = earlyMessages(db, root);
+	const bound = db.cache.bound;
+	const collected = db.cache.collected;
+	dbSetFileText(db, `${root}/leaf.ms`, edited);
+	const after = earlyMessages(db, root);
+	return [before, after, earlyFreshMessages(`${root}Fresh`, edited), `${db.cache.bound - bound}`, `${db.cache.collected - collected}`];
+}
+
+test "a comment or whitespace edit of an imported module rebinds no importer and answers as a fresh db" {
+	const edits = [
+		"// head\n" + EARLY_LEAF,
+		"\n\n" + EARLY_LEAF.replace("return a;", "return   a; /* inner */"),
+	];
+	for (let i = 0; i < edits.length; i += 1) {
+		const run = earlyEdited(`/earlyKeep${i}`, edits[i]);
+		assert run[0] != "", "the project has an error to keep";
+		assert run[1] == run[0] && run[1] == run[2], `${run[0]} | ${run[1]} | ${run[2]}`;
+		assert run[3] == "2", `edit ${i} rebound ${run[3]} modules, the checked top and the edited leaf are two`;
+		assert run[4] == "1", `edit ${i} collected ${run[4]} modules`;
+	}
+}
+
+test "a body edit of an imported module answers as a fresh db" {
+	const edits = [
+		EARLY_LEAF.replace("return a;", "return a + 0;"),
+		EARLY_LEAF.replace("return this.v;", "return this.v + 0;"),
+	];
+	for (let i = 0; i < edits.length; i += 1) {
+		const run = earlyEdited(`/earlyBody${i}`, edits[i]);
+		assert run[1] == run[0] && run[1] == run[2], `${run[0]} | ${run[1]} | ${run[2]}`;
+	}
+}
+
+test "an exported body edit that changes an inferred type reaches the importers a bind reused" {
+	const root = "/earlyInferred";
+	const run = earlyEdited(root, EARLY_LEAF.replace("export function g() {\n\treturn 1;", 'export function g() {\n\treturn "s";'));
+	assert run[1] == run[2], `${run[1]} | ${run[2]}`;
+	assert run[1].indexOf("string") >= 0 && run[1] != run[0], run[1];
+}
+
+test "a signature edit of an imported module reaches the checked module through the module between" {
+	const edits = [
+		EARLY_LEAF.replace("v: int32 = 1;", 'v: string = "";'),
+		EARLY_LEAF.replace("export function num(): int32 {\n\treturn 1;", 'export function num(): string {\n\treturn "";'),
+	];
+	for (let i = 0; i < edits.length; i += 1) {
+		const run = earlyEdited(`/earlySignature${i}`, edits[i]);
+		assert run[1] == run[2], `${run[1]} | ${run[2]}`;
+		assert run[1] != run[0], `edit ${i}: ${run[1]}`;
+		assert run[3] != "0" && run[3] != "1", `edit ${i} rebound ${run[3]} modules`;
+	}
+}
+
+test "a class keeps its identity across an edit of its module, so no Box is not a Box" {
+	const edits = [
+		"// head\n" + EARLY_LEAF,
+		EARLY_LEAF.replace("return this.v;", "return this.v + 0;"),
+		EARLY_LEAF.replace("v: int32 = 1;", "v: int32 = 1;\n\tw: int32 = 2;"),
+	];
+	for (let i = 0; i < edits.length; i += 1) {
+		const run = earlyEdited(`/earlyIdentity${i}`, edits[i]);
+		assert run[1].indexOf("not a Box") < 0 && run[1].indexOf("is not a class") < 0, run[1];
+		assert run[1] == run[2], `${run[1]} | ${run[2]}`;
+	}
 }
