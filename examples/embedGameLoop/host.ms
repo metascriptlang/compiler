@@ -1,4 +1,4 @@
-import { createInterpreter, evalModule, selectRoutine, callRoutine, implementRoutine, Interpreter, Routine, RaiserValue, RaiserHostValue, hostValue, boxInt, boxFloat, boxVoid, unboxInt, unboxFloat } from "../../src/embed/index";
+import { createInterpreter, evalModule, selectRoutine, callRoutine, implementRoutine, implementRoutineInPlace, Interpreter, Routine, RaiserValue, RaiserVM, RaiserHostValue, hostValue, boxInt, boxFloat, boxVoid, unboxInt, unboxFloat, hostArgFloat, hostReturnFloat } from "../../src/embed/index";
 import { argv, exit } from "std/process";
 
 const BALLS: int32 = 1000;
@@ -41,6 +41,11 @@ implementRoutine("game.spawned", (args: RaiserValue[]): RaiserValue => {
 	return boxVoid();
 });
 
+implementRoutineInPlace("game.sqrtInPlace", (call: RaiserVM): void => {
+	hostReturnFloat(call, Math.sqrt(hostArgFloat(call, 0)));
+});
+implementRoutine("game.sqrtBoxed", (args: RaiserValue[]): RaiserValue => boxFloat(Math.sqrt(unboxFloat(args[0]))));
+
 const script = argv.length > 2 ? argv[2] : "examples/embedGameLoop/game.ms";
 const t0 = performance.now();
 const evaluated = evalModule(interp, script);
@@ -66,3 +71,24 @@ const t2 = performance.now();
 for (let i: int32 = 0; i < CALLS; i += 1) call(interp, noop, []);
 const perCall = (performance.now() - t2) * 1000000.0 / (CALLS as number);
 console.log(`host -> script call: ${rounded(perCall, 10)} ns per call (${CALLS} calls of noop)`);
+
+function perIteration(interp: Interpreter, name: string): number {
+	const loop = routine(interp, name);
+	call(interp, loop, [hostValue(boxInt(1000))]);
+	const t = performance.now();
+	const result = unboxFloat(call(interp, loop, [hostValue(boxInt(CALLS))]));
+	const ns = (performance.now() - t) * 1000000.0 / (CALLS as number);
+	if (result < 1.0) exit(1);
+	return rounded(ns, 10);
+}
+
+function nativeSqrtLoop(n: int32): number {
+	let acc = 1.0;
+	for (let i: int32 = 0; i < n; i += 1) acc = Math.sqrt(acc + 2.0);
+	return acc;
+}
+
+const t3 = performance.now();
+const native = nativeSqrtLoop(CALLS);
+const nativeNs = rounded((performance.now() - t3) * 1000000.0 / (CALLS as number), 100);
+console.log(`script -> host sqrt, ns per loop iteration: std in-place ${perIteration(interp, "stdSqrtLoop")} · embedder in-place ${perIteration(interp, "inPlaceSqrtLoop")} · embedder boxed ${perIteration(interp, "boxedSqrtLoop")} · native C loop ${nativeNs} (${native > 1.0})`);

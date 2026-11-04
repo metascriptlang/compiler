@@ -1,4 +1,6 @@
 extern function spawned(id: int32, x: number, y: number): void from "game.spawned";
+extern function sqrtInPlace(x: number): number from "game.sqrtInPlace";
+extern function sqrtBoxed(x: number): number from "game.sqrtBoxed";
 
 interface Ball {
 	x: number;
@@ -38,4 +40,22 @@ export function ballX(i: int32): number {
 }
 
 export function noop(): void {
+}
+
+export function stdSqrtLoop(n: int32): number {
+	let acc = 1.0;
+	for (let i: int32 = 0; i < n; i += 1) acc = Math.sqrt(acc + 2.0);
+	return acc;
+}
+
+export function inPlaceSqrtLoop(n: int32): number {
+	let acc = 1.0;
+	for (let i: int32 = 0; i < n; i += 1) acc = sqrtInPlace(acc + 2.0);
+	return acc;
+}
+
+export function boxedSqrtLoop(n: int32): number {
+	let acc = 1.0;
+	for (let i: int32 = 0; i < n; i += 1) acc = sqrtBoxed(acc + 2.0);
+	return acc;
 }
