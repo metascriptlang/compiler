@@ -5,7 +5,7 @@ import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, Aw
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
-import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
+import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
 import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { isScalarPrimitive } from "./fit";
@@ -399,8 +399,11 @@ export function isImmutableModuleConst(sym: Symbol): boolean {
 }
 
 function immutableConstValue(sym: Symbol, t: Type): boolean {
-	if (isReadonlyView(t)) return builtFresh(sym);
-	return sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable) && isFrozenByConst(t) && noTaskStartsBefore(sym, Effect.StartsTask);
+	if (hasFlag(sym, SymbolFlag.ImmutableModuleConst)) return true;
+	const immutable = isReadonlyView(t) ? builtFresh(sym)
+		: sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable) && isFrozenByConst(t) && noTaskStartsBefore(sym, Effect.StartsTask);
+	if (immutable) setFlag(sym, SymbolFlag.ImmutableModuleConst);
+	return immutable;
 }
 
 function reachesModuleState(e: Effect): boolean {

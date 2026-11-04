@@ -257,6 +257,7 @@ export enum SymbolFlag {
 	IteratorHelper, // @iteratorHelper std generator: a close before its first next closes its first parameter, the source iterator
 	ImmutableEnv, // a ClosureEnv whose every captured variable is a const: no field is written after the env is built
 	NoSideEffect, // @pure extern: writes only the operands its signature makes writable (reference: noSideEffect)
+	ImmutableModuleConst, // a module const the checker proved never written, on the source tree: a borrow of it takes no count on any thread
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard
