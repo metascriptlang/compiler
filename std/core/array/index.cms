@@ -502,15 +502,12 @@ export function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): b
 export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, flatMap } from "./shared";
 export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
+extern function msMemChr(hay: Readonly<Span<uint8>>, from: int64, end: int64, byte: uint8): int64;
+
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): number {
-	const n = view.length;
-	let i = fromIndex < 0 ? n + fromIndex : fromIndex;
-	if (i < 0) i = 0;
-	while (i < n) {
-		if (view[i] == value) return i;
-		i = i + 1;
-	}
-	return -1;
+	const n = view.length as int64;
+	const from = fromIndex < 0 ? n + fromIndex : fromIndex as int64;
+	return msMemChr(view, from < 0 ? 0 : from, n, value) as number;
 }
 
 export function includes(this view: Readonly<Span<uint8>>, value: uint8, fromIndex: int32 = 0): boolean {
@@ -587,4 +584,21 @@ export function asString(this arr: Readonly<uint8[]>): string {
 
 export function asString(this view: Readonly<Span<uint8>>): string {
 	return utf8String(view, true);
+}
+
+test "a byte span indexOf follows Array.prototype.indexOf for every fromIndex" {
+	const bytes: uint8[] = [5, 7, 9, 7];
+	assert bytes.indexOf(7) == 1;
+	assert bytes.indexOf(7, 2) == 3;
+	assert bytes.indexOf(7, -1) == 3;
+	assert bytes.indexOf(5, -100) == 0;
+	assert bytes.indexOf(5, 1) == -1;
+	assert bytes.indexOf(7, 4) == -1;
+	assert bytes.indexOf(7, 100) == -1;
+	assert bytes.indexOf(4) == -1;
+	assert bytes.includes(9);
+	assert !bytes.includes(9, 3);
+	const empty: uint8[] = [];
+	assert empty.indexOf(0) == -1;
+	assert empty.indexOf(0, -1) == -1;
 }
