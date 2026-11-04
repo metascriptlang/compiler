@@ -424,3 +424,47 @@ export function chacha20Poly1305OpenInto(
 	wipeWork(w);
 	return matched;
 }
+
+/**
+ * ChaCha20-Poly1305 seal of `buf[at, +length)` in place, its tag into
+ * `buf[at + length, +16)`; false on a bad nonce or a range outside `buf`.
+ */
+export function chacha20Poly1305SealAt(
+	key: Readonly<uint32[]>,
+	nonce: Readonly<uint8[]>,
+	aad: Readonly<uint8[]>,
+	buf: uint8[],
+	at: int32,
+	length: int32,
+): boolean {
+	if (nonce.length != 12 || at < 0 || length < 0 || at + length + 16 > buf.length) return false;
+	const w = newWork();
+	startIetf(w, key, nonce);
+	chachaXor(w, 1, buf, at, buf, at, length);
+	computeTag(w, aad, buf, at, length);
+	for (let i = 0; i < 16; i++) buf[at + length + i] = w.tag[i];
+	wipeWork(w);
+	return true;
+}
+
+/**
+ * Opens `buf[at, +length)` in place once the tag at `buf[at + length, +16)`
+ * verifies; false, with `buf` untouched, on a bad nonce, range or tag.
+ */
+export function chacha20Poly1305OpenAt(
+	key: Readonly<uint32[]>,
+	nonce: Readonly<uint8[]>,
+	aad: Readonly<uint8[]>,
+	buf: uint8[],
+	at: int32,
+	length: int32,
+): boolean {
+	if (nonce.length != 12 || at < 0 || length < 0 || at + length + 16 > buf.length) return false;
+	const w = newWork();
+	startIetf(w, key, nonce);
+	computeTag(w, aad, buf, at, length);
+	const matched = tagMatches(w, buf, at + length);
+	if (matched) chachaXor(w, 1, buf, at, buf, at, length);
+	wipeWork(w);
+	return matched;
+}
