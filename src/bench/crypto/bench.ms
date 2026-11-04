@@ -1,14 +1,12 @@
 // Run one binary at a time: a parallel job moves every number.
 
 import { Buffer } from "std/core/buffer";
+import { bench, benchAsync } from "../harness";
 import { CryptoError, digestSync, hmacSync, pbkdf2, hkdf, randomBytesSync, createHash } from "std/crypto";
 import { Ed25519PrivateKey, sign as edSign, verify as edVerify } from "std/crypto/ed25519";
 import { X25519PrivateKey, sharedSecret } from "std/crypto/x25519";
 import { AesKey, seal as aesSeal } from "std/crypto/aes";
 import { ChaChaKey, seal as chachaSeal } from "std/crypto/chacha20";
-
-const MIN_ROUND_MS = 250.0;
-const ROUNDS = 3;
 
 let sink: number = 0;
 
@@ -21,43 +19,6 @@ function bytesOf(count: int32): Buffer {
 	const buf = Buffer.alloc(count);
 	for (let i = 0; i < count; i++) buf.set(i, (i * 31 + 7) & 255);
 	return buf;
-}
-
-// Milliseconds per call of `op`, one round of at least MIN_ROUND_MS.
-function round(op: () => void): number {
-	let calls = 1;
-	while (true) {
-		const start = performance.now();
-		for (let i = 0; i < calls; i++) op();
-		const elapsed = performance.now() - start;
-		if (elapsed >= MIN_ROUND_MS) return elapsed / calls;
-		calls = (elapsed < 1.0 ? calls * 16.0 : Math.ceil(calls * (MIN_ROUND_MS * 1.2 / elapsed))) as int32;
-	}
-}
-
-function pad(text: string, width: number): string {
-	let out = text;
-	while (out.length < width) out = out + " ";
-	return out;
-}
-
-function fixed(value: number, digits: number): string {
-	const scale = Math.pow(10, digits);
-	return (Math.round(value * scale) / scale).toString();
-}
-
-// `perCallBytes > 0` reports MB/s; 0 reports us/op.
-function bench(name: string, perCallBytes: number, op: () => void): void {
-	const rates: number[] = [];
-	for (let r = 0; r < ROUNDS; r++) {
-		const ms = round(op);
-		rates.push(perCallBytes > 0 ? perCallBytes / ms / 1000.0 : ms * 1000.0);
-	}
-	rates.sort((a, b) => a - b);
-	const median = rates[1];
-	const spread = (rates[2] - rates[0]) / median * 100.0;
-	const unit = perCallBytes > 0 ? "MB/s" : "us/op";
-	console.log(pad(name, 28) + pad(fixed(median, 3) + " " + unit, 18) + "spread " + fixed(spread, 1) + "%");
 }
 
 const b32 = bytesOf(32);
@@ -76,30 +37,6 @@ bench("hmac-sha256 32 B", 0, () => { sink += must(hmacSync("sha256", b32, b32)).
 await benchAsync("pbkdf2-sha256 100k", 0, async () => { sink += must(await pbkdf2("password", "salt", 100000, 32, "sha256")).length; });
 await benchAsync("hkdf-sha256 32 B", 0, async () => { sink += must(await hkdf("sha256", b32, b32, b32, 32)).length; });
 bench("randomBytes 32 B", 0, () => { sink += must(randomBytesSync(32)).length; });
-
-async function roundAsync(op: () => Promise<void>): Promise<number> {
-	let calls = 1;
-	while (true) {
-		const start = performance.now();
-		for (let i = 0; i < calls; i++) await op();
-		const elapsed = performance.now() - start;
-		if (elapsed >= MIN_ROUND_MS) return elapsed / calls;
-		calls = (elapsed < 1.0 ? calls * 16.0 : Math.ceil(calls * (MIN_ROUND_MS * 1.2 / elapsed))) as int32;
-	}
-}
-
-async function benchAsync(name: string, perCallBytes: number, op: () => Promise<void>): Promise<void> {
-	const rates: number[] = [];
-	for (let r = 0; r < ROUNDS; r++) {
-		const ms = await roundAsync(op);
-		rates.push(perCallBytes > 0 ? perCallBytes / ms / 1000.0 : ms * 1000.0);
-	}
-	rates.sort((a, b) => a - b);
-	const median = rates[1];
-	const spread = (rates[2] - rates[0]) / median * 100.0;
-	const unit = perCallBytes > 0 ? "MB/s" : "us/op";
-	console.log(pad(name, 28) + pad(fixed(median, 3) + " " + unit, 18) + "spread " + fixed(spread, 1) + "%");
-}
 
 const edKey = must(await Ed25519PrivateKey.fromSeed(b32));
 const edPublic = edKey.publicKey();

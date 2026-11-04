@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROUNDS=${1:-3}
-HERE=src/bench/crypto
-OUT=out/bench/crypto
+AREA=${1:?usage: src/bench/run.sh <area> [rounds]}
+ROUNDS=${2:-3}
+HERE=src/bench/$AREA
+OUT=out/bench/$AREA
 MSC=${MSC:-$([ -x ./msc ] && echo ./msc || echo msc)}
 NODE=${NODE:-node}
 mkdir -p "$OUT"

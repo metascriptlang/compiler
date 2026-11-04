@@ -10,13 +10,14 @@ longer than any check the edit loop allows.
 
 `src/bench/<area>/` holds:
 
-- the MetaScript program, and a twin per foreign implementation it is compared with (`bench.node.mjs`, `.rs`, `.nim`),
-  printing the same row names;
-- `run.sh`, which builds the program with `MSC` (and `MSBENCH_BASE` for an A/B), runs every arm in turn for `ROUNDS`
-  rounds and prints each row's median per arm; it prints the host, the commit and the load before and after;
+- `bench.ms`, and `bench.node.mjs` as its node twin, printing the same row names; both time each row through the
+  shared harness (`src/bench/harness.ms`, `src/bench/harness.mjs`): three rounds of at least 250 ms, the median and
+  its spread;
 - `baseline.md`, the recorded tables: host, commit, tree, load, and the command that produced them.
 
-A shared runner waits for a second area whose `run.sh` repeats the first one's.
+`src/bench/run.sh <area> [rounds]` builds `bench.ms` with `MSC` (and `MSBENCH_BASE` for an A/B), runs every arm in
+turn for `rounds` rounds and prints each row's median per arm; it prints the host, the commit and the load before and
+after.
 
 ## Running
 

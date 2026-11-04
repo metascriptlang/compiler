@@ -1,13 +1,13 @@
 # std/crypto bench baseline
 
-Each table is one `src/bench/crypto/run.sh 3` run: the median of three runs per arm, each run itself the median of
+Each table is one `src/bench/run.sh crypto 3` run: the median of three runs per arm, each run itself the median of
 three rounds of at least 250 ms. `candidate` is std/crypto on the C backend built `--release`; `node` is
 `bench.node.mjs` on node:crypto. The command:
 
 ```
 ~/metascript/.gate-host/run-remote.sh <host flags> -- sh -c 'cp "$(command -v msc)" builder && \
   ./builder build src/index.ms --danger --lto=off --output=msc-cand && \
-  MSC=./msc-cand MSBENCH_COMMIT=<sha> src/bench/crypto/run.sh 3'
+  MSC=./msc-cand MSBENCH_COMMIT=<sha> src/bench/run.sh crypto 3'
 ```
 
 The hosts are shared, so a table carries its load; compare a new run against the table of the same host only.
