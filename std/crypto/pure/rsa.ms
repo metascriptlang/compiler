@@ -1,7 +1,6 @@
 /**
- * RSA on `bigint`: key encodings (PKCS#1, PKCS#8, SPKI) and, for the JavaScript `*Sync` forms, the RFC 8017
- * operations. Not constant-time and slow: a 2048-bit private operation takes milliseconds where a native
- * library takes microseconds, so use the asynchronous forms (WebCrypto) unless you need a synchronous call.
+ * RSA key encodings (PKCS#1, PKCS#8, SPKI) and the RFC 8017 operations over key integers held as minimal
+ * big-endian bytes. The arithmetic is `rsaArith`: `ff` limbs on C, BigInt on JavaScript.
  */
 
 import {
@@ -9,44 +8,36 @@ import {
 	derOctets, derBits, derOidOf, derTlv, derJoin, tagSequence, tagOctetString, tagBitString, tagNull, tagOid,
 	oidRsaEncryption,
 } from "./asn1";
-import { bigFromBytes, bigToBytes, bitLength, mod, modPow, modInverse, gcd, randomBelow, randomOctets } from "./bigint";
+import { RsaPublicData, RsaPrivateData, bytesBitLength, rsaModulusBytes, sameBytes } from "./rsaKey";
+import { rsaPublicOperation, rsaPrivateOperation, rsaKeyConsistent, rsaGenerateKey } from "./rsaArith";
+import { randomOctets } from "./random";
 import { hashKind, hashOf } from "./hash";
 import { kindSha256 } from "./state";
 
+export { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
+
 export const rsaMinBits: int32 = 2048;
 
-export interface RsaPublicData {
-	n: bigint;
-	e: bigint;
+// Byte order of minimal big-endian integers: a shorter one is smaller.
+function below(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
+	if (a.length != b.length) return a.length < b.length;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] != b[i]) return a[i] < b[i];
+	}
+	return false;
 }
 
-export interface RsaPrivateData {
-	n: bigint;
-	e: bigint;
-	d: bigint;
-	p: bigint;
-	q: bigint;
-	dp: bigint;
-	dq: bigint;
-	qi: bigint;
-}
-
-export function rsaModulusBytes(n: bigint): int32 {
-	return (bitLength(n) + 7) >> 3;
-}
-
-function integerAt(buf: Readonly<uint8[]>, item: DerItem): bigint | null {
-	const bytes = derUnsigned(buf, item);
-	if (bytes == null) return null;
-	return bigFromBytes(bytes);
+function atLeastThree(value: Readonly<uint8[]>): boolean {
+	return !below(value, [3]);
 }
 
 function publicFromSequence(buf: Readonly<uint8[]>, seq: DerItem): RsaPublicData | null {
 	const parts = derChildren(buf, seq);
 	if (parts == null || parts.length != 2) return null;
-	const n = integerAt(buf, parts[0]);
-	const e = integerAt(buf, parts[1]);
-	if (n == null || e == null || bitLength(n) < rsaMinBits || e < 3n || e % 2n == 0n || e >= n) return null;
+	const n = derUnsigned(buf, parts[0]);
+	const e = derUnsigned(buf, parts[1]);
+	if (n == null || e == null || bytesBitLength(n) < rsaMinBits || (n[n.length - 1] & 1) == 0) return null;
+	if (!atLeastThree(e) || (e[e.length - 1] & 1) == 0 || !below(e, n)) return null;
 	return { n, e };
 }
 
@@ -79,12 +70,8 @@ function rsaAlgorithm(): uint8[] {
 	return derSequence([derOidOf(oidRsaEncryption()), derTlv(tagNull, [])]);
 }
 
-function unsignedOf(value: bigint): uint8[] {
-	return derUnsignedInteger(bigToBytes(value, ((bitLength(value) + 7) >> 3) as int32));
-}
-
 export function rsaPublicToSpki(pub: RsaPublicData): uint8[] {
-	const key = derSequence([unsignedOf(pub.n), unsignedOf(pub.e)]);
+	const key = derSequence([derUnsignedInteger(pub.n), derUnsignedInteger(pub.e)]);
 	return derSequence([rsaAlgorithm(), derBits(key)]);
 }
 
@@ -93,17 +80,15 @@ function privateFromSequence(buf: Readonly<uint8[]>, seq: DerItem): RsaPrivateDa
 	if (parts == null || parts.length != 9) return null;
 	const version = derUnsigned(buf, parts[0]);
 	if (version == null || version.length != 1 || version[0] != 0) return null;
-	const values: bigint[] = [];
+	const values: uint8[][] = [];
 	for (let i = 1; i < 9; i++) {
-		const value = integerAt(buf, parts[i]);
+		const value = derUnsigned(buf, parts[i]);
 		if (value == null) return null;
 		values.push(value);
 	}
 	const key: RsaPrivateData = { n: values[0], e: values[1], d: values[2], p: values[3], q: values[4], dp: values[5], dq: values[6], qi: values[7] };
-	if (bitLength(key.n) < rsaMinBits || key.p < 3n || key.q < 3n) return null;
-	if (key.p * key.q != key.n) return null;
-	if ((key.e * key.dp) % (key.p - 1n) != 1n || (key.e * key.dq) % (key.q - 1n) != 1n) return null;
-	if ((key.qi * key.q) % key.p != 1n) return null;
+	if (bytesBitLength(key.n) < rsaMinBits || !atLeastThree(key.p) || !atLeastThree(key.q)) return null;
+	if (!rsaKeyConsistent(key)) return null;
 	return key;
 }
 
@@ -128,8 +113,9 @@ export function rsaPrivateFromPkcs8(der: Readonly<uint8[]>): RsaPrivateData | nu
 
 export function rsaPrivateToPkcs1(key: RsaPrivateData): uint8[] {
 	return derSequence([
-		derSmallInteger(0), unsignedOf(key.n), unsignedOf(key.e), unsignedOf(key.d), unsignedOf(key.p),
-		unsignedOf(key.q), unsignedOf(key.dp), unsignedOf(key.dq), unsignedOf(key.qi),
+		derSmallInteger(0), derUnsignedInteger(key.n), derUnsignedInteger(key.e), derUnsignedInteger(key.d),
+		derUnsignedInteger(key.p), derUnsignedInteger(key.q), derUnsignedInteger(key.dp), derUnsignedInteger(key.dq),
+		derUnsignedInteger(key.qi),
 	]);
 }
 
@@ -164,13 +150,6 @@ function slice(bytes: Readonly<uint8[]>, from: int32, to: int32): uint8[] {
 	return out;
 }
 
-function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
-	if (a.length != b.length) return false;
-	let diff = 0;
-	for (let i = 0; i < a.length; i++) diff |= (a[i] ^ b[i]) as int32;
-	return diff == 0;
-}
-
 function mgf1(kind: int32, seed: Readonly<uint8[]>, length: int32): uint8[] {
 	const out: uint8[] = [];
 	let counter = 0;
@@ -180,15 +159,6 @@ function mgf1(kind: int32, seed: Readonly<uint8[]>, length: int32): uint8[] {
 		counter += 1;
 	}
 	return out;
-}
-
-function privateOperation(key: RsaPrivateData, value: bigint): bigint | null {
-	const m1 = modPow(value % key.p, key.dp, key.p);
-	const m2 = modPow(value % key.q, key.dq, key.q);
-	const h = mod(key.qi * (m1 - m2), key.p);
-	const result = m2 + h * key.q;
-	if (modPow(result, key.e, key.n) != value) return null;
-	return result;
 }
 
 function pkcs1Encoding(prefix: Readonly<uint8[]>, digest: Readonly<uint8[]>, size: int32): uint8[] | null {
@@ -206,24 +176,21 @@ export function rsaSignPkcs1(key: RsaPrivateData, hash: string, message: Readonl
 	const size = rsaModulusBytes(key.n);
 	const encoded = pkcs1Encoding(prefix, hashOf(hashKind(hash), message), size);
 	if (encoded == null) return null;
-	const signed = privateOperation(key, bigFromBytes(encoded));
-	if (signed == null) return null;
-	return bigToBytes(signed, size);
+	return rsaPrivateOperation(key, encoded);
 }
 
 export function rsaVerifyPkcs1(key: RsaPublicData, hash: string, message: Readonly<uint8[]>, signature: Readonly<uint8[]>): boolean {
 	const prefix = digestPrefix(hash);
 	const size = rsaModulusBytes(key.n);
 	if (prefix == null || signature.length != size) return false;
-	const s = bigFromBytes(signature);
-	if (s >= key.n) return false;
+	const opened = rsaPublicOperation(key, signature);
 	const expected = pkcs1Encoding(prefix, hashOf(hashKind(hash), message), size);
-	if (expected == null) return false;
-	return sameBytes(bigToBytes(modPow(s, key.e, key.n), size), expected);
+	if (opened == null || expected == null) return false;
+	return sameBytes(opened, expected);
 }
 
-function pssLayout(n: bigint, hashSize: int32): int32 {
-	return ((bitLength(n) - 1 + 7) >> 3) - hashSize - 2;
+function pssLayout(n: Readonly<uint8[]>, hashSize: int32): int32 {
+	return ((bytesBitLength(n) - 1 + 7) >> 3) - hashSize - 2;
 }
 
 export function rsaSignPss(key: RsaPrivateData, hash: string, message: Readonly<uint8[]>): uint8[] | null {
@@ -231,7 +198,7 @@ export function rsaSignPss(key: RsaPrivateData, hash: string, message: Readonly<
 	const kind = hashKind(hash);
 	const mHash = hashOf(kind, message);
 	const hashSize = mHash.length as int32;
-	const emBits = bitLength(key.n) - 1;
+	const emBits = bytesBitLength(key.n) - 1;
 	const emLength = (emBits + 7) >> 3;
 	const zeros = pssLayout(key.n, hashSize) - hashSize;
 	if (zeros < 0) return null;
@@ -241,9 +208,7 @@ export function rsaSignPss(key: RsaPrivateData, hash: string, message: Readonly<
 	xorInto(block, mgf1(kind, h, emLength - hashSize - 1));
 	block[0] = ((block[0] as int32) & (255 >> (8 * emLength - emBits))) as uint8;
 	const encoded = derJoin([block, h, [0xbc] as uint8[]]);
-	const signed = privateOperation(key, bigFromBytes(encoded));
-	if (signed == null) return null;
-	return bigToBytes(signed, rsaModulusBytes(key.n));
+	return rsaPrivateOperation(key, encoded);
 }
 
 export function rsaVerifyPss(key: RsaPublicData, hash: string, message: Readonly<uint8[]>, signature: Readonly<uint8[]>): boolean {
@@ -251,13 +216,12 @@ export function rsaVerifyPss(key: RsaPublicData, hash: string, message: Readonly
 	const kind = hashKind(hash);
 	const mHash = hashOf(kind, message);
 	const hashSize = mHash.length as int32;
-	const emBits = bitLength(key.n) - 1;
+	const emBits = bytesBitLength(key.n) - 1;
 	const emLength = (emBits + 7) >> 3;
-	const s = bigFromBytes(signature);
-	if (emLength < hashSize + 2 || s >= key.n) return false;
-	const m = modPow(s, key.e, key.n);
-	if (bitLength(m) > emBits) return false;
-	const encoded = bigToBytes(m, emLength);
+	if (emLength < hashSize + 2) return false;
+	const m = rsaPublicOperation(key, signature);
+	if (m == null || bytesBitLength(m) > emBits) return false;
+	const encoded = slice(m, m.length - emLength, m.length as int32);
 	if (encoded[emLength - 1] != 0xbc) return false;
 	const block = slice(encoded, 0, emLength - hashSize - 1);
 	const h = slice(encoded, emLength - hashSize - 1, emLength - 1);
@@ -287,17 +251,14 @@ export function rsaOaepEncrypt(key: RsaPublicData, message: Readonly<uint8[]>): 
 	const maskedSeed = seed;
 	xorInto(maskedSeed, mgf1(kindSha256, block, 32));
 	const encoded = derJoin([[0] as uint8[], maskedSeed, block]);
-	return bigToBytes(modPow(bigFromBytes(encoded), key.e, key.n), size);
+	return rsaPublicOperation(key, encoded);
 }
 
 export function rsaOaepDecrypt(key: RsaPrivateData, ciphertext: Readonly<uint8[]>): uint8[] | null {
 	const size = rsaModulusBytes(key.n);
 	if (ciphertext.length != size || size < 66) return null;
-	const c = bigFromBytes(ciphertext);
-	if (c >= key.n) return null;
-	const opened = privateOperation(key, c);
-	if (opened == null) return null;
-	const encoded = bigToBytes(opened, size);
+	const encoded = rsaPrivateOperation(key, ciphertext);
+	if (encoded == null) return null;
 	const seed = slice(encoded, 1, 33);
 	const block = slice(encoded, 33, size);
 	xorInto(seed, mgf1(kindSha256, block, 32));
@@ -310,78 +271,6 @@ export function rsaOaepDecrypt(key: RsaPrivateData, ciphertext: Readonly<uint8[]
 	return slice(block, at + 1, block.length as int32);
 }
 
-function oddPrimesBelow2000(): int32[] {
-	const primes: int32[] = [];
-	for (let candidate = 3; candidate < 2000; candidate += 2) {
-		let prime = true;
-		for (const known of primes) {
-			if (known * known > candidate) break;
-			if (candidate % known == 0) {
-				prime = false;
-				break;
-			}
-		}
-		if (prime) primes.push(candidate);
-	}
-	return primes;
-}
-
-const smallPrimes: Readonly<int32[]> = oddPrimesBelow2000();
-
-function millerRabin(n: bigint, rounds: int32): boolean {
-	let odd = n - 1n;
-	let twos = 0;
-	while (odd % 2n == 0n) {
-		odd = odd >> 1n;
-		twos += 1;
-	}
-	for (let round = 0; round < rounds; round++) {
-		const base = randomBelow(n - 3n) + 1n;
-		let x = modPow(base, odd, n);
-		if (x == 1n || x == n - 1n) continue;
-		let witness = true;
-		for (let i = 1; i < twos; i++) {
-			x = (x * x) % n;
-			if (x == n - 1n) {
-				witness = false;
-				break;
-			}
-		}
-		if (witness) return false;
-	}
-	return true;
-}
-
-function randomPrime(bits: int32, e: bigint): bigint {
-	const small = smallPrimes;
-	while (true) {
-		const bytes = randomOctets(bits >> 3);
-		bytes[0] = (bytes[0] | 0xc0) as uint8;
-		bytes[bytes.length - 1] = (bytes[bytes.length - 1] | 1) as uint8;
-		const candidate = bigFromBytes(bytes);
-		let divisible = false;
-		for (const prime of small) {
-			if (candidate % BigInt(prime) == 0n) {
-				divisible = true;
-				break;
-			}
-		}
-		if (divisible || (candidate - 1n) % e == 0n) continue;
-		if (millerRabin(candidate, 8)) return candidate;
-	}
-}
-
 export function rsaGenerate(bits: int32): RsaPrivateData {
-	const e = 65537n;
-	while (true) {
-		const p = randomPrime(bits >> 1, e);
-		const q = randomPrime(bits >> 1, e);
-		const n = p * q;
-		if (p == q || bitLength(n) != bits) continue;
-		const big = p > q ? p : q;
-		const little = p > q ? q : p;
-		const lambda = ((big - 1n) * (little - 1n)) / gcd(big - 1n, little - 1n);
-		const d = modInverse(e, lambda);
-		return { n, e, d, p: big, q: little, dp: d % (big - 1n), dq: d % (little - 1n), qi: modInverse(little, big) };
-	}
+	return rsaGenerateKey(bits);
 }

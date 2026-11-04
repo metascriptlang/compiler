@@ -58,9 +58,11 @@ test "every key format parses to the same 2048-bit key" {
 	const pub1 = publicOf(keyAPkcs1Public);
 	assert p1 != null && pub1 != null;
 	assert rsaModulusBytes(p8.n) == 256;
-	assert p1.n == p8.n && p1.d == p8.d && spki.n == p8.n && pub1.n == p8.n && spki.e == 65537n;
+	const n = p8.n.encodeHex();
+	assert p1.n.encodeHex() == n && p1.d.encodeHex() == p8.d.encodeHex() && spki.n.encodeHex() == n;
+	assert pub1.n.encodeHex() == n && spki.e.encodeHex() == "010001";
 	const crlf = publicOf(keyASpki.split("\n").join(" \t\r\n"));
-	assert crlf != null && crlf.n == p8.n;
+	assert crlf != null && crlf.n.encodeHex() == n;
 }
 
 test "encoders write the same PEM text openssl wrote" {
@@ -166,7 +168,7 @@ test "OAEP roundtrips up to the size limit and refuses one byte more" {
 
 test "a generated 2048-bit key signs and verifies" {
 	const key = rsaGenerate(2048);
-	assert rsaModulusBytes(key.n) == 256 && key.p * key.q == key.n;
+	assert rsaModulusBytes(key.n) == 256 && key.e.encodeHex() == "010001";
 	const reparsed = privateOf(pemEncode("PRIVATE KEY", rsaPrivateToPkcs8(key)));
 	assert reparsed != null;
 	const data = bytesOf(message);

@@ -1,0 +1,128 @@
+/**
+ * RSA arithmetic on the platform BigInt for the JavaScript backend; the C backend uses `rsaArith.ms` on `ff`
+ * limbs. Not constant-time.
+ */
+
+import { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
+import { bigFromBytes, bigToBytes, bitLength, mod, modPow, modInverse, gcd, randomBelow, randomOctets } from "./bigint";
+
+function minimal(value: bigint): uint8[] {
+	const size = (bitLength(value) + 7) >> 3;
+	return bigToBytes(value, size > 0 ? size : 1);
+}
+
+export function rsaPublicOperation(key: RsaPublicData, input: Readonly<uint8[]>): uint8[] | null {
+	const n = bigFromBytes(key.n);
+	const x = bigFromBytes(input);
+	if (x >= n) return null;
+	return bigToBytes(modPow(x, bigFromBytes(key.e), n), rsaModulusBytes(key.n));
+}
+
+export function rsaPrivateOperation(key: RsaPrivateData, input: Readonly<uint8[]>): uint8[] | null {
+	const x = bigFromBytes(input);
+	if (x >= bigFromBytes(key.n)) return null;
+	const result = privateOperation(key, x);
+	if (result == null) return null;
+	return bigToBytes(result, rsaModulusBytes(key.n));
+}
+
+export function rsaKeyConsistent(key: RsaPrivateData): boolean {
+	const n = bigFromBytes(key.n);
+	const e = bigFromBytes(key.e);
+	const p = bigFromBytes(key.p);
+	const q = bigFromBytes(key.q);
+	if (p * q != n) return false;
+	if ((e * bigFromBytes(key.dp)) % (p - 1n) != 1n || (e * bigFromBytes(key.dq)) % (q - 1n) != 1n) return false;
+	return (bigFromBytes(key.qi) * q) % p == 1n;
+}
+
+function privateOperation(key: RsaPrivateData, value: bigint): bigint | null {
+	const n = bigFromBytes(key.n);
+	const p = bigFromBytes(key.p);
+	const q = bigFromBytes(key.q);
+	const m1 = modPow(value % p, bigFromBytes(key.dp), p);
+	const m2 = modPow(value % q, bigFromBytes(key.dq), q);
+	const h = mod(bigFromBytes(key.qi) * (m1 - m2), p);
+	const result = m2 + h * q;
+	if (modPow(result, bigFromBytes(key.e), n) != value) return null;
+	return result;
+}
+
+function oddPrimesBelow2000(): int32[] {
+	const primes: int32[] = [];
+	for (let candidate = 3; candidate < 2000; candidate += 2) {
+		let prime = true;
+		for (const known of primes) {
+			if (known * known > candidate) break;
+			if (candidate % known == 0) {
+				prime = false;
+				break;
+			}
+		}
+		if (prime) primes.push(candidate);
+	}
+	return primes;
+}
+
+const smallPrimes: Readonly<int32[]> = oddPrimesBelow2000();
+
+function millerRabin(n: bigint, rounds: int32): boolean {
+	let odd = n - 1n;
+	let twos = 0;
+	while (odd % 2n == 0n) {
+		odd = odd >> 1n;
+		twos += 1;
+	}
+	for (let round = 0; round < rounds; round++) {
+		const base = randomBelow(n - 3n) + 1n;
+		let x = modPow(base, odd, n);
+		if (x == 1n || x == n - 1n) continue;
+		let witness = true;
+		for (let i = 1; i < twos; i++) {
+			x = (x * x) % n;
+			if (x == n - 1n) {
+				witness = false;
+				break;
+			}
+		}
+		if (witness) return false;
+	}
+	return true;
+}
+
+function randomPrime(bits: int32, e: bigint): bigint {
+	const small = smallPrimes;
+	while (true) {
+		const bytes = randomOctets(bits >> 3);
+		bytes[0] = (bytes[0] | 0xc0) as uint8;
+		bytes[bytes.length - 1] = (bytes[bytes.length - 1] | 1) as uint8;
+		const candidate = bigFromBytes(bytes);
+		let divisible = false;
+		for (const prime of small) {
+			if (candidate % BigInt(prime) == 0n) {
+				divisible = true;
+				break;
+			}
+		}
+		if (divisible || (candidate - 1n) % e == 0n) continue;
+		if (millerRabin(candidate, 8)) return candidate;
+	}
+}
+
+export function rsaGenerateKey(bits: int32): RsaPrivateData {
+	const e = 65537n;
+	while (true) {
+		const p = randomPrime(bits >> 1, e);
+		const q = randomPrime(bits >> 1, e);
+		const n = p * q;
+		if (p == q || bitLength(n) != bits) continue;
+		const big = p > q ? p : q;
+		const little = p > q ? q : p;
+		const lambda = ((big - 1n) * (little - 1n)) / gcd(big - 1n, little - 1n);
+		const d = modInverse(e, lambda);
+		return {
+			n: minimal(n), e: minimal(e), d: minimal(d), p: minimal(big), q: minimal(little), dp: minimal(d % (big - 1n)),
+			dq: minimal(d % (little - 1n)), qi: minimal(modInverse(little, big)),
+		};
+	}
+}
