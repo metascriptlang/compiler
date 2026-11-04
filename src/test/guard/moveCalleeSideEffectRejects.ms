@@ -19,6 +19,7 @@
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'stash'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'current'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'pick'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'describe'
 
 interface Box { n: int32; }
 interface Holder { b: Box | null; }
@@ -76,4 +77,18 @@ function fieldAssignedFromCall(): int32 {
 	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] }); // GUARD-REFUSED
 }
 
-console.log(fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall());
+const shown: Shown[] = [];
+class Shown {
+	n: int32 = 0;
+	toString(): string { shown.push(this); return "shown"; }
+}
+interface Labelled { label: string; b: Box; }
+function describe(s: Shown): Labelled { return { label: String(s), b: { n: s.n } }; }
+
+// 6 — `String` of an object runs its `toString`, which publishes the receiver.
+function fromWritingToString(): int32 {
+	const g = describe(new Shown());
+	return await spawn(() => { g.b.n = 3; return g.b.n; }, { move: [g] }); // GUARD-REFUSED
+}
+
+console.log(fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall() + fromWritingToString());
