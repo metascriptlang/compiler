@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser error: 'corpus821Time' cannot run on the Raiser: no host bridge for 'corpus821Time'
 // Parity program — system headers included by a header imported with `import { … } from "./x.h"`
 // resolve from the importer's builtin headers, under the #if branch of the build target.
 // Axes: <time.h> in the imported header; <windows.h> or <unistd.h>, by the build target's

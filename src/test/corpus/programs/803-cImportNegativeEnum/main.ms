@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser error: 'corpus803Ok' cannot run on the Raiser: no host bridge for 'corpus803Ok'
 // Parity program — a typedef'd C enum with negative members reaches MetaScript as an
 // `extern enum` whose initializers are negated literals, and keeps their values.
 // Axes: the enum as a return type (zero and negative member), as a parameter type, and a

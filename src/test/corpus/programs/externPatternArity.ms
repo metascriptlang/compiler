@@ -1,4 +1,3 @@
-// @skip-raiser: the Raiser calls no C function outside the host table std registers
 // @stdout: 42 hi 3 | 1 #x | 7 [1,2,3] | 3 65 4 #x@
 when (js) {
 	extern class Box { size: int32; }

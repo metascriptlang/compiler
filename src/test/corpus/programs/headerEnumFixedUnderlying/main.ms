@@ -7,7 +7,6 @@
 // `enum Tag : int;` followed by its definition.
 //
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
-// @xfail(raiser): raiser has no C layout, so `sizeof` of a header type is refused
 // @stdout: 0 7 | 1 200 3 9
 // @stdout: 4 true
 // @exit: 0

@@ -1,5 +1,5 @@
 // @stdout: 251 251 5
-// @xfail(raiser): raiser error: 'bytesSum' cannot run on the Raiser: no host bridge for 'bytesSum' — a C header import has no host bridge on the Raiser
+// @xfail(raiser): a generated native bridge does not carry `bytesSum`'s byte pointer (Borrow<uint8>) yet, card .inbox/compiler/2026-10-27-raiser-has-no-host-bridge-for-a-user-c-header-import
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // note: a header's `unsigned char *` and `uint8_t *` point at bytes, so they import as a
 // borrowed uint8, not as cstring; plain `char *` stays cstring. Both byte forms used to be

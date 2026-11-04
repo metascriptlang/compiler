@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser error: 'corpus802LongIsWide' cannot run on the Raiser: no host bridge for 'corpus802LongIsWide'
 // Parity program — a header imported with `import { … } from "./x.h"` that includes <limits.h>
 // resolves it from the importer's builtin headers, the way it resolves <stdint.h>.
 // Axes: <limits.h> in the imported header, again in a header it includes, and INT_MAX as the
