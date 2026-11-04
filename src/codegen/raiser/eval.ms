@@ -1060,10 +1060,10 @@ test "engine: a subclass with no constructor holds its parent's fields first, as
 	assert names.join(",") == "x,y", names.join(",");
 }
 
-test "engine: a for-of raises when the string it iterates changes length" {
-	const ctx = evalVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
+test "engine: a for-of over a string iterates the string it started with when the body rebinds the variable" {
+	const ctx = evalVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); } console.log(seen);");
 	assert ctx.error == "", ctx.error;
-	assert ctx.output == "raised after a\n", ctx.output;
+	assert ctx.output == "abc\n", ctx.output;
 }
 
 test "engine: struct assignment preserves the source value" {

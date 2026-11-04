@@ -14,7 +14,7 @@ test "compiler raises: array iteration defects carry a message and stop at the m
 	assert message.contains("length") && message.contains("array");
 }
 
-test "compiler raises: string iteration defects carry a message and stop at the mutation" {
+test "a for-of over a string iterates the string it started with when the body rebinds the variable" {
 	let text = "ab";
 	let visited: int32 = 0;
 	let message = "";
@@ -26,7 +26,7 @@ test "compiler raises: string iteration defects carry a message and stop at the 
 	} catch (error) {
 		message = error.message;
 	}
-	assert visited == 1;
-	assert message.contains("length") && message.contains("string");
+	assert visited == 2;
+	assert message == "", message;
 }
 
