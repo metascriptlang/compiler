@@ -244,9 +244,10 @@ export enum RaiserOpcode {
 	ZeroN,
 	LoadFrame,
 	StoreFrame,
+	RetN,
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreFrame;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.RetN;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -341,6 +342,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ZeroN => "i--",
 		RaiserOpcode.LoadFrame => "xi-",
 		RaiserOpcode.StoreFrame => "i-x",
+		RaiserOpcode.RetN => "i--",
 		RaiserOpcode.MoveR => "yy-",
 		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
@@ -451,6 +453,23 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 		RaiserRole.Any => OPERAND_TAGGED,
 		_ => OPERAND_BARE,
 	};
+}
+
+export interface RaiserSlotShape {
+	words: number;
+	block: boolean;
+}
+
+export interface RaiserCallShape {
+	params: RaiserSlotShape[];
+	result: RaiserSlotShape;
+}
+
+export const SHAPED_SCALAR_SITE: int64 = -2;
+export const SHAPED_BLOCK_SITE: int64 = -3;
+
+export function isShapedSite(signature: int64): boolean {
+	return signature == SHAPED_SCALAR_SITE || signature == SHAPED_BLOCK_SITE;
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
@@ -868,12 +887,12 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.LoadConstW, 0) == RaiserRole.Word && opRole(RaiserOpcode.LoadConstW, 1) == RaiserRole.None;
 	assert opRole(RaiserOpcode.UnownedRc, 0) == RaiserRole.Slot && opRole(RaiserOpcode.UnownedRc, 1) == RaiserRole.None;
 	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Any;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.None;
 }
 
 test "frame data opcodes append to the numeric ABI and pack scalar MemKind in slot" {
 	assert (RaiserOpcode.MoveN as int32) == (RaiserOpcode.UnownedRc as int32) + 1;
-	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.StoreFrame as int32);
+	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.StoreFrame as int32) + 1;
 	assert opRoleLetters(RaiserOpcode.MoveN) == "ii-";
 	assert opRoleLetters(RaiserOpcode.ZeroN) == "i--";
 	assert opRoleLetters(RaiserOpcode.LoadFrame) == "xi-";

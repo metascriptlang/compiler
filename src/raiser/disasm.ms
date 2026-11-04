@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset, isShapedSite, SHAPED_BLOCK_SITE, opHasSite } from "./bytecode";
 import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
 	RaiserFunction,
@@ -47,6 +47,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ForLtI64 => "ForLtI64",
 		RaiserOpcode.ForLtI64Imm => "ForLtI64Imm",
 		RaiserOpcode.Ret => "Ret",
+		RaiserOpcode.RetN => "RetN",
 		RaiserOpcode.Halt => "Halt",
 		RaiserOpcode.Print => "Print",
 		RaiserOpcode.NewArray => "NewArray",
@@ -223,7 +224,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 	const ra = regText(op, 0, inst.a);
 	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
 	if (op == RaiserOpcode.MoveN) return `${name} ${ra} ${regText(op, 1, inst.b)} words ${inst.c}`;
-	if (op == RaiserOpcode.ZeroN) return `${name} ${ra} words ${inst.b}`;
+	if (op == RaiserOpcode.ZeroN || op == RaiserOpcode.RetN) return `${name} ${ra} words ${inst.b}`;
 	if (op == RaiserOpcode.LoadFrame) return `${name} ${ra} ${regText(op, 1, inst.b)} +${inst.c} kind ${inst.slot}`;
 	if (op == RaiserOpcode.StoreFrame) return `${name} ${ra} +${inst.b} ${regText(op, 2, inst.c)} kind ${inst.slot}`;
 	if (op == RaiserOpcode.RcInc || op == RaiserOpcode.WasMoved) return `${name} ${ra}`;
@@ -250,6 +251,12 @@ export function disasmFunc(func: RaiserFunction): string {
 	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
 		let line = `  ${i}: ${disasmInst(inst)}`;
+		if (opHasSite(inst.op) && isShapedSite(func.blocks[inst.c + 2])) {
+			const first = func.blocks[inst.c];
+			const words = first - ((inst.a as int32) >> 3);
+			const kind = func.blocks[inst.c + 2] == SHAPED_BLOCK_SITE ? "block" : "scalar";
+			line = `${line} result ${kind} words ${words} params @${first} words ${func.blocks[inst.c + 1]}`;
+		}
 		if (inst.op == RaiserOpcode.LoadConst || inst.op == RaiserOpcode.LoadConstW) {
 			const cIdx = getBx(inst);
 			if (cIdx < getFuncConstLen(func)) {
@@ -263,6 +270,15 @@ export function disasmFunc(func: RaiserFunction): string {
 }
 
 // --- Tests ---
+test "span ABI disassembly names whole result and physical argument prefix" {
+	const call = raiserABC(RaiserOpcode.Call, 0, 0, 2);
+	call.slot = 3;
+	const func = makeTestModule([call], []).functions[0];
+	const text = disasmFunc(func);
+	assert text.includes("result block words 2 params @2 words 2"), text;
+	assert disasmInst(raiserABC(RaiserOpcode.RetN, 1, 3, 0)) == "RetN W1 words 3";
+}
+
 test "ABC instruction format" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
 	assert disasmInst(inst) == "AddI64 W2 W0 W1";

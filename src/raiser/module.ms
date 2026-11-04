@@ -1,6 +1,6 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction, inRefFile } from "./bytecode";
+import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction, inRefFile, RaiserSlotShape, RaiserCallShape, isShapedSite, SHAPED_BLOCK_SITE } from "./bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 import { layoutRegisters } from "./regs";
@@ -24,6 +24,8 @@ export interface RaiserFunction {
 	nameIds: int64[];     // the interned handle of constants[i] when it is a string, -1 otherwise, so a cached field access compares integers
 	names: string[];      // constants[i] read as text, "" for a non-string; a cache miss in LoadField and StoreField compares it
 	arity: number;
+	paramWords: int32;
+	callShape: RaiserCallShape | null;
 	localsCount: number;
 	frameSize: int32;     // slots the frame holds: one per register, the parameters first
 	ownRefs: int32[];     // the Ref and Dyn registers that are not parameters, which the frame releases and starts at zero
@@ -75,7 +77,10 @@ export interface RaiserModule {
 
 // --- Constructors ---
 
-export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null, inlineSites: RaiserInlineSite[] = []): RaiserFunction {
+export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null, inlineSites: RaiserInlineSite[] = [], callShape: RaiserCallShape | null = null): RaiserFunction {
+	validateCount(name, arity, 65535);
+	validateCount(name, regCount, 65535);
+	const paramWords = validateCallShape(name, callShape, arity, regCount);
 	const layout = layoutRegisters(name, code, constants, regCount as int32, classes);
 	const packed: int64[] = [];
 	const lines: int32[] = [];
@@ -98,10 +103,84 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
 	}
 	const ownRefs: int32[] = [];
-	for (let r = arity as int32; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	for (let r = paramWords; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, paramWords, callShape, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: callShape == null ? layout.sigs : [], copyPlans: [], classTypes: [] };
+	validateShapeClasses(func);
 	bindReturns(func);
 	return func;
+}
+
+function validateCount(name: string, value: number, limit: number): void {
+	if (value != value || value < 0 || value > limit ||
+		value != ((value as int32) as number)) {
+		throw new Error(`internal: invalid span ABI count ${value} in ${name}`);
+	}
+}
+
+function validateSlotShape(name: string, shape: RaiserSlotShape): void {
+	validateCount(name, shape.words, 65535);
+	if (shape.words < 1 || !shape.block && shape.words != 1) {
+		throw new Error(`internal: invalid span ABI slot shape in ${name}`);
+	}
+}
+
+function validateCallShape(name: string, shape: RaiserCallShape | null,
+	arity: number, regCount: number): int32 {
+	if (shape == null) {
+		if (arity > regCount) throw new Error(`internal: parameter prefix exceeds frame in ${name}`);
+		return arity as int32;
+	}
+	if (shape.params.length != arity) {
+		throw new Error(`internal: span ABI logical arity mismatch in ${name}`);
+	}
+	validateSlotShape(name, shape.result);
+	if (shape.result.words > regCount) throw new Error(`internal: span ABI result exceeds frame in ${name}`);
+	let words: int32 = 0;
+	for (const param of shape.params) {
+		validateSlotShape(name, param);
+		words += param.words as int32;
+		if (words > regCount) throw new Error(`internal: span ABI parameter prefix exceeds frame in ${name}`);
+	}
+	return words;
+}
+
+function validateShapeClasses(func: RaiserFunction): void {
+	const shape = func.callShape;
+	if (shape == null) {
+		for (const inst of func.code) {
+			if (inst.op == RaiserOpcode.RetN) throw new Error(`internal: RetN requires span ABI shape in ${func.name}`);
+		}
+		return;
+	}
+	let first: int32 = 0;
+	for (const param of shape.params) {
+		for (let i = 0; i < param.words; i += 1) {
+			if (param.block && func.regClasses[first + i] != RaiserRegClass.Word) {
+				throw new Error(`internal: span ABI block parameter needs Word storage in ${func.name}`);
+			}
+		}
+		first += param.words as int32;
+	}
+	for (const inst of func.code) {
+		if (inst.op == RaiserOpcode.Ret && shape.result.block ||
+			inst.op == RaiserOpcode.RetN && (!shape.result.block || inst.b != shape.result.words)) {
+			throw new Error(`internal: span ABI return shape mismatch in ${func.name}`);
+		}
+	}
+}
+
+export function callSiteMatches(caller: RaiserFunction, dest: int32,
+	site: int32, callee: RaiserFunction): boolean {
+	const signature = caller.blocks[site + 2];
+	if (!isShapedSite(signature)) return callee.callShape == null;
+	const shape = callee.callShape;
+	if (shape == null || (signature == SHAPED_BLOCK_SITE) != shape.result.block ||
+		caller.blocks[site] - (dest >> 3) != (shape.result.words as int64) ||
+		caller.blocks[site + 1] != (callee.paramWords as int64)) return false;
+	for (let i = 0; i < callee.paramWords; i += 1) {
+		if (((caller.blocks[site + 3 + i] as int32) & 7) != (callee.regOps[i] & 7)) return false;
+	}
+	return true;
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
@@ -115,10 +194,17 @@ export function createRaiserModule(name: string, functions: RaiserFunction[], en
 function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): void {
 	for (let pc = 0; pc < func.code.length; pc += 1) {
 		const inst = func.code[pc];
-		if (inst.op != RaiserOpcode.Call || inst.b < 0 || inst.b >= functions.length) continue;
+		if (inst.op != RaiserOpcode.Call && inst.op != RaiserOpcode.CallDirect) continue;
+		if (inst.op == RaiserOpcode.CallDirect) {
+			inst.op = RaiserOpcode.Call;
+			func.packed[pc] = packInstruction(inst);
+		}
+		if (inst.b < 0 || inst.b >= functions.length) continue;
 		const callee = functions[inst.b];
 		const site = inst.c as int32;
 		const argc = func.blocks[site + 1];
+		if (!callSiteMatches(func, inst.a as int32, site, callee)) continue;
+		if (isShapedSite(func.blocks[site + 2])) continue;
 		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 2]) continue;
 		inst.op = RaiserOpcode.CallDirect;
 		func.packed[pc] = packInstruction(inst);
@@ -136,7 +222,7 @@ function bindReturns(func: RaiserFunction): void {
 	for (let pc = 0; pc < func.code.length; pc += 1) {
 		const inst = func.code[pc];
 		if (inst.op != RaiserOpcode.Ret) continue;
-		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.arity as int32, owned * 2 + opensHandler));
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramWords, owned * 2 + opensHandler));
 	}
 }
 
@@ -184,6 +270,54 @@ export function getModuleEntry(mod: RaiserModule): RaiserFunction {
 }
 
 // --- Tests ---
+test "span ABI shape keeps logical arity and physical prefix separate" {
+	const shape: RaiserCallShape = {
+		params: [{ words: 1, block: false }, { words: 3, block: true }],
+		result: { words: 2, block: true },
+	};
+	const func = createRaiserFunction("span", [
+		raiserABC(RaiserOpcode.RetN, 1, 2, 0),
+	], [], 2, 0, 5, [RaiserRegClass.Word, RaiserRegClass.Word,
+		RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Ref],
+		[], shape);
+	assert func.arity == 2 && func.paramWords == 4;
+	assert func.ownRefs.length == 1 && func.ownRefs[0] == 4;
+}
+
+function spanShapeRefusal(shape: RaiserCallShape, arity: number,
+	classes: RaiserRegClass[]): string {
+	try {
+		createRaiserFunction("badSpan", [], [], arity, 0,
+			classes.length, classes, [], shape);
+	} catch (e) { return e.message; }
+	return "";
+}
+
+test "span ABI validates shape counts before narrowing in every mode" {
+	for (const words of [0, -1, 1.5, NaN, Infinity, -Infinity, 65536]) {
+		const error = spanShapeRefusal({
+			params: [{ words, block: true }],
+			result: { words: 1, block: true },
+		}, 1, [RaiserRegClass.Word]);
+		assert error.includes("span ABI"), `${words}: ${error}`;
+	}
+}
+
+test "span ABI rejects arity scalar extent block class and frame overflow" {
+	const block: RaiserSlotShape = { words: 2, block: true };
+	const scalar: RaiserSlotShape = { words: 1, block: false };
+	assert spanShapeRefusal({ params: [block], result: scalar }, 2,
+		[RaiserRegClass.Word, RaiserRegClass.Word]).includes("arity");
+	assert spanShapeRefusal({ params: [{ words: 2, block: false }], result: scalar },
+		1, [RaiserRegClass.Word, RaiserRegClass.Word]).includes("slot shape");
+	assert spanShapeRefusal({ params: [block], result: scalar }, 1,
+		[RaiserRegClass.Word]).includes("prefix");
+	assert spanShapeRefusal({ params: [scalar], result: block }, 1,
+		[RaiserRegClass.Word]).includes("result exceeds");
+	assert spanShapeRefusal({ params: [block], result: scalar }, 1,
+		[RaiserRegClass.Word, RaiserRegClass.Ref]).includes("Word storage");
+}
+
 test "create function" {
 	const code: RaiserInstruction[] = [
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),

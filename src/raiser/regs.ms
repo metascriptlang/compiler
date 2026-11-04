@@ -3,7 +3,7 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, TYPED_SLOTS, RaiserRegClass, RaiserRole, RaiserConvClass, regClassLetter, inRefFile, operandTagged,
-	opRole, opHasSite, siteArgCount, convTarget, convSource, raiserABC, raiserABx
+	opRole, opHasSite, siteArgCount, convTarget, convSource, raiserABC, raiserABx, SHAPED_SCALAR_SITE, SHAPED_BLOCK_SITE
 } from "./bytecode";
 import { RaiserValue, RaiserValueKind, raiserBool } from "./value";
 import { MemKind } from "./layout";
@@ -47,7 +47,7 @@ function roleMask(role: RaiserRole): int32 {
 }
 
 function isFrameData(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.MoveN || op == RaiserOpcode.ZeroN ||
+	return op == RaiserOpcode.RetN || op == RaiserOpcode.MoveN || op == RaiserOpcode.ZeroN ||
 		op == RaiserOpcode.LoadFrame || op == RaiserOpcode.StoreFrame;
 }
 
@@ -69,7 +69,7 @@ function frameScalarMask(kind: number): int32 {
 
 function frameWordCount(inst: RaiserInstruction): int32 {
 	if (inst.op == RaiserOpcode.MoveN) return inst.c as int32;
-	if (inst.op == RaiserOpcode.ZeroN) return inst.b as int32;
+	if (inst.op == RaiserOpcode.ZeroN || inst.op == RaiserOpcode.RetN) return inst.b as int32;
 	const offset = inst.op == RaiserOpcode.LoadFrame ? inst.c : inst.b;
 	return ((offset as int32) + frameScalarWidth(inst.slot) + 7) / 8;
 }
@@ -128,6 +128,36 @@ function verifyWordRange(name: string, pc: int32, classes: RaiserRegClass[], bas
 	}
 }
 
+function isBytecodeCall(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect ||
+		op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure ||
+		op == RaiserOpcode.CallClosureTyped;
+}
+
+function callResultWords(name: string, pc: int32,
+	inst: RaiserInstruction, regCount: int32): int32 {
+	if (inst.op == RaiserOpcode.CallHost && inst.slot != 0) {
+		throw new Error(`internal: span ABI unsupported host boundary in ${name}`);
+	}
+	if (!isBytecodeCall(inst.op)) return 1;
+	for (const value of [inst.a, inst.b, inst.c, inst.slot]) {
+		if (value != value || value < 0 || value > MAX_FIELD ||
+			value != ((value as int32) as number)) {
+			throw new Error(`internal: invalid span ABI call operand in ${name} at ${pc}`);
+		}
+	}
+	if (inst.slot != 0 && (inst.op == RaiserOpcode.CallClosure ||
+		inst.op == RaiserOpcode.CallClosureTyped)) {
+		throw new Error(`internal: span ABI unsupported closure boundary in ${name}`);
+	}
+	const words = inst.slot > 1 ? (inst.slot as int32) - 1 : 1;
+	validateWordRange(name, pc, inst.a as int32, words, regCount);
+	if (inst.a + words + inst.c > regCount) {
+		throw new Error(`internal: span ABI call arguments exceed frame in ${name}`);
+	}
+	return words;
+}
+
 function constantMask(c: RaiserValue): int32 {
 	return match (c.kind) {
 		RaiserValueKind.Int => CLASS_WORD,
@@ -171,6 +201,7 @@ function narrowMask(mask: int32[], reg: int32, allowed: int32): boolean {
 export function inferClasses(name: string, code: RaiserInstruction[], constants: RaiserValue[], regCount: int32): RaiserRegClass[] {
 	for (let pc = 0; pc < code.length; pc += 1) {
 		if (isFrameData(code[pc].op)) validateFrameData(name, pc, code[pc], regCount);
+		callResultWords(name, pc, code[pc], regCount);
 	}
 	const mask: int32[] = [];
 	for (let r = 0; r < regCount; r += 1) mask.push(CLASS_ALL);
@@ -179,6 +210,8 @@ export function inferClasses(name: string, code: RaiserInstruction[], constants:
 		changed = false;
 		for (const inst of code) {
 			const op = inst.op;
+			if (isBytecodeCall(op) && inst.slot > 1 &&
+				narrowWordRange(mask, inst.a as int32, (inst.slot as int32) - 1)) changed = true;
 			if (isFrameData(op)) {
 				const count = frameWordCount(inst);
 				if (narrowWordRange(mask, frameBase(inst), count)) changed = true;
@@ -260,6 +293,7 @@ function typedSlot(op: RaiserOpcode, value: RaiserRegClass): RaiserOpcode {
 // Checks every operand of every instruction against its role and renumbers the registers; a function that
 // breaks a role stops here, with the instruction and the register named.
 export function layoutRegisters(name: string, code: RaiserInstruction[], constants: RaiserValue[], regCount: int32, declared: RaiserRegClass[] | null): RaiserRegLayout {
+	for (let pc = 0; pc < code.length; pc += 1) callResultWords(name, pc, code[pc], regCount);
 	const classes = declared != null ? declared : inferClasses(name, code, constants, regCount);
 	if (classes.length != regCount) throw new Error(`internal: function ${name} has ${regCount} registers but ${classes.length} register classes`);
 	const regOps: int32[] = [];
@@ -268,7 +302,7 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 	const blocks: int64[] = [];
 	for (let pc = 0; pc < code.length; pc += 1) {
 		const inst = code[pc];
-		let op = inst.op;
+		let op = inst.op == RaiserOpcode.CallDirect ? RaiserOpcode.Call : inst.op;
 		if (isFrameData(op)) {
 			validateFrameData(name, pc, inst, regCount);
 			const count = frameWordCount(inst);
@@ -317,14 +351,20 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 		if (op == RaiserOpcode.Conv && (convDestMask(inst.c) & classBit(classes[inst.a as int32])) == 0) throw new Error(`internal: Conv at instruction ${pc} of ${name} writes R${inst.a}, a ${regClassLetter(classes[inst.a as int32])} register, where its target class needs ${maskText(convDestMask(inst.c))}`);
 		let c = fields[2];
 		if (opHasSite(op)) {
+			const shaped = isBytecodeCall(op) && inst.slot != 0;
+			const resultWords = callResultWords(name, pc, inst, regCount);
+			if (shaped && inst.slot > 1) {
+				validateWordRange(name, pc, inst.a as int32, resultWords, regCount);
+				verifyWordRange(name, pc, classes, inst.a as int32, resultWords);
+			}
 			const argc = siteArgCount(inst) as int32;
-			const first = (inst.a as int32) + 1;
+			const first = (inst.a as int32) + resultWords;
 			if (first + argc > regCount) throw new Error(`internal: instruction ${pc} (opcode ${inst.op}) of ${name} has ${argc} arguments after R${inst.a} but only ${regCount} registers`);
 			c = blocks.length;
 			if (c > 65535) throw new Error(`internal: function ${name} has more call sites than a site index holds`);
 			blocks.push(first as int64);
 			blocks.push(argc as int64);
-			blocks.push(signatureOf(classes, first, argc));
+			blocks.push(shaped ? (inst.slot > 1 ? SHAPED_BLOCK_SITE : SHAPED_SCALAR_SITE) : signatureOf(classes, first, argc));
 			for (let i = 0; i < argc; i += 1) blocks.push(regOps[first + i] as int64);
 		}
 		const result = raiserABC(op, fields[0], fields[1], c);
@@ -337,6 +377,28 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 	const sigLimit = regCount < MAX_SIG_ARGS ? regCount : MAX_SIG_ARGS;
 	for (let n = 0; n <= sigLimit; n += 1) sigs.push(signatureOf(classes, 0, n));
 	return { code: out, regClasses: classes, regOps, blocks, sigs };
+}
+
+test "span ABI site validation refuses invalid extents classes and boundaries" {
+	const word = RaiserRegClass.Word;
+	for (const slot of [-1, 0.5, NaN, Infinity, 65536]) {
+		const call = raiserABC(RaiserOpcode.Call, 0, 0, 0);
+		call.slot = slot;
+		assert refusal([call], [word]).includes("span ABI");
+	}
+	const call = raiserABC(RaiserOpcode.Call, 0, 0, 0);
+	call.slot = 3;
+	assert refusal([call], [word]).includes("past the frame");
+	assert refusal([call], [word, RaiserRegClass.Ref]).includes("Word storage");
+	for (const op of [RaiserOpcode.CallHost, RaiserOpcode.CallClosure,
+		RaiserOpcode.CallClosureTyped]) {
+		const boundary = raiserABC(op, 0, 0, 0);
+		boundary.slot = 2;
+		assert refusal([boundary], [RaiserRegClass.Ref, word]).includes("boundary");
+	}
+	assert refusal([raiserABC(RaiserOpcode.RetN, 0, 2, 0)], [word]).includes("past the frame");
+	assert refusal([raiserABC(RaiserOpcode.RetN, 0, 2, 0)],
+		[word, RaiserRegClass.Ref]).includes("Word storage");
 }
 
 function refusal(code: RaiserInstruction[], classes: RaiserRegClass[], inferred: boolean = false): string {

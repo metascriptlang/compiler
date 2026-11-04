@@ -6,7 +6,7 @@ import { MemKind } from "./layout";
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayUnowned, slotArrayWidth, arrayClassSlot, ElemWidth
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayUnowned, slotArrayWidth, arrayClassSlot, ElemWidth, isShapedSite, RaiserCallShape, SHAPED_SCALAR_SITE
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants, rcDecUnlessLast,
@@ -20,7 +20,7 @@ import {
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
+	makeTestModule, assertPacked, callSiteMatches, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { objectCellSlot, objectCellSetSlot } from "./objectCell";
 import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
@@ -520,7 +520,7 @@ function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction, frame: Curs
 	const caller = getModuleFunc(vm.mod, frame.funcIdx);
 	const window = (base - frame.base) as int32;
 	if (frame.conformed) {
-		for (let i = 0; i < func.arity; i += 1) {
+		for (let i = 0; i < func.paramWords; i += 1) {
 			const cls = func.regOps[i] & 7;
 			const h = slots[base + i];
 			if ((cls == CLS_REF || cls == CLS_DYN) && h != 0 && (window + i >= caller.frameSize || !inRefFile(caller.regClasses[window + i]))) {
@@ -531,10 +531,10 @@ function leaveFrame(vm: RaiserVM, base: int64, func: RaiserFunction, frame: Curs
 	}
 	const held = caller.ownRefs;
 	if (held.length == 0) return;
-	for (let i = 0; i < func.arity; i += 1) {
+	for (let i = 0; i < func.paramWords; i += 1) {
 		if (window + i < caller.frameSize && inRefFile(caller.regClasses[window + i]) && !inRefFile(func.regClasses[i])) slots[base + i] = 0;
 	}
-	const from = window + func.arity;
+	const from = window + func.paramWords;
 	const to = (base - frame.base) as int32 + func.frameSize;
 	for (let i = held.length - 1; i >= 0 && held[i] >= from; i -= 1) {
 		if (held[i] < to) slots[frame.base + held[i]] = 0;
@@ -749,6 +749,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	}
 	if (refusedInPlaceRerun(vm)) return raiserNil();
 	const callee = getModuleFunc(vm.mod, funcIdx);
+	if (refuseShapeBoundary(vm, callee, "vmCallFunction RaiserValue entry/return")) return raiserNil();
 	settleFloor(vm);
 	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
 	vm.funcIdx = funcIdx as int32;
@@ -1078,6 +1079,7 @@ function thenStart(vm: RaiserVM, t: RaiserThen, closure: RaiserValue, input: Rai
 	}
 	const funcIdx = fnField.intVal as number;
 	const callee = getModuleFunc(vm.mod, funcIdx);
+	if (refuseShapeBoundary(vm, callee, "future callback")) return;
 	const regs = strandRegFile(vm, callee);
 	const hasEnv = envField.kind == RaiserValueKind.Object;
 	const params = callee.arity - (hasEnv ? 1 : 0);
@@ -2011,6 +2013,7 @@ function closureStrand(vm: RaiserVM, closure: RaiserValue, starter: string, resu
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
+	if (refuseShapeBoundary(vm, callee, `${starter} strand`)) return -1;
 	const regs = strandRegFile(vm, callee);
 	const envField = heapObjectGetField(vm.arrayHeap, vm.objectHeap, closure.intVal, "env");
 	let spawnEnv: int64 = 0;
@@ -2625,6 +2628,8 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 		env = obj.slots[1];
 	}
 	when (mode != "danger") { if (target < 0 || target >= vm.mod.functions.length) return -1; }
+	if (target < 0 || target >= vm.mod.functions.length) return -1;
+	if (vm.mod.functions[target].callShape != null) return -1;
 	let argc = func.blocks[site + 1];
 	let sig = func.blocks[site + 2];
 	if (env == 0) {
@@ -2647,6 +2652,7 @@ function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	assertPacked(func);
+	if (vm.callStack.depth == 0 && refuseShapeBoundary(vm, func, "entry/strand RaiserValue return")) return;
 	dispatch(vm, func.packed, vm.regs.slots, vm.objectHeap.objects);
 }
 
@@ -3789,7 +3795,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleLength(text);
 				break;
 			}
-			case RaiserOpcode.MoveN: case RaiserOpcode.ZeroN: case RaiserOpcode.LoadFrame: case RaiserOpcode.StoreFrame: {
+			case RaiserOpcode.RetN: case RaiserOpcode.MoveN: case RaiserOpcode.ZeroN: case RaiserOpcode.LoadFrame: case RaiserOpcode.StoreFrame: {
 				slow = true;
 				break;
 			}
@@ -3896,6 +3902,9 @@ function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
 // A generic opcode, its register operands retagged. Heap opcodes answer true when handled here.
 function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, pc: int32): boolean {
 	match (op) {
+		RaiserOpcode.RetN => {
+			vmHandleRetN(vm, (absOf(vm, ia) - vm.base) as int32, ib);
+		},
 		RaiserOpcode.MoveN => {
 			const base = vm.regs.slots as int64;
 			copyBytes(base + (absOf(vm, ia) as int64) * 8,
@@ -4289,6 +4298,38 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 
 // --- Call/Ret handlers ---
 
+function refuseShapeBoundary(vm: RaiserVM, func: RaiserFunction, boundary: string): boolean {
+	if (func.callShape == null) return false;
+	vmError(vm, `span ABI unsupported ${boundary} boundary for ${func.name}`);
+	return true;
+}
+
+function vmHandleRetN(vm: RaiserVM, source: int32, words: int32): void {
+	const depth = vm.callStack.depth;
+	if (depth == 0) {
+		vmError(vm, "span ABI unsupported entry/strand return boundary");
+		return;
+	}
+	if (vm.safePoints.length != vm.callStack.items[depth - 1].spBase &&
+		vmRetSpecial(vm, source)) return;
+	const frame = vm.callStack.items[depth - 1];
+	if (frame.returnDest == DISPOSE_DEST) {
+		vmError(vm, "span ABI unsupported destroy return boundary");
+		return;
+	}
+	const callee = getModuleFunc(vm.mod, vm.funcIdx);
+	const base = vm.base;
+	const slots = vm.regs.slots as int64;
+	copyBytes(slots + ((frame.base + (frame.returnDest >> 3)) as int64) * 8,
+		slots + ((base + source) as int64) * 8, (words as int64) * 8);
+	vm.callStack.depth = depth - 1;
+	vm.funcIdx = frame.funcIdx;
+	vm.base = frame.base;
+	vm.ip = frame.returnIp;
+	leaveFrame(vm, base, callee, frame);
+	leaveBelow(vm, depth - 1, base as int64, callee, frame);
+}
+
 // The frame of the callee begins at the first slot the call site names, so an argument whose class matches its
 // parameter is already in place; one that differs is read out as a value first and then written into the callee's own
 // class, because the two layouts overlap.
@@ -4296,10 +4337,17 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	const callee = vm.mod.functions[calleeFuncIdx];
 	const blocks = caller.blocks;
+	const shaped = isShapedSite(blocks[site + 2]);
+	if (shaped || callee.callShape != null) {
+		if (withoutLast || !callSiteMatches(caller, dest, site, callee)) {
+			vmError(vm, `span ABI call boundary shape mismatch calling ${callee.name}`);
+			return;
+		}
+	}
 	const argc = (blocks[site + 1] as int32) - (withoutLast ? 1 : 0);
 	const sig = withoutLast ? sigPrefix(blocks[site + 2], argc) : blocks[site + 2];
 	let args: RaiserValue[] | null = null;
-	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) {
+	if (!shaped && (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig)) {
 		args = [];
 		for (let i = 0; i < argc; i += 1) args.push(getReg(vm, blocks[site + 3 + i] as int32));
 	}
@@ -4643,6 +4691,7 @@ function vmDrain(vm: RaiserVM): void {
 
 function vmEnterDestroy(vm: RaiserVM, handle: int64, fn: int32): void {
 	const callee = vm.mod.functions[fn];
+	if (refuseShapeBoundary(vm, callee, "destroy callback")) return;
 	if (callee.arity < 1 || callee.regClasses.length == 0 || !inRefFile(callee.regClasses[0])) {
 		throw new Error(`internal: destroy routine ${callee.name} does not take the cell as its first ref parameter`);
 	}
@@ -4876,6 +4925,7 @@ function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (fn.kind != RaiserValueKind.Int || fn.intVal < 0 || fn.intVal >= vm.mod.functions.length) {
 		vmError(vm, `function index out of bounds: ${fn.intVal}`); return;
 	}
+	if (refuseShapeBoundary(vm, vm.mod.functions[fn.intVal], "closure")) return;
 	const env = heapObjectGetField(vm.arrayHeap, vm.objectHeap, handle, "env");
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 2 + caller.blocks[ic + 1]] as int32, env);
@@ -9948,6 +9998,211 @@ test "frame data treats real heap handle bits as inert numeric payloads" {
 		assert vm.regs.slots[4] != 0 && vm.regs.slots[2] == vm.regs.slots[4];
 		assert vm.regs.slots[3] == vm.regs.slots[4] && vm.exitValue.intVal == vm.regs.slots[4];
 		assert vm.regs.slots[7] == 1 && vm.regs.slots[6] == 0;
+	}
+}
+
+function spanCallVM(words: int32, indirect: boolean = false,
+	nested: boolean = false, guarded: boolean = false): RaiserVM {
+	const word = RaiserRegClass.Word;
+	const shape: RaiserCallShape = {
+		params: [{ words, block: true }], result: { words, block: true },
+	};
+	const classes: RaiserRegClass[] = [];
+	for (let i = 0; i < words * 2; i += 1) classes.push(word);
+	classes.push(RaiserRegClass.Dyn);
+	const body: RaiserInstruction[] = [];
+	if (nested) {
+		const call = raiserABC(RaiserOpcode.Call, 0, 2, words);
+		call.slot = words + 1;
+		body.push(raiserABC(RaiserOpcode.MoveN, words, 0, words));
+		body.push(call);
+	} else {
+		body.push(raiserABC(RaiserOpcode.MoveN, words, 0, words));
+	}
+	const source = nested ? 0 : words;
+	body.push(raiserABC(RaiserOpcode.Box, words * 2, source, 0));
+	if (guarded) {
+		body.push(raiserABx(RaiserOpcode.Try, 0, 2));
+		body.push(raiserABC(RaiserOpcode.RetN, source, words, 0));
+		body.push(raiserABC(RaiserOpcode.Finally, words * 2 + 1, 1, 0));
+		body.push(raiserABC(RaiserOpcode.FinallyEnd, words * 2 + 1, 1, 0));
+		classes.push(word);
+		classes.push(RaiserRegClass.Dyn);
+	}
+	body.push(raiserABC(RaiserOpcode.RetN, source, words, 0));
+	const callee = createRaiserFunction("spanCallee", body, [], 1, 0,
+		classes.length, classes, [], shape);
+	const leaf = createRaiserFunction("spanLeaf", [
+		raiserABC(RaiserOpcode.RetN, 0, words, 0),
+	], [], 1, 0, words, classes.slice(0, words), [], shape);
+	const call = raiserABC(indirect ? RaiserOpcode.CallIndirect : RaiserOpcode.Call,
+		1, indirect ? 0 : 1, words);
+	call.slot = words + 1;
+	call.site = 1;
+	const mainClasses: RaiserRegClass[] = [];
+	for (let i = 0; i < words * 3 + 5; i += 1) mainClasses.push(word);
+	const entry = createRaiserFunction("spanEntry", [call,
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [], 0, 0, mainClasses.length, mainClasses,
+		[{ name: "spanInlined", parent: 0, callLine: 17 }]);
+	const vm = createVM(createRaiserModule("span", [entry, callee, leaf], 0));
+	vm.regs.slots[0] = 1;
+	for (let i = 0; i < words; i += 1) vm.regs.slots[1 + words + i] = (i as int64) * 8 + 7;
+	vm.regs.slots[words * 3 + 4] = 999;
+	return vm;
+}
+
+function reboundBlockVM(words: int32): RaiserVM {
+	const word = RaiserRegClass.Word;
+	const scalar = createRaiserFunction("originalScalar", [
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], [], 1, 0, 1, [word]);
+	const caller = createRaiserFunction("reusedCaller", [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.Call, 0, 1, 1),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserInt(7)], 0, 0, 3, [word, word, word]);
+	createRaiserModule("original", [caller, scalar], 0);
+	if (caller.code[1].op != RaiserOpcode.CallDirect) {
+		throw new Error("rebound call fixture did not bind its original scalar target");
+	}
+	const classes: RaiserRegClass[] = [];
+	for (let i = 0; i < words; i += 1) classes.push(word);
+	const shape: RaiserCallShape = {
+		params: [{ words: 1, block: true }], result: { words, block: true },
+	};
+	const block = createRaiserFunction("replacementBlock", [
+		raiserABC(RaiserOpcode.RetN, 0, words, 0),
+	], [], 1, 0, words, classes, [], shape);
+	return createVM(createRaiserModule("rebound", [caller, block], 0));
+}
+
+test "span ABI reusing a bound caller rejects a one Word block target" {
+	const vm = reboundBlockVM(1);
+	execLoop(vm);
+	assert vm.error.includes("shape mismatch"), vm.error;
+}
+
+test "span ABI reusing a bound caller rejects a two Word block target" {
+	const vm = reboundBlockVM(2);
+	execLoop(vm);
+	assert vm.error.includes("shape mismatch"), vm.error;
+}
+
+test "span ABI one Word blocks retain block identity on direct transport" {
+	const vm = spanCallVM(1);
+	const entry = vm.mod.functions[0];
+	assert entry.inlined[0] == 1 && entry.code[0].site == 1;
+	execLoop(vm);
+	assert vm.error == "" && vm.regs.slots[1] == 7, vm.error;
+	assert vm.regs.slots[0] == 1 && vm.regs.slots[7] == 999;
+	assert heapBoxLive(vm.arrayHeap) == 0;
+}
+
+test "span ABI three Word blocks survive nested calls and local returns" {
+	const vm = spanCallVM(3, false, true);
+	execLoop(vm);
+	assert vm.error == "", vm.error;
+	assert vm.regs.slots[1] == 7 && vm.regs.slots[2] == 15 && vm.regs.slots[3] == 23;
+	assert vm.regs.slots[0] == 1 && vm.regs.slots[13] == 999;
+	assert heapBoxLive(vm.arrayHeap) == 0;
+}
+
+test "span ABI indirect calls preserve complete two Word results" {
+	const vm = spanCallVM(2, true);
+	execLoop(vm);
+	assert vm.error == "" && vm.regs.slots[1] == 7 && vm.regs.slots[2] == 15, vm.error;
+	assert heapBoxLive(vm.arrayHeap) == 0;
+}
+
+test "span ABI result extents greater than a packed byte are not truncated" {
+	const vm = spanCallVM(257);
+	execLoop(vm);
+	assert vm.error == "", vm.error;
+	for (let i = 0; i < 257; i += 1) assert vm.regs.slots[1 + i] == (i as int64) * 8 + 7;
+}
+
+test "span ABI finally replay retains every result Word" {
+	const vm = spanCallVM(3, false, false, true);
+	execLoop(vm);
+	assert vm.error == "", vm.error;
+	assert vm.regs.slots[1] == 7 && vm.regs.slots[2] == 15 && vm.regs.slots[3] == 23;
+	assert heapBoxLive(vm.arrayHeap) == 0;
+}
+
+test "span ABI legacy entry rejects even a one Word block" {
+	const vm = spanCallVM(1);
+	vmCallFunction(vm, 1, [raiserInt(7)]);
+	assert vm.error.includes("vmCallFunction RaiserValue entry/return"), vm.error;
+}
+
+test "span ABI legacy call cannot fast enter a one Word block signature" {
+	const vm = spanCallVM(1);
+	const entry = vm.mod.functions[0];
+	entry.blocks[entry.code[0].c + 2] = 0;
+	execLoop(vm);
+	assert vm.error.includes("shape mismatch"), vm.error;
+}
+
+test "span ABI mixed logical args preserve the borrowed Ref beyond logical arity" {
+	const word = RaiserRegClass.Word;
+	const refClass = RaiserRegClass.Ref;
+	const shape: RaiserCallShape = {
+		params: [{ words: 3, block: true }, { words: 1, block: false }],
+		result: { words: 1, block: false },
+	};
+	const callee = createRaiserFunction("mixed", [
+		raiserABC(RaiserOpcode.StrLen, 4, 3, 0),
+		raiserABC(RaiserOpcode.AddI64, 4, 4, 2),
+		raiserABC(RaiserOpcode.Ret, 4, 0, 0),
+	], [], 2, 0, 5, [word, word, word, refClass, word], [], shape);
+	const call = raiserABC(RaiserOpcode.Call, 0, 1, 4);
+	call.slot = 1;
+	const entry = createRaiserFunction("entry", [
+		raiserABx(RaiserOpcode.LoadConst, 4, 0), call,
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserConstString("abc")], 0, 0, 5,
+		[word, word, word, word, refClass]);
+	const vm = createVM(createRaiserModule("mixed", [entry, callee], 0));
+	vm.regs.slots[3] = 40;
+	execLoop(vm);
+	assert vm.error == "" && vm.exitValue.intVal == 43, vm.error;
+	assert callee.arity == 2 && callee.paramWords == 4 && callee.ownRefs.length == 0;
+}
+
+test "span ABI one Word block result is not a shaped scalar result" {
+	const vm = spanCallVM(1);
+	const entry = vm.mod.functions[0];
+	entry.blocks[entry.code[0].c + 2] = SHAPED_SCALAR_SITE;
+	execLoop(vm);
+	assert vm.error.includes("shape mismatch"), vm.error;
+}
+
+test "span ABI mismatched physical argument count is refused before entering" {
+	const vm = spanCallVM(3);
+	const entry = vm.mod.functions[0];
+	entry.blocks[entry.code[0].c + 1] = 2;
+	execLoop(vm);
+	assert vm.error.includes("shape mismatch"), vm.error;
+}
+
+test "span ABI closure and typed closure boundaries reject block signatures" {
+	for (const op of [RaiserOpcode.CallClosure, RaiserOpcode.CallClosureTyped]) {
+		const target = spanCallVM(1).mod.functions[1];
+		const entry = createRaiserFunction("closureEntry", [
+			raiserABC(op, 1, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		], [], 0, 0, 3, [RaiserRegClass.Ref, RaiserRegClass.Word, RaiserRegClass.Ref]);
+		const vm = createVM(createRaiserModule("closure", [entry, target], 0));
+		const pair = heapAllocObject(vm.objectHeap);
+		layOutObject(vm.objectHeap.objects[handleIndex(pair)],
+			createClassType(CLOSURE_LAYOUT, -1, [], ["fn", "env"],
+				[RaiserRegClass.Word, RaiserRegClass.Ref]));
+		heapObjectSetField(vm.arrayHeap, vm.objectHeap, pair, "fn", raiserInt(1));
+		heapObjectSetField(vm.arrayHeap, vm.objectHeap, pair, "env", raiserNil());
+		vm.regs.slots[0] = pair;
+		execLoop(vm);
+		assert vm.error.includes("unsupported closure boundary"), vm.error;
 	}
 }
 
