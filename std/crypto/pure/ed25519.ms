@@ -1,14 +1,18 @@
 /**
  * Ed25519 (RFC 8032), ported from Zig's std.crypto (ed25519.zig, edwards25519.zig, scalar.zig; MIT, see
- * LICENSE.zig.MIT) over the fiat-crypto limb field of ./fe25519 and the scalars of ./scalar25519. Verification is the cofactorless strict form, the
- * equation the C backend's Monocypher checks, with Zig's refusals of a non-canonical S, A or R and of identity
- * points, plus the C backend's small-order denylist.
+ * LICENSE.zig.MIT) over the field of ./ed25519Field and the scalars of ./scalar25519. Verification
+ * is the cofactorless strict form, the equation the C backend's Monocypher checks, with Zig's refusals of a
+ * non-canonical S, A or R and of identity points, plus the C backend's small-order denylist.
  *
- * Not constant time: secret scalars index the window table.
+ * Signing multiplies the base point with ref10's per-row table (./ed25519BaseTable) and picks entries with masks
+ * in the manner of Zig's pcSelect, never by a secret index; the JS backend still promises no constant time,
+ * because its field is BigInt.
  */
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
-import { hashOf } from "./hash";
+import { hashOf, newHash, updateHash, finishHash } from "./hash";
+import { wipeBytes } from "./secret";
+import { baseTableHex } from "./ed25519BaseTable";
 import {
 	Fe,
 	feZero,
@@ -17,6 +21,8 @@ import {
 	feToBytes,
 	feAdd,
 	feSub,
+	feAddLoose,
+	feSubLoose,
 	feNeg,
 	feMul,
 	feSqr,
@@ -25,7 +31,8 @@ import {
 	feIsZero,
 	feEqual,
 	feIsNegative,
-} from "./fe25519";
+	feCMov,
+} from "./ed25519Field";
 import { scalarReduce32, scalarReduce64, scalarMulAdd, scalarIsCanonical } from "./scalar25519";
 
 function feHex(hex: string): Fe {
@@ -44,7 +51,7 @@ export const ed25519PublicKeyLength = 32;
 export const ed25519SignatureLength = 64;
 
 /** Extended twisted Edwards coordinates: x = X/Z, y = Y/Z, xy = T/Z. */
-class Point {
+struct Point {
 	x: Fe;
 	y: Fe;
 	z: Fe;
@@ -103,26 +110,26 @@ function neg(p: Readonly<Point>): Point {
 }
 
 function dbl(p: Readonly<Point>): Point {
-	const t0 = feSqr(feAdd(p.x, p.y));
+	const t0 = feSqr(feAddLoose(p.x, p.y));
 	let x = feSqr(p.x);
 	let z = feSqr(p.y);
 	const y = feAdd(z, x);
 	z = feSub(z, x);
-	x = feSub(t0, y);
-	const t = feSub(feAdd(feSqr(p.z), feSqr(p.z)), z);
+	x = feSubLoose(t0, y);
+	const t = feSubLoose(feAdd(feSqr(p.z), feSqr(p.z)), z);
 	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
 }
 
 function addPoints(p: Readonly<Point>, q: Readonly<Point>): Point {
-	const a = feMul(feSub(p.y, p.x), feSub(q.y, q.x));
-	const b = feMul(feAdd(p.x, p.y), feAdd(q.x, q.y));
+	const a = feMul(feSubLoose(p.y, p.x), feSubLoose(q.y, q.x));
+	const b = feMul(feAddLoose(p.x, p.y), feAddLoose(q.x, q.y));
 	const c = feMul(feMul(p.t, q.t), edwardsD2);
 	let d = feMul(p.z, q.z);
 	d = feAdd(d, d);
-	const x = feSub(b, a);
-	const y = feAdd(b, a);
-	const z = feAdd(d, c);
-	const t = feSub(d, c);
+	const x = feSubLoose(b, a);
+	const y = feAddLoose(b, a);
+	const z = feAddLoose(d, c);
+	const t = feSubLoose(d, c);
 	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
 }
 
@@ -136,7 +143,60 @@ function precompute(p: Point, count: int32): Point[] {
 	return pc;
 }
 
-const basePointPc: Readonly<Point[]> = precompute(basePoint(), 15);
+const basePointPc: Readonly<Point[]> = precompute(basePoint(), 8);
+
+/** An affine table point in ref10's niels form: y + x, y - x and 2dxy. */
+struct Niels {
+	yPlusX: Fe;
+	yMinusX: Fe;
+	xy2d: Fe;
+}
+
+function nielsOf(hex: string): Niels {
+	const bytes = hex.decodeHex();
+	return { yPlusX: feFromBytes(bytes, 0), yMinusX: feFromBytes(bytes, 32), xy2d: feFromBytes(bytes, 64) };
+}
+
+function loadBaseTable(): Niels[] {
+	const table: Niels[] = [];
+	for (const hex of baseTableHex) table.push(nielsOf(hex));
+	return table;
+}
+
+const baseTable: Readonly<Niels[]> = loadBaseTable();
+
+/** p + q for an affine q: addPoints without the products Z1 * Z2 and T2 * 2d. */
+function addNiels(p: Readonly<Point>, q: Readonly<Niels>): Point {
+	const a = feMul(feSubLoose(p.y, p.x), q.yMinusX);
+	const b = feMul(feAddLoose(p.x, p.y), q.yPlusX);
+	const c = feMul(p.t, q.xy2d);
+	const d = feAdd(p.z, p.z);
+	const x = feSubLoose(b, a);
+	const y = feAddLoose(b, a);
+	const z = feAddLoose(d, c);
+	const t = feSubLoose(d, c);
+	return { x: feMul(x, t), y: feMul(y, z), z: feMul(z, t), t: feMul(x, y) };
+}
+
+function cMovNiels(p: Readonly<Niels>, q: Readonly<Niels>, bit: uint32): Niels {
+	return {
+		yPlusX: feCMov(p.yPlusX, q.yPlusX, bit),
+		yMinusX: feCMov(p.yMinusX, q.yMinusX, bit),
+		xy2d: feCMov(p.xy2d, q.xy2d, bit),
+	};
+}
+
+/** [digit * 256^row]B for a digit in -8..8, read by touching all eight entries of the row and without a branch. */
+function selectBase(row: int32, digit: int32): Niels {
+	const negative = (digit >> 31) & 1;
+	const magnitude = digit - (((0 - negative) & digit) << 1);
+	let t: Niels = { yPlusX: feOne, yMinusX: feOne, xy2d: feZero };
+	for (let j = 1; j <= 8; j++) {
+		t = cMovNiels(t, baseTable[row * 8 + j - 1], ((((magnitude ^ j) - 1) >> 31) & 1) as uint32);
+	}
+	const minus: Niels = { yPlusX: t.yMinusX, yMinusX: t.yPlusX, xy2d: feNeg(t.xy2d) };
+	return cMovNiels(t, minus, negative as uint32);
+}
 
 function clamp(s: uint8[]): void {
 	s[0] = s[0] & 248;
@@ -160,23 +220,15 @@ function slide(s: Readonly<uint8[]>): int32[] {
 	return e;
 }
 
-/** [s]P with the 15-multiple table; null when the result is the identity. */
-function pcMul16(pc: Readonly<Point[]>, s: Readonly<uint8[]>): Point | null {
+/** [s]B in constant time from radix-16 signed digits, ref10's ge_scalarmult_base; null for the identity. */
+function mulBase(s: Readonly<uint8[]>): Point | null {
+	const e = slide(s);
 	let q = identity();
-	let pos = 252;
-	while (true) {
-		const slot = ((s[pos >> 3] as int32) >> (pos & 7)) & 15;
-		q = addPoints(q, pc[slot]);
-		if (pos == 0) break;
-		q = dbl(dbl(dbl(dbl(q))));
-		pos -= 4;
-	}
+	for (let i = 1; i < 64; i += 2) q = addNiels(q, selectBase(i >> 1, e[i]));
+	q = dbl(dbl(dbl(dbl(q))));
+	for (let i = 0; i < 64; i += 2) q = addNiels(q, selectBase(i >> 1, e[i]));
 	if (isIdentityX(q)) return null;
 	return q;
-}
-
-function mulBase(s: Readonly<uint8[]>): Point | null {
-	return pcMul16(basePointPc, s);
 }
 
 /** [s1]B + [s2]p2 in variable time; null when p2 generates a small-order group. */
@@ -202,30 +254,20 @@ function mulDoubleBasePublic(s1: Readonly<uint8[]>, p2: Point, s2: Readonly<uint
 }
 
 function sha512Of(parts: Readonly<uint8[]>[]): uint8[] {
-	let total = 0;
-	for (const part of parts) total += part.length;
-	const joined = new Array<uint8>(total);
-	let at = 0;
-	for (const part of parts) {
-		for (let i = 0; i < part.length; i++) joined[at + i] = part[i];
-		at += part.length;
-	}
-	return hashOf(kindSha512, joined);
-}
-
-function bytesAt(source: Readonly<uint8[]>, from: int32, length: int32): uint8[] {
-	const out = new Array<uint8>(length);
-	for (let i = 0; i < length; i++) out[i] = source[from + i];
-	return out;
+	const h = newHash(kindSha512);
+	for (const part of parts) updateHash(h, part);
+	return finishHash(h);
 }
 
 /** The public key of a 32-byte seed; empty for any other length. */
 export function ed25519PublicFromSeed(seed: Readonly<uint8[]>): uint8[] {
 	if (seed.length != ed25519SeedLength) return [];
 	const az = hashOf(kindSha512, seed);
-	const s = bytesAt(az, 0, 32);
+	const s = az.slice(0, 32);
 	clamp(s);
 	const pk = mulBase(s);
+	wipeBytes(az);
+	wipeBytes(s);
 	if (pk == null) return [];
 	return toBytes(pk);
 }
@@ -246,14 +288,19 @@ export function ed25519SecretKeyFromSeed(seed: Readonly<uint8[]>): uint8[] {
 export function ed25519Sign(seed: Readonly<uint8[]>, publicKey: Readonly<uint8[]>, message: Readonly<uint8[]>): uint8[] {
 	if (seed.length != ed25519SeedLength || publicKey.length != ed25519PublicKeyLength) return [];
 	const az = hashOf(kindSha512, seed);
-	const scalar = bytesAt(az, 0, 32);
+	const scalar = az.slice(0, 32);
 	clamp(scalar);
-	const nonce = scalarReduce64(sha512Of([bytesAt(az, 32, 32), message]));
+	const prefix = az.slice(32, 64);
+	wipeBytes(az);
+	const nonce = scalarReduce64(sha512Of([prefix, message]));
+	wipeBytes(prefix);
 	const r = mulBase(nonce);
-	if (r == null) return [];
-	const rBytes = toBytes(r);
+	const rBytes = r == null ? [] : toBytes(r);
 	const hram = scalarReduce64(sha512Of([rBytes, publicKey, message]));
 	const s = scalarMulAdd(hram, scalar, nonce);
+	wipeBytes(scalar);
+	wipeBytes(nonce);
+	if (r == null) return [];
 	const out = new Array<uint8>(64);
 	for (let i = 0; i < 32; i++) {
 		out[i] = rBytes[i];
@@ -265,7 +312,7 @@ export function ed25519Sign(seed: Readonly<uint8[]>, publicKey: Readonly<uint8[]
 /** Signs with the 64-byte secret key of ed25519SecretKeyFromSeed; empty on a bad length. */
 export function ed25519SignWithSecretKey(secretKey: Readonly<uint8[]>, message: Readonly<uint8[]>): uint8[] {
 	if (secretKey.length != ed25519SecretKeyLength) return [];
-	return ed25519Sign(bytesAt(secretKey, 0, 32), bytesAt(secretKey, 32, 32), message);
+	return ed25519Sign(secretKey.slice(0, 32), secretKey.slice(32, 64), message);
 }
 
 // The eight small-order points with the sign bit cleared, plus the non-canonical aliases of y = 0 and y = 1,
@@ -281,7 +328,7 @@ const smallOrder: Readonly<string[]> = [
 ];
 
 function isSmallOrder(encoded: Readonly<uint8[]>, from: int32): boolean {
-	const y = bytesAt(encoded, from, 32);
+	const y = encoded.slice(from, from + 32);
 	y[31] = y[31] & 127;
 	const text = y.encodeHex();
 	for (const known of smallOrder) {
@@ -306,9 +353,9 @@ export function ed25519Verify(publicKey: Readonly<uint8[]>, signature: Readonly<
 	if (!isCanonicalEncoding(signature, 0)) return false;
 	const expectedR = fromBytes(signature, 0);
 	if (expectedR == null || isIdentityX(expectedR)) return false;
-	const rBytes = bytesAt(signature, 0, 32);
+	const rBytes = signature.slice(0, 32);
 	const hram = scalarReduce64(sha512Of([rBytes, publicKey, message]));
-	const sbAh = mulDoubleBasePublic(bytesAt(signature, 32, 32), neg(a), hram);
+	const sbAh = mulDoubleBasePublic(signature.slice(32, 64), neg(a), hram);
 	if (sbAh == null) return false;
 	const check = subPoints(sbAh, expectedR);
 	return feIsZero(check.x) && feEqual(check.y, check.z);
