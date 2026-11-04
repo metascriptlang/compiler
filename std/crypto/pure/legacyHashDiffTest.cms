@@ -1,0 +1,57 @@
+import { kindSha1, kindMd5 } from "./state";
+import { newHash, updateHash, finishHash, hashOf } from "./hash";
+import { encodeHex } from "../../core/encoding";
+import { sha1Sync, md5Sync, createHash, toHex } from "../index";
+
+function nextSeed(seed: uint32): uint32 {
+	return seed * 1664525 + 1013904223;
+}
+
+function vendorHex(kind: int32, data: uint8[]): string {
+	const out = kind == kindSha1 ? sha1Sync(data) : md5Sync(data);
+	if (!out.ok) return "vendor failed";
+	return toHex(out.value);
+}
+
+test "pure sha1 and md5 match the vendor on seeded inputs" {
+	let seed: uint32 = 12345;
+	const kinds: int32[] = [kindSha1, kindMd5];
+	let checked = 0;
+	for (let len = 0; len <= 2048; len++) {
+		const data = new Array<uint8>(len);
+		for (let i = 0; i < len; i++) {
+			seed = nextSeed(seed);
+			data[i] = (seed >> 24) as uint8;
+		}
+		for (const kind of kinds) {
+			assert hashOf(kind, data).encodeHex() == vendorHex(kind, data);
+			checked += 1;
+		}
+	}
+	assert checked == 4098;
+}
+
+test "pure streaming matches the vendor streaming hasher" {
+	let seed: uint32 = 777;
+	const data = new Array<uint8>(1000);
+	for (let i = 0; i < 1000; i++) {
+		seed = nextSeed(seed);
+		data[i] = (seed >> 24) as uint8;
+	}
+	for (let cut = 0; cut <= 1000; cut += 13) {
+		const pure = newHash(kindSha1);
+		updateHash(pure, data.slice(0, cut));
+		updateHash(pure, data.slice(cut));
+		const vendor = createHash("sha1");
+		vendor.update(data.slice(0, cut));
+		vendor.update(data.slice(cut));
+		assert finishHash(pure).encodeHex() == toHex(vendor.digest());
+		const pureMd = newHash(kindMd5);
+		updateHash(pureMd, data.slice(0, cut));
+		updateHash(pureMd, data.slice(cut));
+		const vendorMd = createHash("md5");
+		vendorMd.update(data.slice(0, cut));
+		vendorMd.update(data.slice(cut));
+		assert finishHash(pureMd).encodeHex() == toHex(vendorMd.digest());
+	}
+}
