@@ -3444,6 +3444,24 @@ test "a registered entry whose import's implementation changed is collected agai
 	assert db.cache.collected - kept == 1, `${db.cache.collected - kept} collections after a comment edit`;
 }
 
+test "a registered entry stays held after an unrelated file is written, over an import chain of any depth" {
+	for (let depth = 1; depth <= 2; depth += 1) {
+		const root = `/ensureHeld${depth}`;
+		const db = createTransAmDb(100);
+		dbSetFileText(db, `${root}/m0.ms`, "export type T = int32;\n");
+		for (let i = 1; i <= depth; i += 1) {
+			dbSetFileText(db, `${root}/m${i}.ms`, `import { T } from "./m${i - 1}";\nexport const x${i}: T = 1;\n`);
+			recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/m${i}.ms`), getFileId(db.fileInput, `${root}/m${i - 1}.ms`));
+		}
+		const top = `${root}/m${depth}.ms`;
+		dbEnsureModuleExports(db, top);
+		dbSetFileText(db, `${root}/other.ms`, "export const o = 1;\n");
+		const held = db.cache.collected;
+		dbEnsureModuleExports(db, top);
+		assert db.cache.collected == held, `${db.cache.collected - held} collections of a current entry at depth ${depth}`;
+	}
+}
+
 const CYCLE_A = 'import { B, hb } from "./b";\nexport class A {\n\tv: int32 = 1;\n}\nexport function mk(): B {\n\treturn new B();\n}\nexport const av = hb();\n';
 const CYCLE_B = 'import { A } from "./a";\nexport class B {\n\tw: int32 = 2;\n}\nexport function mkA(): A {\n\treturn new A();\n}\nexport function hb() {\n\treturn 1;\n}\n';
 const CYCLE_C = 'import { av, A, mk } from "./a";\nconst k: int32 = av;\nconst a: A = new A();\nconst b = mk();\nconst e: string = b.w;\n';

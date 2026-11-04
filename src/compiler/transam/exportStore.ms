@@ -68,7 +68,7 @@ export function recordImpl(store: TaExportStore, fileId: int32, fileChangedAt: i
 		return revision;
 	}
 	store.implTexts.set(fileId, text);
-	const at = before != null && was != null && before == text ? was : revision;
+	const at = before != null && was != null && before == text ? was : fileChangedAt;
 	store.implChangedAt.set(fileId, at);
 	return at;
 }
@@ -86,7 +86,7 @@ export function setClosureChangedAt(store: TaExportStore, fileId: int32, revisio
 	store.closure.set(fileId, at);
 }
 
-test "an equal implementation text keeps its revision while the file is unchanged, a different one or none takes the current" {
+test "an equal implementation text keeps its revision while the file is unchanged, a different one takes the revision its file was written at, none takes the current" {
 	const store = createExportStore();
 	assert knownImplChangedAt(store, 1, 3) == null;
 	assert recordImpl(store, 1, 3, "a", 3) == 3;
@@ -96,6 +96,7 @@ test "an equal implementation text keeps its revision while the file is unchange
 	assert recordImpl(store, 1, 6, "b", 6) == 6;
 	assert recordImpl(store, 1, 7, null, 7) == 7;
 	assert recordImpl(store, 1, 8, "b", 8) == 8;
+	assert recordImpl(store, 2, 3, "a", 9) == 3;
 }
 
 test "a closure stamp is valid for the revision it was set at only" {
