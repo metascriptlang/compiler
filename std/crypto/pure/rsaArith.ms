@@ -25,7 +25,6 @@ import {
 	uintDivRemPublic,
 	uintGcd,
 	uintGcdModinvOdd,
-	uintWipe,
 	limbsFor,
 	feFromBytes,
 	reduce,
@@ -40,9 +39,9 @@ import {
 	RsaPublicData,
 	RsaPrivateData,
 	rsaModulusBytes,
-	wipeBytes,
 } from "./rsaKey";
 import { randomOctets } from "./random";
+import { wipeBytes, wipeWords } from "./secret";
 
 function uintOf(bytes: Readonly<uint8[]>): uint32[] {
 	const value = uintFromBytes(bytes, limbsFor(bytes.length * 8 + 1));
@@ -130,7 +129,7 @@ function blindingPair(n: Modulus, e: Readonly<uint8[]>): Blinding {
 		const found = uintGcdModinvOdd(vf, n.v);
 		if (uintIsOne(found.gcd)) {
 			const vi = n.powPublic(found.inverse, e);
-			uintWipe(found.inverse);
+			wipeWords(found.inverse);
 			if (vi == null) break;
 			return { vi, vf };
 		}
@@ -147,9 +146,9 @@ function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
 		"rsa: a blinded exponent overflowed its width",
 	);
 	const bytes = uintToMinimalBytes(blinded);
-	uintWipe(r);
-	uintWipe(blinded);
-	uintWipe(exponent);
+	wipeWords(r);
+	wipeWords(blinded);
+	wipeWords(exponent);
 	return bytes;
 }
 
@@ -195,10 +194,10 @@ export function rsaPrivateOperation(
 		result,
 		blinding.vi,
 		blinding.vf,
-	]) uintWipe(scratch);
+	]) wipeWords(scratch);
 	if (!consistent) return null;
 	const out = uintToBytes(opened, rsaModulusBytes(key.n));
-	uintWipe(opened);
+	wipeWords(opened);
 	return out;
 }
 
@@ -326,7 +325,7 @@ function inverseModEven(
 	const k = uintDivRem(t, a).quotient;
 	const out = uintWiden(n, n.length);
 	uintSub(out, k);
-	for (const scratch of [found.inverse, t, k]) uintWipe(scratch);
+	for (const scratch of [found.inverse, t, k]) wipeWords(scratch);
 	return out;
 }
 
@@ -351,7 +350,7 @@ function privateExponent(
 	if (g == null) return null;
 	const lcm = uintDivRem(uintMul(k, l), g).quotient;
 	const d = inverseModEven(e, lcm);
-	for (const scratch of [k, l, g, lcm]) uintWipe(scratch);
+	for (const scratch of [k, l, g, lcm]) wipeWords(scratch);
 	return d;
 }
 
@@ -376,8 +375,8 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		}
 		const d = privateExponent(p, q, e);
 		if (d == null || uintBitLenPublic(d) <= (bits + 1) / 2) {
-			for (const scratch of [p, q]) uintWipe(scratch);
-			if (d != null) uintWipe(d);
+			for (const scratch of [p, q]) wipeWords(scratch);
+			if (d != null) wipeWords(d);
 			continue;
 		}
 		const n = uintMul(p, q);
@@ -397,7 +396,7 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 			dq: uintToMinimalBytes(dq),
 			qi: uintToMinimalBytes(qi),
 		};
-		for (const scratch of [p, q, d, dp, dq, qi]) uintWipe(scratch);
+		for (const scratch of [p, q, d, dp, dq, qi]) wipeWords(scratch);
 		return key;
 	}
 }

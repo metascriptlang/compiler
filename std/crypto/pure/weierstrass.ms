@@ -15,6 +15,7 @@ import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decode
 import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
+import { wipeBytes } from "./secret";
 
 export interface Curve {
 	name: string;
@@ -234,7 +235,7 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 	v = hmacOf(kind, k, v);
 	k = hmacOf(kind, k, derJoin([v, [1], seed]));
 	v = hmacOf(kind, k, v);
-	seed.fill(0);
+	wipeBytes(seed);
 	while (true) {
 		const stream: uint8[] = [];
 		while (stream.length < c.size) {
@@ -242,13 +243,13 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 			for (const b of v) stream.push(b);
 		}
 		const candidate = leftmost(c.size, stream);
-		stream.fill(0);
+		wipeBytes(stream);
 		if (secretScalar(c, candidate) != null) {
-			k.fill(0);
-			v.fill(0);
+			wipeBytes(k);
+			wipeBytes(v);
 			return candidate;
 		}
-		candidate.fill(0);
+		wipeBytes(candidate);
 		k = hmacOf(kind, k, derJoin([v, [0]]));
 		v = hmacOf(kind, k, v);
 	}
@@ -261,7 +262,7 @@ function signRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: 
 	const nonce = nonceFor(c, kind, d, digest);
 	const k = fromBytes(order, nonce, 0) as Limbs;
 	const point = mulBase(c.math, nonce);
-	nonce.fill(0);
+	wipeBytes(nonce);
 	const xy = point == null ? null : affineBytes(c.math, point);
 	if (xy == null) return null;
 	const r = reduceBytes(order, xy[0], 0);

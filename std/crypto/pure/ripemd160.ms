@@ -4,6 +4,7 @@
 // Licence: std/crypto/pure/LICENSE.ripemd160
 
 import { encodeHex } from "../../core/encoding";
+import { wipeBytes } from "./secret";
 
 export class Ripemd160State {
 	h: uint32[5];
@@ -913,7 +914,7 @@ export function finishRipemd160(s: Ripemd160State): uint8[] {
 		s.block[60 + i] = ((high >> shift) & 255) as uint8;
 	}
 	compress(s, s.block, 0);
-	s.block.fill(0);
+	wipeBytes(s.block);
 	s.finished = true;
 	const out = new Array<uint8>(20);
 	for (let i = 0; i < 5; i++) {

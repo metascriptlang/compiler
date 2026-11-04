@@ -3,6 +3,7 @@ import { initSha2, compress256, compress512 } from "./sha2";
 import { initSha1, compressSha1 } from "./sha1";
 import { initMd5, compressMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
+import { wipeBytes, wipeWords } from "./secret";
 
 /** The kind number of a hash name, or -1 when the portable code has no such hash. */
 export function hashKind(algorithm: string): int32 {
@@ -120,6 +121,8 @@ export function finishHashInto(h: HashState, out: uint8[]): void {
 export function finishHash(h: HashState): uint8[] {
 	const out = new Array<uint8>(h.outputSize);
 	finishHashInto(h, out);
+	wipeWords(h.state);
+	wipeBytes(h.block);
 	return out;
 }
 

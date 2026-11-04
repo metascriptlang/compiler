@@ -1,4 +1,5 @@
 import { newGhash, updateGhash, finishGhash, storeBE64 } from "./ghash";
+import { wipeBytes, wipeWords } from "./secret";
 
 /**
  * AES-128/192/256 in GCM (12-byte nonce) and CBC with PKCS#7, bitsliced: eight blocks run at once as 32 words, so the
@@ -411,8 +412,8 @@ export function expandKey(key: Readonly<uint8[]>): uint32[] {
 		packState(st);
 		for (let i = 0; i < 32; i++) packed[r * 32 + i] = st[i];
 	}
-	words.fill(0);
-	st.fill(0);
+	wipeWords(words);
+	wipeWords(st);
 	return packed;
 }
 
@@ -428,8 +429,8 @@ class Batch {
 }
 
 function wipe(batch: Batch): void {
-	batch.st.fill(0);
-	batch.bytes.fill(0);
+	wipeWords(batch.st);
+	wipeBytes(batch.bytes);
 }
 
 // Loads `count` blocks of `src` from `at` into the state, zero blocks after them.
@@ -521,7 +522,7 @@ export function gcmEncryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 	const computed = new Array<uint8>(16);
 	gcmTag(authKey, aad, dst, dstAt, length, computed);
 	for (let i = 0; i < 16; i++) tag[tagAt + i] = computed[i];
-	authKey.fill(0);
+	wipeBytes(authKey);
 	wipe(batch);
 }
 
@@ -540,7 +541,7 @@ export function gcmDecryptInto(xk: Readonly<uint32[]>, nonce: Readonly<uint8[]>,
 	gcmTag(batch.bytes, aad, src, srcAt, length, computed);
 	let diff: uint8 = 0;
 	for (let i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
-	computed.fill(0);
+	wipeBytes(computed);
 	if (diff != 0) {
 		wipe(batch);
 		return false;
@@ -618,7 +619,7 @@ export function cbcDecrypt(xk: Readonly<uint32[]>, iv: Readonly<uint8[]>, cipher
 		bad |= ((out[size - 1 - i] as uint32) ^ pad) & inPadding;
 	}
 	if (bad != 0) {
-		out.fill(0);
+		wipeBytes(out);
 		return null;
 	}
 	return out.slice(0, size - (pad as int32));

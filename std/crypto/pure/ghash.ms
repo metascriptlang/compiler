@@ -1,3 +1,4 @@
+import { wipeBytes } from "./secret";
 /**
  * The GHASH of AES-GCM (NIST SP 800-38D) without tables: each carry-less product is built from integer multiplies of
  * operands masked to every fourth bit, so no memory access or branch depends on the key or the data. Blocks are read
@@ -130,5 +131,5 @@ export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
 	g.accLo = 0;
 	g.productHi = 0;
 	g.productLo = 0;
-	for (let i = 0; i < 16; i++) g.tail[i] = 0;
+	wipeBytes(g.tail);
 }

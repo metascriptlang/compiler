@@ -1,3 +1,4 @@
+import { valueBarrier, wipeWords } from "./secret";
 /**
  * Modular arithmetic on fixed-length unsigned integers, ported from Zig's `std.crypto.ff` (MIT, see
  * LICENSE.zig.MIT). A limb is a `uint32` carrying 31 value bits, little-endian in a `uint32[]`; a field
@@ -26,7 +27,7 @@ export function limbsFor(bits: int32): int32 {
 }
 
 function select(on: uint32, x: uint32, y: uint32): uint32 {
-	const mask = (0 as uint32) - on;
+	const mask = valueBarrier((0 as uint32) - on);
 	return y ^ (mask & (y ^ x));
 }
 
@@ -531,11 +532,6 @@ export function uintGcd(
 	return g;
 }
 
-/** Zeroes secret scratch once it is no longer needed. */
-export function uintWipe(x: uint32[]): void {
-	for (let i = 0; i < x.length; i++) x[i] = 0;
-}
-
 /** An odd modulus above 2 with its Montgomery constants; build it with `modulusFromUint` or `modulusFromBytes`. */
 export struct Modulus {
 	v: uint32[];
@@ -779,8 +775,8 @@ function powInternal(
 			}
 		}
 		if (!isPublic) {
-			for (const entry of pc) uintWipe(entry);
-			uintWipe(t0);
+			for (const entry of pc) wipeWords(entry);
+			wipeWords(t0);
 		}
 	}
 	return fromMontgomery(m, out);

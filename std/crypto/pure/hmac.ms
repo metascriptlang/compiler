@@ -1,5 +1,6 @@
 import { HashState, kindSha256, kindMd5 } from "./state";
 import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
+import { wipeBytes, wipeWords } from "./secret";
 
 const pbkdf2MaxLength = 1048576;
 
@@ -12,14 +13,10 @@ export class HmacState {
 	innerDigest: uint8[];
 }
 
-function wipe(bytes: uint8[]): void {
-	for (let i = 0; i < bytes.length; i++) bytes[i] = 0;
-}
-
 function wipeHash(h: HashState): void {
-	for (let i = 0; i < 16; i++) h.state[i] = 0;
-	for (let i = 0; i < 160; i++) h.schedule[i] = 0;
-	wipe(h.block);
+	wipeWords(h.state);
+	wipeWords(h.schedule);
+	wipeBytes(h.block);
 }
 
 function wipeHmac(hmac: HmacState): void {
@@ -27,7 +24,7 @@ function wipeHmac(hmac: HmacState): void {
 	wipeHash(hmac.outer);
 	wipeHash(hmac.innerKeyed);
 	wipeHash(hmac.outerKeyed);
-	wipe(hmac.innerDigest);
+	wipeBytes(hmac.innerDigest);
 }
 
 function requireKind(kind: int32): void {
@@ -41,7 +38,7 @@ function absorbPads(key: Readonly<uint8[]>, inner: HashState, outer: HashState):
 	if (key.length > size) {
 		const digest = hashOf(inner.kind, key);
 		for (let i = 0; i < digest.length; i++) pad[i] = digest[i];
-		wipe(digest);
+		wipeBytes(digest);
 	} else {
 		for (let i = 0; i < key.length; i++) pad[i] = key[i];
 	}
@@ -49,7 +46,7 @@ function absorbPads(key: Readonly<uint8[]>, inner: HashState, outer: HashState):
 	updateHash(inner, pad);
 	for (let i = 0; i < size; i++) pad[i] = pad[i] ^ (0x36 ^ 0x5c);
 	updateHash(outer, pad);
-	wipe(pad);
+	wipeBytes(pad);
 }
 
 export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
@@ -78,8 +75,8 @@ export function finishHmacInto(hmac: HmacState, out: uint8[]): void {
 	copyHash(hmac.outerKeyed, hmac.outer);
 	updateHash(hmac.outer, hmac.innerDigest);
 	finishHashInto(hmac.outer, out);
-	wipe(hmac.innerDigest);
-	wipe(hmac.outer.block);
+	wipeBytes(hmac.innerDigest);
+	wipeBytes(hmac.outer.block);
 	copyHash(hmac.innerKeyed, hmac.inner);
 }
 
@@ -98,7 +95,7 @@ export function hmacOf(kind: int32, key: Readonly<uint8[]>, data: Readonly<uint8
 	const innerDigest = finishHash(inner);
 	wipeHash(inner);
 	updateHash(outer, innerDigest);
-	wipe(innerDigest);
+	wipeBytes(innerDigest);
 	const out = finishHash(outer);
 	wipeHash(outer);
 	return out;
@@ -135,8 +132,8 @@ export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonl
 		}
 		index += 1;
 	}
-	wipe(block);
-	wipe(running);
+	wipeBytes(block);
+	wipeBytes(running);
 	wipeHmac(hmac);
 	return out;
 }
@@ -166,8 +163,8 @@ export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8
 		}
 		index += 1;
 	}
-	wipe(prk);
-	wipe(block);
+	wipeBytes(prk);
+	wipeBytes(block);
 	wipeHmac(hmac);
 	return out;
 }

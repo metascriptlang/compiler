@@ -31,7 +31,6 @@ import {
 	bytesBitLength,
 	rsaModulusBytes,
 	sameBytes,
-	wipeBytes,
 } from "./rsaKey";
 import {
 	rsaPublicOperation,
@@ -42,6 +41,7 @@ import {
 import { randomOctets } from "./random";
 import { hashKind, hashOf } from "./hash";
 import { kindSha256 } from "./state";
+import { wipeBytes } from "./secret";
 
 export { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
 

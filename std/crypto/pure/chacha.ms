@@ -5,6 +5,7 @@ import {
 	finishPoly1305,
 	load32,
 } from "./poly1305";
+import { wipeBytes, wipeWords } from "./secret";
 
 /**
  * The working words of one cipher call, allocated once so no block
@@ -299,10 +300,10 @@ function putLengths(w: ChaChaWork, aadLength: int64, textLength: int64): void {
 
 /** Zeroes the subkey, keystream block and one-time key a call leaves behind. */
 function wipeWork(w: ChaChaWork): void {
-	for (let i = 0; i < 8; i++) w.key[i] = 0;
-	for (let i = 0; i < 16; i++) w.block[i] = 0;
-	for (let i = 0; i < 32; i++) w.authKey[i] = 0;
-	for (let i = 0; i < 16; i++) w.tag[i] = 0;
+	wipeWords(w.key);
+	wipeWords(w.block);
+	wipeBytes(w.authKey);
+	wipeBytes(w.tag);
 }
 
 /**

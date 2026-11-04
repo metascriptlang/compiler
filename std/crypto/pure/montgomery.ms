@@ -1,3 +1,4 @@
+import { valueBarrier } from "./secret";
 /**
  * Arithmetic modulo an odd 256- or 384-bit modulus on 32-bit little-endian limbs, in the
  * Montgomery domain (R = 2^(32 * words)): word-by-word Montgomery multiplication with one final
@@ -33,7 +34,7 @@ export function select(md: Readonly<Modulus>, flag: uint32, a: Limbs, b: Limbs):
 
 @inline
 function selectWords(flag: uint32, a: Limbs, b: Limbs, n: int32): Limbs {
-	const mask = (0 as uint32) - flag;
+	const mask = valueBarrier((0 as uint32) - flag);
 	let out = zeroLimbs();
 	for (let i = 0; i < n; i++) out[i] = (a[i] & ~mask) | (b[i] & mask);
 	return out;

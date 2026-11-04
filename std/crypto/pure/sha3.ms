@@ -1,4 +1,5 @@
 import { encodeHex } from "../../core/encoding";
+import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
 
 // Derived from Zig std.crypto keccak_p.zig + sha3.zig, commit 16d31ceed5de91b469e010b4a8d515236ad6bf14; see LICENSE.sha3.
 
@@ -194,6 +195,10 @@ when (c) {
 
 	function stateByte(state: Sha3State, i: int32): uint8 {
 		return ((state.st[i >> 3] >> (((i & 7) * 8) as uint64)) & 255) as uint8;
+	}
+
+	function wipeLanes(state: Sha3State): void {
+		wipeWords64(state.st);
 	}
 
 	function zeroLanes(): uint64[25] {
@@ -457,6 +462,10 @@ when (c) {
 		return ((state.st[i >> 2] >> (((i & 3) * 8) as uint32)) & 255) as uint8;
 	}
 
+	function wipeLanes(state: Sha3State): void {
+		wipeWords(state.st);
+	}
+
 	function zeroLanes(): uint32[50] {
 		return [
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -523,8 +532,8 @@ export function finishSha3(state: Sha3State): uint8[] {
 	state.finished = true;
 	const out = new Array<uint8>(state.bits >> 3);
 	for (let i = 0; i < out.length; i++) out[i] = stateByte(state, i);
-	state.st = zeroLanes();
-	for (let i = 0; i < rate; i++) state.buf[i] = 0;
+	wipeLanes(state);
+	wipeBytes(state.buf);
 	state.filled = 0;
 	return out;
 }

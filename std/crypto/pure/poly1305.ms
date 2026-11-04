@@ -1,3 +1,4 @@
+import { wipeBytes, wipeWords } from "./secret";
 /**
  * The running state of one Poly1305 MAC: 32-bit limbs with 64-bit products,
  * fixed storage so no call allocates.
@@ -169,11 +170,9 @@ export function finishPoly1305(
 		out[outOff + 4 * i + 3] = (word >> 24) as uint8;
 		c = c >> 32;
 	}
-	for (let i = 0; i < 4; i++) {
-		s.r[i] = 0;
-		s.pad[i] = 0;
-	}
-	for (let i = 0; i < 5; i++) s.h[i] = 0;
-	for (let i = 0; i < 16; i++) s.block[i] = 0;
+	wipeWords(s.r);
+	wipeWords(s.pad);
+	wipeWords(s.h);
+	wipeBytes(s.block);
 	s.filled = 0;
 }

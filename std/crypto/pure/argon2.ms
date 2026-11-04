@@ -1,4 +1,5 @@
 import { newBlake2b, updateBlake2b, finishBlake2bInto } from "./blake2b";
+import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
 
 const noKey: Readonly<uint8[]> = [];
 const syncPoints = 4;
@@ -587,23 +588,21 @@ export function argon2Fill(memory: uint32[], password: Readonly<uint8[]>, salt: 
 	wordsToBytes(last, 0, w.bytes);
 	const out = new Array<uint8>(hashLen);
 	hPrime(w, w.bytes, 1024, hashLen, out, 0);
-	memory.fill(0);
+	wipeWords(memory);
 	wipeWork(w);
 	return out;
 }
 
 function wipeWork(w: Argon2Work): void {
-	for (let i = 0; i < 256; i++) w.buf[i] = 0;
-	for (let i = 0; i < 128; i++) {
-		w.wide[i] = 0;
-		w.input[i] = 0;
-	}
-	w.address.fill(0);
-	w.h0.fill(0);
-	w.bytes.fill(0);
-	w.word.fill(0);
-	w.chain.fill(0);
-	w.last.fill(0);
+	wipeWords(w.buf);
+	wipeWords64(w.wide);
+	wipeWords64(w.input);
+	wipeWords(w.address);
+	wipeBytes(w.h0);
+	wipeBytes(w.bytes);
+	wipeBytes(w.word);
+	wipeBytes(w.chain);
+	wipeWords(w.last);
 }
 
 function maskEq(x: uint32, y: uint32): uint32 {

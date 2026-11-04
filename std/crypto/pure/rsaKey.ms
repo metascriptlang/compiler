@@ -41,8 +41,3 @@ export function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
 	for (let i = 0; i < a.length; i++) diff |= (a[i] ^ b[i]) as int32;
 	return diff == 0;
 }
-
-/** Zeroes secret bytes once they are no longer needed. */
-export function wipeBytes(bytes: uint8[]): void {
-	for (let i = 0; i < bytes.length; i++) bytes[i] = 0;
-}

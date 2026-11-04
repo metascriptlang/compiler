@@ -1,3 +1,4 @@
+import { wipeBytes, wipeWords64 } from "./secret";
 const iv: uint64[8] = [
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
 	0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
@@ -215,9 +216,9 @@ export function finishBlake2bInto(s: Blake2bState, out: uint8[], outOff: int32):
 	compress(s, s.block, 0, true);
 	s.finished = true;
 	for (let i = 0; i < s.outputSize; i++) out[outOff + i] = ((s.h[i >> 3] >> (((i & 7) * 8) as uint64)) & 255) as uint8;
-	for (let i = 0; i < 128; i++) s.block[i] = 0;
-	for (let i = 0; i < 16; i++) s.m[i] = 0;
-	for (let i = 0; i < 8; i++) s.h[i] = 0;
+	wipeBytes(s.block);
+	wipeWords64(s.m);
+	wipeWords64(s.h);
 }
 
 export function finishBlake2b(s: Blake2bState): uint8[] {
