@@ -10,8 +10,9 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isStringLike, isNumeric, isSendableFunction } from "./types";
+import { isReadonlyView, isAtomicRef, isStringLike, isNumeric, isSendableFunction, isMaybeType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
+import { nonNullMemberOfNullable } from "./compat";
 
 export enum WriteVerdict {
 	Writable,
@@ -45,6 +46,7 @@ function isDeclaredValueStorage(t: Type | null): boolean {
 		TypeKind.GenericInstance => t.typeExtra != null && isDeclaredValueStorage(t.typeExtra),
 		TypeKind.Array => true,
 		TypeKind.Union => t.typeFlags.has(TypeFlag.ValueUnion),
+		TypeKind.Alias | TypeKind.Distinct => isDeclaredValueStorage(t.typeReturn),
 		_ => holdsInlineValue(t),
 	};
 }
@@ -55,6 +57,7 @@ function holdsInlineValue(t: Type | null): boolean {
 		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
 		TypeKind.GenericInstance => t.typeExtra != null && holdsInlineValue(t.typeExtra),
 		TypeKind.SizedArray => true,
+		TypeKind.Alias | TypeKind.Distinct => holdsInlineValue(t.typeReturn),
 		_ => false,
 	};
 }
@@ -67,13 +70,13 @@ function frozenAt(t: Type | null, inGenericBody: boolean, depth: int32): boolean
 	if (t == null || depth > 8) return false;
 	if (isNumeric(t)) return true;
 	return match (t.kind) {
-		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.BigInt | TypeKind.Char
+		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.Char
 			| TypeKind.String | TypeKind.StringLiteral | TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Null => true,
 		TypeKind.GenericParam => inGenericBody,
 		TypeKind.Function => isSendableFunction(t),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Distinct | TypeKind.Alias => frozenAt(t.typeReturn, inGenericBody, depth + 1),
-		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct && t.typeChildren.every((f: Type): boolean => frozenAt(f, inGenericBody, depth + 1)),
-		TypeKind.GenericInstance => t.typeExtra != null && frozenAt(t.typeExtra, true, depth + 1)
+		TypeKind.Struct => isDeclaredValueStorage(t) && t.typeChildren.every((f: Type): boolean => frozenAt(f, inGenericBody, depth + 1)),
+		TypeKind.GenericInstance => isDeclaredValueStorage(t) && frozenAt(t.typeExtra, true, depth + 1)
 			&& t.typeChildren.every((a: Type): boolean => frozenAt(a, inGenericBody, depth + 1)),
 		TypeKind.Union => frozenUnion(t, inGenericBody, depth),
 		_ => false,
@@ -124,12 +127,19 @@ function borrowRoot(target: Node): Symbol | null {
 	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Borrow ? sym : null;
 }
 
-function peelAddressableConv(n: Node | null): Node | null {
-	while (n != null && (n.kind == NodeKind.HiddenSubConv || n.kind == NodeKind.HiddenStdConv)
+function valueBehindNull(t: Type | null): Type | null {
+	if (t != null && isMaybeType(t) && t.typeReturn != null) return t.typeReturn;
+	return nonNullMemberOfNullable(t) ?? t;
+}
+
+function sameStorageOperand(n: Node): Node | null {
+	if (n.kind == NodeKind.TypeAssertion) return (n.data as TypeAssertionData).asExpr;
+	if (n.kind == NodeKind.OutExpr) return (n.data as OutExprData).outArg;
+	if ((n.kind == NodeKind.HiddenSubConv || n.kind == NodeKind.HiddenStdConv)
 			&& n.nodeType != null && (n.nodeType.kind == TypeKind.Struct || n.nodeType.kind == TypeKind.Tuple)) {
-		n = (n.data as HiddenStdConvData).convExpr;
+		return (n.data as HiddenStdConvData).convExpr;
 	}
-	return n;
+	return null;
 }
 
 export function checkWrite(target: Node, site: WriteSite): WriteCheck {
@@ -145,13 +155,19 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		interior = true;
 	}
 	while (cur.kind != NodeKind.Identifier) {
+		const operand = sameStorageOperand(cur);
+		if (operand != null) {
+			if (!isDeclaredValueStorage(valueBehindNull(operand.nodeType))) deep = false;
+			cur = operand;
+			continue;
+		}
 		let base: Node | null = null;
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) base = sliceSource((cur.data as ArrayAccessData).array);
-		base = peelAddressableConv(base);
-		if (base == null || !isValueAggregateParam(base.nodeType)) return { verdict: WriteVerdict.Writable, root: null };
+		const held = base != null ? valueBehindNull(base.nodeType) : null;
+		if (base == null || !isValueAggregateParam(held)) return { verdict: WriteVerdict.Writable, root: null };
 		interior = true;
-		if (!isDeclaredValueStorage(base.nodeType)) deep = false;
+		if (!isDeclaredValueStorage(held)) deep = false;
 		cur = base;
 	}
 	const sym = cur.resolvedSym;

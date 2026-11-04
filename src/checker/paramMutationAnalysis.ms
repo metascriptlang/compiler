@@ -94,6 +94,7 @@ export function isValueAggregateParam(t: Type | null): boolean {
 	return match (t.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple | TypeKind.Struct => true,
 		TypeKind.Union => t.typeFlags.has(TypeFlag.ValueUnion),
+		TypeKind.Alias | TypeKind.Distinct => isValueAggregateParam(t.typeReturn),
 		TypeKind.GenericInstance => t.typeExtra != null && (t.typeExtra.kind == TypeKind.Struct || (t.typeExtra.kind == TypeKind.Union && t.typeExtra.typeFlags.has(TypeFlag.ValueUnion))),
 		_ => false,
 	};
