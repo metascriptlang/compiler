@@ -55,3 +55,16 @@ test "streaming split equals one-shot" {
 		}
 	}
 }
+
+test "a million a" {
+	const chunk = new Array<uint8>(1000);
+	for (let i = 0; i < 1000; i++) chunk[i] = 97;
+	const sha = newHash(kindSha1);
+	const md = newHash(kindMd5);
+	for (let i = 0; i < 1000; i++) {
+		updateHash(sha, chunk);
+		updateHash(md, chunk);
+	}
+	assert finishHash(sha).encodeHex() == "34aa973cd4c4daa4f61eeb2bdbad27316534016f";
+	assert finishHash(md).encodeHex() == "7707d6ae4e027c70eea2a935c2296f21";
+}
