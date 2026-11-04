@@ -8,6 +8,7 @@ import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet } from "./symbol";
 import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
+import { isScalarPrimitive } from "./fit";
 import { isFrozenByConst } from "./assignable";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
@@ -806,7 +807,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		}
 		return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(call, "calls a function value");
 	}
-	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!)) return null;
+	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!) || isScalarToString(call, sym!)) return null;
 	const external = isExternalRoutine(sym!);
 	if (e == Effect.WritesCell && external && !hasFlag(calledRoutine(call) ?? sym!, SymbolFlag.NoSideEffect)) {
 		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
@@ -857,6 +858,11 @@ function messageOperandsEffect(call: Node, e: Effect): EffectCause | null {
 
 function isStdBuiltinWritingNothing(sym: Symbol): boolean {
 	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind);
+}
+
+function isScalarToString(call: Node, sym: Symbol): boolean {
+	const args = (call.data as CallExprData).arguments;
+	return sym.builtinKind == BuiltinKind.ToString && args.length == 1 && isScalarPrimitive(args[0].nodeType);
 }
 
 function constReadEffect(call: Node): EffectCause | null {
