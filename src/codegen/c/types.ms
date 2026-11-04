@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion, isClassOrArrayRef } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName, monoInstanceNameIn } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -384,7 +384,7 @@ function isPointerDesc(desc: string): boolean {
 
 // NIM-REF CG-53
 export function borrowIsPointer(g: CGen, t: Readonly<Type | null>): boolean {
-	return t != null && t.kind == TypeKind.Borrow && t.typeReturn != null && isPointerDesc(getTypeDesc(g, t.typeReturn));
+	return t != null && t.kind == TypeKind.Borrow && isClassOrArrayRef(t.typeReturn) && isPointerDesc(getTypeDesc(g, t.typeReturn));
 }
 
 function isPromotedParam(g: CGen, t: Readonly<Type>, mut: boolean, hookAbi: boolean, borrowsFirst: boolean): boolean {
@@ -1596,7 +1596,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 		},
 		TypeKind.Borrow => {
 			const inner = getTypeDesc(g, t.typeReturn);
-			const ptrType = isPointerDesc(inner) ? inner : "const " + inner + "*";
+			const ptrType = borrowIsPointer(g, t) ? inner : "const " + inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
 		},

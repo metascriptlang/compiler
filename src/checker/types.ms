@@ -4607,6 +4607,17 @@ export function isCountedRef(t: Readonly<Type | null>): boolean {
 	};
 }
 
+export function isClassOrArrayRef(t: Readonly<Type | null>): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Array) return true;
+	if (s.kind == TypeKind.Union) {
+		const inner = unwrapRefNullUnion(s);
+		return inner != null && isClassOrArrayRef(inner);
+	}
+	return isCountedRef(s);
+}
+
 export function isUncountedElement(elem: Readonly<Type | null>): boolean {
 	if (elem == null) return false;
 	const bare = elem.kind == TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
