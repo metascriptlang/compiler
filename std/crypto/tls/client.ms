@@ -4,23 +4,32 @@
  * its certificate chain handed to a caller-supplied verifier and its
  * CertificateVerify checked with the portable signature kernels; then
  * application data, KeyUpdate and close_notify.
+ *
+ * `connectTls` also offers TLS 1.2 (RFC 5246) with ECDHE_RSA and
+ * ECDHE_ECDSA (RFC 8422) AEAD suites and follows whichever version the
+ * server selects. Static-RSA key exchange is not offered.
  */
 
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { HashState, kindSha256, kindSha384 } from "../pure/state";
+import { HashState, kindSha256, kindSha384, kindSha512 } from "../pure/state";
 import { newHash, copyHash, updateHash, finishHash, hashOf } from "../pure/hash";
 import { x25519 } from "../pure/x25519";
 import { p256 } from "../pure/p256";
 import { p384 } from "../pure/p384";
 import { ownCurve, ecPublicPoint, ecdhShared, ecPublicFromSpki, ecdsaDerToRaw, ecdsaVerifyRaw } from "../pure/weierstrass";
 import { ed25519Verify } from "../pure/ed25519";
-import { RsaPublicData, rsaVerifyPss } from "../pure/rsa";
+import { RsaPublicData, rsaVerifyPss, rsaVerifyPkcs1 } from "../pure/rsa";
 import { derItem, derChildren, derUnsigned, derSame, tagSequence, tagBitString, tagOid, oidRsaEncryption } from "../pure/asn1";
 import { bigFromBytes } from "../pure/bigint";
-import { CipherSuite, cipherSuiteOf, suiteAes128GcmSha256, suiteAes256GcmSha384, suiteChacha20Poly1305Sha256 } from "./aead";
-import { KeySchedule, handshakeSchedule, applicationSchedule, finishedVerifyData } from "./keySchedule";
 import {
-	TrafficKeys, Record, RecordBuffer, OpenFailure, trafficKeysOf, updatedTrafficKeys, plaintextRecords,
+	CipherSuite, cipherSuiteOf, tls12CipherSuiteOf, tls12SuiteSignsWithEcdsa, tls12FixedIvLength,
+	suiteAes128GcmSha256, suiteAes256GcmSha384, suiteChacha20Poly1305Sha256,
+	suiteEcdheEcdsaAes128GcmSha256, suiteEcdheEcdsaAes256GcmSha384, suiteEcdheEcdsaChacha20Poly1305Sha256,
+	suiteEcdheRsaAes128GcmSha256, suiteEcdheRsaAes256GcmSha384, suiteEcdheRsaChacha20Poly1305Sha256,
+} from "./aead";
+import { KeySchedule, handshakeSchedule, applicationSchedule, finishedVerifyData, tls12Prf } from "./keySchedule";
+import {
+	TrafficKeys, Record, RecordBuffer, OpenFailure, trafficKeysOf, tls12TrafficKeysOf, updatedTrafficKeys, plaintextRecords,
 	sealRecords, openRecord, newRecordBuffer, recordHeaderLength, maxCiphertextLength,
 	contentChangeCipherSpec, contentAlert, contentHandshake, contentApplicationData,
 } from "./record";
@@ -39,8 +48,8 @@ export abstract class TlsTransport {
  */
 export type CertificateVerifier = (chain: uint8[][], hostname: string) => Result<void, string>;
 
-/** Bytes of `Tls13Options.entropy` one handshake reads: client random, session id and both key-share scalars. */
-export const entropyLength: int32 = 128;
+/** Bytes of `Tls13Options.entropy` one handshake reads: client random, session id and the X25519, P-256 and P-384 scalars. */
+export const entropyLength: int32 = 176;
 
 export interface Tls13Options {
 	/** Sent as SNI and handed to the verifier; empty sends no SNI. */
@@ -52,28 +61,35 @@ export interface Tls13Options {
 	alpn: string[];
 }
 
+const handshakeHelloRequest: int32 = 0;
 const handshakeClientHello: int32 = 1;
 const handshakeServerHello: int32 = 2;
 const handshakeNewSessionTicket: int32 = 4;
 const handshakeEncryptedExtensions: int32 = 8;
 const handshakeCertificate: int32 = 11;
+const handshakeServerKeyExchange: int32 = 12;
 const handshakeCertificateRequest: int32 = 13;
+const handshakeServerHelloDone: int32 = 14;
 const handshakeCertificateVerify: int32 = 15;
+const handshakeClientKeyExchange: int32 = 16;
 const handshakeFinished: int32 = 20;
 const handshakeKeyUpdate: int32 = 24;
 const handshakeMessageHash: int32 = 254;
 
 const extensionServerName: int32 = 0;
 const extensionSupportedGroups: int32 = 10;
+const extensionEcPointFormats: int32 = 11;
 const extensionSignatureAlgorithms: int32 = 13;
 const extensionAlpn: int32 = 16;
 const extensionSupportedVersions: int32 = 43;
 const extensionCookie: int32 = 44;
 const extensionPskKeyExchangeModes: int32 = 45;
 const extensionKeyShare: int32 = 51;
+const extensionRenegotiationInfo: int32 = 0xff01;
 
 const groupX25519: int32 = 0x001d;
 const groupSecp256r1: int32 = 0x0017;
+const groupSecp384r1: int32 = 0x0018;
 
 const schemeEcdsaSecp256r1Sha256: int32 = 0x0403;
 const schemeEcdsaSecp384r1Sha384: int32 = 0x0503;
@@ -84,11 +100,24 @@ const schemeEd25519: int32 = 0x0807;
 const schemeRsaPkcs1Sha256: int32 = 0x0401;
 const schemeRsaPkcs1Sha384: int32 = 0x0501;
 const schemeRsaPkcs1Sha512: int32 = 0x0601;
+const schemeEcdsaSha512: int32 = 0x0603;
 
-const versionTls13: int32 = 0x0304;
+export const versionTls12: int32 = 0x0303;
+export const versionTls13: int32 = 0x0304;
 const alertCloseNotify: int32 = 0;
 
 const offeredSuites: Readonly<int32[]> = [suiteChacha20Poly1305Sha256, suiteAes128GcmSha256, suiteAes256GcmSha384];
+const offeredTls12Suites: Readonly<int32[]> = [
+	suiteEcdheEcdsaAes128GcmSha256,
+	suiteEcdheRsaAes128GcmSha256,
+	suiteEcdheEcdsaAes256GcmSha384,
+	suiteEcdheRsaAes256GcmSha384,
+	suiteEcdheEcdsaChacha20Poly1305Sha256,
+	suiteEcdheRsaChacha20Poly1305Sha256,
+];
+
+/** RFC 8446 4.1.3: the first 7 of the last 8 bytes of ServerHello.random from a TLS 1.3 server that negotiated an older version. */
+const downgradeSentinel: Readonly<uint8[]> = [0x44, 0x4f, 0x57, 0x4e, 0x47, 0x52, 0x44];
 
 const helloRetryRequestRandom: Readonly<uint8[]> = [
 	0xcf, 0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11, 0xbe, 0x1d, 0x8c, 0x02, 0x1e, 0x65, 0xb8, 0x91,
@@ -202,6 +231,8 @@ enum Stage {
 	EncryptedExtensions,
 	Certificate,
 	CertificateVerify,
+	ServerKeyExchange,
+	ServerHelloDone,
 	Finished,
 	Done,
 }
@@ -214,6 +245,14 @@ export class Tls13Handshake {
 	sessionId: uint8[];
 	x25519Private: uint8[];
 	p256Private: uint8[];
+	p384Private: uint8[];
+	/** Whether the ClientHello also offers TLS 1.2. */
+	offerTls12: boolean;
+	/** The groups the ClientHello carries a key share for; a HelloRetryRequest may replace them with one. */
+	shareGroups: int32[];
+	/** The version the server selected, 0 before its ServerHello. */
+	version: int32;
+	serverRandom: uint8[];
 	/** The ClientHello handshake message (with its 4-byte header) the transcript starts with. */
 	clientHello: uint8[];
 	stage: Stage;
@@ -228,6 +267,13 @@ export class Tls13Handshake {
 	certificateRequested: boolean;
 	certificateRequestContext: uint8[];
 	applicationProtocol: string;
+	/** TLS 1.2: the ECDHE pre-master secret and the public key sent in ClientKeyExchange. */
+	preMasterSecret: uint8[];
+	clientPublic: uint8[];
+	masterSecret: uint8[];
+	/** TLS 1.2: the server's read keys, installed by its ChangeCipherSpec. */
+	pendingServerKeys: TrafficKeys | null;
+	expectedServerFinished: uint8[];
 }
 
 function clientHelloOf(hs: Tls13Handshake, cookie: Readonly<uint8[]>): uint8[] {
@@ -236,8 +282,12 @@ function clientHelloOf(hs: Tls13Handshake, cookie: Readonly<uint8[]>): uint8[] {
 	putBytes(body, hs.clientRandom);
 	putU8(body, hs.sessionId.length as int32);
 	putBytes(body, hs.sessionId);
-	putU16(body, 2 * (offeredSuites.length as int32));
-	for (const suite of offeredSuites) putU16(body, suite);
+	const suites: int32[] = [...offeredSuites];
+	if (hs.offerTls12) {
+		for (const suite of offeredTls12Suites) suites.push(suite);
+	}
+	putU16(body, 2 * (suites.length as int32));
+	for (const suite of suites) putU16(body, suite);
 	putU8(body, 1);
 	putU8(body, 0);
 
@@ -251,7 +301,13 @@ function clientHelloOf(hs: Tls13Handshake, cookie: Readonly<uint8[]>): uint8[] {
 		putBytes(list, name);
 		putExtension(extensions, extensionServerName, list);
 	}
-	putExtension(extensions, extensionSupportedVersions, [2, 0x03, 0x04]);
+	if (hs.offerTls12) {
+		putExtension(extensions, extensionSupportedVersions, [4, 0x03, 0x04, 0x03, 0x03]);
+		putExtension(extensions, extensionRenegotiationInfo, [0]);
+		putExtension(extensions, extensionEcPointFormats, [1, 0]);
+	} else {
+		putExtension(extensions, extensionSupportedVersions, [2, 0x03, 0x04]);
+	}
 	const schemes: int32[] = [
 		schemeEcdsaSecp256r1Sha256,
 		schemeEcdsaSecp384r1Sha384,
@@ -267,18 +323,20 @@ function clientHelloOf(hs: Tls13Handshake, cookie: Readonly<uint8[]>): uint8[] {
 	putU16(schemeList, 2 * (schemes.length as int32));
 	for (const scheme of schemes) putU16(schemeList, scheme);
 	putExtension(extensions, extensionSignatureAlgorithms, schemeList);
-	putExtension(extensions, extensionSupportedGroups, [0, 4, 0x00, 0x1d, 0x00, 0x17]);
+	const groups: uint8[] = [];
+	for (const group of supportedGroups(hs)) putU16(groups, group);
+	const groupList: uint8[] = [];
+	putU16(groupList, groups.length as int32);
+	putBytes(groupList, groups);
+	putExtension(extensions, extensionSupportedGroups, groupList);
 	putExtension(extensions, extensionPskKeyExchangeModes, [1, 1]);
 	const shares: uint8[] = [];
-	putU16(shares, groupX25519);
-	const x25519Public = x25519(hs.x25519Private, x25519BasePoint());
-	putU16(shares, x25519Public.length as int32);
-	putBytes(shares, x25519Public);
-	const p256Public = ecPublicPoint(p256, hs.p256Private);
-	if (p256Public != null) {
-		putU16(shares, groupSecp256r1);
-		putU16(shares, p256Public.length as int32);
-		putBytes(shares, p256Public);
+	for (const group of hs.shareGroups) {
+		const share = publicKeyOf(hs, group);
+		if (share == null) continue;
+		putU16(shares, group);
+		putU16(shares, share.length as int32);
+		putBytes(shares, share);
 	}
 	const keyShare: uint8[] = [];
 	putU16(keyShare, shares.length as int32);
@@ -313,8 +371,22 @@ function x25519BasePoint(): uint8[] {
 	return base;
 }
 
-/** A handshake with its ClientHello built from `options.entropy`. */
-export function newHandshake(options: Tls13Options): Result<Tls13Handshake, CryptoError> {
+/** P-384 only with TLS 1.2 on offer, as the ServerKeyExchange may pick it. */
+function supportedGroups(hs: Tls13Handshake): int32[] {
+	if (hs.offerTls12) return [groupX25519, groupSecp256r1, groupSecp384r1];
+	return [groupX25519, groupSecp256r1];
+}
+
+/** This handshake's public key for `group`, or null when the scalar is out of range. */
+function publicKeyOf(hs: Tls13Handshake, group: int32): uint8[] | null {
+	if (group == groupX25519) return x25519(hs.x25519Private, x25519BasePoint());
+	if (group == groupSecp256r1) return ecPublicPoint(p256, hs.p256Private);
+	if (group == groupSecp384r1) return ecPublicPoint(p384, hs.p384Private);
+	return null;
+}
+
+/** A handshake with its ClientHello built from `options.entropy`; `offerTls12` adds TLS 1.2 to it. */
+export function newHandshake(options: Tls13Options, offerTls12: boolean = false): Result<Tls13Handshake, CryptoError> {
 	const entropy = options.entropy;
 	if (entropy.length < entropyLength) return Result.err(tlsError("TlsInsufficientEntropy: options.entropy needs " + String(entropyLength) + " bytes"));
 	const hs: Tls13Handshake = {
@@ -324,6 +396,11 @@ export function newHandshake(options: Tls13Options): Result<Tls13Handshake, Cryp
 		sessionId: entropy.slice(32, 64),
 		x25519Private: entropy.slice(64, 96),
 		p256Private: entropy.slice(96, 128),
+		p384Private: entropy.slice(128, 176),
+		offerTls12,
+		shareGroups: [groupX25519, groupSecp256r1],
+		version: 0,
+		serverRandom: [],
 		clientHello: [],
 		stage: Stage.ServerHello,
 		retried: false,
@@ -346,6 +423,11 @@ export function newHandshake(options: Tls13Options): Result<Tls13Handshake, Cryp
 		certificateRequested: false,
 		certificateRequestContext: [],
 		applicationProtocol: "",
+		preMasterSecret: [],
+		clientPublic: [],
+		masterSecret: [],
+		pendingServerKeys: null,
+		expectedServerFinished: [],
 	};
 	hs.clientHello = clientHelloOf(hs, []);
 	return Result.ok(hs);
@@ -382,6 +464,11 @@ function sharedSecretOf(hs: Tls13Handshake, group: int32, key: Readonly<uint8[]>
 		if (shared == null) return Result.err(tlsError("TlsDecryptFailure: invalid secp256r1 key share"));
 		return Result.ok(shared);
 	}
+	if (group == groupSecp384r1 && hs.offerTls12) {
+		const shared = ecdhShared(p384, hs.p384Private, key);
+		if (shared == null) return Result.err(tlsError("TlsDecryptFailure: invalid secp384r1 key share"));
+		return Result.ok(shared);
+	}
 	return Result.err(tlsError("TlsIllegalParameter: key share for a group not offered"));
 }
 
@@ -407,20 +494,26 @@ function onHelloRetryRequest(
 	const extensions = decoderOf(d.takeBytes(d.takeU16()));
 	let version = 0;
 	let cookie: uint8[] = [];
+	let group = -1;
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const body = decoderOf(extensions.takeBytes(extensions.takeU16()));
 		if (type == extensionSupportedVersions) version = body.takeU16();
 		else if (type == extensionCookie) cookie = body.takeBytes(body.takeU16());
-		else if (type == extensionKeyShare) return Result.err(tlsError("TlsIllegalParameter: HelloRetryRequest for a group whose share was sent"));
+		else if (type == extensionKeyShare) group = body.takeU16();
 		if (body.bad) return Result.err(tlsError("TlsDecodeError: HelloRetryRequest extension"));
+	}
+	if (group != -1) {
+		if (hs.shareGroups.includes(group)) return Result.err(tlsError("TlsIllegalParameter: HelloRetryRequest for a group whose share was sent"));
+		if (!supportedGroups(hs).includes(group) || publicKeyOf(hs, group) == null) return Result.err(tlsError("TlsIllegalParameter: HelloRetryRequest for a group not offered"));
+		hs.shareGroups = [group];
 	}
 	if (d.bad || extensions.bad) return Result.err(tlsError("TlsDecodeError: HelloRetryRequest"));
 	if (version != versionTls13) return Result.err(tlsError("TlsProtocolVersion: HelloRetryRequest is not TLS 1.3"));
 	if (!sameBytes(sessionEcho, hs.sessionId)) return Result.err(tlsError("TlsIllegalParameter: session id echo"));
 	const suite = cipherSuiteOf(code);
 	if (suite == null || !offered(code)) return Result.err(tlsError("TlsIllegalParameter: cipher suite not offered"));
-	if (cookie.length == 0) return Result.err(tlsError("TlsIllegalParameter: HelloRetryRequest changes nothing"));
+	if (cookie.length == 0 && group == -1) return Result.err(tlsError("TlsIllegalParameter: HelloRetryRequest changes nothing"));
 	const firstHash = hashOf(suite.hashKind, hs.clientHello);
 	startTranscript(hs, suite);
 	const synthetic: uint8[] = [handshakeMessageHash as uint8, 0, 0, firstHash.length as uint8];
@@ -464,7 +557,9 @@ function onServerHello(
 		if (ext.bad) return Result.err(tlsError("TlsDecodeError: ServerHello extension"));
 	}
 	if (d.bad || extensions.bad) return Result.err(tlsError("TlsDecodeError: ServerHello"));
+	if (version == 0 && hs.offerTls12 && !hs.retried) return onTls12ServerHello(hs, body, wrapped);
 	if (version != versionTls13) return Result.err(tlsError("TlsProtocolVersion: server did not select TLS 1.3"));
+	hs.version = versionTls13;
 	if (!sameBytes(sessionEcho, hs.sessionId)) return Result.err(tlsError("TlsIllegalParameter: session id echo"));
 	const suite = cipherSuiteOf(code);
 	if (suite == null || !offered(code)) return Result.err(tlsError("TlsIllegalParameter: cipher suite not offered"));
@@ -483,23 +578,27 @@ function onServerHello(
 	return Result.ok(null);
 }
 
+/** Records the ALPN protocol the server chose, which must be one offered. */
+function onAlpn(hs: Tls13Handshake, ext: Decoder): Result<void, CryptoError> {
+	const list = decoderOf(ext.takeBytes(ext.takeU16()));
+	const chosen = list.takeBytes(list.takeU8());
+	if (list.bad || !list.done() || chosen.length == 0) return Result.err(tlsError("TlsDecodeError: ALPN"));
+	let name = "";
+	for (const protocol of hs.alpn) {
+		if (sameBytes(protocol.asBytes().slice(0), chosen)) name = protocol;
+	}
+	if (name.length == 0) return Result.err(tlsError("TlsNoApplicationProtocol: server chose an ALPN protocol not offered"));
+	hs.applicationProtocol = name;
+	return Result.ok(null);
+}
+
 function onEncryptedExtensions(hs: Tls13Handshake, body: Readonly<uint8[]>): Result<void, CryptoError> {
 	const d = decoderOf(body);
 	const extensions = decoderOf(d.takeBytes(d.takeU16()));
 	while (!extensions.done()) {
 		const type = extensions.takeU16();
 		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
-		if (type == extensionAlpn) {
-			const list = decoderOf(ext.takeBytes(ext.takeU16()));
-			const chosen = list.takeBytes(list.takeU8());
-			if (list.bad || !list.done() || chosen.length == 0) return Result.err(tlsError("TlsDecodeError: ALPN"));
-			let name = "";
-			for (const protocol of hs.alpn) {
-				if (sameBytes(protocol.asBytes().slice(0), chosen)) name = protocol;
-			}
-			if (name.length == 0) return Result.err(tlsError("TlsNoApplicationProtocol: server chose an ALPN protocol not offered"));
-			hs.applicationProtocol = name;
-		}
+		if (type == extensionAlpn) try onAlpn(hs, ext);
 		if (ext.bad) return Result.err(tlsError("TlsDecodeError: EncryptedExtensions extension"));
 	}
 	if (d.bad || extensions.bad) return Result.err(tlsError("TlsDecodeError: EncryptedExtensions"));
@@ -521,11 +620,16 @@ function onCertificate(
 		list.takeBytes(list.takeU16());
 	}
 	if (d.bad || list.bad || !d.done()) return Result.err(tlsError("TlsDecodeError: Certificate"));
+	try acceptChain(hs, chain, verifier);
+	hs.stage = Stage.CertificateVerify;
+	return Result.ok(null);
+}
+
+function acceptChain(hs: Tls13Handshake, chain: uint8[][], verifier: CertificateVerifier): Result<void, CryptoError> {
 	if (chain.length == 0) return Result.err(tlsError("TlsCertificateRequired: empty server certificate chain"));
 	const verdict = verifier(chain, hs.hostname);
 	if (!verdict.ok) return Result.err(cryptoError(CryptoErrorKind.CertificateError, "tls13", "TlsCertificateNotVerified: " + verdict.error));
 	hs.chain = chain;
-	hs.stage = Stage.CertificateVerify;
 	return Result.ok(null);
 }
 
@@ -698,6 +802,7 @@ function onHandshakeMessage(
 	verifier: CertificateVerifier,
 ): Result<void, CryptoError> {
 	const stage = hs.stage;
+	if (hs.version == versionTls12) return onTls12HandshakeMessage(hs, type, body, wrapped, transport, verifier);
 	if (stage == Stage.ServerHello) {
 		if (type != handshakeServerHello) return Result.err(tlsError("TlsUnexpectedMessage: expected ServerHello"));
 		return onServerHello(hs, body, wrapped, transport);
@@ -713,6 +818,219 @@ function onHandshakeMessage(
 	if (stage == Stage.Certificate && type == handshakeCertificateRequest && !hs.certificateRequested) return onCertificateRequest(hs, body);
 	if (stage == Stage.Certificate && type == handshakeCertificate) return onCertificate(hs, body, verifier);
 	return Result.err(tlsError("TlsUnexpectedMessage: handshake type " + String(type)));
+}
+
+// ===== TLS 1.2 =====
+
+function concatBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): uint8[] {
+	const out: uint8[] = [...a];
+	putBytes(out, b);
+	return out;
+}
+
+function offeredTls12(code: int32): boolean {
+	for (const suite of offeredTls12Suites) {
+		if (suite == code) return true;
+	}
+	return false;
+}
+
+/** A TLS 1.2 ServerHello: no supported_versions, a random without the downgrade sentinel, an ECDHE AEAD suite offered. */
+function onTls12ServerHello(hs: Tls13Handshake, body: Readonly<uint8[]>, wrapped: Readonly<uint8[]>): Result<void, CryptoError> {
+	const d = decoderOf(body);
+	const legacyVersion = d.takeU16();
+	const random = d.takeBytes(32);
+	d.takeBytes(d.takeU8());
+	const code = d.takeU16();
+	d.takeU8();
+	const extensions = decoderOf(d.takeBytes(d.takeU16()));
+	let secureRenegotiation = false;
+	while (!extensions.done()) {
+		const type = extensions.takeU16();
+		const ext = decoderOf(extensions.takeBytes(extensions.takeU16()));
+		if (type == extensionRenegotiationInfo) {
+			if (ext.takeU8() != 0 || !ext.done()) return Result.err(tlsError("TlsHandshakeFailure: renegotiation_info is not empty"));
+			secureRenegotiation = true;
+		} else if (type == extensionAlpn) {
+			try onAlpn(hs, ext);
+		} else if (type == extensionKeyShare) {
+			return Result.err(tlsError("TlsUnsupportedExtension: key_share in a TLS 1.2 ServerHello"));
+		}
+		if (ext.bad) return Result.err(tlsError("TlsDecodeError: ServerHello extension"));
+	}
+	if (d.bad || extensions.bad) return Result.err(tlsError("TlsDecodeError: ServerHello"));
+	if (legacyVersion != versionTls12) return Result.err(tlsError("TlsProtocolVersion: server selected a version before TLS 1.2"));
+	if (sameBytes(random.slice(24, 31), downgradeSentinel) && (random[31] as int32) >> 1 == 0) {
+		return Result.err(tlsError("TlsIllegalParameter: TLS 1.3 server downgraded to TLS 1.2"));
+	}
+	if (!secureRenegotiation) return Result.err(tlsError("TlsHandshakeFailure: server does not support secure renegotiation"));
+	const suite = tls12CipherSuiteOf(code);
+	if (suite == null || !offeredTls12(code)) return Result.err(tlsError("TlsIllegalParameter: cipher suite not offered"));
+	hs.version = versionTls12;
+	hs.serverRandom = random;
+	startTranscript(hs, suite);
+	updateHash(hs.transcript, hs.clientHello);
+	updateHash(hs.transcript, wrapped);
+	hs.stage = Stage.Certificate;
+	return Result.ok(null);
+}
+
+function onTls12Certificate(hs: Tls13Handshake, body: Readonly<uint8[]>, verifier: CertificateVerifier): Result<void, CryptoError> {
+	const d = decoderOf(body);
+	const list = decoderOf(d.takeBytes(d.takeU24()));
+	const chain: uint8[][] = [];
+	while (!list.done()) chain.push(list.takeBytes(list.takeU24()));
+	if (d.bad || list.bad || !d.done()) return Result.err(tlsError("TlsDecodeError: Certificate"));
+	try acceptChain(hs, chain, verifier);
+	hs.stage = Stage.ServerKeyExchange;
+	return Result.ok(null);
+}
+
+function ecdsaAnyCurveAcceptable(spki: Readonly<uint8[]>, kind: int32, content: Readonly<uint8[]>, signature: Readonly<uint8[]>): boolean {
+	const key = ecPublicFromSpki(spki, [ownCurve(p256), ownCurve(p384)]);
+	if (key == null) return false;
+	const raw = ecdsaDerToRaw(signature, key.curve.size);
+	if (raw == null) return false;
+	return ecdsaVerifyRaw(key.curve, key.point, hashOf(kind, content), raw);
+}
+
+/** RFC 5246 7.4.1.4.1: in TLS 1.2 an ECDSA scheme names only its hash, and RSA may be PKCS #1 v1.5 or PSS. */
+export function tls12SignatureAcceptable(
+	leaf: Readonly<uint8[]>,
+	scheme: int32,
+	content: Readonly<uint8[]>,
+	signature: Readonly<uint8[]>,
+): boolean {
+	const spki = certificateSpki(leaf);
+	if (spki == null) return false;
+	if (scheme == schemeEcdsaSecp256r1Sha256) return ecdsaAnyCurveAcceptable(spki, kindSha256, content, signature);
+	if (scheme == schemeEcdsaSecp384r1Sha384) return ecdsaAnyCurveAcceptable(spki, kindSha384, content, signature);
+	if (scheme == schemeEcdsaSha512) return ecdsaAnyCurveAcceptable(spki, kindSha512, content, signature);
+	if (scheme == schemeRsaPssRsaeSha256) return rsaPssAcceptable(spki, "sha256", content, signature);
+	if (scheme == schemeRsaPssRsaeSha384) return rsaPssAcceptable(spki, "sha384", content, signature);
+	if (scheme == schemeRsaPssRsaeSha512) return rsaPssAcceptable(spki, "sha512", content, signature);
+	const key = rsaKeyOfSpki(spki);
+	if (key == null) return false;
+	if (scheme == schemeRsaPkcs1Sha256) return rsaVerifyPkcs1(key, "sha256", content, signature);
+	if (scheme == schemeRsaPkcs1Sha384) return rsaVerifyPkcs1(key, "sha384", content, signature);
+	if (scheme == schemeRsaPkcs1Sha512) return rsaVerifyPkcs1(key, "sha512", content, signature);
+	return false;
+}
+
+function schemeIsEcdsa(scheme: int32): boolean {
+	return scheme == schemeEcdsaSecp256r1Sha256 || scheme == schemeEcdsaSecp384r1Sha384 || scheme == schemeEcdsaSha512;
+}
+
+function schemeIsRsa(scheme: int32): boolean {
+	return scheme == schemeRsaPkcs1Sha256 || scheme == schemeRsaPkcs1Sha384 || scheme == schemeRsaPkcs1Sha512 ||
+		scheme == schemeRsaPssRsaeSha256 || scheme == schemeRsaPssRsaeSha384 || scheme == schemeRsaPssRsaeSha512;
+}
+
+/** RFC 8422 5.4: named-curve ECDHE parameters signed over both randoms with the leaf key of the suite's kind. */
+function onServerKeyExchange(hs: Tls13Handshake, body: Readonly<uint8[]>): Result<void, CryptoError> {
+	const d = decoderOf(body);
+	if (d.takeU8() != 3) return Result.err(tlsError("TlsIllegalParameter: ServerKeyExchange curve type is not named_curve"));
+	const group = d.takeU16();
+	const point = d.takeBytes(d.takeU8());
+	const paramsEnd = d.at;
+	const scheme = d.takeU16();
+	const signature = d.takeBytes(d.takeU16());
+	if (d.bad || !d.done()) return Result.err(tlsError("TlsDecodeError: ServerKeyExchange"));
+	const ecdsaSuite = tls12SuiteSignsWithEcdsa(hs.suite.code);
+	if (ecdsaSuite ? !schemeIsEcdsa(scheme) : !schemeIsRsa(scheme)) {
+		return Result.err(tlsError("TlsIllegalParameter: ServerKeyExchange scheme 0x" + scheme.toString(16) + " does not match the suite"));
+	}
+	const signed = concatBytes(concatBytes(hs.clientRandom, hs.serverRandom), body.slice(0, paramsEnd));
+	if (!tls12SignatureAcceptable(hs.chain[0], scheme, signed, signature)) {
+		return Result.err(tlsError("TlsDecryptError: ServerKeyExchange signature does not verify (scheme 0x" + scheme.toString(16) + ")"));
+	}
+	if (!supportedGroups(hs).includes(group)) return Result.err(tlsError("TlsIllegalParameter: ServerKeyExchange group not offered"));
+	const clientPublic = publicKeyOf(hs, group);
+	if (clientPublic == null) return Result.err(tlsError("TlsInsufficientEntropy: key exchange scalar out of range"));
+	hs.preMasterSecret = try sharedSecretOf(hs, group, point);
+	hs.clientPublic = clientPublic;
+	hs.stage = Stage.ServerHelloDone;
+	return Result.ok(null);
+}
+
+function onTls12CertificateRequest(hs: Tls13Handshake, body: Readonly<uint8[]>): Result<void, CryptoError> {
+	const d = decoderOf(body);
+	d.takeBytes(d.takeU8());
+	d.takeBytes(d.takeU16());
+	d.takeBytes(d.takeU16());
+	if (d.bad || !d.done()) return Result.err(tlsError("TlsDecodeError: CertificateRequest"));
+	hs.certificateRequested = true;
+	return Result.ok(null);
+}
+
+/** Keys from the master secret (RFC 5246 6.3); AEAD suites take no MAC keys. */
+function installTls12Keys(hs: Tls13Handshake): void {
+	const suite = hs.suite;
+	const kind = suite.hashKind;
+	const seed = concatBytes(hs.clientRandom, hs.serverRandom);
+	hs.masterSecret = tls12Prf(kind, hs.preMasterSecret, "master secret", seed, 48);
+	const keyLength = suite.keyLength;
+	const ivLength = tls12FixedIvLength(suite.code);
+	const block = tls12Prf(kind, hs.masterSecret, "key expansion", concatBytes(hs.serverRandom, hs.clientRandom), 2 * keyLength + 2 * ivLength);
+	const clientKey = block.slice(0, keyLength);
+	const serverKey = block.slice(keyLength, 2 * keyLength);
+	const clientIv = block.slice(2 * keyLength, 2 * keyLength + ivLength);
+	const serverIv = block.slice(2 * keyLength + ivLength, 2 * keyLength + 2 * ivLength);
+	hs.clientKeys = tls12TrafficKeysOf(suite, clientKey, clientIv);
+	hs.pendingServerKeys = tls12TrafficKeysOf(suite, serverKey, serverIv);
+}
+
+/** Answers ServerHelloDone with [Certificate], ClientKeyExchange, ChangeCipherSpec and the encrypted Finished. */
+function onServerHelloDone(hs: Tls13Handshake, body: Readonly<uint8[]>, transport: TlsTransport): Result<void, CryptoError> {
+	if (body.length != 0) return Result.err(tlsError("TlsDecodeError: ServerHelloDone"));
+	const plain: uint8[] = [];
+	if (hs.certificateRequested) {
+		const certificate = handshakeMessage(handshakeCertificate, [0, 0, 0]);
+		updateHash(hs.transcript, certificate);
+		putBytes(plain, certificate);
+	}
+	const exchange: uint8[] = [];
+	putU8(exchange, hs.clientPublic.length as int32);
+	putBytes(exchange, hs.clientPublic);
+	const keyExchange = handshakeMessage(handshakeClientKeyExchange, exchange);
+	updateHash(hs.transcript, keyExchange);
+	putBytes(plain, keyExchange);
+	installTls12Keys(hs);
+	const clientKeys = hs.clientKeys;
+	if (clientKeys == null) return Result.err(tlsError("TlsUnexpectedMessage: no client keys"));
+	const kind = hs.suite.hashKind;
+	const finished = handshakeMessage(handshakeFinished, tls12Prf(kind, hs.masterSecret, "client finished", transcriptHash(hs), 12));
+	updateHash(hs.transcript, finished);
+	hs.expectedServerFinished = tls12Prf(kind, hs.masterSecret, "server finished", transcriptHash(hs), 12);
+	const flight = plaintextRecords(contentHandshake, plain, versionTls12);
+	putBytes(flight, [contentChangeCipherSpec as uint8, 0x03, 0x03, 0x00, 0x01, 0x01]);
+	putBytes(flight, sealRecords(clientKeys, contentHandshake, finished));
+	if (!transport.send(flight)) return Result.err(connectionError("TlsWriteFailed"));
+	hs.stage = Stage.Finished;
+	return Result.ok(null);
+}
+
+function onTls12HandshakeMessage(
+	hs: Tls13Handshake,
+	type: int32,
+	body: Readonly<uint8[]>,
+	wrapped: Readonly<uint8[]>,
+	transport: TlsTransport,
+	verifier: CertificateVerifier,
+): Result<void, CryptoError> {
+	const stage = hs.stage;
+	if (stage == Stage.Finished && type == handshakeFinished) {
+		if (hs.serverKeys == null) return Result.err(tlsError("TlsUnexpectedMessage: Finished before ChangeCipherSpec"));
+		if (!sameBytes(hs.expectedServerFinished, body)) return Result.err(tlsError("TlsDecryptError: server Finished does not verify"));
+		hs.stage = Stage.Done;
+		return Result.ok(null);
+	}
+	updateHash(hs.transcript, wrapped);
+	if (stage == Stage.Certificate && type == handshakeCertificate) return onTls12Certificate(hs, body, verifier);
+	if (stage == Stage.ServerKeyExchange && type == handshakeServerKeyExchange) return onServerKeyExchange(hs, body);
+	if (stage == Stage.ServerHelloDone && type == handshakeCertificateRequest && !hs.certificateRequested) return onTls12CertificateRequest(hs, body);
+	if (stage == Stage.ServerHelloDone && type == handshakeServerHelloDone) return onServerHelloDone(hs, body, transport);
+	return Result.err(tlsError("TlsUnexpectedMessage: TLS 1.2 handshake type " + String(type)));
 }
 
 // ===== Records =====
@@ -756,19 +1074,24 @@ export function completeHandshake(
 		const serverKeys = hs.serverKeys;
 		if (record.contentType == contentChangeCipherSpec) {
 			if (record.body.length != 1 || record.body[0] != 1) return Result.err(tlsError("TlsUnexpectedMessage: change_cipher_spec"));
+			if (hs.version == versionTls12) {
+				if (hs.stage != Stage.Finished || serverKeys != null || messages.length > 0) return Result.err(tlsError("TlsUnexpectedMessage: change_cipher_spec"));
+				hs.serverKeys = hs.pendingServerKeys;
+			}
 			continue;
 		}
 		if (record.contentType == contentAlert && serverKeys == null) return Result.err(alertError(record.body));
-		if (record.contentType == contentHandshake) {
-			if (serverKeys != null) return Result.err(tlsError("TlsUnexpectedMessage: plaintext handshake after ServerHello"));
+		if (record.contentType == contentHandshake && serverKeys == null) {
 			putBytes(messages, record.body);
-		} else if (record.contentType == contentApplicationData && serverKeys != null) {
+		} else if (serverKeys != null && (serverKeys.tls12 || record.contentType == contentApplicationData)) {
 			const opened = openRecord(serverKeys, record);
 			if (!opened.ok) return Result.err(tlsError(openFailureText(opened.error)));
 			const inner = opened.value;
 			if (inner.contentType == contentAlert) return Result.err(alertError(inner.content));
 			if (inner.contentType != contentHandshake) return Result.err(tlsError("TlsUnexpectedMessage: content type " + String(inner.contentType) + " during handshake"));
 			putBytes(messages, inner.content);
+		} else if (record.contentType == contentHandshake) {
+			return Result.err(tlsError("TlsUnexpectedMessage: plaintext handshake after ServerHello"));
 		} else {
 			return Result.err(tlsError("TlsUnexpectedMessage: record type " + String(record.contentType)));
 		}
@@ -786,11 +1109,19 @@ export function completeHandshake(
 			}
 		}
 	}
+	let readKeys = hs.serverKeys;
+	let writeKeys = hs.clientKeys;
+	if (hs.version == versionTls13) {
+		readKeys = trafficKeysOf(hs.suite, hs.schedule.serverApplicationSecret);
+		writeKeys = trafficKeysOf(hs.suite, hs.schedule.clientApplicationSecret);
+	}
+	if (readKeys == null || writeKeys == null) return Result.err(tlsError("TlsUnexpectedMessage: handshake ended without traffic keys"));
 	const client: Tls13Client = {
 		transport,
 		buffer,
-		readKeys: trafficKeysOf(hs.suite, hs.schedule.serverApplicationSecret),
-		writeKeys: trafficKeysOf(hs.suite, hs.schedule.clientApplicationSecret),
+		version: hs.version,
+		readKeys,
+		writeKeys,
 		plaintext: [],
 		receivedCloseNotify: false,
 		sentCloseNotify: false,
@@ -808,12 +1139,20 @@ export function connectTls13(transport: TlsTransport, options: Tls13Options): Re
 	return completeHandshake(hs, transport, options.verifier);
 }
 
+/** Offers TLS 1.3 and TLS 1.2 in one ClientHello and completes the version the server selects; `version` on the client names it. */
+export function connectTls(transport: TlsTransport, options: Tls13Options): Result<Tls13Client, CryptoError> {
+	const hs = try newHandshake(options, true);
+	return completeHandshake(hs, transport, options.verifier);
+}
+
 // ===== Application data =====
 
-/** An established TLS 1.3 connection. */
+/** An established TLS connection: TLS 1.3, or TLS 1.2 when `connectTls` negotiated it. */
 export class Tls13Client {
 	transport: TlsTransport;
 	buffer: RecordBuffer;
+	/** `versionTls13` or `versionTls12`. */
+	version: int32;
 	readKeys: TrafficKeys;
 	writeKeys: TrafficKeys;
 	/** Decrypted application data not yet returned by `read`. */
@@ -844,7 +1183,9 @@ function onPostHandshake(c: Tls13Client, content: Readonly<uint8[]>): Result<voi
 		const length = ((content[at + 1] as int32) << 16) | ((content[at + 2] as int32) << 8) | (content[at + 3] as int32);
 		const next = at + 4 + length;
 		if (next > content.length) return Result.err(connectionError("TlsBadLength"));
-		if (type == handshakeKeyUpdate) {
+		if (c.version == versionTls12) {
+			if (type != handshakeHelloRequest) return Result.err(connectionError("TlsUnexpectedMessage: post-handshake type " + String(type)));
+		} else if (type == handshakeKeyUpdate) {
 			if (length != 1) return Result.err(connectionError("TlsDecodeError: KeyUpdate"));
 			const request = content[at + 4] as int32;
 			if (request > 1) return Result.err(connectionError("TlsIllegalParameter: KeyUpdate request"));
@@ -861,7 +1202,8 @@ function onPostHandshake(c: Tls13Client, content: Readonly<uint8[]>): Result<voi
 /** Reads and handles one record; application data lands in `c.plaintext`. */
 function pumpRecord(c: Tls13Client): Result<void, CryptoError> {
 	const record = try readRecord(c.transport, c.buffer);
-	if (record.contentType != contentApplicationData) return Result.err(connectionError("TlsUnexpectedMessage: record type " + String(record.contentType)));
+	const allowed = c.version == versionTls12 ? record.contentType != contentChangeCipherSpec : record.contentType == contentApplicationData;
+	if (!allowed) return Result.err(connectionError("TlsUnexpectedMessage: record type " + String(record.contentType)));
 	const opened = openRecord(c.readKeys, record);
 	if (!opened.ok) return Result.err(connectionError(openFailureText(opened.error)));
 	const inner = opened.value;
@@ -900,6 +1242,7 @@ export function write(this c: Tls13Client, data: Readonly<uint8[]>): Result<void
 /** Sends a KeyUpdate and moves to the next write keys; `requestPeer` asks the server to update its keys too. */
 export function updateKeys(this c: Tls13Client, requestPeer: boolean): Result<void, CryptoError> {
 	if (c.sentCloseNotify) return Result.err(connectionError("TLS connection is closed"));
+	if (c.version != versionTls13) return Result.err(connectionError("TlsUnexpectedMessage: KeyUpdate needs TLS 1.3"));
 	return sendKeyUpdate(c, requestPeer);
 }
 
