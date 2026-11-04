@@ -45,6 +45,7 @@ import { kindSha256 } from "./state";
 import { wipeBytes } from "./secret";
 
 export { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
+export { rsaModulusOf } from "./rsaArith";
 
 export const rsaMinBits: int32 = 2048;
 

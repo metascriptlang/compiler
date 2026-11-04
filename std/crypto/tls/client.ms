@@ -18,7 +18,7 @@ import { p256 } from "../pure/p256";
 import { p384 } from "../pure/p384";
 import { ownCurve, ecPublicPoint, ecdhShared, ecPublicFromSpki, ecdsaDerToRaw, ecdsaVerifyRaw } from "../pure/weierstrass";
 import { ed25519Verify } from "../pure/ed25519";
-import { RsaPublicData, rsaVerifyPss, rsaVerifyPkcs1 } from "../pure/rsa";
+import { RsaPublicData, rsaModulusOf, rsaVerifyPss, rsaVerifyPkcs1 } from "../pure/rsa";
 import { derItem, derChildren, derUnsigned, derSame, tagSequence, tagBitString, tagOid, oidRsaEncryption } from "../pure/asn1";
 import {
 	CipherSuite, cipherSuiteOf, tls12CipherSuiteOf, tls12SuiteSignsWithEcdsa, tls12FixedIvLength,
@@ -770,7 +770,7 @@ function rsaKeyOfSpki(spki: Readonly<uint8[]>): RsaPublicData | null {
 	if (modulus == null || exponent == null) return null;
 	const size = modulus.length;
 	if (size != 128 && size != 256 && size != 384 && size != 512) return null;
-	return { n: modulus, e: exponent };
+	return { n: modulus, e: exponent, nModulus: rsaModulusOf(modulus) };
 }
 
 function ed25519KeyOfSpki(spki: Readonly<uint8[]>): uint8[] | null {

@@ -13,7 +13,7 @@ import {
 import { ecdsaDerToRaw, ecdsaVerifyRaw } from "../pure/weierstrass";
 import { p256 } from "../pure/p256";
 import { p384 } from "../pure/p384";
-import { RsaPublicData, rsaVerifyPkcs1 } from "../pure/rsa";
+import { RsaPublicData, rsaModulusOf, rsaVerifyPkcs1 } from "../pure/rsa";
 import { ed25519Verify } from "../pure/ed25519";
 import { bigFromBytes, bitLength } from "../pure/bigint";
 import { hashOf } from "../pure/hash";
@@ -538,7 +538,7 @@ function verifyRsa(
 	const exponent = key.slice(exponentStart, exponentElement.end);
 	const e = bigFromBytes(exponent);
 	if (e % 2n == 0n || e < 2n || e >= n) return Result.err(X509Error.SignatureInvalid);
-	const publicKey: RsaPublicData = { n: modulus, e: exponent };
+	const publicKey: RsaPublicData = { n: modulus, e: exponent, nModulus: rsaModulusOf(modulus) };
 	if (!rsaVerifyPkcs1(publicKey, hashName, message, signature)) return Result.err(X509Error.SignatureInvalid);
 	return Result.ok(null);
 }
