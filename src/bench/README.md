@@ -10,14 +10,19 @@ longer than any check the edit loop allows.
 
 `src/bench/<area>/` holds:
 
-- `bench.ms`, and `bench.node.mjs` as its node twin, printing the same row names; both time each row through the
-  shared harness (`src/bench/harness.ms`, `src/bench/harness.mjs`): three rounds of at least 250 ms, the median and
-  its spread;
+- `bench.ms`, and `bench.node.mjs` (or `bench.lua`) as its twin, printing the same row names; both time each row through the
+  shared harness (`src/bench/harness.ms`, `src/bench/harness.mjs`; `bench.lua` carries its own copy): three rounds of
+  at least 250 ms, the median and its spread;
 - `baseline.md`, the recorded tables: host, commit, tree, load, and the command that produced them.
 
-`src/bench/run.sh <area> [rounds]` builds `bench.ms` with `MSC` (and `MSBENCH_BASE` for an A/B), runs every arm in
-turn for `rounds` rounds and prints each row's median per arm; it prints the host, the commit and the load before and
-after.
+An area that compares against something other than node lists its arms in `arms` (default `candidate node`):
+`candidate` or `c` is `bench.ms` on C `--release`, `raiser` is `msc run --target=raiser bench.ms`, `node` runs
+`bench.node.mjs`, and `luajit-joff`, `luajit-jon` and `lua54` run the Lua twin `bench.lua` under LuaJIT 2.1 and Lua
+5.4, which `src/bench/buildLua.sh` builds from pinned sources into `out/bench/lua/` on first use.
+
+`src/bench/run.sh <area> [rounds]` builds `bench.ms` with `MSC` (and, with `MSBENCH_BASE`, the area's first arm again
+as `base` for an A/B), runs every arm in turn for `rounds` rounds and prints each row's median per arm; it prints the
+host, the commit and the load before and after.
 
 ## Running
 

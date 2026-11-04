@@ -7,25 +7,54 @@ HERE=src/bench/$AREA
 OUT=out/bench/$AREA
 MSC=${MSC:-$([ -x ./msc ] && echo ./msc || echo msc)}
 NODE=${NODE:-node}
+LUAJIT=${LUAJIT:-out/bench/lua/luajit}
+LUA54=${LUA54:-out/bench/lua/lua54}
 mkdir -p "$OUT"
 
-"$MSC" build "$HERE/bench.ms" --release --output="$OUT/candidate" >/dev/null
-arms=(candidate)
-if [ -n "${MSBENCH_BASE:-}" ]; then
-	"$MSBENCH_BASE" build "$HERE/bench.ms" --release --output="$OUT/base" >/dev/null
-	arms+=(base)
-fi
-arms+=(node)
+# An area lists its arms in $HERE/arms; base is the first arm's build by MSBENCH_BASE.
+read -r -a wanted <<< "$(cat "$HERE/arms" 2>/dev/null || echo candidate node)"
+[ -z "${MSBENCH_BASE:-}" ] || wanted=("${wanted[0]}" base "${wanted[@]:1}")
+case " ${wanted[*]} " in *" lua"*) src/bench/buildLua.sh out/bench/lua ;; esac
+
+build() { # <arm> <msc> <output>
+	case $1 in
+		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
+	esac
+}
+runArm() { # <arm>
+	case $1 in
+		candidate | c) "$OUT/$1" ;;
+		base) if [ "${wanted[0]}" = raiser ]; then "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms"; else "$OUT/base"; fi ;;
+		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
+		node) "$NODE" "$HERE/bench.node.mjs" ;;
+		luajit-joff) "$LUAJIT" -joff "$HERE/bench.lua" ;;
+		luajit-jon) "$LUAJIT" -jon "$HERE/bench.lua" ;;
+		lua54) "$LUA54" "$HERE/bench.lua" ;;
+		*) echo "run.sh: unknown arm $1" >&2; exit 2 ;;
+	esac
+}
+
+arms=() versions=""
+for arm in "${wanted[@]}"; do
+	case $arm in
+		base) build "${wanted[0]}" "$MSBENCH_BASE" base ;;
+		node) versions+=" · node $("$NODE" --version)" ;;
+		luajit-*) [ -x "$LUAJIT" ] || { echo "skip $arm: no $LUAJIT"; continue; }; [ "$arm" = luajit-jon ] || versions+=" · $("$LUAJIT" -v | cut -d' ' -f1-2)" ;;
+		lua54) [ -x "$LUA54" ] || { echo "skip $arm: no $LUA54"; continue; }; versions+=" · $("$LUA54" -v | cut -d' ' -f1-2)" ;;
+		*) build "$arm" "$MSC" "$arm" ;;
+	esac
+	arms+=("$arm")
+done
 
 cpu=$( (sysctl -n machdep.cpu.brand_string 2>/dev/null || grep -m1 'model name' /proc/cpuinfo | cut -d: -f2) | sed 's/^ *//')
 echo "host $(hostname -s) · $cpu · $(uname -sm)"
-echo "commit ${MSBENCH_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)} · $("$MSC" --version 2>/dev/null | head -1) · node $("$NODE" --version)"
+echo "commit ${MSBENCH_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)} · $("$MSC" --version 2>/dev/null | head -1)$versions"
 echo "load before $(uptime | sed 's/.*load averages*: //')"
 
 : > "$OUT/runs.tsv"
 for ((r = 1; r <= ROUNDS; r++)); do
 	for arm in "${arms[@]}"; do
-		if [ "$arm" = node ]; then "$NODE" "$HERE/bench.node.mjs"; else "$OUT/$arm"; fi |
+		runArm "$arm" |
 			awk -v arm="$arm" '{ name = substr($0, 1, 28); sub(/ +$/, "", name); split(substr($0, 29), f, " "); print arm "\t" name "\t" f[1] "\t" f[2] }' >> "$OUT/runs.tsv"
 	done
 done
