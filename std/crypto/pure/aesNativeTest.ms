@@ -343,6 +343,33 @@ test "GCM encrypt and decrypt into caller ranges, in place" {
 	assert eqHex(record.slice(5, 65), pt);
 }
 
+test "GCM decryptInto does not write dst on tag failure" {
+	const xk     = expandKey(k128f.decodeHex());
+	const nonce  = ivCafe.decodeHex();
+	const aad    = aadF.decodeHex();
+	const pt     = "d9313225f88406e5a55909c5aff5269a".decodeHex();
+	const srcBuf = new Array<uint8>(32);
+	gcmEncryptInto(xk, nonce, aad, pt, 0, 16, srcBuf, 0, srcBuf, 16);
+	srcBuf[16] = (srcBuf[16] ^ 1) as uint8;
+	const dst = new Array<uint8>(16);
+	dst.fill(0xaa);
+	assert !gcmDecryptInto(xk, nonce, aad, srcBuf, 0, 16, srcBuf, 16, dst, 0);
+	for (let i = 0; i < 16; i++) assert (dst[i] as int32) == 0xaa;
+}
+
+test "GCM decryptInto does not write dst on tag failure, src and dst aliased" {
+	const xk    = expandKey(k128f.decodeHex());
+	const nonce = ivCafe.decodeHex();
+	const aad   = aadF.decodeHex();
+	const pt    = "d9313225f88406e5a55909c5aff5269a".decodeHex();
+	const buf   = new Array<uint8>(32);
+	gcmEncryptInto(xk, nonce, aad, pt, 0, 16, buf, 0, buf, 16);
+	const ctHex = buf.slice(0, 16).encodeHex();
+	buf[16] = (buf[16] ^ 1) as uint8;
+	assert !gcmDecryptInto(xk, nonce, aad, buf, 0, 16, buf, 16, buf, 0);
+	assert eqHex(buf.slice(0, 16), ctHex);
+}
+
 test "GCM into refuses a range outside its array" {
 	const xk = expandKey(k128z.decodeHex());
 	const nonce = ivZ.decodeHex();
