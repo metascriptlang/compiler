@@ -199,8 +199,8 @@ when (!js) {
 		else sha256HwBlocks(state, block, 0, blocks);
 		const out = digestArray(hashOutputSize(kind));
 		writeDigest(state, out, out.length >> 2, false);
-		wipeWords(state);
-		wipeBytes(block);
+		wipeWords(state[0..(wide ? 16 : 8)]);
+		wipeBytes(block[0..blocks * size]);
 		return out;
 	}
 }
