@@ -76,11 +76,20 @@ function isSafeInteger(value: number): boolean {
 }
 
 function drawUint64(): uint64 | null {
-	const drawn = drawBytes(8);
-	if (drawn == null) return null;
-	let x: uint64 = 0;
-	for (let i = 0; i < 8; i++) x = (x << 8) | (drawn[i] as uint64);
-	return x;
+	when (js) {
+		const drawn = drawBytes(8);
+		if (drawn == null) return null;
+		let x: uint64 = 0;
+		for (let i = 0; i < 8; i++) x = (x << 8) | (drawn[i] as uint64);
+		return x;
+	} else {
+		let drawn: uint8[8] = [0];
+		const span: Span<uint8> = drawn;
+		if (osRandomFill(span as Ptr<uint8>, 8) != 0) return null;
+		let x: uint64 = 0;
+		for (let i = 0; i < 8; i++) x = (x << 8) | (drawn[i] as uint64);
+		return x;
+	}
 }
 
 /** The high 64 bits of the 128-bit product `x * n`, from 32-bit limbs. */
