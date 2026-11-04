@@ -1958,8 +1958,10 @@ export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): v
 }
 
 function isViewCall(call: Node): boolean {
-	const callee = peelView((call.data as CallExprData).callee);
-	if (callee == null || callee.kind != NodeKind.MemberExpr) return false;
+	const written = (call.data as CallExprData).callee;
+	if (written == null) return false;
+	const callee = peelView(written);
+	if (callee.kind != NodeKind.MemberExpr) return false;
 	const m = callee.data as MemberExprData;
 	if (m.property != "view" || m.object.nodeType == null) return false;
 	const handle = peelThrough(m.object.nodeType!, PEEL_ALIAS);
