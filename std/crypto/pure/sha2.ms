@@ -52,6 +52,19 @@ const iv512: uint32[16] = [
 	0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179,
 ];
 
+/** The initial chaining words of a SHA-2 kind into `state`: eight for SHA-224/256, sixteen (high word first) for SHA-384/512. */
+export function sha2Iv(kind: int32, state: Span<uint32>): void {
+	if (kind == kindSha256) {
+		for (let i = 0; i < 8; i++) state[i] = iv256[i];
+	} else if (kind == kindSha224) {
+		for (let i = 0; i < 8; i++) state[i] = iv224[i];
+	} else if (kind == kindSha512) {
+		for (let i = 0; i < 16; i++) state[i] = iv512[i];
+	} else {
+		for (let i = 0; i < 16; i++) state[i] = iv384[i];
+	}
+}
+
 export function initSha2(h: HashState): void {
 	if (h.kind == kindSha256) {
 		for (let i = 0; i < 8; i++) h.state[i] = iv256[i];

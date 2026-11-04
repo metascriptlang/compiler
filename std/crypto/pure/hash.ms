@@ -6,7 +6,10 @@ import { encodeHex } from "../../core/encoding";
 
 when (!js) {
 	import { Buffer } from "std/core/buffer";
-	import { sha256HwBlocks, sha512HwBlocks } from "./hw";
+	import { sha256HwBlocks, sha512HwBlocks, pureCpuFeatures } from "./hw";
+	import { hashOutputSize } from "./state";
+	import { sha2Iv } from "./sha2";
+	import { wipeBytes, wipeWords } from "./secret";
 
 	/** The digest array; finishHashInto writes every byte, so it is not zeroed first. */
 	function digestArray(size: int32): uint8[] {
@@ -102,30 +105,55 @@ export function updateHash(h: HashState, data: Readonly<uint8[]>): void {
 	h.filled = filled;
 }
 
-/** The message length in bits at `block[at, +8)`: little-endian for MD5, big-endian for the others. */
-function putLength(h: HashState, at: int32): void {
+/**
+ * Pads the last `filled` bytes of a message of `length` bytes in `block` (two blocks of room): 0x80, zeros, then the
+ * length in bits in the last eight bytes, little-endian for MD5 and big-endian for the others. The blocks to compress.
+ */
+function padInto(block: Span<uint8>, filled: int32, size: int32, length: number, md5: boolean): int32 {
+	const lengthBytes = size == 128 ? 16 : 8;
+	block[filled] = 0x80;
+	const blocks = filled + 1 > size - lengthBytes ? 2 : 1;
+	const end = blocks * size;
+	for (let i = filled + 1; i < end - 8; i++) block[i] = 0;
 	let high: uint32 = 0;
 	let low: uint32 = 0;
 	when (js) {
-		const bits = h.length * 8;
+		const bits = length * 8;
 		high = Math.floor(bits / 4294967296) as uint32;
 		low = (bits - Math.floor(bits / 4294967296) * 4294967296) as uint32;
 	} else {
-		const bytes = h.length as uint64;
+		const bytes = length as uint64;
 		high = (bytes >> 29) as uint32;
 		low = (bytes << 3) as uint32;
 	}
-	if (h.kind == kindMd5) {
-		for (let i = 0; i < 4; i++) {
-			const shift = (8 * i) as uint32;
-			h.block[at + i] = ((low >> shift) & 255) as uint8;
-			h.block[at + 4 + i] = ((high >> shift) & 255) as uint8;
+	const at = end - 8;
+	for (let i = 0; i < 4; i++) {
+		const shift = (8 * i) as uint32;
+		if (md5) {
+			block[at + i] = ((low >> shift) & 255) as uint8;
+			block[at + 4 + i] = ((high >> shift) & 255) as uint8;
+		} else {
+			block[at + 7 - i] = ((low >> shift) & 255) as uint8;
+			block[at + 3 - i] = ((high >> shift) & 255) as uint8;
 		}
-	} else {
-		for (let i = 0; i < 4; i++) {
-			const shift = (8 * i) as uint32;
-			h.block[at + 7 - i] = ((low >> shift) & 255) as uint8;
-			h.block[at + 3 - i] = ((high >> shift) & 255) as uint8;
+	}
+	return blocks;
+}
+
+/** The first `words` chaining words as digest bytes: little-endian words for MD5, big-endian for the others. */
+function writeDigest(state: Readonly<Span<uint32>>, out: uint8[], words: int32, md5: boolean): void {
+	for (let w = 0; w < words; w++) {
+		const word = state[w];
+		if (md5) {
+			out[4 * w] = (word & 255) as uint8;
+			out[4 * w + 1] = ((word >> 8) & 255) as uint8;
+			out[4 * w + 2] = ((word >> 16) & 255) as uint8;
+			out[4 * w + 3] = (word >> 24) as uint8;
+		} else {
+			out[4 * w] = (word >> 24) as uint8;
+			out[4 * w + 1] = ((word >> 16) & 255) as uint8;
+			out[4 * w + 2] = ((word >> 8) & 255) as uint8;
+			out[4 * w + 3] = (word & 255) as uint8;
 		}
 	}
 }
@@ -133,36 +161,12 @@ function putLength(h: HashState, at: int32): void {
 /** Pads, compresses the last block(s) and writes the digest to `out`; the state is finished afterwards. */
 export function finishHashInto(h: HashState, out: uint8[]): void {
 	if (h.finished) throw new Error("hash already finished");
-	const size = h.blockSize;
-	const lengthBytes = size == 128 ? 16 : 8;
-	let filled = h.filled;
-	h.block[filled] = 0x80;
-	filled += 1;
-	const blocks = filled > size - lengthBytes ? 2 : 1;
-	const end = blocks * size;
-	for (let i = filled; i < end - 8; i++) h.block[i] = 0;
-	putLength(h, end - 8);
+	const md5 = h.kind == kindMd5;
+	const blocks = padInto(h.block, h.filled, h.blockSize, h.length, md5);
 	compressRun(h, h.block, 0, blocks);
 	h.filled = 0;
 	h.finished = true;
-	const words = h.outputSize >> 2;
-	if (h.kind == kindMd5) {
-		for (let w = 0; w < words; w++) {
-			const word = h.state[w];
-			out[4 * w] = (word & 255) as uint8;
-			out[4 * w + 1] = ((word >> 8) & 255) as uint8;
-			out[4 * w + 2] = ((word >> 16) & 255) as uint8;
-			out[4 * w + 3] = (word >> 24) as uint8;
-		}
-	} else {
-		for (let w = 0; w < words; w++) {
-			const word = h.state[w];
-			out[4 * w] = (word >> 24) as uint8;
-			out[4 * w + 1] = ((word >> 16) & 255) as uint8;
-			out[4 * w + 2] = ((word >> 8) & 255) as uint8;
-			out[4 * w + 3] = (word & 255) as uint8;
-		}
-	}
+	writeDigest(h.state, out, h.outputSize >> 2, md5);
 }
 
 export function finishHash(h: HashState): uint8[] {
@@ -172,7 +176,42 @@ export function finishHash(h: HashState): uint8[] {
 	return out;
 }
 
+// A one-shot SHA-2 digest on the CPU's SHA extension keeps its chaining words and last blocks on the stack, so the
+// only allocation is the digest.
+when (!js) {
+	function sha2OneShot(kind: int32, data: Readonly<uint8[]>): uint8[] | null {
+		const wide = kind == kindSha512 || kind == kindSha384;
+		if ((pureCpuFeatures() & (wide ? 2 : 1)) == 0) return null;
+		const size = wide ? 128 : 64;
+		let state: uint32[16] = [0];
+		let block: uint8[256] = [0];
+		sha2Iv(kind, state);
+		const length = data.length as int32;
+		const full = (length / size) as int32;
+		if (full > 0) {
+			if (wide) sha512HwBlocks(state, data, 0, full);
+			else sha256HwBlocks(state, data, 0, full);
+		}
+		const rest = length - full * size;
+		for (let i = 0; i < rest; i++) block[i] = data[full * size + i];
+		const blocks = padInto(block, rest, size, length as number, false);
+		if (wide) sha512HwBlocks(state, block, 0, blocks);
+		else sha256HwBlocks(state, block, 0, blocks);
+		const out = digestArray(hashOutputSize(kind));
+		writeDigest(state, out, out.length >> 2, false);
+		wipeWords(state);
+		wipeBytes(block);
+		return out;
+	}
+}
+
 export function hashOf(kind: int32, data: Readonly<uint8[]>): uint8[] {
+	when (!js) {
+		if (kind == kindSha256 || kind == kindSha224 || kind == kindSha512 || kind == kindSha384) {
+			const out = sha2OneShot(kind, data);
+			if (out != null) return out;
+		}
+	}
 	const h = newHash(kind);
 	updateHash(h, data);
 	return finishHash(h);
