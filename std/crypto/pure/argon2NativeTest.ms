@@ -134,3 +134,21 @@ test "argon2VerifyEncoded refuses malformed strings and parameters over the boun
 	assert !argon2VerifyEncoded(good, pw, { memoryCost: 32, timeCost: 12, parallelism: 16 });
 	assert decodeArgon2id("$argon2i$v=19$m=64,t=2,p=2$c29tZXNhbHQ$NQrDciL0Nsy1wJcvHr079rlYvyBxhBNi") == null;
 }
+
+test "argon2idHash wipes the memory matrix it was given" {
+	const memory = new Array<uint32>(argon2Words(32, 1) as int32);
+	argon2idHash(memory, pw, salt, 1, 32, 1, 0x13, 16);
+	let any: uint32 = 0;
+	for (const word of memory) any |= word;
+	assert any == 0;
+}
+
+test "argon2Raw refuses memory the matrix cannot index before allocating" {
+	const huge = argon2Raw(pw, salt, 1, 8388608, 1, 32);
+	assert !huge.ok && huge.error == "Memory allocation error";
+	assert !argon2VerifyEncoded("$argon2id$v=19$m=8388608,t=1,p=1$c29tZXNhbHQ$NQrDciL0Nsy1wJcvHr079rlYvyBxhBNi", pw, { memoryCost: 8388608, timeCost: 12, parallelism: 16 });
+}
+
+test "base64 fields with a character outside ASCII are refused" {
+	assert decodeArgon2("$argon2id$v=19$m=64,t=2,p=2$c29tZXNhbHQ$NQrDciL0Nsy1wJcvHr079rlYvyBxhBNé") == null;
+}
