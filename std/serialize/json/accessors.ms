@@ -397,11 +397,32 @@ function jsonElemPath(arrPath: string, i: int32): string {
 	return arrPath + "[" + i.toString() + "]";
 }
 
+function reqStringAt(v: JsonValue, arrPath: string, i: int32, errs: string[]): string {
+	if (v != null && v.kind == JsonKind.String) return v.strVal;
+	return reqString(v, jsonElemPath(arrPath, i), "", errs);
+}
+
+function reqBooleanAt(v: JsonValue, arrPath: string, i: int32, errs: string[]): boolean {
+	if (v != null && v.kind == JsonKind.Bool) return v.boolVal;
+	return reqBoolean(v, jsonElemPath(arrPath, i), "", errs);
+}
+
+function reqNumberAt(v: JsonValue, arrPath: string, i: int32, errs: string[]): number {
+	if (v != null && v.kind == JsonKind.Number) return v.numVal;
+	if (v != null && v.kind == JsonKind.Int) return v.intVal as number;
+	return reqNumber(v, jsonElemPath(arrPath, i), "", errs);
+}
+
+function reqInt64At(v: JsonValue, arrPath: string, i: int32, errs: string[]): int64 {
+	if (v != null && v.kind == JsonKind.Int) return v.intVal;
+	return reqInt64(v, jsonElemPath(arrPath, i), "", errs);
+}
+
 export function jsonToStringArrayE(this v: JsonValue, errs: string[], arrPath: string): string[] {
 	const out: string[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqString(v.items[i], jsonElemPath(arrPath, i), "", errs));
+		out.push(reqStringAt(v.items[i], arrPath, i, errs));
 	}
 	return out;
 }
@@ -410,7 +431,7 @@ export function jsonToBooleanArrayE(this v: JsonValue, errs: string[], arrPath: 
 	const out: boolean[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqBoolean(v.items[i], jsonElemPath(arrPath, i), "", errs));
+		out.push(reqBooleanAt(v.items[i], arrPath, i, errs));
 	}
 	return out;
 }
@@ -419,7 +440,7 @@ export function jsonToNumberArrayE(this v: JsonValue, errs: string[], arrPath: s
 	const out: number[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs));
+		out.push(reqNumberAt(v.items[i], arrPath, i, errs));
 	}
 	return out;
 }
@@ -428,7 +449,7 @@ export function jsonToFloat32ArrayE(this v: JsonValue, errs: string[], arrPath: 
 	const out: float32[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqNumber(v.items[i], jsonElemPath(arrPath, i), "", errs) as float32);
+		out.push(reqNumberAt(v.items[i], arrPath, i, errs) as float32);
 	}
 	return out;
 }
@@ -437,7 +458,7 @@ export function jsonToInt8ArrayE(this v: JsonValue, errs: string[], arrPath: str
 	const out: int8[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int8);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int8);
 	}
 	return out;
 }
@@ -446,7 +467,7 @@ export function jsonToInt16ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: int16[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int16);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int16);
 	}
 	return out;
 }
@@ -455,7 +476,7 @@ export function jsonToInt32ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: int32[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as int32);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int32);
 	}
 	return out;
 }
@@ -464,7 +485,7 @@ export function jsonToInt64ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: int64[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs));
+		out.push(reqInt64At(v.items[i], arrPath, i, errs));
 	}
 	return out;
 }
@@ -473,7 +494,7 @@ export function jsonToUint8ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: uint8[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint8);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint8);
 	}
 	return out;
 }
@@ -482,7 +503,7 @@ export function jsonToUint16ArrayE(this v: JsonValue, errs: string[], arrPath: s
 	const out: uint16[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint16);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint16);
 	}
 	return out;
 }
@@ -491,7 +512,7 @@ export function jsonToUint32ArrayE(this v: JsonValue, errs: string[], arrPath: s
 	const out: uint32[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64(v.items[i], jsonElemPath(arrPath, i), "", errs) as uint32);
+		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint32);
 	}
 	return out;
 }

@@ -255,6 +255,24 @@ test "array of structs: the second element reports its own index" {
 	assert errs[0] == "field 'items[1].qty': expected int, got null";
 }
 
+interface Zip { code: string; }
+interface Row { tags: string[]; at: Zip; n: int64; }
+interface Sheet { rows: Row[]; }
+
+test "array of structs: nested paths under an outer prefix name every level" {
+	const pr = parseJson(`{"rows":[{"tags":["a",1],"at":{"code":2},"n":1},5]}`);
+	assert pr.ok;
+	const errs: string[] = [];
+	const s: Sheet = jsonValueToStructE(pr.value, null as Sheet | null, errs, "doc.");
+	assert errs.includes("field 'doc.rows[0].tags[1]': expected string, got int");
+	assert errs.includes("field 'doc.rows[0].at.code': expected string, got int");
+	assert errs.includes("field 'doc.rows[1]': expected object, got int");
+	assert errs.includes("field 'doc.rows[1].tags': expected array, got null");
+	assert errs.includes("field 'doc.rows[1].at.code': expected string, got null");
+	assert errs.includes("field 'doc.rows[1].n': expected int, got null");
+	for (const e of errs) assert e.startsWith("field 'doc.rows[");
+}
+
 // ===== Atomic array elements are strict too =====
 //
 // Struct elements became strict first; atomic elements stayed lenient and

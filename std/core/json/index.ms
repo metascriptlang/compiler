@@ -173,7 +173,11 @@ export function _jsonToIntArrayE<T>(jv: JsonValue, witness: T | null, errs: stri
 	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
-		out.push(reqInt64(jv.items[i], arrPath + "[" + i.toString() + "]", "", errs) as T);
+		const item = jv.items[i];
+		const value = item != null && item.kind == JsonKind.Int
+			? item.intVal
+			: reqInt64(item, elementPath(arrPath, i), "", errs);
+		out.push(value as T);
 		i = i + 1;
 	}
 	return out;
@@ -213,12 +217,39 @@ export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: s
 	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
-		const elemPath: string = arrPath + "[" + i.toString() + "]";
-		const el: JsonValue = reqObject(jv.items[i], elemPath, "", errs);
-		out.push(jsonValueToStructE(el, witness, errs, elemPath + "."));
+		const item = jv.items[i];
+		const el: JsonValue = item != null && item.kind == JsonKind.Object
+			? item
+			: reqObject(item, elementPath(arrPath, i), "", errs);
+		const firstElementError = errs.length;
+		out.push(jsonValueToStructE(el, witness, errs, ""));
+		if (errs.length > firstElementError) {
+			prefixFieldErrors(errs, firstElementError, elementPath(arrPath, i) + ".");
+		}
 		i = i + 1;
 	}
 	return out;
+}
+
+function elementPath(arrPath: string, i: int32): string {
+	return arrPath + "[" + i.toString() + "]";
+}
+
+function entryPath(mapPath: string, key: string): string {
+	return mapPath == "" ? key : mapPath + "." + key;
+}
+
+const fieldErrorLead = "field '";
+
+function prefixFieldErrors(errs: string[], from: int32, pfx: string): void {
+	const leadWidth = fieldErrorLead.byteLength;
+	for (let k = from; k < errs.length; k = k + 1) {
+		const e = errs[k];
+		if (e.byteSlice(0, leadWidth) != fieldErrorLead) {
+			throw new Error("decode error without a field lead: " + e);
+		}
+		errs[k] = fieldErrorLead + pfx + e.byteSlice(leadWidth, e.byteLength);
+	}
 }
 
 
@@ -280,9 +311,10 @@ export function _jsonToStructMap<V>(jv: JsonValue, witness: V | null): Map<strin
 export function _jsonToStringMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
 	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
+	const entryPfx = mapPath == "" ? "" : mapPath + ".";
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqString(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		out.set(jv.keys[i], reqString(jv.values[i], entryPfx, jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
@@ -291,9 +323,10 @@ export function _jsonToStringMapE<V>(jv: JsonValue, witness: V | null, errs: str
 export function _jsonToBooleanMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
 	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
+	const entryPfx = mapPath == "" ? "" : mapPath + ".";
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqBoolean(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		out.set(jv.keys[i], reqBoolean(jv.values[i], entryPfx, jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
@@ -302,9 +335,10 @@ export function _jsonToBooleanMapE<V>(jv: JsonValue, witness: V | null, errs: st
 export function _jsonToNumberMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
 	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
+	const entryPfx = mapPath == "" ? "" : mapPath + ".";
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqNumber(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		out.set(jv.keys[i], reqNumber(jv.values[i], entryPfx, jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
@@ -313,9 +347,10 @@ export function _jsonToNumberMapE<V>(jv: JsonValue, witness: V | null, errs: str
 export function _jsonToIntMapE<V>(jv: JsonValue, witness: V | null, errs: string[], mapPath: string): Map<string, V> {
 	const out = new Map<string, V>();
 	if (jv == null || jv.kind != JsonKind.Object) return out;
+	const entryPfx = mapPath == "" ? "" : mapPath + ".";
 	let i = 0;
 	while (i < jv.keys.length) {
-		out.set(jv.keys[i], reqInt64(jv.values[i], (mapPath == "" ? "" : mapPath + "."), jv.keys[i], errs) as V);
+		out.set(jv.keys[i], reqInt64(jv.values[i], entryPfx, jv.keys[i], errs) as V);
 		i = i + 1;
 	}
 	return out;
@@ -326,9 +361,15 @@ export function _jsonToStructMapE<V>(jv: JsonValue, witness: V | null, errs: str
 	if (jv == null || jv.kind != JsonKind.Object) return out;
 	let i = 0;
 	while (i < jv.keys.length) {
-		const valuePath: string = mapPath == "" ? jv.keys[i] : mapPath + "." + jv.keys[i];
-		const el: JsonValue = reqObject(jv.values[i], valuePath, "", errs);
-		out.set(jv.keys[i], jsonValueToStructE(el, witness, errs, valuePath + "."));
+		const value = jv.values[i];
+		const el: JsonValue = value != null && value.kind == JsonKind.Object
+			? value
+			: reqObject(value, entryPath(mapPath, jv.keys[i]), "", errs);
+		const firstEntryError = errs.length;
+		out.set(jv.keys[i], jsonValueToStructE(el, witness, errs, ""));
+		if (errs.length > firstEntryError) {
+			prefixFieldErrors(errs, firstEntryError, entryPath(mapPath, jv.keys[i]) + ".");
+		}
 		i = i + 1;
 	}
 	return out;
