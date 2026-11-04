@@ -1,4 +1,4 @@
-/** Arbitrary-size integer helpers for the portable RSA and elliptic-curve code, and the random bytes they draw. Not constant-time. */
+/** Arbitrary-size integer helpers for the portable RSA and elliptic-curve code, and the random bytes they draw (the OS CSPRNG on C). Not constant-time. */
 
 when (js) {
 	@emit(`function msPureRandom(size) {
@@ -10,8 +10,22 @@ when (js) {
 	extern function pureRandom(size: int32): uint8[] from "msPureRandom(#)";
 }
 
+when (c) {
+	@include("runtime/crypto/randomFill.h");
+	extern function osRandomFill(buf: Ptr<uint8>, len: int64): int32 from "ms_random_fill";
+}
+
 export function randomOctets(size: int32): uint8[] {
-	when (js) { return pureRandom(size); } else { throw new Error("randomOctets: the portable code draws its random bytes on the JS tier only"); }
+	when (js) {
+		return pureRandom(size);
+	} else when (c) {
+		const bytes = new Array<uint8>(size);
+		const target = (bytes as Span<uint8>) as Ptr<uint8>;
+		if (size > 0 && osRandomFill(target, size as int64) != 0) throw new Error("randomOctets: the OS random source failed");
+		return bytes;
+	} else {
+		throw new Error("randomOctets: this target has no random source for the portable code");
+	}
 }
 
 export function bigFromBytes(bytes: Readonly<uint8[]>): bigint {
