@@ -10,7 +10,7 @@
 // BODY moves unchanged into the fallback, so a block the guard refuses keeps every check and stops
 // at the exact element. Any other loop is left alone.
 
-import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData } from "../../ast/node";
+import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
@@ -80,7 +80,39 @@ function matchReduction(loop: Node): Reduction | null {
 	if (cd.operator != "<" || !isSignedLocal(cd.left)) return null;
 	const index = cd.left;
 	const stmts = (w.whileBody.data as BlockStmtData).statements;
-	return stmts.length == 4 ? matchForOf(stmts, index, cd.right) : stmts.length == 2 ? matchIndexed(stmts, index, cd.right) : null;
+	if (stmts.length == 4) return matchForOf(stmts, index, cd.right);
+	if (stmts.length != 2) return null;
+	return stmts[0].kind == NodeKind.BlockStmt ? matchElementLocal(stmts, index, cd.right) : matchIndexed(stmts, index, cd.right);
+}
+
+// The fused loop of an array iterator: `{ const x = xs[i]; { acc op= x } }` then the step of i, bounded by
+// `xs.length` read each step (through `as int64`).
+function matchElementLocal(stmts: Node[], index: Node, len: Node): Reduction | null {
+	if (!isIndexStep(stmts[1], index)) return null;
+	const inner = nestedStatements(stmts[0]);
+	if (inner.length != 2 || inner[0].kind != NodeKind.VariableDecl || inner[0].resolvedSym == null) return null;
+	const decl = inner[0];
+	const array = elementRead((decl.data as VariableDeclData).initializer, index);
+	const reduce = reduceStmt(inner[1]);
+	if (array == null || reduce == null) return null;
+	const acc = reduce.acc;
+	const term = widened(reduce.term, acc);
+	if (term == null || term.kind != NodeKind.Identifier || term.resolvedSym != decl.resolvedSym) return null;
+	const bareLen = len.kind == NodeKind.TypeAssertion ? (len.data as TypeAssertionData).asExpr : len;
+	const bound = lengthOf(bareLen);
+	if (bound == null || !readsAnyOf(bound, [array]) || !distinctFrom(acc, [index, decl, array])) return null;
+	const tag = sumTag(acc, array);
+	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len: bareLen, widthTag: tag };
+}
+
+function nestedStatements(block: Node): Node[] {
+	const out: Node[] = [];
+	for (const s of (block.data as BlockStmtData).statements) {
+		if (s.kind == NodeKind.BlockStmt) {
+			for (const t of nestedStatements(s)) out.push(t);
+		} else out.push(s);
+	}
+	return out;
 }
 
 function matchForOf(stmts: Node[], index: Node, len: Node): Reduction | null {
