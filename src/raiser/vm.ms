@@ -5106,18 +5106,19 @@ function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32)
 	const handle = vmPlainArray(vm, ia, "splice");
 	if (handle < 0) return;
 	const uncounted = heapArrayUncounted(vm.arrayHeap, handle);
+	const n = arrayHeldCount(vm.arrayHeap, handle) as int64;
 	let start = getDyn(vm, ic).intVal;
+	if (start < 0) start = start < -n ? 0 : start + n;
+	else if (start > n) start = n;
 	let count = getDyn(vm, ic + 8).intVal;
 	const inserting = itemReg >= 0;
 	let item = raiserNil();
 	if (inserting) {
 		item = getDyn(vm, itemReg);
 		if (vmElemRefused(vm, handle, item)) return;
-		if (start < 0) start = 0;
 	}
-	const n = arrayHeldCount(vm.arrayHeap, handle) as int64;
 	const evicted: RaiserValue[] = [];
-	if (start >= 0 && start < n && count > 0) {
+	if (start < n && count > 0) {
 		if (count > n - start) count = n - start;
 		for (let i = 0; i < count; i += 1) evicted.push(arrayHeldAt(vm.arrayHeap, handle, (start + i) as number));
 		arrayHeldRemove(vm.arrayHeap, handle, start as number, count as number);
@@ -9265,10 +9266,14 @@ function numberSplice(values: number[], start: number, count: number, withItem: 
 	return heldText(vm, vm.regs.slots[0]);
 }
 
-test "array kernels: splice removes by the C clamps and splice3 inserts where the removal began" {
+test "array kernels: splice removes by the C clamps, a negative start counting from the end, and splice3 inserts where the removal began" {
 	const base: number[] = [5, 4, 3, 1];
 	assert numberSplice(base, 1, 2, false, 0) == "[5,1]";
-	assert numberSplice(base, -1, 1, false, 0) == "[5,4,3,1]";
+	assert numberSplice(base, -1, 1, false, 0) == "[5,4,3]";
+	assert numberSplice(base, -3, 2, false, 0) == "[5,1]";
+	assert numberSplice(base, -9, 1, false, 0) == "[4,3,1]";
+	assert numberSplice([5, 1], -1, 0, true, 7) == "[5,7,1]";
+	assert numberSplice([5, 1], -1, 1, true, 7) == "[5,7]";
 	assert numberSplice(base, 9, 1, false, 0) == "[5,4,3,1]";
 	assert numberSplice(base, 0, 0, false, 0) == "[5,4,3,1]";
 	assert numberSplice(base, 0, -3, false, 0) == "[5,4,3,1]";

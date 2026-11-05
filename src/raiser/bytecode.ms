@@ -224,8 +224,8 @@ export enum RaiserOpcode {
 	RcKeptCheck,      // ABC: fatal when the count of the cell in refs[A] exceeds words[B]: a destroy routine kept its own cell alive
 	ArrayPop,         // ABC: R[A] = R[B].pop(); the element leaves the array with its count; an empty array is fatal like an index past its end
 	ArrayShift,       // ABC: R[A] = R[B].shift(); an empty array gives the zero of its element class, and "" when C = 1 (a string array)
-	ArraySplice,      // ABC: remove R[C+1] elements at R[C] from R[A]; a start outside the array or a count of 0 or less changes nothing
-	ArraySplice3,     // ABC: remove R[C+1] elements at R[C] from R[A], then insert R[B] there; the start clamps into 0..length
+	ArraySplice,      // ABC: remove R[C+1] elements at R[C] from R[A]; a negative start counts from the end, the start clamps into 0..length, a count of 0 or less removes nothing
+	ArraySplice3,     // ABC: ArraySplice, then insert R[B] where the removal began
 	ArrayReverse,     // ABC: reverse R[A] in place
 	ArraySort,        // ABC: sort R[A] in place, stable: numbers by value, strings by bytes
 	ArrayFill,        // ABC: every element of R[A] becomes R[B], each evicted element released
