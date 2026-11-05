@@ -1,77 +1,49 @@
-# ANALYZER — Phase 4, DRC injection
+# Analyzer: lifecycle placement
 
-Deterministic reference counting for the C backend. `analyzeProgram(program, checkerCtx)` (`src/analyzer/index.ms`) walks the post-transform AST, inserts the lifecycle calls `=destroy`, `=copy`, `=sink`, `=wasMoved` and then removes the redundant ones: `injectProgram` → `optimizeDrc`. The design is a direct AST rewrite with scope-based cleanup and a conservative last-read analysis. The rules a change must hold are in [`src/analyzer/CLAUDE.md`](../src/analyzer/CLAUDE.md); where Phase 4 sits is in [`PIPELINE.md`](PIPELINE.md).
+Phase 4 places lifecycle operations for C and Raiser; JS uses its own value-copy emission.
+The source entry is `analyzeProgram` in `src/analyzer/index.ms`. Raiser reaches it through
+`analyzeForRaiser` in `src/codegen/raiser/rgen.ms`, not a VM-store counting policy.
+Phase ordering is in [PIPELINE.md](PIPELINE.md); editing obligations are in
+[src/analyzer/CLAUDE.md](../src/analyzer/CLAUDE.md).
 
-## Three stages
+## Why placement is separate from representation
 
-| Stage | Where | Does | Does not |
-|-------|-------|------|----------|
-| Hook lifting | `src/transform/lowering/destructorLifting.ms` | generates the per-type lifecycle hooks | decide when or where they are called |
-| Injection | `inject.ms` with `classify.ms`, `scope.ms`, `cfg.ms`, `alias.ms`, `cursors.ms` | inserts the calls at the right AST positions | generate hook bodies, optimize |
-| Optimization | `optimize.ms` | removes redundant operations | restructure code, add operations |
+A copy, move, borrow and shared reference need not perform the same runtime operation.
+Classification must use the actual type/storage contract, not infer deep copying from the
+word “array” or ownership from a pointer-shaped C value. The emitter must not rediscover
+lifetime decisions after the analyzer has placed them.
 
-## What the injector sees
+Hook generation, placement and optimization have separate jobs: a generated cleanup body
+does not decide where it runs, and removing a redundant operation must not erase cleanup
+owed on another path. For an aliased destructive assignment, the source must survive the
+old destination's destruction. Finally/defer reads and exception exits are obligations too,
+not only the straight-line last read.
 
-Earlier phases have already removed `defer`, `match` expressions, `try` expressions, `?.`, `??` and destructuring: `inject.ms` has no case for them. It does have cases for `ForStmt`, `ForOfStmt`, `MatchStmt`, `SwitchStmt` and `ArrowFunction`, so a description of Phase 4 input as "everything lowered to `while` and `if`" does not match the code.
+The decision owners are `moveOrCopy`/`generateCleanup` in `inject.ms`, classification in
+`classify.ms`, last-read/alias analysis in `cfg.ms`/`alias.ms`, cursor inference in
+`cursors.ms`, and `optimizeDrc` in `optimize.ms`. Consult them rather than maintaining a
+second algorithm or insertion-point inventory here. In particular, source shapes with a
+non-owning annotation still need the proof described in [Advanced contracts](CONTRACTS.md).
 
-## The decision at an assignment — `moveOrCopy` (`inject.ms`)
+## Historical measurements, not current certification
 
-In this order:
+Preserved from the earlier document, not rerun for this rewrite:
 
-1. The type needs no cleanup → the statement is left alone.
-2. Destination and source are the same location → left alone.
-3. The destination is a cursor (a borrow inferred by `cursors.ms`) → no RC.
-4. Otherwise by the kind of the right-hand side:
-   - **Call** — at a declaration the result is taken as is (SINK). At a reassignment, String and Named values hoist the result into a temp and call the sink hook (or the copy hook when the type has no sink), then `wasMoved` on the temp; Ref and Closure go through `genSink`: save old, assign, destroy old.
-   - **Literal, `new`, arrow or function expression** — SINK.
-   - **`move x`** — self-move is a no-op; a move that aliases the destination (`x = move x.field`) captures to a temp, zeroes the source, destroys the old destination, assigns from the temp; any other move is `wasMoved` on the source plus SINK.
-   - **Identifier** — MOVE (`genSink` + `wasMoved`) when this is the last read of its symbol, else COPY.
-   - **Member, index or hidden deref** — MOVE when the source owns the field, the type has a `wasMoved` hook and this is the field's last read; else COPY.
-   - **Conditional** — becomes an `if` whose branches are each decided on their own where the arm can; else COPY.
-   - **Anything else** — COPY.
+- 2026-09-21: self-host and 223 corpus programs emitted byte-identical C after lifecycle-op
+  identity replaced name matching; 119 destroys were removed, all on runtime operations.
+  The original observation did not record its tree.
+- 2026-09-22, tree `5158d70c07c173380e72a42f99f1d58003dff425`: 3789/3789 tests passed;
+  self-host generations 1/2 emitted 326 identical C modules. JS self-host stopped before
+  emission on unavailable std crypto/zip imports; it was not verified.
+- 2026-09-20: a probe over 51 corpus programs numbered 000–307 and a small control did not
+  reach the For/ForOf/Match statement arms; Switch did arrive. The other 169 programs and
+  self-host were not measured, and the record supplied no tree. This is not permission to
+  delete an unreached arm.
+- 2026-09-21: 44,700 last-read queries over self-host and 223 corpus programs changed 588
+  copy decisions to moves after symbol-keyed CFGs replaced name keys: 362 differed in
+  defs/reachability and 224 were old misses (222 `postBytes`). The exact separating edge/def
+  in the 362 and the original tree were not recorded.
 
-At sink and return materialization points `sinkClassify` classifies a `Ptr<T>` whose pointee is a counted Ref as the pointee, so it is COPIED (incref) and the owning destination's decref stays balanced. A `Ptr` variable holds a borrow and is never moved into an owning slot; a `Ptr` to a non-Ref pointee (malloc, FFI) is untouched.
-
-## Insertion points
-
-| Context | What happens |
-|---------|-------------|
-| `const x = fresh()` | SINK — ownership transfer, no copy |
-| `const x = y` | MOVE on the last read of `y` (assign + `wasMoved(y)`), else COPY |
-| `const x = obj.field` | COPY, or a field-level MOVE under the conditions above |
-| `x = …` (reassignment) | destroy the old value, then as for a declaration; a first write to an uninitialized `let x;` skips the destroy |
-| `x = f(x)` (self-alias) | save old in a temp, assign, destroy the temp |
-| `obj.field = expr`, `arr[i] = expr` | save the old slot, assign, destroy the old value |
-| `x += y` on an RC type | save old, compute, assign, destroy old |
-| `{ field: rcVar }`, `[a, b, c]` | incref or copy each RC field or element |
-| `f(rcVar)` | incref before the call when it is not the last read, `wasMoved` after when it is; a `sink` parameter consumes its argument |
-| `return expr` | returned variables are marked moved and excluded from cleanup |
-| Scope exit | destroy the tracked variables in LIFO order |
-| `break` / `continue` | cleanup runs up to the loop boundary |
-| `throw` | marks `needsTry` on the enclosing scopes |
-| Discarded `f()` result | captured in a temp and registered for cleanup |
-| Variable read inside a `finally` | protected: never moved out before the `finally` runs |
-| The closure env parameter `_envP` | typed `Ptr<void>`, so it carries no RC and is never tracked; the closure machinery owns the env (emitted `void* _envP`, no decref, measured 2026-10-15) |
-| Generator state body | `needsTry` is forced off — no try/finally wrapper |
-
-## Scope cleanup — `generateCleanup` (`inject.ms`)
-
-1. Emit the pending `wasMoved` expressions of the scope.
-2. Walk the tracked variables in reverse. Skip a cursor, a name in the exclude set (the returned expression), a type with no destroy hook. Emit `destroy` for the rest.
-3. When the scope needs a `try` and the cleanup is not empty: hoist each RC declaration before the `try` with a null initializer, turn the original initializer into an assignment inside it, and wrap `try { body } finally { cleanup }`.
-
-A moved variable still gets its `destroy` here; the optimizer removes it.
-
-## Post-optimization — `optimizeDrc` (`optimize.ms`)
-
-Per block it keeps the set of variables that are definitely moved: `wasMoved(x)` adds `x`; a later `destroy(x)` on a member of the set is dropped, adjacent or not; an `if` with an `else` contributes the intersection of its branches (`collectIfMoved`, `symListIntersect`); sub-blocks are walked recursively. A call is a `wasMoved` or `destroy` when its callee symbol carries `SymbolFlag.WasMovedOp` or `DestroyOp` — stamped at the minting boundary by `attachedOpSym` or `markLifecycleOp` — and variables are matched by symbol identity. Measured 2026-09-21: the self-host build and 223 corpus programs emit byte-identical C to the name-matching optimizer it replaced (119 destroys removed, all on runtime ops). Rechecked 2026-09-22 on tree `5158d70c07c173380e72a42f99f1d58003dff425`: 3789/3789 tests passed and generation 1/2 emitted the same 326 C modules byte-for-byte. Self-host JS was not verified: generation 1 stops before emission because `std/crypto` and `std/compress/zip` do not resolve on that target.
-
-## Type classification
-
-`RcInfo` in `classify.ms` and `Type.attachedOps` in `std/meta/node.ms` carry lifecycle identity as `Symbol`; `attachedOpSym` in `transform/util.ms` is the minting boundary. Names are read only at serialization and emission boundaries.
-
-## Not verified here
-
-- The decision list and the cleanup steps are read from `moveOrCopy` and `generateCleanup`; the rows of "Insertion points" are carried over from the earlier text with three corrections from the code (field-level move, conditional, `sink` parameter). No row was confirmed by emitting C.
-- Which control kinds reach the analyzer, measured 2026-09-20 with a probe compiler that printed the kind at the top of `processStmt`: over corpus programs 000–307 (51 programs) and a program with `for`, `for..of` and an integer `match`, `ForStmt`, `ForOfStmt` and `MatchStmt` never arrived; `SwitchStmt` arrived about 380 times per program from std plus once for the integer `match` — the match engine emits it for ordinal discriminants and `switchLower` keeps ordinal user switches. So `processSwitch` is live, while `processFor` and the `ForStmt`/`ForOfStmt`/`MatchStmt` arms of `scanFinallyBlocks` were unreached on that set; they were not removed. Not measured: the other 169 corpus programs and the self-host build.
-- `cfg.ms` builds one control-flow graph per root symbol per function, cached by symbol identity; a last-read query finds its use by node identity and walks forward with the `alias.ms` checks, for whole variables and field paths alike. Measured 2026-09-21 against the name-keyed graph it replaced: of 44 700 whole-variable queries (self-host + 223 corpus programs) 588 changed, all from copy to move, and in none of them was the blocking later use an identifier without a symbol or with another symbol: in 362 every later use was of the same symbol (the two graphs differ in defs or reachability, not in which identifiers count as uses), and 224 were queries the old graph could not find at all (222 of them `postBytes`, whose identifier is renamed away from its symbol). Not verified: which def or edge separates them in the 362. `alias.ms` (path aliasing) and `cursors.ms` (borrow inference with live ranges and mutation tracking) are named, not described: their internals were not read in this pass.
+Those results do not prove current optimization, control coverage, leak freedom or alias
+safety. A changed invariant needs its smallest real consumer and required runtime/backend
+checks; the land gate observes interactions, not a blanket safety property.

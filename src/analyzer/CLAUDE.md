@@ -1,6 +1,6 @@
 # Phase 4: DRC Analyzer
 
-Deterministic reference counting for the C backend: `analyzeProgram(program, checkerCtx)` → `injectProgram` → `optimizeDrc`. It rewrites the post-transform AST in place, inserting `=destroy`, `=copy`, `=sink`, `=wasMoved` calls. The decision tree, the insertion points, scope cleanup and the optimizer: [`docs/ANALYZER.md`](../../docs/ANALYZER.md).
+Deterministic reference counting for the C and Raiser backends: `analyzeProgram` (`index.ms`) → `injectProgram` → `optimizeDrc`. It rewrites the post-transform AST in place, inserting `=destroy`, `=copy`, `=sink`, `=wasMoved` calls. Placement rationale, source owners and historical evidence: [`docs/ANALYZER.md`](../../docs/ANALYZER.md).
 
 ## Rules
 
@@ -32,4 +32,4 @@ Deterministic reference counting for the C backend: `analyzeProgram(program, che
 msc test src/analyzer/index.ms
 ```
 
-A DRC change is proven by the corpus, not by small leak probes.
+Before a DRC change, select the smallest registered corpus, guard or counter check that observes the touched lifetime invariant and prove it red before the fix and green after. Use native execution for native counts/lifetimes and the required backend variants; self-host success or JS parity alone does not prove them. Small diagnostic probes locate the failure but do not replace its regression pin. Full lanes belong to the land gate, because the edit loop must settle one changed contract at a time.

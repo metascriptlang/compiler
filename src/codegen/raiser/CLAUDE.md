@@ -1,6 +1,6 @@
 # Raiser Codegen — AST → bytecode
 
-Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transform → Raiser codegen → Raiser VM`. Phase 4 (DRC) and Phase 5 (C/JS) are skipped; the VM has its own memory model. What each node kind emits is in `expressions.ms` and `statements.ms`, the emit helpers in `context.ms`, the opcodes in `src/raiser/bytecode.ms`.
+Compiles the placed AST into Raiser bytecode: `parse → check → transform → analyze → Raiser codegen → Raiser VM`. `lowerForRaiser` runs `transformForRaiser` then `analyzeForRaiser` (`rgen.ms`), so Phase 4 places lifecycle operations; only C/JS emission is skipped. Preserve that placement boundary when changing lowering, because the VM does not reconstruct AST lifetime decisions. What each node kind emits is in `expressions.ms` and `statements.ms`, the emit helpers in `context.ms`, the opcodes in `src/raiser/bytecode.ms`.
 
 ## Files
 

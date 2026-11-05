@@ -17,19 +17,26 @@ Non-goals: a JIT, competing with browser engines, a 60 fps render loop, a large 
 
 ## Memory model
 
-Two regimes, chosen per VM by `gcMode`:
+Lifecycle decisions are placed before bytecode generation: `lowerForRaiser` runs
+`transformForRaiser` then `analyzeForRaiser` in `src/codegen/raiser/rgen.ms`; that calls
+`analyzeProgram` with the Raiser backend enabled. This is a source-traced phase boundary,
+not an optional VM-intrinsic `gcMode = "orc"`/arena policy.
 
-| Roles | `gcMode` | Reclamation |
-|---|---|---|
-| comptime (1), sandbox (3) | `"arena"`, the default of `createVM` and `createContext` | none per value; the heaps die with the evaluation |
-| long-lived (2, 4) and every `msc run --target=raiser` (`cmdRunRaiser` sets it) | `"orc"` | refcount on store and overwrite, plus a trial-deletion cycle collector once the live count passes `gcThreshold` (256) |
+Why preserve placement? Deterministic cleanup is language behavior. An evaluator must not
+silently defer the source's lifetime decisions to a different collector merely because it
+uses a different representation. A long-lived embedding also cannot assume that a growing
+arena is bounded or that resetting it preserves values held across ticks.
 
-- **Why not an arena for the long-lived roles** — nothing bounds their scope; a growing arena leaks and a per-tick reset corrupts state held across ticks.
-- **Why not a tracing GC** — the C backend destroys deterministically (RC plus the cycle collector, `--mm=drc`); a tracing Raiser would run `defer` and destructors at other times, so one source would behave differently per target. RC plus a cycle collector is also what AngelScript, Squirrel and GDScript use, and it has no stop-the-world pause.
-- **Why it is simpler than on C** — VM objects describe themselves (`fields: RaiserObjectField[]`), so one generic trace and one generic destroy cover every type; C needs per-type type info and generated trace / destroy procs.
-- **What is built** — `rc` and `color` on each heap entry and a free list that reuses slots (`value.ms`), `rcIncref` / `rcDecref`, the collector in `orc.ms`. RC placement is VM-intrinsic (the VM counts at stores), not the Phase 4 analyzer: Raiser runs `transformForRaiser` and skips the analyzer.
+The memory, typed string/array storage, heaps, placed counts and registered-root cycle
+collector are owned by the symbols listed in [`src/raiser/CLAUDE.md`](../src/raiser/CLAUDE.md).
+Trace those owners for a representation change rather than copying heap fields here.
+[Advanced contracts](CONTRACTS.md) separates a source trace from runtime/lifetime proof.
 
-**Strands share the program heap and the global slots**, as C's tasks read the one copy of module state; a future owns the heap its value lives in, the shape of C's future struct holding its value. `copyGraph` moves a value between heaps, preserving sharing and stopping on cycles through a source → destination map. Crossings: at `spawn`, the closure env as a copy the strand owns, whose global locations stay the shared slots; at completion, the result into the future; at `await`, the result out to the reader. So a strand's write to a global is what its parent reads next (`src/raiser/vm.ms` test "a global a spawned strand writes is what its parent reads next"), while its writes to captured state stay in its copy.
+Module state, closure captures and future results are different lifetime/provenance domains;
+copying one does not imply cloning the others. Their current crossing/representation owners
+are `copyGraph` and the strand/future paths in `src/raiser/value.ms` and `vm.ms`.
+The dated location matrix below records its observed cases, not a fresh certificate for the
+current heap-transfer or global-slot implementation.
 
 Location captures and future results were checked on 2026-10-04, source tree
 `de24e7b64206d38fb57f76d36cf1a3c3086b3b9a`: `msc run
@@ -42,7 +49,7 @@ Before the fix, a captured element location crashed at heap transfer and a
 captured string register read `nil`; C also destroyed the local storage at the
 first suspension. The frame lifetime decision lives in
 `localsOutlivingSuspension` (`src/transform/lowering/generatorLower.ms`), shared
-by the iterator and async builders; heap transfer remains the model above.
+by the iterator and async builders; that measurement does not certify subsequent heap/placement changes.
 These probes do not establish safety for a raw pointer escaping its source's
 scope or surviving storage growth.
 
@@ -51,7 +58,7 @@ scope or surviving storage growth.
 | Tier | What | Admission |
 |---|---|---|
 | 0 | VM opcode | not expressible in MS: string identity / length / index, array index / length / push / set-length, arithmetic. A std operation becomes an opcode for representation, never for speed; how an instruction codegen already emits is encoded (an immediate operand, a field slot index, a compare fused with its branch) is chosen for speed |
-| 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`, 174 `registerHostFn` entries) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
+| 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
 | 2 | Portable MS (`std/core/string/shared.ms`, `std/core/array/index.rms`) | everything derivable; shared with the C and JS backends |
 
 The bridge table is compiler-side, so Tier 1 exists only where a host compiler does: roles 1 and 2. Roles 3 and 4 get whatever minimal surface the embedder supplies, so their stdlib has to come from Tier 2. Answering "Raiser needs X" with "add a bridge" is a role-1-only answer. Comptime runs a std routine of a `.cms` module through that module's `.rms` tier when one declares it, and a tier that lacks the routine refuses the call rather than falling back to the C body (`raiserTierOf`, `src/codegen/raiser/eval.ms`).
@@ -121,7 +128,12 @@ raiser runtime error: interpretation requires too many iterations (limit 1000000
 
 A 20M-iteration loop fails with that message and prints `20000000` with `--max-vm-iterations=30000000`. The unit is back-edges because a per-instruction budget taxes Tier-2 std by the length of its loop bodies. On 2026-09-04 an identical comptime `startsWith` folded at N = 450k through a host bridge and died at N = 35k as pure MS, which made "foldable" depend on which tier supplied a function (not re-run here).
 
-## Status on `--target=raiser`
+## Historical observations on `--target=raiser`
+
+This table is a dated ledger, not a current feature blacklist. Its negative cells must be
+reproduced on the relevant binary before being treated as present limits. The new documentation
+checks in [CONTRACTS.md](CONTRACTS.md#bounded-findings-not-new-features) exercised async rejection,
+byte detachment/view reads and array aliasing on C/JS/Raiser; they did not recertify this table.
 
 Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each probe also run on `--target=c` as control:
 

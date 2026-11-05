@@ -10,11 +10,12 @@ because `ls` is current.
 | `ast/` | node definitions re-exported from `std/meta/node`, the child visitor (`visitor.ms`: `forEachChild`, `mapChildren`, `anyChild`/`anyDescendant`), the debug dump (`printer.ms`), `fieldspec.ms` (the one per-kind field spec), `operators.ms` and `shape.ms` (operator and node-shape predicates the transform passes share) and the guards that keep the child tables whole | `index.ms` |
 | `lexer/` | source text to tokens; `TokenKind` lives in `std/meta/token` | `lexer.ms` `lex` |
 | `parser/` | recursive descent + Pratt precedence; `statements/` and `expressions/` split by node family | `statements/core.ms` `parseProgram` |
-| `binder/` | flow graph the checker's narrowing reads | `index.ms` `bindFlowGraph` |
+| `bench/` | benchmarks and compiler flow A/B ([BUILD-PERF.md](BUILD-PERF.md)) | `compiler/run.ms`; `README.md` |
+| `binder/` | flow graph the checker's narrowing reads | `binder.ms` `bindFlowGraph` |
 | `checker/` | the three passes (collect, resolve, check), flow narrowing, and `suggest.ms`, the position queries the LSP calls | `orchestrator.ms` `checkModuleGraph` |
 | `monomorphize/` | mangled names for generic instances; instances themselves are made by the checker (`checker/instantiate.ms`) | `registry.ms` `monoInstanceName` |
 | `transform/` | AST lowering passes, grouped `lowering/`, `desugar/`, `coercion/`, `analysis/` (dead code and declaration sweeps); the C-only tail is `native/`, the Raiser list is `raiserLowering.ms`. Shared parts: `walker.ms` (1:1 walk), `blockExpand.ms` (1:N statement walk), `walkEffects.ms` (evaluation order), `context.ms`, `util.ms` (node builders), `place.ms`, `numKinds.ms`, `maybeCarrier.ms`; `testUtil.ms` serves the inline tests | `index.ms` `transformProgram`; `native/index.ms` `transformForNative`; `raiserLowering.ms` `transformForRaiser` |
-| `analyzer/` | DRC injection (C backend only): `inject.ms` places the lifecycle calls, `classify.ms` decides what a type needs, `scope.ms` tracks cleanup per scope, `cursors.ms` finds borrow-only variables, `cfg.ms` and `alias.ms` answer last-read and aliasing, `optimize.ms` removes redundant pairs ([`CLAUDE.md`](../src/analyzer/CLAUDE.md)) | `index.ms` `analyzeProgram` |
+| `analyzer/` | DRC injection (C and Raiser): `inject.ms` places the lifecycle calls, `classify.ms` decides what a type needs, `scope.ms` tracks cleanup per scope, `cursors.ms` finds borrow-only variables, `cfg.ms` and `alias.ms` answer last-read and aliasing, `optimize.ms` removes redundant pairs ([`CLAUDE.md`](../src/analyzer/CLAUDE.md)) | `index.ms` `analyzeProgram` |
 | `codegen/c/` | C emitter, one module of C per source module | `index.ms` `generateCModule` |
 | `codegen/js/` | JS emitter | `jsgen.ms` `generateJS` |
 | `codegen/raiser/` | AST to Raiser bytecode | `rgen.ms` `generateRaiser` |

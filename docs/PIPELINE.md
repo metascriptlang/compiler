@@ -77,8 +77,9 @@ complex expressions are lowered to STATEMENTS**, rather than handled inline in t
 
 ### Order of passes
 
-The order is the code: `transformProgram` in `src/transform/index.ms` (one list, each
-step gated by `jsBackend` where a backend needs it) and, for C only, `transformForNative` in
+The order is the code: `transformProgramHead` then `transformProgramTail` in
+`src/transform/index.ms` (each step gated by `jsBackend` where a backend needs it) and,
+for C only, `transformForNative` in
 `src/transform/native/index.ms`. Do not copy the list into a doc. Order is a contract, and these edges hold in `index.ms` at `99ff1ce60`:
 `for` lowers to `while` before `for-of`; `switch` and `match` lower to `if` before `async` and
 generators; `async` lowers before `generatorLower`; `lambdaLifting` runs before the state split
@@ -86,7 +87,8 @@ generators; `async` lowers before `generatorLower`; `lambdaLifting` runs before 
 per-iteration one included, is an ordinary local the split keeps in the frame; `lambdaLifting`
 runs again after the split to lift the resume routine the split creates; `callHoist` runs after
 `lambdaLifting`;
-`destructorLifting` is the last step of `transformProgram`; on C the `native/` tail follows it.
+`destructorLifting` is the last C step of `transformProgram`; on C the `native/` tail follows it.
+JS has additional tail work; Raiser uses the list described below.
 
 ### What Phase 4 (Analyzer) requires Phase 3 to have done
 `defer`→try/finally · all `for`→`while` · all `match`→if/else, or a C `switch` when the
@@ -96,7 +98,7 @@ accesses · `try`-expr→result checks · closures→(fn,env) pairs · per-type
 If the analyzer needs to know something the source still encodes structurally, the rule is
 **add a transform, not analyzer logic** (keeps codegen/analyzer thin).
 
-## Phase 4 — Analyze: DRC Injection (C backend only) (`src/analyzer`)
+## Phase 4 — Analyze: DRC Injection (C and Raiser; JS skips it) (`src/analyzer`)
 
 Deterministic Reference Counting: `analyzeProgram` (`src/analyzer/index.ms`) walks the
 post-transform AST and inserts `=destroy/=copy/=sink/=wasMoved` calls at the right points
@@ -106,8 +108,9 @@ injector: cursor inference (`cursors.ms`, which variables only borrow) and last-
 graph-free CFG (`cfg.ms`, with `alias.ms` for path aliasing). A cursor is found by that
 inference, not by a `$` name: a user local `$t = s` and `t = s` emit the same C. Per-type hook
 bodies are not made here: `destructorLifting` makes them at the end of Phase 3. See
-[`ANALYZER.md`](ANALYZER.md) for the RC insertion-point table and the moveOrCopy decision tree.
-The reference-count convention (`msAlloc` returns rc=0 for a sole owner) is in `runtime/drc.h`.
+[`ANALYZER.md`](ANALYZER.md) for the placement obligations and their source owners.
+The reference-count convention (`msAlloc` starts a cell at rc=0, meaning one owner) is in
+`runtime/drc.h`; that count is not a proof that no other alias exists.
 
 ### After DRC, before codegen (C only) — `transform/native/nativeLower.ms`
 
@@ -124,7 +127,8 @@ passed to a call as a possible mutation and would then own the borrowed array. P
 
 **Codegen is a thin/dumb emitter** — it only dumps what earlier phases produced. If you find
 yourself adding logic to codegen, it almost certainly belongs in Transform or Checker
-(evidence: 6 of 7 traced "codegen" bugs were really Transform/Checker bugs). C backend needs
+(historical observation: 6 of 7 traced “codegen” bugs were Transform/Checker bugs;
+tree, date and case list were not recorded, so this is not a current measured rate). C backend needs
 Phase 4; JS backend skips it (JS GC handles lifetime). Codegen reads the alive-symbol set
 (DCE), closure-vs-direct-call list (closureCallMarker), and emits per-`Promise<T>` future
 structs, per-type lifecycle hooks, etc.
@@ -145,17 +149,19 @@ annotate/emit. Net: by Phase 5 the AST is a small, C-shaped subset.
 
 RAISER executes MetaScript at **compile time** (`@comptime`, macro bodies, const folding),
 and whole programs under `msc run --target=raiser`. It consumes the **post-transform AST**
-(`transformForRaiser`) and skips Phase 4 and Phase 5.
+through `transformForRaiser` (`src/transform/raiserLowering.ms`), then Phase 4 via
+`analyzeForRaiser` (`src/codegen/raiser/rgen.ms`). It skips C/JS emission, not lifecycle placement.
 
 **Core architecture:**
-- **Register-based** instruction set; the slot file starts at 256 slots and grows; a register number is its slot in the frame.
+- **Register-based** instruction set; `createRegFile` in `src/raiser/vm.ms` reserves stable
+  storage so taking a register's address does not become invalid when a later frame runs.
 - **One `switch` dispatch** in `src/raiser/vm.ms`, one arm per opcode.
-- **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
-  refcount + cycle collector under `gcMode = "orc"`.
+- **Placed lifecycle operations**, with memory/heap and registered-root collection owners in
+  [`src/raiser/CLAUDE.md`](../src/raiser/CLAUDE.md). An old `gcMode = "orc"`/arena choice is not this pipeline.
 
 Design, measured status and what is not built: [`RAISER.md`](RAISER.md).
 
-Flow: `Source → Parse → Check → Transform → Raiser codegen (primitives→bytecode) → Raiser VM
+Flow: `Source → Parse → Check → Transform → Analyze → Raiser codegen (primitives→bytecode) → Raiser VM
 (execute, fold results back into the AST)`.
 
 ### CallHost — reaching host std from comptime bytecode
