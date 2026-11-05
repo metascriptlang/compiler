@@ -46,6 +46,59 @@ function refused<T>(
 	}
 }
 
+test "private RSA OAEP API checks 29 empty-label cases and 8 foreign-label refusals" {
+	const text = readFile(
+		"std/crypto/test/vectors/rsa_oaep_2048_sha256_mgf1sha256_test.json",
+	);
+	assert text.ok;
+	const parsed = parseJson(text.value);
+	assert parsed.ok;
+	const groups = parsed.value.getDynamicField("testGroups");
+	assert groups.kind == JsonKind.Array;
+	let valid = 0;
+	let invalid = 0;
+	let foreignLabel = 0;
+	for (let g = 0; g < groups.length(); g++) {
+		const group = groups.at(g);
+		assert group.getDynamicField("sha").asString() == "SHA-256";
+		assert group.getDynamicField("mgf").asString() == "MGF1";
+		assert group.getDynamicField("mgfSha").asString() == "SHA-256";
+		const key = must(RsaPrivateKey.importPemSync(
+			group.getDynamicField("privateKeyPem").asString(),
+		));
+		const tests = group.getDynamicField("tests");
+		assert tests.kind == JsonKind.Array;
+		for (let t = 0; t < tests.length(); t++) {
+			const vector = tests.at(t);
+			const id = vector.getDynamicField("tcId").asInt32();
+			const label = vector.getDynamicField("label").asString();
+			const category = vector.getDynamicField("result").asString();
+			const ciphertext = vector.getDynamicField("ct").asString().decodeHex();
+			const opened = decryptSync(key, ciphertext);
+			if (label.length == 0 && category == "valid") {
+				assert opened.ok, `RSA OAEP tcId ${id}: valid refused`;
+				assert opened.value.encodeHex() ==
+					vector.getDynamicField("msg").asString();
+				valid++;
+			} else {
+				assert !opened.ok, `RSA OAEP tcId ${id}: rejected ciphertext accepted`;
+				assert opened.error.kind == CryptoErrorKind.DecryptionFailed;
+				assert opened.error.operation == "rsa.decrypt";
+				if (label.length == 0) {
+					assert category == "invalid";
+					invalid++;
+				} else {
+					assert category == "valid";
+					foreignLabel++;
+				}
+			}
+		}
+	}
+	assert valid == 10 && invalid == 19 && foreignLabel == 8;
+	assert valid + invalid + foreignLabel ==
+		parsed.value.getDynamicField("numberOfTests").asInt32();
+}
+
 test "private RSA PSS verify API checks all 352 cases with any-salt semantics" {
 	const files = [
 		"rsa_pss_2048_sha256_mgf1_0_test.json",
