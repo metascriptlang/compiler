@@ -56,6 +56,20 @@ test "the last read of an Unowned field is a copy, not a move" {
 	assert !c.contains("msPtrWasMoved(v_1_.at)"), c;
 }
 
+test "Unowned is a field type: a local, a parameter, a return or a static that names it is refused" {
+	const head = "class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\n";
+	assert emitted(head + "const n = new N();\nconst p: Unowned<N> | null = n;\nconsole.log(p != null);\n").contains("Unowned<T> is the type of a class or struct field");
+	assert emitted(head + "function f(x: Unowned<N>): int32 { return 0; }\nconsole.log(f(new N()));\n").contains("Unowned<T> is the type of a class or struct field");
+	assert emitted(head + "function f(h: H): Unowned<N> | null { return h.at; }\nconsole.log(f(new H()) == null);\n").contains("Unowned<T> is the type of a class or struct field");
+	assert emitted(head + "class S { static at: Unowned<N> | null = null; }\nconsole.log(S.at == null);\n").contains("Unowned<T> is the type of a class or struct field");
+}
+
+test "a local bound to an Unowned read is a plain reference, so storing into it is a strong store" {
+	const c = emitted("class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\nfunction f(h: H, m: N): int32 {\n\tlet p = h.at;\n\tp = m;\n\treturn p != null ? p.id : 0;\n}\nconst n = new N();\nconst h = new H();\nh.at = n;\nconsole.log(f(h, n));\n");
+	assert !c.contains("msUnownedAssign((&(p_1_))"), c;
+	assert !c.contains("error"), c;
+}
+
 test "Unowned takes a class" {
 	assert emitted("const v: Unowned<string> | null = null;\nconsole.log(v);\n").contains("Unowned<T> takes a class type");
 	assert emitted("struct S { a: int32 }\nclass H { s: Unowned<S> | null = null; }\nconsole.log(new H().s == null);\n").contains("Unowned<T> takes a class type");
