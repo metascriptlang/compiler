@@ -3,6 +3,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "runtime/allocator.h"
+
+#if MS_HEAP_USE_MALLOC
+#error "freestanding libc requires the custom heap backend"
+#endif
 
 void* memcpy(void* restrict dst, const void* restrict src, size_t n) {
     unsigned char* d = dst;
@@ -133,58 +138,55 @@ void qsort(void* base, size_t count, size_t size, int (*cmp)(const void*, const 
     }
 }
 
-extern unsigned char __heap_base;
-static uintptr_t arenaPosition;
-
 typedef union {
     size_t size;
     max_align_t alignment;
 } msAllocationHeader;
 
 void msArenaReset(void) {
-    arenaPosition = (uintptr_t)&__heap_base;
+    msHeapReset();
 }
 
 void* msArenaAlloc(size_t size) {
-    const size_t alignment = _Alignof(max_align_t);
-    if (!arenaPosition) msArenaReset();
-    if (arenaPosition > UINTPTR_MAX - (alignment - 1)) return NULL;
-    uintptr_t start = (arenaPosition + alignment - 1) & ~(uintptr_t)(alignment - 1);
-    if (size > UINTPTR_MAX - start) return NULL;
-    uintptr_t end = start + size;
-    const uint64_t capacity = (uint64_t)__builtin_wasm_memory_size(0) * 65536;
-    if ((uint64_t)end > capacity) {
-        const size_t pages = (size_t)(((uint64_t)end - capacity + 65535) / 65536);
-        if (__builtin_wasm_memory_grow(0, pages) == (size_t)-1) return NULL;
-    }
-    arenaPosition = end;
-    return memset((void*)start, 0, size);
+    return calloc(1, size);
 }
 
 void* malloc(size_t size) {
     if (size > SIZE_MAX - sizeof(msAllocationHeader)) return NULL;
-    msAllocationHeader* header = msArenaAlloc(sizeof(msAllocationHeader) + size);
-    if (!header) return NULL;
+    msAllocationHeader* header = msHeapAlloc(sizeof(msAllocationHeader) + size);
     header->size = size;
     return header + 1;
 }
 
 void* calloc(size_t count, size_t size) {
     if (size && count > SIZE_MAX / size) return NULL;
-    return malloc(count * size);
+    size_t bytes = count * size;
+    void* ptr = malloc(bytes);
+    if (ptr) memset(ptr, 0, bytes);
+    return ptr;
 }
 
-void free(void* ptr) { (void)ptr; }
+void free(void* ptr) {
+    if (ptr) msHeapFree((msAllocationHeader*)ptr - 1);
+}
 
 void* msRealloc(void* old, size_t oldSize, size_t newSize) {
-    void* ptr = malloc(newSize);
-    if (ptr && old) memcpy(ptr, old, oldSize < newSize ? oldSize : newSize);
-    return ptr;
+    if (!newSize) {
+        free(old);
+        return NULL;
+    }
+    if (!old) return malloc(newSize);
+    if (newSize > SIZE_MAX - sizeof(msAllocationHeader)) return NULL;
+    size_t copied = oldSize < newSize ? oldSize : newSize;
+    msAllocationHeader* header = (msAllocationHeader*)old - 1;
+    header = msHeapRealloc(header, sizeof(*header) + copied,
+                          sizeof(*header) + newSize);
+    header->size = newSize;
+    return header + 1;
 }
 
 void* realloc(void* old, size_t size) {
     if (!old) return malloc(size);
-    if (!size) return NULL;
     const msAllocationHeader* header = (const msAllocationHeader*)old - 1;
     return msRealloc(old, header->size, size);
 }
