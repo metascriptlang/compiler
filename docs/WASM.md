@@ -178,6 +178,28 @@ differ from the optimized-run inputs only in whitespace. No full suite, browser/
 rebased-main integration was certified. Raw m1m artifacts under the same work dir:
 `out/lto-fixed/`, `out/lto-remaining/`, `out/lto-final/`.
 
+Child build options, 2026-11-05, m1m/Node 24.1.0/emcc 5.0.5, checked tree
+`c3411bdcc7b62a8cdb97b4d3b9b696057d1710c4`: the old parent CLI's
+`-d:probeMarker` printed `0` from the wasm half rather than `1`, and
+`--passL=-sMSB_DELIBERATELY_INVALID_SETTING=1` incorrectly succeeded. The corrected actual
+CLI rejected that setting with emcc's `Attempt to set a non-existent setting`; a valid
+`--passL=-sASSERTIONS=1` plus `-d:label=CLI=x with space λ` printed exactly
+`15 / CLI=x with space λ / true / true` (four lines). The retained `childOptions` mixed
+program also checks project-config defines and project identity against the parent while
+observing the child's own C/emcc, not JS, target facts. Owner pins changed from five expected
+failures and two passes to seven passes; `WASMMIX_ONLY=childOptions,scalars` reported `2/2 pass`.
+
+The distinction reuses `defines.ms` `isOptionDefine`, rather than forwarding the parent's
+whole target table. Reference anchors: Nim `15dd34468` `compiler/condsyms.nim` `defineSymbol`
+and `initDefines`, `compiler/commands.nim:767–775` define parsing, and
+`compiler/extccomp.nim` `getLinkOptions`. The source contract is in `placementBuild.ms`
+`wasmHalfOptions`. Raw m1m artifacts: `out/m5-flags-green/`; executable SHA256
+`ba9735ac6418ff2352f8217bbfc00add3bf36ae5168c496b94af911e40e71d67`.
+This proves option propagation, not a returning browser lifecycle, a Void build, WebGPU/
+WebGL2 screenshots or M5 completion. The verification recipe's final hash glob encountered
+a generated directory after all assertions passed; explicit-file hashes subsequently matched
+without rerunning the product checks.
+
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
 cached memory view detached by growth to 32 MiB, and `TextEncoder` losing a lone surrogate, which
