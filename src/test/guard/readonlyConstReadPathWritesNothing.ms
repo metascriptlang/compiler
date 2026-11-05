@@ -143,6 +143,13 @@ const cases: Case[] = [
 			+ "const run: Sendable<() => string> = (): string => text();\nconsole.log(run());\n",
 	},
 	{
+		name: "a push of the const into a local Vec of cursors, whose elements take no count",
+		refused: false,
+		text: CELL
+			+ "function seen(c: Readonly<Cell>): int32 { let xs: Cursor<Readonly<Cell>>[] = []; xs.push(c); return xs.length; }\n"
+			+ "function read(): int32 { return seen(K); }\n" + RUN,
+	},
+	{
 		name: "a push into a module let inside a routine that reads the const",
 		refused: true,
 		mark: "module-level 'kept'",
