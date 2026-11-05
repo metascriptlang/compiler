@@ -364,6 +364,7 @@ export enum BuiltinKind {
 	throws,
 	ToString,
 	ToStringMethod,
+	TypedArray,
 	UnboxStruct,
 	UnionDebug,
 	UnionEq,

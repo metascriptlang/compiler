@@ -14,6 +14,7 @@ export extern class ArrayBuffer {
 
 export extern function slice(this b: ArrayBuffer, begin: number = 0, end: number = b.byteLength): ArrayBuffer from "#.slice(#, #)";
 
+@builtin("TypedArray")
 export extern class TypedArray<T> {
 	buffer: ArrayBuffer;
 	byteOffset: number;

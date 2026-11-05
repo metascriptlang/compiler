@@ -32,6 +32,7 @@ export class ArrayBuffer {
 	}
 }
 
+@builtin("TypedArray")
 export class TypedArray<T> {
 	readonly buffer: ArrayBuffer;
 	readonly byteOffset: number;
