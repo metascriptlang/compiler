@@ -71,6 +71,12 @@ export class Uint8Array extends TypedArray<uint8> {
 		}
 	}
 
+	static from(source: Readonly<Span<uint8>>): Uint8Array {
+		const out = new Uint8Array(source.length);
+		for (let i = 0; i < source.length; i++) out.buffer.bytes[i] = source[i];
+		return out;
+	}
+
 	get byteLength(): number { return this.length; }
 
 	subarray(begin: number = 0, end: number = this.length): Uint8Array {

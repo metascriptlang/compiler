@@ -31,6 +31,13 @@ export extern class Uint8Array extends TypedArray<uint8> {
 	) {}
 }
 
+export function from(this typeof Uint8Array, source: Readonly<Span<uint8>>): Uint8Array {
+	const out = new Uint8Array(source.length);
+	const into = writableElementsOf(out);
+	for (let i = 0; i < source.length; i++) into[i] = source[i];
+	return out;
+}
+
 export extern function subarray(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.subarray(#, #)";
 export extern function slice(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.slice(#, #)";
 export extern function fill(this a: Uint8Array, value: uint8, begin: number = 0, end: number = a.length): Uint8Array from "#.fill(#, #, #)";
