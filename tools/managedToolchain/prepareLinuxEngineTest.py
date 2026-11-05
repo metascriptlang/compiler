@@ -71,9 +71,11 @@ def inspection(args, path):
                                               "FileSize": len(f["interpreter"]) + 1}})
         if dynamic:
             headers.append({"ProgramHeader": {"Type": {"Name": "PT_DYNAMIC", "Value": 2}, "Offset": 0, "FileSize": 0}})
+        headers.extend({"ProgramHeader": h} for h in f.get("loads", []))
         return json.dumps([{
             "ElfHeader": {"Ident": {"Class": {"Name": "64-bit", "Value": 2}, "DataEncoding": {"Name": "LittleEndian", "Value": 1}},
-                          "Type": "SharedObject (0x%x)" % f["type"], "Machine": {"Name": "EM", "Value": f["machine"]}},
+                          "Type": "SharedObject (0x%x)" % f["type"], "Machine": {"Name": "EM", "Value": f["machine"]},
+                          "Entry": f.get("entry", 0)},
             "ProgramHeaders": headers, "DynamicSection": dynamic, "NeededLibraries": sorted(f["needed"])}])
     out.append("Version symbols section '.gnu.version' contains 1 entries:\n Addr: 0000000000000000  Offset: 0x000000  Link: 1 (.dynsym)\n  000:   0 (*local*)\n")
     if f["verdef"]:
@@ -221,6 +223,38 @@ class ElfReaderTest(TempCase):
         self.assertEqual([c.args[0] for c in run.call_args_list], [
             [self.inspector, "--elf-output-style=JSON", "--file-headers", "--program-headers", "--dynamic-table", "--needed-libs", path],
             [self.inspector, "--elf-output-style=GNU", "--version-info", path]])
+
+
+class StaticExecutableTest(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.inspector = self.path("tools", "llvm-readobj")
+        write(self.inspector, FAKE_INSPECTOR, 0o755)
+
+    def info(self, **changes):
+        load = {"Type": {"Name": "PT_LOAD", "Value": 1}, "Offset": 0,
+                "VirtualAddress": 4096, "FileSize": 64, "MemSize": 128,
+                "Flags": {"Value": 5}}
+        fields = dict(type=2, entry=4096, loads=[load])
+        fields.update(changes)
+        return pl.readElf(self.elf(self.path("static"), **fields), self.inspector)
+
+    def test_static_exec_accepts_entry_in_file_backed_executable_load(self):
+        for entry in (4096, 4128):
+            with self.subTest(entry=entry):
+                self.assertIsNone(pl.roleProblem("bin/llvm", self.info(entry=entry)))
+
+    def test_static_exec_still_rejects_missing_loader_and_non_executable_shapes(self):
+        for changes in [dict(type=3), dict(needed=["libc.so.6"]),
+                        dict(soname="libfake.so"), dict(entry=0), dict(entry=4160), dict(loads=[])]:
+            with self.subTest(changes=changes):
+                self.assertEqual(pl.roleProblem("bin/llvm", self.info(**changes)), "has no interpreter")
+        for flags, offset in ((4, 0), (5, 100000)):
+            load = {"Type": {"Name": "PT_LOAD", "Value": 1}, "Offset": offset,
+                    "VirtualAddress": 4096, "FileSize": 64, "MemSize": 64,
+                    "Flags": {"Value": flags}}
+            with self.subTest(flags=flags, offset=offset):
+                self.assertEqual(pl.roleProblem("bin/llvm", self.info(loads=[load])), "has no interpreter")
 
 
 class RealToolTest(TempCase):

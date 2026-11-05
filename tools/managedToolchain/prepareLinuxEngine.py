@@ -226,6 +226,20 @@ def readElf(path, inspector):
         raise pe.EngineError("%s: NEEDED entries and NeededLibraries disagree" % path)
     info["verneed"], info["verdef"] = readVersions(path, inspect(inspector, VERSION_FLAGS, path),
                                                    counts.get("VERNEEDNUM=", 0), counts.get("VERDEFNUM=", 0))
+    if info["type"] == 2 and info["interpreter"] is None and "PT_DYNAMIC" not in kinds:
+        entry = member(header, "Entry", int, path, "ElfHeader.Entry")
+        for h, name in zip(headers, kinds):
+            if name != "PT_LOAD":
+                continue
+            flags = member(member(h, "Flags", dict, path, "PT_LOAD.Flags"), "Value", int, path, "PT_LOAD.Flags.Value")
+            address = member(h, "VirtualAddress", int, path, "PT_LOAD.VirtualAddress")
+            offset = member(h, "Offset", int, path, "PT_LOAD.Offset")
+            size = member(h, "FileSize", int, path, "PT_LOAD.FileSize")
+            memory = member(h, "MemSize", int, path, "PT_LOAD.MemSize")
+            if (flags & 1 and entry > 0 and 0 <= address <= entry < address + size
+                    and 0 <= offset and 0 < size <= memory and offset + size <= os.path.getsize(path)):
+                info["staticExecutable"] = True
+                break
     return info
 
 
@@ -329,6 +343,9 @@ def roleProblem(rel, info):
         if info["type"] not in (2, 3):
             return "%s is not ET_EXEC or ET_DYN, required of %s" % (kind, rel)
         if info["interpreter"] is None:
+            if (info["type"] == 2 and info.get("staticExecutable", False)
+                    and not info["needed"] and info["soname"] is None):
+                return None
             return "has no interpreter"
     elif rel.startswith("lib/"):
         if info["type"] != 3:
