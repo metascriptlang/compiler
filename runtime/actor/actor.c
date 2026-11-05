@@ -241,4 +241,9 @@ void msActorLendNote(void* fut) {
     msActorLendNoteIn(msCurrentActor, fut, msAsyncCurrentChain());
 }
 
+void msActorLendStepped(void* chain) {
+    msActor* a = msCurrentActor;
+    if (a != NULL && a->jobs != NULL && a->jobs->lentLen > 0) msActorLendJoin(a->jobs, chain);
+}
+
 #endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */

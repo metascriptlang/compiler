@@ -1499,7 +1499,10 @@ static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e,
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 			: ((msFutureBase*(*)(void))e->stepper.fn)();
 	}
-	if (__builtin_expect(actor != NULL, 0)) gAsyncChain = outerChain;
+	if (__builtin_expect(actor != NULL, 0)) {
+		msActorLendStepped(e);
+		gAsyncChain = outerChain;
+	}
 
 	if (next == NULL) {
 		/* Stepper completed — drop the env reference taken in msAsyncStart.

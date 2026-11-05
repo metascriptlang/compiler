@@ -95,6 +95,7 @@ MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
 MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
 MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
 MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
+MS_ACTOR_JOB_PATH void msActorLendStepped(void* chain);
 MS_ACTOR_JOB_PATH void msActorVisitPark(msActor* a);
 MS_ACTOR_JOB_PATH void msActorVisitResume(msActor* a);
 
