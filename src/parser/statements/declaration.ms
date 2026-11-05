@@ -1979,8 +1979,10 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		let extendsName = "";
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
 			advance(state);
-			if (isIdentLike(current(state))) { extendsName = current(state).value; advance(state); }
+			const extStart = state.position;
+			if (isIdentLike(current(state))) advance(state);
 			skipGenericParams(state);
+			extendsName = collectTokenText(state, extStart, state.position).trim();
 		}
 		if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 			advance(state); // skip {
