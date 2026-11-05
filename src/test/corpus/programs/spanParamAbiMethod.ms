@@ -1,6 +1,4 @@
 // A class method takes a Span parameter; the C ABI passes it as element pointer and length. Companion of `spanParamAbi`.
-// @xfail(js): a Span argument to a class method reaches the callee unconverted on JS (sum 0 where C gives 6)
-// @xfail(esm): a Span argument to a class method reaches the callee unconverted on JS (sum 0 where C gives 6)
 // @stdout: 7|7
 // @exit: 0
 function localSum(xs: Span<int64>): int64 {
