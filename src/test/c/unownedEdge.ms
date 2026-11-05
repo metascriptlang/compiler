@@ -64,6 +64,16 @@ test "Unowned is a field type: a local, a parameter, a return or a static that n
 	assert emitted(head + "class S { static at: Unowned<N> | null = null; }\nconsole.log(S.at == null);\n").contains("Unowned<T> is the type of a class or struct field");
 }
 
+test "an Unowned edge inside an element or a type argument is refused until it is counted there" {
+	const head = "class N { id: int32 = 1; }\n";
+	const tail = "console.log(new H().ups.size >= 0);\n";
+	assert emitted(head + "class H { ups: Vec<Unowned<N>> = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: Unowned<N>[] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: Unowned<N>[][] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: (Unowned<N> | null)[] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\n" + tail).contains("an element or a type argument is not built yet");
+}
+
 test "a local bound to an Unowned read is a plain reference, so storing into it is a strong store" {
 	const c = emitted("class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\nfunction f(h: H, m: N): int32 {\n\tlet p = h.at;\n\tp = m;\n\treturn p != null ? p.id : 0;\n}\nconst n = new N();\nconst h = new H();\nh.at = n;\nconsole.log(f(h, n));\n");
 	assert !c.contains("msUnownedAssign((&(p_1_))"), c;
