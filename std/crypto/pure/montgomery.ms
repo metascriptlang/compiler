@@ -194,6 +194,10 @@ export function invert(md: Readonly<Modulus>, a: Limbs): Limbs {
 }
 
 function load(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from: int32): Limbs {
+	if ((md.words != 8 && md.words != 12) || from < 0 ||
+		from > bytes.length || 4 * md.words > bytes.length - from) {
+		throw new Error("montgomery.load: invalid span");
+	}
 	let out = zeroLimbs();
 	const size = 4 * md.words;
 	for (let i = 0; i < size; i++) {

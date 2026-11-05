@@ -11,6 +11,7 @@ import "./ecdhApiSmoke";
 import "./ecdhInvalidApiVectors";
 import "./ecdhValidApiVectors";
 import "./ecdhAcceptableApiVectors";
+import "./montgomeryBounds";
 import "./ed25519ApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
