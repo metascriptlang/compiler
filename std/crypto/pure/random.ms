@@ -20,12 +20,17 @@ export function randomOctets(size: int32): uint8[] {
 		return pureRandom(size);
 	} else when (c) {
 		const bytes = new Array<uint8>(size);
+		if (size == 0) return bytes;
 		const target = (bytes as Span<uint8>) as Ptr<uint8>;
-		if (size > 0 && osRandomFill(target, size as int64) != 0) throw new Error("randomOctets: the OS random source failed");
+		if (osRandomFill(target, size as int64) != 0) throw new Error("randomOctets: the OS random source failed");
 		return bytes;
 	} else {
 		throw new Error("randomOctets: this target has no random source for the portable code");
 	}
+}
+
+test "randomOctets accepts an empty requested buffer" {
+	assert randomOctets(0).length == 0;
 }
 
 test "randomInto rejects negative counts before touching the buffer" {
