@@ -1,13 +1,23 @@
 // The prelude's typed arrays on the C backend: the classes are the shared core, the subscripts
-// read and write inside the view, so an index outside it stops like an array index does.
+// read and write the view as a Span of its element type, so an index outside it stops like an array
+// index does.
 
-export { ArrayBuffer, TypedArray, Uint8Array } from "./core";
-import { Uint8Array } from "./core";
+export { ArrayBuffer, TypedArray, Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array } from "./core";
+export { TextEncoder, TextDecoder, TextDecoderOptions, TextDecodeOptions } from "./text";
+import { TypedArray, Uint8ClampedArray, clampUint8 } from "./core";
 
-export function `[]`(this a: Readonly<Uint8Array>, index: number): uint8 {
-	return a.buffer.bytes[a.byteOffset .. a.byteOffset + a.length][index];
+export function `[]`<T>(this a: Readonly<TypedArray<T>>, index: number): T {
+	const elements: Readonly<Span<T>> = a;
+	return elements[index];
 }
 
-export function `[]=`(this a: Uint8Array, index: number, value: uint8): void {
-	a.buffer.bytes[a.byteOffset .. a.byteOffset + a.length][index] = value;
+export function `[]=`<T>(this a: TypedArray<T>, index: number, value: T): void {
+	const elements: Span<T> = a;
+	elements[index] = value;
+}
+
+// A Uint8ClampedArray takes any number and clamps it, where the other views take their element type.
+export function `[]=`(this a: Uint8ClampedArray, index: number, value: number): void {
+	const elements: Span<uint8> = a;
+	elements[index] = clampUint8(value);
 }

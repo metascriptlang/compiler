@@ -1,0 +1,96 @@
+// The prelude's typed array classes on the JS backend: the host's own, so a value crosses to a JS API
+// with no copy. Their subscripts and methods are index.jms.
+
+export extern class ArrayBuffer {
+	byteLength: number;
+	constructor(byteLength: number = 0) {}
+}
+
+@builtin("TypedArray")
+export extern class TypedArray<T> {
+	buffer: ArrayBuffer;
+	byteOffset: number;
+	length: number;
+	byteLength: number;
+}
+
+export extern class Int8Array extends TypedArray<int8> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<int8[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 1 != 0 ? -1 : (source.byteLength - byteOffset) / 1) : 0,
+	) {}
+}
+
+export extern class Uint8Array extends TypedArray<uint8> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<uint8[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 1 != 0 ? -1 : (source.byteLength - byteOffset) / 1) : 0,
+	) {}
+}
+
+export extern class Uint8ClampedArray extends TypedArray<uint8> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<number[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 1 != 0 ? -1 : (source.byteLength - byteOffset) / 1) : 0,
+	) {}
+}
+
+export extern class Int16Array extends TypedArray<int16> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<int16[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 2 != 0 ? -1 : (source.byteLength - byteOffset) / 2) : 0,
+	) {}
+}
+
+export extern class Uint16Array extends TypedArray<uint16> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<uint16[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 2 != 0 ? -1 : (source.byteLength - byteOffset) / 2) : 0,
+	) {}
+}
+
+export extern class Int32Array extends TypedArray<int32> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<int32[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 4 != 0 ? -1 : (source.byteLength - byteOffset) / 4) : 0,
+	) {}
+}
+
+export extern class Uint32Array extends TypedArray<uint32> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<uint32[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 4 != 0 ? -1 : (source.byteLength - byteOffset) / 4) : 0,
+	) {}
+}
+
+export extern class Float32Array extends TypedArray<float32> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<float32[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 4 != 0 ? -1 : (source.byteLength - byteOffset) / 4) : 0,
+	) {}
+}
+
+export extern class Float64Array extends TypedArray<float64> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<float64[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? (source.byteLength % 8 != 0 ? -1 : (source.byteLength - byteOffset) / 8) : 0,
+	) {}
+}

@@ -1,0 +1,8 @@
+// UTF-8 decoding for the text classes on the C backend: the string kernel repairs the bytes in one pass.
+
+import { utf8String } from "../string/bytes";
+
+/** The bytes as text, each ill-formed sequence and encoded surrogate one U+FFFD per maximal subpart. */
+export function decodeUtf8(data: Readonly<Span<uint8>>): string {
+	return utf8String(data, false);
+}

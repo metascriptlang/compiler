@@ -1,0 +1,10 @@
+// UTF-8 decoding for the text classes on the JS backend: the host's decoder, which the text classes
+// have already limited to UTF-8 and given the BOM rule. A span over a typed array crosses as a
+// subarray, one over an array as a copy.
+
+/** The bytes as text, each ill-formed sequence and encoded surrogate one U+FFFD per maximal subpart. */
+export function decodeUtf8(data: Readonly<Span<uint8>>): string {
+	@emit(`const b = ${data}.base, from = ${data}.off, to = from + ${data}.len;
+	return new TextDecoder("utf-8", { ignoreBOM: true }).decode(b instanceof Uint8Array ? b.subarray(from, to) : Uint8Array.from(b.slice(from, to)));`);
+	unreachable;
+}

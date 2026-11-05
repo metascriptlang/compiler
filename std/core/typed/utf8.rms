@@ -1,0 +1,10 @@
+// UTF-8 decoding for the text classes on the Raiser backend: the host bridge repairs a raw copy of the bytes.
+
+import { utf8Text } from "../string/bytes";
+
+extern function msRawString(data: Readonly<uint8[]>): string from "msRawString";
+
+/** The bytes as text, each ill-formed sequence and encoded surrogate one U+FFFD per maximal subpart. */
+export function decodeUtf8(data: Readonly<Span<uint8>>): string {
+	return utf8Text(msRawString(data.slice(0)), false);
+}
