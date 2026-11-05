@@ -42,6 +42,11 @@ function main(): void {
 	show("byteSliceEmpty", "abcdef".byteSlice(3, 3));
 	show("byteSliceLatin", latin.byteSlice(0, 1));
 	show("byteSliceCjk", cjk.byteSlice(0, 3));
+	show("byteSliceNegStart", "abcdef".byteSlice(-2, 3));
+	show("byteSlicePastEnd", "abcdef".byteSlice(2, 99));
+	show("byteSliceReversed", "abcdef".byteSlice(4, 2));
+	show("byteSliceStartPastEnd", "abcdef".byteSlice(9, 12));
+	show("byteSliceMixedAfterAscii", ("ab" + latin).byteSlice(1, 4));
 
 	bytesOf("bAscii", ascii);
 	bytesOf("bLatin", latin);
