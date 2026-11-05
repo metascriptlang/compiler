@@ -4551,14 +4551,15 @@ macro deriveEq(target) {
 Foreign declarations are a trust boundary, not a proof of a native body's hidden effects,
 retention or thread behavior. Access permissions, lifetime and result aliasing remain separate.
 
-**Approved transition, not implemented/landed:** remove `@pure`, without a replacement purity
-marker. The frozen module-const read path will use operand provenance and parameter kind,
-rather than rejecting a helper merely because its body reaches an unmarked extern. Readonly
-Ptr/Span over value-only data can pass while the foreign signature must still honor readonly
-access; counted handles, opaque/writable pointers and consuming/writing parameters derived
-from the frozen const remain restricted. This is not a general `func`/`noSideEffect` contract,
-proof of hidden C state, or fresh-return guarantee. Do not describe it as already available on
-a compiler that still has the old marker. See [transition status and limits](CONTRACTS.md#approved-contract-transitions).
+**Landed on main `fb69f51edc9`:** `@pure` was removed, without a replacement purity marker.
+Borrowed operands reaching an extern are checked by provenance and receiving parameter kind,
+not by a helper-wide native-call taint. Readonly Ptr/Span over value-only data can pass;
+counted handles, opaque/writable pointers and Ref/ref/out slots remain restricted. Sink slots
+still use the sink rules. This is not a general `func`/`noSideEffect` contract, proof of hidden
+C state, or fresh-return guarantee. The checked receiver cases are extension methods, not
+consts entering class-method bodies as `this`; that remains an enforcement hole.
+Installed binary/support `d60be1a7f75` predates the change. See
+[slot rules, gate evidence and limits](CONTRACTS.md#approved-contract-transitions).
 
 ```typescript
 // Standard FFI (names match) — a header you @include declares the symbol

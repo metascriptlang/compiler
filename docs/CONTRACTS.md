@@ -53,11 +53,11 @@ that foreign code refrains from writing through another address. Review the real
 consumer, including unregister/join/release paths, rather than only the binding's signature.
 See [the authoring standard's FFI recipes](LANG-PREFERENCE.md#10-use-c-directly-make-the-boundary-explicit).
 
-The old extern-only `@pure` marker waives a `WritesCell` charge; it was never mathematical
-purity, a no-hidden-read promise, a fresh-return proof or optimization permission. Its removal
-is now approved, without a replacement marker. Until that change lands, the old code path is
-still in `applyDecoratedInfo` (`src/checker/collectPass.ms`) and `callEffect`/`constReadEffect`
-(`src/checker/effects.ms`). The approved target and current availability are separated
+The old extern-only `@pure` marker and its separate `WritesCell`/`constReadEffect` policy
+were removed on main `fb69f51edc9`, without a replacement marker. Borrowed operands now reach
+the native-call gate in `passedViewEffect` / `foreignSlotTakesNothing`
+(`src/checker/effects.ms`). This is not mathematical purity, a no-hidden-read promise,
+a fresh-return proof or optimization permission. Availability and checked scope are recorded
 [below](#approved-contract-transitions). Return isolation in `src/checker/sendable.ms` remains
 a separate obligation.
 
@@ -109,18 +109,32 @@ Approved direction and shipped enforcement are separate facts. As of this 2026-1
 
 | Contract | Direction and availability |
 |---|---|
-| `@pure` | Remove the marker and its `WritesCell`/`constReadEffect` policy branch. The source owner has not implemented or landed the change. No replacement purity marker or whole-function `func` contract is introduced. |
+| `@pure` | Removed with `WritesCell`/`constReadEffect` on main `fb69f51edc9`. No replacement purity marker or whole-function `func` contract. Installed binary/support `d60be1a7f75` at this follow-up predates it; landing is not toolchain sync. |
 | Cursor | Retain inference/no-count views; an explicit no-count request must not override lender/lifetime proof. This is the approved target, not proof that every current local, stored or returned shape is enforced. |
 | Unowned | Fields and own-array elements landed on main `8f166cdb812`; use a build carrying it, not installed `56ad1fdf80f`. Arbitrary nesting/generic containers and async use are not established recipes. |
 
-The `@pure` replacement on the frozen module-const read path reuses operand provenance and
-parameter kind. Strings/scalars and readonly Ptr/Span over value-only data can pass; const-derived
-counted handles, reference containers, opaque `Ptr<void>` (even readonly), writable Ptr/Span,
-ref/out and shared T[] parameters remain restricted. A helper's native call on only its local
-operands does not taint an unrelated readonly source. This narrower gate does not prove that
-foreign code honors readonly or has no hidden aliases/global state. Those remain binding
-trust, not internal proof. It does not change result freshness, justify optimization or close
-all actor/lent-capture enforcement holes.
+The landed native-call gate follows borrowed operands: module consts, parameters bound to
+them, task views and pointer casts of those views. The receiving parameter determines the
+charge. Strings/scalars, readonly Ptr/Span over value-only data and by-value arrays over
+value-only elements can pass. Counted handles, opaque `Ptr<void>` (even readonly), writable
+pointers, Ref receivers (`&`, such as push) and ref/out remain restricted. Containers of cursors
+and compiler-recognized std builtins that write nothing are exempt; sink slots remain subject
+to `sinkStoreOf`, not a blanket ban or permission. A helper's native call on only its locals
+does not taint an unrelated readonly source. See `foreignSlotTakesNothing` for slot classification.
+
+Actor methods also run `StoresBorrowed`: storing a module const into a field is refused in
+the named guard. **Enforcement hole:** a const entering a class-method body as `this` is not
+followed; the receiver coverage here is for extension methods. Do not generalize these pins
+to every actor/lent-capture path. Foreign readonly compliance, retained aliases and hidden
+global state remain binding trust. No result freshness or optimization permission follows.
+
+T1 evidence: GREEN gate `q1105155051-rtx`, tip `ab915948ed4`, source tree
+`f5db953877015c2902c7f01179c942de7e13a9a9`, identical to landed `fb69f51edc9`.
+Its guard log records `ok readonlyConstReadPathWritesNothing [drc]` and
+`ok readonlyConstStdBuiltinsWriteNothing [drc]`. These guards invoke checker subprocesses:
+16 shapes on C/JS (32 checks), and 10 builtin/user-extern shapes (13 checks; accepted
+C-only builtins are not claimed on JS). Both guard sources match the landed tree.
+This follow-up inspects existing gate evidence; it adds no FFI runtime, SAN or hidden-alias proof.
 
 For Unowned, target/holder destruction order is observable: a local target declared after its
 holder can die first and trigger the check; a global target must precede its holder. Arena
@@ -217,8 +231,8 @@ research transcripts are not portable regression pins or an exhaustive safety au
 |---|---|
 | `Ptr`, `Handle`, `Borrow`, `Readonly`, `Cursor` look similar | They answer different address, retention, access and lifetime questions. No runtime redundancy is established by the naming overlap. |
 | Read-only views versus mutable non-owning data views | Keep mutability separate from no-count lifetime proof. The approved Cursor target does not make read-only Borrow a replacement for mutable AST/VM views; each migration still needs proof. |
-| Stored non-owning back edges | Unowned's second-count design is approved, not landed. Compiler graph/arena/context migrations still need their own lifetime/teardown proof; approval is not support evidence. |
-| Foreign operand writes versus hidden effects and result aliasing | Remove the old purity marker via the approved operand-sensitive gate. Foreign hidden-state trust, operand permissions and result isolation remain distinct; not all are compiler proofs. |
+| Stored non-owning back edges | Unowned fields/own-array elements landed at `8f166cdb812` in the checked scope above. Compiler graph/arena/context migrations still need their own lifetime/teardown proof. |
+| Foreign operand writes versus hidden effects and result aliasing | The marker was removed by the landed operand-sensitive gate. Foreign hidden-state trust, operand permissions and result isolation remain distinct; not all are compiler proofs. |
 | Maybe versus union | Presence over a payload union is not the payload union alone. Neither nullable lowering nor similar names justify deleting its absence state or promising arbitrary nested Option states. |
 | Structural constraints versus operation-based concepts | Structural shape does not require arbitrary operations to resolve. A missing concept mechanism needs a concrete consumer, not automatic porting from a reference manual. |
 | Unsupported static/value generics and type-position `typeof` queries of ordinary values | Authors lose those compile-time forms. Checked refusal of const generics or `typeof local` is not evidence against namespace-import queries or runtime `typeof`. |

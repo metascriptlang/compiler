@@ -1058,13 +1058,14 @@ native import fails inside its implementation (§19), so it is not a green super
 
 ## 10. Use C directly; make the boundary explicit
 
-Do not add a new `@pure` annotation or replace it with another purity marker. Its removal is
-approved but not implemented/landed: the target frozen-const read gate uses operand provenance
-and parameter kind, not a helper-wide native-call taint. A compiler still using the old gate
-can therefore reject a target-legal binding; this is the pending compiler change, not a reason
-to invent a workaround annotation. The declaration still carries foreign retention, hidden-state
-and thread promises that the checker cannot verify. Readonly alone proves none of those, and
-result freshness is separate. See [transition status](CONTRACTS.md#approved-contract-transitions).
+Do not add a new `@pure` annotation or replace it with another purity marker. It was removed
+on main `fb69f51edc9`: the borrowed-operand native-call gate uses provenance and receiving
+parameter kind, not a helper-wide native-call taint. Use a compiler/support tree carrying the
+change; installed `d60be1a7f75` at this follow-up predates it. The declaration still carries
+foreign retention, hidden-state and thread promises that the checker cannot verify. Readonly
+alone proves none of those, and result freshness is separate. Consts entering class-method
+bodies as `this` remain an enforcement hole, not an authoring recipe. See
+[slot rules, gate evidence and limits](CONTRACTS.md#approved-contract-transitions).
 
 Prefer real declarations: `import { twice } from "./bridge.h";` then `twice(21)` calls C.
 A matching adjacent `bridge.c` is compiled automatically. For example, `bridge.h`:
