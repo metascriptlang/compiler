@@ -3636,15 +3636,17 @@ holes and the distinction from foreign trust are in
 
 #### Stored back edges: `Unowned<T>`
 
-**Approved design, not landed language support:** Unowned is a checked non-owning stored edge,
+**Implementation landed on main `8f166cdb812`:** Unowned is a checked non-owning stored edge,
 not another name for Cursor or a weak reference that becomes null. It does not retain the
 target. The design counts stored edges separately and stops when a target would be freed with
 edges remaining. Values read out are ordinary `T`; local copy elision remains the analyzer's
 job. Nullability is still explicit.
 
-The implementation owner has fields and field-owned array elements committed on an unlanded
-branch; neither is current main support. This is not a recommendation to use Unowned in
-async/suspending code: a lifted holder can outlive its target because of frame destruction timing. Destroy order and arena
+Fields and field-owned array elements are implemented in builds carrying that commit; the
+installed `56ad1fdf80f` used by the older documentation probes predates it. The checked gate
+scope and platform exclusions are recorded below, not a blanket post-rebase runtime certificate.
+This is not a recommendation to use Unowned in async/suspending code: a lifted holder can
+outlive its target because of frame destruction timing. Destroy order and arena
 teardown must be established; changing a field's spelling does not prove them. Worker views,
 identity-only collections, value-struct cursors and arbitrary nested containers are not
 mechanical migration targets. See [the current status and limits](CONTRACTS.md#approved-contract-transitions).

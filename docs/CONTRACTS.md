@@ -98,7 +98,7 @@ names a kind of check, not a certificate that every path is implemented correctl
 | `Handle<T>` | `Handle.retain` explicitly retains; `Handle.borrow` does not. Neither proves that the foreign user has stopped before release/owner death, callback affinity or absence of races. Those need the real registration/teardown consumer. |
 | `Borrow<T>` | Internal, checkable access/lifetime proof. Not complete: the tested returned-call root bypasses readonly checks that locals/parameters enforce. Do not promote that acceptance to writable access. |
 | `Cursor<T>` | Internal no-count view treatment. The approved target requires lender/lifetime proof; current explicit annotations are not a certificate of that proof or a weak-reference liveness check. |
-| `Unowned<T>` | Approved checked stored-edge design, not landed support. Does not keep the target alive; target death with edges remaining stops rather than producing an expired/null weak reference. Branch/async/platform limits below. |
+| `Unowned<T>` | Stored-edge implementation landed on main `8f166cdb812`. Does not keep the target alive; native target death with edges remaining stops rather than producing an expired/null weak reference. Checked scope, async and platform limits below. |
 | `Span<T>` / `Readonly<Span<T>>` | Internal source-relative views; readonly additionally restricts writes through that view. Neither owns its source. The view/storage cases named in LANG are scoped pins, not proof for every escape or foreign pointer. |
 | `Ref<T>` / parameter `ref` | A managed storage tool and a parameter mode, respectively; not synonyms for raw `Ptr`. Follow LANG's distinct lifetime/write-back contracts. Casting their address across FFI reintroduces the foreign obligations. |
 | `Readonly<T>` | Restricts access without replacing T's owning/borrowed contract or freezing every alias. It does not by itself prove hidden foreign effects, no retention, fresh returns or thread safety. |
@@ -111,7 +111,7 @@ Approved direction and shipped enforcement are separate facts. As of this 2026-1
 |---|---|
 | `@pure` | Remove the marker and its `WritesCell`/`constReadEffect` policy branch. The source owner has not implemented or landed the change. No replacement purity marker or whole-function `func` contract is introduced. |
 | Cursor | Retain inference/no-count views; an explicit no-count request must not override lender/lifetime proof. This is the approved target, not proof that every current local, stored or returned shape is enforced. |
-| Unowned | Second-count stored edges, checked at target death, are approved. Fields and own-array elements are committed on an unlanded branch; arbitrary nesting/generic containers and async use are not established recipes. |
+| Unowned | Fields and own-array elements landed on main `8f166cdb812`; use a build carrying it, not installed `56ad1fdf80f`. Arbitrary nesting/generic containers and async use are not established recipes. |
 
 The `@pure` replacement on the frozen module-const read path reuses operand provenance and
 parameter kind. Strings/scalars and readonly Ptr/Span over value-only data can pass; const-derived
@@ -125,13 +125,22 @@ all actor/lent-capture enforcement holes.
 For Unowned, target/holder destruction order is observable: a local target declared after its
 holder can die first and trigger the check; a global target must precede its holder. Arena
 links need a proved bulk teardown. A suspending frame can keep a holder alive too long, so do
-not recommend Unowned in async code yet. The branch's reported death checks cover C/Raiser on
-64-bit; its 32-bit build has no second count, and JS does not reproduce native death checks.
+not recommend Unowned in async code yet. The gate's native death checks cover C/Raiser on
+64-bit; the 32-bit path has no second count, and JS does not reproduce native death checks.
 Those results do not establish checked target-death behavior on either platform. Do not claim backend-independent checked
 lifetime support from the type's accepted spelling.
 
-The implementation owners supply the regression evidence before these labels change to
-landed support. A new view model, a counter protocol and a rename are not interchangeable.
+Unowned land evidence: GREEN gate `q1105115549-rtx`, tip `56268ffed57`, candidate source tree
+`7d89b989c742`. Its `src/test/c/unownedEdge.ms` passed 14 cases. The five `unownedEdge*` corpus
+programs passed 17 execution cells, five SAN cells and five parity comparisons: C/danger/Raiser,
+plus JS/ESM for valid field reads only. Dangling fields/elements intentionally exit 1; JS is
+excluded from native death/destructor tests. The six pin/consumer sources are byte-identical
+after landing. The clean rebase to `8f166cdb812` also carries concurrent typed-array changes;
+this doc pass inspected the recorded gate evidence, not a new post-rebase runtime run.
+
+That evidence establishes the named gate scope and the Git fact of landing, not universal
+lifetime safety, async support, 32-bit/JS checked death semantics or the 13 proposed Scope/CToken
+migrations. A new view model, a counter protocol and a rename remain different things.
 
 ## What a status means
 

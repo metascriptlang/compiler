@@ -527,7 +527,7 @@ count must survive until C is finished. Calling `process.exit()` is not a substi
 | `Span<T>` | Pointer plus length; bounded non-owning access, not copied elements. |
 | `Borrow<T>` | Reads an existing location; its owner/storage must outlive every use. |
 | `Cursor<T>` | No-count non-owning view treatment, not an implicit nullable/weak edge. Prefer inference; the approved target requires lender/lifetime proof rather than an unchecked RC override. |
-| `Unowned<T>` | Approved checked stored-edge design, not landed support or a general local/parameter/result type. Do not migrate by name alone. |
+| `Unowned<T>` | Stored field/field-owned-array edge, implemented on main `8f166cdb812`; not a general local/parameter/result type. Observe the checked native/platform scope and teardown limits; do not migrate by name alone. |
 | `Readonly<T>` | Access restriction; storage and ownership still follow `T`. |
 
 Cursor does not choose mutability or nullability for you. A mutable AST/VM view cannot simply
