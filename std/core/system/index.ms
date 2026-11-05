@@ -380,6 +380,9 @@ extern function msUnownedDecref(p: Ptr<void>): void;
 extern function msUnownedAssign(slot: Ptr<void>, p: Ptr<void>): void;
 
 @compilerFunc
+extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
+
+@compilerFunc
 extern function msPtrWasMoved(p: Ptr<void>): void;
 
 @compilerFunc

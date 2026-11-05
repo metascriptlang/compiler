@@ -418,6 +418,11 @@ static inline void msUnownedAssignAt(void** slot, void* p) {
 }
 #define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
 
+static inline void* msUnownedTake(void* p) {
+	msUnownedIncref(p);
+	return p;
+}
+
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
