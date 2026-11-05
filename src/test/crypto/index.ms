@@ -3,6 +3,7 @@
 import "./aeadOracle";
 import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
+import "./kdfApiVectors";
 import "./x25519Wycheproof";
 
 import { CryptoError, CryptoErrorKind, HashAlgorithm, createHash, createHmac, digestSync, fromBase64, fromHex,
