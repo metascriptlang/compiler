@@ -1853,7 +1853,10 @@ function unownedIn(t: Type | null, depth: int32): Type | null {
 	if (isUnownedRef(t)) return t;
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias
 			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var) return unownedIn(t.typeReturn, depth + 1);
-	if (t.kind == TypeKind.Ref) return t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance ? unownedIn(t.typeReturn, depth + 1) : null;
+	if (t.kind == TypeKind.Ref) {
+		const p = t.typeReturn;
+		return p != null && (p.kind == TypeKind.GenericInstance || p.kind == TypeKind.Array) ? unownedIn(p, depth + 1) : null;
+	}
 	if (t.kind == TypeKind.Union || t.kind == TypeKind.Tuple || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Varargs || t.kind == TypeKind.Function) {
 		for (const c of t.typeChildren) {
 			const u = unownedIn(c, depth + 1);
