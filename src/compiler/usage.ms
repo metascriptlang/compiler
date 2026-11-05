@@ -53,7 +53,8 @@ export function printUsage(): void {
 	console.log("  " + cyan("--no-color") + "            Disable color output");
 	console.log("  " + cyan("--release") + "             Optimize for speed " + dim("(-O2)"));
 	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3, +LTO where the toolchain can link it)"));
-	console.log("  " + cyan("--cc") + "=<clang|gcc|zig|path> C compiler " + dim("(default: the prepared LLVM toolchain, installed beside msc; zig is deprecated)"));
+	console.log("  " + cyan("--cc") + "=<clang|gcc|zig|bundle|path> C compiler " +
+		dim("(default: managed Zig; bundle: opt-in prepared LLVM toolchain)"));
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(--os=solana always strips the program; --strip also drops its .debug copy)"));
 	console.log("  " + cyan("--mm") + "=<mode>           Memory management " + dim("(drc|manual|none; bare and solana default to manual)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));

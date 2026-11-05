@@ -1208,7 +1208,7 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 	assert rmdir(root).ok;
 }
 
-function defaultBundle(compilerRoot: string, explicit: string, assumeYes: boolean): Result<string, string> {
+function requestedBundle(compilerRoot: string, explicit: string, assumeYes: boolean): Result<string, string> {
 	const found = nativeToolchainPath(compilerRoot, explicit);
 	if (found != "") return Result.ok(found);
 	let installed: Result<string, string> = Result.err("msc has no runtime directory to install a toolchain beside");
@@ -1217,12 +1217,10 @@ function defaultBundle(compilerRoot: string, explicit: string, assumeYes: boolea
 		installed = source.ok ? installBundle(compilerRoot, source.value, assumeYes) : Result.err(source.error);
 	}
 	if (installed.ok) return installed;
-	return Result.err(`${installed.error}\n  → pass --cc=<path> to a C compiler you installed, or --cc=zig (deprecated).`);
+	return Result.err(`${installed.error}\n  → use --cc=zig or --cc=<path> to select another compiler.`);
 }
 
-// --cc=zig keeps the Zig path of every release before the prepared toolchain became the default.
 function selectZig(opts: CliOptions): void {
-	eprintln("warning: --cc=zig is deprecated in favour of the prepared toolchain, which is the default; drop --cc=zig.");
 	if (cmdExists("zig")) {
 		opts.ccBinary = "zig cc";
 		return;
@@ -1244,10 +1242,16 @@ function resolveCCIn(opts: CliOptions, stampRoot: string, compilerRoot: string, 
 		selectZig(opts);
 		return;
 	}
+	const wantBundle = opts.ccBinary == "bundle";
+	if (wantBundle) opts.ccBinary = "";
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "emcc") return;
+	if (!wantBundle && explicit == "") {
+		if (ensureZig(opts.autoYes) == "") stopBuild();
+		return;
+	}
 
-	const native = defaultBundle(compilerRoot, explicit, opts.autoYes);
+	const native = requestedBundle(compilerRoot, explicit, opts.autoYes);
 	const selected: Result<void, string> = native.ok ? selectNativeToolchain(opts, native.value, stampRoot) : Result.err(native.error);
 	if (!selected.ok) {
 		eprintln(`error: ${selected.error}`);
@@ -1378,26 +1382,57 @@ test "the bundle source is the table row of the host, or the override, and fails
 	assert localArchivePath("https://example.com/x.tar") == "";
 }
 
-test "with no --cc a bundle beside the runtime is selected, never zig" {
+test "an adjacent bundle does not replace Zig without an explicit opt-in" {
+	const root = installRoot();
+	assert root != "";
+	const bundle = selectionProbe(true);
+	assert bundle != "";
+	assert rename(bundle, join(root, "msc-toolchain")).ok;
+	const home = env.get("HOME");
+	const zigDir = join(root, ".metascript/zig");
+	assert ensureDir(zigDir).ok;
+	assert writeFile(zigBinaryIn(zigDir), "probe").ok;
+	env.set("HOME", root);
+	const opts = linuxOptions();
+	resolveCCIn(opts, "", root, "");
+	env.set("HOME", home);
+	verifySelectedToolchain();
+	assert opts.ccCompiler == 0;
+	assert opts.ccBinary == "";
+	assert removeAll(root).ok;
+}
+
+test "the bundle alias explicitly selects an adjacent prepared toolchain" {
 	const root = installRoot();
 	assert root != "";
 	const bundle = selectionProbe(true);
 	assert bundle != "";
 	assert rename(bundle, join(root, "msc-toolchain")).ok;
 	const opts = linuxOptions();
+	opts.ccBinary = "bundle";
 	resolveCCIn(opts, "", root, "");
 	assert opts.ccCompiler == CC_PREPARED;
 	assert opts.ccBinary.contains(join(root, "msc-toolchain"));
-	assert !opts.ccBinary.contains("zig");
 	verifySelectedToolchain();
 	assert removeAll(root).ok;
 }
 
-test "with no bundle and no published row the default fails naming the host and the two choices" {
+test "an explicit bundle path selects it without an adjacent installation" {
+	const bundle = selectionProbe(true);
+	assert bundle != "";
+	const opts = linuxOptions();
+	resolveCCIn(opts, "", "", bundle);
+	assert opts.ccCompiler == CC_PREPARED;
+	assert opts.ccBinary.contains(bundle);
+	verifySelectedToolchain();
+	assert removeAll(bundle).ok;
+}
+
+test "an unpublished requested bundle fails naming the host and explicit alternatives" {
 	if (env.get("MSC_TOOLCHAIN_ARCHIVE") != "") return;
 	const root = installRoot();
 	assert root != "";
-	const refused = defaultBundle(root, "", false);
+	const refused = requestedBundle(root, "", false);
 	assert !refused.ok;
 	assert refused.error.contains(`no prepared toolchain bundle is published for host '${hostKey()}'`);
 	assert refused.error.contains("--cc=zig") && refused.error.contains("--cc=<path>");
@@ -1405,7 +1440,7 @@ test "with no bundle and no published row the default fails naming the host and 
 	assert removeAll(root).ok;
 }
 
-test "MSC_TOOLCHAIN_ARCHIVE installs the bundle on the default path and the next resolution finds it" {
+test "an explicitly requested archive is installed once beside the compiler" {
 	if (platform == "windows" || env.get("MSC_TOOLCHAIN_ARCHIVE") != "") return;
 	const root = installRoot();
 	assert root != "";
@@ -1415,11 +1450,11 @@ test "MSC_TOOLCHAIN_ARCHIVE installs the bundle on the default path and the next
 	const archive = tarOf(root, bundle, "bundle");
 	assert archive != "";
 	env.set("MSC_TOOLCHAIN_ARCHIVE", `${archive},${bundleSourceOf(archive, identity).sha256},${identity}`);
-	const installed = defaultBundle(root, "", false);
+	const installed = requestedBundle(root, "", false);
 	env.delete("MSC_TOOLCHAIN_ARCHIVE");
 	assert installed.ok && installed.value == join(root, "msc-toolchain");
 	assert validateNativeToolchain(installed.value, "", "").ok;
-	const again = defaultBundle(root, "", false);
+	const again = requestedBundle(root, "", false);
 	assert again.ok && again.value == installed.value;
 	assert removeAll(root).ok && removeAll(bundle).ok;
 }
