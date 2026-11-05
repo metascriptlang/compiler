@@ -21,7 +21,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -63,6 +63,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 	return match (t.kind) {
 		TypeKind.Ref => {
 			if (t.typeReturn == null) return true;
+			if (isUnownedRef(t)) return false;
 			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !isOwnedRef(t), marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
 		TypeKind.Function | TypeKind.Unknown => true,

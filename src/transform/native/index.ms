@@ -26,6 +26,7 @@ import { injectIntChecks, lowerNumberBitwiseOperands } from "./intCheckInject";
 import { coerceOptionals } from "./optionalCoercion";
 import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
+import { lowerUnownedStores } from "./unownedStoreLower";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerPresizedPushes } from "./presizedPush";
 import { lowerInductionPointers } from "./inductionPointer";
@@ -53,6 +54,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.lowerDownConversions");
 	result = insertVarParamDerefs(result, ctx);
 	flowLap("pass.insertVarParamDerefs");
+	result = lowerUnownedStores(result, ctx);
+	flowLap("pass.native.lowerUnownedStores");
 	result = lowerPresizedPushes(result, ctx);
 	flowLap("pass.lowerPresizedPushes");
 	result = lowerInductionPointers(result, ctx);

@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
+import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
@@ -679,6 +679,25 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
+// An Unowned<T> field counts on its target's second count: never traced, never the last strong owner.
+function unownedOp(hook: string, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	match (hook) {
+		"destroy" => { genCall("msUnownedDecref", hook, xf, yf, buf, loc); },
+		"copy" => {
+			const incref = makeTypedIdentResolved(attachedOpSym("msUnownedIncref", AttachedOp.AttachedAsgn), null, loc);
+			buf.items.push(makeExprStmt(makeCall(incref, [clonePath(yf, loc)], loc), loc));
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall("msUnownedDecref", "destroy", old, old, buf, loc);
+		},
+		"sink" => {
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall("msUnownedDecref", "destroy", old, old, buf, loc);
+		},
+		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
+		_ => {},
+	};
+}
+
 interface HookLiftScope {
 	callsUnavailableCopy: boolean;
 	dropOwner: Symbol | null;
@@ -896,6 +915,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			// never increfs it) -> double-free of the shared actor's state.
 			if (fieldType.sym != null && fieldType.sym.symbolKind == SymbolKind.Actor) {
 				defaultOp(hook, xf, yf, buf, loc);
+			} else if (isUnownedRef(fieldType)) {
+				unownedOp(hook, xf, yf, lctx, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
 				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
@@ -965,6 +986,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
+				} else if (isUnownedRef(refInner)) {
+					unownedOp(hook, xf, yf, lctx, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
 					refOp(hook, xf, yf, empties, refInner, cyclic, isAtomicRef(refInner), lctx, buf, loc);
