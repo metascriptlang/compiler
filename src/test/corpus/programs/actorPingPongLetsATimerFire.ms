@@ -2,6 +2,7 @@
 // @xfail(c): the main-thread actor poll drains actors re-queued during its pass, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
 // @xfail(danger): the main-thread actor poll drains actors re-queued during its pass, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
 // @xfail(san): the main-thread actor poll drains actors re-queued during its pass, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
+// @xfail(tsan): the main-thread actor poll drains actors re-queued during its pass, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
 // @xfail(js): the mailbox pump is a microtask, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
 // @xfail(esm): the mailbox pump is a microtask, so the timer waits for the cap (inbox 2026-10-31-c-and-js-two-actors-messaging-each-other-starve-a-due-timer)
 // note: two actors that message each other leave a due timer its turn, because an actor run is a turn of the loop beside the timers, not a promise job that runs before them. The cap only bounds a lane that starves the timer; there the timer runs after the exchange ends and prints false.
