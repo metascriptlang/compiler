@@ -15,6 +15,7 @@ import {
 } from "./weierstrass";
 import { hashKind, hashOf } from "./hash";
 import { kindSha256, kindSha384, kindSha512 } from "./state";
+import { wipeBytes } from "./secret";
 import { p256 } from "./p256";
 import { p384 } from "./p384";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
@@ -174,6 +175,10 @@ export class EcPrivateKey {
 
 	publicKey(): EcPublicKey {
 		return { _data: { curve: this._data.curve, point: this._data.point } };
+	}
+
+	onDestroy(): void {
+		wipeBytes(this._data.d);
 	}
 }
 
