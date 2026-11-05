@@ -57,6 +57,15 @@ def engineRequirements(requirements, receipt):
             need(requirements, package["name"], package["copyright"], package.get("copyrightSha256"))
     elif kind == "local-windows-llvm-proof":
         need(requirements, "llvm-project", "notices/LICENSE.TXT", receipt["license"]["sha256"])
+    elif kind == "local-source-engine-proof":
+        licenses = receipt.get("licenses", {})
+        for component in ("llvm", "compiler-rt"):
+            digest = licenses.get(component) if isinstance(licenses, dict) else None
+            if digest is None:
+                raise pe.EngineError("source engine: missing license sha256 for " + component)
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise pe.EngineError("source engine: invalid license sha256 for " + component)
+            need(requirements, component, "notices/%s/LICENSE.TXT" % component, digest)
     else:
         need(requirements, "llvm-project", "notices/llvm-project/LICENSE.TXT")
 
@@ -91,7 +100,8 @@ def problemsOf(root):
     for path, base, receipt in receipts:
         kind = receipt.get("kind", "")
         gaps += ["%s: %s" % (path, gap) for gap in receipt.get("noticeGaps", [])]
-        if kind in ("local-homebrew-proof", "local-linux-package-proof", "local-windows-llvm-proof", "upstream-release-subset"):
+        if kind in ("local-homebrew-proof", "local-linux-package-proof", "local-windows-llvm-proof",
+                    "upstream-release-subset", "local-source-engine-proof"):
             engineRequirements(requirements, receipt)
         elif kind.startswith("local-zig-"):
             zigRequirements(requirements, receipt, base)

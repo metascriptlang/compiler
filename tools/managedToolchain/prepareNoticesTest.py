@@ -161,5 +161,46 @@ class EngineKindsTest(BundleCase):
                 self.assertEqual(pn.problemsOf(self.root)[0], [])
 
 
+class SourceEngineTest(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="sourceEngineNotices-")
+        self.addCleanup(shutil.rmtree, self.root)
+        self.licenses = {}
+        for name in ("llvm", "compiler-rt"):
+            path = os.path.join(self.root, "notices", name, "LICENSE.TXT")
+            write(path, LLVM_TEXT)
+            self.licenses[name] = pe.sha256File(path)
+        self.save()
+
+    def save(self):
+        receipt(os.path.join(self.root, "notices/provenance.json"),
+                kind="local-source-engine-proof", licenses=self.licenses)
+
+    def test_source_engine_matches_both_exact_license_hashes(self):
+        self.assertEqual(pn.verifyNotices(self.root), (2, []))
+
+    def test_source_engine_refuses_changed_or_missing_component_license(self):
+        for name in ("llvm", "compiler-rt"):
+            path = os.path.join(self.root, "notices", name, "LICENSE.TXT")
+            with self.subTest(component=name, case="changed"):
+                write(path, LLVM_TEXT + "changed\n")
+                with self.assertRaisesRegex(pe.EngineError, name + ": .* differs from its receipt"):
+                    pn.verifyNotices(self.root)
+            with self.subTest(component=name, case="missing"):
+                os.remove(path)
+                with self.assertRaisesRegex(pe.EngineError, name + ": .* is missing or empty"):
+                    pn.verifyNotices(self.root)
+            write(path, LLVM_TEXT)
+
+    def test_source_engine_requires_hashes_instead_of_unchecked_licenses(self):
+        for name in ("llvm", "compiler-rt"):
+            saved = self.licenses.pop(name)
+            self.save()
+            with self.subTest(component=name):
+                with self.assertRaisesRegex(pe.EngineError, "source engine: missing license sha256 for " + name):
+                    pn.verifyNotices(self.root)
+            self.licenses[name] = saved
+
+
 if __name__ == "__main__":
     unittest.main()
