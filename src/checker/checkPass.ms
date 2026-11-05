@@ -2627,8 +2627,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 						}
 					} else if (settled) {
 						const unresolved = isUnresolvedType(getProperty(iterType, p.propKey));
-						let builtinLength = false;
-						if (p.propKey == "length" && iterType != null) builtinLength = carriesLength(unwrapRef(iterType));
+						const builtinLength = p.propKey == "length" && iterType != null && carriesLength(unwrapRef(iterType));
 						addError(ctx, unresolved && !builtinLength
 							? `Property '${p.propKey}' does not exist on type '${typeDisplayName(iterType)}'`
 							: `cannot destructure '${p.propKey}' from '${typeDisplayName(iterType)}': read it as a member, destructuring lowers stored fields of one struct only`, prop.location.line, prop.location.column);
