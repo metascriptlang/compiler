@@ -77,6 +77,12 @@ Commit `43cc3103de9`, tree `be370ad7937`, 2026-11-05, load 2.73 before, 1.25 aft
 | ecdh-p256 shared | us/op | 390 | 86.7 | 51.7 |
 | sha256 stream 16x64 KB | MB/s | 2628 | 155 | 2679 |
 
+Each MetaScript row awaits its async form per op while node calls its sync form, so a gap is the whole API path, not
+the engine alone; OAEP decrypt and ECDH on C also import and destroy a PSA key per call (`runtime/crypto/rsa/rsa.c`,
+`runtime/crypto/curves/ec.c`). The verify and open rows were timed before `bench.ms` checked their results outside
+the clock; the one-round run of the checked bench (rtx, rc 0, every verify and open row present) shows they time the
+success path.
+
 C rows behind node: RSA-2048 (sign and decrypt 18x, verify 6x) and P-256 (sign 13x, verify 17x, ECDH 8x) on mbedTLS
 PSA; sha1 (2.6x), blake2b-512 (2.2x) and sha512 (2.1x) at 1 MB; aes-256-cbc (1.35x); the three 25519 rows (1.2-1.9x).
 
