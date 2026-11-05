@@ -54,6 +54,49 @@ export function _jsonEnumName(ord: int32, ords: int32[], names: string[]): JsonV
 	return jsonString("");
 }
 
+export function _jsonCopy(v: Readonly<JsonValue>): JsonValue {
+	if (v == null) return jsonNull();
+	if (v.kind == JsonKind.Bool) return jsonBool(v.boolVal);
+	if (v.kind == JsonKind.Number) return jsonNumber(v.numVal);
+	if (v.kind == JsonKind.Int) return jsonInt(v.intVal);
+	if (v.kind == JsonKind.String) return jsonString(v.strVal);
+	if (v.kind == JsonKind.Array) {
+		const items: JsonValue[] = [];
+		let i = 0;
+		while (i < v.items.length) {
+			items.push(_jsonCopy(v.items[i]));
+			i = i + 1;
+		}
+		return jsonArray(items);
+	}
+	if (v.kind == JsonKind.Object) {
+		const keys: string[] = [];
+		const values: JsonValue[] = [];
+		let i = 0;
+		while (i < v.keys.length) {
+			keys.push(v.keys[i]);
+			values.push(_jsonCopy(v.values[i]));
+			i = i + 1;
+		}
+		return jsonObject(keys, values);
+	}
+	return jsonNull();
+}
+
+test "_jsonCopy builds an equal tree that shares no node with its source" {
+	const src = jsonObject(["a", "b"], [jsonArray([jsonInt(1), jsonString("x")]), jsonNull()]);
+	const copy = _jsonCopy(src);
+	assert copy.kind == JsonKind.Object;
+	if (copy.kind == JsonKind.Object) {
+		assert copy.keys.length == 2 && copy.values[1].kind == JsonKind.Null;
+		const inner = copy.values[0];
+		assert inner.kind == JsonKind.Array;
+		if (inner.kind == JsonKind.Array) assert inner.items.length == 2 && inner.items[1].asString("?") == "x";
+		copy.keys[0] = "z";
+	}
+	if (src.kind == JsonKind.Object) assert src.keys[0] == "a";
+}
+
 test "_jsonEnumName — a member's value writes the member's name" {
 	assert _jsonEnumName(5, [0, 5, 2], ["Red", "Blue", "Green"]).asString("?") == "Blue";
 }

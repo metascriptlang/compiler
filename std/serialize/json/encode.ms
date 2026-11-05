@@ -8,7 +8,7 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-import { Node, NodeKind, declaredCallType, getType } from "std/meta";
+import { Node, NodeKind, IdentifierData, TypeGenericData, TypeUnionData, declaredCallType, getType } from "std/meta";
 import {
 	detectUnionDisc,
 	namesStruct,
@@ -18,6 +18,23 @@ import {
 	literalCarrier,
 	literalMembers,
 } from "../discDetect";
+
+function namesJsonValue(type: Node | null): boolean {
+	if (type == null) return false;
+	let shape: Node = type;
+	if (shape.kind == NodeKind.TypeGeneric) {
+		const g = shape as TypeGenericData;
+		if (g.typExprBase.kind != NodeKind.Identifier || (g.typExprBase as IdentifierData).name != "Ref" || g.typExprArgs.length != 1) return false;
+		shape = g.typExprArgs[0];
+	}
+	if (shape.kind != NodeKind.TypeUnion) return false;
+	const members = (shape as TypeUnionData).typExprMembers;
+	if (members.length == 0) return false;
+	for (const m of members) {
+		if (m.kind != NodeKind.Identifier || !(m as IdentifierData).name.startsWith("JsonValueData.")) return false;
+	}
+	return true;
+}
 
 function isOptionalField(name: string, optionalFields: string[]): boolean {
 	for (const f of optionalFields) {
@@ -49,6 +66,13 @@ export macro jsonValueOf(arg: Node): Node {
 					nodeType: hooked,
 				}],
 			}],
+		};
+	}
+	if (namesJsonValue(getType(t))) {
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonCopy" },
+			arguments: [t],
 		};
 	}
 	const declared = getType(t);
@@ -506,6 +530,13 @@ export macro jsonValueOf(arg: Node): Node {
 }
 
 export macro jsonStringify(t: Node): Node {
+	if (namesJsonValue(getType(t))) {
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "stringify" },
+			arguments: [t, { kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: false }],
+		};
+	}
 	// stringify(jsonValueOf(t), false)
 	return {
 		kind: NodeKind.CallExpr,
