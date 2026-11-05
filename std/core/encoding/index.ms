@@ -39,9 +39,30 @@ when (c) {
 	}
 }
 
+function hexTextOnVm(data: Readonly<Span<uint8>>): string {
+	const digits = "0123456789abcdef".asBytes();
+	const out: uint8[] = [];
+	const inputLength = data.length as int64;
+	for (let i: int64 = 0; i < inputLength; i++) {
+		const byte = data[i];
+		out.push(digits[byte >> 4]);
+		out.push(digits[byte & 15]);
+	}
+	return out.asString();
+}
+
 @inline
 export function encodeHex(this data: Readonly<Span<uint8>>): string {
-	if (data.length == 0) return emptyEncoding;
+	when (raiser) {
+		return hexTextOnVm(data);
+	} else {
+		if (data.length == 0) return emptyEncoding;
+		return hexText(data);
+	}
+}
+
+@inline
+function hexText(data: Readonly<Span<uint8>>): string {
 	let result = newEncodingOutput((data.length as int64) * 2);
 	const bytes = freshEncodingOutputBytes(result);
 	when (c) {
@@ -83,9 +104,43 @@ export function decodeHex(this text: string): uint8[] {
 	return result;
 }
 
+function base64TextOnVm(data: Readonly<Span<uint8>>): string {
+	const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".asBytes();
+	const out: uint8[] = [];
+	const inputLength = data.length as int64;
+	let i: int64 = 0;
+	while (i + 3 <= inputLength) {
+		const triple = ((data[i] as int32) << 16) | ((data[i + 1] as int32) << 8) | (data[i + 2] as int32);
+		out.push(digits[(triple >> 18) & 63]);
+		out.push(digits[(triple >> 12) & 63]);
+		out.push(digits[(triple >> 6) & 63]);
+		out.push(digits[triple & 63]);
+		i += 3;
+	}
+	const remaining = inputLength - i;
+	if (remaining != 0) {
+		const a = data[i] as int32;
+		const b = remaining == 2 ? data[i + 1] as int32 : 0;
+		out.push(digits[a >> 2]);
+		out.push(digits[((a & 3) << 4) | (b >> 4)]);
+		out.push(remaining == 2 ? digits[(b & 15) << 2] : "=".code as uint8);
+		out.push("=".code as uint8);
+	}
+	return out.asString();
+}
+
 @inline
 export function encodeBase64(this data: Readonly<Span<uint8>>): string {
-	if (data.length == 0) return emptyEncoding;
+	when (raiser) {
+		return base64TextOnVm(data);
+	} else {
+		if (data.length == 0) return emptyEncoding;
+		return base64Encoded(data);
+	}
+}
+
+@inline
+function base64Encoded(data: Readonly<Span<uint8>>): string {
 	when (c) {
 		return base64Text(data);
 	} else {
@@ -142,28 +197,37 @@ export function decodeBase64(this text: string): uint8[] {
 		length -= 1;
 	}
 	const result = newDecodingOutput(length);
-	when (c) {
-		const decoded: Span<uint8> = result;
-		if (!decodesWhole(bytes, decoded as Ptr<uint8>, length)) return [];
-		return result;
+	when (raiser) {
+		return decodesPortably(bytes, result) ? result : [];
 	} else {
-		const outputLength = length as EncodingIndex;
-		const finalGroup = inputLength - 4;
-		let at: EncodingIndex = 0;
-		for (let i: EncodingIndex = 0; i < inputLength; i += 4) {
-			const padded = i == finalGroup;
-			const a = base64Digit(bytes[i] as int32);
-			const b = base64Digit(bytes[i + 1] as int32);
-			const c = padded && bytes[i + 2] == "=".code ? 0 : base64Digit(bytes[i + 2] as int32);
-			const d = padded && bytes[i + 3] == "=".code ? 0 : base64Digit(bytes[i + 3] as int32);
-			if (a < 0 || b < 0 || c < 0 || d < 0) return [];
-			const triple = (a << 18) | (b << 12) | (c << 6) | d;
-			if (at < outputLength) { result[at] = ((triple >> 16) & 255) as uint8; at += 1; }
-			if (at < outputLength) { result[at] = ((triple >> 8) & 255) as uint8; at += 1; }
-			if (at < outputLength) { result[at] = (triple & 255) as uint8; at += 1; }
+		when (c) {
+			const decoded: Span<uint8> = result;
+			if (!decodesWhole(bytes, decoded as Ptr<uint8>, length)) return [];
+			return result;
+		} else {
+			return decodesPortably(bytes, result) ? result : [];
 		}
-		return result;
 	}
+}
+
+function decodesPortably(bytes: Readonly<Span<uint8>>, result: uint8[]): boolean {
+	const inputLength = bytes.length as EncodingIndex;
+	const outputLength = result.length as EncodingIndex;
+	const finalGroup = inputLength - 4;
+	let at: EncodingIndex = 0;
+	for (let i: EncodingIndex = 0; i < inputLength; i += 4) {
+		const padded = i == finalGroup;
+		const a = base64Digit(bytes[i] as int32);
+		const b = base64Digit(bytes[i + 1] as int32);
+		const c = padded && bytes[i + 2] == "=".code ? 0 : base64Digit(bytes[i + 2] as int32);
+		const d = padded && bytes[i + 3] == "=".code ? 0 : base64Digit(bytes[i + 3] as int32);
+		if (a < 0 || b < 0 || c < 0 || d < 0) return false;
+		const triple = (a << 18) | (b << 12) | (c << 6) | d;
+		if (at < outputLength) { result[at] = ((triple >> 16) & 255) as uint8; at += 1; }
+		if (at < outputLength) { result[at] = ((triple >> 8) & 255) as uint8; at += 1; }
+		if (at < outputLength) { result[at] = (triple & 255) as uint8; at += 1; }
+	}
+	return true;
 }
 
 when (c) {
