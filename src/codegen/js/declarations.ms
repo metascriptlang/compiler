@@ -5,7 +5,7 @@ import {
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding, jsPropertyKey } from "./emit";
-import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
+import { safeJsName, exportedBindingName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
 import { ACTOR_EXIT_STOP, useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
@@ -516,8 +516,8 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			if (imp.importNames.length != 1 || imp.importNames[0] != "*") {
 				const bindings: string[] = [];
 				for (let i = 0; i < imp.importNames.length; i += 1) {
-					const name = imp.importNames[i];
-					const alias = imp.importAliases[i];
+					const name = exportedBindingName(imp.importNames[i]);
+					const alias = exportedBindingName(imp.importAliases[i]);
 					bindings.push(name == alias ? name : `${name} as ${alias}`);
 				}
 				clause = `{ ${bindings.join(", ")} }`;

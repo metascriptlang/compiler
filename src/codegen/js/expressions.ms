@@ -223,7 +223,7 @@ function isJsGlobalName(name: string): boolean {
 	return false;
 }
 
-function exportedBindingName(baseName: string): string {
+export function exportedBindingName(baseName: string): string {
 	return isJsGlobalName(baseName) ? `${safeJsName(baseName)}_u0` : safeJsName(baseName);
 }
 
