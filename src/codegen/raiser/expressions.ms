@@ -40,6 +40,7 @@ import {
 	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
 import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy } from "./packedValues";
+import { nullAccessHead } from "../../transform/maybeCarrier";
 import { packedSlotShapeOf } from "./valueCopy";
 import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
 import { vmLayoutOf } from "./layout";
@@ -593,7 +594,7 @@ function packedReadOwner(s: RaiserCompState, object: Node, property: string): Ra
 function checkPackedPresent(s: RaiserCompState, place: RaiserFramePlace): void {
 	const present = emitPackedLoad(s, s.layouts, packedField(s, s.layouts, place, "present"));
 	emitInst(s, raiserABC(RaiserOpcode.BTruthy, present, 0, 1));
-	emitTrap(s, "member 'value' is not accessible for type 'null' using '.'");
+	emitTrap(s, nullAccessHead(peelTransparentInstance(place.valueType)) + "null'");
 }
 
 export function copyPackedExpr(s: RaiserCompState, dest: RaiserFramePlace, node: Node): void {
@@ -848,7 +849,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 					emitInst(s, raiserABC(RaiserOpcode.IsKind, nil, carrier, RaiserValueKind.Nil as int32));
 					emitInst(s, raiserABC(RaiserOpcode.BTruthy, nil, 0, 1));
 					const done = emitJumpPlaceholder(s);
-					emitTrap(s, "member 'value' is not accessible for type 'null' using '.'");
+					emitTrap(s, nullAccessHead(peelTransparentInstance(d.object.nodeType)) + "null'");
 					patchJumpTo(s, done, codeLen(s));
 				}
 				return carrier;
