@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
-import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef } from "./types";
+import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { isScalarPrimitive } from "./fit";
 import { isFrozenByConst } from "./assignable";
@@ -23,7 +23,6 @@ export enum Effect {
 	Suspends,
 	StoresBorrowed,
 	StartsTask,
-	WritesCell,
 	RunsElsewhere,
 }
 
@@ -49,6 +48,7 @@ function borrowText(b: BorrowSource): string {
 export interface EffectCause {
 	site: Node;
 	text: string;
+	advice?: string;
 }
 
 interface EffectTable {
@@ -69,7 +69,6 @@ let elsewhereTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
 let sharedConstTable: EffectTable = emptyTable();
 let startTable: EffectTable = emptyTable();
-let writeTable: EffectTable = emptyTable();
 let startsByModule = new HashMap<string, boolean>();
 let cycles = new HashMap<string, string[]>();
 let freshConsts = new HashMap<Symbol, boolean>();
@@ -110,7 +109,6 @@ function tableFor(e: Effect): EffectTable {
 		Effect.Suspends => suspendTable,
 		Effect.StoresBorrowed => sharedConstTable,
 		Effect.StartsTask => startTable,
-		Effect.WritesCell => writeTable,
 	};
 }
 
@@ -138,7 +136,6 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	suspendTable = emptyTable();
 	sharedConstTable = emptyTable();
 	startTable = emptyTable();
-	writeTable = emptyTable();
 	startsByModule = new HashMap<string, boolean>();
 	cycles = new HashMap<string, string[]>();
 	freshConsts = new HashMap<Symbol, boolean>();
@@ -735,7 +732,7 @@ function isRoutine(sym: Symbol | null): boolean {
 function through(site: Node, what: string, inner: EffectCause | null): EffectCause | null {
 	if (inner == null) return null;
 	const c = cause(site, what);
-	return { site, text: c.text + ", which " + inner.text };
+	return { site, text: c.text + ", which " + inner.text, advice: inner.advice };
 }
 
 function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): EffectCause | null {
@@ -818,7 +815,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	if (isSuperCall(callee)) return null;
 	if ((e == Effect.Suspends || e == Effect.StartsTask || e == Effect.RunsElsewhere) && isSpawnCall(call)) return cause(call, "spawns");
 	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == BuiltinKind.DynamicImport) {
-		return e == Effect.SideEffect || e == Effect.WritesCell ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
+		return e == Effect.SideEffect ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
 	}
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
@@ -836,9 +833,6 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!) || isScalarToString(call, sym!)) return null;
 	const external = isExternalRoutine(sym!);
-	if (e == Effect.WritesCell && external && !hasFlag(calledRoutine(call) ?? sym!, SymbolFlag.NoSideEffect)) {
-		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
-	}
 	if (external) {
 		if (e != Effect.SideEffect || receiverOf(call) != null) return null;
 		return cause(call, "calls the external '" + sym!.name + "'");
@@ -892,16 +886,6 @@ function isScalarToString(call: Node, sym: Symbol): boolean {
 	return sym.builtinKind == BuiltinKind.ToString && args.length == 1 && isScalarPrimitive(args[0].nodeType);
 }
 
-function constReadEffect(call: Node): EffectCause | null {
-	const recv = receiverOf(call);
-	let read = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
-	for (const arg of (call.data as CallExprData).arguments) {
-		if (read == null || read.kind != BorrowKind.ModuleConst) read = borrowedOf(arg);
-	}
-	if (read == null || read.kind != BorrowKind.ModuleConst) return null;
-	return through(call, "reads " + borrowText(read), callEffect(call, Effect.WritesCell));
-}
-
 export function newEffect(newNode: Node, e: Effect): EffectCause | null {
 	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
 	if (e == Effect.StartsTask && classSym != null && classSym.symbolKind == SymbolKind.Actor) return cause(newNode, "starts the actor '" + classSym.name + "'");
@@ -930,7 +914,7 @@ function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.WritesCell || e == Effect.RunsElsewhere) && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.RunsElsewhere) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
@@ -955,8 +939,7 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if ((e == Effect.Suspends || reachesModuleState(e)) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
-		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e)
-			: reachesModuleState(e) ? constReadEffect(node) ?? callEffect(node, e) : callEffect(node, e),
+		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e) : callEffect(node, e),
 		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(node) ?? newEffect(node, e) : newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
 		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
@@ -1244,6 +1227,11 @@ function viewArgEffect(call: Node): EffectCause | null {
 	const passed: (Node | null)[] = shift == 1 ? [actorPidNotView ? null : receiverOf(call)] : [];
 	for (const a of (call.data as CallExprData).arguments) passed.push(a);
 	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : isSuperCall(callee) ? "super" : sym!.name;
+	if (shift == 0 && !actorPidNotView && isExternalRoutine(sym!) && unpackDecl(sym!.declNode) != null && unpackDecl(sym!.declNode)!.kind == NodeKind.MethodDecl) {
+		const recv = receiverOf(call);
+		const what = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
+		if (what != null) return lentToForeign(call, what, name, "as its receiver");
+	}
 	const targets: Symbol[] = [sym!];
 	const entry = dispatchEntryFor(sym!);
 	if (entry != null && !entry.overloaded) {
@@ -1268,6 +1256,12 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 		const what = borrowedOf(passed[i]);
 		if (what == null) continue;
 		for (const t of targets) {
+			if (isExternalRoutine(t)) {
+				const sig = call.kind == NodeKind.CallExpr && t == targets[0] ? calledRoutineType(call) : t.symbolType;
+				const formal = sig != null && i < sig.typeChildren.length ? sig.typeChildren[i] : null;
+				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType)) return lentToForeign(call, what, name, "through a parameter of type '" + typeNameOf(formal) + "'");
+				continue;
+			}
 			const decl = unpackDecl(t.declNode);
 			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
 			const c = i < params.length ? paramStoreEffect(t, decl!, i, params[i]) : null;
@@ -1275,6 +1269,26 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 		}
 	}
 	return null;
+}
+
+const FOREIGN_ADVICE = "C may count or write what it receives there while another thread reads the same value, so pass an explicit copy (clone or spread), or declare that parameter Readonly over value-only data when C only reads it";
+
+function lentToForeign(call: Node, what: BorrowSource, name: string, how: string): EffectCause {
+	const c = cause(call, "passes " + borrowText(what) + " to the external '" + name + "' " + how);
+	return { site: c.site, text: c.text, advice: FOREIGN_ADVICE };
+}
+
+function foreignSlotTakesNothing(formal: Type | null, actual: Type | null): boolean {
+	if (formal == null || formal.kind == TypeKind.Var || formal.kind == TypeKind.Sink) return false;
+	if (!holdsPointerByValue(formal, 0)) return true;
+	if (!isReadonlyView(formal)) return false;
+	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.Span || formal.kind == TypeKind.Ptr) {
+		let passed = actual;
+		while (passed != null && (passed.kind == TypeKind.Ref || passed.kind == TypeKind.Var) && passed.typeReturn != null) passed = passed.typeReturn;
+		const elem = formal.typeReturn != null && hasGenericParams(formal.typeReturn) && passed != null ? passed.typeReturn : formal.typeReturn;
+		return elem != null && elem.kind != TypeKind.Void && isValueOnlyType(elem);
+	}
+	return formal.kind == TypeKind.Struct && formal.typeChildren.every((f: Type): boolean => isValueOnlyType(f));
 }
 
 function paramStoreEffect(sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {

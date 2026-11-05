@@ -21,8 +21,6 @@ export interface DefineTable {
 
 export function createDefineTable(): DefineTable {
 	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
-	// std marks its extern push @pure only under this symbol: a compiler that predates the decorator refuses it on a declaration, so the guard goes one sync cycle after the compiler lands.
-	defineSymbol(t, "mscReadsPureExterns", "true");
 	return t;
 }
 
@@ -214,9 +212,9 @@ test "define: bare flag stores true" {
 	assert definedValue(t, "myFlag") == "true";
 }
 
-test "define: a fresh table carries only the capability symbols std reads while a builder predates them" {
+test "define: a fresh table carries no capability symbol" {
 	const names = createDefineTable().names;
-	assert names.length == 1 && names[0] == "mscReadsPureExterns", names.join(",");
+	assert names.length == 0, names.join(",");
 }
 
 test "define: unknown flag is false, never an error" {

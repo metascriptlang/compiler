@@ -37,22 +37,8 @@ export function isArray<T>(this typeof Array, x: T): x is unknown[] {
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-when (mscReadsPureExterns) {
-	@pure
-	export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
-}
-when (!mscReadsPureExterns) {
-	export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
-}
-
-when (mscReadsPureExterns) {
-	@pure
-	export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
-}
-when (!mscReadsPureExterns) {
-	export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
-}
-
+export extern function push(this arr: uint8[], sink value: uint8): void from "&msUint8ArrayPush";
+export extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush";
 /**
  * Removes the last element from an array and returns it.
  * An empty array raises the index error, as a[-1] would.
@@ -65,44 +51,27 @@ export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
  */
 export extern function shift(this arr: number[]): number from "&msNumberArrayShift";
 
-when (mscReadsPureExterns) {
-	/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
-	@pure
-	export extern function at(this arr: Vec<number>, idx: number): number from "&msNumberArrayAt";
-	/**
-	 * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
-	 * @param value The value to locate in the array.
-	 */
-	@pure
-	export extern function indexOf(this arr: Vec<number>, value: number, fromIndex: int32 = 0): number from "&msNumberArrayIndexOf";
-	/**
-	 * Determines whether an array includes a certain element, returning true or false as appropriate.
-	 * @param value The element to search for.
-	 */
-	@pure
-	export extern function includes(this arr: Vec<number>, value: number, fromIndex: int32 = 0): boolean from "&msNumberArrayIncludes";
-	/** Returns the number of occurrences of a value in an array. */
-	@pure
-	export extern function count(this arr: Vec<number>, value: number): number from "&msNumberArrayCount";
-	/**
-	 * Adds all the elements of an array into a string, separated by the specified separator string.
-	 * @param sep A string used to separate one element of the array from the next in the resulting string.
-	 */
-	@pure
-	export extern function join(this arr: Vec<number>, sep: string): string from "&msNumberArrayJoin";
-	/** Returns the allocated capacity of the array buffer. */
-	@pure
-	export extern function capacity(this arr: Vec<number>): number from "&msNumberArrayCapacity";
-}
-when (!mscReadsPureExterns) {
-	export extern function at(this arr: Vec<number>, idx: number): number from "&msNumberArrayAt";
-	export extern function indexOf(this arr: Vec<number>, value: number, fromIndex: int32 = 0): number from "&msNumberArrayIndexOf";
-	export extern function includes(this arr: Vec<number>, value: number, fromIndex: int32 = 0): boolean from "&msNumberArrayIncludes";
-	export extern function count(this arr: Vec<number>, value: number): number from "&msNumberArrayCount";
-	export extern function join(this arr: Vec<number>, sep: string): string from "&msNumberArrayJoin";
-	export extern function capacity(this arr: Vec<number>): number from "&msNumberArrayCapacity";
-}
-
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
+export extern function at(this arr: Readonly<Vec<number>>, idx: number): number from "&msNumberArrayAt";
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
+export extern function indexOf(this arr: Readonly<Vec<number>>, value: number, fromIndex: int32 = 0): number from "&msNumberArrayIndexOf";
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
+export extern function includes(this arr: Readonly<Vec<number>>, value: number, fromIndex: int32 = 0): boolean from "&msNumberArrayIncludes";
+/** Returns the number of occurrences of a value in an array. */
+export extern function count(this arr: Readonly<Vec<number>>, value: number): number from "&msNumberArrayCount";
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
+export extern function join(this arr: Readonly<Vec<number>>, sep: string): string from "&msNumberArrayJoin";
+/** Returns the allocated capacity of the array buffer. */
+export extern function capacity(this arr: Readonly<Vec<number>>): number from "&msNumberArrayCapacity";
 /**
  * Returns a copy of a section of an array.
  * @param start The beginning index of the specified portion of the array.
@@ -156,14 +125,7 @@ export extern function splice(this arr: number[], start: number, deleteCount: nu
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-when (mscReadsPureExterns) {
-	@pure
-	export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
-}
-when (!mscReadsPureExterns) {
-	export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
-}
-
+export extern function push(this arr: string[], sink value: string): void from "&msStringArrayPush";
 /**
  * Removes the last element from an array and returns it.
  * An empty array raises the index error, as a[-1] would.
@@ -176,43 +138,26 @@ export extern function pop(this arr: string[]): string from "&msStringArrayPop";
  */
 export extern function shift(this arr: string[]): string from "&msStringArrayShift";
 
-when (mscReadsPureExterns) {
-	/**
-	 * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
-	 * @param value The value to locate in the array.
-	 */
-	@pure
-	export extern function indexOf(this arr: Vec<string>, value: string, fromIndex: int32 = 0): number from "&msStringArrayIndexOf";
-	/**
-	 * Determines whether an array includes a certain element, returning true or false as appropriate.
-	 * @param value The element to search for.
-	 */
-	@pure
-	export extern function includes(this arr: Vec<string>, value: string, fromIndex: int32 = 0): boolean from "&msStringArrayIncludes";
-	@pure
-	export extern function lastIndexOf(this arr: Vec<string>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
-	/** Returns the number of occurrences of a value in an array. */
-	@pure
-	export extern function count(this arr: Vec<string>, value: string): number from "&msStringArrayCount";
-	/**
-	 * Adds all the elements of an array into a string, separated by the specified separator string.
-	 * @param sep A string used to separate one element of the array from the next in the resulting string.
-	 */
-	@pure
-	export extern function join(this arr: Vec<string>, sep: string): string from "&msStringArrayJoin";
-	/** Returns the allocated capacity of the array buffer. */
-	@pure
-	export extern function capacity(this arr: Vec<string>): number from "&msStringArrayCapacity";
-}
-when (!mscReadsPureExterns) {
-	export extern function indexOf(this arr: Vec<string>, value: string, fromIndex: int32 = 0): number from "&msStringArrayIndexOf";
-	export extern function includes(this arr: Vec<string>, value: string, fromIndex: int32 = 0): boolean from "&msStringArrayIncludes";
-	export extern function lastIndexOf(this arr: Vec<string>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
-	export extern function count(this arr: Vec<string>, value: string): number from "&msStringArrayCount";
-	export extern function join(this arr: Vec<string>, sep: string): string from "&msStringArrayJoin";
-	export extern function capacity(this arr: Vec<string>): number from "&msStringArrayCapacity";
-}
-
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
+export extern function indexOf(this arr: Readonly<Vec<string>>, value: string, fromIndex: int32 = 0): number from "&msStringArrayIndexOf";
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
+export extern function includes(this arr: Readonly<Vec<string>>, value: string, fromIndex: int32 = 0): boolean from "&msStringArrayIncludes";
+export extern function lastIndexOf(this arr: Readonly<Vec<string>>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
+/** Returns the number of occurrences of a value in an array. */
+export extern function count(this arr: Readonly<Vec<string>>, value: string): number from "&msStringArrayCount";
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
+export extern function join(this arr: Readonly<Vec<string>>, sep: string): string from "&msStringArrayJoin";
+/** Returns the allocated capacity of the array buffer. */
+export extern function capacity(this arr: Readonly<Vec<string>>): number from "&msStringArrayCapacity";
 /**
  * Returns a copy of a section of an array.
  * @param start The beginning index of the specified portion of the array.
@@ -276,14 +221,7 @@ export extern function splice(this arr: boolean[], start: number, deleteCount: n
  * Appends new elements to the end of an array, and returns the new length of the array.
  * @param value New element to add to the array.
  */
-when (mscReadsPureExterns) {
-	@pure
-	export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
-}
-when (!mscReadsPureExterns) {
-	export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
-}
-
+export extern function push<T>(this arr: T[], sink value: T): void from "&msGenericArrayPush";
 /**
  * Removes the last element from an array and returns it.
  * An empty array raises the index error, as a[-1] would.
@@ -322,7 +260,7 @@ export function setLength<T>(this arr: T[], newLen: number): void {
 }
 
 /** Returns the allocated capacity of the array buffer. */
-export extern function capacity<T>(this arr: Vec<T>): number from "&msGenericArrayCapacity";
+export extern function capacity<T>(this arr: Readonly<Vec<T>>): number from "&msGenericArrayCapacity";
 
 extern function rotate<T>(this arr: T[], lo: int64, mid: int64, hi: int64): void from "&msGenericArrayRotate";
 extern function swap<T>(this arr: T[], i: int64, j: int64): void from "&msGenericArraySwap";

@@ -18,13 +18,7 @@ export function isArray<T>(this typeof Array, x: T): x is unknown[] {
 	return holdsArray<T>(x);
 }
 
-when (mscReadsPureExterns) {
-	@pure
-	export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
-}
-when (!mscReadsPureExterns) {
-	export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
-}
+export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
 export function pop<T>(this arr: T[]): T {
 	const last = arr[arr.length - 1];
 	@emit(`${arr}.pop();`);
@@ -39,16 +33,8 @@ function checkedIndex<T>(this arr: Vec<T>, idx: number): int64 {
 export function at<T>(this arr: Vec<T>, idx: number): T {
 	return arr[arr.checkedIndex(idx)];
 }
-when (mscReadsPureExterns) {
-	@pure
-	export extern function indexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): number from "#.indexOf(#, #)";
-	@pure
-	export extern function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): boolean from "#.includes(#, #)";
-}
-when (!mscReadsPureExterns) {
-	export extern function indexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): number from "#.indexOf(#, #)";
-	export extern function includes<T>(this arr: Vec<T>, value: T, fromIndex: int32 = 0): boolean from "#.includes(#, #)";
-}
+export extern function indexOf<T>(this arr: Readonly<Vec<T>>, value: T, fromIndex: int32 = 0): number from "#.indexOf(#, #)";
+export extern function includes<T>(this arr: Readonly<Vec<T>>, value: T, fromIndex: int32 = 0): boolean from "#.includes(#, #)";
 export { flat, lastIndexOf, findIndex, findLastIndex, filter, some, find, findLast, every, reduce, flatMap } from "./shared";
 export function* values<T>(this arr: T[]): Iterator<T> {
 	for (let i = 0; i < arr.length; i += 1) yield arr[i];

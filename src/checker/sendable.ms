@@ -1444,7 +1444,7 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v));
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
 		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresBorrowed, borrowed);
-		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements", at.location.line, at.location.column);
+		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + (stored.advice ?? storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements"), at.location.line, at.location.column);
 		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
 		addError(ctx, runs + ", but it " + c.text + MODULE_STATE_RULE, at.location.line, at.location.column);
@@ -1495,9 +1495,12 @@ export function checkActorMethodModuleState(actorName: string, raw: Node): void 
 	const md = method.data as MethodDeclData;
 	if (md.methodIsStatic) return;
 	deferEffectCheck(method, "actorModuleState", (ctx: CheckerContext): void => {
+		const runs = "actor '" + actorName + "' runs '" + md.methodName + "' on whichever thread takes its message, but it ";
+		const stored = walkWithViews(method, Effect.StoresBorrowed, []);
+		if (stored != null) addError(ctx, runs + stored.text + "; " + (stored.advice ?? "a module const is shared by every thread and a read of it takes no count, so store an explicit copy of it (clone or spread)"), method.location.line, method.location.column);
 		const c = walkEffect(method, Effect.ActorReach);
 		if (c == null) return;
-		addError(ctx, "actor '" + actorName + "' runs '" + md.methodName + "' on whichever thread takes its message, but it " + c.text + MODULE_STATE_RULE, method.location.line, method.location.column);
+		addError(ctx, runs + c.text + MODULE_STATE_RULE, method.location.line, method.location.column);
 	});
 }
 

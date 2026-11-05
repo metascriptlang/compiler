@@ -304,11 +304,6 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (kind != BuiltinKind.None) sym.builtinKind = kind;
 	if (exportName != "") sym.exportName = exportName;
 	if (info.throws) setFlag(sym, SymbolFlag.Throws);
-	if (info.pure) {
-		const decl = declOfStatement(dd.decoratedNode);
-		if (decl.kind != NodeKind.FunctionDecl || !routineFlagSet((decl.data as FunctionDeclData).fnFlags).has(RoutineFlag.Extern)) addError(ctx, `@pure applies to an extern declaration, and '${declName}' has a body the checker reads`, node.location.line, node.location.column);
-		else setFlag(sym, SymbolFlag.NoSideEffect);
-	}
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
 	if (info.borrow) markBorrow(ctx, dd, sym);
 	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
