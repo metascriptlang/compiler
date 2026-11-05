@@ -1,6 +1,5 @@
 An override added, changed and removed in an importing module changes which method a call through
 the base class runs; the module that declares the base and makes the call is never edited.
-#!XFAIL the override registry is a global with no edge to the module that lowers the call, so shape.ms is not relowered (cache-reuse step 1)
 #!FILE shape.ms
 export class Shape {
 	name(): string {

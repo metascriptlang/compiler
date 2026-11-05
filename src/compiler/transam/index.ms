@@ -30,6 +30,8 @@ import {
 } from "./query";
 import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
 import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
+import { TaDispatchStore, createDispatchStore, prepareDispatch, trackDispatchReads } from "./dispatch";
+import { installDispatchReadSink } from "../../checker/context";
 import {
 	TaFileInputStore, createFileInputStore,
 	setFileText, getFileText, getFileId, getInputId, getFilePath, hasFile,
@@ -141,6 +143,7 @@ export class TransAmDb {
 	depStack: TaDependencyStack;
 	cache: TaCacheStore;
 	outputs: TaOutputStore;
+	dispatch: TaDispatchStore;
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: CancelCtx;
 	exportRegistry: ExportRegistry;
@@ -209,6 +212,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		depStack: createDependencyStack(),
 		cache: createCacheStore(cacheCapacity),
 		outputs: createOutputStore(),
+		dispatch: createDispatchStore(),
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
 		exportRegistry: createExportRegistry(),
@@ -1370,9 +1374,11 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Lower, fileId);
+	prepareDispatch(db.dispatch, db.cache, db.fileInput, db.depStack, db.revision.value);
 	if (dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const ctx = checkedUnlessCancelled(db, filePath);
 	if (ctx == null) return null;
+	prepareDispatch(db.dispatch, db.cache, db.fileInput, db.depStack, db.revision.value);
 	if (recheckImports(db, key) && dbMarkGreen(db, key)) return dbTree(db, lowerNodeKey(fileId));
 	const checked = dbTree(db, checkNodeKey(fileId));
 	if (checked == null) throw new Error(`internal: ${filePath} is lowered from a check that kept no tree`);
@@ -1387,9 +1393,18 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	ctx.disambTable = copyDisambTable(afterCheck);
 	const lowerReads = new HashSet<string>();
 	const outerSink = installBodyReadSink((modulePath: string): void => { lowerReads.add(modulePath); });
-	const lowered = lower(checked, ctx, arg);
-	installBodyReadSink(outerSink);
-	ctx.disambTable = checkTable;
+	const outerDispatch = trackDispatchReads(db.dispatch, db.cache, db.fileInput, db.depStack);
+	let lowered: Node;
+	try {
+		lowered = lower(checked, ctx, arg);
+	} catch (e) {
+		popFrame(db.depStack);
+		throw e;
+	} finally {
+		installDispatchReadSink(outerDispatch);
+		installBodyReadSink(outerSink);
+		ctx.disambTable = checkTable;
+	}
 	for (const read of lowerReads) {
 		const readId = getFileId(db.fileInput, read);
 		if (readId >= 0 && readId != fileId) recordImplRead(db, readId);

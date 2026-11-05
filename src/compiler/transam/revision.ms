@@ -16,6 +16,7 @@ export enum TaQueryKind {
 	ModuleDeps, // derived: parse -> import list
 	Lower,
 	Impl, // derived: module implementation digest, the NeedsImpl edge target
+	Dispatch,
 }
 
 // ===== Query State — red-green verification state =====

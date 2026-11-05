@@ -1,0 +1,41 @@
+A base-module call with an argument follows overrides added and removed two inheritance levels away.
+#!FILE base.ms
+export class Base {
+	value(x: int32): int32 { return x + 1; }
+}
+export function read(b: Base): int32 { return b.value(10); }
+#!FILE middle.ms
+import { Base } from "./base";
+export class Middle extends Base {
+}
+#!FILE leaf.ms
+import { Middle } from "./middle";
+export class Leaf extends Middle {
+}
+#!FILE main.ms
+import { read } from "./base";
+import { Leaf } from "./leaf";
+console.log(read(new Leaf()));
+#!STEP expect: 11
+#!FILE middle.ms
+import { Base } from "./base";
+export class Middle extends Base {
+	override value(x: int32): int32 { return x + 2; }
+}
+#!STEP expect: 12
+#!FILE leaf.ms
+import { Middle } from "./middle";
+export class Leaf extends Middle {
+	override value(x: int32): int32 { return x + 3; }
+}
+#!STEP expect: 13
+#!FILE middle.ms
+import { Base } from "./base";
+export class Middle extends Base {
+}
+#!STEP expect: 13
+#!FILE leaf.ms
+import { Middle } from "./middle";
+export class Leaf extends Middle {
+}
+#!STEP expect: 11

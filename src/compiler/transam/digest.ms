@@ -1,7 +1,7 @@
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { makeSymbol, symbolKey, builtinKindName } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
-import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod } from "../../checker/context";
+import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod, DispMethodEntry } from "../../checker/context";
 import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceText } from "./hash";
 import { createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, TransAmDb } from "./index";
 import { recordModuleImport } from "./moduleDeps";
@@ -154,6 +154,23 @@ export function ifaceDigest(ctx: CheckerContext): string {
 	out = putInt(out, ctx.jsImportRegistry.length);
 	for (const entry of ctx.jsImportRegistry) out = putStrings(putString(out, entry.modulePath), entry.names);
 	out = putInt(out, errorCount(ctx));
+	return textOf(out);
+}
+
+export function dispatchDigest(entries: DispMethodEntry[]): string {
+	let out = putInt(createText(), entries.length);
+	for (const entry of entries) {
+		const st: DigestState = {
+			modulePath: entry.classSym.modulePath,
+			ids: new HashMap<Type, int32>(),
+		};
+		out = putString(out, symbolKey(entry.classSym));
+		out = putString(out, entry.methodName);
+		out = putBool(out, entry.overloaded);
+		out = putRoutine(st, out, entry.classSym);
+		out = putString(out, symbolKey(entry.sym));
+		out = putRoutine(st, out, entry.sym);
+	}
 	return textOf(out);
 }
 

@@ -917,6 +917,7 @@ export interface DispMethodEntry {
 	methodName: string;
 	sym: Symbol;
 	overloaded: boolean;
+	version: int32;
 }
 
 let _dispEntries: DispMethodEntry[] = [];
@@ -929,6 +930,37 @@ export interface DispatchRecords {
 	methodSyms: Symbol[];
 }
 let _dispCapture: DispatchRecords | null = null;
+let _dispVersion: int32 = 0;
+export type DispatchReadSink = (classSym: Symbol, methodName: string) => void;
+let _dispRead: DispatchReadSink | null = null;
+
+export function installDispatchReadSink(sink: DispatchReadSink | null): DispatchReadSink | null {
+	const outer = _dispRead;
+	_dispRead = sink;
+	return outer;
+}
+
+function recordDispatchRead(classSym: Symbol, methodName: string): void {
+	if (_dispRead != null) _dispRead(classSym, methodName);
+}
+
+function changeDispatchRegistry(): void {
+	if (_dispRead != null) {
+		throw new Error("internal: dispatch changed during a cached query");
+	}
+	_dispVersion += 1;
+}
+
+export function dispatchRegistryVersion(): int32 {
+	return _dispVersion;
+}
+
+export function dispatchRegistryEntries(): DispMethodEntry[] {
+	if (_dispRead != null) {
+		throw new Error("internal: untracked dispatch snapshot during a cached query");
+	}
+	return _dispEntries;
+}
 
 export function startDispatchCapture(): DispatchRecords | null {
 	const outer = _dispCapture;
@@ -947,6 +979,7 @@ export function replayDispatchRecords(records: DispatchRecords): void {
 }
 
 export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: Symbol): void {
+	changeDispatchRegistry();
 	if (_dispCapture != null) {
 		_dispCapture.classSyms.push(classSym);
 		_dispCapture.methodNames.push(methodName);
@@ -959,6 +992,7 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 			const samePlace = prev.sym.modulePath == sym.modulePath
 				&& prev.sym.location.line == sym.location.line
 				&& prev.sym.location.column == sym.location.column;
+			prev.version = _dispVersion;
 			if (samePlace) {
 				prev.sym = sym;
 				_dispBySym.set(sym, prev);
@@ -968,7 +1002,7 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 			return;
 		}
 	}
-	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false };
+	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false, version: _dispVersion };
 	_dispEntries.push(e);
 	if (ofClass != null) ofClass.push(e);
 	else _dispByClass.set(classSym, [e]);
@@ -978,6 +1012,7 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 // Drops every entry of the classes a module declares and returns where the first sat in the registry's order, -1 when
 // it had none, so the module's re-collection can be put back there by placeDispatchOfModule.
 export function forgetDispatchOfModule(modulePath: string): int32 {
+	changeDispatchRegistry();
 	let first = -1;
 	const kept: DispMethodEntry[] = [];
 	const gone = new HashSet<DispMethodEntry>();
@@ -1003,6 +1038,7 @@ export function forgetDispatchOfModule(modulePath: string): int32 {
 // collection of the modules in load order gives them.
 export function placeDispatchOfModule(modulePath: string, at: int32): void {
 	if (at < 0) return;
+	changeDispatchRegistry();
 	const mine: DispMethodEntry[] = [];
 	const rest: DispMethodEntry[] = [];
 	for (const e of _dispEntries) {
@@ -1023,16 +1059,20 @@ export function dispatchEntryCount(): int32 {
 }
 
 export function resetDispatchRegistry(): void {
+	changeDispatchRegistry();
 	_dispEntries = [];
 	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
 	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
 }
 
 export function dispatchEntryFor(sym: Readonly<Symbol>): DispMethodEntry | null {
-	return _dispBySym.get(sym) ?? null;
+	const entry = _dispBySym.get(sym) ?? null;
+	if (entry != null) recordDispatchRead(entry.classSym, entry.methodName);
+	return entry;
 }
 
 export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	recordDispatchRead(classSym, methodName);
 	const entries = _dispByClass.get(classSym);
 	if (entries == null) return null;
 	for (const entry of entries) {
@@ -1072,6 +1112,7 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 }
 
 export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	recordDispatchRead(classSym, methodName);
 	let cur = classSym.symbolType != null ? classBaseOwner(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
@@ -1089,11 +1130,13 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 }
 
 export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
+	recordDispatchRead(classSym, methodName);
 	return overridesAmong(_dispEntries, classSym, methodName);
 }
 
 // Every dispatched method with the overrides its dispatcher tries, deepest first, read once before emission.
 export function dispatchOverrideTable(): HashMap<Symbol, Symbol[]> {
+	for (const e of _dispEntries) recordDispatchRead(e.classSym, e.methodName);
 	const byName = new HashMap<string, DispMethodEntry[]>();
 	for (const e of _dispEntries) {
 		const named = byName.get(e.methodName);
