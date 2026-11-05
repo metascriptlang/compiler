@@ -13,7 +13,8 @@ test "bindingOwnership: explicit moves require ownership transfer rather than im
 		{ name: "moving an element read afterwards is rejected at the move", source: "\ninterface Leaf { v: string; }\nexport function run(): string {\n\tconst arr: Leaf[] = [{ v: \"a\" }, { v: \"b\" }];\n\tconst x = move arr[0];\n\treturn x.v + (arr[0] == null ? \"null\" : \"kept\");\n}\n", expected: -1 },
 		{ name: "moving an owned element read afterwards is rejected at the move", source: "\nclass N { id: int32 = 0; }\nexport function run(): int32 {\n\tlet kids: Vec<Owned<N>> = [new N(), new N()];\n\tconst k = move kids[0];\n\treturn k.id + kids[0].id;\n}\n", expected: -1 },
 		{ name: "moving a nested element out of a return is rejected", source: "\nexport function run(): string {\n\tconst grid: string[][] = [[\"a\" + String(1), \"b\"], [\"c\"]];\n\treturn move grid[0][1];\n}\n", expected: -1 },
-		{ name: "moving an element into a sink argument is rejected", source: "\ninterface Leaf { v: string; }\nexport function run(): string {\n\tconst arr: Leaf[] = [{ v: \"a\" }, { v: \"b\" }];\n\tconst out: Leaf[] = [];\n\tout.push(move arr[1]);\n\treturn out[0].v;\n}\n", expected: -1 },
+		{ name: "moving an element into a sink argument out of a local dropped unread still compiles", source: "\ninterface Leaf { v: string; }\nexport function run(): string {\n\tconst arr: Leaf[] = [{ v: \"a\" }, { v: \"b\" }];\n\tconst out: Leaf[] = [];\n\tout.push(move arr[1]);\n\treturn out[0].v;\n}\n", expected: 0 },
+		{ name: "moving an element into a sink argument and reading its local again is rejected", source: "\ninterface Leaf { v: string; }\nexport function run(): string {\n\tconst arr: Leaf[] = [{ v: \"a\" }, { v: \"b\" }];\n\tconst out: Leaf[] = [];\n\tout.push(move arr[1]);\n\treturn out[0].v + arr[0].v;\n}\n", expected: -1 },
 		{ name: "moving a field still compiles", source: "\nclass H { f: string = \"\"; }\nexport function run(): string {\n\tconst h = new H();\n\th.f = \"x\" + String(1);\n\tconst t = move h.f;\n\treturn t + h.f;\n}\n", expected: 0 },
 	];
 	for (const item of cases) {
@@ -164,12 +165,9 @@ test "bindingOwnership: an explicit move out of a path needs a location the move
 	}
 }
 
-test "bindingOwnership: an explicit move out of a field or element whose type has no default value is refused, naming what to write instead" {
+test "bindingOwnership: an explicit move out of a field or element whose type has no default value is refused through a key, naming what to write instead, and kept out of a holder the routine created" {
 	const shapes = "class Leaf { v: int32 = 7; }\nstruct Wrap { leaf: Leaf; }\nclass Holder { leaf: Leaf = new Leaf(); wrap: Wrap = { leaf: new Leaf() }; maybe: Leaf | null = new Leaf(); n: int32 = 1; s: string = \"s\"; kids: Vec<int32> = [1]; }\nclass Box<T> { item: T; constructor(item: T) { this.item = item; } }\nfunction take<T>(b: Box<T>): T { return move b.item; }\n";
 	const refused = [
-		{ name: "a field of class type", body: "export function run(): int32 { const h = new Holder(); const t = move h.leaf; return t.v; }", refusal: "cannot move 'h.leaf': type 'Leaf' has no default value, so the move would leave the field without a value" },
-		{ name: "an element of a class array", body: "export function run(): int32 { const xs: Leaf[] = [new Leaf()]; const t = move xs[0]; return t.v; }", refusal: "cannot move 'xs[…]': type 'Leaf' has no default value, so the move would leave the element without a value" },
-		{ name: "a field of a struct type that holds a class", body: "export function run(): int32 { const h = new Holder(); const w = move h.wrap; return w.leaf.v; }", refusal: "cannot move 'h.wrap': type 'Wrap' has no default value" },
 		{ name: "a field of a generic instance holding a class", body: "export function run(): int32 { return take(new Box<Leaf>(new Leaf())).v; }", refusal: "cannot move 'b.item': type 'Leaf' has no default value" },
 	];
 	for (const item of refused) {
@@ -183,6 +181,9 @@ test "bindingOwnership: an explicit move out of a field or element whose type ha
 		{ name: "a Vec field", body: "export function run(): int32 { const h = new Holder(); const t = move h.kids; return t.length; }" },
 		{ name: "an identifier", body: "export function run(): int32 { const l = new Leaf(); const t = move l; return t.v; }" },
 		{ name: "a generic instance holding a number", body: "export function run(): int32 { return take(new Box<int32>(3)); }" },
+		{ name: "a field of class type, its local holder dropped unread", body: "export function run(): int32 { const h = new Holder(); const t = move h.leaf; return t.v; }" },
+		{ name: "an element of a class array, its local holder dropped unread", body: "export function run(): int32 { const xs: Leaf[] = [new Leaf()]; const t = move xs[0]; return t.v; }" },
+		{ name: "a field of a struct type that holds a class, its local holder dropped unread", body: "export function run(): int32 { const h = new Holder(); const w = move h.wrap; return w.leaf.v; }" },
 	];
 	for (const item of kept) {
 		const result = compileToC(shapes + item.body);
@@ -217,8 +218,9 @@ test "bindingOwnership: an explicit move out of a path a dead local owns by valu
 		assert result.ok, item.name + (result.ok ? "" : ": " + result.error);
 	}
 	const refused = [
-		{ name: "the local is read after the move", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; return t.v + w.leaf.v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value and 'w' is used again at line 8" },
-		{ name: "a loop runs the move again", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; let s = 0; for (let i = 0; i < 2; i++) { const t = move w.leaf; s += t.v; } return s; }", refusal: "and the loop at line 8 runs the move again on the same 'w'" },
+		{ name: "the local is read after the move", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; const t = move w.leaf; return t.v + w.leaf.v; }", refusal: "cannot use 'w.leaf.v': 'w.leaf' was moved out of it at 8:78 and is not put back yet" },
+		{ name: "a loop runs the move again", body: "export function run(): int32 { let w: Wrap = { leaf: new Leaf() }; let s = 0; for (let i = 0; i < 2; i++) { const t = move w.leaf; s += t.v; } return s; }", refusal: "cannot use 'w.leaf': 'w.leaf' was moved out at 8:119 and is not put back yet" },
+		{ name: "a local aliasing a path through a class reference", body: "export function run(): int32 { let s: Shelf = { room: new Room() }; const room = s.room; const t = move room.wrap.leaf; return t.v; }", refusal: "cannot move 'room.wrap.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 		{ name: "a class hop on the path", body: "export function run(): int32 { let s: Shelf = { room: new Room() }; const t = move s.room.wrap.leaf; return t.v; }", refusal: "cannot move 's.room.wrap.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 		{ name: "a ref parameter root", body: "function take(ref w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return take(w).v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
 		{ name: "a this root", body: "function take(this w: Wrap): Leaf { return move w.leaf; }\nexport function run(): int32 { let w: Wrap = { leaf: new Leaf() }; return w.take().v; }", refusal: "cannot move 'w.leaf': type 'Leaf' has no default value, so the move would leave the field without a value —" },
