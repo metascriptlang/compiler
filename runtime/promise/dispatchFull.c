@@ -234,6 +234,8 @@ static int msProcessTimersIn(msDispatcher* d, msTimerHeap* heap, bool* didWork);
  * a worker is about to resume a routine. */
 static MS_THREAD_LOCAL int32_t gWorkerTakenWork = 0;
 
+static MS_THREAD_LOCAL bool tlOwnLoopWoken = false;
+
 static void msSettleWorkerWork(void) {
 	if (gWorkerTakenWork == 0) return;
 	msPoolPendingAdd(-gWorkerTakenWork);
@@ -610,7 +612,17 @@ static void msChannelCount(msLoopChannel* c, int32_t messages) {
 	if (c != &gMainChannel) msPoolPendingAdd(messages);
 }
 
+static bool msChannelIsOwn(msLoopChannel* c) {
+	if (c == tlWorkerChannel) return true;
+	return c == &gMainChannel && !msIsPoolWorker
+		&& atomic_load_explicit(&msLoopThread, memory_order_relaxed) == msLockedSelf();
+}
+
 static void msChannelWake(msLoopChannel* c) {
+	if (msChannelIsOwn(c)) {
+		tlOwnLoopWoken = true;
+		return;
+	}
 	if (c->wake[1] >= 0) {
 		char b = 1;
 		(void)write(c->wake[1], &b, 1);
@@ -1002,6 +1014,10 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 /* The one question every loop asks before it sleeps (a worker's condvar, an I/O engine poll, the
  * host's next delay): it drops the amortized actor wake, so a send after it wakes the sleeper. */
 bool msLoopHasReadyWork(void) {
+	if (tlOwnLoopWoken) {
+		tlOwnLoopWoken = false;
+		return true;
+	}
 	if (gDispatcher != NULL && msDequeLen(&gDispatcher->callbacks) > 0) return true;
 	msActorPollFn ready = atomic_load_explicit(&msActorParkReadyHook, memory_order_acquire);
 	return ready != NULL && ready();
