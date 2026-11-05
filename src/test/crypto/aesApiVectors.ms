@@ -13,10 +13,74 @@ when (c) {
 	} from "std/crypto/aes";
 }
 import { encodeHex, decodeHex } from "std/core/encoding";
+import { readFile } from "std/fs";
+import {
+	JsonKind, asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
 
 function must<T>(sink result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
 	return result.value;
+}
+
+test "private AES GCM API checks supported Wycheproof cases and refusals" {
+	const text = readFile("std/crypto/test/vectors/aes_gcm_test.json");
+	assert text.ok;
+	const parsed = parseJson(text.value);
+	assert parsed.ok;
+	const groups = parsed.value.getDynamicField("testGroups");
+	assert groups.kind == JsonKind.Array;
+	let valid = 0;
+	let invalid = 0;
+	let unsupportedKey = 0;
+	let foreignNonceBlob = 0;
+	for (let g = 0; g < groups.length(); g++) {
+		const group = groups.at(g);
+		assert group.getDynamicField("tagSize").asInt32() == 128;
+		const tests = group.getDynamicField("tests");
+		assert tests.kind == JsonKind.Array;
+		for (let t = 0; t < tests.length(); t++) {
+			const vector = tests.at(t);
+			const raw = vector.getDynamicField("key").asString().decodeHex();
+			const key = AesKey.import(raw);
+			if (raw.length == 24) {
+				assert !key.ok;
+				assert key.error.kind == CryptoErrorKind.InvalidKey;
+				unsupportedKey++;
+				continue;
+			}
+			assert raw.length == 16 || raw.length == 32;
+			assert key.ok;
+			const nonce = vector.getDynamicField("iv").asString();
+			const wireHex = nonce +
+				vector.getDynamicField("ct").asString() +
+				vector.getDynamicField("tag").asString();
+			const wire = wireHex.decodeHex();
+			const opened = openSync(key.value, wire,
+				vector.getDynamicField("aad").asString().decodeHex());
+			const id = vector.getDynamicField("tcId").asInt32();
+			const category = vector.getDynamicField("result").asString();
+			assert category == "valid" || category == "invalid";
+			if (nonce.length != 24) {
+				assert !opened.ok, `AES foreign nonce blob tcId ${id}`;
+				foreignNonceBlob++;
+			} else if (category == "valid") {
+				assert opened.ok, `AES GCM tcId ${id}`;
+				assert opened.value.encodeHex() ==
+					vector.getDynamicField("msg").asString(),
+					`AES GCM plaintext tcId ${id}`;
+				valid++;
+			} else {
+				assert !opened.ok, `AES GCM accepted tcId ${id}`;
+				invalid++;
+			}
+			assert wire.encodeHex() == wireHex;
+		}
+	}
+	assert valid == 79 && invalid == 54;
+	assert unsupportedKey == 103 && foreignNonceBlob == 80;
+	assert valid + invalid + unsupportedKey + foreignNonceBlob ==
+		parsed.value.getDynamicField("numberOfTests").asInt32();
 }
 
 test "private AES API opens the NIST empty GCM vector" {
