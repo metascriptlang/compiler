@@ -27,7 +27,12 @@ build() { # <arm> <msc> <output>
 runArm() { # <arm>
 	case $1 in
 		candidate | c | rust | nim) "$OUT/$1" ;;
-		base) if [ "${wanted[0]}" = raiser ]; then "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms"; else "$OUT/base"; fi ;;
+		base)
+			case ${wanted[0]} in
+				raiser) "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms" ;;
+				js) "$NODE" "$OUT/base.mjs" ;;
+				*) "$OUT/base" ;;
+			esac ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
 		js) "$NODE" "$OUT/js.mjs" ;;
 		node) "$NODE" "$HERE/bench.node.mjs" ;;
