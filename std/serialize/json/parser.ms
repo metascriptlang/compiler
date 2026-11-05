@@ -10,6 +10,7 @@
 // against `byteLength`.
 
 import { JsonKind, JsonValue } from "./types";
+import { Map } from "std/core/struct";
 import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
 import {
 	EncodingBytes, EncodingIndex, newEncodingOutput, freshEncodingOutputBytes,
@@ -31,7 +32,7 @@ type ParseResult = Result<JsonValue, string>;
 export function parseJson(input: string): Result<JsonValue, string> {
 	const b = input.asBytes();
 	let pos = skipWs(b, 0);
-	const value = try parseValue(input, b, pos, 0);
+	const value = try parseValue(input, b, pos);
 	pos = skipWs(b, pos);
 	if (pos < b.length) {
 		return Result.err(`Unexpected character at position ${pos}`);
@@ -77,17 +78,170 @@ function errorAt(msg: string, pos: int32): ParseResult {
 
 // ===== Value Parser =====
 
-function parseValue(input: string, b: Bytes, ref pos: int32, depth: int32): ParseResult {
-	if (depth > DEPTH_LIMIT) return errorAt("Maximum nesting depth exceeded", pos);
-	if (pos >= b.length) return errorAt("Unexpected end of input", pos);
+function parseValue(input: string, b: Bytes, ref pos: int32): ParseResult {
+	const len = b.length;
+	const open: JsonValue[] = [];
+	let seen: Map<string, int32> | null = null;
+	while (true) {
+		if (pos >= len) return errorAt("Unexpected end of input", pos);
+		const ch = b[pos];
+		const isContainer = ch == "[".code || ch == "{".code;
+		const isObject = ch == "{".code;
+		if (isContainer) {
+			if (open.length > DEPTH_LIMIT) return errorAt("Maximum nesting depth exceeded", pos);
+			const start = pos;
+			pos = skipWs(b, pos + 1);
+			if (pos < len && b[pos] == closingByte(isObject)) {
+				pos = pos + 1;
+			} else {
+				if (pos >= len) return errorAt(unterminated(isObject), start);
+				const container = emptyContainer(isObject);
+				if (isObject) addKey(container, try parseKey(input, b, pos));
+				open.push(container);
+				continue;
+			}
+		}
+		let value = isContainer ? emptyContainer(isObject) : try parseScalar(input, b, pos);
 
+		while (true) {
+			const depth = open.length;
+			if (depth == 0) return Result.ok(value);
+			const isObject = open[depth - 1].kind == JsonKind.Object;
+			store(open[depth - 1], value);
+			pos = skipWs(b, pos);
+			if (pos >= len) return errorAt(unterminated(isObject), openedAt(b, depth));
+			const next = b[pos];
+			if (next == closingByte(isObject)) {
+				pos = pos + 1;
+				value = open.pop();
+				if (value.kind == JsonKind.Object && value.keys.length > linearScanKeys) {
+					if (seen == null) seen = new Map<string, int32>();
+					dropDuplicateKeysHashed(value, seen);
+				} else if (value.kind == JsonKind.Object) {
+					dropDuplicateKeysLinear(value);
+				}
+				continue;
+			}
+			if (next != ",".code) {
+				return errorAt(isObject ? "Expected ',' or '}' in object" : "Expected ',' or ']' in array", pos);
+			}
+			pos = pos + 1;
+			if (pos >= len) return errorAt(unterminated(isObject), openedAt(b, depth));
+			pos = skipWs(b, pos);
+			if (isObject) addKey(open[depth - 1], try parseKey(input, b, pos));
+			break;
+		}
+	}
+}
+
+function openedAt(b: Bytes, depth: int32): int32 {
+	const opens: int32[] = [];
+	let inString = false;
+	for (let p = 0; p < b.length; p = p + 1) {
+		const ch = b[p];
+		if (inString) {
+			if (ch == "\\".code) p = p + 1;
+			else if (ch == "\"".code) inString = false;
+		} else if (ch == "\"".code) {
+			inString = true;
+		} else if (ch == "[".code || ch == "{".code) {
+			opens.push(p);
+		} else if (ch == "]".code || ch == "}".code) {
+			opens.shrink(opens.length - 1);
+		}
+	}
+	return opens[depth - 1];
+}
+
+function closingByte(isObject: boolean): uint8 {
+	return (isObject ? "}".code : "]".code) as uint8;
+}
+
+function unterminated(isObject: boolean): string {
+	return isObject ? "Unterminated object" : "Unterminated array";
+}
+
+function emptyContainer(isObject: boolean): JsonValue {
+	return isObject ? jsonObject([], []) : jsonArray([]);
+}
+
+function parseKey(input: string, b: Bytes, ref pos: int32): Result<string, string> {
+	if (pos >= b.length || b[pos] != "\"".code) return Result.err(messageAt("Expected string key", pos));
+	const key = try parseString(input, b, pos);
+	pos = skipWs(b, pos);
+	if (pos >= b.length || b[pos] != ":".code) return Result.err(messageAt("Expected ':'", pos));
+	pos = skipWs(b, pos + 1);
+	return Result.ok(key);
+}
+
+function addKey(container: JsonValue, sink key: string): void {
+	if (container.kind == JsonKind.Object) container.keys.push(key);
+}
+
+function store(container: JsonValue, sink value: JsonValue): void {
+	if (container.kind == JsonKind.Array) container.items.push(value);
+	else if (container.kind == JsonKind.Object) container.values.push(value);
+}
+
+const linearScanKeys: int32 = 32;
+
+function dropDuplicateKeysLinear(obj: JsonValue): void {
+	if (obj.kind != JsonKind.Object) return;
+	const n = obj.keys.length;
+	let kept = 0;
+	for (let i = 0; i < n; i = i + 1) {
+		const first = linearIndexOf(obj.keys, kept, obj.keys[i]);
+		if (first >= 0) obj.values[first] = obj.values[i];
+		else kept = keepAt(obj, kept, i);
+	}
+	shrinkFields(obj, kept);
+}
+
+function dropDuplicateKeysHashed(obj: JsonValue, seen: Map<string, int32>): void {
+	if (obj.kind != JsonKind.Object) return;
+	seen.clear();
+	const n = obj.keys.length;
+	let kept = 0;
+	for (let i = 0; i < n; i = i + 1) {
+		const first = seen.get(obj.keys[i]) ?? -1;
+		if (first >= 0) {
+			obj.values[first] = obj.values[i];
+		} else {
+			seen.set(obj.keys[i], kept);
+			kept = keepAt(obj, kept, i);
+		}
+	}
+	shrinkFields(obj, kept);
+}
+
+function keepAt(obj: JsonValue, kept: int32, i: int32): int32 {
+	if (obj.kind == JsonKind.Object && kept != i) {
+		obj.keys[kept] = obj.keys[i];
+		obj.values[kept] = obj.values[i];
+	}
+	return kept + 1;
+}
+
+function shrinkFields(obj: JsonValue, kept: int32): void {
+	if (obj.kind == JsonKind.Object && kept < obj.keys.length) {
+		obj.keys.shrink(kept);
+		obj.values.shrink(kept);
+	}
+}
+
+function linearIndexOf(keys: string[], count: int32, key: string): int32 {
+	for (let j = 0; j < count; j = j + 1) {
+		if (keys[j] == key) return j;
+	}
+	return -1;
+}
+
+function parseScalar(input: string, b: Bytes, ref pos: int32): ParseResult {
 	const ch = b[pos];
 	if (ch == "\"".code) {
 		const text = try parseString(input, b, pos);
 		return Result.ok(jsonString(text));
 	}
-	if (ch == "{".code) return parseObject(input, b, pos, depth);
-	if (ch == "[".code) return parseArray(input, b, pos, depth);
 	if (ch == "t".code) {
 		if (!skipLiteral(b, pos, "true")) return errorAt("Expected 'true'", pos);
 		return Result.ok(jsonBool(true));
@@ -149,7 +303,7 @@ function parseNumber(input: string, b: Bytes, ref pos: int32): ParseResult {
 	if (p >= len || !isDigit(b[p])) return errorAt("Invalid number", start);
 	const intStart = p;
 	const firstDigit = b[p];
-	let mantissa: int64 = 0;
+	let mantissa: float64 = 0;
 	while (p < len && isDigit(b[p])) {
 		if (p - intStart < exactMantissaDigits) mantissa = mantissa * 10 + digitValue(b[p]);
 		p = p + 1;
@@ -198,11 +352,11 @@ function parseNumber(input: string, b: Bytes, ref pos: int32): ParseResult {
 
 	const digits = intDigits + fracDigits;
 	if (!isFloat && digits <= exactMantissaDigits) {
-		return Result.ok(jsonInt(negative && mantissa != 0 ? -mantissa : mantissa));
+		return Result.ok(jsonInt((negative ? -mantissa : mantissa) as int64));
 	}
 	const scale = exponent - fracDigits;
 	if (isFloat && digits <= exactMantissaDigits && scale >= -22 && scale <= 22) {
-		const exact = mantissa as float64;
+		const exact = mantissa;
 		const magnitude = scale < 0
 			? exact / exactPowersOfTen[-scale]
 			: exact * exactPowersOfTen[scale];
@@ -379,98 +533,6 @@ function writeUtf8(bytes: EncodingBytes, at: EncodingIndex, cp: int32): Encoding
 	bytes[at + 2] = (0x80 | ((cp >> 6) & 0x3F)) as uint8;
 	bytes[at + 3] = (0x80 | (cp & 0x3F)) as uint8;
 	return at + 4;
-}
-
-// ===== Array Parser =====
-
-function parseArray(input: string, b: Bytes, ref pos: int32, depth: int32): ParseResult {
-	const start = pos;
-	const len = b.length;
-	pos = skipWs(b, pos + 1);
-	const items: JsonValue[] = [];
-
-	if (pos < len && b[pos] == "]".code) {
-		pos = pos + 1;
-		return Result.ok(jsonArray(items));
-	}
-
-	while (pos < len) {
-		pos = skipWs(b, pos);
-		const elem = try parseValue(input, b, pos, depth + 1);
-		items.push(elem);
-		pos = skipWs(b, pos);
-
-		if (pos >= len) return errorAt("Unterminated array", start);
-		const ch = b[pos];
-		if (ch == "]".code) {
-			pos = pos + 1;
-			return Result.ok(jsonArray(items));
-		}
-		if (ch != ",".code) {
-			return errorAt("Expected ',' or ']' in array", pos);
-		}
-		pos = pos + 1;
-	}
-	return errorAt("Unterminated array", start);
-}
-
-// ===== Object Parser =====
-
-function parseObject(input: string, b: Bytes, ref pos: int32, depth: int32): ParseResult {
-	const start = pos;
-	const len = b.length;
-	pos = skipWs(b, pos + 1);
-	const keys: string[] = [];
-	const values: JsonValue[] = [];
-
-	if (pos < len && b[pos] == "}".code) {
-		pos = pos + 1;
-		return Result.ok(jsonObject(keys, values));
-	}
-
-	while (pos < len) {
-		pos = skipWs(b, pos);
-		if (pos >= len || b[pos] != "\"".code) {
-			return errorAt("Expected string key", pos);
-		}
-		const key = try parseString(input, b, pos);
-		pos = skipWs(b, pos);
-
-		if (pos >= len || b[pos] != ":".code) {
-			return errorAt("Expected ':'", pos);
-		}
-		pos = skipWs(b, pos + 1);
-
-		const value = try parseValue(input, b, pos, depth + 1);
-		// Duplicate key: last one wins, first position kept (JS parity —
-		// engine objects cannot hold two entries for one key).
-		let existing = -1;
-		for (let ki = 0; ki < keys.length; ki = ki + 1) {
-			if (keys[ki] == key) {
-				existing = ki;
-				break;
-			}
-		}
-		if (existing >= 0) {
-			values[existing] = value;
-		} else {
-			keys.push(key);
-			values.push(value);
-		}
-		pos = skipWs(b, pos);
-
-		if (pos >= len) return errorAt("Unterminated object", start);
-		const ch = b[pos];
-		if (ch == "}".code) {
-			pos = pos + 1;
-			return Result.ok(jsonObject(keys, values));
-		}
-		if (ch != ",".code) {
-			return errorAt("Expected ',' or '}' in object", pos);
-		}
-		pos = pos + 1;
-	}
-	return errorAt("Unterminated object", start);
 }
 
 // ===== Tests =====
@@ -731,4 +793,61 @@ test "string and object errors keep their messages and positions" {
 	const key = parseJson("{\"a\":1, }");
 	assert !key.ok;
 	if (!key.ok) assert key.error == "Expected string key at position 8";
+}
+
+test "duplicate keys in a large object: last value wins at the first position" {
+	let text = "{";
+	for (let i = 0; i < 40; i = i + 1) text = text + `"k${i % 13}":${i},`;
+	const r = parseJson(text + "\"k0\":\"end\"}");
+	assert r.ok;
+	assert r.value.kind == JsonKind.Object;
+	if (r.value.kind == JsonKind.Object) {
+		assert r.value.keys.length == 13;
+		assert r.value.values.length == 13;
+		for (let k = 0; k < 13; k = k + 1) assert r.value.keys[k] == `k${k}`;
+		assert r.value.values[0].asString() == "end";
+		assert r.value.values[1].asNumber() == 27;
+		assert r.value.values[12].asNumber() == 38;
+	}
+}
+
+function nested(open: string, inner: string, close: string, levels: int32): string {
+	let out = "";
+	for (let i = 0; i < levels; i = i + 1) out = out + open;
+	out = out + inner;
+	for (let i = 0; i < levels; i = i + 1) out = out + close;
+	return out;
+}
+
+test "containers nest to depth DEPTH_LIMIT and one more level is refused at its bracket" {
+	assert parseJson(nested("[", "", "]", DEPTH_LIMIT + 1)).ok;
+	const deeper = parseJson(nested("[", "", "]", DEPTH_LIMIT + 2));
+	assert !deeper.ok;
+	if (!deeper.ok) assert deeper.error == `Maximum nesting depth exceeded at position ${DEPTH_LIMIT + 1}`;
+}
+
+test "a scalar inside the deepest allowed object is not a nesting level" {
+	assert parseJson(nested("{\"a\":", "1", "}", DEPTH_LIMIT + 1)).ok;
+	assert parseJson(nested("[", "\"s\"", "]", DEPTH_LIMIT + 1)).ok;
+}
+
+test "nesting far past the limit is refused with an error on every backend" {
+	const deep = parseJson(nested("{\"a\":", "1", "}", 100000));
+	assert !deep.ok;
+	if (!deep.ok) assert deep.error == `Maximum nesting depth exceeded at position ${(DEPTH_LIMIT + 1) * 5}`;
+	assert !parseJson(nested("[", "", "", 100000)).ok;
+}
+
+test "a container cut short keeps the message of where it was cut" {
+	const cases = ["[1,", "[1, ", "[", "{", "{\"a\":1,", "{\"a\":1", "[1 2]", "{\"a\":1 \"b\":2}"];
+	const want = [
+		"Unterminated array at position 0", "Unexpected end of input at position 4", "Unterminated array at position 0",
+		"Unterminated object at position 0", "Unterminated object at position 0", "Unterminated object at position 0",
+		"Expected ',' or ']' in array at position 3", "Expected ',' or '}' in object at position 7",
+	];
+	for (let i = 0; i < cases.length; i = i + 1) {
+		const r = parseJson(cases[i]);
+		assert !r.ok, cases[i];
+		if (!r.ok) assert r.error == want[i], `${cases[i]}: ${r.error}`;
+	}
 }
