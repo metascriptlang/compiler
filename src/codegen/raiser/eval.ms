@@ -2,13 +2,13 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc, BuiltinKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
-import { typeDisplayName } from "../../checker/types";
+import { typeDisplayName, createUnifyBindings, unifyType } from "../../checker/types";
 import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath, isMetaNodeSym } from "../../compiler/meta/nodeSym";
@@ -482,14 +482,16 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
 	if (tier == null) return null;
 	if (sym.instantiatedFrom != null) return tierInstanceOf(sym, tier);
-	const builtShape = typeDisplayName(sym.symbolType);
+	const builtShape = signatureShape(sym.symbolType);
 	let tierShape = "";
 	for (const head of tier) {
 		if (head.name != sym.name) continue;
 		for (const candidate of [head, ...head.overloads]) {
 			if (sameType(candidate.symbolType, sym.symbolType)) return candidate;
-			const shape = typeDisplayName(candidate.symbolType);
+			const shape = signatureShape(candidate.symbolType);
 			if (shape == builtShape) return candidate;
+			const instance = tierGenericAt(candidate, sym, builtShape);
+			if (instance != null) return instance;
 			tierShape = shape;
 		}
 	}
@@ -498,6 +500,11 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 		: `the Raiser tier of ${stdModuleName(sym.modulePath)} does not declare '${sym.name}'`;
 	queueRaiserCompileError(refusal, sym.location.line, sym.location.column, true);
 	return sym;
+}
+
+function signatureShape(t: Type | null): string {
+	if (t == null || t.kind != TypeKind.Function) return typeDisplayName(t);
+	return `(${t.typeChildren.map((p: Type): string => typeDisplayName(p)).join(", ")}) => ${typeDisplayName(t.typeReturn)}`;
 }
 
 function tierGenericOf(generic: Symbol, tier: Symbol[]): Symbol | null {
@@ -518,8 +525,7 @@ let _tierInstanceHost: CheckerContext | null = null;
 
 function tierInstanceOf(inst: Symbol, tier: Symbol[]): Symbol | null {
 	const generic = tierGenericOf(inst.instantiatedFrom!, tier);
-	const at = _tierInstanceHost;
-	if (generic == null || at == null) return null;
+	if (generic == null || _tierInstanceHost == null) return null;
 	const params = instanceParamsOf(inst);
 	const args = instanceArgsOf(inst);
 	const types: Type[] = [];
@@ -528,13 +534,33 @@ function tierInstanceOf(inst: Symbol, tier: Symbol[]): Symbol | null {
 		if (i < 0) return null;
 		types.push(args[i]);
 	}
+	return instantiateTier(generic, types, inst);
+}
+
+function tierGenericAt(generic: Symbol, built: Symbol, builtShape: string): Symbol | null {
+	if (!isRoutineSym(generic) || generic.typeParams.length == 0 || built.typeParams.length != 0 || _tierInstanceHost == null) return null;
+	const bindings = createUnifyBindings();
+	unifyType(generic.symbolType, built.symbolType, bindings);
+	const types: Type[] = [];
+	for (const p of generic.typeParams) {
+		const i = bindings.names.indexOf(p.typeName);
+		if (i < 0) return null;
+		types.push(bindings.types[i]);
+	}
+	const instance = instantiateTier(generic, types, built);
+	if (instance == null) return null;
+	return sameType(instance.symbolType, built.symbolType) || signatureShape(instance.symbolType) == builtShape ? instance : null;
+}
+
+function instantiateTier(generic: Symbol, types: Type[], built: Symbol): Symbol | null {
+	const at = _tierInstanceHost!;
 	const errorsBefore = at.errors.length;
-	const tierInst = instantiateGenericFunction(generic, generic.typeParams, types, at, inst.declNode != null ? inst.declNode.location : makeLoc(1, 1));
+	const tierInst = instantiateGenericFunction(generic, generic.typeParams, types, at, built.declNode != null ? built.declNode.location : makeLoc(1, 1));
 	for (let i = errorsBefore; i < at.errors.length; i += 1) {
 		const e = at.errors[i];
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({
-			message: `helper '${inst.name}': ${e.message}`,
+			message: `helper '${built.name}': ${e.message}`,
 			line: e.line, column: e.column, endLine: e.endLine, endColumn: e.endColumn,
 			fatal: e.fatal, severity: e.severity, tags: e.tags,
 		});
