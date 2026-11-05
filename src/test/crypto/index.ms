@@ -11,6 +11,7 @@ import "./hashApiVectors";
 import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
 import "./kdfApiVectors";
+import "./rsaApiVectors";
 import "./x25519ApiVectors";
 import "./x25519Wycheproof";
 
