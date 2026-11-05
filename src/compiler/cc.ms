@@ -789,6 +789,9 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 	}
 	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
 		let flags = appendFlag(base, "-nostdlib -Wl,--gc-sections");
+		if (isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+			flags = appendFlag(flags, "-lcompiler_rt");
+		}
 		if (!forceExe && (opts.appMode == "lib" || opts.appMode == "staticlib")) {
 			flags = appendFlag(flags, "-Wl,--no-entry");
 		}
@@ -1744,6 +1747,25 @@ test "a Windows link through an external clang or gcc carries winpthread inside 
 	opts.ccCompiler = 1;
 	opts.ccBinary = "";
 	assert !cliLinkFlags("", opts).contains("-Bstatic");
+}
+
+test "bare Wasm on Zig retains compiler builtins without libc or startup" {
+	const opts = newCliOptions();
+	opts.targetOs = "bare";
+	opts.cpuTarget = "wasm32";
+	opts.appMode = "lib";
+	opts.ccCompiler = 0;
+	opts.ccBinary = "zig cc";
+	const flags = cliLinkFlags("", opts);
+	assert flags.contains("-nostdlib");
+	assert flags.contains("-lcompiler_rt");
+	assert flags.contains("-Wl,--no-entry");
+	opts.cpuTarget = "arm64";
+	assert !cliLinkFlags("", opts).contains("-lcompiler_rt");
+	opts.cpuTarget = "wasm32";
+	opts.ccCompiler = CC_PREPARED;
+	opts.ccBinary = "/prepared/clang --no-default-config";
+	assert !cliLinkFlags("", opts).contains("-lcompiler_rt");
 }
 
 function debugUbOptions(os: string, mode: number, sanitize: string): CliOptions {
