@@ -4,8 +4,8 @@
 // on the held member, one routine per union and table.
 
 import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, CallExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData, BuiltinKind } from "../../ast/node";
-import { isArrayType, unwrapRefNullUnion, peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
-import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout } from "../../checker/fit";
+import { isArrayType, unwrapRefNullUnion, peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable, withoutOwned } from "../../checker/types";
+import { isTypeofExpr, primitiveNameLiteral, readInStoredLayout, releaseOwnedRead } from "../../checker/fit";
 import { declaresProperty } from "../../checker/compat";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
@@ -406,8 +406,9 @@ function tagLiteral(tag: string, typeofNode: Node): Node {
 }
 
 function routineCall(prefix: string, operand: Node, ctx: TransformContext, loc: SourceLocation, body: (x: Symbol) => Node[], returns: Type = stringType()): Node {
-	const source = operand.nodeType;
-	if (source == null) throw new Error(`internal: the typeof routine '${prefix}' is called on an operand with no type`);
+	const read = operand.nodeType;
+	if (read == null) throw new Error(`internal: the typeof routine '${prefix}' is called on an operand with no type`);
+	const source = releaseOwnedRead(operand, withoutOwned(read), read);
 	const call = makeCall(makeTypedIdentResolved(nameRoutine(prefix, source, body, returns, ctx, loc), null, loc), [operand], loc);
 	call.nodeType = returns;
 	return call;
