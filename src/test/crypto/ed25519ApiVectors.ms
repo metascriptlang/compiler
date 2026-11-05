@@ -3,6 +3,11 @@ import {
 } from "std/crypto/pure/ed25519Native";
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
 import { encodeHex, decodeHex } from "std/core/encoding";
+import { readFile } from "std/fs";
+import {
+	JsonKind, asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
+import { ed25519Verify } from "std/crypto/pure/ed25519";
 
 when (c) {
 	import {
@@ -25,6 +30,49 @@ const publicHex = "d75a980182b10ab7d54bfed3c964073a0" +
 const signatureHex =
 	"e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555f" +
 	"b8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
+
+test "private Ed25519 verify API checks all 210 pinned Wycheproof cases" {
+	const text = readFile("std/crypto/test/vectors/ed25519_test.json");
+	assert text.ok;
+	const parsed = parseJson(text.value);
+	assert parsed.ok;
+	const groups = parsed.value.getDynamicField("testGroups");
+	assert groups.kind == JsonKind.Array;
+	let valid = 0;
+	let invalid = 0;
+	let acceptable = 0;
+	for (let g = 0; g < groups.length(); g++) {
+		const group = groups.at(g);
+		const raw = group.getDynamicField("publicKey")
+			.getDynamicField("pk").asString().decodeHex();
+		const key = must(Ed25519PublicKey.importSync(raw));
+		const tests = group.getDynamicField("tests");
+		assert tests.kind == JsonKind.Array;
+		for (let t = 0; t < tests.length(); t++) {
+			const vector = tests.at(t);
+			const id = vector.getDynamicField("tcId").asInt32();
+			const message = vector.getDynamicField("msg").asString().decodeHex();
+			const signature = vector.getDynamicField("sig").asString().decodeHex();
+			const accepted = verifySync(key, signature, message);
+			const category = vector.getDynamicField("result").asString();
+			if (category == "valid") {
+				assert accepted, `Ed25519 API tcId ${id}: valid rejected`;
+				valid++;
+			} else if (category == "invalid") {
+				assert !accepted, `Ed25519 API tcId ${id}: invalid accepted`;
+				invalid++;
+			} else {
+				assert category == "acceptable";
+				assert accepted == ed25519Verify(raw, signature, message),
+					`Ed25519 API tcId ${id}: changed acceptable-case policy`;
+				acceptable++;
+			}
+		}
+	}
+	assert valid == 117 && invalid == 64 && acceptable == 29;
+	assert valid + invalid + acceptable ==
+		parsed.value.getDynamicField("numberOfTests").asInt32();
+}
 
 test "private Ed25519 key API preserves RFC8032 test1 bytes" {
 	const key = must(Ed25519PrivateKey.fromSeedSync(seedHex.decodeHex()));
