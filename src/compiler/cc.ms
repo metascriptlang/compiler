@@ -736,6 +736,10 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
+	if (opts.ccCompiler == CC_PREPARED &&
+		opts.sanitize.split(",").includes("undefined")) {
+		flags = appendFlag(flags, "-fno-sanitize-recover=undefined");
+	}
 	flags = appendFlag(flags, debugUbFlags(opts));
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
@@ -1014,6 +1018,8 @@ function targetTriple(args: string[]): string {
 	return triple;
 }
 
+const PREPARED_DWARF_VERSION = 4;
+
 function emitsCodeView(command: Readonly<ToolCommand>, lead: Readonly<string[]>, trail: Readonly<string[]>): boolean {
 	const name = basename(command.path).toLowerCase();
 	if (!isZigDriver(command) && name.indexOf("clang", 0) < 0) return false;
@@ -1251,6 +1257,9 @@ export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boo
 	if (emitsCodeView(command, lead, trail)) {
 		if (ccOption == CC_PREPARED && mode == MODE_DEBUG) lead.push("-gcodeview");
 		lead.push("-gno-codeview-command-line");
+	} else if (ccOption == CC_PREPARED &&
+		(mode == MODE_DEBUG || trail.includes("-g"))) {
+		lead.push(`-gdwarf-${PREPARED_DWARF_VERSION}`);
 	}
 	return Result.ok({ command, lead, quote: runtimeQuoteDir(), trail });
 }
@@ -1765,6 +1774,7 @@ test "a prepared debug build reports signed overflow with the runtime its target
 	}
 	const explicit = cliCompileFlags(debugUbOptions("linux", MODE_DEBUG, "address"));
 	assert explicit.contains("-fsanitize=address") && !explicit.contains("minimal") && !explicit.contains(DEBUG_UB_CHECKS);
+	assert !explicit.contains("-fno-sanitize-recover");
 	const zig = debugUbOptions("linux", MODE_DEBUG, "");
 	zig.ccCompiler = 0;
 	assert !cliCompileFlags(zig).contains("-fsanitize");
@@ -2076,6 +2086,54 @@ test "a prepared debug link to Windows asks for a PDB beside the image, nothing 
 	for (const mode of [1, 2]) assert pdbLinkArg(mode, "windows", CC_PREPARED, "/w/app.exe") == "";
 	for (const os of ["linux", "macos"]) assert pdbLinkArg(0, os, CC_PREPARED, "/w/app") == "";
 	assert pdbLinkArg(0, "windows", 0, "/w/app.exe") == "";
+}
+
+test "explicit UBSan aborts on the first report on prepared targets" {
+	for (const os of ["linux", "macos", "windows"]) {
+		for (const mode of [MODE_DEBUG, MODE_RELEASE]) {
+			for (const checks of ["undefined", "address,undefined"]) {
+				const flags = cliCompileFlags(debugUbOptions(os, mode, checks));
+				assert flags.contains("-fsanitize=" + checks);
+				assert flags.contains("-fno-sanitize-recover=undefined");
+			}
+		}
+	}
+	const other = debugUbOptions("linux", MODE_RELEASE, "undefined");
+	other.ccCompiler = 0;
+	assert !cliCompileFlags(other).contains("-fno-sanitize-recover");
+}
+
+test "prepared debug builds use DWARF 4 except on CodeView targets" {
+	const triples = [
+		"x86_64-unknown-linux-gnu",
+		"aarch64-unknown-linux-musl",
+		"x86_64-apple-macos",
+		"arm64-apple-macos",
+		"wasm32-wasi",
+	];
+	for (const triple of triples) {
+		const cc = `/p/clang --no-default-config -target ${triple}`;
+		const debug = objectCompileArgs(CC_PREPARED, cc, false, MODE_DEBUG, "");
+		assert debug.ok && debug.value.lead.includes("-gdwarf-4");
+		const release = objectCompileArgs(
+			CC_PREPARED, cc, false, MODE_RELEASE, "",
+		);
+		assert release.ok && !release.value.lead.includes("-gdwarf-4");
+		const withG = objectCompileArgs(
+			CC_PREPARED, cc, false, MODE_RELEASE, "-g",
+		);
+		assert withG.ok && withG.value.lead.includes("-gdwarf-4");
+		const plain = objectCompileArgs(0, cc, false, MODE_DEBUG, "");
+		assert plain.ok && !plain.value.lead.includes("-gdwarf-4");
+	}
+	const windows = objectCompileArgs(
+		CC_PREPARED,
+		"/p/clang --no-default-config -target x86_64-unknown-windows-gnu",
+		false,
+		MODE_DEBUG,
+		"",
+	);
+	assert windows.ok && !windows.value.lead.includes("-gdwarf-4");
 }
 
 test "a prepared debug compile for Windows emits CodeView, release and other targets keep their format" {
