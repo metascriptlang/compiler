@@ -438,6 +438,25 @@ class SourceRootTest(TempCase):
     def prepare(self, llvm, lld, output=None):
         return pe.prepareEngine(llvm, lld, output or self.path("out", "engine"))
 
+    def completeRoots(self):
+        llvm, lld = self.fakeRoots()
+        for tool in ("clang-22", "llvm-rc") + pe.LLVM_TOOLS:
+            writeScript(os.path.join(llvm, "bin", tool), tool)
+        writeScript(os.path.join(lld, "bin", "lld"), "LLD 22.1.1")
+        return llvm, lld
+
+    def test_engine_plan_copies_resource_compiler(self):
+        llvm, lld = self.completeRoots()
+        plan = pe.enginePlan(llvm, lld, "22")
+        self.assertIn("bin/llvm-rc", plan)
+        self.assertEqual(plan["bin/llvm-rc"], os.path.join(llvm, "bin", "llvm-rc"))
+
+    def test_engine_plan_refuses_missing_resource_compiler(self):
+        llvm, lld = self.completeRoots()
+        os.remove(os.path.join(llvm, "bin", "llvm-rc"))
+        with self.assertRaisesRegex(pe.EngineError, "missing source file .*llvm-rc"):
+            pe.enginePlan(llvm, lld, "22")
+
     @mock.patch.object(pe, "detectHost", return_value=("aarch64-macos", 0x0100000C))
     def test_failures_leave_no_output(self, _):
         llvm, lld = self.fakeRoots(lldVersion="21.1.0")
@@ -498,7 +517,7 @@ class SourceRootTest(TempCase):
 
 class UpstreamEngineTest(TempCase):
     ARCHIVE = {"name": "LLVM-23.1.4-macOS-ARM64.tar.zst", "url": "https://example.invalid/a.tar.zst", "sha256": "0" * 64}
-    TOOLS = ("llvm-ar", "llvm-nm", "llvm-objcopy", "dsymutil")
+    TOOLS = ("llvm-ar", "llvm-nm", "llvm-objcopy", "llvm-rc", "dsymutil")
     ALIASES = {"llvm-ranlib": "llvm-ar", "llvm-dlltool": "llvm-ar", "llvm-strip": "llvm-objcopy"}
 
     def upstream(self):

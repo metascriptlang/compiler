@@ -31,6 +31,7 @@ class RecipeTest(unittest.TestCase):
         self.assertIn("LLVM_TOOL_LLVM_DRIVER_BUILD ON", text)
         self.assertIn('"X86;AArch64;WebAssembly"', text)
         self.assertIn("LLVM_ENABLE_ASSERTIONS OFF", text)
+        self.assertRegex(text, r'set\(LLVM_DISTRIBUTION_COMPONENTS\s+"[^\"]*;llvm-rc;')
 
     def test_build_rejects_zero_jobs(self):
         with self.assertRaisesRegex(pe.EngineError, "at least 1"):

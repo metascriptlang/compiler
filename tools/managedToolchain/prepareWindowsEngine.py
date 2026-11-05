@@ -5,8 +5,7 @@
     prepareWindowsEngine.py --verify BUNDLE_DIR [--inspector LLVM_READOBJ]
 
 Runs on native Windows x86_64 only. The bundle has the layout and contract files of prepareEngine.py (HOST
-x86_64-windows): the thirteen .exe tools of the LLVM root's bin/ (the twelve compiler, linker and archive tools and llvm-readobj)
-and the resource directory lib/clang/MAJOR. The upstream payload ships no license, so --license names the exact-release
+x86_64-windows) and the resource directory lib/clang/MAJOR. The upstream payload ships no license, so --license names the exact-release
 license file, copied to notices/LICENSE.TXT with its hash recorded; it is never fetched.
 
 Every PE file of bin/ is read, never run, with the bundle's own llvm-readobj: the machine must be AMD64, the image PE32+
@@ -38,7 +37,7 @@ IMAGE_EXECUTABLE = 0x2
 IMAGE_DLL = 0x2000
 INSPECTOR = "llvm-readobj.exe"
 TOOLS = ("clang.exe", "clang++.exe", "lld.exe", "ld.lld.exe", "ld64.lld.exe", "lld-link.exe", "wasm-ld.exe", "llvm-ar.exe",
-         "llvm-ranlib.exe", "llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", "llvm-dlltool.exe", INSPECTOR)
+         "llvm-ranlib.exe", "llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", "llvm-dlltool.exe", "llvm-rc.exe", INSPECTOR)
 SYSTEM_DLLS = frozenset(("advapi32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll", "shell32.dll",
                          "user32.dll", "version.dll"))
 RESOURCE_PREFIX = "lib/clang/"

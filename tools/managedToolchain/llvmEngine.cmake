@@ -5,7 +5,7 @@ set(LLVM_TARGETS_TO_BUILD "X86;AArch64;WebAssembly" CACHE STRING "")
 set(LLVM_ENABLE_ASSERTIONS OFF CACHE BOOL "")
 set(LLVM_TOOL_LLVM_DRIVER_BUILD ON CACHE BOOL "")
 set(LLVM_DISTRIBUTION_COMPONENTS
-    "llvm-driver;clang;lld;llvm-ar;llvm-nm;llvm-objcopy;dsymutil;llvm-symbolizer;llvm-readobj;clang-resource-headers"
+    "llvm-driver;clang;lld;llvm-ar;llvm-nm;llvm-objcopy;llvm-rc;dsymutil;llvm-symbolizer;llvm-readobj;clang-resource-headers"
     CACHE STRING "")
 set(LLVM_BUILD_STATIC ON CACHE BOOL "")
 set(LLVM_ENABLE_PLUGINS OFF CACHE BOOL "")
