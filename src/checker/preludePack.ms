@@ -39,7 +39,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK9";
+const PACK_MAGIC = "MSPK11";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -668,6 +668,8 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			symCursor += 1;
 			enqType(s.symbolType);
 			for (const tp of s.typeParams) enqType(tp);
+			for (const t of s.instanceArgs ?? []) enqType(t);
+			for (const t of s.instanceParams ?? []) enqType(t);
 			if (s.overloads != null) {
 				for (const ov of s.overloads) enqSym(ov, false);
 			}
@@ -772,7 +774,12 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const dp = idxs(s.defaultParams);
 		const tps: int32[] = [];
 		for (const tp of s.typeParams) tps.push(idxType(tp));
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}\t${idxSym(s.typeParamOwner)}`);
+		const instArgs: int32[] = [];
+		for (const t of s.instanceArgs ?? []) instArgs.push(idxType(t));
+		const instParams: int32[] = [];
+		for (const t of s.instanceParams ?? []) instParams.push(idxType(t));
+		const retained = s.instanceArgs != null && s.instanceParams != null ? 1 : 0;
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}\t${idxSym(s.typeParamOwner)}\t${retained}\t${intsCsv(instArgs)}\t${intsCsv(instParams)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1304,6 +1311,9 @@ function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry
 	const symTypeParamsIdx: int32[][] = [];
 	const symOriginIdx: int32[] = [];
 	const symParamOwnerIdx: int32[] = [];
+	const symRetained: boolean[] = [];
+	const symInstanceArgsIdx: int32[][] = [];
+	const symInstanceParamsIdx: int32[][] = [];
 	const symDpRaw: string[] = [];
 	const inScopeFlags: int32[] = [];
 	const nodeTypeRef: int32[] = [];
@@ -1431,6 +1441,9 @@ function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry
 			symTypeParamsIdx.push(rd.last == 9 ? rd.ints() : []);
 			symOriginIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 			symParamOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
+			symRetained.push(rd.last == 9 && rd.int() == 1);
+			symInstanceArgsIdx.push(rd.last == 9 ? rd.ints() : []);
+			symInstanceParamsIdx.push(rd.last == 9 ? rd.ints() : []);
 			syms.push(s);
 			rd.endRow();
 		} else if (tag == 69) {
@@ -1542,6 +1555,20 @@ function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry
 			tps.push(types[k]);
 		}
 		s.typeParams = tps;
+		if (symRetained[i]) {
+			const args: Type[] = [];
+			for (const k of symInstanceArgsIdx[i]) {
+				if (k < 0 || k >= types.length) return null;
+				args.push(types[k]);
+			}
+			const params: Type[] = [];
+			for (const k of symInstanceParamsIdx[i]) {
+				if (k < 0 || k >= types.length) return null;
+				params.push(types[k]);
+			}
+			s.instanceArgs = args;
+			s.instanceParams = params;
+		}
 		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
 		s.instantiatedFrom = symOriginIdx[i] >= 0 && symOriginIdx[i] < syms.length ? syms[symOriginIdx[i]] : null;
 		s.typeParamOwner = symParamOwnerIdx[i] >= 0 && symParamOwnerIdx[i] < syms.length ? syms[symParamOwnerIdx[i]] : null;
@@ -1916,7 +1943,7 @@ test "preludePack: generic defaults and parameter identity survive cold and warm
 		assert warmSym!.typeParams[1].typeParamDefault == warmSym!.typeParams[0];
 		const path = `${packRoot()}/${key}.pk`;
 		const packed = try readFile(path) catch "";
-		writeFile(path, packed.replace("MSPK9", "MSPK8"));
+		writeFile(path, packed.replace(PACK_MAGIC, "MSPK8"));
 		assert tryLoadPreludePack(key, PK_STAMP) == null;
 		remove(path);
 	} finally {
@@ -1924,7 +1951,7 @@ test "preludePack: generic defaults and parameter identity survive cold and warm
 	}
 }
 
-test "preludePack: a generic instance keeps the generic it was instantiated from" {
+test "preludePack: a generic instance keeps the generic it was instantiated from and its checked arguments and type parameters" {
 	const prevHome = pkEnterPrivateCache();
 	try {
 		const ctx = makeTestCtx();
@@ -1935,6 +1962,11 @@ test "preludePack: a generic instance keeps the generic it was instantiated from
 		const inScope = makeSymbolState("pkPop_int32", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
 		inScope.state = SymbolState.Checked;
 		inScope.instantiatedFrom = generic;
+		const param = createGenericParam("T");
+		const arg = emptyType();
+		arg.kind = TypeKind.String;
+		inScope.instanceParams = [param];
+		inScope.instanceArgs = [arg];
 		inScope.nameId = getIdentId(ctx.table.identCache, inScope.name);
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(inScope.nameId, inScope);
 		const unlisted = makeSymbolState("pkShift", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
@@ -1952,6 +1984,9 @@ test "preludePack: a generic instance keeps the generic it was instantiated from
 		const gotInstance = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkPop_int32"));
 		assert gotGeneric != null && gotInstance != null;
 		assert gotInstance.instantiatedFrom == gotGeneric;
+		assert gotInstance.instanceParams != null && gotInstance.instanceParams!.length == 1 && gotInstance.instanceParams![0].typeName == "T";
+		assert gotInstance.instanceArgs != null && gotInstance.instanceArgs!.length == 1 && gotInstance.instanceArgs![0].kind == TypeKind.String;
+		assert gotGeneric.instanceArgs == null && gotGeneric.instanceParams == null;
 		const gotLinked = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkShift_int32"));
 		assert gotLinked != null && gotLinked.instantiatedFrom != null;
 		assert gotLinked.instantiatedFrom!.name == "pkShift";
