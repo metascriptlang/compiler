@@ -24,7 +24,7 @@ import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContex
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUnownedPosition, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
 import { isBuiltinDirective, decoratorNamed, isWasmPlacementStmt } from "./decoratorHelpers";
@@ -4065,6 +4065,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 				}
 			}
 			ctx.preludeModuleScopes.set(resolvedPath, moduleScopeSymbols(ctx.table));
+			registerModuleCtx(resolvedPath, preludeBodyCtx(ctx, resolvedPath));
 			closeScope(ctx.table);
 			publishPreludeModuleExports(ctx, scope);
 		}
@@ -4221,6 +4222,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
 		ctx.preludeModuleScopes.set(subResolved, moduleScopeSymbols(subCtx.table));
+		registerModuleCtx(subResolved, preludeBodyCtx(ctx, subResolved));
 
 		const subScope = subCtx.table.current;
 
@@ -4314,7 +4316,12 @@ function checkPreludeSource(stdPath: string, backendExt: string, dispatchRegistr
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
 	ctx.stdRoot = stdRoot;
 	defineBuiltinConstants(ctx);
-	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
+	const buildModules = swapModuleCtxRegistry(createModuleCtxRegistry());
+	try {
+		for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
+	} finally {
+		swapModuleCtxRegistry(buildModules);
+	}
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
 	return ctx;
@@ -6810,6 +6817,22 @@ test "a prelude checked from the relative std root names its modules as the abso
 	for (const path of relative.ownModules) assert absolute.ownModules.has(path), path;
 	assert relative.preludeModuleScopes.size > 0 && relative.preludeModuleScopes.size == absolute.preludeModuleScopes.size;
 	for (const path of relative.preludeModuleScopes.keys()) assert absolute.preludeModuleScopes.has(path), path;
+}
+
+test "a prelude checked from source registers its module views in a registry of its own, so the build's module of the same path stays registered" {
+	const std = join(resolveRuntimeDir(), "std");
+	let structPath = "";
+	for (const path of checkPreludeFromSource(std, ".rms").preludeModuleScopes.keys()) if (path.endsWith("core/struct.ms")) structPath = path;
+	assert structPath != "";
+	const decoy = createContext();
+	decoy.modulePath = structPath;
+	const outer = swapModuleCtxRegistry(createModuleCtxRegistry());
+	registerModuleCtx(structPath, decoy);
+	const prelude = checkPreludeFromSource(std, ".rms");
+	const after = lookupModuleCtx(structPath);
+	swapModuleCtxRegistry(outer);
+	assert after == decoy;
+	assert !hasErrors(prelude);
 }
 
 function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
