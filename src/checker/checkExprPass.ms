@@ -3419,6 +3419,8 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") {
+			if (bd.left.nodeType != null && bd.left.nodeType.kind == TypeKind.Number) bd.left = wrapInConv(bd.left, createPrimitive(TypeKind.Int64));
+			if (bd.right.nodeType != null && bd.right.nodeType.kind == TypeKind.Number) bd.right = wrapInConv(bd.right, createPrimitive(TypeKind.Int64));
 			const pointer = skipModifier(arrType);
 			if (pointer != null && pointer.kind == TypeKind.Ptr && pointer.typeReturn != null && pointer.typeReturn.kind != TypeKind.Void) {
 				const view = createSpan(pointer.typeReturn);
