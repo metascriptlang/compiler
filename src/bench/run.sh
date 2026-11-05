@@ -19,6 +19,7 @@ case " ${wanted[*]} " in *" lua"*) src/bench/buildLua.sh out/bench/lua ;; esac
 build() { # <arm> <msc> <output>
 	case $1 in
 		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
+		js) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
 		rust) rustc -C opt-level=3 "$HERE/bench.rs" -o "$OUT/rust" ;;
 		nim) nim c -d:danger --hints:off --nimcache:"$OUT/nimcache" -o:"$PWD/$OUT/nim" "$HERE/bench.nim" >/dev/null ;;
 	esac
@@ -28,6 +29,7 @@ runArm() { # <arm>
 		candidate | c | rust | nim) "$OUT/$1" ;;
 		base) if [ "${wanted[0]}" = raiser ]; then "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms"; else "$OUT/base"; fi ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
+		js) "$NODE" "$OUT/js.mjs" ;;
 		node) "$NODE" "$HERE/bench.node.mjs" ;;
 		luajit-joff) "$LUAJIT" -joff "$HERE/bench.lua" ;;
 		luajit-jon) "$LUAJIT" -jon "$HERE/bench.lua" ;;

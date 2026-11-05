@@ -17,7 +17,7 @@ longer than any check the edit loop allows.
 - `baseline.md`, the recorded tables: host, commit, tree, load, and the command that produced them.
 
 An area that compares against something other than node lists its arms in `arms` (default `candidate node`):
-`candidate` or `c` is `bench.ms` on C `--release`, `raiser` is `msc run --target=raiser bench.ms`, `node` runs
+`candidate` or `c` is `bench.ms` on C `--release`, `js` is `bench.ms` built `--target=js` and run by node, `raiser` is `msc run --target=raiser bench.ms`, `node` runs
 `bench.node.mjs`, and `luajit-joff`, `luajit-jon` and `lua54` run the Lua twin `bench.lua` under LuaJIT 2.1 and Lua
 5.4, which `src/bench/buildLua.sh` builds from pinned sources into `out/bench/lua/` on first use. `rust` and `nim` build the
 twins `rustc -C opt-level=3` and `nim c -d:danger`, or take prebuilt binaries from `MSBENCH_RUST` and `MSBENCH_NIM` on
