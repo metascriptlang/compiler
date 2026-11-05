@@ -107,6 +107,7 @@ import "./flowsRecorder";
 import "./awaitWaitPath";
 import "./acyclicDecorator";
 import "./ownedEdge";
+import "./unownedEdge";
 import "./openSlotCycleClassification";
 import "./spawnViewCursor";
 import "./spawnCaptureCursor";
