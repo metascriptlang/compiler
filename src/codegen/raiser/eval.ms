@@ -3402,7 +3402,13 @@ function funcNamed(code: string, prefix: string): RaiserFunction {
 test "register classes: a parameter takes the class of its declared type" {
 	const f = compiledFunc("function p(a: number, s: string, o: { x: number } | null, n: number | null, u: number | string, b: boolean, c: () => number): number { return a; }"
 		+ " console.log(`${p(1, \"s\", null, null, 1, true, (): number => 1)}`);", "p");
-	assert classTable(f) == "FRRDDBR", classTable(f);
+	assert f.arity == 7 && f.paramWords == 8;
+	assert f.callShape != null && f.callShape.params.length == 7;
+	for (let i = 0; i < f.callShape!.params.length; i += 1) {
+		const shape = f.callShape!.params[i];
+		assert shape.block == (i == 3) && shape.words == (i == 3 ? 2 : 1);
+	}
+	assert classTable(f) == "FRR" + "WW" + "DBR", classTable(f);
 }
 
 test "register classes: a local takes the class of its declared type, not of its initializer" {
@@ -3410,9 +3416,10 @@ test "register classes: a local takes the class of its declared type, not of its
 		+ " console.log(`${l()}`);";
 	const f = compiledFunc(code, "l");
 	const table = classTable(f);
-	assert table == "RRRDFRDFWFF", table;
+	assert table == "RRRDFR" + "WW" + "FWFF", table;
 	const text = disasmFunc(f);
-	assert countNamed(f, "Box") == 3, text;
+	assert countNamed(f, "ZeroN") == 1, text;
+	assert countNamed(f, "Box") == 2, text;
 	const vm = evalVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "2\n", vm.output;
