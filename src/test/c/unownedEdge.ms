@@ -1,6 +1,6 @@
 // Unowned<T> is a stored edge counted on its target's second count: it keeps the class out of
 // the cycle collector, a store counts it, the holder's destroy releases it, and a read never
-// moves it into a strong owner. Runtime behaviour: corpus `unownedTreeUpEdges` and siblings.
+// moves it into a strong owner. Runtime behaviour: corpus `unownedEdgeReadsItsTarget` and its `unownedEdge*` siblings.
 
 import { compileToC } from "../helpers";
 
@@ -41,6 +41,14 @@ test "a store into an Unowned slot counts on the second count" {
 	const c = emitted("class T { id: int32 = 0; }\nclass H { at: Unowned<T> | null = null; }\nconst t = new T();\nconst h = new H();\nh.at = t;\nconsole.log(t.id);\n");
 	assert c.contains("msUnownedAssign"), c;
 	assert c.contains("msUnownedDecref"), c;
+}
+
+test "a literal's Unowned field takes its value on the second count, not a strong copy" {
+	const element = emitted("class T { id: int32 = 4; }\nstruct V { at: Unowned<T> | null; tag: int32; }\nfunction f(t: T): int32 {\n\tconst vs: V[] = [{ at: t, tag: 1 }];\n\treturn vs.length;\n}\nconsole.log(f(new T()));\n");
+	assert element.contains("msUnownedTake(t_p0)"), element;
+	assert !element.contains("msIncref(t_p0)"), element;
+	const returned = emitted("class T { id: int32 = 4; }\nstruct V { at: Unowned<T> | null; tag: int32; }\nfunction f(t: T): V { return { at: t, tag: 2 }; }\nconst t = new T();\nconsole.log(f(t).tag);\n");
+	assert returned.contains("msUnownedTake(t_p0)"), returned;
 }
 
 test "the last read of an Unowned field is a copy, not a move" {
