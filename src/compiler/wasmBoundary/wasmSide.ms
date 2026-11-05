@@ -605,7 +605,6 @@ function resultLettersOf(name: string): string {
 }
 
 function resultImportParams(name: string): string[] {
-	if (name == "msb_rv") return ["...a"];
 	const letters = resultLettersOf(name);
 	const params: string[] = [];
 	for (let i = 0; i < letters.length; i += 1) {
@@ -621,7 +620,7 @@ function jsLibraryOf(usage: EntryUsage): string {
 	for (const name of usage.resultImports) {
 		const params = resultImportParams(name);
 		const take = `${REGISTRY}.takes.pop()(${params.join(", ")})`;
-		entries.push(guardedImportJs(name, params, take));
+		entries.push(`\t${name}: (${params.join(", ")}) => ${take},`);
 	}
 	const escape = `${REGISTRY}.escape(a0p, a0l)`;
 	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));

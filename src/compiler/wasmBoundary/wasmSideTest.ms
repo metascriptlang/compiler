@@ -127,7 +127,7 @@ test "wasm entry: a string parameter arrives as ptr and len and is adopted witho
 	assert s.includes('extern function msb_rs_s(a0p: uint32, a0l: int32): void from "msb_rs_s";');
 	assert s.includes("void msb_rs_s(uint32_t a0p, int32_t a0l);");
 	assert s.includes("msbRet") == false && s.includes("msb_ret_len") == false;
-	assert e.jsLibrary.includes("\tmsb_rs_s: (a0p, a0l) => { try { return Module['msb'].takes.pop()(a0p, a0l); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rs_s: (a0p, a0l) => Module['msb'].takes.pop()(a0p, a0l),");
 	assert e.exportedFunctions.join(",") == "_msb_calc_twice,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8";
 	const plain = entryFor(["add64"]);
@@ -172,7 +172,7 @@ test "wasm entry: a struct crosses as leaf parameters and returns through one re
 	assert s.includes("\tconst r = msbm0_tag({ at: { x: l_0, y: l_1 }, text: msbStrAdopt(l_2Ptr, l_2Len), count: l_3 });");
 	assert s.includes("\tmsb_rs_ddsi(r.at.x, r.at.y, msbStrPtr(r.text), r.text.asBytes().length, r.count);");
 	assert s.split("extern function msb_rs_ddsi").length == 2;
-	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (a0, a1, a2p, a2l, a3) => { try { return Module['msb'].takes.pop()(a0, a1, a2p, a2l, a3); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rs_ddsi: (a0, a1, a2p, a2l, a3) => Module['msb'].takes.pop()(a0, a1, a2p, a2l, a3),");
 	assert e.exportedFunctions.join(",") == "_msb_calc_tag,_malloc,_free,_MsMain";
 }
 
@@ -183,7 +183,7 @@ test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is h
 	assert s.includes("export function msb_calc_scale(xsPtr: uint32, xsLen: int32, k: float32): void {");
 	assert s.includes("\tconst r = msbm0_scale(msbVecFrom_float32(xsPtr, xsLen), k);");
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
-	assert e.jsLibrary.includes("\tmsb_rv: (...a) => { try { return Module['msb'].takes.pop()(...a); } catch (e) { throw Module['msb'].die(e); } },");
+	assert e.jsLibrary.includes("\tmsb_rv: (a0, a1) => Module['msb'].takes.pop()(a0, a1),");
 	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
 	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
@@ -236,10 +236,16 @@ test "wasm entry: each runtime export is used by the js glue of that function an
 	}
 }
 
-test "wasm entry: a result import and the escape import poison the instance when they throw, and a callback import turns the throw into the failure flag" {
+test "wasm entry: enclosing export wrappers poison result import failures, escape and callback imports keep their own guards" {
 	const e = entryFor(["evaluate", "visit", "report", "sumBy", "edit", "tag", "scale"]);
-	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 4;
+	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 2;
 	assert e.jsLibrary.split("\n\tmsb_").length == 10;
+	const m = manifestOf(["twice", "tag", "scale"]);
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
+	for (const f of m.functions) {
+		assert code.includes(`try { __msbMod._${f.exportSymbol}(`);
+	}
+	assert code.split("catch (e) { throw __msb.die(e); }").length == 4;
 }
 
 test "wasm entry: a callback import has the fixed arity of its signature, no rest or spread, a string or span taking two parameters" {
