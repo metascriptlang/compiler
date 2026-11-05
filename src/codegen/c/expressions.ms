@@ -1678,7 +1678,8 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		// Integer types (int32, int64 etc.) keep native %
 		if (d.operator == "%") {
 			const lt = d.left.nodeType;
-			const isInt = lt != null && isIntegerType(lt);
+			const rt = d.right.nodeType;
+			const isInt = lt != null && isIntegerType(lt) && !(rt != null && (isFloatType(rt) || rt.kind == TypeKind.Number));
 			if (!isInt) {
 				ctx.results.push(`fmod(${left}, ${finalRight})`);
 				return;
