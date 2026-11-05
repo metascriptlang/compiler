@@ -1,5 +1,5 @@
 import { encodeHex, decodeHex } from "../../core/encoding";
-import { Fe, feZero, feOne, feFromBytes, feToBytes, feAdd, feSub, feMul, feMul121666, feSqr, feInv, feCMov } from "./ed25519Field";
+import { Fe, feZero, feOne, feFromBytes, feToBytes, feAdd, feSub, feAddLoose, feSubLoose, feMul, feMul121666, feSqr, feInv, feCMov } from "./ed25519Field";
 import { wipeBytes } from "./secret";
 
 /** The RFC 7748 Montgomery ladder: 255 steps that swap by mask, never by branch. An all-zero result means a low-order input. */
@@ -24,19 +24,19 @@ export function x25519(scalar: Readonly<uint8[]>, u: Readonly<uint8[]>): uint8[]
 		z3 = feCMov(z3, z2, swap);
 		z2 = sz2;
 		swap = bit;
-		const a = feAdd(x2, z2);
+		const a = feAddLoose(x2, z2);
 		const aa = feSqr(a);
-		const b = feSub(x2, z2);
+		const b = feSubLoose(x2, z2);
 		const bb = feSqr(b);
-		const e = feSub(aa, bb);
-		const c = feAdd(x3, z3);
-		const d = feSub(x3, z3);
+		const e = feSubLoose(aa, bb);
+		const c = feAddLoose(x3, z3);
+		const d = feSubLoose(x3, z3);
 		const da = feMul(d, a);
 		const cb = feMul(c, b);
-		x3 = feSqr(feAdd(da, cb));
-		z3 = feMul(x1, feSqr(feSub(da, cb)));
+		x3 = feSqr(feAddLoose(da, cb));
+		z3 = feMul(x1, feSqr(feSubLoose(da, cb)));
 		x2 = feMul(aa, bb);
-		z2 = feMul(e, feAdd(bb, feMul121666(e)));
+		z2 = feMul(e, feAddLoose(bb, feMul121666(e)));
 	}
 	x2 = feCMov(x2, x3, swap);
 	z2 = feCMov(z2, z3, swap);
