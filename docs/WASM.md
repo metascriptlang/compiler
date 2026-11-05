@@ -200,6 +200,35 @@ WebGL2 screenshots or M5 completion. The verification recipe's final hash glob e
 a generated directory after all assertions passed; explicit-file hashes subsequently matched
 without rerunning the product checks.
 
+Result-import wrapper check, 2026-11-05, m1m/Node 24.1.0/emcc 5.0.5, tree
+`1fafa1c260a74e86fbd2fc9763fe8bf0473a15a3`: three interleaved rounds of the real generated
+`src/bench/wasmBoundary/main.ms` bundle, built with `--target=js --danger` (default thin LTO).
+Control and candidate wasm were byte-identical, SHA256
+`cf4729b17843086ab64944b464e9dcf676fe3959c280d57dc90047f90d2bec1e`.
+
+| ns/call, median of per-process medians | control | candidate |
+|---|---|---|
+| echo16 | 154.5 | 145.4 |
+| mid | 55.6 | 54.4 |
+| makeVec1k | 2677.3 | 2655.6 |
+
+All six runs printed `sink true`. Echo improved 5.9%; the Vec difference is too small to
+claim a general gain. A preceding same-wasm, emitted-JS three-arm probe found no consistent
+extra gain from fixed arity alone. Reusing the existing `ii` parameter path removes the
+Vec-specific rest/spread case, rather than adding a new fast path. This is single-host Node
+evidence, not a browser or multi-engine result; no confidence interval was established.
+
+`wasmSide.ms` `jsLibraryOf` and `jsSide.ms` `guardedCall` carry the implementation contract.
+Four old shape pins failed before the change; the candidate passed all 30 owner pins and six
+named consumers. `resultThrowPoison` injects host failures into Vec allocation and long-string
+decoding on separate fresh instances. The generated candidate preserved the original error,
+poisoned subsequent calls and retained its cause. Removing the enclosing export guards made
+both blocked-call oracles false; callback and escape import guards were unchanged. No wire,
+ownership or wasm code change was needed. Raw m1m artifacts: `out/r8-probe/`, `out/r8-red/`,
+`out/r8-safety/`, `out/r8-green/`. Earlier companion-path and host-admission setup failures
+produced no safety verdict; only their missing controls were subsequently run. This does not
+certify M5, GPU screenshots, the full suite or integration after a rebase onto current main.
+
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
 cached memory view detached by growth to 32 MiB, and `TextEncoder` losing a lone surrogate, which
