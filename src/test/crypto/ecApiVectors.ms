@@ -2,11 +2,45 @@ import {
 	EcPrivateKey, EcPublicKey, EcCurve, ecdsaSignSync, ecdsaVerifySync,
 	ecdsaSign, ecdsaVerify, ecdhSync, ecdh,
 } from "std/crypto/pure/ecNative";
-import { CryptoError } from "std/crypto/errors";
+import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
 
 function must<T>(sink result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
 	return result.value;
+}
+
+test "private EC malformed PEM errors keep their kind and operation" {
+	for (const pem of ["", "not a pem",
+		"-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----\n"]) {
+		const publicKey = EcPublicKey.importPemSync(pem);
+		assert !publicKey.ok;
+		assert publicKey.error.kind == CryptoErrorKind.InvalidKey;
+		assert publicKey.error.operation == "EcPublicKey.importPem";
+		const privateKey = EcPrivateKey.importPemSync(pem);
+		assert !privateKey.ok;
+		assert privateKey.error.kind == CryptoErrorKind.InvalidKey;
+		assert privateKey.error.operation == "EcPrivateKey.importPem";
+	}
+}
+
+test "private EC signing and curve mismatch errors preserve their contract" {
+	const key = must(EcPrivateKey.generateSync("p256"));
+	for (const hash of ["sha1", "md5", "sha224", "nope", ""]) {
+		const signature = ecdsaSignSync(key, "message", hash);
+		assert !signature.ok;
+		assert signature.error.kind == CryptoErrorKind.SignatureFailed;
+		assert signature.error.operation == "ec.ecdsaSign";
+		assert signature.error.message ==
+			`ECDSA signing failed (hash ${hash}; sha1 is refused)`;
+		assert !ecdsaVerifySync(key.publicKey(), "message", [], hash);
+	}
+	const other = must(EcPrivateKey.generateSync("p384"));
+	const shared = ecdhSync(key, other.publicKey());
+	assert !shared.ok;
+	assert shared.error.kind == CryptoErrorKind.KeyDerivationFailed;
+	assert shared.error.operation == "ec.ecdh";
+	assert shared.error.message ==
+		"ECDH key agreement failed (are the curves the same?)";
 }
 
 test "private EC signs UTF8 NUL and binary bytes without changing owners" {
