@@ -534,3 +534,17 @@ test "E2E C: a returned module-level value is copied once" {
 	for (const hook of fromNone) assert hook.endsWith("Copy"), `${hook} takes the module-level value as its source`;
 	assert !c.value.contains(")), (&(dollarborrow");
 }
+
+test "E2E C: an extern string returned is copied, never moved out of its C global" {
+	const c = compileToC(`
+		@include("runtime/core/string.h");
+		extern const sharedText: string from "MS_EMPTY_STRING";
+		function read(n: int32): string {
+			if (n == 0) return sharedText;
+			return "x";
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("msStringWasMoved(MS_EMPTY_STRING)");
+	assert c.value.contains("MS_EMPTY_STRING");
+}

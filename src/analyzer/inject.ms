@@ -1997,7 +1997,7 @@ function ownsMovableValue(sym: Symbol, dctx: DrcContext): boolean {
 	if (hasFlag(sym, SymbolFlag.SinkTemp)) return true;
 	// Reference parity (sfGlobal): module-level variables live for the entire program.
 	// wasMoved would zero them for all callers. Never move globals.
-	if (hasFlag(sym, SymbolFlag.Global)) return false;
+	if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.ImportC)) return false;
 	// A borrowed param is never moved: the caller owns the value and will still
 	// destroy its own copy (use-after-free otherwise). A constructor's owned param moves.
 	const vi = findVarInfoInContext(dctx, sym);
