@@ -11,7 +11,7 @@ import { Symbol } from "../ast/node";
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 export function defaultGlobalImports(): string[] {
-	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/value", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean", "std/core/object", "std/core/proxy"];
+	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/value", "std/core/typed", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean", "std/core/object", "std/core/proxy"];
 }
 
 let _extraGlobalImports: string[] = [];
@@ -110,27 +110,28 @@ test "isGlobalImport is the std prelude only; an extra takes the ordinary import
 	setExtraGlobalImports([]);
 }
 
-test "globalImports has system, string, array, bigint, json, value, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object, proxy" {
+test "globalImports has system, string, array, bigint, json, value, typed, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object, proxy" {
 	const imports = defaultGlobalImports();
-	assert imports.length == 18;
+	assert imports.length == 19;
 	assert imports[0] == "std/core/system";
 	assert imports[1] == "std/core/array";
 	assert imports[2] == "std/core/string";
 	assert imports[3] == "std/core/bigint";
 	assert imports[4] == "std/core/json";
 	assert imports[5] == "std/core/value";
-	assert imports[6] == "std/core/buffer";
-	assert imports[7] == "std/core/promise";
-	assert imports[8] == "std/core/struct";
-	assert imports[9] == "std/core/fetch";
-	assert imports[10] == "std/core/date";
-	assert imports[11] == "std/core/performance";
-	assert imports[12] == "std/core/websocket";
-	assert imports[13] == "std/core/math";
-	assert imports[14] == "std/core/number";
-	assert imports[15] == "std/core/boolean";
-	assert imports[16] == "std/core/object";
-	assert imports[17] == "std/core/proxy";
+	assert imports[6] == "std/core/typed";
+	assert imports[7] == "std/core/buffer";
+	assert imports[8] == "std/core/promise";
+	assert imports[9] == "std/core/struct";
+	assert imports[10] == "std/core/fetch";
+	assert imports[11] == "std/core/date";
+	assert imports[12] == "std/core/performance";
+	assert imports[13] == "std/core/websocket";
+	assert imports[14] == "std/core/math";
+	assert imports[15] == "std/core/number";
+	assert imports[16] == "std/core/boolean";
+	assert imports[17] == "std/core/object";
+	assert imports[18] == "std/core/proxy";
 }
 
 test "module passes enter the build identity, and none leave it empty" {
