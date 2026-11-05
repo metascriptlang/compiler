@@ -735,7 +735,46 @@ when (c) {
 		const unit = new Array<uint64>(m.w.length);
 		unit[0] = 1;
 		wideMontMul(m.w, m.wm0inv, x, x, unit, t);
-		return fromWide(x, m.v.length);
+		const result = fromWide(x, m.v.length);
+		wideWipe(x);
+		wideWipe(t);
+		return result;
+	}
+
+	test "wide conversion clears one-word input after copying its result" {
+		const m = modulusFromBytes("03fb".decodeHex());
+		if (m == null) throw new Error("one-word modulus fixture rejected");
+		assert m.w.length == 1;
+		const cache: uint64[] = [];
+		for (const word of m.wone) cache.push(word);
+		for (const value of [0 as uint32, 7 as uint32]) {
+			const t = new Array<uint64>(m.w.length + 1);
+			const wide = wideToMont(m, [value], t);
+			const result = wideFromMont(m, wide, t);
+			assert result[0] == value;
+			for (let i = 1; i < result.length; i++) assert result[i] == 0;
+			for (let i = 0; i < cache.length; i++) assert m.wone[i] == cache[i];
+			for (const word of wide) assert word == 0, "wideFromMont: one-word input not erased";
+			for (const word of t) assert word == 0, "wideFromMont: one-word workspace not erased";
+		}
+	}
+
+	test "wide conversion clears multiword workspace after copying its result" {
+		const m = modulusFromBytes("0100000000000000000000000000000033".decodeHex());
+		if (m == null) throw new Error("multiword modulus fixture rejected");
+		assert m.w.length == 3;
+		const cache: uint64[] = [];
+		for (const word of m.wone) cache.push(word);
+		for (const value of [0 as uint32, 7 as uint32]) {
+			const t = new Array<uint64>(m.w.length + 1);
+			const wide = wideToMont(m, [value], t);
+			const result = wideFromMont(m, wide, t);
+			assert result[0] == value;
+			for (let i = 1; i < result.length; i++) assert result[i] == 0;
+			for (let i = 0; i < cache.length; i++) assert m.wone[i] == cache[i];
+			for (const word of t) assert word == 0, "wideFromMont: multiword workspace not erased";
+			for (const word of wide) assert word == 0, "wideFromMont: multiword input not erased";
+		}
 	}
 
 	function wideMul(
