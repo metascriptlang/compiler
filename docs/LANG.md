@@ -3057,6 +3057,37 @@ with a string, a `Vec`, a class and a string; a generic class method; a closure
 inside a generic) prints the same line on C (DRC, ORC, `--danger`), JS, ESM and
 the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 
+### The comptime branch: `when (raiser)`
+
+A function a native or JS build checks can also run at compile time, inside the
+comptime engine, which is the Raiser. In a function body, `when (raiser) { … } else
+{ … }` keeps both blocks: both are type-checked with the build's types, the engine
+runs the first block when it runs the body, and every other backend runs the else.
+So a routine whose native code the engine cannot run carries its engine path beside
+it, and a helper gives the same answer at `@comptime` whichever module declares it.
+
+The form is fixed: `raiser` alone in the condition, exactly one `else`, no
+`else when`; anything else that names `raiser` in a body is an error. A native or
+JS build checks each block as a scope, so nothing declared inside is visible after
+it. On a Raiser
+build, and at module level on any build, `raiser` is an ordinary flag.
+
+```typescript
+function where(): string {
+    when (raiser) {
+        return "vm";
+    } else {
+        return "native";
+    }
+}
+const atCompile = @comptime { return where(); };
+console.log(`${atCompile} ${where()}`);   // C and JS: "vm native"; Raiser: "vm vm"
+```
+
+Measured 2026-11-06 (`wt/std-unix-socket` candidate on rtx): corpus `whenRaiserBranch`
+(same-module, imported and generic helpers at `@comptime` and at run time) passes on
+C, `--danger`, JS, ESM and the Raiser with identical output.
+
 ### Flags
 
 | Source | Example |
