@@ -632,6 +632,69 @@ function fiat_25519_carry_square(arg1: Fe): Fe {
 	return out1;
 }
 
+function fiat_25519_carry_scmul_121666(arg1: Fe): Fe {
+	let out1: Fe = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+	const k: uint64 = 0x1db42;
+	const x1: uint64 = k * (arg1[9] as uint64);
+	const x2: uint64 = k * (arg1[8] as uint64);
+	const x3: uint64 = k * (arg1[7] as uint64);
+	const x4: uint64 = k * (arg1[6] as uint64);
+	const x5: uint64 = k * (arg1[5] as uint64);
+	const x6: uint64 = k * (arg1[4] as uint64);
+	const x7: uint64 = k * (arg1[3] as uint64);
+	const x8: uint64 = k * (arg1[2] as uint64);
+	const x9: uint64 = k * (arg1[1] as uint64);
+	const x10: uint64 = k * (arg1[0] as uint64);
+	const x11 = (x10 >> 26) as uint32;
+	const x12 = (x10 & 0x3ffffff) as uint32;
+	const x13: uint64 = (x11 as uint64) + x9;
+	const x14 = (x13 >> 25) as uint32;
+	const x15 = (x13 & 0x1ffffff) as uint32;
+	const x16: uint64 = (x14 as uint64) + x8;
+	const x17 = (x16 >> 26) as uint32;
+	const x18 = (x16 & 0x3ffffff) as uint32;
+	const x19: uint64 = (x17 as uint64) + x7;
+	const x20 = (x19 >> 25) as uint32;
+	const x21 = (x19 & 0x1ffffff) as uint32;
+	const x22: uint64 = (x20 as uint64) + x6;
+	const x23 = (x22 >> 26) as uint32;
+	const x24 = (x22 & 0x3ffffff) as uint32;
+	const x25: uint64 = (x23 as uint64) + x5;
+	const x26 = (x25 >> 25) as uint32;
+	const x27 = (x25 & 0x1ffffff) as uint32;
+	const x28: uint64 = (x26 as uint64) + x4;
+	const x29 = (x28 >> 26) as uint32;
+	const x30 = (x28 & 0x3ffffff) as uint32;
+	const x31: uint64 = (x29 as uint64) + x3;
+	const x32 = (x31 >> 25) as uint32;
+	const x33 = (x31 & 0x1ffffff) as uint32;
+	const x34: uint64 = (x32 as uint64) + x2;
+	const x35 = (x34 >> 26) as uint32;
+	const x36 = (x34 & 0x3ffffff) as uint32;
+	const x37: uint64 = (x35 as uint64) + x1;
+	const x38 = (x37 >> 25) as uint32;
+	const x39 = (x37 & 0x1ffffff) as uint32;
+	const x40: uint32 = x38 * 0x13;
+	const x41: uint32 = x12 + x40;
+	const x42: uint32 = x41 >> 26;
+	const x43: uint32 = x41 & 0x3ffffff;
+	const x44: uint32 = x42 + x15;
+	const x45: uint32 = x44 >> 25;
+	const x46: uint32 = x44 & 0x1ffffff;
+	const x47: uint32 = x45 + x18;
+	out1[0] = x43;
+	out1[1] = x46;
+	out1[2] = x47;
+	out1[3] = x21;
+	out1[4] = x24;
+	out1[5] = x27;
+	out1[6] = x30;
+	out1[7] = x33;
+	out1[8] = x36;
+	out1[9] = x39;
+	return out1;
+}
+
 function fiat_25519_carry(arg1: Fe): Fe {
 	let out1: Fe = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 	let x1: uint32 = 0;
@@ -1223,6 +1286,10 @@ export function feMul(a: Fe, b: Fe): Fe {
 
 export function feSqr(a: Fe): Fe {
 	return fiat_25519_carry_square(a);
+}
+
+export function feMul121666(a: Fe): Fe {
+	return fiat_25519_carry_scmul_121666(a);
 }
 
 export function feSqrK(a: Fe, count: int32): Fe {

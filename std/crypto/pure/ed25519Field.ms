@@ -56,6 +56,10 @@ when (js) {
 		return sqr(a);
 	}
 
+	export function feMul121666(a: Fe): Fe {
+		return (a * 121666n) % P;
+	}
+
 	export function fePow2252m3(a: Fe): Fe {
 		return pow2252m3(a);
 	}
@@ -116,6 +120,7 @@ when (js) {
 		feSubLoose,
 		feNeg,
 		feMul,
+		feMul121666,
 		feSqr,
 		fePow2252m3,
 		feInv,
