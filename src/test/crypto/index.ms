@@ -2,6 +2,7 @@
 
 import "./aeadOracle";
 import "./aesApiVectors";
+import "./chachaApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
