@@ -204,6 +204,58 @@ test "private HKDF API matches every pinned Wycheproof SHA case" {
 	assert valid == 327 && invalid == 12;
 }
 
+test "private PBKDF2 API matches 297 bounded Wycheproof cases" {
+	const algorithms: HashAlgorithm[] = [
+		"sha1", "sha224", "sha256", "sha384", "sha512",
+	];
+	let checked = 0;
+	let deferred = 0;
+	for (const algorithm of algorithms) {
+		const text = readFile(
+			`std/crypto/test/vectors/pbkdf2_hmac${algorithm}_test.json`,
+		);
+		assert text.ok;
+		const parsed = parseJson(text.value);
+		assert parsed.ok;
+		const groups = parsed.value.getDynamicField("testGroups");
+		assert groups.kind == JsonKind.Array;
+		let count = 0;
+		for (let g = 0; g < groups.length(); g++) {
+			const tests = groups.at(g).getDynamicField("tests");
+			assert tests.kind == JsonKind.Array;
+			for (let t = 0; t < tests.length(); t++) {
+				const vector = tests.at(t);
+				assert vector.getDynamicField("result").asString() == "valid";
+				const iterations = vector.getDynamicField("iterationCount")
+					.asInt32();
+				const id = vector.getDynamicField("tcId").asInt32();
+				count++;
+				if (iterations > 100000) {
+					assert algorithm == "sha1" && id == 4;
+					assert iterations == 16777216;
+					deferred++;
+					continue;
+				}
+				const result = pbkdf2Sync(
+					vector.getDynamicField("password").asString().decodeHex(),
+					vector.getDynamicField("salt").asString().decodeHex(),
+					iterations, vector.getDynamicField("dkLen").asInt32(),
+					algorithm,
+				);
+				assert result.ok, `PBKDF2 ${algorithm} tcId ${id}`;
+				assert result.value.encodeHex() ==
+					vector.getDynamicField("dk").asString(),
+					`PBKDF2 output ${algorithm} tcId ${id}`;
+				checked++;
+			}
+		}
+		assert count == parsed.value.getDynamicField("numberOfTests").asInt32();
+		assert count == (algorithm == "sha1" ? 64 :
+			algorithm == "sha256" ? 60 : 58);
+	}
+	assert checked == 297 && deferred == 1;
+}
+
 test "private SHA-256 KDF remains the passing neighbour" {
 	assert derivedPassword("sha256").encodeHex() == vectors[0].pbkdf2;
 	assert derivedKey("sha256").encodeHex() == vectors[0].hkdf;
