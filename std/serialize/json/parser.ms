@@ -450,11 +450,53 @@ function parseEscapedString(input: string, b: Bytes, ref pos: int32): Result<str
 	if (p >= len) return Result.err(messageAt("Unterminated string", pos));
 	const end = p;
 	pos = end + 1;
+	when (raiser) {
+		return Result.ok(unescapedOnVm(b, start, end));
+	} else {
+		return Result.ok(unescaped(b, start, end, size));
+	}
+}
 
+function unescapedOnVm(b: Bytes, start: int32, end: int32): string {
+	const out: uint8[] = [];
+	let p = start;
+	while (p < end) {
+		const ch = b[p];
+		if (ch != "\\".code) {
+			out.push(ch);
+			p = p + 1;
+			continue;
+		}
+		const esc = b[p + 1];
+		if (esc == "u".code) {
+			const codePoint = hexAt(b, p + 2);
+			const paired = pairedCodePoint(b, p + 1, codePoint);
+			pushUtf8(out, paired >= 0 ? paired : codePoint);
+			p = p + (paired >= 0 ? 12 : 6);
+			continue;
+		}
+		out.push(unescapedByte(esc) as uint8);
+		p = p + 2;
+	}
+	return out.asString();
+}
+
+function pushUtf8(out: uint8[], cp: int32): void {
+	const width = utf8Width(cp) as int32;
+	if (width == 1) {
+		out.push(cp as uint8);
+		return;
+	}
+	const lead = width == 2 ? 0xC0 : (width == 3 ? 0xE0 : 0xF0);
+	out.push((lead | (cp >> (6 * (width - 1)))) as uint8);
+	for (let k = width - 2; k >= 0; k = k - 1) out.push((0x80 | ((cp >> (6 * k)) & 0x3F)) as uint8);
+}
+
+function unescaped(b: Bytes, start: int32, end: int32, size: int64): string {
 	let out = newEncodingOutput(size);
 	const bytes = freshEncodingOutputBytes(out);
 	let o: EncodingIndex = 0;
-	p = start;
+	let p = start;
 	while (p < end) {
 		const ch = b[p];
 		if (ch != "\\".code) {
@@ -475,7 +517,7 @@ function parseEscapedString(input: string, b: Bytes, ref pos: int32): Result<str
 		o = o + 1;
 		p = p + 2;
 	}
-	when (c) { return Result.ok(out); } else { return Result.ok(out.asString()); }
+	when (c) { return out; } else { return out.asString(); }
 }
 
 function unescapedByte(esc: uint8): int32 {
