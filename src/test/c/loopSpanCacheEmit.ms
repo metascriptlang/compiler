@@ -102,3 +102,39 @@ test "loop span cache: a checked build keeps the length guard" {
 	assert !c.startsWith("error:"), c.slice(0, 400);
 	assert c.includes(GUARD), "a checked build lost the guard";
 }
+
+function closureLoop(closure: string, use: string): string {
+	return emitted(`
+function same(x: int32): int32 { return x; }
+` + loopIn(`${closure} for (let i: int32 = 0; i < a.length; i++) { out[i] = ${use}; }`), true);
+}
+
+test "loop span cache: a call through a const closure that touches no array reads through local spans" {
+	const c = closureLoop("const g = (x: int32): int32 => x * 2;", "g(a[i])");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert c.includes("msSpanAccessUnchecked(dollarspan_"), "a loop calling a closure that touches no array was not cached";
+}
+
+test "loop span cache: a const closure that captures keeps the heap cell" {
+	const c = closureLoop("const g = (x: int32): int32 => x + n;", "g(a[i])");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes("dollarspan_"), "a call through a closure with an env was admitted";
+}
+
+test "loop span cache: a const closure that calls keeps the heap cell" {
+	const c = closureLoop("const g = (x: int32): int32 => same(x);", "g(a[i])");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes("dollarspan_"), "a closure whose body calls was admitted";
+}
+
+test "loop span cache: a const closure that reads an array argument keeps the heap cell" {
+	const c = closureLoop("const g = (v: int32[]): int32 => v[0];", "g(a)");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes("dollarspan_"), "a closure reading an array argument was admitted";
+}
+
+test "loop span cache: a let closure keeps the heap cell" {
+	const c = closureLoop("let g = (x: int32): int32 => x * 2;", "g(a[i])");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes("dollarspan_"), "a call through a reassignable closure was admitted";
+}
