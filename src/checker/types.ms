@@ -2768,7 +2768,7 @@ function phantomShaped(base: Readonly<Type>): boolean {
 	if (base.sym.symbolKind != SymbolKind.Struct && base.sym.symbolKind != SymbolKind.Class) return false;
 	if (!fieldsResolved(base)) return false;
 	for (const field of base.typeChildren) {
-		if (hasGenericParams(field)) return false;
+		if (field.kind == TypeKind.TypeReference || isUnresolvedType(field) || hasGenericParams(field)) return false;
 	}
 	return true;
 }
