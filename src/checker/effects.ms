@@ -1261,7 +1261,7 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 				if (isStdBuiltinWritingNothing(t)) continue;
 				const sig = call.kind == NodeKind.CallExpr && t == targets[0] ? calledRoutineType(call) : t.symbolType;
 				const formal = sig != null && i < sig.typeChildren.length ? sig.typeChildren[i] : null;
-				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType)) return lentToForeign(call, lent, name, "through a parameter of type '" + typeNameOf(formal) + "'");
+				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType) && !elementHoldsNoCount(passed[i]!.nodeType)) return lentToForeign(call, lent, name, "through a parameter of type '" + typeNameOf(formal) + "'");
 				continue;
 			}
 			if (what == null) continue;
