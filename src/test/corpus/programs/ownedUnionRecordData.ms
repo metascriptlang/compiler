@@ -2,6 +2,7 @@
 // @stdout: before 15
 // @stdout: after 27
 // @stdout: pair 7 3
+// @stdout: arm leaf pair leaf
 type D = { l: Owned<N>, r: Owned<N> } | { x: int32 };
 class N {
 	k: int32 = 0;
@@ -68,3 +69,11 @@ function firstOf(sink kid: Owned<N>, k: int32): int32 {
 	return n == null ? -1 : n.k;
 }
 console.log("pair " + firstOf(leaf(7), 3) + " " + 3);
+
+function armOf(d: Owned<E>): string {
+	const pair = "l" in d;
+	const leaf = "x" in d;
+	return pair ? "pair" : leaf ? "leaf" : "none";
+}
+function armOfSunk(sink d: Owned<E>): string { return "l" in d ? "pair" : "leaf"; }
+console.log("arm " + armOf({ x: 1 }) + " " + armOf({ l: mleaf(1), r: mleaf(2) }) + " " + armOfSunk({ x: 2 }));
