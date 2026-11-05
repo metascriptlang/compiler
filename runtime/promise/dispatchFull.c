@@ -31,7 +31,7 @@ void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPoll
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorParkReadyHook = NULL;
-void msSetActorParkReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorParkReadyHook, hook, memory_order_relaxed); }
+void msSetActorParkReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorParkReadyHook, hook, memory_order_release); }
 bool msLoopHasReadyWork(void);
 
 
@@ -1003,7 +1003,7 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
  * host's next delay): it drops the amortized actor wake, so a send after it wakes the sleeper. */
 bool msLoopHasReadyWork(void) {
 	if (gDispatcher != NULL && msDequeLen(&gDispatcher->callbacks) > 0) return true;
-	msActorPollFn ready = atomic_load_explicit(&msActorParkReadyHook, memory_order_relaxed);
+	msActorPollFn ready = atomic_load_explicit(&msActorParkReadyHook, memory_order_acquire);
 	return ready != NULL && ready();
 }
 
