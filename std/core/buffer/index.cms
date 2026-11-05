@@ -8,7 +8,7 @@ import {
 	hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom,
 	utf8Encoding, hexEncoding, base64Encoding, base64UrlEncoding, latin1Encoding, asciiEncoding,
 	encodingOf, textEncoding, sliceEncoding, encodedLength, utf8Fit, writeText, ucs2Text,
-	needBytes, checkedInt, storedInt, needWideValue, needBigValue, widthOrZero, badByteLength,
+	needBytes, checkedInt, storedInt, needWideValue, widthOrZero, badByteLength,
 } from "./codec";
 import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
@@ -45,6 +45,7 @@ extern function msStringMarkAscii(s: string): void;
 extern function msStringMarkNonAscii(s: string): void;
 
 when (!bare && !solana) {
+	import { needBigValue } from "./codec";
 	extern function msBigIntFromInt64(v: int64): bigint;
 	extern function msBigIntFromUint64(v: uint64): bigint;
 	extern function msBigIntToInt64(b: bigint): int64;
