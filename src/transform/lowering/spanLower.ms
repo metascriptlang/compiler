@@ -316,10 +316,12 @@ function wrapSpanCoercions(node: Node): Node {
 	const fnType = calleeFnType(node);
 	if (fnType == null) return node;
 	const cd = node.data as CallExprData;
+	// A method call the backend keeps as `obj.m(args)` has its receiver in the method's type, not in the arguments.
+	const receiver = cd.callee.kind == NodeKind.MemberExpr && fnType.typeNames != null && fnType.typeNames.length > 0 && fnType.typeNames[0] == "this" ? 1 : 0;
 	let i = 0;
 	while (i < cd.arguments.length) {
-		if (i < fnType.typeChildren.length) {
-			const formal = fnType.typeChildren[i];
+		if (i + receiver < fnType.typeChildren.length) {
+			const formal = fnType.typeChildren[i + receiver];
 			if (formal != null && formal.kind == TypeKind.Span && formal.typeReturn != null) {
 				const arg = cd.arguments[i];
 				if (arg != null && arg.nodeType != null && !isSpanValued(arg.nodeType)) {
