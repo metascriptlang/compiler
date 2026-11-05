@@ -2,7 +2,11 @@ import {
 	ChaChaKey, sealSync, openSync, seal, open,
 } from "std/crypto/pure/chachaNative";
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
-import { encodeHex } from "std/core/encoding";
+import { encodeHex, decodeHex } from "std/core/encoding";
+import { readFile } from "std/fs";
+import {
+	JsonKind, asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
 
 when (c) {
 	import {
@@ -23,6 +27,56 @@ function pattern(length: int32): uint8[] {
 function must<T>(sink result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
 	return result.value;
+}
+
+test "private ChaCha API opens or rejects every pinned Wycheproof wire blob" {
+	const text = readFile(
+		"std/crypto/test/vectors/xchacha20_poly1305_test.json",
+	);
+	assert text.ok;
+	const parsed = parseJson(text.value);
+	assert parsed.ok;
+	const groups = parsed.value.getDynamicField("testGroups");
+	assert groups.kind == JsonKind.Array;
+	let valid = 0;
+	let invalid = 0;
+	let malformedNonce = 0;
+	for (let g = 0; g < groups.length(); g++) {
+		const tests = groups.at(g).getDynamicField("tests");
+		assert tests.kind == JsonKind.Array;
+		for (let t = 0; t < tests.length(); t++) {
+			const vector = tests.at(t);
+			const category = vector.getDynamicField("result").asString();
+			assert category == "valid" || category == "invalid";
+			const nonce = vector.getDynamicField("iv").asString();
+			const wireHex = nonce +
+				vector.getDynamicField("ct").asString() +
+				vector.getDynamicField("tag").asString();
+			const wire = wireHex.decodeHex();
+			const key = must(ChaChaKey.import(
+				vector.getDynamicField("key").asString().decodeHex(),
+			));
+			const opened = openSync(key, wire,
+				vector.getDynamicField("aad").asString().decodeHex());
+			const id = vector.getDynamicField("tcId").asInt32();
+			if (category == "valid") {
+				assert nonce.length == 48;
+				assert opened.ok, `XChaCha tcId ${id}`;
+				assert opened.value.encodeHex() ==
+					vector.getDynamicField("msg").asString(),
+					`XChaCha plaintext tcId ${id}`;
+				valid++;
+			} else {
+				assert !opened.ok, `XChaCha accepted tcId ${id}`;
+				invalid++;
+				if (nonce.length != 48) malformedNonce++;
+			}
+			assert wire.encodeHex() == wireHex;
+		}
+	}
+	assert valid == 246 && invalid == 69 && malformedNonce == 9;
+	assert valid + invalid ==
+		parsed.value.getDynamicField("numberOfTests").asInt32();
 }
 
 test "private ChaCha API keeps nonce ciphertext and tag wire format" {
