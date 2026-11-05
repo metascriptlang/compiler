@@ -90,6 +90,15 @@ test "a value holding an Unowned edge is still lent to an awaited actor call and
 	assert !emitted(head + "async function g(): Promise<int32> { const n = new N(); const h = new H(); h.at = n; const t = spawn(() => { return h.at != null ? h.at.id : 0; }); return await t; }\nconsole.log(await g());\n").contains("not sendable");
 }
 
+test "an Unowned field is never moved out, because it holds no ownership to move" {
+	const head = "class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\nclass K { kept: N | null = null; }\n";
+	const refused = "an Unowned<T> field holds no ownership of its target";
+	assert emitted(head + "function f(n: N): int32 { const h = new H(); h.at = n; const x = move h.at; return x != null ? x.id : 0; }\nconsole.log(f(new N()));\n").contains(refused);
+	assert emitted(head + "function keep(k: K, sink v: N | null): void { k.kept = v; }\nfunction f(n: N, k: K): void { const h = new H(); h.at = n; keep(k, move h.at); }\nf(new N(), new K());\n").contains(refused);
+	assert emitted(head + "function f(n: N): int32 { const h = new H(); const g = new H(); h.at = n; g.at = move h.at; return g.at != null ? g.at.id : 0; }\nconsole.log(f(new N()));\n").contains(refused);
+	assert emitted("class N { id: int32 = 1; }\nclass H { at: Unowned<N>; constructor(n: N) { this.at = n; } }\nfunction f(n: N): int32 { const h = new H(n); const x = move h.at; return x.id; }\nconsole.log(f(new N()));\n").contains(refused);
+}
+
 test "a local bound to an Unowned read is a plain reference, so storing into it is a strong store" {
 	const c = emitted("class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\nfunction f(h: H, m: N): int32 {\n\tlet p = h.at;\n\tp = m;\n\treturn p != null ? p.id : 0;\n}\nconst n = new N();\nconst h = new H();\nh.at = n;\nconsole.log(f(h, n));\n");
 	assert !c.contains("msUnownedAssign((&(p_1_))"), c;
