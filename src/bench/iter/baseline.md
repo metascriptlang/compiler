@@ -20,27 +20,28 @@ run against the table of the same host only.
 
 ## rtx — AMD Ryzen 9 9950X, Linux x86_64, node 24.1.0, rustc 1.99.1
 
-Commit `f96cdf53d8f` (compiler as `0bb8fbaec38`), 2026-11-04, load 48.4 before, 18.7 after (32 threads): a loaded host, so the ratios to the
-twins, measured in the same minutes, carry more than the absolute numbers.
+Main `39e4132d6c2` (the same patch measured on its tree before a docs-only rebase), 2026-11-06, load 5.3 before,
+3.4 after (32 threads). The Nim twin was cross-built on the Mac: `nim c -d:danger --opt:speed --cpu:amd64 --os:linux
+--cc:clang --clang.exe:<wrapper running zig cc -target x86_64-linux-gnu.2.28>`, Nim 2.2.2, zig 0.16.0.
 
 | row | candidate us/op | rust | nim | node | ms/rust | ms/nim |
 |---|---|---|---|---|---|---|
-| indexed for int32[] | 2.245 | 3.117 | 3.162 | 18.512 | 0.72 | 0.71 |
-| for-of int32[] | 2.072 | 3.716 | 3.731 | 38.214 | 0.56 | 0.56 |
-| for-of Vec<int32> | 2.161 | 3.341 | 3.149 | 300.629 | 0.65 | 0.69 |
-| for-of values() | 22.783 | 4.156 | 3.189 | 35.977 | 5.48 **slower** | 7.14 |
-| for-of keys() | 35.821 | 3.108 | 3.178 | 48.779 | 11.53 **slower** | 11.27 |
-| for-of entries() | 18.199 | 6.412 | 6.291 | 123.124 | 2.84 **slower** | 2.89 |
-| for-of nested 256x256 | 3.151 | 4.068 | 4.073 | 35.173 | 0.77 | 0.77 |
-| generator | 15.724 | 4.345 | 4.185 | 482.36 | 3.62 **slower** | 3.76 |
-| nested generator | 14.579 | 4.356 | 4.263 | 1083.661 | 3.35 **slower** | 3.42 |
-| Iterator.range float64 | 52.716 | 34.301 | 34.259 | 478.832 | 1.54 **slower** | 1.54 |
-| chain for-of | 31.633 | 18.125 | 30.354 | 1161.94 | 1.75 **slower** | 1.04 |
-| chain reduce | 32.568 | 19.901 | 27.896 | 1321.699 | 1.64 **slower** | 1.17 |
-| chain stored in a function | 32.661 | 18.438 | 339.626 | 1429.672 | 1.77 **slower** | 0.10 |
-| map toArray | 77.104 | 7.066 | 7.825 | 2020.954 | 10.91 **slower** | 9.85 |
-| zip product | 2247.244 | 7.745 | 29.792 | 2233.326 | 290.15 **slower** | 75.43 |
-| eager map filter reduce | 138.3 | 22.506 | 72.314 | 1210.205 | 6.15 **slower** | 1.91 |
+| indexed for int32[] | 1.931 | 3.035 | 3.109 | 14.036 | 0.64 | 0.62 |
+| for-of int32[] | 1.786 | 3.057 | 3.113 | 36.596 | 0.58 | 0.57 |
+| for-of Vec<int32> | 1.667 | 3.057 | 3.088 | 287.588 | 0.55 | 0.54 |
+| for-of values() | 12.354 | 3.091 | 3.04 | 35.485 | 4.00 **slower** | 4.06 |
+| for-of keys() | 31.823 | 3.03 | 3.047 | 48.323 | 10.50 **slower** | 10.44 |
+| for-of entries() | 17.376 | 6.046 | 6.061 | 123.522 | 2.87 **slower** | 2.87 |
+| for-of nested 256x256 | 2.548 | 3.842 | 3.852 | 33.653 | 0.66 | 0.66 |
+| generator | 12.683 | 3.801 | 3.779 | 461.496 | 3.34 **slower** | 3.36 |
+| nested generator | 12.725 | 3.799 | 3.788 | 1063.348 | 3.35 **slower** | 3.36 |
+| Iterator.range float64 | 37.065 | 32.802 | 32.875 | 479.3 | 1.13 **slower** | 1.13 |
+| chain for-of | 20.775 | 16.432 | 25.992 | 1123.699 | 1.26 **slower** | 0.80 |
+| chain reduce | 20.649 | 16.057 | 26.12 | 1318.889 | 1.29 **slower** | 0.79 |
+| chain stored in a function | 21.601 | 16.592 | 308.085 | 1097.858 | 1.30 **slower** | 0.07 |
+| map toArray | 28.386 | 5.544 | 6.714 | 1318.427 | 5.12 **slower** | 4.23 |
+| zip product | 1106.19 | 7.41 | 26.297 | 1553.431 | 149.28 **slower** | 42.07 |
+| eager map filter reduce | 105.038 | 21.305 | 67.369 | 980.435 | 4.93 **slower** | 1.56 |
 
 ## m1m — Apple M1 Pro, macOS arm64, node 24.1.0
 
