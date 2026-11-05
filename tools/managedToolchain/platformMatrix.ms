@@ -30,7 +30,7 @@ struct Captured {
 	out: string;
 	err: string;
 	timedOut: boolean;
-	seconds: number;
+	seconds: float64;
 }
 
 const TARGETS: Target[] = [
@@ -65,6 +65,7 @@ const CONSUMERS: Consumer[] = [
 	{ name: "sanUndefined", source: "cCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "matrix-c 1428", code: 0, report: "" },
 	{ name: "sanThread", source: "threads.ms", flags: "--sanitize=thread", kind: "exe", expect: THREADS, code: 0, report: "" },
 	{ name: "ubsanDefault", source: "ubsanCompanion.ms", flags: "", kind: "exe", expect: "", code: 0, report: "overflow" },
+	{ name: "ubsanSan", source: "ubsanCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "", code: 0, report: "overflow" },
 	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub -2147483648", code: 0, report: "" },
 	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0, report: "" },
 ];
@@ -74,7 +75,7 @@ const RUN_LIMIT_MS = 120000;
 const WASI_RUNNER = "const {WASI}=require('node:wasi');const fs=require('fs');const w=new WASI({version:'preview1',args:['x'],env:{},returnOnExit:true});WebAssembly.instantiate(fs.readFileSync(process.argv[1]),w.getImportObject()).then(m=>{process.exitCode=w.start(m.instance);});";
 const LIB_LOADER = "import ctypes,sys;l=ctypes.CDLL(sys.argv[1]);print('matrix-lib',l.matrixLibraryValue())";
 
-function capture(file: string, args: string[], limitMs: number): Captured {
+function capture(file: string, args: string[], limitMs: int32): Captured {
 	const started = performance.now();
 	const child = spawn(file, args);
 	if (!child.ok) {
@@ -132,10 +133,12 @@ function mscPath(): string {
 	return `${home}/.metascript/bin/msc${platform == "windows" ? ".exe" : ""}`;
 }
 
-function oneLine(text: string, limit: number): string {
-	let flat = text.trim().split("\n").join("\\n").split("\r").join("").split("\t").join(" ");
-	if (flat.length > limit) { flat = flat.slice(0, limit as int32); }
-	return flat;
+function oneLine(text: string, limit: int32): string {
+	const flat = text.trim()
+		.split("\n").join("\\n")
+		.split("\r").join("")
+		.split("\t").join(" ");
+	return flat.length > limit ? flat.slice(0, limit) : flat;
 }
 
 function firstError(text: string): string {
@@ -147,11 +150,6 @@ function firstError(text: string): string {
 	for (const line of lines) { if (line.contains("error")) { return oneLine(line, 220); } }
 	const tail = text.trim().split("\n");
 	return oneLine(tail.length > 0 ? tail[tail.length - 1] : "", 220);
-}
-
-function targetNamed(name: string): Target | null {
-	for (const target of TARGETS) { if (target.name == name) { return target; } }
-	return null;
 }
 
 function listOption(value: string): string[] {
@@ -202,6 +200,20 @@ function debugKind(artifact: string, target: string): string {
 	return "none";
 }
 
+function gdbStopped(text: string): boolean {
+	return text.contains("Breakpoint 1, ") || text.contains("Breakpoint 1.1, ");
+}
+
+test "gdb stops identify single and multiple breakpoint locations" {
+	assert gdbStopped("Breakpoint 1, probe () at debugLine.ms:3");
+	assert gdbStopped("Breakpoint 1.1, probe () at debugLine.ms:3");
+}
+
+test "a breakpoint declaration or another breakpoint is not the stop" {
+	assert !gdbStopped("Breakpoint 1 at 0x1234: file debugLine.ms, line 3.");
+	assert !gdbStopped("Breakpoint 2, probe () at debugLine.ms:3");
+}
+
 function debuggerStop(artifact: string, target: string): string {
 	const lldb = ["--batch", "-o", "b debugLine.ms:3", "-o", "run", "-o", "process status", "-o", "frame info", "-o", "quit", artifact];
 	const gdb = ["-batch", "-ex", "break debugLine.ms:3", "-ex", "run", "-ex", "frame", artifact];
@@ -211,14 +223,18 @@ function debuggerStop(artifact: string, target: string): string {
 		if (capture(name, ["--version"], 60000).code != 0) { continue; }
 		const ran = capture(name, name == "gdb" ? gdb : lldb, 120000);
 		const text = ran.out + ran.err;
-		const stopped = text.contains("at debugLine.ms:3") && (name == "gdb" ? text.contains("Breakpoint 1, ") : text.contains("stop reason = breakpoint"));
+		const stopped = text.contains("at debugLine.ms:3") && (name == "gdb" ? gdbStopped(text) : text.contains("stop reason = breakpoint"));
 		if (stopped) { return `${name}: stopped at debugLine.ms:3`; }
 		verdict = `${name}: no stop at debugLine.ms:3: ${oneLine(text, 200)}`;
 	}
 	return verdict;
 }
 
-function runArtifact(consumer: Consumer, artifact: string, runner: string, target: string): Captured {
+function runArtifact(
+	this consumer: Consumer,
+	artifact: string,
+	runner: string,
+): Captured {
 	if (consumer.kind == "lib") {
 		if (runner == "rosetta") { return capture("arch", ["-x86_64", "/usr/bin/python3", "-I", "-c", LIB_LOADER, artifact], RUN_LIMIT_MS); }
 		return capture(platform == "windows" ? "python" : "python3", ["-I", "-c", LIB_LOADER, artifact], RUN_LIMIT_MS);
@@ -229,9 +245,8 @@ function runArtifact(consumer: Consumer, artifact: string, runner: string, targe
 }
 
 function runCell(results: string, host: string, consumer: Consumer, target: string, compiler: string, artifact: string, runner: string): void {
-	const ran = runArtifact(consumer, artifact, runner, target);
+	const ran = consumer.runArtifact(artifact, runner);
 	const observed = `rc=${ran.code} out=${oneLine(ran.out, 200)}`;
-	const label = runner == "native" ? host : `${host}:${runner}`;
 	if (ran.timedOut) {
 		note(results, [consumer.name, target, compiler, "run", host, "FAIL", String(ran.seconds), observed, "timeout"]);
 		return;
@@ -427,8 +442,8 @@ function summary(opts: Record<string, string>): void {
 		console.log(`${f[0]} ${f[1]}: zig=${cellText(rows, f[0], f[1], "zig")} bundle=${cellText(rows, f[0], f[1], "bundle")}`);
 	}
 	for (const target of TARGETS) {
-		let zigTotal: number = 0;
-		let bundleTotal: number = 0;
+		let zigTotal: float64 = 0;
+		let bundleTotal: float64 = 0;
 		let count = 0;
 		for (const consumer of CONSUMERS) {
 			const z = rowOf(rows, `${consumer.name}|${target.name}|zig|build`);
@@ -448,11 +463,26 @@ function summary(opts: Record<string, string>): void {
 	}
 }
 
-const mode = argv.length > 1 ? argv[1] : "";
-const opts = options();
-const debuggerPath = opts["debuggerPath"] ?? "";
-if (debuggerPath != "") { env.set("PATH", debuggerPath + (platform == "windows" ? ";" : ":") + (env.get("PATH") ?? "")); }
-if (mode == "build") { build(opts); }
-else if (mode == "run") { runBuilt(opts); }
-else if (mode == "summary") { summary(opts); }
-else { console.log("usage: platformMatrix.ms build|run|summary --out=<dir> --host=<name> --hostTarget=<target> [--bundle=<dir>] [--targets=..] [--consumers=..] [--compilers=..]"); exit(2); }
+when (!testBuild) {
+	const mode = argv.length > 1 ? argv[1] : "";
+	const opts = options();
+	const debuggerPath = opts["debuggerPath"] ?? "";
+	if (debuggerPath != "") {
+		const separator = platform == "windows" ? ";" : ":";
+		env.set("PATH", debuggerPath + separator + env.get("PATH"));
+	}
+	match (mode) {
+		"build" => build(opts),
+		"run" => runBuilt(opts),
+		"summary" => summary(opts),
+		_ => {
+			console.log(
+				"usage: platformMatrix.ms build|run|summary " +
+				"--out=<dir> --host=<name> --hostTarget=<target> " +
+				"[--bundle=<dir>] [--targets=..] [--consumers=..] " +
+				"[--compilers=..]",
+			);
+			exit(2);
+		},
+	}
+}
