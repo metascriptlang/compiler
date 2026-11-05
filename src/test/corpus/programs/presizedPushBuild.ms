@@ -2,7 +2,7 @@
 // or a callback raises midway, for plain and counted elements; a filter and a body that reads the array it
 // builds keep pushing (NIM-REF TR-41).
 //
-// @stdout: 2,4,6|1,2,3,11,12,13|1,2,3|ab-,cd-,ef-|boom 2|3,6,9|2,3|1,3,5|0|p1,p2,p3|x,x,y
+// @stdout: 2,4,6|1,2,3,11,12,13|1,2,3|ab-,cd-,ef-|boom 2|3,6,9|2,3|1,3,5|0|p1,p2,p3|x,x,y|1,3,5|1,2,3,4,5
 
 class P { v: string; constructor(v: string) { this.v = v; } }
 
@@ -31,6 +31,22 @@ function filtered(): string { const a: int32[] = [1, 2, 3]; return a.values().fi
 function readsOut(): string { const a: int32[] = [1, 2, 3]; const out: int32[] = []; for (const x of a) out.push(x + out.length); return out.join(","); }
 function empty(): string { const a: int32[] = []; return String(a.values().map((x) => x + 1).toArray().length); }
 function objects(): string { const a: int32[] = [1, 2, 3]; return a.values().map((x) => new P("p" + String(x))).toArray().map((p) => p.v).join(","); }
+function oneStep(): string {
+	const a: int32[] = [1, 2, 3, 4, 5];
+	const out: int32[] = [];
+	let i: int64 = 0;
+	while (i < a.length) { out.push(a[i]); i++; }
+	return out.join(",");
+}
+
+function twoSteps(): string {
+	const a: int32[] = [1, 2, 3, 4, 5];
+	const out: int32[] = [];
+	let i: int64 = 0;
+	while (i < a.length) { out.push(a[i]); i++; i++; }
+	return out.join(",");
+}
+
 function raisedInChain(): string {
 	const a: string[] = ["x", "x", "y", "z"];
 	let seen = "";
@@ -41,4 +57,4 @@ function raisedInChain(): string {
 	}
 	return "none";
 }
-console.log([doubled(), grown(), shrunk(), strings(), raised(), forOf(), filtered(), readsOut(), empty(), objects(), raisedInChain()].join("|"));
+console.log([doubled(), grown(), shrunk(), strings(), raised(), forOf(), filtered(), readsOut(), empty(), objects(), raisedInChain(), twoSteps(), oneStep()].join("|"));
