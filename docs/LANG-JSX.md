@@ -110,12 +110,11 @@ const ui = <View style={s}>
 </View>;
 
 // Different macros produce different output from same JSX:
-const webApp = @webJsx(ui);       // → DOM manipulation
-const nativeApp = @nativeJsx(ui); // → UIKit calls
-const termApp = @termJsx(ui);     // → ANSI terminal
+const webApp = webJsx(ui);
+const nativeApp = nativeJsx(ui);
+const termApp = termJsx(ui);
 
-// Direct application (most common):
-const app = @jsx <View><Text>hello</Text></View>;
+const app = jsx(<View><Text>hello</Text></View>);
 ```
 
 See `LANG-METAPROGRAMMING.md` Tier 2 for the full JSX transform macro implementation.
@@ -154,16 +153,16 @@ Uppercase tag = component (user function), lowercase tag = platform element. The
 // Components are regular MetaScript functions:
 function Counter(props: { initial: number }): Element {
     const count = signal(props.initial);
-    return @jsx <View>
+    return jsx(<View>
         <Text>Count: {String(count())}</Text>
         <Button onPress={() => count.set(count() + 1)}>
             <Text>+</Text>
         </Button>
-    </View>;
+    </View>);
 }
 
 // Usage:
-const app = @jsx <Counter initial={0} />;
+const app = jsx(<Counter initial={0} />);
 ```
 
 ### Inline literals through re-checked component callbacks
@@ -216,9 +215,6 @@ const ok = validateA11y(ui);           // macros still receive RAW JSX (param ty
   `header: Node`) is not covered — the converter sees an identifier child and emits the
   runtime path. nodeType-aware splice is V2 (unlocked by A4 `nodeType` reads).
 
-Status: design locked; implementation sequenced after a thunk-field closure miscompile that
-blocked component props (2026-07-30).
-
 ## Implementation Status
 
 JSX is wired end-to-end: `.ms` source → tokens → AST → checker → macro-expand → native binary.
@@ -243,6 +239,7 @@ TODO    Editor/compiler parity CI corpus (Phase 8) — the compiler-side corpus 
         tree-sitter↔compiler cross-check that fails on divergence is still open
 ```
 
-> Note: the compiler binary shipped at `bin/msc` may lag the source — if `msc dump-ast`
-> reports "Unexpected token: <", rebuild via `rm -rf out && msc test src/index.ms`
-> and use the freshly built `./msc` (or copy it to `bin/msc`).
+Compiler/support provenance and rebuild verification follow repository/workspace instructions.
+Do not wipe the object cache or copy an arbitrary binary to bypass that delivery path.
+The dated implementation records above are not a fresh all-target certificate; macro/converter
+examples require their actual consumer and definitions.

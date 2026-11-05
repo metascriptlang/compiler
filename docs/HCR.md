@@ -247,8 +247,8 @@ Linux x64 in the same WSL run. An edit of the dependency also reloaded the entry
 (`reloaded greeter/index,app`) on `8cf8901c`: the prelude replays its own type instances
 (`UntypedTree<JsonValueData, string>`, `Map<number, string>`) into whichever module check asks
 for it first, so a cold build gave them to the entry module and a warm one did not. The
-prelude's rows now carry a flag and always join the shared rows (`collectTypeInstanceRows`'s
-first module); instances a module creates over its own types stay with it
+prelude's rows now carry a flag and always join the shared rows (the shared-instance ownership path; the old `collectTypeInstanceRows` name is retired,
+and this paragraph's historical measurement does not retrace its replacement); instances a module creates over its own types stay with it
 (`hcrNewInstance`). `hcrFileDependency` now expects `reloaded greeter/index` alone.
 
 Not verified: how Live++ keeps globals (its
@@ -546,12 +546,12 @@ Three edges that a single image resolved by the linker needed a mechanism across
 - **DRC hooks.** A lifecycle operation has one definition, in the module whose lowering
   first needs it. Another project image that calls it reaches it through the owner's handle
   table: after DCE the owner appends every generated operation another image uses
-  (`compile.ms` `completeHcrTables`), and its ABI key covers those slots; a reload that
+  (the historical `compile.ms` ownership/table path; `completeHcrTables` is no longer a current source anchor), and its ABI key covers those slots; a reload that
   changes them is not measured. A reference array's cell TypeInfo is registered
   by its owner in the core registry, like a class's. Per-image copies were tried first; the
   C emitter keeps one definition per `__` name, so the consumer kept only a declaration and
   failed the split link (`hcrArrayOwner`). When a core module boxes the same cell, a core
-  module owns it as a plain global (`src/checker/reachability.ms` `moveCellOwnerIntoCore`):
+  module owns it as a plain global (ownership in `src/checker/reachability.ms`; the old `moveCellOwnerIntoCore` anchor is retired, not assumed equivalent to a differently named function):
   core links before every image and outlives them, so it cannot declare what an image
   defines, and an image reaches the core's TypeInfo like any core symbol. The first demander
   in walk order used to own it, and a project module that boxed `number[]`, `string[]` or a
@@ -620,7 +620,7 @@ in `app` over `shapes` returned `PROBE 17` (4 + 9 + 4); other generic shapes are
 The reload engine is `std/hcr/engine.cms`, linked into the core image; the registry and the
 Win32 loader edge stay C (`runtime/hcr.c`, `runtime/hcrEngine.h`). A thin host copies
 `<stem>.core.dll` into `<dir>/.hcr/<pid>/core/`, loads it, calls `msHcrLaunch(dir, stem)` and then
-`msHcrEngineStart`; the fixture host is `src/test/hcr/fixtures/engine/host.ms`. The program
+`msHcrEngineStart`; the host is `std/hcr/host.cms`, driven by the `engine` case of `src/test/hcr/run.ms`. The program
 imports `reload` from `std/hcr` where it wants reloads to happen and calls it at its safe point
 (the Neon frame loop); it answers `NoChange`, `Reloaded`, `Pending`, `Rejected` or
 `RestartRequired`, and `lastReload()` gives the modules and the reason of the last call.
@@ -640,12 +640,12 @@ C-only engine).
 The shape follows nimhcr (`lib/nimhcr.nim`: `hcrInit`, `recursiveDiscovery`, `initModules`,
 `hcrPerformCodeReload`, `hcrAddEventHandler`) with these decisions:
 
-- **Images describe themselves.** Every module image exports `HcrModuleId000`,
-  `HcrAbiKey000` and `HcrImports000`, the analogue of nimhcr's `HcrGetImportedModules` and
-  `HcrGetSigHash`. The key is `hcrExportKey` over the S2 manifest without its dependency
-  list, so it changes exactly when a dependent must reload. Before anything is published,
-  every import edge of the post-transaction module set must carry the key of the image it
-  would bind to; otherwise the reload is `Rejected` and names the module to rebuild. Reading
+- **Historical image-wide contract, superseded by the per-symbol protocol above.** The
+  earlier module-image exports were `HcrModuleId000`, `HcrAbiKey000` and `HcrImports000`, the analogue of nimhcr's `HcrGetImportedModules` and
+  `HcrGetSigHash`. The key in that design was `hcrExportKey` over the S2 manifest without its
+  dependency list. Before publication, that protocol required every import edge to carry the
+  key of the image it would bind to; otherwise it rejected the reload. This historical
+  image-wide rule is not the current per-symbol protocol. Reading
   the `.hcrabi` bundle instead was rejected: it can disagree with a copied image, and it cannot
   describe the generation that is already loaded.
 - **The bundle is the trigger.** `reload()` stats only `<stem>.dll.hcrabi`, which the compiler
@@ -807,7 +807,7 @@ own weak `Box…__int32TypeInfo`, so each image and each generation had another 
 Windows x64, `as Box<int32>` in `app` of an object `logic` built, or in generation 2 of an
 object generation 1 built, threw `invalid object conversion: Box<int32> is not Box<int32>`.
 An instance used only by image modules is now registered like a class: reachability records
-which image modules demand its TypeInfo (`noteInstanceTypeInfo`), the first of them in load
+which image modules demand its TypeInfo (reachability's TypeInfo-demand recording; the old `noteInstanceTypeInfo` anchor is retired), the first of them in load
 order owns the registry entry and writes it (`emitOwnedTypeInfos`), and the others resolve the
 same entry by owner and name. One owner writes, so rollback and restore work as for a class.
 The generic declaration's layout key still decides a restart. `hcrGenericIdentity`, Windows x64,
@@ -863,7 +863,7 @@ reason printed (`watch: rebuilding from scratch: …`):
 
 | Input from other modules | Why it couples modules | Compared by |
 |---|---|---|
-| HCR export tables and the shapes of project types | table/layout changes alter already-lowered cross-image calls; TypeInfo macros are demand-local to an image (`hcrIndirect.ms` `lowerHcrIndirection`) | `hcrTypeRegistryFingerprint`, `projectTypesFingerprint` |
+| HCR export tables and the shapes of project types | table/layout changes alter already-lowered cross-image calls; TypeInfo macros are demand-local to an image (`hcrIndirect.ms` `lowerHcrIndirection`) | `projectTypesFingerprint` in `src/compiler/buildSession.ms`; the old `hcrTypeRegistryFingerprint` anchor is retired |
 | generic function instances routed to the module | an instance is emitted in its owner's unit, usually a std module: one `Map<string, Item>` in a project module put 84 lines naming `Item` into `std/core/struct.c` | `instancesFingerprint` per owner |
 | typed operation registrations | lowering retains operation Symbols needed by later emission; see `LowerClaims` / `sameClaims` in `buildSession.ms` and `opsFrom` / `replayOps` in `codegen/c/types.ms` | recorded per lowering, replayed when reused, compared when rerun; TypeInfo demand/ownership is rebuilt by reachability, not replayed from deleted owner tables |
 
@@ -905,7 +905,7 @@ modules, so it is not equivalent to a cold build. Nim's per-module backend avoid
 emitting every definition a module demands into that module's unit and keeping one per C name at
 merge (`cgen.nim` `findPendingModule`); that placement is a new mechanism, not taken here.
 
-Edit to visible with a running program, `msc run app.ms --hcr` on `examples/hcrApp/` (55
+Edit to visible with a running program, `msc run --hcr app.ms` on `examples/hcrApp/` (55
 modules), five saves of distinct `logic.ms` bodies written with `cat new > logic.ms`, timed from
 before the write to the line the app prints after `reload()` answers `Reloaded`; tree
 `565df01d46c8`, 2026-09-27:
@@ -1128,7 +1128,7 @@ Neon native/browser refresh parity were not verified in this smoke.
 
 ### Running an app
 
-`msc run app.ms --hcr` (`cmdRunHcr`, `src/compiler/compile.ms`) builds the host from
+`msc run --hcr app.ms` (`cmdRunHcr`, `src/compiler/compile.ms`) builds the host from
 `std/hcr/host.cms` into `out/hcr/host`, builds the images into `out/hcr/<stem>.<ext>` through the
 watch session above, runs the host on them as a separate process, and rebuilds after every save
 until the host exits; the host's exit code is `msc run`'s. The host copies the core image into
@@ -1172,7 +1172,7 @@ keeps `Error` alive through `mustNotThrow` for this reason.
 ### Standard-library first use: macOS candidate evidence
 
 The engine dependency group stays complete and app-independent; other std modules use the
-existing module-image protocol. See `hcrCoreModulePaths`, `hcrModuleId` and
+existing module-image protocol. See `hcrCoreModules`, `hcrModuleId` and
 `HCR_SHARED_NATIVE_SOURCES` in `src/compiler/compile.ms`. Shared native C providers stay in
 one fixed core group: putting their objects into whichever image first requested them failed
 when a second image needed the same library; compiling copies also duplicated the I/O engine's

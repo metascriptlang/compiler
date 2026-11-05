@@ -119,7 +119,7 @@ the toolchain representation and its root lifetime are established.
 ## Compiler and browser shape
 
 Existing integration anchors: `src/compiler/compile.ms` `buildResolverConfig`/`loadAndCheckGraph`,
-`src/module/resolver.ms` `createDefaultConfig`, `src/module/loader.ms` `inlineHeaderImports`,
+`src/module/resolver.ms` `createDefaultConfig`, `src/module/loader.ms` `headerModuleSource`,
 `src/checker/orchestrator.ms` `checkModuleGraph`, and `src/checker/checkPass.ms`
 `preludeContextFor`/`loadPreludeOne`. Follow those idioms, not a second language frontend.
 

@@ -14,7 +14,7 @@ One file, both build config and package manifest. No `package.json` beside it.
 
 **Discovery**: the compiler walks up from the entry file (or CWD) to the nearest `build.ms`; that
 directory is the project root, and every manifest operation (`msc.lock`, `.msc/bin/`, relative
-`file:` deps) is relative to it (`findProjectRoot`, `src/index.ms`).
+`file:` deps) is relative to it (`findProjectRoot`, `src/utils/path.ms`).
 
 **Accepted forms** (`findConfigObject`): `const config: BuildConfig = { … }; export default config;`
 (the idiomatic form), `export default { … };`, and `defineConfig({ … })`.
@@ -147,8 +147,10 @@ Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-decl
   `src/deep/m.ms` with `"../lib"` resolved to `src/lib`; an absolute path resolves;
   `"./src/lib"` stops with `Cannot resolve module` (also under the name `lib`). `msc run
   --target=raiser` resolves the same aliases (measured on a candidate built from this branch,
-  2026-10-25: `deep:src-lib`); `msc run` on C and `--target=js` stops with `Cannot resolve module
-  '@lib/util'`. Not verified: Windows paths, an alias target outside the project.
+  2026-10-25: `deep:src-lib`). The same older record observed C/JS `msc run` failing to
+  resolve `@lib/util`; that is a historical observation, not a current target restriction.
+  A target-specific alias claim needs its exact importer/manifest consumer rechecked.
+  Not reverified here: Windows paths, an alias target outside the project or all run targets.
 - `root` — declared in `std/build`'s `BuildConfig` as the base for non-relative imports, and read
   by nothing. Measured 2026-10-15 on a candidate built from `7e7c0dd02`: with `root: "src"` or
   `root: "."`, `import … from "lib/util"` and `from "src/lib/util"` both stop with `Cannot resolve
@@ -256,7 +258,7 @@ no command was installed
 ```
 
 A name colliding with an `msc` subcommand is refused at `publish` and again at install
-(`reservedCommands`, `src/compiler/package/bin.ms`); the entry must be a relative `.ms` path
+(`RESERVED_COMMANDS`, `src/compiler/package/bin.ms`); the entry must be a relative `.ms` path
 inside the package and must exist.
 
 **The dep stays when the command is refused.** `msc add rival` above writes `rival` into

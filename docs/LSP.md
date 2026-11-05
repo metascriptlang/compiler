@@ -2,19 +2,23 @@
 
 This document outlines the strategy for evolving the MetaScript Language Server Protocol (LSP) implementation into a production-grade tool, leveraging the **Trans-Am** incremental query engine and aligning with the **Multi-Module Build Specification**.
 
-## 1. Current Status (March 2026)
+## 1. Historical status (March 2026)
+
+The roadmap/status labels below record that period, not current latency, completeness or
+implementation approval. Source owners and focused LSP consumers take precedence; no LSP
+runner or performance measurement was rerun for this documentation repair.
 
 ### LSP Module (`src/compiler/lsp/`)
 - **Status**: Production-Ready Core, Cross-Module Aware.
 - **Capabilities**: Semantic Tokens, Cross-module Hover/Definition, Zero-lag Completion, Transitive Diagnostics, Circular Dep Warnings, Doc Comment extraction, Request Queue with stdin drain + coalescing.
-- **Architecture**: "Thin Server" adapter (~10,300 lines across 22 files, inline tests included). Intelligence lives in the compiler (`src/checker/suggest.ms`). Single-threaded with `select()`-based message draining.
+- **Architecture**: "Thin Server" adapter. Intelligence lives in the compiler (`src/checker/suggest.ms`). Single-threaded with `select()`-based message draining.
 
 ### Trans-Am Engine (`src/compiler/transam/`)
-- **Status**: Core Engine Complete (~6,600 lines across 15 modules, inline tests included). Durability + stdlib optimizations landed. Design: [`TRANSAM.md`](TRANSAM.md).
+- **Status**: Core Engine Complete (historical status). Durability + stdlib optimizations landed. Design: [`TRANSAM.md`](TRANSAM.md).
 - **Capabilities**: Red-Green query invalidation, content-addressed hashing, dependency tracking, ExportRegistry integration, version-based cancellation, module dep graph with cycle detection, stdlib durability (G2-G5).
 
 ### Intelligence (`src/checker/suggest.ms`)
-- **Status**: Production-Ready (~4,200 lines).
+- **Status**: Production-Ready in the historical roadmap below; not a fresh certificate.
 - **Capabilities**: AST semantic analysis, relative delta semantic tokens, workspace-wide usage tracking, rich markdown hovers.
 
 ---
@@ -25,8 +29,8 @@ MetaScript follows standard reference patterns where the compiler is the primary
 
 | Phase | LSP Usage | Reference Pattern (`suggest.ms` equivalent) |
 |-------|-----------|---------------------------|
-| **1. Parse** | `findNodeAtPosition`, `collectSymbolsInFile` | `findNode`, `ideOutline` |
-| **2. TypeCheck** | `sgGetSymbolAtCursor`, `sgTypeToString` | `symToSuggest`, `forth` |
+| **1. Parse** | `findNodeAtPosition`, `sgCollectSymbolsInFile` | `findNode`, `ideOutline` |
+| **2. TypeCheck** | `sgQueryAtPosition`, `sgTypeToString` | `symToSuggest`, `forth` |
 | **3. Transform** | HCR Visibility, Move Semantics Hints | `ideExpand` (macro expansion) |
 | **Trans-Am** | Incremental Invalidation | `ModuleGraph.markDirty` |
 
@@ -64,14 +68,14 @@ MetaScript follows standard reference patterns where the compiler is the primary
     - ~~[x] **G2: Durability for Stdlib** — Mark std/ files as `TaDurability.High` via `dbSetStdPath` prefix matching. Skip `tryMarkGreen` recursive verification for High-durability entries (they never change during a session). HIGH durability skip still checks `computedAt` for safety. Standard reference: `belongsToStdlib`. rust-analyzer: 3-tier version vector skips sysroot.~~
     - ~~[x] **G3: Stdlib Export Freeze** — Skip re-registration in `dbInvalidateExports` for std/ paths (prefix-matched via `db.stdPath`). Once registered, std exports are immutable for the session.~~
     - ~~[x] **G4: Stale Edge Cleanup** — Verified `clearImportsFor` is called before `recordImportsForFile` re-records edges, preventing phantom dependencies from deleted imports.~~
-    - ~~[x] **G5: Cancel in Export Registration** — `checkCancel` calls in `dbEnsureExportsRegistered` loop so long transitive dep walks don't block LSP responsiveness. Uses `startVersion` captured before the walk.~~
+    - ~~[x] **G5: Cancel in Export Registration** — `isCancelled` calls in `dbEnsureExportsRegistered` loop so long transitive dep walks don't block LSP responsiveness. Uses `startVersion` captured before the walk.~~
     - [ ] **G6: Background Cache Priming** — Pre-warm parse/exports/type-check for all project files during idle time (rust-analyzer: `parallel_prime_caches`). *(Medium impact, High effort — needs async infrastructure)*
     - [ ] **G7: Persistent Disk Cache** — Serialize Trans-Am cache to `.metascript-cache` for fast cold start (Standard reference cache). *(Low impact now, High effort)*
     - [ ] **G8: Per-Query LRU Tuning** — Profile and tune cache capacities per query type (parse:128, typecheck:2048, etc.). *(Low impact, Low effort — profile first)*
 *   **Bugs fixed during implementation** (2026-03-07):
     - `recordDurability` was never called for Low-durability (user) files — frames stayed at High, causing user file queries to skip verification. Fixed: always call `recordDurability`.
     - `tryMarkGreen` HIGH durability skip bypassed `computedAt > entry.computedAt` recomputation check. Fixed: HIGH skip still checks `computedAt`.
-    - `isStdPath` used substring match (`/std/` anywhere in path). Fixed: prefix match against `db.stdPath` set via `dbSetStdPath()`. Empty stdPath = no files get High durability (safe default).
+    - `isStdPathFor` used substring match (`/std/` anywhere in path). Fixed: prefix match against `db.stdPath` set via `dbSetStdPath()`. Empty stdPath = no files get High durability (safe default).
 *   **LSP wiring note**: `server.ms` calls `dbSetStdPath(db, <runtime dir>/std)` when `initialize` arrives, so std files get High durability.
 
 ### Phase 6: Live-Coding & HCR Intelligence (Pillar D)
@@ -94,7 +98,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
     - [ ] **Partial Check Recovery**: Ensure a type error in `module_a.ms` does not return `unknown` for symbols in `module_b.ms` using Trans-Am red-green isolation.
     - [ ] **Memory Cap**: Implement a memory-aware LRU for `TransAmDb` to prevent memory ballooning on massive projects.
     - [ ] **Stale-While-Revalidate**: Return the last known "Green" result from Trans-Am immediately while background re-computation runs.
-    - [ ] **Cancellation Depth**: Propagate `checkCancel` into parser/checker/codegen inner loops (currently only at query boundaries). Single-threaded, so acceptable for now. rust-analyzer uses unwinding `salsa::Cancelled` for automatic propagation — not feasible without exception support.
+    - [ ] **Cancellation Depth**: Propagate `isCancelled` into parser/checker/codegen inner loops (currently only at query boundaries). Single-threaded, so acceptable for now. rust-analyzer uses unwinding `salsa::Cancelled` for automatic propagation — not feasible without exception support.
     - [ ] **Transaction Semantics on Cancel**: If `dbEnsureExportsRegistered` is cancelled mid-loop, partial exports remain registered. Next query re-registers missing ones, but a brief window of inconsistency exists. Consider batch-commit pattern if this causes issues.
     - [ ] **Multi-Threaded LSP Server**: The current server is single-threaded with blocking I/O. Eager `dbTypeCheck` on `didOpen` blocks all request processing for 1-3s on cold files. The `select()`-based drain + coalesce mitigates this by batching requests, but true concurrent processing requires: (1) separate stdin reader thread (like nimsuggest's `replStdin` + Channel pattern), (2) request priority queue with preemption (user-initiated > auto-fired), (3) snapshot isolation for concurrent queries (rust-analyzer's `AnalysisHost` pattern), (4) mid-computation cancellation via `doStopCompile`-style voluntary abort (nimsuggest checks `requests.peek() > 0` during compilation). **Blocked by**: MetaScript threading/async primitives in the runtime. When available, this eliminates the ~1s didOpen freeze entirely — stdin reader thread feeds a channel, main thread processes with priority ordering and voluntary yield points in `dbTypeCheck`.
 
@@ -122,7 +126,7 @@ MetaScript follows standard reference patterns where the compiler is the primary
 | **Stdlib Caching** | Bundled .d.ts | Aggressive caching | Durable tier (skip validation) | TaDurability.High + prefix match |
 | **Early Cutoff** | N/A | N/A | Output hash backdating | Change revisions; Preprocess/Parse backdate on exact text equality |
 | **Request Queue** | Async event loop | Channel + tryRecv | crossbeam channel | `select()` drain + coalesce |
-| **Cancellation** | Async/Promise | doStopCompile hook | salsa::Cancelled (unwinding) | Version-based checkCancel (loop boundary) |
+| **Cancellation** | Async/Promise | doStopCompile hook | salsa::Cancelled (unwinding) | Version-based isCancelled (loop boundary) |
 | **Circular Deps** | Error | recursiveDep warning | DefMap handles | detectCycle + LSP Warning |
 | **Live Coding** | N/A | N/A | N/A | HCR Contract Validation |
 | **Stdlib Detection** | Package manifest | Package-ID based | SourceRoot kind | Path prefix (`db.stdPath`) |
@@ -139,10 +143,10 @@ MetaScript follows standard reference patterns where the compiler is the primary
 
 ### rust-analyzer Key Patterns
 - **Salsa red-green**: Query dependencies tracked automatically. On re-request, validate each dependency's revision. GREEN = return cached. RED = recompute.
-- **Early cutoff (backdating)**: If re-executed query produces same output hash, it's "backdated" — blocks cascading to all transitive dependents. Comment-only edits: parse re-runs, AST unchanged, type-check stays cached. **This is our G1 — highest-impact remaining optimization.**
+- **Early cutoff (backdating)**: If re-executed query produces same output hash, it's "backdated" — blocks cascading to all transitive dependents. Comment-only edits: parse re-runs, AST unchanged, type-check stays cached. **G1 was completed through change revisions, as recorded above; this is prior-art context, not a new pending task.**
 - **3-tier durability**: Volatile (open files), Normal (project code), Durable (external crates/sysroot). Version vector `[volatile, normal, durable]` — editing user file only bumps volatile counter, skips all durable query verification.
 - **DefMap**: Per-module name resolution (`hir_def/nameres`). Incrementally rebuilt. Import changes invalidate dependents; no-change early-cuts.
-- **Cancellation**: `salsa::Cancelled` propagated via `check_canceled()` in long loops. Partial results discarded; next request starts fresh. Uses unwinding (Rust panics) for automatic propagation — not feasible in MetaScript without exception support. Our loop-boundary `checkCancel` is acceptable for single-threaded operation.
+- **Cancellation**: `salsa::Cancelled` propagated via `check_canceled()` in long loops. Partial results discarded; next request starts fresh. Uses unwinding (Rust panics) for automatic propagation — not feasible in MetaScript without exception support. Our loop-boundary `isCancelled` is acceptable for single-threaded operation.
 - **PrimeCaches**: Background thread pre-warm parse/DefMap/inference for all open/recent files during idle. Parallel execution. **This is our G6.**
 - **No disk cache**: Intentionally skipped — forces optimization of initial analysis speed.
 - **Snapshot isolation**: `apply_change()` on `AnalysisHost` cancels all in-flight `Analysis` queries. Each snapshot is a clone. Not needed for single-threaded MetaScript, but relevant if we add async LSP.

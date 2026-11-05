@@ -43,7 +43,7 @@ Key insight: three axes — `--mm` (memory management), `--os` (platform), and *
 
 ### `--os=emcc` vs `--os=wasm`
 
-Both select `Backend.Wasm` (`src/compiler/compile.ms:98`) but drive different toolchains:
+Both select `Backend.Wasm` (`src/compiler/compile.ms`) but drive different toolchains:
 
 | | `--os=wasm` | `--os=emcc` |
 |---|---|---|
@@ -299,7 +299,10 @@ localnet, and these runs establish no persisted public deployment.
 
 ## Phase 1: `--mm=manual` (No RC, malloc available) — DONE
 
-DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to the RC mode's (`--gc=orc` when this was written) — only the linked runtime header differs.
+The mode's source owners are `analyzeProgram` (`src/analyzer/index.ms`) and
+`runtime/manual.h`. Skipping lifecycle injection changes the emitted program; do not assume
+byte-identical C with only a different runtime header. The dated measurements below retain
+the flags used then, not necessarily current command spellings.
 
 **What was built:**
 
@@ -353,7 +356,7 @@ When `--os=bare` is combined with `--mm=manual` (its default), the runtime uses 
 |--------|-------------|------|
 | `auto` (default) | `main(int argc, char** argv, char** env)` | Full POSIX: stack init, env, signal handlers |
 | `bare` | `main(void)` | Calls `MsMain()` → `MsPreMainInner()` + `MsMainInner()` |
-| `solana` | `uint64_t entrypoint(const uint8_t* input)`, emitted in `_dispatch.c` | `msSolanaEnter(input); MsMain(); return msSolanaResult();` |
+| `solana` | `uint64_t entrypoint(const uint8_t* input)`, emitted in `_dispatch.c` | `msSolStart(input, accounts, instructionData); MsMain(); return msSolanaResult();` |
 
 **`MsMain()`** is the init function: calls `MsPreMainInner` (DatInit for every alive module) then
 `MsMainInner` (Init for every alive module). It does **not** call a user `main` — the
@@ -442,7 +445,7 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 | `src/codegen/c/literals.ms` | `static const` string literals (`.rodata`, COW-safe) — correctness fix for all targets |
 | `src/checker/context.ms` | `osTarget` field on CheckerContext |
 | `src/compiler/compile.ms` | Solana toolchain setup (auto-detect BPF clang + sbpf-linker), force `--mm=manual` + release mode, graceful @compile failures, LLVM bitcode pipeline, BPF validation via `llc` |
-| `src/compiler/cc.ms` | `resolveBpfClang()`, `resolveSbpfLinker()`, `validateBpfBitcode()`, `linkSolana()` (`ld.lld`, after the LTO merge below), `cliCompileFlags` BPF early-return with `-emit-llvm` |
+| `src/compiler/cc.ms` | `resolveBpfClang()`, `resolveSbfLinker()`, `linkSolana()` (`ld.lld`, after the LTO merge below), `cliCompileFlags` BPF early-return with `-emit-llvm` |
 | `src/compiler/options.ms` | `--os` target validation |
 | `src/index.ms` | Exclude bare/solana from zig cc auto-detection |
 | `std/process` | Critical fix: `exec()` now returns actual exit codes |
@@ -710,7 +713,13 @@ freestanding target via `lsp = { os, mm }` — see docs/PACKAGE.md "`lsp` — ed
 matrix. A project with no `lsp` section resolves to the host os and never to `manual`, so it gets
 zero new diagnostics.
 
-## Phase 5: Explicit Allocator (~2 weeks)
+## Historical explicit-allocator proposal — not a current API
+
+The following is an unverified design sketch, not a shipped allocator family, approved
+implementation plan or current default-allocation policy. `ArenaAllocator`, the example
+constructors and `msAllocWith` below must not be copied as available APIs. Actual mode/host
+allocation is defined by the mode owners above; desktop manual allocation and bare static
+arena allocation are different cases.
 
 Allocator passed via constructor, stored as field — TypeScript-natural, not Zig-style pass-everywhere.
 
@@ -802,30 +811,13 @@ A library compiled with `--mm=manual` is importable from RC (`--mm=drc`) code. T
 
 **Implementation**: Future phase, ~150 additional lines.
 
-## Runtime Directory Structure
+## Runtime owners
 
-All C runtime files live under `runtime/` (separated from `std/` which contains MetaScript modules):
-
-```
-runtime/
-  drc.h / .c              ← RC + cycle collector (--mm=drc; the collector is compiled out under MSGC_MANUAL)
-  manual.h                ← no RC, defines MSGC_MANUAL; MSOS_BARE=arena, else=malloc (--mm=manual)
-  types.h                 ← msRefHeader, msTypeInfo (shared by both)
-  fs.h, process.h, os.h  ← single-file modules (flat, no subdirs)
-  hcr.h / hcrHost.c      ← HCR Phase 1/2 POSIX prototype; architecture: docs/HCR.md
-  core/                   ← core types every program needs
-    system.h/.c, string.h/.c, array.h/.c, buffer.h/.c, test.h, abort.h
-  promise/                ← async subsystem
-    future.h, dispatch.h/.c, combinator.h/.c, pool.h/.c, thread.h, locker.h
-  crypto/                 ← organized by category
-    hash.h/.c, curves/, ciphers/, kdf/, tls/, rsa/
-  io/                     ← I/O engines
-    streams.h, engine.h, engineSelect.c, engineIOCP.c, engineUring.c
-  net/                    ← networking
-    socket.h, async.h, eventLoopUring.h
-  actor/                  ← actor model
-    actor.h, cycle.h, mailbox.h, selector.h
-```
+The native runtime lives under `runtime/`; use the tree itself instead of a copied file map.
+Memory mode owners are `runtime/drc.h`/`drc.c` and `runtime/manual.h`; HCR architecture is in
+[HCR.md](HCR.md). A source path identifies implementation, not a host/ABI or safety certificate.
+For retained addresses, callbacks and mixed ownership, use the independent obligations in
+[Advanced contracts](CONTRACTS.md).
 
 ## References
 

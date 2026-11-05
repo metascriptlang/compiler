@@ -1,5 +1,9 @@
 # Trans-Am: Incremental Computation Engine
 
+Timing records below without an explicit source tree have **tree not recorded**. They
+preserve historical observations, not current latency guarantees; no benchmark was rerun for
+this documentation repair.
+
 Incremental query engine of the MetaScript compiler, in `src/compiler/transam/`. Inspired by Salsa / rust-analyzer. Two callers: the LSP (`src/compiler/lsp/`), which keeps one db across edits, and `checkModuleGraph` (`src/checker/orchestrator.ms`), the graph check every `build`, `check`, `test` and `run` goes through, which binds a fresh db to the module graph the loader built (§5, "Bound to a loaded graph").
 
 Rules for editing the module: [`src/compiler/transam/CLAUDE.md`](../src/compiler/transam/CLAUDE.md). The code is the source of truth for types and signatures; this file holds the design and the reasons.
@@ -173,7 +177,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 
 | Change | Reference | Here | Why |
 |--------|-----------|------|-----|
-| Module per concern | god struct | 9 files | DRC safety, testability |
+| Module per concern | god struct | one file per concern | DRC safety, testability |
 | Dependency tracking | manual `recordDependency()` at each site | frame-based scope | Cannot be forgotten |
 | Cache | pointer-based doubly-linked LRU | one `TaCacheStore`: lookup and invalidation through a `fileId` index, access-clock LRU with linear-scan eviction | DRC does not manage arbitrary graph pointers; an O(1) eviction list is an upgrade to make when a profile asks for it |
 | Early cutoff | output hash per entry, compared with the hash a dependent recorded | `changedAt` revision per entry and per input file, kept by `Preprocess` and `Parse` when an exact comparison shows no change | An equal hash is not equal content: `Az` and `BY` share a hash, and a hash fold only makes a collision rarer |

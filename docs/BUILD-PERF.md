@@ -251,8 +251,7 @@ With the same compiler, cwd, source and headers, `MSC_NO_GLOBAL_CACHE=1`
 and another empty local cache compiled native source and printed **`22`**.
 The control also changed the counter-log filename; no program input changed.
 The originally absent header is not in the first native dependency record.
-Inspect `src/compiler/cache.ms` `storeManifest`, `manifestDeps` and
-`presenceSignature`. No fix was applied.
+Inspect `src/compiler/cache.ms` `storeManifest` and `presenceSignature`. No fix was applied.
 
 Raw commands, sources, counters and output are retained in the machine-local
 `~/metascript/.wt/evidence/2026-10-08-cache-reuse-main-audit.json`.
@@ -591,8 +590,9 @@ the second link reports the overflow), other platform-tools versions.
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
 Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
-Phases 3–10 landed: **Phase A is 6.3s, not 24.7s** — it beat its own
-~12–14s target, and the roadmap below is stale from that row down.
+Historical measurement: **Phase A was 6.3s, not 24.7s** — it beat the plan's ~12–14s
+target, but that does not establish that phases 3–10 shipped. The roadmap is obsolete;
+the original measurement did not record its tree and was not rerun for this repair.
 
 | Phase | Then (plan) | Now | Note |
 |---|---|---|---|
@@ -698,11 +698,10 @@ Phase A dropped **24.7s → 14.6s** — confirms **~10s of Phase A is pure RC re
 | Native cold self-build | ~15s | **32s** (`rm -rf out`, warm object cache); ~20s warm |
 | Native Phase A | ~12–14s | **6.3s** — beat the target by 2× |
 
-**Phases 3, 4 and 5 never shipped** — checked on the tree: `syntheticToken`
-still has 12 call sites, `createNode` still assigns `comments = []`, and
-`SourceLocation` is still an `interface`. Phase A got fast anyway. So every
-saving estimate below is attributed to work that did not happen, against a
-baseline that no longer exists.
+The earlier goal record found phases 3–5 had not shipped while Phase A had improved anyway.
+Its source counts/tree were not recorded as a current audit; they are not today's status
+verdict. The estimates below were attributed to that abandoned baseline, so they cannot
+justify implementation work or predict current savings.
 
 Do NOT pick up a phase because this file lists it. Re-measure Phase A first
 (`msc build src/index.ms --time`); at 6.3s out of a 53s build it is no
@@ -711,7 +710,13 @@ longer where the time is. The remaining cost is the C toolchain — clang
 
 ---
 
-## Phase 3 — Eliminate synthetic Token allocation in transforms
+## Historical phase estimates — not implementation instructions
+
+The estimates and execution order below describe an abandoned baseline, not current source,
+measured savings available today or approval to start these changes. The earlier goal record
+explains why the plan was dropped; current costs require a new flow-specific measurement.
+
+### Phase 3 — Eliminate synthetic Token allocation in transforms
 
 **Problem**: every `makeIdent`, `makeBlock`, `makeNumber`, `makeNull`, `makeBool`, `makeString`, and similar transform helper calls `createNode(kind, data, syntheticToken(loc))`. `syntheticToken(loc)` allocates a throwaway `Token` (heap + msRefHeader) used only to pass `.line` / `.column` into `createNode`, then immediately discarded.
 
@@ -972,14 +977,16 @@ How to time anything on this shared machine:
 
 ---
 
-## Measured 2026-09-05 — `toolchainStamp()` content-hashes ALL of `vendor/` on every invocation
+## Historical measurement 2026-09-05 — support-tree stamp cost
 
 **Symptom**: any `msc` binary sitting in the dev tree pays a ~45-60s FIXED cost per invocation (hello build: 44-64s real, user 23-27s, sys 10-16s), while the installed `~/.metascript/bin/msc` does the same build in 2.5s. Measured on two independent dev-tree binaries (one from a clean worktree, one from the main tree) in fresh target dirs; binary sizes are equal (~11.3MB), so it is NOT an optimization-level difference. `sample` puts the time in `collectFilesSorted` (`src/compiler/cache.ms`) plus memmove/malloc churn.
 
-**Cause**: `toolchainStamp()` = hash(binary) + `stampTreeInto(runtime/)` + `stampTreeInto(vendor/)`, where `stampTreeInto` recursively content-hashes EVERY file under the tree, once per process (memoized in-process only). The tree root is the compiler-root (binary location), so a dev-tree binary scans the dev `vendor/` = **3.0GB** (rust 1.2G, zig 654M, typescript-go 507M, prettier 221M, biome 187M — reference clones, not C libs), while the installed root's `vendor/` is 51MB (argon2, mbedtls, miniz, monocypher).
+**Historical cause at that measurement** (tree not recorded): the support-tree stamp content-hashed the runtime/vendor trees per process. This is not the current algorithm: `toolchainStamp`, `compilerStamp`, `objectStamp` and `treesStamp` in `src/compiler/cache.ms` own it; `treesStamp` memoizes file hashes by change stamp across processes. The old per-invocation 3 GB rehash explanation must not be carried forward without measurement. In that experiment the compiler-root was the binary location, so the dev-tree binary scanned dev `vendor/` = **3.0GB** (rust 1.2G, zig 654M, typescript-go 507M, prettier 221M, biome 187M — reference clones, not C libs), while the installed root's `vendor/` is 51MB (argon2, mbedtls, miniz, monocypher).
 
-**Verified fix for test rigs**: prune the worktree's `vendor/` COPY down to the installed set → same probe drops 52s → **1.74s** (30x). Do NOT prune the main tree's vendor (dev reference clones are wanted there).
+**Historical test-rig experiment, not a current recipe**: pruning a standalone worktree's
+vendor COPY to the installed set changed that probe from 52s to **1.74s** (30x). This record
+does not authorize pruning a shared checkout, vendored inputs or another job's support tree.
 
 **Downstream costs previously misattributed**: guard battery "~1.5 min/guard", corpus lane at ~105s/program (9h projection vs the documented ~19 min), worktree suite 228s vs 120s. All were this stamp scan, not slow binaries.
 
-**Real fix (pending, needs design sign-off)**: `toolchainStamp` should stamp only the trees that can invalidate compiled artifacts (runtime headers + the C-source vendor libs actually reachable by `@compile`), or read a manifest, instead of walking whatever happens to live under `vendor/`.
+**Historical proposal, not a current pending fix or implementation approval**: `toolchainStamp` should stamp only the trees that can invalidate compiled artifacts (runtime headers + the C-source vendor libs actually reachable by `@compile`), or read a manifest, instead of walking whatever happens to live under `vendor/`.

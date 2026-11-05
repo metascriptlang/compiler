@@ -1,11 +1,15 @@
-# Known Issues
+# Recorded issues
 
-Bugs and gaps you can hit writing MetaScript with the self-hosted `msc`.
+This is a ledger of observations at the revisions/dates each entry names, **not a current
+support blacklist, an exhaustive issue list or a fresh test certificate**. “LIVE”, “RESOLVED”
+and fix advice describe the entry's last recorded observation; recheck its exact consumer on
+the relevant binary/support trees before applying it to today's code. A missing entry does
+not prove a capability safe or an issue absent. Use [the evidence framework](CONTRACTS.md)
+to distinguish current failures, enforcement holes and unverified historical correspondence.
 
-**Every claim in this file was measured on 2026-09-02** against `./msc` @ main `81090cc`
-(cross-checked at `8c61416`). Memory-lifetime probes were re-run under ASan with
-`-DMS_DRC_LEDGER` and the alloc/destroy counts are quoted. There are no unverified entries left:
-if something is not listed below, it is not a known issue — go measure before believing otherwise.
+The initial audit was measured on 2026-09-02 against `./msc` @ main `81090cc`
+(cross-checked at `8c61416`). Memory-lifetime probes also ran under ASan with
+`-DMS_DRC_LEDGER`; the recorded alloc/destroy counts belong to those runs.
 
 **Re-audited 2026-09-04** (every Live entry re-probed on one binary: snapshot `8506c8ff` + the
 L1/L4 fixes built in a private worktree — no binary on the box builds current HEAD, see the
@@ -24,7 +28,7 @@ are gone.
 
 ---
 
-# Live issues
+# Issue observations
 
 ## ~~L1. `break` in a match arm — silent no-op~~
 

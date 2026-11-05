@@ -2,9 +2,9 @@
 
 Compile-time code execution and AST manipulation. Macros are **normal MetaScript code** that imports from `std/meta` and runs in the Raiser bytecode VM during compilation. No special macro API — the compiler's own typed AST is the macro author's API.
 
-## Core Principle: `Node` is Compile-Time Only
+## Expansion boundary, not a compile-time-only Node type
 
-`Node` (from `std/meta`) is the type a macro receives and returns, and a macro runs only while compiling: the expansion reaches codegen, the macro does not. The type is an ordinary class, not a compile-time-only one: a program that calls `createNodeAt(NodeKind.NumberLiteral, …, makeLoc(7, 9))` and prints `n.location.line` builds and prints `7` on C and on `--target=js` (measured 2026-10-04 on tree `fa27682b2a79`), and the compiler itself holds `Node` values at run time, so a leftover `Node` is not refused at codegen. What holds is the cost: a program that uses `std/meta` only inside macro bodies emits nothing from it on C, on the host and on `--os=solana`, while a program that calls a `std/meta` function at run time emits the module (guard `src/test/guard/metaModuleEmitsNothing.ms`). The JS bundle still carries `std/meta` (22,978 of 179,511 bytes of `console.log(0)`, measured 2026-10-04): the JS backend has no dead-module elimination (NIM-REF CG-15). The rest of this section still describes the intended model; only this paragraph was re-measured.
+`Node` (from `std/meta`) is the type a macro receives and returns, and a macro runs only while compiling: the expansion reaches codegen, the macro does not. The type is an ordinary class, not a compile-time-only one: a program that calls `createNodeAt(NodeKind.NumberLiteral, …, makeLoc(7, 9))` and prints `n.location.line` builds and prints `7` on C and on `--target=js` (measured 2026-10-04 on tree `fa27682b2a79`), and the compiler itself holds `Node` values at run time, so a leftover `Node` is not refused at codegen. What holds is the cost: a program that uses `std/meta` only inside macro bodies emits nothing from it on C, on the host and on `--os=solana`, while a program that calls a `std/meta` function at run time emits the module (guard `src/test/guard/metaModuleEmitsNothing.ms`). The JS bundle still carries `std/meta` (22,978 of 179,511 bytes of `console.log(0)`, measured 2026-10-04): the JS backend has no dead-module elimination (NIM-REF CG-15). The rest of this section preserves the historical intended model; only this paragraph was re-measured at that tree.
 
 Multiple sources produce `Node` values — all follow the same rules:
 
@@ -37,9 +37,13 @@ const app = render(optimized);                      // macro returns runtime cod
 
 `@name` is reserved for two other things: decorators on a declaration (see "Decorators" below) and compiler directives (`@include("x");`, see Tier 3).
 
-**One invariant: zero `Node` at codegen.** Everything else is free.
+The old “zero Node at codegen” goal is not an enforced universal contract; the measured
+paragraph above explicitly demonstrates runtime Node use. The following is the **historical
+intended erasure model**, not an additional checker guarantee or current support checklist.
+Use the authoring standard's [macro recipes](LANG-PREFERENCE.md#13-compile-time-code-macros-and-jsx) and
+[bounded evidence rules](CONTRACTS.md) when changing this boundary.
 
-### How it works
+### Historical intended erasure model
 
 1. **Checker** recognizes `Node` type as compile-time only (like in standard reference implementations)
 2. **Propagation** — any function/interface containing `Node` in its signature becomes compile-time only
@@ -51,17 +55,10 @@ const app = render(optimized);                      // macro returns runtime cod
 
 **Ordering**: a module-level Node const (`const el = <View/>`) is classified when declarations are collected, so a macro argument may name one declared later in the module. Inside a function body declarations are checked in source order, so a local Node const must precede the macro call that consumes it.
 
-### Standard Reference comparison
-
-| | Reference | MetaScript |
-|--|-----|-----------|
-| Compile-time AST type | `ReferenceNode` | `Node` |
-| Enforcement | compile-time flag propagates to containers/procs | Checker flag, same propagation |
-| Backend safety | C/JS codegen emits hard error if Node leaks | Same |
-| Storage scope | Only inside macros/`static` blocks | Also at module scope (const only) — slightly more permissive |
-| Erasure | Implicit (macro bodies only generate VM bytecode) | Explicit (Node consts erased after expansion) |
-
-The module-scope extension enables the "store and reuse" pattern (`const el = <View/>; @jsx(el); @native(el);`) that some reference models don't support. Cost: ~15 lines of const-inlining logic in macro expansion.
+A stored AST template and a runtime value are different uses. Explicit macro calls such as
+`jsx(el)` consume the template; ordinary runtime use must not be advertised as forbidden
+merely because the type is also used by the macro engine. The former reference-parity and
+line-count table did not establish that boundary and is retired.
 
 ## Architecture
 
@@ -398,13 +395,14 @@ Every position where MetaScript accepts `@` and TypeScript does not is a TypeScr
 
 A decorator is an ordinary function found by normal scoping: `@x` is an identifier lookup. Two compiler-recognised groups sit beside user decorators, and the two are recognised by opposite mechanisms — measured 2026-09-13.
 
-**Directives** (`emit`, `include`, `compile`, `link`, `passC`, `passL`, `import`, `comptime`, `builtin`) are matched by **spelling** against a fixed list (`isBuiltinDirective`, `src/checker/decoratorHelpers.ms`). There is no symbol behind them, nothing to import, and a local binding does **not** shadow them: `import { include } from "./mine"` followed by `@include("stdio.h")` still runs the directive and reports `'include' is imported but never used`.
+**Directives and compiler decorators** are matched by **spelling** against
+`passThroughDirectives` (`src/checker/decoratorHelpers.ms`). There is no symbol behind them, nothing to import, and a local binding does **not** shadow them: `import { include } from "./mine"` followed by `@include("stdio.h")` still runs the directive and reports `'include' is imported but never used`.
 
 **The isolation intrinsic** `nonisolated` is the opposite. It is a symbol exported by `std/actor` (`@builtin("nonisolated") export extern function nonisolated(): void`) and recognised by `sym.builtinKind`, so it must be imported — without the import the actor field is a hard error, `Cannot find name 'nonisolated'`. Because recognition is by symbol it survives renaming (`import { nonisolated as noniso }` is accepted), and a same-named local function is *not* it: a hand-written `export function nonisolated()` imported from a user module is run as an ordinary decorator and fails with `decorator 'nonisolated': Too many arguments: expected at most 0, got 1`. `std/actor` is not in the prelude — `globalImports` is `std/core/*` — so the import is always explicit.
 
 Signature: `(value: Node, context) => Node | void`, where TS has `(value, context) => value | void`. `@f(args)` calls `f(args)` first and uses the result as the decorator, the TS factory rule. The Raiser VM already runs closures and closure-returning factories, so this rule is implemented literally. The body runs at compile time.
 
-`context` is `{ kind: "class" | "method" | "field", name: string, static: boolean, private: boolean, access, addInitializer, metadata }`, the TC39 field names verbatim (`static` and `private` are legal field names in MetaScript, measured). `private` is always `false` while there is no `#x`. `access.get(recv)` / `set(recv, v)` / `has(recv)` return `Node` expressions against a receiver Node instead of touching a runtime object. `metadata` is one object per class shared by every decorator on that class, and a subclass reads its parent's. Measured 2026-09-13: `metadata.keys` lists only what the class itself wrote — a grandchild whose own decorators write nothing reads `keys.length == 0` while still resolving its grandparent's key — and `metadataGet` / `metadataHas` fall through the chain, nearest class first, so a key rewritten by the middle class answers `9` rather than the root's `1`. A parent declared *after* the subclass answers the same, because its decorators are applied on demand when the subclass asks rather than in source order. Inheritance is same-module only: `class K extends P` with `P` imported fails earlier, in class inheritance itself — `cannot declare 'P_init': the parent constructor signature is not reachable from this module`, measured identical on a decorator-free program. It exists **only during compilation** and is never emitted.
+`context` is `{ kind: "class" | "method" | "field", name: string, static: boolean, private: boolean, access, addInitializer, metadata }`, the TC39 field names verbatim (`static` and `private` are legal field names in MetaScript, measured). `private` is always `false` while there is no `#x`. `access.get(recv)` / `set(recv, v)` / `has(recv)` return `Node` expressions against a receiver Node instead of touching a runtime object. `metadata` is one object per class shared by every decorator on that class, and a subclass reads its parent's. Measured 2026-09-13: `metadata.keys` lists only what the class itself wrote — a grandchild whose own decorators write nothing reads `keys.length == 0` while still resolving its grandparent's key — and `metadataGet` / `metadataHas` fall through the chain, nearest class first, so a key rewritten by the middle class answers `9` rather than the root's `1`. A parent declared *after* the subclass answers the same, because its decorators are applied on demand when the subclass asks rather than in source order. The 2026-09-13 record observed imported inheritance failing with `cannot declare 'P_init': the parent constructor signature is not reachable from this module`, also without decorators. That historical failure is not a current same-module-only rule; the current [class reference](LANG.md#classes) and a focused cross-module consumer own the question. It exists **only during compilation** and is never emitted.
 
 Return rules follow TS ("replace only with the same kind") plus MetaScript's superset: class → a `ClassDecl` Node, which may rewrite fields, types and members (the checker runs on the result); method → a method Node (the original is lifted to a hidden member, and `value` spliced in expression position calls it); field → `(init: Node) => Node` as in TS, or a replacement field Node.
 
@@ -488,7 +486,7 @@ console.log(`x=${x} y=${y} runs=${runs}`);
 
 Because C runs them before any call, a static initializer of such a class cannot read the enclosing function's locals or parameters: `a static initializer cannot read the enclosing local 'k' — a class declared in a function body initializes its statics once, before any call runs` (and `… the parameter 'n'`), on both backends. Guards `staticInitReadsEnclosingLocal`, `staticLocalClass`. Methods of such a class reading an enclosing local are not rejected and do not compile on C (`KNOWN-ISSUES.md` L36).
 
-**Actor statics.** An actor's static is shared by every instance on every thread, so it must be `static readonly` and hold plain data, `string`, `Arc<T>` or `Locked<T>` (PARALOCK I22). Both are check errors on both backends:
+**Actor statics.** An actor's static is shared by every instance on every thread, so it must be `static readonly` and hold plain data, `string`, `Arc<T>` or `Locked<T>` (ULTRALOCK V7). Both are check errors on both backends:
 
 ```
 actor A { static n: int32 = 0; … }
@@ -499,7 +497,10 @@ actor A { static readonly xs: int32[] = [1, 2]; … }
     — an actor's static must be plain data, Arc<T> or Locked<T>
 ```
 
-Guards `actorStaticRules`, `actorStaticReadonly` (C and JS) and `actorStaticLocked` (C only: `Locked<T>` does not exist on JS, `KNOWN-ISSUES.md` L44). `Arc<T>` statics were not measured.
+The focused guards are `actorStaticRules`, `actorStaticReadonly` and `actorStaticLocked`.
+Their names are verification entry points, not a new pass claim. The former C-only/JS-absence
+assertion relied on historical KNOWN-ISSUES L44 and is not a current restriction.
+`Arc<T>` statics and native sharing/lifetime parity were not re-measured in this repair.
 
 ## Tier 3: Directives — Backend-Specific Control
 
@@ -521,7 +522,7 @@ when (js) { function allocate(size: number): number { return 0; } }
 |-----------|--------|
 | `@include` / `@link` / `@passC` / `@passL` | DONE |
 | `@target("backend")` | RETIRED 2026-08-09 — use `when (c) { … }` |
-| `@emit("code")` | DONE — top-level via `genTopLevelEmit` + `emitToSection` (`src/codegen/c/declarations.ms:578-603`), in-function via `src/codegen/c/statements.ms:237`, JS backend at `src/codegen/js/statements.ms:188` |
+| `@emit("code")` | Dated expansion record above; source owners are `genTopLevelEmit`/`emitToSection` in `src/codegen/c/declarations.ms` and the `macroName == "emit"` arms in C/JS `statements.ms` |
 
 `@emit` at top level routes each line by section marker (`emitToSection`): `/*TYPESECTION*/` → Types, `/*VARSECTION*/` → GlobalVars, `/*INCLUDESECTION*/` → Headers, otherwise ProcHeaders. Arbitrary C attributes survive to the object file — verified 2026-08-10 by emitting `__attribute__((import_module(...), import_name(...)))` / `__attribute__((export_name(...)))` and reading them back out of the linked `--os=emcc` wasm:
 
@@ -605,7 +606,12 @@ Each Node becomes an Object with fields:
 
 DRC-safe helpers: `serializeNodes`, `serializeStrings`, `setStr`, `setBool`, `setNode`, `setNodes`, `setStrs`.
 
-## Phased Implementation Plan
+## Historical implementation plan — not current feature status
+
+The stages below preserve an earlier sequence and rationale. Their DONE/NEXT labels and
+“What macro authors can write now” wording describe that plan, not today's capability list;
+they do not override the invocation forms or scoped measurements above. Build history is
+`git log -- src/compiler/meta`; unverified neighboring forms need a focused consumer.
 
 ### Phase 0: Module System Foundation — DONE
 
@@ -727,6 +733,8 @@ Prerequisite for `std/meta` re-exports and clean macro authoring.
 **What macro authors can write now**:
 
 ```ms
+import { Node, NodeKind } from "std/meta";
+
 macro double(x: Node): Node {
     return {
         kind: NodeKind.BinaryExpr,    // ← was: kind: 7
