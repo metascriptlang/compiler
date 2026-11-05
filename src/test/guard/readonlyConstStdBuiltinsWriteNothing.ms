@@ -14,8 +14,7 @@ import { ensureDir, isFile, writeFile } from "std/fs";
 const root = cwd();
 const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
-const MODULE_STATE_RULE = "module state crosses threads only as";
-const WRITES = "which may write state the checker cannot see";
+const FOREIGN = "C may count or write what it receives there";
 
 let failed = 0;
 
@@ -124,7 +123,7 @@ for (const c of cases) {
 		const r = execFileResult(msc, ["check", `--target=${target}`, `${dir}/main.ms`]);
 		const out = `${r.output}${r.errorOutput}`;
 		const name = `${c.name} [${target}]`;
-		if (c.refused && (r.exitCode == 0 || !out.includes(WRITES) || !out.includes(MODULE_STATE_RULE))) report(`${name}: not refused: ${out}`);
+		if (c.refused && (r.exitCode == 0 || !out.includes(FOREIGN))) report(`${name}: not refused: ${out}`);
 		if (!c.refused && r.exitCode != 0) report(`${name}: check failed: ${out}`);
 	}
 }

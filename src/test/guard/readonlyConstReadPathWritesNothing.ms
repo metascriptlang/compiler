@@ -1,10 +1,11 @@
 // guard: a deep Readonly module const crosses threads when nothing a task or an actor hands it to
-// can count or write it. Passing the const, or a parameter bound to it, to a C extern whose
-// parameter is a counted handle refuses it on C and JS, whether the call is on the task's own line
-// or inside a routine the const reaches, and an actor method that stores the const or passes it to
-// such an extern is refused the same way; a string, scalar or Readonly view of value-only data
-// passes (includes, indexOf, lastIndexOf), and so does an extern a helper calls with its own locals
-// (a push into a fresh Vec), while a push into a module `let` stays refused as module state.
+// can count or write it. Passing the const, a parameter bound to it, or a pointer cast of it to a C
+// extern whose parameter is a counted handle or an opaque pointer refuses it on C and JS, whether
+// the call is on the task's own line or inside a routine the const reaches, and an actor method
+// that stores the const or passes it to such an extern is refused the same way; a string, scalar or
+// Readonly view of value-only data passes (includes, indexOf, lastIndexOf, the Readonly pointer
+// asString copies through), and so does an extern a helper calls with its own locals (a push into
+// a fresh Vec), while a push into a module `let` stays refused as module state.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent.
 //
@@ -124,6 +125,22 @@ const cases: Case[] = [
 		refused: false,
 		text: "const nums: Readonly<number[]> = [1, 2];\nconst names: Readonly<string[]> = [\"a\", \"b\"];\n"
 			+ "function read(): number { return nums.indexOf(2) + names.lastIndexOf(\"a\"); }\n" + RUN,
+	},
+	{
+		name: "a C extern given the const cast to an opaque Readonly pointer",
+		refused: true,
+		mark: "to the external 'look' through a parameter",
+		rule: FOREIGN,
+		text: CELL
+			+ "extern function look(p: Readonly<Ptr<void>>): int32;\n"
+			+ "function read(): int32 { return look(K as Readonly<Ptr<void>>); }\n" + RUN,
+	},
+	{
+		name: "an asString of a slice of the const's bytes in a Sendable function (std copies them through a Readonly pointer)",
+		refused: false,
+		text: "struct Doc { bytes: Vec<uint8>; }\nconst doc: Readonly<Doc> = { bytes: [104, 105] };\n"
+			+ "function text(): string { return doc.bytes[0..2].asString(); }\n"
+			+ "const run: Sendable<() => string> = (): string => text();\nconsole.log(run());\n",
 	},
 	{
 		name: "a push into a module let inside a routine that reads the const",
