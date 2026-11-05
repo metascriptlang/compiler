@@ -345,7 +345,7 @@ test "packed source: a checked absent aggregate binding still fails" {
 		return run();
 	`);
 	assert ctx.hasModule, ctx.lastError;
-	assert ctx.lastError.includes("not accessible for type 'null'"), ctx.lastError;
+	assert ctx.lastError.split("\n")[0] == "member 'Pair' is not accessible for type 'Pair | null' using 'null'", ctx.lastError;
 }
 
 test "packed source: erased arguments keep closure holds below the physical window" {
