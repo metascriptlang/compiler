@@ -8,7 +8,7 @@
 import {
 	DerItem, derItem, derChildren, derRoot, derUnsigned, derSame, derSequence, derUnsignedInteger, derSmallInteger,
 	derOctets, derBits, derOidOf, derTlv, derJoin, tagSequence, tagOctetString, tagBitString, tagOid,
-	oidEcPublicKey,
+	oidEcPublicKey, keyRoot, keyChildren,
 } from "./asn1";
 import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
 import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
@@ -67,12 +67,17 @@ function pointAt(buf: Readonly<uint8[]>, bits: DerItem, curve: Readonly<Curve>):
 	}
 }
 
-export function ecPublicFromSpki(der: Readonly<uint8[]>, curves: Readonly<Curve[]>): EcPublicData | null {
-	const root = derRoot(der, tagSequence);
+export function ecPublicFromSpki(
+	der: Readonly<uint8[]>, curves: Readonly<Curve[]>,
+	pemLengths: boolean = false,
+): EcPublicData | null {
+	const root = pemLengths ? keyRoot(der, tagSequence) :
+		derRoot(der, tagSequence);
 	if (root == null) return null;
-	const parts = derChildren(der, root);
+	const parts = pemLengths ? keyChildren(der, root) : derChildren(der, root);
 	if (parts == null || parts.length != 2 || parts[0].tag != tagSequence) return null;
-	const algorithm = derChildren(der, parts[0]);
+	const algorithm = pemLengths ? keyChildren(der, parts[0]) :
+		derChildren(der, parts[0]);
 	if (algorithm == null || algorithm.length != 2 || algorithm[0].tag != tagOid || !derSame(der, algorithm[0], oidEcPublicKey())) return null;
 	const curve = curveWithOid(curves, der, algorithm[1]);
 	if (curve == null) return null;

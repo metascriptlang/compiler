@@ -48,6 +48,54 @@ export function derRoot(buf: Readonly<uint8[]>, tag: int32): DerItem | null {
 	return root;
 }
 
+function keyItem(
+	buf: Readonly<uint8[]>, at: int32, limit: int32,
+): DerItem | null {
+	if (at < 0 || limit < at || limit > buf.length || limit - at < 2) {
+		return null;
+	}
+	const tag = buf[at] as int32;
+	let length = buf[at + 1] as int32;
+	let body = at + 2;
+	if (length >= 0x80) {
+		const count = length - 0x80;
+		if (count == 0 || count > 4 || count > limit - body) return null;
+		const start = body;
+		body += count;
+		length = 0;
+		for (let i = 0; i < count; i++) {
+			if (length > 0x7fffff) return null;
+			length = length * 256 + (buf[start + i] as int32);
+		}
+	}
+	if (length > limit - body) return null;
+	return { tag, body, end: body + length };
+}
+
+export function keyChildren(
+	buf: Readonly<uint8[]>, item: DerItem,
+): DerItem[] | null {
+	if (item.body < 0 || item.end < item.body || item.end > buf.length) {
+		return null;
+	}
+	const out: DerItem[] = [];
+	let at = item.body;
+	while (at < item.end) {
+		const child = keyItem(buf, at, item.end);
+		if (child == null) return null;
+		out.push(child);
+		at = child.end;
+	}
+	return out;
+}
+
+export function keyRoot(buf: Readonly<uint8[]>, tag: int32): DerItem | null {
+	if (buf.length > 0x7fffffff) return null;
+	const root = keyItem(buf, 0, buf.length as int32);
+	if (root == null || root.tag != tag || root.end != buf.length) return null;
+	return root;
+}
+
 export function derBody(buf: Readonly<uint8[]>, item: DerItem): uint8[] {
 	const out: uint8[] = [];
 	for (let i = item.body; i < item.end; i++) out.push(buf[i]);

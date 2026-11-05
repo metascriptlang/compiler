@@ -70,7 +70,7 @@ function pemBlockOf(text: string): PemBlock | null {
 function publicOfPem(pem: string): EcPublicData | null {
 	const block = pemBlockOf(pem);
 	if (block == null || block.label != "PUBLIC KEY") return null;
-	const data = ecPublicFromSpki(block.der, curves());
+	const data = ecPublicFromSpki(block.der, curves(), true);
 	if (data == null || !ecPointValid(data.curve, data.point)) return null;
 	return data;
 }

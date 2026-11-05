@@ -4,15 +4,118 @@ import {
 } from "std/crypto/pure/ecNative";
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
 import { readFile } from "std/fs";
-import { asInt32, asString, at, getDynamicField, parseJson } from "std/core/json";
+import {
+	asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
 import { pemEncode } from "std/crypto/pure/pem";
 import { p256 } from "std/crypto/pure/p256";
 import { p384 } from "std/crypto/pure/p384";
-import { ownCurve, ecPublicPoint, ecPublicToSpki, ecPrivateToSec1 } from "std/crypto/pure/weierstrass";
+import {
+	ownCurve, ecPublicPoint, ecPublicFromSpki, ecPublicToSpki,
+	ecPrivateToSec1, ecdsaRawToDer, ecdsaDerToRaw,
+} from "std/crypto/pure/weierstrass";
 
 function must<T>(sink result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
 	return result.value;
+}
+
+test "private EC public PEM accepts bounded BER length encodings" {
+	let checked = 0;
+	let refused = 0;
+	for (const name of ["p256", "p384"] as EcCurve[]) {
+		const file = name == "p256" ? "secp256r1" : "secp384r1";
+		const ids = name == "p256" ?
+			[391, 392, 393, 394, 490, 491, 492, 493, 576, 577] :
+			[826, 827, 828, 829, 925, 926, 927, 928, 1011, 1012];
+		const text = readFile(
+			`std/crypto/test/vectors/ecdh_${file}_test.json`,
+		);
+		assert text.ok;
+		const root = parseJson(text.value);
+		assert root.ok;
+		const groups = root.value.getDynamicField("testGroups");
+		for (let g = 0; g < groups.length(); g++) {
+			const tests = groups.at(g).getDynamicField("tests");
+			for (let t = 0; t < tests.length(); t++) {
+				const vector = tests.at(t);
+				const id = vector.getDynamicField("tcId").asInt32();
+				if (!ids.includes(id)) continue;
+				checked++;
+				const curve = ownCurve(name == "p256" ? p256 : p384);
+				const der = vector.getDynamicField("public")
+					.asString().decodeHex();
+				assert ecPublicFromSpki(der, [curve]) == null;
+				const imported = EcPublicKey.importPemSync(
+					pemEncode("PUBLIC KEY", der),
+				);
+				if (!imported.ok) {
+					refused++;
+					continue;
+				}
+				assert imported.value.curve == name;
+				let scalar = vector.getDynamicField("private")
+					.asString().decodeHex();
+				while (scalar.length > curve.size && scalar[0] == 0) {
+					scalar = scalar.slice(1);
+				}
+				assert scalar.length <= curve.size;
+				const privateKey = must(EcPrivateKey.importPemSync(pemEncode(
+					"EC PRIVATE KEY",
+					ecPrivateToSec1({ curve, d: scalar, point: [] }),
+				)));
+				assert must(ecdhSync(privateKey, imported.value)).encodeHex() ==
+					vector.getDynamicField("shared").asString(), `${file}:${id}`;
+				const lines = must(imported.value.exportPemSync()).split("\n");
+				const canonical = lines.slice(1, lines.length - 2)
+					.join("").decodeBase64();
+				assert ecPublicFromSpki(canonical, [curve]) != null;
+			}
+		}
+	}
+	assert checked == 20;
+	assert refused == 0, `bounded BER public PEM refused ${refused}/20`;
+}
+
+test "private EC PEM framing retains length bounds and root exhaustion" {
+	for (const name of ["p256", "p384"] as EcCurve[]) {
+		const curve = ownCurve(name == "p256" ? p256 : p384);
+		const scalar: uint8[] = new Array<uint8>(curve.size);
+		scalar[curve.size - 1] = 1;
+		const point = ecPublicPoint(curve, scalar);
+		assert point != null;
+		const der = ecPublicToSpki({ curve, point });
+		const malformed: uint8[][] = [
+			[0x30, 0x80, ...der.slice(2), 0, 0],
+			[0x30, 0x84, 0x7f, 0xff, 0xff, 0xff, ...der.slice(2)],
+			[0x30, 0x84, 0x80, 0, 0, 0, ...der.slice(2)],
+			[0x30, 0x84, 0xff, 0xff, 0xff, 0xff, ...der.slice(2)],
+			[0x30, 0x84, 0, 0],
+			[0x30, 0x85, 0, 0, 0, 0, der[1], ...der.slice(2)],
+			[...der, 0, 0],
+		];
+		for (const bytes of malformed) {
+			const result = EcPublicKey.importPemSync(
+				pemEncode("PUBLIC KEY", bytes),
+			);
+			assert !result.ok;
+			assert result.error.kind == CryptoErrorKind.InvalidKey;
+			assert result.error.operation == "EcPublicKey.importPem";
+		}
+	}
+}
+
+test "private EC signature DER keeps minimal lengths and root exhaustion" {
+	for (const size of [32, 48]) {
+		const raw: uint8[] = new Array<uint8>(size * 2);
+		raw[size - 1] = 1;
+		raw[size * 2 - 1] = 1;
+		const der = ecdsaRawToDer(raw);
+		assert ecdsaDerToRaw(der, size) != null;
+		const longLength: uint8[] = [0x30, 0x81, der[1], ...der.slice(2)];
+		assert ecdsaDerToRaw(longLength, size) == null;
+		assert ecdsaDerToRaw([...der, 0, 0], size) == null;
+	}
 }
 
 test "private EC compressed public PEM preserves canonical exports" {
