@@ -27,3 +27,13 @@ export function randomOctets(size: int32): uint8[] {
 		throw new Error("randomOctets: this target has no random source for the portable code");
 	}
 }
+
+export function randomInto(dst: uint8[], size: int32): void {
+	when (c) {
+		const target = (dst as Span<uint8>) as Ptr<uint8>;
+		if (size > 0 && osRandomFill(target, size as int64) != 0) throw new Error("randomInto: the OS random source failed");
+	} else {
+		const bytes = randomOctets(size);
+		for (let i: int32 = 0; i < size; i++) dst[i] = bytes[i];
+	}
+}

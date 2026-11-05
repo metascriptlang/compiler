@@ -2,7 +2,7 @@ import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf } from "./bytes";
-import { randomOctets } from "./random";
+import { randomOctets, randomInto } from "./random";
 import { store32LE } from "./endian";
 import { wipeBytes, wipeWords } from "./secret";
 import { keyWords, xchachaSealInto, xchachaOpenInto } from "./chacha";
@@ -72,8 +72,7 @@ export function sealSync(
 	const sealed = new Array<uint8>(plain.length + 40);
 	let success = false;
 	try {
-		const nonce = randomOctets(24);
-		for (let i: int32 = 0; i < 24; i++) sealed[i] = nonce[i];
+		randomInto(sealed, 24);
 		success = xchachaSealInto(words, bytesOf(aad), plain, sealed);
 	} catch (_error) {
 		success = false;
