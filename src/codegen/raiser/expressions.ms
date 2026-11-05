@@ -26,7 +26,7 @@ import { demandNativeBridge } from "./nativeBridge";
 import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
+import { typedArrayElement, declaredFieldType, createPrimitive, brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
 import { isSlotUnion, storesUnionTag, objectHolderSlots, objectPathHolders } from "../../checker/fit";
 import { SymbolFlag, classDeclNodeOf, hasFlag, makeSymbol } from "../../checker/symbol";
 import { isCtorSignature } from "../../checker/ctorRoutine";
@@ -729,6 +729,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const hd = node.data as HiddenStdConvData;
 			const refused = refuseByteView(s, node, hd.convExpr.nodeType, hd.convType);
 			if (refused >= 0) return refused;
+			if (isSpanType(hd.convType) && typedArrayElement(hd.convExpr.nodeType) != null) return compileTypedArraySpan(s, hd.convExpr);
 			const reg = compileConvOperand(s, hd);
 			if (node.variantSlot > 0 && node.flags.has(NodeFlag.ConvCheck)) emitUnionConv(s, reg, hd.convExpr.nodeType, hd.convType);
 			if (isSpanType(hd.convType) && exprIsString(s, hd.convExpr)) return compileStringBytes(s, reg);
@@ -2747,6 +2748,28 @@ function isSpanType(t: Type | null): boolean {
 	if (t == null) return false;
 	if ((t.kind == TypeKind.Var || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) return t.typeReturn.kind == TypeKind.Span;
 	return t.kind == TypeKind.Span;
+}
+
+// A typed array as a Span: a view of its buffer's bytes from byteOffset for length elements.
+function compileTypedArraySpan(s: RaiserCompState, view: Node): int32 {
+	const viewReg = compileExpr(s, view);
+	const bufferReg = loadFieldOf(s, viewReg, view.nodeType, "buffer");
+	const bytesReg = loadFieldOf(s, bufferReg, declaredFieldType(view.nodeType, "buffer"), "bytes");
+	const offsetReg = loadFieldOf(s, viewReg, view.nodeType, "byteOffset");
+	const lengthReg = loadFieldOf(s, viewReg, view.nodeType, "length");
+	const index = createPrimitive(TypeKind.Int64);
+	const slotStart = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, emitNumericConv(s, offsetReg, declaredFieldType(view.nodeType, "byteOffset"), index), 0));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64, slotStart + 1, slotStart, emitNumericConv(s, lengthReg, declaredFieldType(view.nodeType, "length"), index)));
+	const dest = allocRef(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart));
+	return dest;
+}
+
+function loadFieldOf(s: RaiserCompState, objReg: int32, objType: Type | null, name: string): int32 {
+	const reg = allocFor(s, declaredFieldType(objType, name));
+	emitInst(s, fieldInst(s, objType, name, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, reg, objReg, addConst(s, raiserConstString(name))));
+	return reg;
 }
 
 function compileStringBytes(s: RaiserCompState, strReg: int32): int32 {
