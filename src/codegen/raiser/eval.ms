@@ -2649,6 +2649,17 @@ test "engine: a struct is copied into a held struct and zeroed through typed slo
 	}
 }
 
+test "engine: packed locals and subplaces copy into legacy elements without releasing borrowed sources" {
+	const code = "struct P { x: int64; y: int64; } struct H { p: P; }"
+		+ " function f(): string { let p: P = { x: 2, y: 3 }; const xs: P[] = [{ x: 0, y: 0 }, { x: 6, y: 7 }];"
+		+ " xs[0] = p; const snapshot = xs[0]; p.x = 9; xs[1] = xs[0]; xs[0].y = 8;"
+		+ " let h: H = { p: { x: 4, y: 5 } }; xs[0] = h.p; h.p.x = 9;"
+		+ " return `${snapshot.x} ${snapshot.y} ${xs[1].x} ${xs[1].y} ${xs[0].x} ${xs[0].y} ${p.x} ${h.p.x}`; } console.log(f());";
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2 3 2 3 4 5 9 9\n", vm.output;
+}
+
 function backBranchSpan(f: RaiserFunction): number {
 	for (let i = 0; i < f.code.length; i = i + 1) {
 		const inst = f.code[i];

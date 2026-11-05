@@ -428,6 +428,16 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 			if (row == ROW_INCREF || row == ROW_DECREF || row == ROW_DECREF_CYCLIC || row == ROW_TRACE || row == ROW_COPY_VALUE && d.arguments.length == 1) return true;
 		}
 	}
+	if (d.arguments.length == 2 && (row == ROW_COPY_VALUE ||
+		isLiftedCellOp(d, AttachedOp.AttachedAsgn))) {
+		const source = storedFramePlace(s, placeOf(d.arguments[1]));
+		if (source != null) {
+			const ownedSource = refRegister(s, d.callee.resolvedSym!.name,
+				d.arguments[1]);
+			emitStoreInto(s, d.callee.resolvedSym!.name, d.arguments[0], ownedSource);
+			return true;
+		}
+	}
 	if (isHooklessCellWasMoved(d)) {
 		emitClear(s, d.callee.resolvedSym!.name, d.arguments[0]);
 		return true;

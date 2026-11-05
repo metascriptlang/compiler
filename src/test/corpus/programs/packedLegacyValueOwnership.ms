@@ -5,6 +5,7 @@
 // @stdout: borrowed projection 89
 // @stdout: distinct projection 67
 // @stdout: distinct snapshot 23
+// @stdout: packed element copy 23 23 45 9 9
 struct Pair { x: int64; y: int64; }
 type OtherPair = distinct Pair;
 
@@ -62,6 +63,22 @@ type OtherPair = distinct Pair;
 	return scoreDistinct(snapshot);
 }
 
+struct Holder { pair: Pair; }
+
+@noinline function packedElementCopy(): string {
+	let p: Pair = { x: 2, y: 3 };
+	const xs: Pair[] = [{ x: 0, y: 0 }, { x: 6, y: 7 }];
+	xs[0] = p;
+	const snapshot = xs[0];
+	p.x = 9;
+	xs[1] = xs[0];
+	xs[0].y = 8;
+	let h: Holder = { pair: { x: 4, y: 5 } };
+	xs[0] = h.pair;
+	h.pair.x = 9;
+	return `${snapshot.x * 10 + snapshot.y} ${xs[1].x * 10 + xs[1].y} ${xs[0].x * 10 + xs[0].y} ${p.x} ${h.pair.x}`;
+}
+
 console.log(`local closure ${fromClosure()}`);
 console.log(`borrowed place ${fromLegacyPlace()}`);
 console.log(`nullable closure ${fromNullableClosure()}`);
@@ -69,3 +86,4 @@ console.log(`checked projection ${fromCheckedProjection()}`);
 console.log(`borrowed projection ${fromBorrowedProjection()}`);
 console.log(`distinct projection ${fromDistinctProjection()}`);
 console.log(`distinct snapshot ${fromDistinctSnapshot()}`);
+console.log(`packed element copy ${packedElementCopy()}`);
