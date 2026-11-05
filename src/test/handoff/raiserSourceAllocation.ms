@@ -18,4 +18,3 @@ function truthyLoop(iterations: int32): int64 {
 test "packed source: ordinary nullable conditions allocate no per-iteration carrier" {
 	assert truthyLoop(200) - truthyLoop(2) == 0;
 }
-
