@@ -7,7 +7,11 @@ import { parseJson } from "std/serialize/json/parser";
 import { stringify } from "std/serialize/json/stringify";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
 import {
-	getDynamicField, setDynamicField, at, asInt32, asString,
+	getDynamicField,
+	setDynamicField,
+	at,
+	asInt32,
+	asString,
 } from "std/serialize/json/accessors";
 import { jsonNull, jsonString } from "std/serialize/json/builder";
 import { ensureDir, writeFile } from "std/fs";
@@ -65,35 +69,57 @@ export function projectUri(dir: string): string {
 }
 
 // Every frame of `wire` with `from` replaced by `to`, framed again.
-export function replaceInFrames(wire: string, from: string, to: string): string {
+export function replaceInFrames(
+	wire: string,
+	from: string,
+	to: string,
+): string {
 	let out = "";
-	for (const body of lspSplitFrames(wire)) out += lspFormatMessage(body.split(from).join(to));
+	for (const body of lspSplitFrames(wire)) {
+		out += lspFormatMessage(body.split(from).join(to));
+	}
 	return out;
 }
 
 // Writes the project files under dir; returns the drains with PROJECT_URI moved there.
-export function materialiseProject(files: LspProjectFile[], drains: string[][], dir: string): Result<string[][], string> {
+export function materialiseProject(
+	files: LspProjectFile[],
+	drains: string[][],
+	dir: string,
+): Result<string[][], string> {
 	for (const file of files) {
 		const path = `${dir}/${file.path}`;
 		const parent = dirname(path);
-		if (!ensureDir(parent).ok) return Result.err(`cannot create ${parent}`);
+		if (!ensureDir(parent).ok) {
+			return Result.err(`cannot create ${parent}`);
+		}
 		const written = writeFile(path, file.text);
-		if (!written.ok) return Result.err(`cannot write ${path}`);
+		if (!written.ok) {
+			return Result.err(`cannot write ${path}`);
+		}
 	}
 	const moved: string[][] = [];
 	for (const drain of drains) {
 		const frames: string[] = [];
-		for (const frame of drain) frames.push(replaceInFrames(frame, PROJECT_URI, projectUri(dir)));
+		for (const frame of drain) {
+			frames.push(replaceInFrames(frame, PROJECT_URI, projectUri(dir)));
+		}
 		moved.push(frames);
 	}
 	return Result.ok(moved);
 }
 
-export function lspTranscript(output: string, exitCode: int32, drainsConsumed: int32): LspReplay {
+export function lspTranscript(
+	output: string,
+	exitCode: int32,
+	drainsConsumed: int32,
+): LspReplay {
 	const messages: JsonValue[] = [];
 	for (const body of lspSplitFrames(output)) {
 		const parsed = parseJson(body);
-		if (!parsed.ok) throw new Error("server frame is not JSON: " + body);
+		if (!parsed.ok) {
+			throw new Error("server frame is not JSON: " + body);
+		}
 		messages.push(parsed.value);
 	}
 	return { messages, exitCode, drainsConsumed };
@@ -103,38 +129,72 @@ export function lspTranscript(output: string, exitCode: int32, drainsConsumed: i
 
 export function frames(bodies: string[]): string[] {
 	const out: string[] = [];
-	for (const body of bodies) out.push(lspFormatMessage(body));
+	for (const body of bodies) {
+		out.push(lspFormatMessage(body));
+	}
 	return out;
 }
 
-export function request(idJson: string, method: string, params: string): string {
-	return `{"jsonrpc":"2.0","id":${idJson},"method":${lspJsonString(method)},"params":${params}}`;
+export function request(
+	idJson: string,
+	method: string,
+	params: string,
+): string {
+	return (
+		`{"jsonrpc":"2.0","id":${idJson},"method":${lspJsonString(method)},"params":${params}}`
+	);
 }
 
 export function notification(method: string, params: string): string {
-	return `{"jsonrpc":"2.0","method":${lspJsonString(method)},"params":${params}}`;
+	return (
+		`{"jsonrpc":"2.0","method":${lspJsonString(method)},"params":${params}}`
+	);
 }
 
 export function initializeDrain(): string[] {
-	return frames([request("1", "initialize", "{}"), notification("initialized", "{}")]);
+	return frames([
+		request("1", "initialize", "{}"),
+		notification("initialized", "{}"),
+	]);
 }
 
 export function openParams(uri: string, text: string): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)},"languageId":"metascript","version":1,"text":${lspJsonString(text)}}}`;
+	return (
+		`{"textDocument":{"uri":${lspJsonString(uri)},"languageId":"metascript","version":1,"text":${lspJsonString(text)}}}`
+	);
 }
 
-export function changeParams(uri: string, version: int32, text: string): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":${version}},"contentChanges":[{"text":${lspJsonString(text)}}]}`;
+export function changeParams(
+	uri: string,
+	version: int32,
+	text: string,
+): string {
+	return (
+		`{"textDocument":{"uri":${lspJsonString(uri)},"version":${version}},"contentChanges":[{"text":${lspJsonString(text)}}]}`
+	);
 }
 
-export function positionParams(uri: string, line: int32, character: int32): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`;
+export function positionParams(
+	uri: string,
+	line: int32,
+	character: int32,
+): string {
+	return (
+		`{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`
+	);
 }
 
-export function referenceParams(uri: string, line: int32, character: int32, includeDeclaration: boolean): string {
+export function referenceParams(
+	uri: string,
+	line: int32,
+	character: int32,
+	includeDeclaration: boolean,
+): string {
 	const at = positionParams(uri, line, character);
-	return at.byteSlice(0, at.byteLength - 1)
-		+ `,"context":{"includeDeclaration":${includeDeclaration ? "true" : "false"}}}`;
+	return (
+		at.byteSlice(0, at.byteLength - 1) +
+		`,"context":{"includeDeclaration":${includeDeclaration ? "true" : "false"}}}`
+	);
 }
 
 const BAD_VALUE = "export const value: int32 = \"wrong\";";
@@ -162,14 +222,16 @@ export function lspComparableAnswer(
 	message: JsonValue,
 	method: string,
 ): string {
-	if (method != "textDocument/completion") return stringify(message);
+	if (method != "textDocument/completion") {
+		return stringify(message);
+	}
 	const copy = parseJson(stringify(message));
 	if (!copy.ok) {
 		throw new Error("completion answer cannot be compared: " + copy.error);
 	}
 	const result = copy.value.getDynamicField("result");
-	const items = result.kind == JsonKind.Array ? result :
-		result.getDynamicField("items");
+	const items =
+		result.kind == JsonKind.Array ? result : result.getDynamicField("items");
 	if (items.kind == JsonKind.Array) {
 		for (const item of items.items) {
 			if (hasKey(item, "data")) {
@@ -213,10 +275,10 @@ test "completion comparison preserves incomplete status" {
 }
 
 test "completion comparison preserves item order" {
-	const first = `{"result":[{"label":"a","data":0},` +
-		`{"label":"b","data":0}]}`;
-	const second = `{"result":[{"label":"b","data":0},` +
-		`{"label":"a","data":0}]}`;
+	const first =
+		`{"result":[{"label":"a","data":0},` + `{"label":"b","data":0}]}`;
+	const second =
+		`{"result":[{"label":"b","data":0},` + `{"label":"a","data":0}]}`;
 	assert comparableReplayJson(first) != comparableReplayJson(second);
 }
 
@@ -233,7 +295,8 @@ test "completion comparison preserves replacement text" {
 }
 
 test "completion comparison preserves replacement ranges" {
-	const first = `{"result":[{"data":0,"textEdit":{"newText":"x","range":` +
+	const first =
+		`{"result":[{"data":0,"textEdit":{"newText":"x","range":` +
 		`{"start":{"line":0,"character":1},` +
 		`"end":{"line":0,"character":2}}}}]}`;
 	const second = first.replace(`"character":1`, `"character":0`);
@@ -241,7 +304,8 @@ test "completion comparison preserves replacement ranges" {
 }
 
 test "completion comparison preserves additional import edits" {
-	const first = `{"result":[{"data":0,"additionalTextEdits":` +
+	const first =
+		`{"result":[{"data":0,"additionalTextEdits":` +
 		`[{"newText":"import a"}]}]}`;
 	const second = first.replace("import a", "import b");
 	assert comparableReplayJson(first) != comparableReplayJson(second);
@@ -299,7 +363,9 @@ function render(v: JsonValue): string {
 function field(m: JsonValue, path: string): string {
 	let v = m;
 	for (const key of path.split(".")) {
-		if (!hasKey(v, key)) return "absent";
+		if (!hasKey(v, key)) {
+			return "absent";
+		}
 		v = v.getDynamicField(key);
 	}
 	return render(v);
@@ -312,28 +378,38 @@ function messageAt(r: LspReplay, index: int32): JsonValue {
 function answersTo(r: LspReplay, key: string): JsonValue[] {
 	const found: JsonValue[] = [];
 	for (const m of r.messages) {
-		if (idKey(m.getDynamicField("id")) == key) found.push(m);
+		if (idKey(m.getDynamicField("id")) == key) {
+			found.push(m);
+		}
 	}
 	return found;
 }
 
 function onlyAnswer(r: LspReplay, key: string): Result<JsonValue, string> {
 	const found = answersTo(r, key);
-	if (found.length != 1) return Result.err("expected one answer to " + key + ", got " + found.length);
+	if (found.length != 1) {
+		return Result.err(
+			"expected one answer to " + key + ", got " + found.length,
+		);
+	}
 	return Result.ok(found[0]);
 }
 
 function answerField(r: LspReplay, key: string, path: string): string {
 	const answer = onlyAnswer(r, key);
-	if (!answer.ok) return answer.error;
+	if (!answer.ok) {
+		return answer.error;
+	}
 	return field(answer.value, path);
 }
 
 function published(r: LspReplay, uri: string): JsonValue[] {
 	const found: JsonValue[] = [];
 	for (const m of r.messages) {
-		if (field(m, "method") == lspJsonString("textDocument/publishDiagnostics")
-			&& field(m, "params.uri") == lspJsonString(uri)) {
+		if (
+			field(m, "method") == lspJsonString("textDocument/publishDiagnostics") &&
+			field(m, "params.uri") == lspJsonString(uri)
+		) {
 			found.push(m.getDynamicField("params").getDynamicField("diagnostics"));
 		}
 	}
@@ -343,19 +419,30 @@ function published(r: LspReplay, uri: string): JsonValue[] {
 function publishedCounts(r: LspReplay, uri: string): string {
 	const counts: string[] = [];
 	for (const diagnostics of published(r, uri)) {
-		counts.push(diagnostics.kind == JsonKind.Array ? "" + diagnostics.items.length : render(diagnostics));
+		counts.push(
+			diagnostics.kind == JsonKind.Array
+				? "" + diagnostics.items.length
+				: render(diagnostics),
+		);
 	}
 	return "[" + counts.join(",") + "]";
 }
 
 function finalDiagnosticCount(r: LspReplay, uri: string): string {
 	const all = published(r, uri);
-	if (all.length == 0) return "no publish";
+	if (all.length == 0) {
+		return "no publish";
+	}
 	const last = all[all.length - 1];
 	return last.kind == JsonKind.Array ? "" + last.items.length : render(last);
 }
 
-function diagnosticAt(r: LspReplay, uri: string, publish: int32, index: int32): JsonValue {
+function diagnosticAt(
+	r: LspReplay,
+	uri: string,
+	publish: int32,
+	index: int32,
+): JsonValue {
 	const all = published(r, uri);
 	return publish < all.length ? all[publish].at(index) : jsonNull();
 }
@@ -364,19 +451,32 @@ function spanOf(diagnostic: JsonValue): string {
 	const range = diagnostic.getDynamicField("range");
 	const start = range.getDynamicField("start");
 	const end = range.getDynamicField("end");
-	return start.getDynamicField("line").asInt32(-1) + ":" + start.getDynamicField("character").asInt32(-1)
-		+ "-" + end.getDynamicField("line").asInt32(-1) + ":" + end.getDynamicField("character").asInt32(-1);
+	return (
+		start.getDynamicField("line").asInt32(-1) +
+		":" +
+		start.getDynamicField("character").asInt32(-1) +
+		"-" +
+		end.getDynamicField("line").asInt32(-1) +
+		":" +
+		end.getDynamicField("character").asInt32(-1)
+	);
 }
 
 // Every diagnostic of the n-th publish for uri as "span severity message", joined by "; ".
 function publishedAt(r: LspReplay, uri: string, publish: int32): string {
 	const all = published(r, uri);
-	if (publish >= all.length) return "no publish " + publish;
+	if (publish >= all.length) {
+		return "no publish " + publish;
+	}
 	const diagnostics = all[publish];
-	if (diagnostics.kind != JsonKind.Array) return render(diagnostics);
+	if (diagnostics.kind != JsonKind.Array) {
+		return render(diagnostics);
+	}
 	const items: string[] = [];
 	for (const d of diagnostics.items) {
-		items.push(spanOf(d) + " " + field(d, "severity") + " " + field(d, "message"));
+		items.push(
+			spanOf(d) + " " + field(d, "severity") + " " + field(d, "message"),
+		);
 	}
 	return "[" + items.join("; ") + "]";
 }
@@ -388,25 +488,35 @@ function lastPublished(r: LspReplay, uri: string): string {
 
 function definitionSpan(r: LspReplay, key: string): string {
 	const answer = onlyAnswer(r, key);
-	if (!answer.ok) return answer.error;
+	if (!answer.ok) {
+		return answer.error;
+	}
 	const result = answer.value.getDynamicField("result");
-	if (result.kind != JsonKind.Array || result.items.length != 1) return "no location";
+	if (result.kind != JsonKind.Array || result.items.length != 1) {
+		return "no location";
+	}
 	return spanOf(result.items[0]);
 }
 
 // ===== Checks =====
 
 function sameText(what: string, expected: string, got: string): string {
-	return expected == got ? "" : what + ": expected " + expected + ", got " + got;
+	return expected == got
+		? ""
+		: what + ": expected " + expected + ", got " + got;
 }
 
 function sameCount(what: string, expected: int32, got: int32): string {
-	return expected == got ? "" : what + ": expected " + expected + ", got " + got;
+	return expected == got
+		? ""
+		: what + ": expected " + expected + ", got " + got;
 }
 
 function firstFailure(results: string[]): string {
 	for (const failure of results) {
-		if (failure != "") return failure;
+		if (failure != "") {
+			return failure;
+		}
 	}
 	return "";
 }
@@ -417,7 +527,11 @@ function requestKeys(drains: string[][]): string[] {
 		for (const frame of drain) {
 			for (const body of lspSplitFrames(frame)) {
 				const parsed = parseJson(body);
-				if (parsed.ok && hasKey(parsed.value, "id") && hasKey(parsed.value, "method")) {
+				if (
+					parsed.ok &&
+					hasKey(parsed.value, "id") &&
+					hasKey(parsed.value, "method")
+				) {
 					keys.push(idKey(parsed.value.getDynamicField("id")));
 				}
 			}
@@ -429,7 +543,9 @@ function requestKeys(drains: string[][]): string[] {
 function everyRequestAnsweredOnce(r: LspReplay, drains: string[][]): string {
 	for (const key of requestKeys(drains)) {
 		const failure = sameCount("answers to " + key, 1, answersTo(r, key).length);
-		if (failure != "") return failure;
+		if (failure != "") {
+			return failure;
+		}
 	}
 	return "";
 }
@@ -443,22 +559,61 @@ function openWithErrorThenFix(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, BAD_VALUE))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, GOOD_VALUE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, BAD_VALUE)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, GOOD_VALUE),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("messages", 3, r.messages.length),
-			sameText("first message id", "n:1", idKey(messageAt(r, 0).getDynamicField("id"))),
-			sameText("textDocumentSync", "1", field(messageAt(r, 0), "result.capabilities.textDocumentSync")),
-			sameText("hoverProvider", "true", field(messageAt(r, 0), "result.capabilities.hoverProvider")),
-			sameText("diagnostic counts per publish", "[1,0]", publishedCounts(r, uri)),
-			sameText("publish 0 message", lspJsonString(NOT_ASSIGNABLE), field(diagnosticAt(r, uri, 0, 0), "message")),
-			sameText("publish 0 severity", "1", field(diagnosticAt(r, uri, 0, 0), "severity")),
-			sameText("publish 0 span", "0:28-0:29", spanOf(diagnosticAt(r, uri, 0, 0))),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("messages", 3, r.messages.length),
+				sameText(
+					"first message id",
+					"n:1",
+					idKey(messageAt(r, 0).getDynamicField("id")),
+				),
+				sameText(
+					"textDocumentSync",
+					"1",
+					field(messageAt(r, 0), "result.capabilities.textDocumentSync"),
+				),
+				sameText(
+					"hoverProvider",
+					"true",
+					field(messageAt(r, 0), "result.capabilities.hoverProvider"),
+				),
+				sameText(
+					"diagnostic counts per publish",
+					"[1,0]",
+					publishedCounts(r, uri),
+				),
+				sameText(
+					"publish 0 message",
+					lspJsonString(NOT_ASSIGNABLE),
+					field(diagnosticAt(r, uri, 0, 0), "message"),
+				),
+				sameText(
+					"publish 0 severity",
+					"1",
+					field(diagnosticAt(r, uri, 0, 0), "severity"),
+				),
+				sameText(
+					"publish 0 span",
+					"0:28-0:29",
+					spanOf(diagnosticAt(r, uri, 0, 0)),
+				),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 0, character: 13 }] },
+		checkpoints: {
+			afterDrains: [1, 2],
+			probes: [{ uri, line: 0, character: 13 }],
+		},
 		project: null,
 	};
 }
@@ -471,17 +626,43 @@ function multibyteContentLength(): LspScenario {
 		drains: [
 			initializeDrain(),
 			frames([
-				notification("textDocument/didOpen", `{"textDocument":{"uri":"${uri}","languageId":"metascript","version":1,"text":"/*é😀*/ export const value: int32 = \\"wrong\\";\\nexport const w = value;"}}`),
-				request("\"é😀-1\"", "textDocument/definition", positionParams(uri, 1, 17)),
+				notification(
+					"textDocument/didOpen",
+					`{"textDocument":{"uri":"${uri}","languageId":"metascript","version":1,"text":"/*é😀*/ export const value: int32 = \\"wrong\\";\\nexport const w = value;"}}`,
+				),
+				request(
+					"\"é😀-1\"",
+					"textDocument/definition",
+					positionParams(uri, 1, 17),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostic counts per publish", "[1]", publishedCounts(r, uri)),
-			sameText("publish 0 span", "0:36-0:37", spanOf(diagnosticAt(r, uri, 0, 0))),
-			sameText("s:é😀-1 definition", "0:21-0:26", definitionSpan(r, "s:é😀-1")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"diagnostic counts per publish",
+					"[1]",
+					publishedCounts(r, uri),
+				),
+				sameText(
+					"publish 0 span",
+					"0:36-0:37",
+					spanOf(diagnosticAt(r, uri, 0, 0)),
+				),
+				sameText(
+					"s:é😀-1 definition",
+					"0:21-0:26",
+					definitionSpan(r, "s:é😀-1"),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 17 }, { uri, line: 0, character: 22 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [
+				{ uri, line: 1, character: 17 },
+				{ uri, line: 0, character: 22 },
+			],
+		},
 		project: null,
 	};
 }
@@ -500,11 +681,17 @@ function twoEditsOneDrain(): LspScenario {
 		name: "two edits in one drain publish once",
 		batching: "exact",
 		drains,
-		check: (r: LspReplay) => sameText("diagnostic counts per publish", "[0,0]", publishedCounts(r, uri)),
-		checkAnyBatching: (r: LspReplay) => firstFailure([
-			everyRequestAnsweredOnce(r, drains),
-			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			sameText(
+				"diagnostic counts per publish",
+				"[0,0]",
+				publishedCounts(r, uri),
+			),
+		checkAnyBatching: (r: LspReplay) =>
+			firstFailure([
+				everyRequestAnsweredOnce(r, drains),
+				sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
+			]),
 		checkpoints: null,
 		project: null,
 	};
@@ -517,16 +704,37 @@ function twoEditsTwoDrains(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 3, GOOD_VALUE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, GOOD_VALUE)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 3, GOOD_VALUE),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostic counts per publish", "[0,1,0]", publishedCounts(r, uri)),
-			sameText("publish 1 message", lspJsonString(NOT_ASSIGNABLE), field(diagnosticAt(r, uri, 1, 0), "message")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"diagnostic counts per publish",
+					"[0,1,0]",
+					publishedCounts(r, uri),
+				),
+				sameText(
+					"publish 1 message",
+					lspJsonString(NOT_ASSIGNABLE),
+					field(diagnosticAt(r, uri, 1, 0), "message"),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [2], probes: [{ uri, line: 0, character: 13 }] },
+		checkpoints: {
+			afterDrains: [2],
+			probes: [{ uri, line: 0, character: 13 }],
+		},
 		project: null,
 	};
 }
@@ -538,20 +746,37 @@ function requestBetweenEdits(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, TWO_CONSTS))]),
 			frames([
-				notification("textDocument/didChange", changeParams(uri, 2, "\n" + TWO_CONSTS)),
-				request("3", "textDocument/definition", positionParams(uri, 2, 10)),
-				notification("textDocument/didChange", changeParams(uri, 3, "\n\n" + TWO_CONSTS)),
+				notification("textDocument/didOpen", openParams(uri, TWO_CONSTS)),
 			]),
-			frames([request("4", "textDocument/definition", positionParams(uri, 3, 10))]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, "\n" + TWO_CONSTS),
+				),
+				request("3", "textDocument/definition", positionParams(uri, 2, 10)),
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 3, "\n\n" + TWO_CONSTS),
+				),
+			]),
+			frames([
+				request("4", "textDocument/definition", positionParams(uri, 3, 10)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:3 definition", "1:6-1:7", definitionSpan(r, "n:3")),
-			sameText("n:4 definition", "2:6-2:7", definitionSpan(r, "n:4")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("n:3 definition", "1:6-1:7", definitionSpan(r, "n:3")),
+				sameText("n:4 definition", "2:6-2:7", definitionSpan(r, "n:4")),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [3], probes: [{ uri, line: 3, character: 10 }, { uri, line: 1, character: 10 }] },
+		checkpoints: {
+			afterDrains: [3],
+			probes: [
+				{ uri, line: 3, character: 10 },
+				{ uri, line: 1, character: 10 },
+			],
+		},
 		project: null,
 	};
 }
@@ -563,7 +788,12 @@ function supersededAndCoalesced(): LspScenario {
 		initializeDrain(),
 		frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
 		frames([
-			request("5", "textDocument/inlayHint", document + `,"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}}`),
+			request(
+				"5",
+				"textDocument/inlayHint",
+				document +
+					`,"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}}`,
+			),
 			notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
 			request("6", "textDocument/semanticTokens/full", document + "}"),
 			request("7", "textDocument/semanticTokens/full", document + "}"),
@@ -573,16 +803,34 @@ function supersededAndCoalesced(): LspScenario {
 		name: "superseded and coalesced requests answer ContentModified",
 		batching: "exact",
 		drains,
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:5 error.code", "-32801", answerField(r, "n:5", "error.code")),
-			sameText("n:6 error.code", "-32801", answerField(r, "n:6", "error.code")),
-			sameText("n:7 result.data", "array", answerField(r, "n:7", "result.data")),
-			sameText("diagnostic counts per publish", "[0,1]", publishedCounts(r, uri)),
-		]),
-		checkAnyBatching: (r: LspReplay) => firstFailure([
-			everyRequestAnsweredOnce(r, drains),
-			sameText("final diagnostic count", "1", finalDiagnosticCount(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"n:5 error.code",
+					"-32801",
+					answerField(r, "n:5", "error.code"),
+				),
+				sameText(
+					"n:6 error.code",
+					"-32801",
+					answerField(r, "n:6", "error.code"),
+				),
+				sameText(
+					"n:7 result.data",
+					"array",
+					answerField(r, "n:7", "result.data"),
+				),
+				sameText(
+					"diagnostic counts per publish",
+					"[0,1]",
+					publishedCounts(r, uri),
+				),
+			]),
+		checkAnyBatching: (r: LspReplay) =>
+			firstFailure([
+				everyRequestAnsweredOnce(r, drains),
+				sameText("final diagnostic count", "1", finalDiagnosticCount(r, uri)),
+			]),
 		checkpoints: null,
 		project: null,
 	};
@@ -595,7 +843,9 @@ function idsComeBackExactly(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, TWO_CONSTS))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, TWO_CONSTS)),
+			]),
 			frames([
 				request("0", "textDocument/definition", positionParams(uri, 1, 10)),
 				request("42", "textDocument/definition", positionParams(uri, 1, 10)),
@@ -603,12 +853,17 @@ function idsComeBackExactly(): LspScenario {
 				request("\"req-α\"", "textDocument/hover", positionParams(uri, 1, 6)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:0 definition", "0:6-0:7", definitionSpan(r, "n:0")),
-			sameText("n:42 definition", "0:6-0:7", definitionSpan(r, "n:42")),
-			sameText("s:42 definition", "0:6-0:7", definitionSpan(r, "s:42")),
-			sameText("s:req-α result", "object", answerField(r, "s:req-α", "result")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("n:0 definition", "0:6-0:7", definitionSpan(r, "n:0")),
+				sameText("n:42 definition", "0:6-0:7", definitionSpan(r, "n:42")),
+				sameText("s:42 definition", "0:6-0:7", definitionSpan(r, "s:42")),
+				sameText(
+					"s:req-α result",
+					"object",
+					answerField(r, "s:req-α", "result"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -624,12 +879,13 @@ function shutdownWaitsForExit(): LspScenario {
 			frames([request("9", "shutdown", "null")]),
 			frames([notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("messages", 2, r.messages.length),
-			sameText("n:9 result", "null", answerField(r, "n:9", "result")),
-			sameCount("drains consumed", 3, r.drainsConsumed),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("messages", 2, r.messages.length),
+				sameText("n:9 result", "null", answerField(r, "n:9", "result")),
+				sameCount("drains consumed", 3, r.drainsConsumed),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -643,7 +899,9 @@ function afterShutdown(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, GOOD_VALUE)),
+			]),
 			frames([request("9", "shutdown", "null")]),
 			frames([
 				request("10", "textDocument/definition", positionParams(uri, 0, 0)),
@@ -652,13 +910,26 @@ function afterShutdown(): LspScenario {
 			]),
 			frames([notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:9 result", "null", answerField(r, "n:9", "result")),
-			sameText("n:10 error.code", "-32600", answerField(r, "n:10", "error.code")),
-			sameText("n:11 error.code", "-32600", answerField(r, "n:11", "error.code")),
-			sameText("diagnostic counts per publish", "[0]", publishedCounts(r, uri)),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("n:9 result", "null", answerField(r, "n:9", "result")),
+				sameText(
+					"n:10 error.code",
+					"-32600",
+					answerField(r, "n:10", "error.code"),
+				),
+				sameText(
+					"n:11 error.code",
+					"-32600",
+					answerField(r, "n:11", "error.code"),
+				),
+				sameText(
+					"diagnostic counts per publish",
+					"[0]",
+					publishedCounts(r, uri),
+				),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -679,12 +950,13 @@ function exitAfterShutdown(): LspScenario {
 			]),
 			frames([request("11", "textDocument/hover", positionParams(uri, 0, 0))]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("exit code", 0, r.exitCode),
-			sameCount("answers to n:10", 0, answersTo(r, "n:10").length),
-			sameCount("answers to n:11", 0, answersTo(r, "n:11").length),
-			sameCount("drains consumed", 2, r.drainsConsumed),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("exit code", 0, r.exitCode),
+				sameCount("answers to n:10", 0, answersTo(r, "n:10").length),
+				sameCount("answers to n:11", 0, answersTo(r, "n:11").length),
+				sameCount("drains consumed", 2, r.drainsConsumed),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -696,10 +968,11 @@ function exitWithoutShutdown(): LspScenario {
 		name: "exit without shutdown ends the loop with code 1",
 		batching: "any",
 		drains: [initializeDrain(), frames([notification("exit", "null")])],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("exit code", 1, r.exitCode),
-			sameCount("messages", 1, r.messages.length),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("exit code", 1, r.exitCode),
+				sameCount("messages", 1, r.messages.length),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -723,11 +996,15 @@ function bodyCutShort(): LspScenario {
 	return {
 		name: "a body cut short by EOF is not processed and ends the server with code 1",
 		batching: "any",
-		drains: [initializeDrain(), ["Content-Length: " + (body.byteLength + 10) + "\r\n\r\n" + body]],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("answers to n:9", 0, answersTo(r, "n:9").length),
-			sameCount("exit code", 1, r.exitCode),
-		]),
+		drains: [
+			initializeDrain(),
+			["Content-Length: " + (body.byteLength + 10) + "\r\n\r\n" + body],
+		],
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("answers to n:9", 0, answersTo(r, "n:9").length),
+				sameCount("exit code", 1, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -739,10 +1016,11 @@ function headerCutShort(): LspScenario {
 		name: "a header cut short by EOF ends the server with code 0",
 		batching: "any",
 		drains: [initializeDrain(), ["Content-Length: 30\r\n"]],
-		check: (r: LspReplay) => firstFailure([
-			sameCount("messages", 1, r.messages.length),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameCount("messages", 1, r.messages.length),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -762,28 +1040,48 @@ function cancelledInDrain(): LspScenario {
 			notification("$/cancelRequest", "{\"id\":\"four\"}"),
 			notification("$/cancelRequest", "{\"id\":99}"),
 		]),
-		frames([request("6", "textDocument/definition", positionParams(uri, 1, 10))]),
+		frames([
+			request("6", "textDocument/definition", positionParams(uri, 1, 10)),
+		]),
 		frames([notification("$/cancelRequest", "{\"id\":6}")]),
 	];
 	return {
 		name: "a cancelled request still in the drain answers RequestCancelled",
 		batching: "exact",
 		drains,
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:4 result", "absent", answerField(r, "n:4", "result")),
-			sameText("n:4 error.code", "-32800", answerField(r, "n:4", "error.code")),
-			sameText("n:4 error.message", lspJsonString("RequestCancelled"), answerField(r, "n:4", "error.message")),
-			sameText("s:four result", "absent", answerField(r, "s:four", "result")),
-			sameText("s:four error.code", "-32800", answerField(r, "s:four", "error.code")),
-			sameText("s:four error.message", lspJsonString("RequestCancelled"), answerField(r, "s:four", "error.message")),
-			sameText("n:5 definition", "0:6-0:7", definitionSpan(r, "n:5")),
-			sameText("n:6 definition", "0:6-0:7", definitionSpan(r, "n:6")),
-			sameCount("answers to n:99", 0, answersTo(r, "n:99").length),
-		]),
-		checkAnyBatching: (r: LspReplay) => firstFailure([
-			everyRequestAnsweredOnce(r, drains),
-			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("n:4 result", "absent", answerField(r, "n:4", "result")),
+				sameText(
+					"n:4 error.code",
+					"-32800",
+					answerField(r, "n:4", "error.code"),
+				),
+				sameText(
+					"n:4 error.message",
+					lspJsonString("RequestCancelled"),
+					answerField(r, "n:4", "error.message"),
+				),
+				sameText("s:four result", "absent", answerField(r, "s:four", "result")),
+				sameText(
+					"s:four error.code",
+					"-32800",
+					answerField(r, "s:four", "error.code"),
+				),
+				sameText(
+					"s:four error.message",
+					lspJsonString("RequestCancelled"),
+					answerField(r, "s:four", "error.message"),
+				),
+				sameText("n:5 definition", "0:6-0:7", definitionSpan(r, "n:5")),
+				sameText("n:6 definition", "0:6-0:7", definitionSpan(r, "n:6")),
+				sameCount("answers to n:99", 0, answersTo(r, "n:99").length),
+			]),
+		checkAnyBatching: (r: LspReplay) =>
+			firstFailure([
+				everyRequestAnsweredOnce(r, drains),
+				sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
+			]),
 		checkpoints: null,
 		project: null,
 	};
@@ -796,13 +1094,18 @@ const MB_USE = "export const w = value;";
 
 function positionEditsShiftRanges(): LspScenario {
 	const uri = "file:///lspwire/shift.ms";
-	const shifted = "// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = \"wrong\";\n" + MB_USE;
-	const fixed = "// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = 42;\n" + MB_USE;
+	const shifted =
+		"// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = \"wrong\";\n" + MB_USE;
+	const fixed =
+		"// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = 42;\n" + MB_USE;
 	const notAssignable = lspJsonString(NOT_ASSIGNABLE);
 	const drains = [
 		initializeDrain(),
 		frames([
-			notification("textDocument/didOpen", openParams(uri, MB_LINE + "\n" + MB_USE)),
+			notification(
+				"textDocument/didOpen",
+				openParams(uri, MB_LINE + "\n" + MB_USE),
+			),
 			request("11", "textDocument/definition", positionParams(uri, 1, 17)),
 		]),
 		frames([
@@ -818,19 +1121,32 @@ function positionEditsShiftRanges(): LspScenario {
 		name: "position edits past non-ASCII text shift the diagnostic and the definition, a fix clears it",
 		batching: "any",
 		drains,
-		check: (r: LspReplay) => firstFailure([
-			everyRequestAnsweredOnce(r, drains),
-			sameText("publish 0", "[0:36-0:37 1 " + notAssignable + "]", publishedAt(r, uri, 0)),
-			sameText("n:11 definition", "0:21-0:26", definitionSpan(r, "n:11")),
-			sameText("publish 1", "[1:43-1:44 1 " + notAssignable + "]", publishedAt(r, uri, 1)),
-			sameText("n:12 definition", "1:28-1:33", definitionSpan(r, "n:12")),
-			sameText("publish 2", "[]", publishedAt(r, uri, 2)),
-			sameText("n:13 definition", "1:28-1:33", definitionSpan(r, "n:13")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				everyRequestAnsweredOnce(r, drains),
+				sameText(
+					"publish 0",
+					"[0:36-0:37 1 " + notAssignable + "]",
+					publishedAt(r, uri, 0),
+				),
+				sameText("n:11 definition", "0:21-0:26", definitionSpan(r, "n:11")),
+				sameText(
+					"publish 1",
+					"[1:43-1:44 1 " + notAssignable + "]",
+					publishedAt(r, uri, 1),
+				),
+				sameText("n:12 definition", "1:28-1:33", definitionSpan(r, "n:12")),
+				sameText("publish 2", "[]", publishedAt(r, uri, 2)),
+				sameText("n:13 definition", "1:28-1:33", definitionSpan(r, "n:13")),
+			]),
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [1, 2, 3],
-			probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 17 }, { uri, line: 1, character: 30 }],
+			probes: [
+				{ uri, line: 2, character: 17 },
+				{ uri, line: 1, character: 17 },
+				{ uri, line: 1, character: 30 },
+			],
 		},
 		project: null,
 	};
@@ -841,38 +1157,77 @@ function dependencyEditsRecheckDependent(): LspScenario {
 	const user = "file:///lspwire/dep/a.ms";
 	const depInt = "export const value: int32 = 42;";
 	const depString = "export const value: string = \"x\";";
-	const wantsString = "import { value } from \"./b\";\nconst s: string = value;\nexport const t = s;";
-	const wantsInt = "import { value } from \"./b\";\nconst n: int32 = value;\nexport const t = n;";
+	const wantsString =
+		"import { value } from \"./b\";\nconst s: string = value;\nexport const t = s;";
+	const wantsInt =
+		"import { value } from \"./b\";\nconst n: int32 = value;\nexport const t = n;";
 	return {
 		name: "a dependency edit re-checks the dependent and clears or raises its diagnostic",
 		batching: "any",
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(dep, depInt))]),
-			frames([notification("textDocument/didOpen", openParams(user, wantsString))]),
-			frames([notification("textDocument/didChange", changeParams(dep, 2, depString))]),
-			frames([notification("textDocument/didChange", changeParams(user, 2, wantsInt))]),
-			frames([notification("textDocument/didChange", changeParams(dep, 3, depInt))]),
+			frames([
+				notification("textDocument/didOpen", openParams(user, wantsString)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(dep, 2, depString)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(user, 2, wantsInt)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(dep, 3, depInt)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("a.ms publish 0 start and message", "1:18 " + lspJsonString("Type 'int32' is not assignable to type 'string'"),
-				spanOf(diagnosticAt(r, user, 0, 0)).split("-")[0] + " " + field(diagnosticAt(r, user, 0, 0), "message")),
-			sameText("a.ms after b.ms exports a string", "[]", publishedAt(r, user, 1)),
-			sameText("a.ms publish 2 start and message", "1:17 " + lspJsonString("Type 'string' is not assignable to type 'int32'"),
-				spanOf(diagnosticAt(r, user, 2, 0)).split("-")[0] + " " + field(diagnosticAt(r, user, 2, 0), "message")),
-			sameText("a.ms after b.ms exports an int32 again", "[]", lastPublished(r, user)),
-			sameText("b.ms last publish", "[]", lastPublished(r, dep)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"a.ms publish 0 start and message",
+					"1:18 " +
+						lspJsonString("Type 'int32' is not assignable to type 'string'"),
+					spanOf(diagnosticAt(r, user, 0, 0)).split("-")[0] +
+						" " +
+						field(diagnosticAt(r, user, 0, 0), "message"),
+				),
+				sameText(
+					"a.ms after b.ms exports a string",
+					"[]",
+					publishedAt(r, user, 1),
+				),
+				sameText(
+					"a.ms publish 2 start and message",
+					"1:17 " +
+						lspJsonString("Type 'string' is not assignable to type 'int32'"),
+					spanOf(diagnosticAt(r, user, 2, 0)).split("-")[0] +
+						" " +
+						field(diagnosticAt(r, user, 2, 0), "message"),
+				),
+				sameText(
+					"a.ms after b.ms exports an int32 again",
+					"[]",
+					lastPublished(r, user),
+				),
+				sameText("b.ms last publish", "[]", lastPublished(r, dep)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [2, 3, 4, 5], probes: [{ uri: user, line: 1, character: 18 }, { uri: user, line: 0, character: 9 }] },
+		checkpoints: {
+			afterDrains: [2, 3, 4, 5],
+			probes: [
+				{ uri: user, line: 1, character: 18 },
+				{ uri: user, line: 0, character: 9 },
+			],
+		},
 		project: null,
 	};
 }
 
 function cancelledWorkDoesNotPoison(): LspScenario {
 	const uri = "file:///lspwire/cancelok.ms";
-	const good = "// café ☕\nexport const value: int32 = 42;\nexport const w = value;";
-	const bad = "// café ☕\nexport const value: int32 = \"wrong\";\nexport const w = value;";
+	const good =
+		"// café ☕\nexport const value: int32 = 42;\nexport const w = value;";
+	const bad =
+		"// café ☕\nexport const value: int32 = \"wrong\";\nexport const w = value;";
 	const drains = [
 		initializeDrain(),
 		frames([notification("textDocument/didOpen", openParams(uri, good))]),
@@ -883,30 +1238,56 @@ function cancelledWorkDoesNotPoison(): LspScenario {
 			notification("$/cancelRequest", "{\"id\":20}"),
 			notification("$/cancelRequest", "{\"id\":21}"),
 		]),
-		frames([request("22", "textDocument/definition", positionParams(uri, 2, 17))]),
+		frames([
+			request("22", "textDocument/definition", positionParams(uri, 2, 17)),
+		]),
 		frames([
 			notification("textDocument/didChange", changeParams(uri, 3, good)),
 			notification("$/cancelRequest", "{\"id\":99}"),
 		]),
 	];
-	const afterCancel = (r: LspReplay) => firstFailure([
-		everyRequestAnsweredOnce(r, drains),
-		sameText("publish 1", "[1:28-1:29 1 " + lspJsonString(NOT_ASSIGNABLE) + "]", publishedAt(r, uri, 1)),
-		sameText("n:22 definition", "1:13-1:18", definitionSpan(r, "n:22")),
-		sameText("last publish", "[]", lastPublished(r, uri)),
-	]);
+	const afterCancel = (r: LspReplay) =>
+		firstFailure([
+			everyRequestAnsweredOnce(r, drains),
+			sameText(
+				"publish 1",
+				"[1:28-1:29 1 " + lspJsonString(NOT_ASSIGNABLE) + "]",
+				publishedAt(r, uri, 1),
+			),
+			sameText("n:22 definition", "1:13-1:18", definitionSpan(r, "n:22")),
+			sameText("last publish", "[]", lastPublished(r, uri)),
+		]);
 	return {
 		name: "cancelled requests do not poison the checks after them",
 		batching: "exact",
 		drains,
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:20 error.code", "-32800", answerField(r, "n:20", "error.code")),
-			sameText("n:21 error.code", "-32800", answerField(r, "n:21", "error.code")),
-			sameText("diagnostic counts per publish", "[0,1,0]", publishedCounts(r, uri)),
-			afterCancel(r),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"n:20 error.code",
+					"-32800",
+					answerField(r, "n:20", "error.code"),
+				),
+				sameText(
+					"n:21 error.code",
+					"-32800",
+					answerField(r, "n:21", "error.code"),
+				),
+				sameText(
+					"diagnostic counts per publish",
+					"[0,1,0]",
+					publishedCounts(r, uri),
+				),
+				afterCancel(r),
+			]),
 		checkAnyBatching: afterCancel,
-		checkpoints: { afterDrains: [2, 3, 4], probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 14 }] },
+		checkpoints: {
+			afterDrains: [2, 3, 4],
+			probes: [
+				{ uri, line: 2, character: 17 },
+				{ uri, line: 1, character: 14 },
+			],
+		},
 		project: null,
 	};
 }
@@ -917,46 +1298,78 @@ function unusedImportWarnsInEditorAndBatch(): LspScenario {
 	return {
 		name: "an unused import warns in the editor and in batch checking",
 		batching: "any",
-		drains: [initializeDrain(), frames([notification("textDocument/didOpen", openParams(uri, text))])],
-		check: (r: LspReplay) => sameText("publish 0",
-			"[0:9-0:15 2 " + lspJsonString("'exists' is imported but never used") + "]",
-			publishedAt(r, uri, 0)),
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+		],
+		check: (r: LspReplay) =>
+			sameText(
+				"publish 0",
+				"[0:9-0:15 2 " +
+					lspJsonString("'exists' is imported but never used") +
+					"]",
+				publishedAt(r, uri, 0),
+			),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 0, character: 10 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 0, character: 10 }],
+		},
 		project: null,
 	};
 }
 
-const WHEN_FAST = "let n: int32 = 0;\nwhen (fast) { n = 1; } else { n = \"slow\"; }\nconsole.log(n);\n";
+const WHEN_FAST =
+	"let n: int32 = 0;\nwhen (fast) { n = 1; } else { n = \"slow\"; }\nconsole.log(n);\n";
 const HELLO = "export function hello(): int32 { return 7; }\n";
 
 function buildConfigReachesEditor(): LspScenario {
 	const globals = PROJECT_URI + "globals.ms";
 	const defines = PROJECT_URI + "defines.ms";
 	const deps = PROJECT_URI + "deps.ms";
-	const build = "const config = { globalImports: [\"./helper\"], defines: { fast: true }, deps: { \"lib\": \"file:./deplib\" } };\nexport default config;\n";
+	const build =
+		"const config = { globalImports: [\"./helper\"], defines: { fast: true }, deps: { \"lib\": \"file:./deplib\" } };\nexport default config;\n";
 	return {
 		name: "build.ms config reaches the editor as it reaches batch checking",
 		batching: "any",
 		drains: [
 			initializeDrain(),
 			frames([
-				notification("textDocument/didOpen", openParams(globals, "const n: int32 = hello();\nconsole.log(n);\n")),
+				notification(
+					"textDocument/didOpen",
+					openParams(globals, "const n: int32 = hello();\nconsole.log(n);\n"),
+				),
 				notification("textDocument/didOpen", openParams(defines, WHEN_FAST)),
-				notification("textDocument/didOpen", openParams(deps, "import { libVal } from \"lib/val\";\nconst n: int32 = libVal();\nconsole.log(n);\n")),
+				notification(
+					"textDocument/didOpen",
+					openParams(
+						deps,
+						"import { libVal } from \"lib/val\";\nconst n: int32 = libVal();\nconsole.log(n);\n",
+					),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("globals.ms publish 0", "[]", publishedAt(r, globals, 0)),
-			sameText("defines.ms publish 0", "[]", publishedAt(r, defines, 0)),
-			sameText("deps.ms publish 0", "[]", publishedAt(r, deps, 0)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("globals.ms publish 0", "[]", publishedAt(r, globals, 0)),
+				sameText("defines.ms publish 0", "[]", publishedAt(r, defines, 0)),
+				sameText("deps.ms publish 0", "[]", publishedAt(r, deps, 0)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri: globals, line: 0, character: 18 }, { uri: deps, line: 1, character: 18 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [
+				{ uri: globals, line: 0, character: 18 },
+				{ uri: deps, line: 1, character: 18 },
+			],
+		},
 		project: [
 			{ path: "build.ms", text: build },
 			{ path: "helper.ms", text: HELLO },
-			{ path: "deplib/val.ms", text: "export function libVal(): int32 { return 3; }\n" },
+			{
+				path: "deplib/val.ms",
+				text: "export function libVal(): int32 { return 3; }\n",
+			},
 		],
 	};
 }
@@ -964,30 +1377,55 @@ function buildConfigReachesEditor(): LspScenario {
 function twoProjectsKeepTheirConfig(): LspScenario {
 	const fast = PROJECT_URI + "fast/defines.ms";
 	const greet = PROJECT_URI + "greet/globals.ms";
-	const greetText = "let n: int32 = hello();\nwhen (fast) { n = \"leaked\"; }\nconsole.log(n);\n";
+	const greetText =
+		"let n: int32 = hello();\nwhen (fast) { n = \"leaked\"; }\nconsole.log(n);\n";
 	return {
 		name: "two projects in one session each keep their own build.ms",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(fast, WHEN_FAST))]),
-			frames([notification("textDocument/didOpen", openParams(greet, greetText))]),
 			frames([
-				notification("textDocument/didChange", changeParams(fast, 2, WHEN_FAST + "// edited\n")),
-				notification("textDocument/didChange", changeParams(greet, 2, greetText + "// edited\n")),
+				notification("textDocument/didOpen", openParams(fast, WHEN_FAST)),
+			]),
+			frames([
+				notification("textDocument/didOpen", openParams(greet, greetText)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(fast, 2, WHEN_FAST + "// edited\n"),
+				),
+				notification(
+					"textDocument/didChange",
+					changeParams(greet, 2, greetText + "// edited\n"),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("fast/defines.ms publish 0", "[]", publishedAt(r, fast, 0)),
-			sameText("greet/globals.ms publish 0", "[]", publishedAt(r, greet, 0)),
-			sameText("fast/defines.ms last publish", "[]", lastPublished(r, fast)),
-			sameText("greet/globals.ms last publish", "[]", lastPublished(r, greet)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("fast/defines.ms publish 0", "[]", publishedAt(r, fast, 0)),
+				sameText("greet/globals.ms publish 0", "[]", publishedAt(r, greet, 0)),
+				sameText("fast/defines.ms last publish", "[]", lastPublished(r, fast)),
+				sameText(
+					"greet/globals.ms last publish",
+					"[]",
+					lastPublished(r, greet),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [2, 3], probes: [{ uri: greet, line: 0, character: 16 }] },
+		checkpoints: {
+			afterDrains: [2, 3],
+			probes: [{ uri: greet, line: 0, character: 16 }],
+		},
 		project: [
-			{ path: "fast/build.ms", text: "const config = { defines: { fast: true } };\nexport default config;\n" },
-			{ path: "greet/build.ms", text: "const config = { globalImports: [\"./helper\"] };\nexport default config;\n" },
+			{
+				path: "fast/build.ms",
+				text: "const config = { defines: { fast: true } };\nexport default config;\n",
+			},
+			{
+				path: "greet/build.ms",
+				text: "const config = { globalImports: [\"./helper\"] };\nexport default config;\n",
+			},
 			{ path: "greet/helper.ms", text: HELLO },
 		],
 	};
@@ -995,19 +1433,32 @@ function twoProjectsKeepTheirConfig(): LspScenario {
 
 function globalImportMacroExpands(): LspScenario {
 	const uri = PROJECT_URI + "twice.ms";
-	const mac = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+	const mac =
+		"import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
 	return {
 		name: "a macro from a build.ms global import expands in the editor",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, "const n: int32 = twice(3);\nconsole.log(n);\n"))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, "const n: int32 = twice(3);\nconsole.log(n);\n"),
+				),
+			]),
 		],
-		check: (r: LspReplay) => sameText("twice.ms publish 0", "[]", publishedAt(r, uri, 0)),
+		check: (r: LspReplay) =>
+			sameText("twice.ms publish 0", "[]", publishedAt(r, uri, 0)),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 0, character: 18 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 0, character: 18 }],
+		},
 		project: [
-			{ path: "build.ms", text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n" },
+			{
+				path: "build.ms",
+				text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n",
+			},
 			{ path: "mac.ms", text: mac },
 		],
 	};
@@ -1018,45 +1469,78 @@ function sharedDepResolvesPerProject(): LspScenario {
 	const aGeneric = PROJECT_URI + "a/generic.ms";
 	const bPlain = PROJECT_URI + "b/plain.ms";
 	const bGeneric = PROJECT_URI + "b/generic.ms";
-	const plain = "import { v } from \"lib/lib\";\nconst n: int32 = v;\nconsole.log(n);\n";
-	const generic = "import { pick } from \"lib/lib\";\nconst n: int32 = pick<int32>(3);\nconsole.log(n);\n";
-	const build = "const config = { deps: { \"lib\": \"file:../shared\", \"cfg\": \"file:./cfg\" } };\nexport default config;\n";
-	const lib = "import { confValue } from \"cfg/conf\";\nexport const v = confValue();\nexport function pick<T>(x: T): int32 {\n\treturn confValue();\n}\n";
+	const plain =
+		"import { v } from \"lib/lib\";\nconst n: int32 = v;\nconsole.log(n);\n";
+	const generic =
+		"import { pick } from \"lib/lib\";\nconst n: int32 = pick<int32>(3);\nconsole.log(n);\n";
+	const build =
+		"const config = { deps: { \"lib\": \"file:../shared\", \"cfg\": \"file:./cfg\" } };\nexport default config;\n";
+	const lib =
+		"import { confValue } from \"cfg/conf\";\nexport const v = confValue();\nexport function pick<T>(x: T): int32 {\n\treturn confValue();\n}\n";
 	return {
 		name: "a dependency shared by two projects resolves through each project's own deps",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(aPlain, plain)), notification("textDocument/didOpen", openParams(aGeneric, generic))]),
-			frames([notification("textDocument/didOpen", openParams(bPlain, plain)), notification("textDocument/didOpen", openParams(bGeneric, generic))]),
 			frames([
-				notification("textDocument/didChange", changeParams(aPlain, 2, plain + "// edited\n")),
-				notification("textDocument/didChange", changeParams(aGeneric, 2, generic + "// edited\n")),
+				notification("textDocument/didOpen", openParams(aPlain, plain)),
+				notification("textDocument/didOpen", openParams(aGeneric, generic)),
+			]),
+			frames([
+				notification("textDocument/didOpen", openParams(bPlain, plain)),
+				notification("textDocument/didOpen", openParams(bGeneric, generic)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(aPlain, 2, plain + "// edited\n"),
+				),
+				notification(
+					"textDocument/didChange",
+					changeParams(aGeneric, 2, generic + "// edited\n"),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("a/plain.ms publish 0", "[]", publishedAt(r, aPlain, 0)),
-			sameText("a/generic.ms publish 0", "[]", publishedAt(r, aGeneric, 0)),
-			publishedAt(r, bPlain, 0) == "[]" ? "b/plain.ms publish 0: expected b's string confValue to refuse int32, got []" : "",
-			publishedAt(r, bGeneric, 0) == "[]" ? "b/generic.ms publish 0: expected b's string confValue to refuse int32, got []" : "",
-			sameText("a/plain.ms last publish", "[]", lastPublished(r, aPlain)),
-			sameText("a/generic.ms last publish", "[]", lastPublished(r, aGeneric)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("a/plain.ms publish 0", "[]", publishedAt(r, aPlain, 0)),
+				sameText("a/generic.ms publish 0", "[]", publishedAt(r, aGeneric, 0)),
+				publishedAt(r, bPlain, 0) == "[]"
+					? "b/plain.ms publish 0: expected b's string confValue to refuse int32, got []"
+					: "",
+				publishedAt(r, bGeneric, 0) == "[]"
+					? "b/generic.ms publish 0: expected b's string confValue to refuse int32, got []"
+					: "",
+				sameText("a/plain.ms last publish", "[]", lastPublished(r, aPlain)),
+				sameText("a/generic.ms last publish", "[]", lastPublished(r, aGeneric)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [2, 3], probes: [{ uri: bPlain, line: 1, character: 17 }] },
+		checkpoints: {
+			afterDrains: [2, 3],
+			probes: [{ uri: bPlain, line: 1, character: 17 }],
+		},
 		project: [
 			{ path: "shared/lib.ms", text: lib },
 			{ path: "a/build.ms", text: build },
-			{ path: "a/cfg/conf.ms", text: "export function confValue(): int32 { return 1; }\n" },
+			{
+				path: "a/cfg/conf.ms",
+				text: "export function confValue(): int32 { return 1; }\n",
+			},
 			{ path: "b/build.ms", text: build },
-			{ path: "b/cfg/conf.ms", text: "export function confValue(): string { return \"b\"; }\n" },
+			{
+				path: "b/cfg/conf.ms",
+				text: "export function confValue(): string { return \"b\"; }\n",
+			},
 		],
 	};
 }
 
-const SHAPES = "export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\nexport function takeBox(b: Box): int32 {\n\treturn b.v;\n}\n";
-const SHAPE_MAKERS = "export function mkBox(): Box {\n\treturn new Box(4);\n}\nexport function mkHolder(): Holder<Box> {\n\treturn new Holder<Box>(new Box(5));\n}\nexport function readBox(b: Box): int32 {\n\treturn b.v;\n}\n";
-const SHAPE_USER = "import { Box, Holder, takeBox } from \"./shapes\";\nconst b: Box = mkBox();\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(b) + readBox(new Box(7)) + h.item.v);\n";
+const SHAPES =
+	"export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\nexport function takeBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const SHAPE_MAKERS =
+	"export function mkBox(): Box {\n\treturn new Box(4);\n}\nexport function mkHolder(): Holder<Box> {\n\treturn new Holder<Box>(new Box(5));\n}\nexport function readBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const SHAPE_USER =
+	"import { Box, Holder, takeBox } from \"./shapes\";\nconst b: Box = mkBox();\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(b) + readBox(new Box(7)) + h.item.v);\n";
 
 function globalImportSharesClassIdentity(): LspScenario {
 	const uri = PROJECT_URI + "use.ms";
@@ -1065,18 +1549,35 @@ function globalImportSharesClassIdentity(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SHAPE_USER))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, SHAPE_USER + "// edited\n"))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, SHAPE_USER)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, SHAPE_USER + "// edited\n"),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
-			sameText("use.ms last publish", "[]", lastPublished(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+				sameText("use.ms last publish", "[]", lastPublished(r, uri)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 1, character: 16 }] },
+		checkpoints: {
+			afterDrains: [1, 2],
+			probes: [{ uri, line: 1, character: 16 }],
+		},
 		project: [
-			{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
-			{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+			{
+				path: "build.ms",
+				text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n",
+			},
+			{
+				path: "makers.ms",
+				text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS,
+			},
 			{ path: "shapes.ms", text: SHAPES },
 		],
 	};
@@ -1084,8 +1585,10 @@ function globalImportSharesClassIdentity(): LspScenario {
 
 function globalImportSharesMacroModuleIdentity(): LspScenario {
 	const uri = PROJECT_URI + "use.ms";
-	const twice = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
-	const user = "import { Box, Holder, takeBox, twice } from \"./shapes\";\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(h.item) + readBox(mkBox()) + twice(1));\n";
+	const twice =
+		"import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+	const user =
+		"import { Box, Holder, takeBox, twice } from \"./shapes\";\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(h.item) + readBox(mkBox()) + twice(1));\n";
 	return {
 		name: "a generic class from a macro module reached through a build.ms global import keeps its identity",
 		batching: "any",
@@ -1093,28 +1596,48 @@ function globalImportSharesMacroModuleIdentity(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, user))]),
 		],
-		check: (r: LspReplay) => sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+		check: (r: LspReplay) =>
+			sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 26 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 1, character: 26 }],
+		},
 		project: [
-			{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
-			{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+			{
+				path: "build.ms",
+				text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n",
+			},
+			{
+				path: "makers.ms",
+				text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS,
+			},
 			{ path: "shapes.ms", text: twice + SHAPES },
 		],
 	};
 }
 
 function containsText(what: string, needle: string, got: string): string {
-	return got.includes(needle) ? "" : what + ": expected to contain " + needle + ", got " + got;
+	return got.includes(needle)
+		? ""
+		: what + ": expected to contain " + needle + ", got " + got;
 }
 
 function lacksText(what: string, needle: string, got: string): string {
-	return got.includes(needle) ? what + ": expected no " + needle + ", got " + got : "";
+	return got.includes(needle)
+		? what + ": expected no " + needle + ", got " + got
+		: "";
 }
 
 const MAKERS_PROJECT: LspProjectFile[] = [
-	{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
-	{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+	{
+		path: "build.ms",
+		text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n",
+	},
+	{
+		path: "makers.ms",
+		text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS,
+	},
 	{ path: "shapes.ms", text: SHAPES },
 ];
 
@@ -1127,16 +1650,40 @@ function globalImportEditReachesItsUsers(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, "console.log(readBox(mkBox()));\n"))]),
-			frames([notification("textDocument/didOpen", openParams(makers, makersText))]),
-			frames([notification("textDocument/didChange", changeParams(makers, 2, makersText.replace("function mkBox(", "function mkBoxRenamed(")))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, "console.log(readBox(mkBox()));\n"),
+				),
+			]),
+			frames([
+				notification("textDocument/didOpen", openParams(makers, makersText)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(
+						makers,
+						2,
+						makersText.replace("function mkBox(", "function mkBoxRenamed("),
+					),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
-			containsText("use.ms after makers.ms renames mkBox", "Undefined variable 'mkBox'", lastPublished(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+				containsText(
+					"use.ms after makers.ms renames mkBox",
+					"Undefined variable 'mkBox'",
+					lastPublished(r, uri),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 3], probes: [{ uri, line: 0, character: 22 }] },
+		checkpoints: {
+			afterDrains: [1, 3],
+			probes: [{ uri, line: 0, character: 22 }],
+		},
 		project: MAKERS_PROJECT,
 	};
 }
@@ -1148,19 +1695,38 @@ function globalImportClosureSeesNoGlobals(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SHAPES + "export function viaGlobal(): int32 {\n\treturn readBox(mkBox());\n}\n"))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(
+						uri,
+						SHAPES +
+							"export function viaGlobal(): int32 {\n\treturn readBox(mkBox());\n}\n",
+					),
+				),
+			]),
 		],
-		check: (r: LspReplay) => containsText("shapes.ms publish 0", "Undefined variable 'readBox'", publishedAt(r, uri, 0)),
+		check: (r: LspReplay) =>
+			containsText(
+				"shapes.ms publish 0",
+				"Undefined variable 'readBox'",
+				publishedAt(r, uri, 0),
+			),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 16, character: 10 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 16, character: 10 }],
+		},
 		project: MAKERS_PROJECT,
 	};
 }
 
 function genericReadsItsModuleConst(): LspScenario {
 	const uri = PROJECT_URI + "use.ms";
-	const user = "import { capped, nested, cappedByConsts } from \"./rows\";\nconsole.log(capped<int32>([1, 2]) + nested<string>([\"a\"]) + cappedByConsts<int32>([3]));\n";
-	const rows = "import { otherLimit } from \"./consts\";\nconst limit = 32;\nexport function capped<T>(items: T[]): number {\n\treturn Math.min(limit, items.length);\n}\nexport function nested<T>(items: T[]): number {\n\treturn capped<T>(items);\n}\nexport function cappedByConsts<T>(items: T[]): number {\n\treturn Math.min(otherLimit, items.length);\n}\n";
+	const user =
+		"import { capped, nested, cappedByConsts } from \"./rows\";\nconsole.log(capped<int32>([1, 2]) + nested<string>([\"a\"]) + cappedByConsts<int32>([3]));\n";
+	const rows =
+		"import { otherLimit } from \"./consts\";\nconst limit = 32;\nexport function capped<T>(items: T[]): number {\n\treturn Math.min(limit, items.length);\n}\nexport function nested<T>(items: T[]): number {\n\treturn capped<T>(items);\n}\nexport function cappedByConsts<T>(items: T[]): number {\n\treturn Math.min(otherLimit, items.length);\n}\n";
 	return {
 		name: "a generic instantiated from an importer reads its module's inferred const",
 		batching: "any",
@@ -1168,9 +1734,13 @@ function genericReadsItsModuleConst(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, user))]),
 		],
-		check: (r: LspReplay) => lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
+		check: (r: LspReplay) =>
+			lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 14 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 1, character: 14 }],
+		},
 		project: [
 			{ path: "rows.ms", text: rows },
 			{ path: "consts.ms", text: "export const otherLimit = 16;\n" },
@@ -1178,12 +1748,17 @@ function genericReadsItsModuleConst(): LspScenario {
 	};
 }
 
-const EACH_MODULE = "import { helper } from \"./node\";\nimport { twice } from \"./mac\";\nexport function each<T>(x: T): number {\n\treturn helper(twice(1));\n}\n";
-const EACH_MACRO = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
-const EACH_HELPER = "export function helper(n: number): number {\n\treturn n;\n}\n";
+const EACH_MODULE =
+	"import { helper } from \"./node\";\nimport { twice } from \"./mac\";\nexport function each<T>(x: T): number {\n\treturn helper(twice(1));\n}\n";
+const EACH_MACRO =
+	"import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+const EACH_HELPER =
+	"export function helper(n: number): number {\n\treturn n;\n}\n";
 
 // each.ms imports a macro module, so the editor binds it apart from the check that imports it.
-function genericFromMacroImporterReadsItsImports(throughGlobal: boolean): LspScenario {
+function genericFromMacroImporterReadsItsImports(
+	throughGlobal: boolean,
+): LspScenario {
 	const uri = PROJECT_URI + "use.ms";
 	const from = throughGlobal ? "./g" : "./each";
 	const user = `import { each } from "${from}";\nconst n = each<string>("a");\nconsole.log(n);\n`;
@@ -1194,23 +1769,41 @@ function genericFromMacroImporterReadsItsImports(throughGlobal: boolean): LspSce
 	];
 	if (throughGlobal) {
 		project.push({ path: "g.ms", text: "export { each } from \"./each\";\n" });
-		project.push({ path: "build.ms", text: "const config = { globalImports: [\"./g\"] };\nexport default config;\n" });
+		project.push({
+			path: "build.ms",
+			text: "const config = { globalImports: [\"./g\"] };\nexport default config;\n",
+		});
 	}
-	const reached = throughGlobal ? " reached through a build.ms global import" : "";
+	const reached = throughGlobal
+		? " reached through a build.ms global import"
+		: "";
 	return {
 		name: `a generic from a module that imports a macro${reached} reads that module's imports`,
 		batching: "any",
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, user))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, user.replace("\"a\"", "\"b\"")))]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, user.replace("\"a\"", "\"b\"")),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
-			lacksText("use.ms last publish", "instantiation", lastPublished(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
+				lacksText(
+					"use.ms last publish",
+					"instantiation",
+					lastPublished(r, uri),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 1, character: 10 }] },
+		checkpoints: {
+			afterDrains: [1, 2],
+			probes: [{ uri, line: 1, character: 10 }],
+		},
 		project,
 	};
 }
@@ -1223,20 +1816,48 @@ function globalImportsSeenInOrder(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, seesFirst))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, seesFirst.replace("f1()", "f2()")))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, seesFirst)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, seesFirst.replace("f1()", "f2()")),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			lacksText("c2.ms calling the first global import", "Undefined", publishedAt(r, uri, 0)),
-			containsText("c2.ms calling the second global import", "Undefined variable 'f2'", lastPublished(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				lacksText(
+					"c2.ms calling the first global import",
+					"Undefined",
+					publishedAt(r, uri, 0),
+				),
+				containsText(
+					"c2.ms calling the second global import",
+					"Undefined variable 'f2'",
+					lastPublished(r, uri),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 9 }] },
 		project: [
-			{ path: "build.ms", text: "const config = { globalImports: [\"./g1\", \"./g2\"] };\nexport default config;\n" },
-			{ path: "g1.ms", text: "import { d1 } from \"./c1\";\nexport function f1(): int32 {\n\treturn d1();\n}\n" },
-			{ path: "c1.ms", text: "export function d1(): int32 {\n\treturn 1;\n}\n" },
-			{ path: "g2.ms", text: "import { d2 } from \"./c2\";\nexport function f2(): int32 {\n\treturn d2() + f1();\n}\n" },
+			{
+				path: "build.ms",
+				text: "const config = { globalImports: [\"./g1\", \"./g2\"] };\nexport default config;\n",
+			},
+			{
+				path: "g1.ms",
+				text: "import { d1 } from \"./c1\";\nexport function f1(): int32 {\n\treturn d1();\n}\n",
+			},
+			{
+				path: "c1.ms",
+				text: "export function d1(): int32 {\n\treturn 1;\n}\n",
+			},
+			{
+				path: "g2.ms",
+				text: "import { d2 } from \"./c2\";\nexport function f2(): int32 {\n\treturn d2() + f1();\n}\n",
+			},
 			{ path: "c2.ms", text: seesFirst },
 			{ path: "use.ms", text: "console.log(f1() + f2());\n" },
 		],
@@ -1246,26 +1867,52 @@ function globalImportsSeenInOrder(): LspScenario {
 function modulePassSurvivesProjectSwitch(): LspScenario {
 	const use = PROJECT_URI + "a/use.ms";
 	const other = PROJECT_URI + "b/main.ms";
-	const pass = "import { Node } from \"std/meta\";\nexport macro keep(mod: Node): Node {\n\treturn mod;\n}\nexport function helper(): int32 {\n\treturn 2;\n}\n";
+	const pass =
+		"import { Node } from \"std/meta\";\nexport macro keep(mod: Node): Node {\n\treturn mod;\n}\nexport function helper(): int32 {\n\treturn 2;\n}\n";
 	return {
 		name: "a build.ms module pass still applies after the session checked another project",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(use, "console.log(helper());\n"))]),
-			frames([notification("textDocument/didOpen", openParams(other, "console.log(1);\n"))]),
-			frames([notification("textDocument/didChange", changeParams(use, 2, "console.log(helper() + 1);\n"))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(use, "console.log(helper());\n"),
+				),
+			]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(other, "console.log(1);\n"),
+				),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(use, 2, "console.log(helper() + 1);\n"),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("a/use.ms publish 0", "[]", publishedAt(r, use, 0)),
-			sameText("a/use.ms after b/main.ms", "[]", lastPublished(r, use)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("a/use.ms publish 0", "[]", publishedAt(r, use, 0)),
+				sameText("a/use.ms after b/main.ms", "[]", lastPublished(r, use)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 3], probes: [{ uri: use, line: 0, character: 14 }] },
+		checkpoints: {
+			afterDrains: [1, 3],
+			probes: [{ uri: use, line: 0, character: 14 }],
+		},
 		project: [
-			{ path: "a/build.ms", text: "const config = { globalImports: [{ from: \"./pass\", modulePass: \"keep\" }] };\nexport default config;\n" },
+			{
+				path: "a/build.ms",
+				text: "const config = { globalImports: [{ from: \"./pass\", modulePass: \"keep\" }] };\nexport default config;\n",
+			},
 			{ path: "a/pass.ms", text: pass },
-			{ path: "b/build.ms", text: "const config = {};\nexport default config;\n" },
+			{
+				path: "b/build.ms",
+				text: "const config = {};\nexport default config;\n",
+			},
 		],
 	};
 }
@@ -1292,37 +1939,69 @@ function cursorAtEnd(uri: string, text: string): string {
 
 function completionRows(r: LspReplay, key: string): string[] {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return ["not a completion list: " + render(result)];
+	if (result.kind != JsonKind.Array) {
+		return ["not a completion list: " + render(result)];
+	}
 	const keyed: string[] = [];
 	for (const item of result.items) {
 		const label = scalarText(item.getDynamicField("label"));
-		const row = label + "|" + scalarText(item.getDynamicField("kind")) + "|" + scalarText(item.getDynamicField("detail"));
-		keyed.push(scalarText(item.getDynamicField("sortText")) + "\t" + label + "\t" + row);
+		const row =
+			label +
+			"|" +
+			scalarText(item.getDynamicField("kind")) +
+			"|" +
+			scalarText(item.getDynamicField("detail"));
+		keyed.push(
+			scalarText(item.getDynamicField("sortText")) + "\t" + label + "\t" + row,
+		);
 	}
 	keyed.sort();
 	const rows: string[] = [];
-	for (const entry of keyed) rows.push(entry.split("\t")[2]);
+	for (const entry of keyed) {
+		rows.push(entry.split("\t")[2]);
+	}
 	return rows;
 }
 
 function sameRows(what: string, expected: string[], got: string[]): string {
-	return sameText(what, "[" + expected.join(", ") + "]", "[" + got.join(", ") + "]");
+	return sameText(
+		what,
+		"[" + expected.join(", ") + "]",
+		"[" + got.join(", ") + "]",
+	);
 }
 
 function sortTextOf(r: LspReplay, key: string, label: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "absent";
+	if (result.kind != JsonKind.Array) {
+		return "absent";
+	}
 	for (const item of result.items) {
-		if (scalarText(item.getDynamicField("label")) == label) return scalarText(item.getDynamicField("sortText"));
+		if (scalarText(item.getDynamicField("label")) == label) {
+			return scalarText(item.getDynamicField("sortText"));
+		}
 	}
 	return "absent";
 }
 
-function sortsBefore(r: LspReplay, key: string, first: string, second: string): string {
+function sortsBefore(
+	r: LspReplay,
+	key: string,
+	first: string,
+	second: string,
+): string {
 	const a = sortTextOf(r, key, first);
 	const b = sortTextOf(r, key, second);
 	if (a == "absent" || b == "absent" || !(a < b)) {
-		return first + " must sort before " + second + ": sortText " + a + " against " + b;
+		return (
+			first +
+			" must sort before " +
+			second +
+			": sortText " +
+			a +
+			" against " +
+			b
+		);
 	}
 	return "";
 }
@@ -1330,55 +2009,111 @@ function sortsBefore(r: LspReplay, key: string, first: string, second: string): 
 function signatureSummary(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
 	const signatures = result.getDynamicField("signatures");
-	if (signatures.kind != JsonKind.Array) return "no signatures: " + render(result);
+	if (signatures.kind != JsonKind.Array) {
+		return "no signatures: " + render(result);
+	}
 	const activeSignature = result.getDynamicField("activeSignature").asInt32(-1);
 	const active = signatures.at(activeSignature);
 	const labels: string[] = [];
 	const parameters = active.getDynamicField("parameters");
 	if (parameters.kind == JsonKind.Array) {
-		for (const parameter of parameters.items) labels.push(scalarText(parameter.getDynamicField("label")));
+		for (const parameter of parameters.items) {
+			labels.push(scalarText(parameter.getDynamicField("label")));
+		}
 	}
-	return "signatures " + signatures.items.length + ", activeSignature " + activeSignature
-		+ ", activeParameter " + result.getDynamicField("activeParameter").asInt32(-1)
-		+ ", label " + scalarText(active.getDynamicField("label")) + ", parameters [" + labels.join(", ") + "]";
+	return (
+		"signatures " +
+		signatures.items.length +
+		", activeSignature " +
+		activeSignature +
+		", activeParameter " +
+		result.getDynamicField("activeParameter").asInt32(-1) +
+		", label " +
+		scalarText(active.getDynamicField("label")) +
+		", parameters [" +
+		labels.join(", ") +
+		"]"
+	);
 }
 
 function hoverSummary(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Object) return "no hover: " + render(result);
-	return scalarText(result.getDynamicField("contents").getDynamicField("value")) + " @ " + spanOf(result);
+	if (result.kind != JsonKind.Object) {
+		return "no hover: " + render(result);
+	}
+	return (
+		scalarText(result.getDynamicField("contents").getDynamicField("value")) +
+		" @ " +
+		spanOf(result)
+	);
 }
 
-const SEMANTIC_ROW_TYPES = ["class", "property", "parameter", "function", "variable"];
+const SEMANTIC_ROW_TYPES = [
+	"class",
+	"property",
+	"parameter",
+	"function",
+	"variable",
+];
 
 function semanticRows(r: LspReplay, key: string): string[] {
-	const legend = answerResult(r, "n:1").getDynamicField("capabilities").getDynamicField("semanticTokensProvider").getDynamicField("legend");
+	const legend = answerResult(r, "n:1")
+		.getDynamicField("capabilities")
+		.getDynamicField("semanticTokensProvider")
+		.getDynamicField("legend");
 	const types = legend.getDynamicField("tokenTypes");
 	const modifiers = legend.getDynamicField("tokenModifiers");
 	const data = answerResult(r, key).getDynamicField("data");
-	if (data.kind != JsonKind.Array || types.kind != JsonKind.Array || modifiers.kind != JsonKind.Array) return ["no token data"];
+	if (
+		data.kind != JsonKind.Array ||
+		types.kind != JsonKind.Array ||
+		modifiers.kind != JsonKind.Array
+	) {
+		return ["no token data"];
+	}
 	const rows: string[] = [];
 	let line: int32 = 0;
 	let col: int32 = 0;
 	for (let i = 0; i + 4 < data.items.length; i += 5) {
 		const deltaLine = data.items[i].asInt32(0);
 		line += deltaLine;
-		col = deltaLine == 0 ? col + data.items[i + 1].asInt32(0) : data.items[i + 1].asInt32(0);
+		col =
+			deltaLine == 0
+				? col + data.items[i + 1].asInt32(0)
+				: data.items[i + 1].asInt32(0);
 		const typeIndex = data.items[i + 3].asInt32(-1);
-		const typeName = typeIndex >= 0 && typeIndex < types.items.length ? scalarText(types.items[typeIndex]) : "type#" + typeIndex;
-		if (!SEMANTIC_ROW_TYPES.includes(typeName)) continue;
+		const typeName =
+			typeIndex >= 0 && typeIndex < types.items.length
+				? scalarText(types.items[typeIndex])
+				: "type#" + typeIndex;
+		if (!SEMANTIC_ROW_TYPES.includes(typeName)) {
+			continue;
+		}
 		const bits = data.items[i + 4].asInt32(0);
 		const names: string[] = [];
 		for (let b = 0; b < modifiers.items.length; b++) {
-			if ((bits & (1 << b)) != 0) names.push(scalarText(modifiers.items[b]));
+			if ((bits & (1 << b)) != 0) {
+				names.push(scalarText(modifiers.items[b]));
+			}
 		}
-		rows.push(line + ":" + col + "+" + data.items[i + 2].asInt32(0) + " " + typeName + (names.length > 0 ? " " + names.join("+") : ""));
+		rows.push(
+			line +
+				":" +
+				col +
+				"+" +
+				data.items[i + 2].asInt32(0) +
+				" " +
+				typeName +
+				(names.length > 0 ? " " + names.join("+") : ""),
+		);
 	}
 	return rows;
 }
 
-const POINT_SOURCE = "interface Point {\n\tx: int32;\n\ty: int32;\n\tlabel?: string;\n}\nconst p: Point = { x: 1, y: 2 };\np.";
-const COUNTER_SOURCE = "class Counter {\n\tcount: int32;\n\tlabel: string;\n\tconstructor() {\n\t\tthis.count = 0;\n\t\tthis.label = \"c\";\n\t}\n\tbump(by: int32): int32 {\n\t\treturn this.count + by;\n\t}\n\treset(): void {\n\t\tthis.count = 0;\n\t}\n}\nconst k = new Counter();\nk.";
+const POINT_SOURCE =
+	"interface Point {\n\tx: int32;\n\ty: int32;\n\tlabel?: string;\n}\nconst p: Point = { x: 1, y: 2 };\np.";
+const COUNTER_SOURCE =
+	"class Counter {\n\tcount: int32;\n\tlabel: string;\n\tconstructor() {\n\t\tthis.count = 0;\n\t\tthis.label = \"c\";\n\t}\n\tbump(by: int32): int32 {\n\t\treturn this.count + by;\n\t}\n\treset(): void {\n\t\tthis.count = 0;\n\t}\n}\nconst k = new Counter();\nk.";
 
 // `hash` is the prelude's extension on every type, so every member list carries it.
 function memberCompletionKinds(): LspScenario {
@@ -1391,24 +2126,56 @@ function memberCompletionKinds(): LspScenario {
 			initializeDrain(),
 			frames([
 				notification("textDocument/didOpen", openParams(point, POINT_SOURCE)),
-				notification("textDocument/didOpen", openParams(counter, COUNTER_SOURCE)),
+				notification(
+					"textDocument/didOpen",
+					openParams(counter, COUNTER_SOURCE),
+				),
 			]),
 			frames([
-				request("10", "textDocument/completion", cursorAtEnd(point, POINT_SOURCE)),
-				request("11", "textDocument/completion", cursorAtEnd(counter, COUNTER_SOURCE)),
+				request(
+					"10",
+					"textDocument/completion",
+					cursorAtEnd(point, POINT_SOURCE),
+				),
+				request(
+					"11",
+					"textDocument/completion",
+					cursorAtEnd(counter, COUNTER_SOURCE),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameRows("p. on an interface value", ["hash|2|() => int64", "label|5|string | null", "x|5|int32", "y|5|int32"], completionRows(r, "n:10")),
-			sameRows("k. on a class instance", ["bump|2|(by: int32) => int32", "count|5|int32", "hash|2|() => int64", "label|5|string", "reset|2|() => void"], completionRows(r, "n:11")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameRows(
+					"p. on an interface value",
+					[
+						"hash|2|() => int64",
+						"label|5|string | null",
+						"x|5|int32",
+						"y|5|int32",
+					],
+					completionRows(r, "n:10"),
+				),
+				sameRows(
+					"k. on a class instance",
+					[
+						"bump|2|(by: int32) => int32",
+						"count|5|int32",
+						"hash|2|() => int64",
+						"label|5|string",
+						"reset|2|() => void",
+					],
+					completionRows(r, "n:11"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const SCOPE_SOURCE = "import { exists } from \"std/fs\";\nfunction helper(): int32 {\n\treturn 1;\n}\nconst total = 5;\nfunction run(): void {\n\tconst local = 2;\n\t\n}\n";
+const SCOPE_SOURCE =
+	"import { exists } from \"std/fs\";\nfunction helper(): int32 {\n\treturn 1;\n}\nconst total = 5;\nfunction run(): void {\n\tconst local = 2;\n\t\n}\n";
 
 function scopeCompletionTiers(): LspScenario {
 	const uri = "file:///lspwire/scope.ms";
@@ -1417,23 +2184,38 @@ function scopeCompletionTiers(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SCOPE_SOURCE))]),
-			frames([request("10", "textDocument/completion", positionParams(uri, 7, 1))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, SCOPE_SOURCE)),
+			]),
+			frames([
+				request("10", "textDocument/completion", positionParams(uri, 7, 1)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("a local shares the file's tier", "11", sortTextOf(r, "n:10", "local")),
-			sameText("an import shares the file's tier", "11", sortTextOf(r, "n:10", "exists")),
-			sortsBefore(r, "n:10", "helper", "const"),
-			sortsBefore(r, "n:10", "local", "const"),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"a local shares the file's tier",
+					"11",
+					sortTextOf(r, "n:10", "local"),
+				),
+				sameText(
+					"an import shares the file's tier",
+					"11",
+					sortTextOf(r, "n:10", "exists"),
+				),
+				sortsBefore(r, "n:10", "helper", "const"),
+				sortsBefore(r, "n:10", "local", "const"),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const BOX_SOURCE = "class Box<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n\tget(): T {\n\t\treturn this.item;\n\t}\n\tput(v: T): void {\n\t\tthis.item = v;\n\t}\n}\nconst b = new Box<string>(\"a\");\nb.";
-const OPTIONAL_SOURCE = "interface Cfg {\n\tport: int32;\n\thost: string;\n}\nfunction find(): Cfg | null {\n\treturn null;\n}\nconst c = find();\nc?.";
+const BOX_SOURCE =
+	"class Box<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n\tget(): T {\n\t\treturn this.item;\n\t}\n\tput(v: T): void {\n\t\tthis.item = v;\n\t}\n}\nconst b = new Box<string>(\"a\");\nb.";
+const OPTIONAL_SOURCE =
+	"interface Cfg {\n\tport: int32;\n\thost: string;\n}\nfunction find(): Cfg | null {\n\treturn null;\n}\nconst c = find();\nc?.";
 
 function genericAndOptionalCompletion(): LspScenario {
 	const box = "file:///lspwire/box.ms";
@@ -1445,28 +2227,53 @@ function genericAndOptionalCompletion(): LspScenario {
 			initializeDrain(),
 			frames([
 				notification("textDocument/didOpen", openParams(box, BOX_SOURCE)),
-				notification("textDocument/didOpen", openParams(optional, OPTIONAL_SOURCE)),
+				notification(
+					"textDocument/didOpen",
+					openParams(optional, OPTIONAL_SOURCE),
+				),
 			]),
 			frames([
 				request("10", "textDocument/completion", cursorAtEnd(box, BOX_SOURCE)),
-				request("11", "textDocument/completion", cursorAtEnd(optional, OPTIONAL_SOURCE)),
+				request(
+					"11",
+					"textDocument/completion",
+					cursorAtEnd(optional, OPTIONAL_SOURCE),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameRows("b. on Box<string>", ["get|2|() => string", "hash|2|() => int64", "item|5|string", "put|2|(v: string) => void"], completionRows(r, "n:10")),
-			sameRows("c?. on Cfg | null", ["hash|2|() => int64", "host|5|string", "port|5|int32"], completionRows(r, "n:11")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameRows(
+					"b. on Box<string>",
+					[
+						"get|2|() => string",
+						"hash|2|() => int64",
+						"item|5|string",
+						"put|2|(v: string) => void",
+					],
+					completionRows(r, "n:10"),
+				),
+				sameRows(
+					"c?. on Cfg | null",
+					["hash|2|() => int64", "host|5|string", "port|5|int32"],
+					completionRows(r, "n:11"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const CALLS_SOURCE = "function clamp(value: int32, low: int32, high: int32): int32 {\n\treturn value < low ? low : value > high ? high : value;\n}\nconst r = clamp(5, 1, 9);\nconst t = clamp(clamp(1, 2, 3), 4, 5);\n";
+const CALLS_SOURCE =
+	"function clamp(value: int32, low: int32, high: int32): int32 {\n\treturn value < low ? low : value > high ? high : value;\n}\nconst r = clamp(5, 1, 9);\nconst t = clamp(clamp(1, 2, 3), 4, 5);\n";
 
 function clampSignature(activeParameter: int32): string {
-	return "signatures 1, activeSignature 0, activeParameter " + activeParameter
-		+ ", label clamp(value: int32, low: int32, high: int32): int32, parameters [value: int32, low: int32, high: int32]";
+	return (
+		"signatures 1, activeSignature 0, activeParameter " +
+		activeParameter +
+		", label clamp(value: int32, low: int32, high: int32): int32, parameters [value: int32, low: int32, high: int32]"
+	);
 }
 
 function signatureHelpFollowsTheArgument(): LspScenario {
@@ -1476,7 +2283,9 @@ function signatureHelpFollowsTheArgument(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE)),
+			]),
 			frames([
 				request("10", "textDocument/signatureHelp", positionParams(uri, 3, 16)),
 				request("11", "textDocument/signatureHelp", positionParams(uri, 3, 19)),
@@ -1484,12 +2293,29 @@ function signatureHelpFollowsTheArgument(): LspScenario {
 				request("13", "textDocument/signatureHelp", positionParams(uri, 4, 28)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("cursor at the 1st argument", clampSignature(0), signatureSummary(r, "n:10")),
-			sameText("cursor at the 2nd argument", clampSignature(1), signatureSummary(r, "n:11")),
-			sameText("cursor at the 3rd argument", clampSignature(2), signatureSummary(r, "n:12")),
-			sameText("3rd argument of the inner call", clampSignature(2), signatureSummary(r, "n:13")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"cursor at the 1st argument",
+					clampSignature(0),
+					signatureSummary(r, "n:10"),
+				),
+				sameText(
+					"cursor at the 2nd argument",
+					clampSignature(1),
+					signatureSummary(r, "n:11"),
+				),
+				sameText(
+					"cursor at the 3rd argument",
+					clampSignature(2),
+					signatureSummary(r, "n:12"),
+				),
+				sameText(
+					"3rd argument of the inner call",
+					clampSignature(2),
+					signatureSummary(r, "n:13"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1503,10 +2329,19 @@ function signatureHelpAfterNestedCall(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
-			frames([request("10", "textDocument/signatureHelp", positionParams(uri, 4, 32))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE)),
+			]),
+			frames([
+				request("10", "textDocument/signatureHelp", positionParams(uri, 4, 32)),
+			]),
 		],
-		check: (r: LspReplay) => sameText("2nd argument of the outer call", clampSignature(1), signatureSummary(r, "n:10")),
+		check: (r: LspReplay) =>
+			sameText(
+				"2nd argument of the outer call",
+				clampSignature(1),
+				signatureSummary(r, "n:10"),
+			),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1520,10 +2355,17 @@ function hoverInsideToken(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE)),
+			]),
 			frames([request("10", "textDocument/hover", positionParams(uri, 3, 12))]),
 		],
-		check: (r: LspReplay) => sameText("hover inside clamp", "```metascript\nfunction clamp(value: int32, low: int32, high: int32): int32\n``` @ 3:10-3:15", hoverSummary(r, "n:10")),
+		check: (r: LspReplay) =>
+			sameText(
+				"hover inside clamp",
+				"```metascript\nfunction clamp(value: int32, low: int32, high: int32): int32\n``` @ 3:10-3:15",
+				hoverSummary(r, "n:10"),
+			),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1532,42 +2374,76 @@ function hoverInsideToken(): LspScenario {
 
 function hoverShowsDeclarations(): LspScenario {
 	const uri = "file:///lspwire/hover.ms";
-	const clamp = "```metascript\nfunction clamp(value: int32, low: int32, high: int32): int32\n```";
+	const clamp =
+		"```metascript\nfunction clamp(value: int32, low: int32, high: int32): int32\n```";
 	return {
 		name: "hover answers the exact markdown and range of a function and a const",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE)),
+			]),
 			frames([
 				request("10", "textDocument/hover", positionParams(uri, 3, 10)),
 				request("11", "textDocument/hover", positionParams(uri, 3, 6)),
 				request("12", "textDocument/hover", positionParams(uri, 0, 9)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("hover on the call clamp", clamp + " @ 3:10-3:15", hoverSummary(r, "n:10")),
-			sameText("hover on const r", "```metascript\nconst r: int32\n``` @ 3:6-3:7", hoverSummary(r, "n:11")),
-			sameText("hover on the declaration clamp", clamp + " @ 0:9-0:14", hoverSummary(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"hover on the call clamp",
+					clamp + " @ 3:10-3:15",
+					hoverSummary(r, "n:10"),
+				),
+				sameText(
+					"hover on const r",
+					"```metascript\nconst r: int32\n``` @ 3:6-3:7",
+					hoverSummary(r, "n:11"),
+				),
+				sameText(
+					"hover on the declaration clamp",
+					clamp + " @ 0:9-0:14",
+					hoverSummary(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 3, character: 10 }, { uri, line: 3, character: 6 }] },
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: 3, character: 10 }, { uri, line: 3, character: 6 }],
+		},
 		project: null,
 	};
 }
 
-const FIELD_DOC_SOURCE = "/** The Box doc. */\ninterface Box {\n\t/** The n doc. */\n\tn: int32;\n\t/** The inner doc. */\n\tinner: Inner;\n}\n/** The Inner doc. */\ninterface Inner {\n\t/** The deep doc. */\n\tdeep: int32;\n}\n/** The Crate doc. */\nclass Crate {\n\t/** The weight doc. */\n\tweight: int32 = 1;\n}\nconst b: Box = { n: 1, inner: { deep: 2 } };\nconst x = b.n;\nconst y = b.inner.deep;\nconst k = new Crate();\nconst z = k.weight;\n";
+const FIELD_DOC_SOURCE =
+	"/** The Box doc. */\ninterface Box {\n\t/** The n doc. */\n\tn: int32;\n\t/** The inner doc. */\n\tinner: Inner;\n}\n/** The Inner doc. */\ninterface Inner {\n\t/** The deep doc. */\n\tdeep: int32;\n}\n/** The Crate doc. */\nclass Crate {\n\t/** The weight doc. */\n\tweight: int32 = 1;\n}\nconst b: Box = { n: 1, inner: { deep: 2 } };\nconst x = b.n;\nconst y = b.inner.deep;\nconst k = new Crate();\nconst z = k.weight;\n";
 
 function hoverShowsTheFieldDocAtItsUses(): LspScenario {
 	const uri = "file:///lspwire/fielddoc.ms";
-	const field = (owner: string, name: string, doc: string, span: string): string =>
-		"```metascript\n(property) " + owner + "." + name + ": int32\n```\n\n---\n\n" + doc + " @ " + span;
+	const field = (
+		owner: string,
+		name: string,
+		doc: string,
+		span: string,
+	): string =>
+		"```metascript\n(property) " +
+		owner +
+		"." +
+		name +
+		": int32\n```\n\n---\n\n" +
+		doc +
+		" @ " +
+		span;
 	return {
 		name: "hover on a field read answers the field's own doc, not its container's",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, FIELD_DOC_SOURCE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, FIELD_DOC_SOURCE)),
+			]),
 			frames([
 				request("10", "textDocument/hover", positionParams(uri, 3, 1)),
 				request("11", "textDocument/hover", positionParams(uri, 18, 12)),
@@ -1575,30 +2451,55 @@ function hoverShowsTheFieldDocAtItsUses(): LspScenario {
 				request("13", "textDocument/hover", positionParams(uri, 21, 12)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("interface field at its declaration", field("Box", "n", "The n doc.", "3:1-3:2"), hoverSummary(r, "n:10")),
-			sameText("interface field at a read", field("Box", "n", "The n doc.", "18:12-18:13"), hoverSummary(r, "n:11")),
-			sameText("field of a field at a read", field("Inner", "deep", "The deep doc.", "19:18-19:22"), hoverSummary(r, "n:12")),
-			sameText("class field at a read", field("Crate", "weight", "The weight doc.", "21:12-21:18"), hoverSummary(r, "n:13")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"interface field at its declaration",
+					field("Box", "n", "The n doc.", "3:1-3:2"),
+					hoverSummary(r, "n:10"),
+				),
+				sameText(
+					"interface field at a read",
+					field("Box", "n", "The n doc.", "18:12-18:13"),
+					hoverSummary(r, "n:11"),
+				),
+				sameText(
+					"field of a field at a read",
+					field("Inner", "deep", "The deep doc.", "19:18-19:22"),
+					hoverSummary(r, "n:12"),
+				),
+				sameText(
+					"class field at a read",
+					field("Crate", "weight", "The weight doc.", "21:12-21:18"),
+					hoverSummary(r, "n:13"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const BUILT_BY_MACRO_USER = "const value: int32 = 3;\nconst a: int32 = callsHelper(value);\nconst b: int32 = forward(value);\n";
-const BUILT_BY_MACRO_MODULE = "import { Node, NodeKind, bindSym } from \"std/meta\";\n/** The helper doc. */\nexport function helper(v: int32): int32 {\n\treturn v;\n}\nexport macro callsHelper(n: Node): Node {\n\tconst callee = bindSym(\"helper\")!;\n\tcallee.line = n.line;\n\tcallee.column = n.column - 1;\n\treturn { kind: NodeKind.CallExpr, callee, arguments: [n], isDirectCall: false, resolvedOverloadIdx: -1 };\n}\nexport macro forward(n: Node): Node {\n\treturn quote { (${n}) };\n}\n";
+const BUILT_BY_MACRO_USER =
+	"const value: int32 = 3;\nconst a: int32 = callsHelper(value);\nconst b: int32 = forward(value);\n";
+const BUILT_BY_MACRO_MODULE =
+	"import { Node, NodeKind, bindSym } from \"std/meta\";\n/** The helper doc. */\nexport function helper(v: int32): int32 {\n\treturn v;\n}\nexport macro callsHelper(n: Node): Node {\n\tconst callee = bindSym(\"helper\")!;\n\tcallee.line = n.line;\n\tcallee.column = n.column - 1;\n\treturn { kind: NodeKind.CallExpr, callee, arguments: [n], isDirectCall: false, resolvedOverloadIdx: -1 };\n}\nexport macro forward(n: Node): Node {\n\treturn quote { (${n}) };\n}\n";
 
 function positionsBuiltByAMacroAnswerNothing(): LspScenario {
 	const uri = PROJECT_URI + "user.ms";
-	const value = (span: string): string => "```metascript\nconst value: int32\n``` @ " + span;
+	const value = (span: string): string =>
+		"```metascript\nconst value: int32\n``` @ " + span;
 	return {
 		name: "a node a macro builds answers no hover or definition, an argument it forwards still does",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, BUILT_BY_MACRO_USER))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, BUILT_BY_MACRO_USER),
+				),
+			]),
 			frames([
 				request("10", "textDocument/hover", positionParams(uri, 1, 17)),
 				request("11", "textDocument/hover", positionParams(uri, 1, 29)),
@@ -1609,27 +2510,61 @@ function positionsBuiltByAMacroAnswerNothing(): LspScenario {
 				request("16", "textDocument/definition", positionParams(uri, 1, 28)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
-			sameText("hover on the macro name", "```metascript\n(macro) callsHelper: unknown\n``` @ 1:17-1:28", hoverSummary(r, "n:10")),
-			sameText("hover on the argument beside a built callee", value("1:29-1:34"), hoverSummary(r, "n:11")),
-			sameText("hover on the argument a quote forwards", value("2:25-2:30"), hoverSummary(r, "n:12")),
-			sameText("definition on the macro name", "5:13-5:24", definitionSpan(r, "n:13")),
-			sameText("definition on the argument beside a built callee", "0:6-0:11", definitionSpan(r, "n:14")),
-			sameText("hover where only the built callee sits", "no hover: null", hoverSummary(r, "n:15")),
-			sameText("definition where only the built callee sits", "no location", definitionSpan(r, "n:16")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
+				sameText(
+					"hover on the macro name",
+					"```metascript\n(macro) callsHelper: unknown\n``` @ 1:17-1:28",
+					hoverSummary(r, "n:10"),
+				),
+				sameText(
+					"hover on the argument beside a built callee",
+					value("1:29-1:34"),
+					hoverSummary(r, "n:11"),
+				),
+				sameText(
+					"hover on the argument a quote forwards",
+					value("2:25-2:30"),
+					hoverSummary(r, "n:12"),
+				),
+				sameText(
+					"definition on the macro name",
+					"5:13-5:24",
+					definitionSpan(r, "n:13"),
+				),
+				sameText(
+					"definition on the argument beside a built callee",
+					"0:6-0:11",
+					definitionSpan(r, "n:14"),
+				),
+				sameText(
+					"hover where only the built callee sits",
+					"no hover: null",
+					hoverSummary(r, "n:15"),
+				),
+				sameText(
+					"definition where only the built callee sits",
+					"no location",
+					definitionSpan(r, "n:16"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: [
-			{ path: "build.ms", text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n" },
+			{
+				path: "build.ms",
+				text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n",
+			},
 			{ path: "mac.ms", text: BUILT_BY_MACRO_MODULE },
 		],
 	};
 }
 
-const RETURNED_FROM_MODULE_LIB = "export function useParams(): Map<string, string> {\n\treturn new Map<string, string>();\n}\nexport function pairs<K, V>(k: K, v: V): Map<K, V> {\n\tconst m = new Map<K, V>();\n\tm.set(k, v);\n\treturn m;\n}\nexport class Box {\n\tn: int32 = 1;\n}\nexport function makeBox(): Box {\n\treturn new Box();\n}\n";
-const RETURNED_FROM_MODULE_USER = "import { useParams, pairs, makeBox } from \"./lib\";\n\nconst slug = useParams();\nconst pm = pairs<string, int32>(\"a\", 1);\nconst bx = makeBox();\nconsole.log(slug.size, pm.size, bx.n);\n";
+const RETURNED_FROM_MODULE_LIB =
+	"export function useParams(): Map<string, string> {\n\treturn new Map<string, string>();\n}\nexport function pairs<K, V>(k: K, v: V): Map<K, V> {\n\tconst m = new Map<K, V>();\n\tm.set(k, v);\n\treturn m;\n}\nexport class Box {\n\tn: int32 = 1;\n}\nexport function makeBox(): Box {\n\treturn new Box();\n}\n";
+const RETURNED_FROM_MODULE_USER =
+	"import { useParams, pairs, makeBox } from \"./lib\";\n\nconst slug = useParams();\nconst pm = pairs<string, int32>(\"a\", 1);\nconst bx = makeBox();\nconsole.log(slug.size, pm.size, bx.n);\n";
 
 function hoverShowsTheTypeAnotherModuleReturns(): LspScenario {
 	const uri = PROJECT_URI + "main.ms";
@@ -1638,54 +2573,89 @@ function hoverShowsTheTypeAnotherModuleReturns(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, RETURNED_FROM_MODULE_USER))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, RETURNED_FROM_MODULE_USER),
+				),
+			]),
 			frames([
 				request("10", "textDocument/hover", positionParams(uri, 2, 6)),
 				request("11", "textDocument/hover", positionParams(uri, 3, 6)),
 				request("12", "textDocument/hover", positionParams(uri, 4, 6)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
-			sameText("hover on a Map an imported function returns", "```metascript\nconst slug: Map<string, string>\n``` @ 2:6-2:10", hoverSummary(r, "n:10")),
-			sameText("hover on a Map an imported generic returns", "```metascript\nconst pm: Map<string, int32>\n``` @ 3:6-3:8", hoverSummary(r, "n:11")),
-			sameText("hover on a class instance an imported function returns", "```metascript\nconst bx: Box\n``` @ 4:6-4:8", hoverSummary(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
+				sameText(
+					"hover on a Map an imported function returns",
+					"```metascript\nconst slug: Map<string, string>\n``` @ 2:6-2:10",
+					hoverSummary(r, "n:10"),
+				),
+				sameText(
+					"hover on a Map an imported generic returns",
+					"```metascript\nconst pm: Map<string, int32>\n``` @ 3:6-3:8",
+					hoverSummary(r, "n:11"),
+				),
+				sameText(
+					"hover on a class instance an imported function returns",
+					"```metascript\nconst bx: Box\n``` @ 4:6-4:8",
+					hoverSummary(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: [{ path: "lib.ms", text: RETURNED_FROM_MODULE_LIB }],
 	};
 }
 
-const SHADOWED_DOC_SOURCE = "function f(): int32 {\n\tconst JSON: int32 = 3;\n\treturn JSON;\n}\nconst s = JSON.stringify(1);\n";
+const SHADOWED_DOC_SOURCE =
+	"function f(): int32 {\n\tconst JSON: int32 = 3;\n\treturn JSON;\n}\nconst s = JSON.stringify(1);\n";
 
 function hoverDocFollowsTheSymbol(): LspScenario {
 	const uri = "file:///lspwire/shadowdoc.ms";
-	const intrinsic = "intrinsic object that provides functions to convert JavaScript values";
+	const intrinsic =
+		"intrinsic object that provides functions to convert JavaScript values";
 	return {
 		name: "hover shows the built-in doc for the std JSON and none for a user binding spelled JSON",
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SHADOWED_DOC_SOURCE))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, SHADOWED_DOC_SOURCE),
+				),
+			]),
 			frames([
 				request("10", "textDocument/hover", positionParams(uri, 1, 8)),
 				request("11", "textDocument/hover", positionParams(uri, 2, 9)),
 				request("12", "textDocument/hover", positionParams(uri, 4, 11)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			lacksText("hover on the user declaration", intrinsic, hoverSummary(r, "n:10")),
-			lacksText("hover on the user use", intrinsic, hoverSummary(r, "n:11")),
-			containsText("hover on the std JSON", intrinsic, hoverSummary(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				lacksText(
+					"hover on the user declaration",
+					intrinsic,
+					hoverSummary(r, "n:10"),
+				),
+				lacksText("hover on the user use", intrinsic, hoverSummary(r, "n:11")),
+				containsText(
+					"hover on the std JSON",
+					intrinsic,
+					hoverSummary(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const SHADOWED_CALL_SOURCE = "function pick(a: int32): int32 { return a; }\nfunction outer(): int32 {\n\tconst pick = (x: int32, y: int32): int32 => x + y;\n\treturn pick(1, 2);\n}\n";
+const SHADOWED_CALL_SOURCE =
+	"function pick(a: int32): int32 { return a; }\nfunction outer(): int32 {\n\tconst pick = (x: int32, y: int32): int32 => x + y;\n\treturn pick(1, 2);\n}\n";
 
 function signatureHelpFollowsTheCalleeSymbol(): LspScenario {
 	const uri = "file:///lspwire/shadowcall.ms";
@@ -1694,14 +2664,24 @@ function signatureHelpFollowsTheCalleeSymbol(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, SHADOWED_CALL_SOURCE))]),
-			frames([request("10", "textDocument/signatureHelp", positionParams(uri, 3, 13))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, SHADOWED_CALL_SOURCE),
+				),
+			]),
+			frames([
+				request("10", "textDocument/signatureHelp", positionParams(uri, 3, 13)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("local pick shadows the module pick",
-				"signatures 1, activeSignature 0, activeParameter 0, label pick(x: int32, y: int32): int32, parameters [x: int32, y: int32]",
-				signatureSummary(r, "n:10")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"local pick shadows the module pick",
+					"signatures 1, activeSignature 0, activeParameter 0, label pick(x: int32, y: int32): int32, parameters [x: int32, y: int32]",
+					signatureSummary(r, "n:10"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1710,9 +2690,15 @@ function signatureHelpFollowsTheCalleeSymbol(): LspScenario {
 
 function referenceRows(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	if (result.kind != JsonKind.Array) {
+		return "no references: " + render(result);
+	}
 	const rows: string[] = [];
-	for (const location of result.items) rows.push(scalarText(location.getDynamicField("uri")) + " " + spanOf(location));
+	for (const location of result.items) {
+		rows.push(
+			scalarText(location.getDynamicField("uri")) + " " + spanOf(location),
+		);
+	}
 	return rows.join("; ");
 }
 
@@ -1725,11 +2711,36 @@ function outlineTracksSourceRenameAndUndo(): LspScenario {
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, original))]),
-			frames([request("10", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, "export const BY = 1;\n"))]),
-			frames([request("11", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 3, original))]),
-			frames([request("12", "textDocument/documentSymbol", positionParams(uri, 0, 13))]),
+			frames([
+				request(
+					"10",
+					"textDocument/documentSymbol",
+					positionParams(uri, 0, 13),
+				),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, "export const BY = 1;\n"),
+				),
+			]),
+			frames([
+				request(
+					"11",
+					"textDocument/documentSymbol",
+					positionParams(uri, 0, 13),
+				),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(uri, 3, original)),
+			]),
+			frames([
+				request(
+					"12",
+					"textDocument/documentSymbol",
+					positionParams(uri, 0, 13),
+				),
+			]),
 		],
 		check: (r: LspReplay) => {
 			const ids = [10, 11, 12];
@@ -1737,16 +2748,22 @@ function outlineTracksSourceRenameAndUndo(): LspScenario {
 			for (let i = 0; i < ids.length; i++) {
 				let found = false;
 				for (const message of r.messages) {
-					if (message.getDynamicField("id").asInt32() != ids[i]) continue;
+					if (message.getDynamicField("id").asInt32() != ids[i]) {
+						continue;
+					}
 					found = true;
 					const result = message.getDynamicField("result");
 					if (result.kind != JsonKind.Array || result.items.length != 1) {
 						return `outline ${ids[i]} requires one declaration`;
 					}
 					const name = result.items[0].getDynamicField("name").asString();
-					if (name != expected[i]) return `outline ${ids[i]} expected ${expected[i]}, got ${name}`;
+					if (name != expected[i]) {
+						return `outline ${ids[i]} expected ${expected[i]}, got ${name}`;
+					}
 				}
-				if (!found) return `missing outline ${ids[i]}`;
+				if (!found) {
+					return `missing outline ${ids[i]}`;
+				}
 			}
 			return "";
 		},
@@ -1770,26 +2787,63 @@ function referencesHonorDeclarationContext(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, text))]),
 			frames([
-				request("10", "textDocument/references", referenceParams(uri, 0, 6, true)),
-				request("11", "textDocument/references", referenceParams(uri, 0, 6, false)),
-				request("12", "textDocument/references", referenceParams(uri, 1, 15, true)),
-				request("13", "textDocument/references", referenceParams(uri, 1, 15, false)),
+				request(
+					"10",
+					"textDocument/references",
+					referenceParams(uri, 0, 6, true),
+				),
+				request(
+					"11",
+					"textDocument/references",
+					referenceParams(uri, 0, 6, false),
+				),
+				request(
+					"12",
+					"textDocument/references",
+					referenceParams(uri, 1, 15, true),
+				),
+				request(
+					"13",
+					"textDocument/references",
+					referenceParams(uri, 1, 15, false),
+				),
 				request("20", "textDocument/references", at),
 				request("21", "textDocument/references", fields + ",\"context\":{}}"),
-				request("22", "textDocument/references", fields + ",\"context\":{\"includeDeclaration\":\"false\"}}"),
+				request(
+					"22",
+					"textDocument/references",
+					fields + ",\"context\":{\"includeDeclaration\":\"false\"}}",
+				),
 				request("23", "textDocument/references", fields + ",\"context\":null}"),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("declaration with true", all, referenceRows(r, "n:10")),
-			sameText("declaration with false", uses, referenceRows(r, "n:11")),
-			sameText("use with true", all, referenceRows(r, "n:12")),
-			sameText("use with false", uses, referenceRows(r, "n:13")),
-			sameText("missing context", "-32602", answerField(r, "n:20", "error.code")),
-			sameText("missing flag", "-32602", answerField(r, "n:21", "error.code")),
-			sameText("nonboolean flag", "-32602", answerField(r, "n:22", "error.code")),
-			sameText("null context", "-32602", answerField(r, "n:23", "error.code")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText("declaration with true", all, referenceRows(r, "n:10")),
+				sameText("declaration with false", uses, referenceRows(r, "n:11")),
+				sameText("use with true", all, referenceRows(r, "n:12")),
+				sameText("use with false", uses, referenceRows(r, "n:13")),
+				sameText(
+					"missing context",
+					"-32602",
+					answerField(r, "n:20", "error.code"),
+				),
+				sameText(
+					"missing flag",
+					"-32602",
+					answerField(r, "n:21", "error.code"),
+				),
+				sameText(
+					"nonboolean flag",
+					"-32602",
+					answerField(r, "n:22", "error.code"),
+				),
+				sameText(
+					"null context",
+					"-32602",
+					answerField(r, "n:23", "error.code"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1807,20 +2861,42 @@ function referencesFollowTheImportedSymbol(): LspScenario {
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
-			frames([notification("textDocument/didOpen", openParams(user, userText))]),
-			frames([request("10", "textDocument/references", referenceParams(dep, 0, 16, true))]),
+			frames([
+				notification("textDocument/didOpen", openParams(user, userText)),
+			]),
+			frames([
+				request(
+					"10",
+					"textDocument/references",
+					referenceParams(dep, 0, 16, true),
+				),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			containsText("the declaration", dep + " 0:16-0:17", referenceRows(r, "n:10")),
-			containsText("the use through the alias g", user + " 1:17-1:18", referenceRows(r, "n:10")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				containsText(
+					"the declaration",
+					dep + " 0:16-0:17",
+					referenceRows(r, "n:10"),
+				),
+				containsText(
+					"the use through the alias g",
+					user + " 1:17-1:18",
+					referenceRows(r, "n:10"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-function renameParams(uri: string, line: int32, character: int32, newName: string): string {
+function renameParams(
+	uri: string,
+	line: int32,
+	character: int32,
+	newName: string,
+): string {
 	const at = positionParams(uri, line, character);
 	return at.slice(0, at.length - 1) + `,"newName":${lspJsonString(newName)}}`;
 }
@@ -1828,9 +2904,13 @@ function renameParams(uri: string, line: int32, character: int32, newName: strin
 function renameRows(r: LspReplay, key: string, uri: string): string {
 	const changes = answerResult(r, key).getDynamicField("changes");
 	const edits = changes.getDynamicField(uri);
-	if (edits.kind != JsonKind.Array) return "none";
+	if (edits.kind != JsonKind.Array) {
+		return "none";
+	}
 	const rows: string[] = [];
-	for (const edit of edits.items) rows.push(spanOf(edit) + " " + scalarText(edit.getDynamicField("newText")));
+	for (const edit of edits.items) {
+		rows.push(spanOf(edit) + " " + scalarText(edit.getDynamicField("newText")));
+	}
 	return rows.join("; ");
 }
 
@@ -1845,18 +2925,37 @@ function renameFollowsTheBindingOfAnImport(): LspScenario {
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(dep, depText))]),
-			frames([notification("textDocument/didOpen", openParams(user, userText))]),
+			frames([
+				notification("textDocument/didOpen", openParams(user, userText)),
+			]),
 			frames([
 				request("10", "textDocument/rename", renameParams(user, 1, 17, "h")),
 				request("11", "textDocument/rename", renameParams(dep, 0, 16, "h")),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("rename at the alias use, the importer", "0:14-0:15 h; 1:17-1:18 h", renameRows(r, "n:10", user)),
-			sameText("rename at the alias use, the exporter", "none", renameRows(r, "n:10", dep)),
-			sameText("rename at the export, the declaration", "0:16-0:17 h", renameRows(r, "n:11", dep)),
-			sameText("rename at the export, the importer", "0:9-0:10 h", renameRows(r, "n:11", user)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"rename at the alias use, the importer",
+					"0:14-0:15 h; 1:17-1:18 h",
+					renameRows(r, "n:10", user),
+				),
+				sameText(
+					"rename at the alias use, the exporter",
+					"none",
+					renameRows(r, "n:10", dep),
+				),
+				sameText(
+					"rename at the export, the declaration",
+					"0:16-0:17 h",
+					renameRows(r, "n:11", dep),
+				),
+				sameText(
+					"rename at the export, the importer",
+					"0:9-0:10 h",
+					renameRows(r, "n:11", user),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1865,18 +2964,26 @@ function renameFollowsTheBindingOfAnImport(): LspScenario {
 
 function renameEditsEachCallOnce(): LspScenario {
 	const uri = "file:///lspwire/rename/calls.ms";
-	const text = "function q(): int32 { return 1; }\nconst t = q() + q();\nconsole.log(t);";
+	const text =
+		"function q(): int32 { return 1; }\nconst t = q() + q();\nconsole.log(t);";
 	return {
 		name: "rename of a called function edits each call once",
 		batching: "any",
 		drains: [
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, text))]),
-			frames([request("10", "textDocument/rename", renameParams(uri, 1, 10, "h"))]),
+			frames([
+				request("10", "textDocument/rename", renameParams(uri, 1, 10, "h")),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("rename at a call", "0:9-0:10 h; 1:10-1:11 h; 1:16-1:17 h", renameRows(r, "n:10", uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"rename at a call",
+					"0:9-0:10 h; 1:10-1:11 h; 1:16-1:17 h",
+					renameRows(r, "n:10", uri),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1886,7 +2993,9 @@ function renameEditsEachCallOnce(): LspScenario {
 function sortedUnique(items: string[]): string {
 	const kept: string[] = [];
 	for (const item of items) {
-		if (kept.indexOf(item) < 0) kept.push(item);
+		if (kept.indexOf(item) < 0) {
+			kept.push(item);
+		}
 	}
 	kept.sort();
 	return kept.join("; ");
@@ -1894,25 +3003,35 @@ function sortedUnique(items: string[]): string {
 
 function referenceFiles(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	if (result.kind != JsonKind.Array) {
+		return "no references: " + render(result);
+	}
 	const uris: string[] = [];
-	for (const location of result.items) uris.push(scalarText(location.getDynamicField("uri")));
+	for (const location of result.items) {
+		uris.push(scalarText(location.getDynamicField("uri")));
+	}
 	return sortedUnique(uris);
 }
 
 function referenceRowsIn(r: LspReplay, key: string, uri: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "no references: " + render(result);
+	if (result.kind != JsonKind.Array) {
+		return "no references: " + render(result);
+	}
 	const rows: string[] = [];
 	for (const location of result.items) {
-		if (scalarText(location.getDynamicField("uri")) == uri) rows.push(spanOf(location));
+		if (scalarText(location.getDynamicField("uri")) == uri) {
+			rows.push(spanOf(location));
+		}
 	}
 	return rows.join("; ");
 }
 
 function renameFiles(r: LspReplay, key: string): string {
 	const changes = answerResult(r, key).getDynamicField("changes");
-	return changes.kind == JsonKind.Object ? sortedUnique(changes.keys) : "no changes: " + render(changes);
+	return changes.kind == JsonKind.Object
+		? sortedUnique(changes.keys)
+		: "no changes: " + render(changes);
 }
 
 const NAV_LIB = PROJECT_URI + "lib.ms";
@@ -1922,16 +3041,21 @@ const NAV_BARREL = PROJECT_URI + "barrel.ms";
 const NAV_VIA = PROJECT_URI + "via.ms";
 const NAV_APP = PROJECT_URI + "app.ms";
 
-const NAV_BUILD = "const config = { entry: \"./app\" };\nexport default config;\n";
+const NAV_BUILD =
+	"const config = { entry: \"./app\" };\nexport default config;\n";
 const NAV_LIB_TEXT = "export function f(): int32 { return 1; }\n";
-const NAV_ALIAS_TEXT = "import { f as g } from \"./lib\";\nexport const t = g();\n";
-const NAV_PLAIN_TEXT = "import { f } from \"./lib\";\nexport const v = f();\nfunction shadow(): int32 {\n\tconst f = 2;\n\treturn f;\n}\n";
+const NAV_ALIAS_TEXT =
+	"import { f as g } from \"./lib\";\nexport const t = g();\n";
+const NAV_PLAIN_TEXT =
+	"import { f } from \"./lib\";\nexport const v = f();\nfunction shadow(): int32 {\n\tconst f = 2;\n\treturn f;\n}\n";
 const NAV_BARREL_TEXT = "export { f } from \"./lib\";\n";
 const NAV_VIA_TEXT = "import { f } from \"./barrel\";\nexport const w = f();\n";
 const NAV_OTHER_TEXT = "export function f(): int32 { return 2; }\n";
 const NAV_ORPHAN_TEXT = "import { f } from \"./lib\";\nexport const o = f();\n";
-const NAV_APP_TEXT = "import { t } from \"./alias\";\nimport { v } from \"./plain\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, v, w, other());\n";
-const NAV_APP_WITHOUT_PLAIN = "import { t } from \"./alias\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, w, other());\n";
+const NAV_APP_TEXT =
+	"import { t } from \"./alias\";\nimport { v } from \"./plain\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, v, w, other());\n";
+const NAV_APP_WITHOUT_PLAIN =
+	"import { t } from \"./alias\";\nimport { w } from \"./via\";\nimport { f as other } from \"./other\";\nconsole.log(t, w, other());\n";
 
 const NAV_ALIAS_ROWS = "0:9-0:10; 0:14-0:15; 1:17-1:18";
 const NAV_PLAIN_ROWS = "0:9-0:10; 1:17-1:18";
@@ -1952,33 +3076,100 @@ function navProject(): LspProjectFile[] {
 
 function navRequests(base: int32): string[] {
 	return frames([
-		request("" + base, "textDocument/references", referenceParams(NAV_LIB, 0, 16, true)),
-		request("" + (base + 1), "textDocument/references", referenceParams(NAV_LIB, 0, 16, false)),
-		request("" + (base + 2), "textDocument/rename", renameParams(NAV_LIB, 0, 16, "h")),
+		request(
+			"" + base,
+			"textDocument/references",
+			referenceParams(NAV_LIB, 0, 16, true),
+		),
+		request(
+			"" + (base + 1),
+			"textDocument/references",
+			referenceParams(NAV_LIB, 0, 16, false),
+		),
+		request(
+			"" + (base + 2),
+			"textDocument/rename",
+			renameParams(NAV_LIB, 0, 16, "h"),
+		),
 	]);
 }
 
-function navAnswers(r: LspReplay, phase: string, base: int32, plainReached: boolean): string {
+function navAnswers(
+	r: LspReplay,
+	phase: string,
+	base: int32,
+	plainReached: boolean,
+): string {
 	const kept: string[] = [NAV_LIB, NAV_ALIAS, NAV_BARREL, NAV_VIA];
-	if (plainReached) kept.push(NAV_PLAIN);
+	if (plainReached) {
+		kept.push(NAV_PLAIN);
+	}
 	const withDecl = "n:" + base;
 	const withoutDecl = "n:" + (base + 1);
 	const renamed = "n:" + (base + 2);
 	const plainRows = plainReached ? NAV_PLAIN_ROWS : "";
 	const plainEdits = plainReached ? "0:9-0:10 h; 1:17-1:18 h" : "none";
 	return firstFailure([
-		sameText(phase + ": files with the declaration", sortedUnique(kept), referenceFiles(r, withDecl)),
-		sameText(phase + ": the declaration", "0:16-0:17", referenceRowsIn(r, withDecl, NAV_LIB)),
-		sameText(phase + ": the alias importer", NAV_ALIAS_ROWS, referenceRowsIn(r, withDecl, NAV_ALIAS)),
-		sameText(phase + ": the plain importer, its shadowing local left out", plainRows, referenceRowsIn(r, withDecl, NAV_PLAIN)),
-		sameText(phase + ": the declaration left out", "", referenceRowsIn(r, withoutDecl, NAV_LIB)),
-		sameText(phase + ": the alias importer without the declaration", NAV_ALIAS_ROWS, referenceRowsIn(r, withoutDecl, NAV_ALIAS)),
-		sameText(phase + ": the plain importer without the declaration", plainRows, referenceRowsIn(r, withoutDecl, NAV_PLAIN)),
-		sameText(phase + ": the re-exporting importer without the declaration", referenceRowsIn(r, withDecl, NAV_VIA), referenceRowsIn(r, withoutDecl, NAV_VIA)),
-		sameText(phase + ": files of rename", sortedUnique(kept), renameFiles(r, renamed)),
-		sameText(phase + ": rename at the declaration", "0:16-0:17 h", renameRows(r, renamed, NAV_LIB)),
-		sameText(phase + ": rename keeps the alias", "0:9-0:10 h", renameRows(r, renamed, NAV_ALIAS)),
-		sameText(phase + ": rename of the plain importer", plainEdits, renameRows(r, renamed, NAV_PLAIN)),
+		sameText(
+			phase + ": files with the declaration",
+			sortedUnique(kept),
+			referenceFiles(r, withDecl),
+		),
+		sameText(
+			phase + ": the declaration",
+			"0:16-0:17",
+			referenceRowsIn(r, withDecl, NAV_LIB),
+		),
+		sameText(
+			phase + ": the alias importer",
+			NAV_ALIAS_ROWS,
+			referenceRowsIn(r, withDecl, NAV_ALIAS),
+		),
+		sameText(
+			phase + ": the plain importer, its shadowing local left out",
+			plainRows,
+			referenceRowsIn(r, withDecl, NAV_PLAIN),
+		),
+		sameText(
+			phase + ": the declaration left out",
+			"",
+			referenceRowsIn(r, withoutDecl, NAV_LIB),
+		),
+		sameText(
+			phase + ": the alias importer without the declaration",
+			NAV_ALIAS_ROWS,
+			referenceRowsIn(r, withoutDecl, NAV_ALIAS),
+		),
+		sameText(
+			phase + ": the plain importer without the declaration",
+			plainRows,
+			referenceRowsIn(r, withoutDecl, NAV_PLAIN),
+		),
+		sameText(
+			phase + ": the re-exporting importer without the declaration",
+			referenceRowsIn(r, withDecl, NAV_VIA),
+			referenceRowsIn(r, withoutDecl, NAV_VIA),
+		),
+		sameText(
+			phase + ": files of rename",
+			sortedUnique(kept),
+			renameFiles(r, renamed),
+		),
+		sameText(
+			phase + ": rename at the declaration",
+			"0:16-0:17 h",
+			renameRows(r, renamed, NAV_LIB),
+		),
+		sameText(
+			phase + ": rename keeps the alias",
+			"0:9-0:10 h",
+			renameRows(r, renamed, NAV_ALIAS),
+		),
+		sameText(
+			phase + ": rename of the plain importer",
+			plainEdits,
+			renameRows(r, renamed, NAV_PLAIN),
+		),
 	]);
 }
 
@@ -1988,15 +3179,23 @@ function configuredEntryFixesTheNavigationUniverse(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			frames([
+				notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT)),
+			]),
 			navRequests(10),
-			frames([notification("textDocument/didOpen", openParams(NAV_ALIAS, NAV_ALIAS_TEXT))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(NAV_ALIAS, NAV_ALIAS_TEXT),
+				),
+			]),
 			navRequests(20),
 		],
-		check: (r: LspReplay) => firstFailure([
-			navAnswers(r, "only the library open", 10, true),
-			navAnswers(r, "an importer open too", 20, true),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				navAnswers(r, "only the library open", 10, true),
+				navAnswers(r, "an importer open too", 20, true),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: navProject(),
@@ -2004,42 +3203,71 @@ function configuredEntryFixesTheNavigationUniverse(): LspScenario {
 }
 
 const SUM_URI = "file:///lspwire/sum.ms";
-const SUM_TEXT = "function sum(a: int32, b: int32): int32 {\n\treturn a + b;\n}\nconst total = sum(1, 2);\nconst again = sum(total, 3);\nconsole.log(again);\n";
+const SUM_TEXT =
+	"function sum(a: int32, b: int32): int32 {\n\treturn a + b;\n}\nconst total = sum(1, 2);\nconst again = sum(total, 3);\nconsole.log(again);\n";
 const SUM_TEXT_WITH_ERROR = SUM_TEXT + "export const bad: int32 = \"x\";\n";
 const SUM_DECLARATION_AND_CALLS = `${SUM_URI} 0:9-0:12; ${SUM_URI} 3:14-3:17; ${SUM_URI} 4:14-4:17`;
 const SUM_COMPLETION_ROW = "sum|3|(a: int32, b: int32) => int32";
 
-function inlayParams(uri: string, startLine: int32, endLine: int32, endCharacter: int32): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)}},"range":{"start":{"line":${startLine},"character":0},"end":{"line":${endLine},"character":${endCharacter}}}}`;
+function inlayParams(
+	uri: string,
+	startLine: int32,
+	endLine: int32,
+	endCharacter: int32,
+): string {
+	return (
+		`{"textDocument":{"uri":${lspJsonString(uri)}},"range":{"start":{"line":${startLine},"character":0},"end":{"line":${endLine},"character":${endCharacter}}}}`
+	);
 }
 
 function highlightRows(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "no highlights: " + render(result);
+	if (result.kind != JsonKind.Array) {
+		return "no highlights: " + render(result);
+	}
 	const rows: string[] = [];
-	for (const highlight of result.items) rows.push(spanOf(highlight));
+	for (const highlight of result.items) {
+		rows.push(spanOf(highlight));
+	}
 	return rows.join("; ");
 }
 
 function inlayRows(r: LspReplay, key: string): string {
 	const result = answerResult(r, key);
-	if (result.kind != JsonKind.Array) return "no hints: " + render(result);
+	if (result.kind != JsonKind.Array) {
+		return "no hints: " + render(result);
+	}
 	const rows: string[] = [];
 	for (const hint of result.items) {
 		const position = hint.getDynamicField("position");
-		rows.push(position.getDynamicField("line").asInt32(-1) + ":" + position.getDynamicField("character").asInt32(-1)
-			+ " " + scalarText(hint.getDynamicField("label")));
+		rows.push(
+			position.getDynamicField("line").asInt32(-1) +
+				":" +
+				position.getDynamicField("character").asInt32(-1) +
+				" " +
+				scalarText(hint.getDynamicField("label")),
+		);
 	}
 	return rows.join("; ");
 }
 
-function listsCompletion(what: string, r: LspReplay, key: string, row: string): string {
-	return completionRows(r, key).includes(row) ? "" : what + ": no completion row " + row;
+function listsCompletion(
+	what: string,
+	r: LspReplay,
+	key: string,
+	row: string,
+): string {
+	return completionRows(r, key).includes(row)
+		? ""
+		: what + ": no completion row " + row;
 }
 
 function sumSignature(activeParameter: int32): string {
-	return "signatures 1, activeSignature 0, activeParameter " + activeParameter
-		+ ", label sum(a: int32, b: int32): int32, parameters [a: int32, b: int32]";
+	return (
+		"signatures 1, activeSignature 0, activeParameter " +
+		activeParameter +
+		", label sum(a: int32, b: int32): int32, parameters [a: int32, b: int32]"
+	);
 }
 
 function queryHistoryKeepsExactAnswers(): LspScenario {
@@ -2055,48 +3283,166 @@ function queryHistoryKeepsExactAnswers(): LspScenario {
 				request("11", "textDocument/rename", renameParams(uri, 3, 14, "add")),
 				request("12", "textDocument/signatureHelp", positionParams(uri, 3, 18)),
 				request("13", "textDocument/signatureHelp", positionParams(uri, 3, 21)),
-				request("14", "textDocument/references", referenceParams(uri, 3, 14, true)),
-				request("15", "textDocument/references", referenceParams(uri, 0, 9, true)),
-				request("16", "textDocument/references", referenceParams(uri, 3, 6, true)),
+				request(
+					"14",
+					"textDocument/references",
+					referenceParams(uri, 3, 14, true),
+				),
+				request(
+					"15",
+					"textDocument/references",
+					referenceParams(uri, 0, 9, true),
+				),
+				request(
+					"16",
+					"textDocument/references",
+					referenceParams(uri, 3, 6, true),
+				),
 				request("17", "textDocument/rename", renameParams(uri, 4, 18, "grand")),
 			]),
-			frames([request("18", "textDocument/documentHighlight", positionParams(uri, 3, 6))]),
-			frames([request("19", "textDocument/documentHighlight", positionParams(uri, 3, 14))]),
-			frames([request("20", "textDocument/inlayHint", inlayParams(uri, 0, 5, 19))]),
-			frames([request("21", "textDocument/inlayHint", inlayParams(uri, 3, 3, 24))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, SUM_TEXT_WITH_ERROR))]),
-			frames([notification("textDocument/didChange", changeParams(uri, 3, SUM_TEXT))]),
 			frames([
-				request("30", "textDocument/references", referenceParams(uri, 3, 14, true)),
+				request(
+					"18",
+					"textDocument/documentHighlight",
+					positionParams(uri, 3, 6),
+				),
+			]),
+			frames([
+				request(
+					"19",
+					"textDocument/documentHighlight",
+					positionParams(uri, 3, 14),
+				),
+			]),
+			frames([
+				request("20", "textDocument/inlayHint", inlayParams(uri, 0, 5, 19)),
+			]),
+			frames([
+				request("21", "textDocument/inlayHint", inlayParams(uri, 3, 3, 24)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, SUM_TEXT_WITH_ERROR),
+				),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(uri, 3, SUM_TEXT)),
+			]),
+			frames([
+				request(
+					"30",
+					"textDocument/references",
+					referenceParams(uri, 3, 14, true),
+				),
 				request("31", "textDocument/rename", renameParams(uri, 3, 14, "add")),
 				request("32", "textDocument/completion", positionParams(uri, 3, 14)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostic counts per publish", "[0,1,0]", publishedCounts(r, uri)),
-			containsText("publish 1 message", NOT_ASSIGNABLE, publishedAt(r, uri, 1)),
-			containsText("publish 1 line", "[6:", publishedAt(r, uri, 1)),
-			listsCompletion("completion at the callee", r, "n:10", SUM_COMPLETION_ROW),
-			sameText("rename of a call edits the declaration and each call", "0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add", renameRows(r, "n:11", uri)),
-			sameText("signature in the 1st argument", sumSignature(0), signatureSummary(r, "n:12")),
-			sameText("signature in the 2nd argument", sumSignature(1), signatureSummary(r, "n:13")),
-			sameText("references at a call", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:14")),
-			sameText("references at the declaration", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:15")),
-			sameText("references of the inferred const", `${uri} 3:6-3:11; ${uri} 4:18-4:23`, referenceRows(r, "n:16")),
-			sameText("rename at a use of the inferred const", "3:6-3:11 grand; 4:18-4:23 grand", renameRows(r, "n:17", uri)),
-			sameText("highlight of the inferred const", "3:6-3:11; 4:18-4:23", highlightRows(r, "n:18")),
-			sameText("highlight of the function at a call", "0:9-0:12; 3:14-3:17; 4:14-4:17", highlightRows(r, "n:19")),
-			containsText("inlay hint of the first inferred const", "3:11 : int32", inlayRows(r, "n:20")),
-			containsText("inlay hint of the second inferred const", "4:11 : int32", inlayRows(r, "n:20")),
-			sameText("inlay hints of line 3 alone", "3:11 : int32; 3:18 a:; 3:21 b:", inlayRows(r, "n:21")),
-			sameText("references after the edits", SUM_DECLARATION_AND_CALLS, referenceRows(r, "n:30")),
-			sameText("rename after the edits", "0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add", renameRows(r, "n:31", uri)),
-			listsCompletion("completion after the edits", r, "n:32", SUM_COMPLETION_ROW),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"diagnostic counts per publish",
+					"[0,1,0]",
+					publishedCounts(r, uri),
+				),
+				containsText(
+					"publish 1 message",
+					NOT_ASSIGNABLE,
+					publishedAt(r, uri, 1),
+				),
+				containsText("publish 1 line", "[6:", publishedAt(r, uri, 1)),
+				listsCompletion(
+					"completion at the callee",
+					r,
+					"n:10",
+					SUM_COMPLETION_ROW,
+				),
+				sameText(
+					"rename of a call edits the declaration and each call",
+					"0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add",
+					renameRows(r, "n:11", uri),
+				),
+				sameText(
+					"signature in the 1st argument",
+					sumSignature(0),
+					signatureSummary(r, "n:12"),
+				),
+				sameText(
+					"signature in the 2nd argument",
+					sumSignature(1),
+					signatureSummary(r, "n:13"),
+				),
+				sameText(
+					"references at a call",
+					SUM_DECLARATION_AND_CALLS,
+					referenceRows(r, "n:14"),
+				),
+				sameText(
+					"references at the declaration",
+					SUM_DECLARATION_AND_CALLS,
+					referenceRows(r, "n:15"),
+				),
+				sameText(
+					"references of the inferred const",
+					`${uri} 3:6-3:11; ${uri} 4:18-4:23`,
+					referenceRows(r, "n:16"),
+				),
+				sameText(
+					"rename at a use of the inferred const",
+					"3:6-3:11 grand; 4:18-4:23 grand",
+					renameRows(r, "n:17", uri),
+				),
+				sameText(
+					"highlight of the inferred const",
+					"3:6-3:11; 4:18-4:23",
+					highlightRows(r, "n:18"),
+				),
+				sameText(
+					"highlight of the function at a call",
+					"0:9-0:12; 3:14-3:17; 4:14-4:17",
+					highlightRows(r, "n:19"),
+				),
+				containsText(
+					"inlay hint of the first inferred const",
+					"3:11 : int32",
+					inlayRows(r, "n:20"),
+				),
+				containsText(
+					"inlay hint of the second inferred const",
+					"4:11 : int32",
+					inlayRows(r, "n:20"),
+				),
+				sameText(
+					"inlay hints of line 3 alone",
+					"3:11 : int32; 3:18 a:; 3:21 b:",
+					inlayRows(r, "n:21"),
+				),
+				sameText(
+					"references after the edits",
+					SUM_DECLARATION_AND_CALLS,
+					referenceRows(r, "n:30"),
+				),
+				sameText(
+					"rename after the edits",
+					"0:9-0:12 add; 3:14-3:17 add; 4:14-4:17 add",
+					renameRows(r, "n:31", uri),
+				),
+				listsCompletion(
+					"completion after the edits",
+					r,
+					"n:32",
+					SUM_COMPLETION_ROW,
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [6, 7, 8],
-			probes: [{ uri, line: 3, character: 14 }, { uri, line: 3, character: 6 }, { uri, line: 3, character: 21 }],
+			probes: [
+				{ uri, line: 3, character: 14 },
+				{ uri, line: 3, character: 6 },
+				{ uri, line: 3, character: 21 },
+			],
 		},
 		project: null,
 	};
@@ -2114,26 +3460,55 @@ function globalImportClassIdentitySurvivesQueryHistory(): LspScenario {
 			frames([notification("textDocument/didOpen", openParams(uri, source))]),
 			frames([
 				request("10", "textDocument/completion", positionParams(uri, 1, 16)),
-				request("11", "textDocument/rename", renameParams(uri, 1, 16, "lspRenamed")),
+				request(
+					"11",
+					"textDocument/rename",
+					renameParams(uri, 1, 16, "lspRenamed"),
+				),
 				request("12", "textDocument/completion", positionParams(uri, 1, 9)),
 				request("13", "textDocument/completion", positionParams(uri, 4, 20)),
 			]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, edited))]),
+			frames([
+				notification("textDocument/didChange", changeParams(uri, 2, edited)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			listsCompletion("alias RHS offers its class", r, "n:13", "Box|7|Box"),
-			sameText("alias RHS excludes the factory", "false",
-				"" + completionLabels(r, "n:13").includes("mkBox")),
-			listsCompletion("typed initializer offers its factory", r, "n:10",
-				"mkBox|3|() => Box"),
-			listsCompletion("type annotation offers its class", r, "n:12", "Box|7|Box"),
-			sameText("type annotation excludes the factory", "false",
-				"" + completionLabels(r, "n:12").includes("mkBox")),
-			sameText("use.ms diagnostic counts per publish", "[0,0]", publishedCounts(r, uri)),
-			sameText("use.ms last publish", "[]", lastPublished(r, uri)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				listsCompletion("alias RHS offers its class", r, "n:13", "Box|7|Box"),
+				sameText(
+					"alias RHS excludes the factory",
+					"false",
+					"" + completionLabels(r, "n:13").includes("mkBox"),
+				),
+				listsCompletion(
+					"typed initializer offers its factory",
+					r,
+					"n:10",
+					"mkBox|3|() => Box",
+				),
+				listsCompletion(
+					"type annotation offers its class",
+					r,
+					"n:12",
+					"Box|7|Box",
+				),
+				sameText(
+					"type annotation excludes the factory",
+					"false",
+					"" + completionLabels(r, "n:12").includes("mkBox"),
+				),
+				sameText(
+					"use.ms diagnostic counts per publish",
+					"[0,0]",
+					publishedCounts(r, uri),
+				),
+				sameText("use.ms last publish", "[]", lastPublished(r, uri)),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [2, 3], probes: [{ uri, line: 1, character: 16 }, { uri, line: 1, character: 9 }] },
+		checkpoints: {
+			afterDrains: [2, 3],
+			probes: [{ uri, line: 1, character: 16 }, { uri, line: 1, character: 9 }],
+		},
 		project: MAKERS_PROJECT,
 	};
 }
@@ -2144,19 +3519,34 @@ function entryEditsMoveTheNavigationUniverse(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT))]),
+			frames([
+				notification("textDocument/didOpen", openParams(NAV_LIB, NAV_LIB_TEXT)),
+			]),
 			navRequests(10),
-			frames([notification("textDocument/didOpen", openParams(NAV_APP, NAV_APP_TEXT))]),
-			frames([notification("textDocument/didChange", changeParams(NAV_APP, 2, NAV_APP_WITHOUT_PLAIN))]),
+			frames([
+				notification("textDocument/didOpen", openParams(NAV_APP, NAV_APP_TEXT)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(NAV_APP, 2, NAV_APP_WITHOUT_PLAIN),
+				),
+			]),
 			navRequests(20),
-			frames([notification("textDocument/didChange", changeParams(NAV_APP, 3, NAV_APP_TEXT))]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(NAV_APP, 3, NAV_APP_TEXT),
+				),
+			]),
 			navRequests(30),
 		],
-		check: (r: LspReplay) => firstFailure([
-			navAnswers(r, "before the edit", 10, true),
-			navAnswers(r, "with the importer disconnected", 20, false),
-			navAnswers(r, "after the undo", 30, true),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				navAnswers(r, "before the edit", 10, true),
+				navAnswers(r, "with the importer disconnected", 20, false),
+				navAnswers(r, "after the undo", 30, true),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: navProject(),
@@ -2166,8 +3556,11 @@ function entryEditsMoveTheNavigationUniverse(): LspScenario {
 function closingAnOverlayRestoresDiskMembers(): LspScenario {
 	const dep = PROJECT_URI + "close/dep.ms";
 	const user = PROJECT_URI + "close/user.ms";
-	const saved = "export interface Box { saved: int32; }\nexport const box: Box = { saved: 1 };\n";
-	const unsaved = saved.replace("saved: int32", "unsaved: int32").replace("saved: 1", "unsaved: 1");
+	const saved =
+		"export interface Box { saved: int32; }\nexport const box: Box = { saved: 1 };\n";
+	const unsaved = saved
+		.replace("saved: int32", "unsaved: int32")
+		.replace("saved: 1", "unsaved: 1");
 	const member = "import { box } from \"./dep\";\nbox.\n";
 	const prefixed = "import { box } from \"./dep\";\nbox.sa\n";
 	return {
@@ -2179,34 +3572,73 @@ function closingAnOverlayRestoresDiskMembers(): LspScenario {
 				notification("textDocument/didOpen", openParams(user, member)),
 				notification("textDocument/didOpen", openParams(dep, saved)),
 			]),
-			frames([notification("textDocument/didChange", changeParams(dep, 2, unsaved))]),
-			frames([request("10", "textDocument/completion", positionParams(user, 1, 4))]),
-			frames([notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(dep)}}}`)]),
-			frames([request("11", "textDocument/completion", positionParams(user, 1, 4))]),
-			frames([notification("textDocument/didChange", changeParams(user, 2, prefixed))]),
-			frames([request("12", "textDocument/completion", positionParams(user, 1, 6))]),
+			frames([
+				notification("textDocument/didChange", changeParams(dep, 2, unsaved)),
+			]),
+			frames([
+				request("10", "textDocument/completion", positionParams(user, 1, 4)),
+			]),
+			frames([
+				notification(
+					"textDocument/didClose",
+					`{"textDocument":{"uri":${lspJsonString(dep)}}}`,
+				),
+			]),
+			frames([
+				request("11", "textDocument/completion", positionParams(user, 1, 4)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(user, 2, prefixed)),
+			]),
+			frames([
+				request("12", "textDocument/completion", positionParams(user, 1, 6)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameRows("members of the unsaved overlay", ["hash|2|() => int64", "unsaved|5|int32"], completionRows(r, "n:10")),
-			sameRows("members after the close", ["hash|2|() => int64", "saved|5|int32"], completionRows(r, "n:11")),
-			lacksText("the overlay member after the close", "unsaved", completionRows(r, "n:11").join(", ")),
-			sameRows("members matching the prefix sa after the close", ["saved|5|int32"], completionRows(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameRows(
+					"members of the unsaved overlay",
+					["hash|2|() => int64", "unsaved|5|int32"],
+					completionRows(r, "n:10"),
+				),
+				sameRows(
+					"members after the close",
+					["hash|2|() => int64", "saved|5|int32"],
+					completionRows(r, "n:11"),
+				),
+				lacksText(
+					"the overlay member after the close",
+					"unsaved",
+					completionRows(r, "n:11").join(", "),
+				),
+				sameRows(
+					"members matching the prefix sa after the close",
+					["saved|5|int32"],
+					completionRows(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [7],
-			probes: [{ uri: user, line: 1, character: 1 }, { uri: user, line: 1, character: 6 }],
+			probes: [
+				{ uri: user, line: 1, character: 1 },
+				{ uri: user, line: 1, character: 6 },
+			],
 			publications: [{ afterDrain: 4, uri: dep }],
 		},
 		project: [
-			{ path: "close/build.ms", text: "const config = { entry: \"./user\" };\nexport default config;\n" },
+			{
+				path: "close/build.ms",
+				text: "const config = { entry: \"./user\" };\nexport default config;\n",
+			},
 			{ path: "close/dep.ms", text: saved },
 			{ path: "close/user.ms", text: member },
 		],
 	};
 }
 
-const COMMENTED_ENUM_SOURCE = "// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
+const COMMENTED_ENUM_SOURCE =
+	"// enum Color { Blue } is documented below\nenum Color {\n\tRed,\n\tBlue,\n}\nconst c = Color.Blue;\n";
 
 function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
 	const uri = "file:///lspwire/enumdef.ms";
@@ -2215,19 +3647,32 @@ function enumMemberDefinitionIsTheMembersDeclaration(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, COMMENTED_ENUM_SOURCE))]),
-			frames([request("10", "textDocument/definition", positionParams(uri, 5, 17))]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(uri, COMMENTED_ENUM_SOURCE),
+				),
+			]),
+			frames([
+				request("10", "textDocument/definition", positionParams(uri, 5, 17)),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("definition of Color.Blue", "3:1-3:5", definitionSpan(r, "n:10")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"definition of Color.Blue",
+					"3:1-3:5",
+					definitionSpan(r, "n:10"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
+const TOKENS_SOURCE =
+	"class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
 const TOKENS_ROWS = [
@@ -2243,14 +3688,28 @@ const TOKENS_ROWS = [
 	"8:12+1 variable readonly",
 ];
 
-function tokensScenario(name: string, check: (r: LspReplay) => string): LspScenario {
+function tokensScenario(
+	name: string,
+	check: (r: LspReplay) => string,
+): LspScenario {
 	return {
 		name,
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(TOKENS_URI, TOKENS_SOURCE))]),
-			frames([request("10", "textDocument/semanticTokens/full", `{"textDocument":{"uri":${lspJsonString(TOKENS_URI)}}}`)]),
+			frames([
+				notification(
+					"textDocument/didOpen",
+					openParams(TOKENS_URI, TOKENS_SOURCE),
+				),
+			]),
+			frames([
+				request(
+					"10",
+					"textDocument/semanticTokens/full",
+					`{"textDocument":{"uri":${lspJsonString(TOKENS_URI)}}}`,
+				),
+			]),
 		],
 		check,
 		checkAnyBatching: null,
@@ -2269,7 +3728,8 @@ function semanticTokensClassifyReadsAndDeclarations(): LspScenario {
 function insignificantEditsKeepAnswers(): LspScenario {
 	const uri = "file:///lspwire/insignificant.ms";
 	const text = BAD_VALUE + "\nexport const w = value;\n";
-	const asked = (id: string) => request(id, "textDocument/hover", positionParams(uri, 1, 17));
+	const asked = (id: string) =>
+		request(id, "textDocument/hover", positionParams(uri, 1, 17));
 	const diagnostics = "[0:28-0:29 1 " + lspJsonString(NOT_ASSIGNABLE) + "]";
 	const hover = "```metascript\nconst value: int32\n``` @ 1:17-1:22";
 	return {
@@ -2277,21 +3737,63 @@ function insignificantEditsKeepAnswers(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, text)), asked("10")]),
-			frames([notification("textDocument/didChange", changeParams(uri, 2, text + "   \n")), asked("11")]),
-			frames([notification("textDocument/didChange", changeParams(uri, 3, text + "// note\n")), asked("12")]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, text)),
+				asked("10"),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 2, text + "   \n"),
+				),
+				asked("11"),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(uri, 3, text + "// note\n"),
+				),
+				asked("12"),
+			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostic counts per publish", "[1,1,1]", publishedCounts(r, uri)),
-			sameText("publish 0", diagnostics, publishedAt(r, uri, 0)),
-			sameText("publish after the whitespace edit", diagnostics, publishedAt(r, uri, 1)),
-			sameText("publish after the comment edit", diagnostics, publishedAt(r, uri, 2)),
-			sameText("hover before the edits", hover, hoverSummary(r, "n:10")),
-			sameText("hover after the whitespace edit", hover, hoverSummary(r, "n:11")),
-			sameText("hover after the comment edit", hover, hoverSummary(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"diagnostic counts per publish",
+					"[1,1,1]",
+					publishedCounts(r, uri),
+				),
+				sameText("publish 0", diagnostics, publishedAt(r, uri, 0)),
+				sameText(
+					"publish after the whitespace edit",
+					diagnostics,
+					publishedAt(r, uri, 1),
+				),
+				sameText(
+					"publish after the comment edit",
+					diagnostics,
+					publishedAt(r, uri, 2),
+				),
+				sameText("hover before the edits", hover, hoverSummary(r, "n:10")),
+				sameText(
+					"hover after the whitespace edit",
+					hover,
+					hoverSummary(r, "n:11"),
+				),
+				sameText(
+					"hover after the comment edit",
+					hover,
+					hoverSummary(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1, 2, 3], probes: [{ uri, line: 1, character: 17 }, { uri, line: 0, character: 13 }] },
+		checkpoints: {
+			afterDrains: [1, 2, 3],
+			probes: [
+				{ uri, line: 1, character: 17 },
+				{ uri, line: 0, character: 13 },
+			],
+		},
 		project: null,
 	};
 }
@@ -2302,7 +3804,8 @@ function rewiredImportsFollowEdits(): LspScenario {
 	const user = PROJECT_URI + "rewire/user.ms";
 	const good = "export const value: int32 = 1;\n";
 	const bad = "export const value: string = \"wrong\";\n";
-	const fromLeft = "import { value } from \"./left\";\nconst answer: int32 = value;\n";
+	const fromLeft =
+		"import { value } from \"./left\";\nconst answer: int32 = value;\n";
 	const fromRight = fromLeft.replaceAll("./left", "./right");
 	return {
 		name: "a rewired import follows dependency edits through undo and redo",
@@ -2311,14 +3814,37 @@ function rewiredImportsFollowEdits(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(left, good))]),
 			frames([notification("textDocument/didOpen", openParams(right, bad))]),
-			frames([notification("textDocument/didOpen", openParams(user, fromLeft))]),
-			frames([notification("textDocument/didChange", changeParams(user, 2, fromRight))]),
-			frames([notification("textDocument/didChange", changeParams(left, 2, bad))]),
-			frames([notification("textDocument/didChange", changeParams(user, 3, fromLeft))]),
-			frames([notification("textDocument/didChange", changeParams(left, 3, good))]),
-			frames([notification("textDocument/didChange", changeParams(user, 4, fromRight))]),
+			frames([
+				notification("textDocument/didOpen", openParams(user, fromLeft)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(user, 2, fromRight),
+				),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(left, 2, bad)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(user, 3, fromLeft)),
+			]),
+			frames([
+				notification("textDocument/didChange", changeParams(left, 3, good)),
+			]),
+			frames([
+				notification(
+					"textDocument/didChange",
+					changeParams(user, 4, fromRight),
+				),
+			]),
 		],
-		check: (r: LspReplay) => sameText("the final importer diagnoses the right module", "1", finalDiagnosticCount(r, user)),
+		check: (r: LspReplay) =>
+			sameText(
+				"the final importer diagnoses the right module",
+				"1",
+				finalDiagnosticCount(r, user),
+			),
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [3, 4, 5, 6, 7, 8],
@@ -2337,7 +3863,8 @@ function closingAnOverlayRestoresDisk(): LspScenario {
 	const user = PROJECT_URI + "overlay/user.ms";
 	const disk = "export const value: int32 = 1;\n";
 	const overlay = "export const value: string = \"wrong\";\n";
-	const source = "import { value } from \"./dep\";\nconst answer: int32 = value;\n";
+	const source =
+		"import { value } from \"./dep\";\nconst answer: int32 = value;\n";
 	return {
 		name: "closing an unsaved dependency restores disk text after a differential checkpoint",
 		batching: "any",
@@ -2345,10 +3872,22 @@ function closingAnOverlayRestoresDisk(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(user, source))]),
 			frames([notification("textDocument/didOpen", openParams(dep, disk))]),
-			frames([notification("textDocument/didChange", changeParams(dep, 2, overlay))]),
-			frames([notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(dep)}}}`)]),
+			frames([
+				notification("textDocument/didChange", changeParams(dep, 2, overlay)),
+			]),
+			frames([
+				notification(
+					"textDocument/didClose",
+					`{"textDocument":{"uri":${lspJsonString(dep)}}}`,
+				),
+			]),
 		],
-		check: (r: LspReplay) => sameText("the importer returns to its disk dependency", "0", finalDiagnosticCount(r, user)),
+		check: (r: LspReplay) =>
+			sameText(
+				"the importer returns to its disk dependency",
+				"0",
+				finalDiagnosticCount(r, user),
+			),
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [3, 4],
@@ -2366,9 +3905,13 @@ export function scenarioSlug(name: string): string {
 	let out = "";
 	for (let i = 0; i < name.byteLength; i++) {
 		const b = name.byteAt(i);
-		const keep = (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57);
-		if (keep) out += name.byteSlice(i, i + 1);
-		else if (!out.endsWith("-")) out += "-";
+		const keep =
+			(b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57);
+		if (keep) {
+			out += name.byteSlice(i, i + 1);
+		} else if (!out.endsWith("-")) {
+			out += "-";
+		}
 	}
 	return out;
 }
@@ -2385,22 +3928,47 @@ function unicodeLinePositions(): LspScenario {
 		const character = i >= 3 ? 36 : 16;
 		const id = 100 + i * 10;
 		const doc = `{"textDocument":{"uri":${lspJsonString(uri)}}}`;
-		drains.push(frames([
-			notification("textDocument/didOpen", openParams(uri, source)),
-			request("" + id, "textDocument/hover", positionParams(uri, line, character)),
-			request("" + (id + 1), "textDocument/definition", positionParams(uri, line, character)),
-			request("" + (id + 2), "textDocument/rename", renameParams(uri, line, character, "face")),
-			request("" + (id + 3), "textDocument/semanticTokens/full", doc),
-			request("" + (id + 4), "textDocument/documentSymbol", doc),
-		]));
+		drains.push(
+			frames([
+				notification("textDocument/didOpen", openParams(uri, source)),
+				request(
+					"" + id,
+					"textDocument/hover",
+					positionParams(uri, line, character),
+				),
+				request(
+					"" + (id + 1),
+					"textDocument/definition",
+					positionParams(uri, line, character),
+				),
+				request(
+					"" + (id + 2),
+					"textDocument/rename",
+					renameParams(uri, line, character, "face"),
+				),
+				request("" + (id + 3), "textDocument/semanticTokens/full", doc),
+				request("" + (id + 4), "textDocument/documentSymbol", doc),
+			]),
+		);
 		probes.push({ uri, line, character });
 	}
 	const changes: string[] = [];
 	for (let i = 0; i < separators.length; i += 1) {
-		changes.push(notification("textDocument/didChange", changeParams(PROJECT_URI + "unicode/" + i + ".ms", 2, prefix + separators[i] + "const target = missing;")));
+		changes.push(
+			notification(
+				"textDocument/didChange",
+				changeParams(
+					PROJECT_URI + "unicode/" + i + ".ms",
+					2,
+					prefix + separators[i] + "const target = missing;",
+				),
+			),
+		);
 	}
 	drains.push(frames(changes));
-	drains.push(frames([request("2", "shutdown", "null"), notification("exit", "null")]));
+	drains.push(
+		frames([request("2", "shutdown", "null"), notification("exit", "null")]),
+	);
 	return {
 		name: "compiler Unicode lines project to client UTF-16 lines in both directions",
 		batching: "any",
@@ -2413,16 +3981,50 @@ function unicodeLinePositions(): LspScenario {
 				const declaration = i >= 3 ? 26 : 6;
 				const key = "n:" + (100 + i * 10);
 				const all = published(r, uri);
-				const diagnostic = all.length > 0 ? all[all.length - 1].at(0) : jsonNull();
+				const diagnostic =
+					all.length > 0 ? all[all.length - 1].at(0) : jsonNull();
 				const failure = firstFailure([
-					sameText("hover " + i, `${line}:${column}-${line}:${column + 5}`, spanOf(answerResult(r, key))),
-					sameText("definition " + i, "0:6-0:11", definitionSpan(r, "n:" + (101 + i * 10))),
-					sameText("rename " + i, `0:6-0:11 face; ${line}:${column}-${line}:${column + 5} face`, renameRows(r, "n:" + (102 + i * 10), uri)),
-					sameRows("tokens " + i, ["0:6+5 variable declaration+readonly", `${line}:${declaration}+6 variable declaration+readonly`, `${line}:${column}+5 variable readonly`], semanticRows(r, "n:" + (103 + i * 10))),
-					sameText("document symbol " + i, "" + line, field(answerResult(r, "n:" + (104 + i * 10)).at(1), "range.start.line")),
-					sameText("diagnostic " + i, `${line}:${column}-${line}:${column + 1}`, spanOf(diagnostic)),
+					sameText(
+						"hover " + i,
+						`${line}:${column}-${line}:${column + 5}`,
+						spanOf(answerResult(r, key)),
+					),
+					sameText(
+						"definition " + i,
+						"0:6-0:11",
+						definitionSpan(r, "n:" + (101 + i * 10)),
+					),
+					sameText(
+						"rename " + i,
+						`0:6-0:11 face; ${line}:${column}-${line}:${column + 5} face`,
+						renameRows(r, "n:" + (102 + i * 10), uri),
+					),
+					sameRows(
+						"tokens " + i,
+						[
+							"0:6+5 variable declaration+readonly",
+							`${line}:${declaration}+6 variable declaration+readonly`,
+							`${line}:${column}+5 variable readonly`,
+						],
+						semanticRows(r, "n:" + (103 + i * 10)),
+					),
+					sameText(
+						"document symbol " + i,
+						"" + line,
+						field(
+							answerResult(r, "n:" + (104 + i * 10)).at(1),
+							"range.start.line",
+						),
+					),
+					sameText(
+						"diagnostic " + i,
+						`${line}:${column}-${line}:${column + 1}`,
+						spanOf(diagnostic),
+					),
 				]);
-				if (failure != "") return failure;
+				if (failure != "") {
+					return failure;
+				}
 			}
 			return "";
 		},
@@ -2435,7 +4037,8 @@ function unicodeLinePositions(): LspScenario {
 const MEMBERS_OF_POINT = ["hash|2|() => int64", "x|5|int32", "y|5|int32"];
 
 function completionAfterWideText(): LspScenario {
-	const header = "interface Point {\n\tx: int32;\n\ty: int32;\n}\nconst p: Point = { x: 1, y: 2 };\n";
+	const header =
+		"interface Point {\n\tx: int32;\n\ty: int32;\n}\nconst p: Point = { x: 1, y: 2 };\n";
 	const sources = [
 		header + "const s = \"ab\"; const t = p.",
 		header + "const s = \"é😀\"; const t = p.",
@@ -2446,29 +4049,53 @@ function completionAfterWideText(): LspScenario {
 	const asks: string[] = [];
 	for (let i = 0; i < sources.length; i += 1) {
 		const uri = "file:///lspwire/wide" + i + ".ms";
-		opens.push(notification("textDocument/didOpen", openParams(uri, sources[i])));
-		asks.push(request("" + (10 + i), "textDocument/completion", positionParams(uri, 5, characters[i])));
+		opens.push(
+			notification("textDocument/didOpen", openParams(uri, sources[i])),
+		);
+		asks.push(
+			request(
+				"" + (10 + i),
+				"textDocument/completion",
+				positionParams(uri, 5, characters[i]),
+			),
+		);
 	}
 	return {
 		name: "member completion after non-ASCII text on the same line reads the UTF-16 column",
 		batching: "any",
 		drains: [initializeDrain(), frames(opens), frames(asks)],
-		check: (r: LspReplay) => firstFailure([
-			sameRows("p. after ASCII text", MEMBERS_OF_POINT, completionRows(r, "n:10")),
-			sameRows("p. after a 2-byte character and a surrogate pair", MEMBERS_OF_POINT, completionRows(r, "n:11")),
-			sameRows("p. after two surrogate pairs", MEMBERS_OF_POINT, completionRows(r, "n:12")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameRows(
+					"p. after ASCII text",
+					MEMBERS_OF_POINT,
+					completionRows(r, "n:10"),
+				),
+				sameRows(
+					"p. after a 2-byte character and a surrogate pair",
+					MEMBERS_OF_POINT,
+					completionRows(r, "n:11"),
+				),
+				sameRows(
+					"p. after two surrogate pairs",
+					MEMBERS_OF_POINT,
+					completionRows(r, "n:12"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const CACHE_SOURCE = "const abc = 1;\nconst o = { abx: 1 };\nconst q = a; const w = o.a;\n";
+const CACHE_SOURCE =
+	"const abc = 1;\nconst o = { abx: 1 };\nconst q = a; const w = o.a;\n";
 
 function completionLabels(r: LspReplay, key: string): string {
 	const labels: string[] = [];
-	for (const row of completionRows(r, key)) labels.push(row.split("|")[0]);
+	for (const row of completionRows(r, key)) {
+		labels.push(row.split("|")[0]);
+	}
 	return "[" + labels.join(", ") + "]";
 }
 
@@ -2481,26 +4108,77 @@ function completionCacheKeepsItsKind(): LspScenario {
 		drains: [
 			initializeDrain(),
 			frames([
-				notification("textDocument/didOpen", openParams(identifierFirst, CACHE_SOURCE)),
-				notification("textDocument/didOpen", openParams(memberFirst, CACHE_SOURCE)),
+				notification(
+					"textDocument/didOpen",
+					openParams(identifierFirst, CACHE_SOURCE),
+				),
+				notification(
+					"textDocument/didOpen",
+					openParams(memberFirst, CACHE_SOURCE),
+				),
 			]),
 			frames([
-				request("10", "textDocument/completion", positionParams(identifierFirst, 2, 11)),
-				request("11", "textDocument/completion", positionParams(identifierFirst, 2, 26)),
-				request("12", "textDocument/completion", positionParams(memberFirst, 2, 26)),
-				request("13", "textDocument/completion", positionParams(memberFirst, 2, 11)),
+				request(
+					"10",
+					"textDocument/completion",
+					positionParams(identifierFirst, 2, 11),
+				),
+				request(
+					"11",
+					"textDocument/completion",
+					positionParams(identifierFirst, 2, 26),
+				),
+				request(
+					"12",
+					"textDocument/completion",
+					positionParams(memberFirst, 2, 26),
+				),
+				request(
+					"13",
+					"textDocument/completion",
+					positionParams(memberFirst, 2, 11),
+				),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			containsText("= a| lists identifiers", "abc", completionLabels(r, "n:10")),
-			lacksText("= a| lists no member", "abx", completionLabels(r, "n:10")),
-			containsText("o.a| after = a| lists the member", "abx", completionLabels(r, "n:11")),
-			lacksText("o.a| after = a| lists no identifier", "abc", completionLabels(r, "n:11")),
-			containsText("o.a| first lists the member", "abx", completionLabels(r, "n:12")),
-			lacksText("o.a| first lists no identifier", "abc", completionLabels(r, "n:12")),
-			containsText("= a| after o.a| lists identifiers", "abc", completionLabels(r, "n:13")),
-			lacksText("= a| after o.a| lists no member", "abx", completionLabels(r, "n:13")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				containsText(
+					"= a| lists identifiers",
+					"abc",
+					completionLabels(r, "n:10"),
+				),
+				lacksText("= a| lists no member", "abx", completionLabels(r, "n:10")),
+				containsText(
+					"o.a| after = a| lists the member",
+					"abx",
+					completionLabels(r, "n:11"),
+				),
+				lacksText(
+					"o.a| after = a| lists no identifier",
+					"abc",
+					completionLabels(r, "n:11"),
+				),
+				containsText(
+					"o.a| first lists the member",
+					"abx",
+					completionLabels(r, "n:12"),
+				),
+				lacksText(
+					"o.a| first lists no identifier",
+					"abc",
+					completionLabels(r, "n:12"),
+				),
+				containsText(
+					"= a| after o.a| lists identifiers",
+					"abc",
+					completionLabels(r, "n:13"),
+				),
+				lacksText(
+					"= a| after o.a| lists no member",
+					"abx",
+					completionLabels(r, "n:13"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -2522,13 +4200,22 @@ function unknownMethodAnswersMethodNotFound(): LspScenario {
 			]),
 			frames([request("10", "shutdown", "null"), notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:7 error.code", "-32601", answerField(r, "n:7", "error.code")),
-			sameText("s8 error.code", "-32601", answerField(r, "s:s8", "error.code")),
-			sameText("n:9 result", "null", answerField(r, "n:9", "result")),
-			sameCount("messages", 5, r.messages.length),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"n:7 error.code",
+					"-32601",
+					answerField(r, "n:7", "error.code"),
+				),
+				sameText(
+					"s8 error.code",
+					"-32601",
+					answerField(r, "s:s8", "error.code"),
+				),
+				sameText("n:9 result", "null", answerField(r, "n:9", "result")),
+				sameCount("messages", 5, r.messages.length),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -2549,13 +4236,26 @@ function requestsBeforeInitializeAreRefused(): LspScenario {
 			frames([request("7", "textDocument/hover", positionParams(uri, 0, 13))]),
 			frames([request("8", "shutdown", "null"), notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("n:5 error.code", "-32002", answerField(r, "n:5", "error.code")),
-			sameText("n:6 error.code", "-32002", answerField(r, "n:6", "error.code")),
-			sameText("n:7 result: the early shutdown did not end the session", "null", answerField(r, "n:7", "result")),
-			sameText("n:8 result", "null", answerField(r, "n:8", "result")),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"n:5 error.code",
+					"-32002",
+					answerField(r, "n:5", "error.code"),
+				),
+				sameText(
+					"n:6 error.code",
+					"-32002",
+					answerField(r, "n:6", "error.code"),
+				),
+				sameText(
+					"n:7 result: the early shutdown did not end the session",
+					"null",
+					answerField(r, "n:7", "result"),
+				),
+				sameText("n:8 result", "null", answerField(r, "n:8", "result")),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -2575,17 +4275,35 @@ function closedDocumentIsNotRepublished(): LspScenario {
 				notification("textDocument/didOpen", openParams(kept, GOOD_VALUE)),
 			]),
 			frames([
-				notification("textDocument/didChange", changeParams(closed, 2, BAD_VALUE)),
-				notification("textDocument/didChange", changeParams(kept, 2, BAD_VALUE)),
-				notification("textDocument/didClose", `{"textDocument":{"uri":${lspJsonString(closed)}}}`),
+				notification(
+					"textDocument/didChange",
+					changeParams(closed, 2, BAD_VALUE),
+				),
+				notification(
+					"textDocument/didChange",
+					changeParams(kept, 2, BAD_VALUE),
+				),
+				notification(
+					"textDocument/didClose",
+					`{"textDocument":{"uri":${lspJsonString(closed)}}}`,
+				),
 			]),
 			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("closed document diagnostic counts per publish", "[0,0]", publishedCounts(r, closed)),
-			sameText("open document diagnostic counts per publish", "[0,1]", publishedCounts(r, kept)),
-			sameCount("exit code", 0, r.exitCode),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"closed document diagnostic counts per publish",
+					"[0,0]",
+					publishedCounts(r, closed),
+				),
+				sameText(
+					"open document diagnostic counts per publish",
+					"[0,1]",
+					publishedCounts(r, kept),
+				),
+				sameCount("exit code", 0, r.exitCode),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -2593,7 +4311,9 @@ function closedDocumentIsNotRepublished(): LspScenario {
 }
 
 function twoChanges(uri: string, first: string, last: string): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(first)}},{"text":${lspJsonString(last)}}]}`;
+	return (
+		`{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(first)}},{"text":${lspJsonString(last)}}]}`
+	);
 }
 
 function lastContentChangeWins(): LspScenario {
@@ -2609,22 +4329,39 @@ function lastContentChangeWins(): LspScenario {
 				notification("textDocument/didOpen", openParams(badLast, GOOD_VALUE)),
 			]),
 			frames([
-				notification("textDocument/didChange", twoChanges(goodLast, BAD_VALUE, GOOD_VALUE)),
-				notification("textDocument/didChange", twoChanges(badLast, GOOD_VALUE, BAD_VALUE)),
+				notification(
+					"textDocument/didChange",
+					twoChanges(goodLast, BAD_VALUE, GOOD_VALUE),
+				),
+				notification(
+					"textDocument/didChange",
+					twoChanges(badLast, GOOD_VALUE, BAD_VALUE),
+				),
 			]),
 			frames([request("9", "shutdown", "null"), notification("exit", "null")]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("diagnostic count after good-last", "0", finalDiagnosticCount(r, goodLast)),
-			sameText("diagnostic count after bad-last", "1", finalDiagnosticCount(r, badLast)),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"diagnostic count after good-last",
+					"0",
+					finalDiagnosticCount(r, goodLast),
+				),
+				sameText(
+					"diagnostic count after bad-last",
+					"1",
+					finalDiagnosticCount(r, badLast),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
 }
 
-const COMMAS_SOURCE = CALLS_SOURCE + "const a = clamp(5, 12, 9);\nconst b = clamp(5, /* x, y */ 12, 9);\n";
+const COMMAS_SOURCE =
+	CALLS_SOURCE +
+	"const a = clamp(5, 12, 9);\nconst b = clamp(5, /* x, y */ 12, 9);\n";
 
 function signatureHelpCountsCommas(): LspScenario {
 	const uri = "file:///lspwire/commas.ms";
@@ -2633,7 +4370,9 @@ function signatureHelpCountsCommas(): LspScenario {
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, COMMAS_SOURCE))]),
+			frames([
+				notification("textDocument/didOpen", openParams(uri, COMMAS_SOURCE)),
+			]),
 			frames([
 				request("10", "textDocument/signatureHelp", positionParams(uri, 5, 17)),
 				request("11", "textDocument/signatureHelp", positionParams(uri, 5, 21)),
@@ -2643,14 +4382,39 @@ function signatureHelpCountsCommas(): LspScenario {
 				request("15", "textDocument/signatureHelp", positionParams(uri, 4, 30)),
 			]),
 		],
-		check: (r: LspReplay) => firstFailure([
-			sameText("5| is the 1st argument", clampSignature(0), signatureSummary(r, "n:10")),
-			sameText("12| is the 2nd argument", clampSignature(1), signatureSummary(r, "n:11")),
-			sameText("9| is the 3rd argument", clampSignature(2), signatureSummary(r, "n:12")),
-			sameText("after the closing parenthesis", "null", answerField(r, "n:13", "result")),
-			sameText("a comma in a comment is not a separator", clampSignature(1), signatureSummary(r, "n:14")),
-			sameText("after a nested call closing parenthesis, before the outer comma", clampSignature(0), signatureSummary(r, "n:15")),
-		]),
+		check: (r: LspReplay) =>
+			firstFailure([
+				sameText(
+					"5| is the 1st argument",
+					clampSignature(0),
+					signatureSummary(r, "n:10"),
+				),
+				sameText(
+					"12| is the 2nd argument",
+					clampSignature(1),
+					signatureSummary(r, "n:11"),
+				),
+				sameText(
+					"9| is the 3rd argument",
+					clampSignature(2),
+					signatureSummary(r, "n:12"),
+				),
+				sameText(
+					"after the closing parenthesis",
+					"null",
+					answerField(r, "n:13", "result"),
+				),
+				sameText(
+					"a comma in a comment is not a separator",
+					clampSignature(1),
+					signatureSummary(r, "n:14"),
+				),
+				sameText(
+					"after a nested call closing parenthesis, before the outer comma",
+					clampSignature(0),
+					signatureSummary(r, "n:15"),
+				),
+			]),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -2731,7 +4495,9 @@ export function lspScenarios(): LspScenario[] {
 
 export function lspScenarioByName(name: string): Result<LspScenario, string> {
 	for (const scenario of lspScenarios()) {
-		if (scenario.name == name) return Result.ok(scenario);
+		if (scenario.name == name) {
+			return Result.ok(scenario);
+		}
 	}
 	return Result.err("no LSP scenario named " + lspJsonString(name));
 }

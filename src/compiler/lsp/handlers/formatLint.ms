@@ -8,7 +8,9 @@ export function splitLines(s: string): string[] {
 		const ch = s.charAt(i);
 		if (ch == "\n" || ch == "\r") {
 			lines.push(s.slice(start, i));
-			if (ch == "\r" && i + 1 < s.length && s.charAt(i + 1) == "\n") i += 1;
+			if (ch == "\r" && i + 1 < s.length && s.charAt(i + 1) == "\n") {
+				i += 1;
+			}
 			start = i + 1;
 		}
 	}
@@ -31,16 +33,24 @@ export function detectLineIndent(line: string): LineIndent {
 	let isMixed = false;
 	let seenSpace = false;
 	while (indentEnd < line.length) {
-		if (line[indentEnd] == " ") { hasSpace = true; seenSpace = true; }
-		else if (line[indentEnd] == "\t") {
+		if (line[indentEnd] == " ") {
+			hasSpace = true;
+			seenSpace = true;
+		} else if (line[indentEnd] == "\t") {
 			hasTab = true;
-			if (seenSpace) { isMixed = true; }
+			if (seenSpace) {
+				isMixed = true;
+			}
+		} else {
+			break;
 		}
-		else { break; }
 		indentEnd = indentEnd + 1;
 	}
 	let trailStart = line.length;
-	while (trailStart > 0 && (line[trailStart - 1] == " " || line[trailStart - 1] == "\t")) {
+	while (
+		trailStart > 0 &&
+		(line[trailStart - 1] == " " || line[trailStart - 1] == "\t")
+	) {
 		trailStart = trailStart - 1;
 	}
 	return { indentEnd, hasSpace, hasTab, isMixed, trailStart };
@@ -54,12 +64,26 @@ export enum IndentFault {
 
 // The one rule for "this line's indentation is wrong", for the diagnostic and the quick fix alike.
 // A block comment continuation line ( * text) is exempt: spaces before * are alignment.
-export function indentFault(line: string, info: LineIndent, useTabs: boolean): IndentFault | null {
-	if (info.indentEnd == 0 || info.indentEnd >= line.length) return null;
-	if (line.byteAt(info.indentEnd) == "*".code) return null;
-	if (info.isMixed) return IndentFault.Mixed;
-	if (useTabs && info.hasSpace && !info.hasTab) return IndentFault.UseTabs;
-	if (!useTabs && info.hasTab && !info.hasSpace) return IndentFault.UseSpaces;
+export function indentFault(
+	line: string,
+	info: LineIndent,
+	useTabs: boolean,
+): IndentFault | null {
+	if (info.indentEnd == 0 || info.indentEnd >= line.length) {
+		return null;
+	}
+	if (line.byteAt(info.indentEnd) == "*".code) {
+		return null;
+	}
+	if (info.isMixed) {
+		return IndentFault.Mixed;
+	}
+	if (useTabs && info.hasSpace && !info.hasTab) {
+		return IndentFault.UseTabs;
+	}
+	if (!useTabs && info.hasTab && !info.hasSpace) {
+		return IndentFault.UseSpaces;
+	}
 	return null;
 }
 

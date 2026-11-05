@@ -28,15 +28,25 @@ export function lspReadFrame(io: LspTransport): Result<string, FrameEnd> {
 	let contentLength = -1;
 	while (contentLength < 0) {
 		const line = io.readLine();
-		if (line.byteLength == 0) return Result.err(FrameEnd.Closed);
+		if (line.byteLength == 0) {
+			return Result.err(FrameEnd.Closed);
+		}
 		contentLength = lspParseContentLength(line);
 	}
 	let separator = io.readLine();
-	while (separator.byteLength > 0) separator = io.readLine();
-	if (contentLength == 0) return Result.err(FrameEnd.EmptyBody);
+	while (separator.byteLength > 0) {
+		separator = io.readLine();
+	}
+	if (contentLength == 0) {
+		return Result.err(FrameEnd.EmptyBody);
+	}
 	const body = io.readBytes(contentLength);
-	if (body.byteLength == 0) return Result.err(FrameEnd.Closed);
-	if (body.byteLength < contentLength) return Result.err(FrameEnd.Truncated);
+	if (body.byteLength == 0) {
+		return Result.err(FrameEnd.Closed);
+	}
+	if (body.byteLength < contentLength) {
+		return Result.err(FrameEnd.Truncated);
+	}
 	return Result.ok(body);
 }
 
@@ -45,11 +55,15 @@ export function lspSplitFrames(output: string): string[] {
 	let pos: int32 = 0;
 	while (pos < output.byteLength) {
 		const headerEnd = output.byteIndexOf("\r\n\r\n", pos);
-		if (headerEnd < 0) throw new Error("frame without header end at byte " + pos);
+		if (headerEnd < 0) {
+			throw new Error("frame without header end at byte " + pos);
+		}
 		const size = lspParseContentLength(output.byteSlice(pos, headerEnd));
 		const bodyStart = headerEnd + 4;
 		if (size < 0 || bodyStart + size > output.byteLength) {
-			throw new Error("frame length " + size + " overruns output at byte " + pos);
+			throw new Error(
+				"frame length " + size + " overruns output at byte " + pos,
+			);
 		}
 		bodies.push(output.byteSlice(bodyStart, bodyStart + size));
 		pos = bodyStart + size;
@@ -72,12 +86,27 @@ export class MemoryWire {
 }
 
 export function createMemoryWire(chunks: string[]): MemoryWire {
-	return { chunks, nextChunk: 0, input: "", pos: 0, output: "", lateChunk: "", lateAfterChunks: 0, lateAtEmptyProbe: 0, emptyProbes: 0 };
+	return {
+		chunks,
+		nextChunk: 0,
+		input: "",
+		pos: 0,
+		output: "",
+		lateChunk: "",
+		lateAfterChunks: 0,
+		lateAtEmptyProbe: 0,
+		emptyProbes: 0,
+	};
 }
 
 // Input that appears while the server works: once afterChunks chunks have been read, the
 // atEmptyProbe-th hasBufferedData call that finds nothing buffered finds lateChunk.
-export function createLateInputWire(chunks: string[], lateChunk: string, afterChunks: int32, atEmptyProbe: int32): MemoryWire {
+export function createLateInputWire(
+	chunks: string[],
+	lateChunk: string,
+	afterChunks: int32,
+	atEmptyProbe: int32,
+): MemoryWire {
 	const wire = createMemoryWire(chunks);
 	wire.lateChunk = lateChunk;
 	wire.lateAfterChunks = afterChunks;
@@ -86,18 +115,28 @@ export function createLateInputWire(chunks: string[], lateChunk: string, afterCh
 }
 
 function wireHasBufferedData(wire: MemoryWire): boolean {
-	if (wire.pos < wire.input.byteLength) return true;
-	if (wire.nextChunk < wire.lateAfterChunks) return false;
+	if (wire.pos < wire.input.byteLength) {
+		return true;
+	}
+	if (wire.nextChunk < wire.lateAfterChunks) {
+		return false;
+	}
 	wire.emptyProbes++;
-	if (wire.emptyProbes != wire.lateAtEmptyProbe) return false;
+	if (wire.emptyProbes != wire.lateAtEmptyProbe) {
+		return false;
+	}
 	wire.input = wire.lateChunk;
 	wire.pos = 0;
 	return true;
 }
 
 function deliverChunk(wire: MemoryWire): boolean {
-	if (wire.nextChunk >= wire.chunks.length) return false;
-	wire.input = wire.input.byteSlice(wire.pos, wire.input.byteLength) + wire.chunks[wire.nextChunk];
+	if (wire.nextChunk >= wire.chunks.length) {
+		return false;
+	}
+	wire.input =
+		wire.input.byteSlice(wire.pos, wire.input.byteLength) +
+		wire.chunks[wire.nextChunk];
 	wire.pos = 0;
 	wire.nextChunk++;
 	return true;
@@ -114,7 +153,9 @@ function wireReadLine(wire: MemoryWire): string {
 		newline = wire.input.byteIndexOf("\n", wire.pos);
 	}
 	let end = newline;
-	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) end--;
+	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) {
+		end--;
+	}
 	const line = wire.input.byteSlice(wire.pos, end);
 	wire.pos = newline + 1;
 	return line;
@@ -122,7 +163,10 @@ function wireReadLine(wire: MemoryWire): string {
 
 function wireReadBytes(wire: MemoryWire, count: int32): string {
 	while (wire.input.byteLength - wire.pos < count && deliverChunk(wire)) {}
-	const end = wire.pos + count < wire.input.byteLength ? wire.pos + count : wire.input.byteLength;
+	const end =
+		wire.pos + count < wire.input.byteLength
+			? wire.pos + count
+			: wire.input.byteLength;
 	const bytes = wire.input.byteSlice(wire.pos, end);
 	wire.pos = end;
 	return bytes;
@@ -133,7 +177,9 @@ export function memoryTransport(wire: MemoryWire): LspTransport {
 		readLine: () => wireReadLine(wire),
 		readBytes: (count: int32) => wireReadBytes(wire, count),
 		hasBufferedData: () => wireHasBufferedData(wire),
-		write: (frames: string) => { wire.output += frames; },
+		write: (frames: string) => {
+			wire.output += frames;
+		},
 	};
 }
 
@@ -149,15 +195,21 @@ test "frame read counts body bytes, not UTF-16 units" {
 	const io = memoryTransport(wire);
 	const a = lspReadFrame(io);
 	assert a.ok;
-	if (a.ok) assert a.value == first;
+	if (a.ok) {
+		assert a.value == first;
+	}
 	assert io.hasBufferedData();
 	const b = lspReadFrame(io);
 	assert b.ok;
-	if (b.ok) assert b.value == "{}";
+	if (b.ok) {
+		assert b.value == "{}";
+	}
 	assert !io.hasBufferedData();
 	const end = lspReadFrame(io);
 	assert !end.ok;
-	if (!end.ok) assert end.error == FrameEnd.Closed;
+	if (!end.ok) {
+		assert end.error == FrameEnd.Closed;
+	}
 }
 
 test "late input appears at the chosen empty probe once enough chunks were read" {
@@ -170,7 +222,9 @@ test "late input appears at the chosen empty probe once enough chunks were read"
 	assert io.hasBufferedData();
 	const b = lspReadFrame(io);
 	assert b.ok;
-	if (b.ok) assert b.value == "{\"b\":2}";
+	if (b.ok) {
+		assert b.value == "{\"b\":2}";
+	}
 	assert !io.hasBufferedData();
 }
 
@@ -184,21 +238,31 @@ test "frame read skips other headers and blocks across chunks" {
 	const io = memoryTransport(wire);
 	const r = lspReadFrame(io);
 	assert r.ok;
-	if (r.ok) assert r.value == body;
+	if (r.ok) {
+		assert r.value == body;
+	}
 }
 
 test "frame read reports a body cut short by EOF as truncated" {
-	const io = memoryTransport(createMemoryWire(["Content-Length: 40\r\n\r\n{\"id\":1}"]));
+	const io = memoryTransport(
+		createMemoryWire(["Content-Length: 40\r\n\r\n{\"id\":1}"]),
+	);
 	const r = lspReadFrame(io);
 	assert !r.ok;
-	if (!r.ok) assert r.error == FrameEnd.Truncated;
+	if (!r.ok) {
+		assert r.error == FrameEnd.Truncated;
+	}
 }
 
 test "frame read reports Content-Length 0 as an empty body, not a closed stream" {
-	const io = memoryTransport(createMemoryWire(["Content-Length: 0\r\n\r\n" + frame("{}")]));
+	const io = memoryTransport(
+		createMemoryWire(["Content-Length: 0\r\n\r\n" + frame("{}")]),
+	);
 	const r = lspReadFrame(io);
 	assert !r.ok;
-	if (!r.ok) assert r.error == FrameEnd.EmptyBody;
+	if (!r.ok) {
+		assert r.error == FrameEnd.EmptyBody;
+	}
 }
 
 test "split frames uses byte lengths for multibyte bodies" {

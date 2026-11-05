@@ -4,20 +4,34 @@
 import { parseIntPrefix } from "std/core/number/parse";
 import { parseJson } from "std/serialize/json/parser";
 import { getDynamicField } from "std/serialize/json/accessors";
-import { JsonKind, JsonValue, asInt64, asNumber, asString } from "std/serialize/json/types";
+import {
+	JsonKind,
+	JsonValue,
+	asInt64,
+	asNumber,
+	asString,
+} from "std/serialize/json/types";
 import { lspJsonString, lspJsonNumber } from "./jsonEncode";
 
 // Parse Content-Length from a header line. Returns -1 if not a Content-Length header.
 export function lspParseContentLength(headerLine: string): int32 {
 	const prefix = "Content-Length: ";
-	if (headerLine.byteLength <= prefix.byteLength) return -1;
-	if (headerLine.slice(0, prefix.byteLength) != prefix) return -1;
-	return parseIntPrefix(headerLine.slice(prefix.byteLength, headerLine.byteLength)) as int32;
+	if (headerLine.byteLength <= prefix.byteLength) {
+		return -1;
+	}
+	if (headerLine.slice(0, prefix.byteLength) != prefix) {
+		return -1;
+	}
+	return parseIntPrefix(
+		headerLine.slice(prefix.byteLength, headerLine.byteLength),
+	) as int32;
 }
 
 // Format a JSON-RPC message with Content-Length header for writing.
 export function lspFormatMessage(json: string): string {
-	return "Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json;
+	return (
+		"Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json
+	);
 }
 
 export function lspIdOf(id: JsonValue): string {
@@ -34,18 +48,48 @@ export function lspResponse(id: string, resultJson: string): string {
 	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + resultJson + "}";
 }
 
-export function lspRequest(id: string, method: string, paramsJson: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":" + lspJsonString(method) + ",\"params\":" + paramsJson + "}";
+export function lspRequest(
+	id: string,
+	method: string,
+	paramsJson: string,
+): string {
+	return (
+		"{\"jsonrpc\":\"2.0\",\"id\":" +
+		id +
+		",\"method\":" +
+		lspJsonString(method) +
+		",\"params\":" +
+		paramsJson +
+		"}"
+	);
 }
 
 // Build a JSON-RPC notification: {"jsonrpc":"2.0","method":"...","params":{...}}
 export function lspNotification(method: string, paramsJson: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"method\":" + lspJsonString(method) + ",\"params\":" + paramsJson + "}";
+	return (
+		"{\"jsonrpc\":\"2.0\",\"method\":" +
+		lspJsonString(method) +
+		",\"params\":" +
+		paramsJson +
+		"}"
+	);
 }
 
 // Build a JSON-RPC error response
-export function lspErrorResponse(id: string, code: int32, message: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + lspJsonNumber(code) + ",\"message\":" + lspJsonString(message) + "}}";
+export function lspErrorResponse(
+	id: string,
+	code: int32,
+	message: string,
+): string {
+	return (
+		"{\"jsonrpc\":\"2.0\",\"id\":" +
+		id +
+		",\"error\":{\"code\":" +
+		lspJsonNumber(code) +
+		",\"message\":" +
+		lspJsonString(message) +
+		"}}"
+	);
 }
 
 test "parse content length" {

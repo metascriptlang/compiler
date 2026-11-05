@@ -11,28 +11,44 @@ export function lspJsonNumber(val: number): string {
 }
 
 export function lspJsonBool(val: boolean): string {
-	if (val) return "true";
+	if (val) {
+		return "true";
+	}
 	return "false";
 }
 
-test "simple string" { assert lspJsonString("hello") == "\"hello\""; }
+test "simple string" {
+	assert lspJsonString("hello") == "\"hello\"";
+}
 
-test "escapes backslash" { assert lspJsonString("a\\b") == "\"a\\\\b\""; }
+test "escapes backslash" {
+	assert lspJsonString("a\\b") == "\"a\\\\b\"";
+}
 
-test "escapes quote" { assert lspJsonString("a\"b") == "\"a\\\"b\""; }
+test "escapes quote" {
+	assert lspJsonString("a\"b") == "\"a\\\"b\"";
+}
 
-test "escapes newline" { assert lspJsonString("a\nb") == "\"a\\nb\""; }
+test "escapes newline" {
+	assert lspJsonString("a\nb") == "\"a\\nb\"";
+}
 
-test "empty string" { assert lspJsonString("") == "\"\""; }
+test "empty string" {
+	assert lspJsonString("") == "\"\"";
+}
 
 test "number" {
 	assert lspJsonNumber(42) == "42";
 	assert lspJsonNumber(0) == "0";
 }
 
-test "bool true" { assert lspJsonBool(true) == "true"; }
+test "bool true" {
+	assert lspJsonBool(true) == "true";
+}
 
-test "bool false" { assert lspJsonBool(false) == "false"; }
+test "bool false" {
+	assert lspJsonBool(false) == "false";
+}
 
 test "json string writes non-ASCII text as raw UTF-8" {
 	assert lspJsonString("\u00e9") == "\"\u00e9\"";

@@ -2,7 +2,9 @@ import { digitValue } from "std/core/number/parse";
 import { physicalPath } from "../../utils/path";
 
 function escapedByte(s: string, at: int32): int32 {
-	if (at + 2 >= s.length || s.charAt(at) != "%") return -1;
+	if (at + 2 >= s.length || s.charAt(at) != "%") {
+		return -1;
+	}
 	const hi = digitValue(s.charCodeAt(at + 1));
 	const lo = digitValue(s.charCodeAt(at + 2));
 	return hi < 16 && lo < 16 ? hi * 16 + lo : -1;
@@ -16,13 +18,19 @@ function continuationEscape(s: string, at: int32): int32 {
 // The code point of the UTF-8 escape run at `at`, or -1 when it is not a well-formed run.
 function escapedCodePoint(s: string, at: int32): int32 {
 	const b0 = escapedByte(s, at);
-	if (b0 < 0x80) return b0;
+	if (b0 < 0x80) {
+		return b0;
+	}
 	const need = b0 >= 0xF0 ? 3 : b0 >= 0xE0 ? 2 : b0 >= 0xC2 ? 1 : 0;
-	if (need == 0 || b0 > 0xF4) return -1;
+	if (need == 0 || b0 > 0xF4) {
+		return -1;
+	}
 	let cp = b0 - (need == 3 ? 0xF0 : need == 2 ? 0xE0 : 0xC0);
 	for (let k = 1; k <= need; k++) {
 		const cb = continuationEscape(s, at + 3 * k);
-		if (cb < 0) return -1;
+		if (cb < 0) {
+			return -1;
+		}
 		cp = cp * 64 + cb;
 	}
 	const floor = need == 3 ? 0x10000 : need == 2 ? 0x800 : 0x80;
@@ -50,8 +58,14 @@ export function lspUriToPath(uri: string): string {
 	const prefix = "file://";
 	if (uri.byteLength > prefix.byteLength) {
 		if (uri.slice(0, prefix.byteLength) == prefix) {
-			const stripped = lspPercentDecode(uri.slice(prefix.byteLength, uri.byteLength));
-			if (stripped.length >= 3 && stripped.charAt(0) == "/" && stripped.charAt(2) == ":") {
+			const stripped = lspPercentDecode(
+				uri.slice(prefix.byteLength, uri.byteLength),
+			);
+			if (
+				stripped.length >= 3 &&
+				stripped.charAt(0) == "/" &&
+				stripped.charAt(2) == ":"
+			) {
 				return stripped.slice(1, stripped.length);
 			}
 			return physicalPath(stripped);
@@ -61,8 +75,13 @@ export function lspUriToPath(uri: string): string {
 }
 
 export function lspPathToUri(path: string): string {
-	const drive = path.length >= 2 && path.charAt(1) == ":" ? path.charAt(0).toLowerCase() : "";
-	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) return `file:///${drive}%3A${lspPathEscape(path.slice(2, path.length))}`;
+	const drive =
+		path.length >= 2 && path.charAt(1) == ":"
+			? path.charAt(0).toLowerCase()
+			: "";
+	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) {
+		return `file:///${drive}%3A${lspPathEscape(path.slice(2, path.length))}`;
+	}
 	return "file://" + lspPathEscape(path);
 }
 
@@ -71,16 +90,29 @@ function lspPathEscape(path: string): string {
 	let out = "";
 	for (let i = 0; i < path.byteLength; i++) {
 		const b = path.byteAt(i);
-		const kept = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
-			|| b == "-".code || b == ".".code || b == "_".code || b == "~".code || b == "/".code;
-		out = kept ? out + fromCodePoint(b) : `${out}%${hex.charAt(b >> 4)}${hex.charAt(b & 15)}`;
+		const kept =
+			(b >= 0x30 && b <= 0x39) ||
+			(b >= 0x41 && b <= 0x5A) ||
+			(b >= 0x61 && b <= 0x7A) ||
+			b == "-".code ||
+			b == ".".code ||
+			b == "_".code ||
+			b == "~".code ||
+			b == "/".code;
+		out = kept
+			? out + fromCodePoint(b)
+			: `${out}%${hex.charAt(b >> 4)}${hex.charAt(b & 15)}`;
 	}
 	return out;
 }
 
-test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms"; }
+test "uri to path" {
+	assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms";
+}
 
-test "path to uri" { assert lspPathToUri("/a/b.ms") == "file:///a/b.ms"; }
+test "path to uri" {
+	assert lspPathToUri("/a/b.ms") == "file:///a/b.ms";
+}
 
 test "path to uri gives a windows drive as the escaped lower-case volume a client sends" {
 	assert lspPathToUri("C:/Users/foo/bar.ms") == "file:///c%3A/Users/foo/bar.ms";
@@ -91,12 +123,15 @@ test "path to uri gives a windows drive as the escaped lower-case volume a clien
 test "path to uri escapes every byte of a segment outside the unreserved set" {
 	assert lspPathToUri("/My Docs/a#1?b.ms") == "file:///My%20Docs/a%231%3Fb.ms";
 	assert lspPathToUri("C:/a b/[x]@y.ms") == "file:///c%3A/a%20b/%5Bx%5D%40y.ms";
-	assert lspPathToUri("/Users/caf" + fromCodePoint(233) + "/a-b_c.~ms") == "file:///Users/caf%C3%A9/a-b_c.~ms";
+	assert lspPathToUri("/Users/caf" + fromCodePoint(233) + "/a-b_c.~ms") ==
+		"file:///Users/caf%C3%A9/a-b_c.~ms";
 	const odd = "/q/a b#c%d/e.ms";
 	assert lspUriToPath(lspPathToUri(odd)) == odd;
 }
 
-test "non-file uri unchanged" { assert lspUriToPath("http://example.com") == "http://example.com"; }
+test "non-file uri unchanged" {
+	assert lspUriToPath("http://example.com") == "http://example.com";
+}
 
 test "uri to path decodes the escaped windows drive colon" {
 	// What the VS Code plugin actually sends on Windows (vscode-uri toString).
@@ -135,6 +170,8 @@ test "uri to path keeps an invalid utf-8 escape run literally" {
 }
 
 test "uri to path decodes three and four byte escape runs" {
-	assert lspUriToPath("file:///a/%E2%82%AC.ms") == "/a/" + fromCodePoint(0x20AC) + ".ms";
-	assert lspUriToPath("file:///a/%F0%9F%98%80.ms") == "/a/" + fromCodePoint(0x1F600) + ".ms";
+	assert lspUriToPath("file:///a/%E2%82%AC.ms") ==
+		"/a/" + fromCodePoint(0x20AC) + ".ms";
+	assert lspUriToPath("file:///a/%F0%9F%98%80.ms") ==
+		"/a/" + fromCodePoint(0x1F600) + ".ms";
 }

@@ -17,7 +17,9 @@ export function jsonArr(): JsonBuilder {
 }
 
 function jItem(b: JsonBuilder, raw: string): void {
-	if (b.count > 0) b.parts.push(",");
+	if (b.count > 0) {
+		b.parts.push(",");
+	}
 	b.parts.push(raw);
 	b.count = b.count + 1;
 }
@@ -40,11 +42,15 @@ export function jBool(b: JsonBuilder, key: string, val: boolean): void {
 }
 
 export function jStrIf(b: JsonBuilder, key: string, val: string): void {
-	if (val.length > 0) jStr(b, key, val);
+	if (val.length > 0) {
+		jStr(b, key, val);
+	}
 }
 
 export function jRawIf(b: JsonBuilder, key: string, raw: string): void {
-	if (raw.length > 0) jRaw(b, key, raw);
+	if (raw.length > 0) {
+		jRaw(b, key, raw);
+	}
 }
 
 export function jStrItem(b: JsonBuilder, val: string): void {

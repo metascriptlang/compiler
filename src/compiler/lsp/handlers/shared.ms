@@ -3,18 +3,27 @@
 // Contains CompletionCache, deferred diagnostics publishing, cursor extraction,
 // source text access, and import resolution.
 
-import { TransAmDb, dbSetFileText, dbTypeCheck, getFileText, getFileId } from "../../transam/index";
+import {
+	TransAmDb,
+	dbSetFileText,
+	dbTypeCheck,
+	getFileText,
+	getFileId,
+} from "../../transam/index";
 import { CheckerContext, isCancelled } from "../../../checker/context";
 import { SgSuggest } from "../../../checker/suggest";
 import { getCancelVersion } from "../../transam/cancel";
 import { readFile } from "std/fs";
 import { writeStderr } from "std/io";
 import {
-	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath, lspPathToUri,
+	lspGetField,
+	lspGetNumberField,
+	lspGetObjectField,
+	lspUriToPath,
+	lspPathToUri,
 } from "../protocol";
 import { lspSourcePosition } from "../position";
 import { Symbol } from "../../../ast/node";
-
 
 // ===== Completion Cache =====
 // Shared with server.ms via LspServerState.
@@ -28,24 +37,46 @@ export class CompletionSnapshot {
 
 export class CompletionCache {
 	snapshot: CompletionSnapshot | null;
-	uri: string;           // file URI of last completion
-	line: number;          // line of last completion (1-indexed, internal)
-	anchor: number;        // 0-based byte column where the typed prefix starts
-	kind: number;          // SgCompletionKind of last completion
-	prefix: string;        // prefix used for last completion
-	items: string[];       // cached per-item JSON strings
+	uri: string; // file URI of last completion
+	line: number; // line of last completion (1-indexed, internal)
+	anchor: number; // 0-based byte column where the typed prefix starts
+	kind: number; // SgCompletionKind of last completion
+	prefix: string; // prefix used for last completion
+	items: string[]; // cached per-item JSON strings
 	scopeCandidates: SgSuggest[];
 }
 
-export function completionSnapshotOf(db: TransAmDb, check: CheckerContext): CompletionSnapshot {
-	return { db, revision: db.revision.value, cancelVersion: getCancelVersion(db.cancelCtx), check };
+export function completionSnapshotOf(
+	db: TransAmDb,
+	check: CheckerContext,
+): CompletionSnapshot {
+	return {
+		db,
+		revision: db.revision.value,
+		cancelVersion: getCancelVersion(db.cancelCtx),
+		check,
+	};
 }
 
-export function completionSnapshotCurrent(snapshot: CompletionSnapshot | null, db: TransAmDb, path: string): boolean {
-	if (snapshot == null || snapshot.db != db || snapshot.revision != db.revision.value) return false;
+export function completionSnapshotCurrent(
+	snapshot: CompletionSnapshot | null,
+	db: TransAmDb,
+	path: string,
+): boolean {
+	if (
+		snapshot == null ||
+		snapshot.db != db ||
+		snapshot.revision != db.revision.value
+	) {
+		return false;
+	}
 	const cancelVersion = getCancelVersion(db.cancelCtx);
 	const check = dbTypeCheck(db, path);
-	return check == snapshot.check && snapshot.revision == db.revision.value && !isCancelled(db.cancelCtx, cancelVersion);
+	return (
+		check == snapshot.check &&
+		snapshot.revision == db.revision.value &&
+		!isCancelled(db.cancelCtx, cancelVersion)
+	);
 }
 
 export function clearCompletionCache(cache: CompletionCache): void {
@@ -59,8 +90,19 @@ export function clearCompletionCache(cache: CompletionCache): void {
 	cache.scopeCandidates = [];
 }
 
-export function fillCompletionCache(cache: CompletionCache, snapshot: CompletionSnapshot, pos: LspCursorParams, kind: int32, prefix: string, items: string[], scopeCandidates: SgSuggest[] = []): void {
-	if (isCancelled(snapshot.db.cancelCtx, snapshot.cancelVersion) || snapshot.db.revision.value != snapshot.revision) {
+export function fillCompletionCache(
+	cache: CompletionCache,
+	snapshot: CompletionSnapshot,
+	pos: LspCursorParams,
+	kind: int32,
+	prefix: string,
+	items: string[],
+	scopeCandidates: SgSuggest[] = [],
+): void {
+	if (
+		isCancelled(snapshot.db.cancelCtx, snapshot.cancelVersion) ||
+		snapshot.db.revision.value != snapshot.revision
+	) {
 		clearCompletionCache(cache);
 		return;
 	}
@@ -84,15 +126,32 @@ export function cacheResolveEdit(key: string, editsJson: string): void {
 
 export function lookupResolveEdit(key: string): string {
 	const cached = _resolveCache.get(key);
-	if (cached != null) return cached;
+	if (cached != null) {
+		return cached;
+	}
 	return "";
 }
 
 export function createCompletionCache(): CompletionCache {
-	return { snapshot: null, uri: "", line: -1, anchor: -1, kind: -1, prefix: "", items: [], scopeCandidates: [] };
+	return {
+		snapshot: null,
+		uri: "",
+		line: -1,
+		anchor: -1,
+		kind: -1,
+		prefix: "",
+		items: [],
+		scopeCandidates: [],
+	};
 }
 
-export function storeCompletion(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string, items: string[]): void {
+export function storeCompletion(
+	cache: CompletionCache,
+	pos: LspCursorParams,
+	kind: int32,
+	prefix: string,
+	items: string[],
+): void {
 	cache.uri = pos.uri;
 	cache.line = pos.line;
 	cache.anchor = pos.col - prefix.length;
@@ -101,10 +160,20 @@ export function storeCompletion(cache: CompletionCache, pos: LspCursorParams, ki
 	cache.items = items;
 }
 
-export function completionCacheServes(cache: CompletionCache, pos: LspCursorParams, kind: int32, prefix: string): boolean {
-	return cache.uri == pos.uri && cache.line == pos.line && cache.kind == kind
-		&& cache.anchor == pos.col - prefix.length
-		&& prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix);
+export function completionCacheServes(
+	cache: CompletionCache,
+	pos: LspCursorParams,
+	kind: int32,
+	prefix: string,
+): boolean {
+	return (
+		cache.uri == pos.uri &&
+		cache.line == pos.line &&
+		cache.kind == kind &&
+		cache.anchor == pos.col - prefix.length &&
+		prefix.length >= cache.prefix.length &&
+		prefix.startsWith(cache.prefix)
+	);
 }
 
 // Deferred diagnostics: didChange marks files as changed. Post-drain publishes diagnostics.
@@ -119,16 +188,22 @@ let _changedPaths: HashSet<string> = new HashSet<string>();
 export function markFileChanged(path: string, uri: string): void {
 	// Clear resolve cache on edit — stale textEdits from previous content
 	_resolveCache = new HashMap<string, string>();
-	if (_changedPaths.has(path)) return;
+	if (_changedPaths.has(path)) {
+		return;
+	}
 	_changedPaths.add(path);
 	_changedFiles.push({ path, uri });
 }
 
 export function forgetChangedFile(path: string): void {
-	if (!_changedPaths.delete(path)) return;
+	if (!_changedPaths.delete(path)) {
+		return;
+	}
 	const kept: ChangedFile[] = [];
 	for (const changed of _changedFiles) {
-		if (changed.path != path) kept.push(changed);
+		if (changed.path != path) {
+			kept.push(changed);
+		}
 	}
 	_changedFiles = kept;
 }
@@ -145,29 +220,43 @@ export function drainChangedFiles(): ChangedFile[] {
 // The built-in doc table describes std and prelude declarations; a user declaration spelled
 // like one of them (`log`, `parse`) has no built-in doc.
 export function lspHasBuiltinDoc(db: TransAmDb, sym: Symbol | null): boolean {
-	if (sym == null) return false;
+	if (sym == null) {
+		return false;
+	}
 	const modulePath = sym.modulePath != null ? sym.modulePath : "";
-	if (modulePath.startsWith("std/") || (db.stdPath.length > 0 && modulePath.startsWith(db.stdPath))) return true;
+	if (
+		modulePath.startsWith("std/") ||
+		(db.stdPath.length > 0 && modulePath.startsWith(db.stdPath))
+	) {
+		return true;
+	}
 	return db.preludeCtx != null && db.preludeCtx.preludeExports.has(sym);
 }
 
 export interface LspCursorParams {
 	uri: string;
-	line: int32;   // 1-based (parser convention)
-	col: int32;    // 0-based (for text offset scanning)
-	col1: int32;   // 1-based (for AST node position matching)
+	line: int32; // 1-based (parser convention)
+	col: int32; // 0-based (for text offset scanning)
+	col1: int32; // 1-based (for AST node position matching)
 }
 
 export function lspDocumentUri(params: string): string {
 	return lspGetField(lspGetObjectField(params, "textDocument"), "uri");
 }
 
-export function lspExtractPosition(params: string, db: TransAmDb): LspCursorParams {
+export function lspExtractPosition(
+	params: string,
+	db: TransAmDb,
+): LspCursorParams {
 	const uri = lspDocumentUri(params);
 	const position = lspGetObjectField(params, "position");
 	const line = (lspGetNumberField(position, "line") as int32) + 1;
 	const character = lspGetNumberField(position, "character") as int32;
-	const at = lspSourcePosition(dbGetSource(db, lspUriToPath(uri)), line, character);
+	const at = lspSourcePosition(
+		dbGetSource(db, lspUriToPath(uri)),
+		line,
+		character,
+	);
 	return { uri, line: at.line, col: at.column - 1, col1: at.column };
 }
 
@@ -175,14 +264,18 @@ export function lspExtractPosition(params: string, db: TransAmDb): LspCursorPara
 // Used by handlers that need text scanning (completion prefix, callee detection).
 export function dbGetSource(db: TransAmDb, path: string): string {
 	const fileId = getFileId(db.fileInput, path);
-	if (fileId < 0) return "";
+	if (fileId < 0) {
+		return "";
+	}
 	return getFileText(db.fileInput, fileId);
 }
 
 // Load a file into the TransAm DB if not already present.
 export function lspReadDiskSource(filePath: string): Result<string, string> {
 	const readResult = readFile(filePath);
-	if (!readResult.ok) { return Result.err(filePath); }
+	if (!readResult.ok) {
+		return Result.err(filePath);
+	}
 	return Result.ok(readResult.value);
 }
 
@@ -199,9 +292,13 @@ export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 }
 
 export function lspReloadFromDisk(db: TransAmDb, filePath: string): boolean {
-	if (getFileId(db.fileInput, filePath) < 0) return false;
+	if (getFileId(db.fileInput, filePath) < 0) {
+		return false;
+	}
 	const source = lspReadDiskSource(filePath);
-	if (!source.ok) return dbSetFileText(db, filePath, "");
+	if (!source.ok) {
+		return dbSetFileText(db, filePath, "");
+	}
 	return dbSetFileText(db, filePath, source.value);
 }
 
@@ -211,8 +308,12 @@ let _openDocumentSet: HashSet<string> = new HashSet<string>();
 let _openDocumentUris: HashMap<string, string> = new HashMap<string, string>();
 
 export function markDocumentOpen(path: string, uri: string = ""): void {
-	if (uri != "") _openDocumentUris.set(path, uri);
-	if (_openDocumentSet.has(path)) return;
+	if (uri != "") {
+		_openDocumentUris.set(path, uri);
+	}
+	if (_openDocumentSet.has(path)) {
+		return;
+	}
 	_openDocumentSet.add(path);
 	_openDocuments.push(path);
 }
@@ -223,7 +324,9 @@ export function documentUri(path: string): string {
 
 export function markDocumentClosed(path: string): void {
 	_openDocumentUris.delete(path);
-	if (!_openDocumentSet.delete(path)) return;
+	if (!_openDocumentSet.delete(path)) {
+		return;
+	}
 	const kept: string[] = [];
 	for (const open of _openDocuments) {
 		if (open != path) {
@@ -249,7 +352,9 @@ let _staleDependents: string[] = [];
 
 export function markDependentsStale(path: string): void {
 	for (const stale of _staleDependents) {
-		if (stale == path) return;
+		if (stale == path) {
+			return;
+		}
 	}
 	_staleDependents.push(path);
 }
@@ -259,4 +364,3 @@ export function drainStaleDependents(): string[] {
 	_staleDependents = [];
 	return drained;
 }
-
