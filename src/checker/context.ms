@@ -1587,6 +1587,8 @@ export class CheckerContext {
 	readonlyBoundary: Cursor<Scope>;
 	capturedSyms: HashSet<Symbol>;
 	identifierMoves: Node[];
+	refillTarget: Node | null;
+	refillValue: Node | null;
 	staticInitBoundary: Cursor<Scope>;
 	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
@@ -1694,6 +1696,8 @@ export function createContext(): CheckerContext {
 		readonlyBoundary: null as unknown as Cursor<Scope>,
 		capturedSyms: new HashSet<Symbol>(),
 		identifierMoves: [],
+		refillTarget: null,
+		refillValue: null,
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		hookBodyBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,

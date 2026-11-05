@@ -366,7 +366,7 @@ export function rootKindOf(scope: PlaceScope, sym: Symbol): RootKind {
 	if (sym.name == "this") return RootKind.Receiver;
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		const routine = scope.routine;
-		if (routine != null && (routine.paramSyms == null || !routine.paramSyms.includes(sym))) return RootKind.Captured;
+		if (routine != null && routine.paramSyms != null && !routine.paramSyms.includes(sym)) return RootKind.Captured;
 		return paramKind(sym);
 	}
 	if (hasFlag(sym, SymbolFlag.ForVar) && (sym.declNode == null || sym.declNode.kind != NodeKind.ForInStmt)) return RootKind.ForOfElement;

@@ -27,6 +27,7 @@ import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, reviveConsumedName, symbolConsumeKey, MOVED_PREFIX } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
+import { Overlap, Place, PlaceScope, RootKind, StepKind, overlap, placeOf, placeScope } from "./places";
 import { calledRoutineType, routineBody } from "./effects";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
@@ -1362,7 +1363,7 @@ function elementSlotType(access: Node): Type | null {
 function refuseEmptiedSlot(ctx: CheckerContext, place: Node, move: Node): void {
 	const isField = place.kind == NodeKind.MemberExpr;
 	const slot = (isField ? declaredTypeOfLocation(place) : elementSlotType(place)) ?? place.nodeType;
-	if (!requiresInit(ctx, slot)) return;
+	if (!requiresInit(ctx, slot) || refilledInPlace(ctx, place, move)) return;
 	const holders: Type[] = [];
 	const root = ownedPathRoot(ctx, place, holders);
 	const body = root != null ? routineBodyOf(ctx.currentFunction) : null;
@@ -1370,7 +1371,67 @@ function refuseEmptiedSlot(ctx: CheckerContext, place: Node, move: Node): void {
 	if (body != null && reuse == "") return;
 	const what = isField ? "field" : "element";
 	const why = `${noDefaultReason(ctx, slot)}, so the move would leave the ${what} without a value` + (body != null ? ` and ${reuse}` : "");
-	addError(ctx, `cannot move '${lvalueText(place)}': ${why} — read it without 'move' (a class reference is shared, not copied), declare the ${what} nullable ('${typeDisplayName(slot)} | null'), or exchange it with swap(a, b)`, place.location.line, place.location.column);
+	addError(ctx, `cannot move '${lvalueText(place)}': ${why} — read it without 'move' (a class reference is shared, not copied), declare the ${what} nullable ('${typeDisplayName(slot)} | null'), put it back in the same assignment ('${lvalueText(place)} = f(move ${lvalueText(place)})'), or exchange it with swap(a, b)`, place.location.line, place.location.column);
+}
+
+function checkRefillValue(ctx: CheckerContext, target: Node, value: Node, expected: Type | null): void {
+	const savedTarget = ctx.refillTarget;
+	const savedValue = ctx.refillValue;
+	ctx.refillTarget = target;
+	ctx.refillValue = value;
+	checkExpr(ctx, value, expected);
+	ctx.refillTarget = savedTarget;
+	ctx.refillValue = savedValue;
+}
+
+// `p = f(move p)`: the slot keeps sharing the moved value until the same assignment refills it, so nothing in
+// between may name p's root, write its index, or suspend.
+function refilledInPlace(ctx: CheckerContext, place: Node, move: Node): boolean {
+	const target = ctx.refillTarget;
+	const value = ctx.refillValue;
+	const routine = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
+	if (target == null || value == null || routine == null || !reachedAsArgument(value, move)) return false;
+	const scope = placeScope(routine, routineBodyOf(ctx.currentFunction));
+	const moved = placeOf(scope, place);
+	const refilled = placeOf(scope, target);
+	if (moved == null || refilled == null || moved.root == null || ctx.capturedSyms.has(moved.root) || !ownsPathRoot(moved.rootKind)) return false;
+	if (overlap(moved, refilled, false) != Overlap.Same) return false;
+	return !touchedBeforeRefill(scope, value, move, moved);
+}
+
+function ownsPathRoot(kind: RootKind): boolean {
+	return kind == RootKind.Local || kind == RootKind.OwnedParam || kind == RootKind.SinkParam || kind == RootKind.RefParam || kind == RootKind.OutParam;
+}
+
+function reachedAsArgument(at: Node, move: Node): boolean {
+	if (at == move) return true;
+	if (at.kind == NodeKind.CallExpr) return (at.data as CallExprData).arguments.some((a: Node): boolean => reachedAsArgument(a, move));
+	if (at.kind == NodeKind.NewExpr) return (at.data as NewExprData).newArguments.some((a: Node): boolean => reachedAsArgument(a, move));
+	if (at.kind == NodeKind.HiddenStdConv || at.kind == NodeKind.HiddenSubConv) return reachedAsArgument((at.data as HiddenStdConvData).convExpr, move);
+	if (at.kind == NodeKind.TypeAssertion) return reachedAsArgument((at.data as TypeAssertionData).asExpr, move);
+	return false;
+}
+
+function touchedBeforeRefill(scope: PlaceScope, value: Node, move: Node, moved: Place): boolean {
+	const indexSyms: Symbol[] = [];
+	for (const s of moved.steps) {
+		if (s.kind == StepKind.Index && s.indexSym != null) indexSyms.push(s.indexSym);
+	}
+	let touched = false;
+	const visit = (n: Node): void => {
+		if (touched || n == move) return;
+		if (n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr) { touched = true; return; }
+		if (n.kind == NodeKind.Identifier && n.resolvedSym != null) {
+			const named = placeOf(scope, n);
+			if (n.resolvedSym == moved.root || (named != null && named.root == moved.root)) { touched = true; return; }
+		}
+		const written = n.kind == NodeKind.UpdateExpr ? (n.data as UpdateExprData).updateArg
+			: n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) ? (n.data as BinaryExprData).left : null;
+		if (written != null && written.kind == NodeKind.Identifier && written.resolvedSym != null && indexSyms.includes(written.resolvedSym)) { touched = true; return; }
+		forEachChild(n, visit);
+	};
+	visit(value);
+	return touched;
 }
 
 function ownedPathRoot(ctx: CheckerContext, place: Node, holders: Type[]): Node | null {
@@ -1598,7 +1659,14 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			const sargs: Node[] = [];
 			sargs.push(target.index);
 			sargs.push(d.right);
-			node.nodeType = rewriteAsMethodCall(ctx, node, target.array, "[]=", sargs); return;
+			const savedTarget = ctx.refillTarget;
+			const savedValue = ctx.refillValue;
+			ctx.refillTarget = d.left;
+			ctx.refillValue = d.right;
+			node.nodeType = rewriteAsMethodCall(ctx, node, target.array, "[]=", sargs);
+			ctx.refillTarget = savedTarget;
+			ctx.refillValue = savedValue;
+			return;
 		}
 	}
 	if (isAsgn) {
@@ -1650,6 +1718,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
+	else if (d.operator == "=") checkRefillValue(ctx, d.left, d.right, rightExpected);
 	else checkExpr(ctx, d.right, rightExpected);
 	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	if (d.operator != "=") d.right = widenNumberLiteral(d.right);
