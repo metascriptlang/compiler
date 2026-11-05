@@ -383,6 +383,9 @@ extern function msUnownedAssign(slot: Ptr<void>, p: Ptr<void>): void;
 extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
+extern function msUnownedGive(sink p: Ptr<void>): Ptr<void>;
+
+@compilerFunc
 extern function msPtrWasMoved(p: Ptr<void>): void;
 
 @compilerFunc
@@ -515,6 +518,9 @@ extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
+extern function msArrayUnownedRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
 extern function msArrayCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
@@ -536,6 +542,9 @@ extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
+extern function msArrayUnownedRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
 extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
@@ -549,6 +558,9 @@ extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayUnownedRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayStringSink(d: Ptr<void>, v: Ptr<void>): void;
@@ -576,6 +588,9 @@ extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
 extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
 extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;

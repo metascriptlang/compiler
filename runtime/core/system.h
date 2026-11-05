@@ -267,9 +267,13 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayAcyclicRefDestroy(arr)  msAcyclicRefArrayDestroy((msRefArray*)&(arr))
 #define msArrayAcyclicRefCopy(d, s)    msArrayRefCopyThen(d, s, msAcyclicRefArrayDestroy)
 #define msArrayAcyclicRefSink(d, ...)  msArrayRefSinkThen(msAcyclicRefArrayDestroy, d, __VA_ARGS__)
+#define msArrayUnownedRefDestroy(arr)  msUnownedRefArrayDestroy((msRefArray*)&(arr))
+#define msArrayUnownedRefCopy(d, s)    msArrayRefCopyBy(d, s, msUnownedIncref, msUnownedRefArrayDestroy)
+#define msArrayUnownedRefSink(d, ...)  msArrayRefSinkThen(msUnownedRefArrayDestroy, d, __VA_ARGS__)
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
-#define msArrayRefCopyThen(d, s, destroyArr) do { \
+#define msArrayRefCopyThen(d, s, destroyArr) msArrayRefCopyBy(d, s, msIncRef, destroyArr)
+#define msArrayRefCopyBy(d, s, increfOp, destroyArr) do { \
 	msRefArray _arc_src = (s); \
 	int64_t _arc_len = _arc_src.len; \
 	msRefPayload* _arc_sp = (msRefPayload*)_arc_src.p; \
@@ -280,7 +284,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		_arc_newp->cap = _arc_sp->cap; \
 		for (int64_t _arc_i = 0; _arc_i < _arc_len; _arc_i++) { \
 			_arc_newp->data[_arc_i] = _arc_sp->data[_arc_i]; \
-			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
+			if (_arc_newp->data[_arc_i]) increfOp(_arc_newp->data[_arc_i]); \
 		} \
 	} \
 	msRefArray _arc_old = *(msRefArray*)&(d); \

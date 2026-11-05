@@ -423,6 +423,12 @@ static inline void* msUnownedTake(void* p) {
 	return p;
 }
 
+static inline void* msUnownedGive(void* p) {
+	msIncRef(p);
+	msUnownedDecref(p);
+	return p;
+}
+
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);

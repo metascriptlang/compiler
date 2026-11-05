@@ -616,6 +616,17 @@ void msAcyclicRefArrayDestroy(msRefArray* arr) {
 	}
 }
 
+void msUnownedRefArrayDestroy(msRefArray* arr) {
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msUnownedDecref(p->data[i]);
+		free(p);
+	}
+}
+
 void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	while (arr->len > newLen) {

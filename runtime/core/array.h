@@ -153,6 +153,7 @@ void msAtomicRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount);
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msAcyclicRefArrayDestroy(msRefArray* arr);
+void msUnownedRefArrayDestroy(msRefArray* arr);
 void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen);
 void msAcyclicRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msAcyclicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
