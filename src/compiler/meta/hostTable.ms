@@ -2215,19 +2215,19 @@ test "cms extern closure: declared externs are bridged, intercepted, or listed u
 		"msStringEquals", "msStringCompareLt", "msStringCompareLe", "msStringCharAt", "msStringSlice", "msStringCharCodeAt",
 		"&msNumberArrayPush", "&msStringArrayPush", "&msUint8ArrayPush", "&msGenericArrayPush",
 		"&msNumberArraySetLen", "&msStringArraySetLen", "&msGenericArraySetLen",
-	];
-	const unserved: string[] = [
-		"&msGenericArrayCapacity", "&msNumberArrayCapacity", "&msStringArrayCapacity", "msStringCapacity",
-		"&msGenericArrayRotate", "&msGenericArraySwap", "&msGenericArraySwapWith",
 		"&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop",
 		"&msNumberArrayShift", "&msStringArrayShift",
 		"&msNumberArrayConcat", "&msStringArrayConcat",
 		"&msNumberArrayFill", "&msStringArrayFill",
 		"&msNumberArrayReverse", "&msStringArrayReverse",
-		"&msNumberArraySlice", "&msStringArraySlice", "msBytesSlice",
+		"&msNumberArraySlice", "&msStringArraySlice",
 		"&msNumberArraySort", "&msStringArraySort",
-		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3",
-		"&msRefArraySplice3", "&msUint8ArraySplice3",
+		"&msNumberArraySplice", "&msNumberArraySplice3", "&msStringArraySplice", "&msStringArraySplice3", "&msUint8ArraySplice3",
+	];
+	const unserved: string[] = [
+		"&msGenericArrayCapacity", "&msNumberArrayCapacity", "&msStringArrayCapacity", "msStringCapacity",
+		"&msGenericArrayRotate", "&msGenericArraySwap", "&msGenericArraySwapWith",
+		"msBytesSlice", "&msRefArraySplice3",
 		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "msStringSetSlice", "&msStringStripInPlace",
 		"msStringNewUninit", "msMemCopyTo", "memcpy",
 	];

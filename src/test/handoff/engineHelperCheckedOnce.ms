@@ -62,7 +62,26 @@ export function shout(s: string): string { return s.toUpperCase() + "!"; }
 export function joined(xs: string[]): string { return xs.join("-"); }
 export function tally(xs: string[], v: string): number { return xs.indexOf(v) + (xs.includes(v) ? 10 : 0); }
 export function numbers(xs: number[]): string { return xs.join("+") + "|" + xs.at(-1) + "|" + xs.indexOf(3); }
-export function popped(xs: string[]): string { return xs.pop(); }
+`;
+
+const UNSERVED_HELPERS = `
+struct Pair<T> { first: T; second: string; }
+class Box { pairs: Pair<int32>[] = []; names: string[] = []; }
+export function roomAndCopy(): string {
+	const b = new Box();
+	b.pairs.push({ first: 1, second: "p" });
+	b.names.push("a");
+	b.names.push("b");
+	const copy = b.pairs[0];
+	return copy.second + b.names.capacity().toString();
+}
+export function copyOnly(): string {
+	const b = new Box();
+	b.pairs.push({ first: 2, second: "q" });
+	const copy = b.pairs[0];
+	b.pairs[0].second = "changed";
+	return copy.second;
+}
 `;
 
 const BIG_HELPERS = `
@@ -90,7 +109,7 @@ const PLAIN_CALLS = `shout("a") + joined(["x", "y"]) + tally(["q", "r", "q"], "q
 function plainBuild(call: string, js: boolean): string {
 	const entries: MapEntry[] = [
 		{ entryPath: "enginePlain/lib.ms", entrySource: PLAIN_HELPERS },
-		{ entryPath: "enginePlain/main.ms", entrySource: plainMain(call, `import { shout, joined, tally, numbers, popped } from "./lib";`) },
+		{ entryPath: "enginePlain/main.ms", entrySource: plainMain(call, `import { shout, joined, tally, numbers } from "./lib";`) },
 	];
 	return js ? compileProjectToJSWithStd(entries, "enginePlain/main.ms") : compileProjectToCWithStd(entries, "enginePlain/main.ms");
 }
@@ -106,15 +125,99 @@ test "build-world helpers over strings and arrays run on the VM from their build
 	assert js.includes(PLAIN_EXPECTED), "the JS expansion is missing";
 }
 
-test "a build-world helper that reaches an unserved extern is checked again and reports the extern" {
+test "a build-world helper that reaches an unserved extern is checked again and reports the extern, and the copy hooks its refused lowering lifted serve the next helper" {
+	const entries: MapEntry[] = [
+		{ entryPath: "engineUnserved/lib.ms", entrySource: UNSERVED_HELPERS },
+		{ entryPath: "engineUnserved/main.ms", entrySource: plainMain(`roomAndCopy() + "|" + copyOnly()`, `import { roomAndCopy, copyOnly } from "./lib";`) },
+	];
 	const before = engineRecheckCount();
-	const c = plainBuild(`popped(["p", "o"])`, false);
+	const c = compileProjectToCWithStd(entries, "engineUnserved/main.ms");
 	assert !c.startsWith("ERROR:"), c;
-	assert c.includes("o"), "the expansion is missing";
-	assert engineRecheckCount() > before, "the pop helper was lowered without a host function";
+	assert c.includes("p2|q"), "the expansion is missing";
+	assert engineRecheckCount() > before, "the capacity helper was lowered without a host function";
 	let named = false;
-	for (const r of engineRecheckReasons()) if (r.startsWith("extern &msStringArrayPop")) named = true;
+	for (const r of engineRecheckReasons()) if (r.startsWith("extern &msStringArrayCapacity")) named = true;
 	assert named, engineRecheckReasons().join(", ");
+}
+
+const ARRAY_KERNEL_HELPERS = `
+interface Cell { n: number; }
+export function numberKernels(): string {
+	const xs: number[] = [5, 3, 9, 1, 7];
+	const last = xs.pop();
+	const first = xs.shift();
+	xs.splice(1, 1);
+	xs.splice(-1, 0, 4);
+	const sorted = xs.slice(0);
+	sorted.sort();
+	xs.reverse();
+	const joined = sorted.concat([8, 2]);
+	const filled: number[] = [0, 0];
+	filled.fill(6);
+	return [last, first, xs.join(","), sorted.join(","), joined.slice(1, -1).join(","), filled.join(",")].join(" ");
+}
+export function stringKernels(): string {
+	const xs: string[] = ["e", "c", "i", "a", "g"];
+	const last = xs.pop();
+	const first = xs.shift();
+	xs.splice(-2, 1);
+	xs.splice(9, 0, "d");
+	const sorted = xs.slice(0);
+	sorted.sort();
+	xs.reverse();
+	const joined = sorted.concat(["h", "b"]);
+	const filled: string[] = ["", ""];
+	filled.fill("z");
+	const empty: string[] = [];
+	return [last, first, xs.join(","), sorted.join(","), joined.slice(-3).join(","), filled.join(","), "<" + empty.shift() + ">"].join(" ");
+}
+export function scalarKernels(): string {
+	const bs: uint8[] = [1, 2, 3];
+	bs.splice(1, 1, 9);
+	const flags: boolean[] = [true, false];
+	flags.splice(0, 1, false);
+	const cells: Cell[] = [{ n: 1 }, { n: 2 }];
+	const top = cells.pop();
+	const ints: int32[] = [4, 5, 6];
+	return [bs.join(","), flags.join(","), top.n, cells.length, ints.pop(), ints.length].join(" ");
+}
+`;
+
+test "a build-world helper calling the C tier's array kernels runs on the VM from its build-checked body and returns what the C kernels return" {
+	const xs: number[] = [5, 3, 9, 1, 7];
+	const last = xs.pop();
+	const first = xs.shift();
+	xs.splice(1, 1);
+	xs.splice(-1, 0, 4);
+	const sorted = xs.slice(0);
+	sorted.sort();
+	xs.reverse();
+	const joinedNumbers = sorted.concat([8, 2]);
+	const filledNumbers: number[] = [0, 0];
+	filledNumbers.fill(6);
+	const ys: string[] = ["e", "c", "i", "a", "g"];
+	const lastText = ys.pop();
+	const firstText = ys.shift();
+	ys.splice(-2, 1);
+	ys.splice(9, 0, "d");
+	const sortedText = ys.slice(0);
+	sortedText.sort();
+	ys.reverse();
+	const joinedText = sortedText.concat(["h", "b"]);
+	const expected = [
+		[last, first, xs.join(","), sorted.join(","), joinedNumbers.slice(1, -1).join(","), filledNumbers.join(",")].join(" "),
+		[lastText, firstText, ys.join(","), sortedText.join(","), joinedText.slice(-3).join(","), "z,z", "<>"].join(" "),
+		"1,9,3 false,false 2 1 6 2",
+	].join("|");
+	const entries: MapEntry[] = [
+		{ entryPath: "engineArrayKernel/lib.ms", entrySource: ARRAY_KERNEL_HELPERS },
+		{ entryPath: "engineArrayKernel/main.ms", entrySource: plainMain(`numberKernels() + "|" + stringKernels() + "|" + scalarKernels()`, `import { numberKernels, stringKernels, scalarKernels } from "./lib";`) },
+	];
+	const before = engineRecheckCount();
+	const c = compileProjectToCWithStd(entries, "engineArrayKernel/main.ms");
+	assert !c.startsWith("ERROR:"), c;
+	assert c.includes(expected), `the expansion differs from the C kernels: ${expected}`;
+	assert engineRecheckCount() == before, `${engineRecheckCount() - before} helpers checked again: ${engineRecheckReasons().join(", ")}`;
 }
 
 const KERNEL_HELPERS = `

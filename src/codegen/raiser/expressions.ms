@@ -2024,6 +2024,9 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 	if (isArraySetLengthCall(node) && d.arguments.length == 1) {
 		return compileArraySetLenCall(s, node);
 	}
+	if (isArrayKernelCall(node)) {
+		return compileArrayKernelCall(s, node);
+	}
 
 	// x.toString()
 	if (isToStringCall(node) && d.arguments.length == 0) {
@@ -2960,6 +2963,80 @@ function isArraySetLengthCall(call: Node): boolean {
 	return sym != null && ARRAY_SET_LENGTH_NATIVES.includes(sym.nativeName);
 }
 
+const ARRAY_POP_NATIVES = ["&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop"];
+const ARRAY_SHIFT_NATIVES = ["&msNumberArrayShift", "&msStringArrayShift"];
+const ARRAY_SPLICE_NATIVES = ["&msNumberArraySplice", "&msStringArraySplice"];
+const ARRAY_SPLICE3_NATIVES = ["&msNumberArraySplice3", "&msStringArraySplice3", "&msUint8ArraySplice3"];
+const ARRAY_REVERSE_NATIVES = ["&msNumberArrayReverse", "&msStringArrayReverse"];
+const ARRAY_SORT_NATIVES = ["&msNumberArraySort", "&msStringArraySort"];
+const ARRAY_FILL_NATIVES = ["&msNumberArrayFill", "&msStringArrayFill"];
+const ARRAY_SLICE_NATIVES = ["&msNumberArraySlice", "&msStringArraySlice"];
+const ARRAY_CONCAT_NATIVES = ["&msNumberArrayConcat", "&msStringArrayConcat"];
+
+function arrayKernelArity(native: string): int32 {
+	if (ARRAY_POP_NATIVES.includes(native) || ARRAY_SHIFT_NATIVES.includes(native)
+		|| ARRAY_REVERSE_NATIVES.includes(native) || ARRAY_SORT_NATIVES.includes(native)) return 0;
+	if (ARRAY_FILL_NATIVES.includes(native) || ARRAY_CONCAT_NATIVES.includes(native)) return 1;
+	if (ARRAY_SPLICE_NATIVES.includes(native) || ARRAY_SLICE_NATIVES.includes(native)) return 2;
+	if (ARRAY_SPLICE3_NATIVES.includes(native)) return 3;
+	return -1;
+}
+
+function isArrayKernelCall(call: Node): boolean {
+	const sym = memberCallSym(call);
+	return sym != null && arrayKernelArity(sym.nativeName) == (call.data as CallExprData).arguments.length;
+}
+
+function compileWordPair(s: RaiserCompState, first: Node, second: Node): int32 {
+	const block = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	emitInst(s, raiserABC(RaiserOpcode.Conv, block, compileExpr(s, first), RaiserConvClass.I64));
+	emitInst(s, raiserABC(RaiserOpcode.Conv, block + 1, compileExpr(s, second), RaiserConvClass.I64));
+	return block;
+}
+
+function compileArrayKernelCall(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const native = memberCallSym(node)!.nativeName;
+	const arrReg = compileExpr(s, (d.callee.data as MemberExprData).object);
+	if (ARRAY_POP_NATIVES.includes(native) || ARRAY_SHIFT_NATIVES.includes(native)) {
+		const dest = allocFor(s, node.nodeType);
+		if (ARRAY_POP_NATIVES.includes(native)) emitInst(s, raiserABC(RaiserOpcode.ArrayPop, dest, arrReg, 0));
+		else emitInst(s, raiserABC(RaiserOpcode.ArrayShift, dest, arrReg, native == "&msStringArrayShift" ? 1 : 0));
+		return dest;
+	}
+	if (ARRAY_REVERSE_NATIVES.includes(native)) {
+		emitInst(s, raiserABC(RaiserOpcode.ArrayReverse, arrReg, 0, 0));
+		return arrReg;
+	}
+	if (ARRAY_SORT_NATIVES.includes(native)) {
+		emitInst(s, raiserABC(RaiserOpcode.ArraySort, arrReg, 0, 0));
+		return arrReg;
+	}
+	if (ARRAY_FILL_NATIVES.includes(native)) {
+		emitInst(s, raiserABC(RaiserOpcode.ArrayFill, arrReg, compileExpr(s, d.arguments[0]), 0));
+		return arrReg;
+	}
+	if (ARRAY_CONCAT_NATIVES.includes(native)) {
+		const other = compileExpr(s, d.arguments[0]);
+		const dest = allocRef(s);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayConcat, dest, arrReg, other));
+		return dest;
+	}
+	if (ARRAY_SLICE_NATIVES.includes(native)) {
+		const range = compileWordPair(s, d.arguments[0], d.arguments[1]);
+		const dest = allocRef(s);
+		emitInst(s, raiserABC(RaiserOpcode.ArraySliceCopy, dest, arrReg, range));
+		return dest;
+	}
+	if (ARRAY_SPLICE_NATIVES.includes(native)) {
+		emitInst(s, raiserABC(RaiserOpcode.ArraySplice, arrReg, 0, compileWordPair(s, d.arguments[0], d.arguments[1])));
+		return arrReg;
+	}
+	const item = compileExpr(s, d.arguments[2]);
+	emitInst(s, raiserABC(RaiserOpcode.ArraySplice3, arrReg, item, compileWordPair(s, d.arguments[0], d.arguments[1])));
+	return arrReg;
+}
+
 function isLoweredArrayPush(callee: Node): boolean {
 	return callee.kind == NodeKind.Identifier && callee.resolvedSym != null && callee.resolvedSym.nativeName == "msGenericArrayPush";
 }
@@ -2985,6 +3062,7 @@ function isInterceptedCall(s: RaiserCompState, node: Node): boolean {
 	const d = node.data as CallExprData;
 	return isArrayPush(node) || isLoweredArrayPush(d.callee)
 		|| (isArraySetLengthCall(node) && d.arguments.length == 1)
+		|| isArrayKernelCall(node)
 		|| (isToStringCall(node) && d.arguments.length == 0)
 		|| (isStringMethod(s, node, "msStringCharAt") && d.arguments.length == 1)
 		|| (isStringMethod(s, node, "msStringSlice") && d.arguments.length == 2)
