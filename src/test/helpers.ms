@@ -40,7 +40,8 @@ import { join } from "std/fs/path";
 import { ErrorSeverity, Module, ModuleGraph, createModuleGraph, findModule } from "../module/graph";
 import { Node, ProgramData } from "../ast/node";
 import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram, placeInstance } from "../checker/instantiate";
-import { platform } from "std/process";
+import { platform, execFileResult, cwd, env } from "std/process";
+import { writeFile, ensureDir, removeAll, readFile, readDir } from "std/fs";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
 // macros encountered in compileToC sources actually expand. Without this,
 // any macro invocation fails check with "evaluator unavailable".
@@ -155,6 +156,31 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(lowered, checkerCtx, modPath, aliveSet));
 	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
 	return Result.ok(cCode);
+}
+
+// The C unit `msc build --emit=c` writes for one program, built by `$MSC` (else `./msc`) under out/<dir>/<name>:
+// std bodies reach the iterator inliner only in such a whole-program build, never through compileToC.
+export function builtModuleC(dir: string, name: string, source: string, flags: string[]): string {
+	const root = cwd();
+	const mscEnv = env.get("MSC");
+	const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
+	const at = `${root}/out/${dir}/${name}`;
+	removeAll(at);
+	ensureDir(at);
+	writeFile(`${at}/${name}.ms`, source);
+	const args = ["build", `${at}/${name}.ms`, "--emit=c", "--output=prog"];
+	for (const f of flags) args.push(f);
+	const r = execFileResult(msc, args, at);
+	if (r.exitCode != 0) return "error: " + r.errorOutput;
+	for (const mode of readDir(`${at}/out`)) {
+		for (const file of readDir(`${at}/out/${mode}`)) {
+			if (file == `${name}Oms.c` || file.endsWith(`Z${name}Oms.c`)) {
+				const text = readFile(`${at}/out/${mode}/${file}`);
+				return text.ok ? text.value : "error: unreadable " + file;
+			}
+		}
+	}
+	return "error: no C unit for " + name;
 }
 
 // Like compileToC but with std/ library resolution enabled (stdPath from the
