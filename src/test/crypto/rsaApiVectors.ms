@@ -46,6 +46,78 @@ function refused<T>(
 	}
 }
 
+test "private RSA PSS verify API checks all 352 cases with any-salt semantics" {
+	const files = [
+		"rsa_pss_2048_sha256_mgf1_0_test.json",
+		"rsa_pss_2048_sha256_mgf1_32_test.json",
+		"rsa_pss_2048_sha384_mgf1_48_test.json",
+	];
+	let valid = 0;
+	let invalid = 0;
+	let otherSalt = 0;
+	for (let f: int32 = 0; f < 3; f++) {
+		const hash = f == 2 ? "sha384" : "sha256";
+		const expectedHash = f == 2 ? "SHA-384" : "SHA-256";
+		const fixedSalt = f == 0 ? 0 : f == 1 ? 32 : 48;
+		const firstOther = f == 2 ? 99 : 67;
+		const otherLengths = f == 0 ? [1, 20, 32, 222] as int32[] :
+			f == 1 ? [0, 1, 20, 31, 33, 222] as int32[] :
+			[0, 1, 20, 32, 47, 49, 206] as int32[];
+		const text = readFile("std/crypto/test/vectors/" + files[f]);
+		assert text.ok;
+		const parsed = parseJson(text.value);
+		assert parsed.ok;
+		const groups = parsed.value.getDynamicField("testGroups");
+		assert groups.kind == JsonKind.Array;
+		let count = 0;
+		let changedSalt = 0;
+		for (let g = 0; g < groups.length(); g++) {
+			const group = groups.at(g);
+			assert group.getDynamicField("sha").asString() == expectedHash;
+			assert group.getDynamicField("mgf").asString() == "MGF1";
+			assert group.getDynamicField("mgfSha").asString() == expectedHash;
+			assert group.getDynamicField("sLen").asInt32() == fixedSalt;
+			const pem = group.getDynamicField("publicKeyPem").asString();
+			const key = must(RsaPublicKey.importPemSync(pem));
+			const tests = group.getDynamicField("tests");
+			assert tests.kind == JsonKind.Array;
+			for (let t = 0; t < tests.length(); t++) {
+				const vector = tests.at(t);
+				const id = vector.getDynamicField("tcId").asInt32();
+				const data = vector.getDynamicField("msg").asString().decodeHex();
+				const signature = vector.getDynamicField("sig").asString()
+					.decodeHex();
+				const accepted = verifySync(key, data, signature, hash, "pss");
+				const category = vector.getDynamicField("result").asString();
+				if (id >= firstOther && id < firstOther + otherLengths.length) {
+					assert category == "invalid";
+					assert vector.getDynamicField("comment").asString() ==
+						`s_len changed to ${otherLengths[id - firstOther]}`;
+					assert accepted, `RSA PSS ${files[f]} tcId ${id}: any salt refused`;
+					when (c) {
+						const native = must(NativePublicKey.importPemSync(pem));
+						assert nativeVerify(native, data, signature, hash, "pss"),
+							`native RSA PSS ${files[f]} tcId ${id}: any salt refused`;
+					}
+					otherSalt++;
+					changedSalt++;
+				} else {
+					assert category == "valid" || category == "invalid";
+					assert accepted == (category == "valid"),
+						`RSA PSS ${files[f]} tcId ${id}: result mismatch`;
+					if (category == "valid") valid++;
+					else invalid++;
+				}
+				count++;
+			}
+		}
+		assert count == parsed.value.getDynamicField("numberOfTests").asInt32();
+		assert count == (f == 0 ? 103 : f == 1 ? 108 : 141);
+		assert changedSalt == otherLengths.length;
+	}
+	assert valid == 219 && invalid == 116 && otherSalt == 17;
+}
+
 test "private RSA PKCS1 verify API checks all 776 pinned Wycheproof cases" {
 	let valid = 0;
 	let invalid = 0;
