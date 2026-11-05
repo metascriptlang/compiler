@@ -58,6 +58,9 @@ void msAdoptOrphanFailure(void* fut) {
  * (NULL is the main loop). */
 static bool msFailureNotedOffOwner(msFutureBase* f) {
 	if (!f->crossThreadPublished) return false;
+#if MS_ACTOR_JOBS
+	if (f->actorOwned) return msCurrentActor == NULL;
+#endif
 	void* q = f->completionQueue;
 	return q != msLoopCompletionQueue() || (msIsPoolWorker && q == NULL);
 }

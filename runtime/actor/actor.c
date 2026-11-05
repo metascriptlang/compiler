@@ -176,6 +176,36 @@ void* msActorStampEnvRelease(void* env) {
     return r;
 }
 
+static void msFutureSettleOnActor(void* fut) {
+    msFutureFireCallbacks((msFutureBase*)fut);
+    msFutureDrcDestroy(fut);
+}
+
+static void msFutureInFlightDrop(void* fut) {
+    msFutureDrcDestroy(fut);
+}
+
+void* msActorStampCompletion(void* fut) {
+    msActorJob* r = msActorJobNew((msClosure){ .fn = (msClosureFn)msFutureSettleOnActor, .env = fut }, msFutureInFlightDrop, NULL);
+    r->completion = true;
+    atomic_store_explicit(&r->envBusy, true, memory_order_relaxed);
+    return r;
+}
+
+void msActorCompletionPost(void* fut) {
+    msActorJob* r = (msActorJob*)((msFutureBase*)fut)->completionQueue;
+    msActorJobEnvIdle(r);
+    msActorJobFire(r);
+}
+
+void msActorCompletionRelease(void* fut) {
+    if (msCurrentActor == NULL) {
+        fputs("internal: a future an actor's visit made is released off that actor (ULTRALOCK M1)\n", stderr);
+        abort();
+    }
+    msFutureDrcDestroy(fut);
+}
+
 void msActorJobEnvIdle(void* r) {
     atomic_store_explicit(&((msActorJob*)r)->envBusy, false, memory_order_release);
 }

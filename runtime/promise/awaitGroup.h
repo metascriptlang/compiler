@@ -117,6 +117,12 @@ static inline void msFutureDeferredRelease(void* fut) {
 		msFutureDrcDestroy(fut);
 		return;
 	}
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(((msFutureBase*)fut)->actorOwned, 0)) {
+		msActorCompletionRelease(fut);
+		return;
+	}
+#endif
 	if (msFutureReleaseCount >= MS_FUTURE_RELEASE_CAP) {
 		msCompletionQueuePushReleaseBatch(msFutureReleaseBuf, msFutureReleaseCount);
 		msFutureReleaseCount = 0;

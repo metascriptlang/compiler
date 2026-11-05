@@ -640,6 +640,15 @@ static inline void msMsgReplyFail(void* fut) {
     if (fut == NULL) return;
     /* A completed reply's in-flight ref is released by the drain its completer posted to. */
     if (atomic_load_explicit(&((msFutureBase*)fut)->finished, memory_order_acquire)) return;
+#if MS_ACTOR_JOBS
+    if (__builtin_expect(((msFutureBase*)fut)->actorOwned, 0)) {
+        ((msFutureBase*)fut)->failed = true;
+        atomic_store_explicit(&((msFutureBase*)fut)->finished, true, memory_order_release);
+        msNotifyFutureComplete();
+        msCompletionQueuePushOwned(fut, true, NULL);
+        return;
+    }
+#endif
     msFutureFail(fut, NULL);
 #if MS_FUTURE_SUBMIT_REF
     void* f = fut;
@@ -827,6 +836,7 @@ typedef struct msActorJob {
     bool periodic;
     bool dropAfterRun;
     bool envDone;                 /* processing only */
+    bool completion;              /* settles a future made in a visit: runs even while a lend is busy (A4) */
     int64_t pid;
     int64_t timerId;
     msClosure cb;
@@ -960,6 +970,7 @@ static inline void msActorLendJoin(msActorJobs* j, void* chain) {
 }
 
 static inline bool msActorLendAllows(msActorJobs* j, msActorJob* r) {
+    if (r->completion) return true;
     if (r->chain == NULL) return false;
     for (int32_t i = 0; i < j->lentLen; i++) {
         if (j->lent[i].chain == r->chain) return true;

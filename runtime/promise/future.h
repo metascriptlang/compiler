@@ -87,6 +87,9 @@ MS_ACTOR_JOB_PATH void* msActorStampTimer(msClosure cb, int64_t id, bool periodi
 MS_ACTOR_JOB_PATH void* msActorStampEnvRelease(void* env);
 MS_ACTOR_JOB_PATH void msActorJobEnvIdle(void* job);
 MS_ACTOR_JOB_PATH void msActorJobFire(void* job);
+MS_ACTOR_JOB_PATH void* msActorStampCompletion(void* fut);
+MS_ACTOR_JOB_PATH void msActorCompletionPost(void* fut);
+MS_ACTOR_JOB_PATH void msActorCompletionRelease(void* fut);
 MS_ACTOR_JOB_PATH void msActorJobTick(void* job);
 MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
 MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
@@ -174,6 +177,7 @@ typedef struct msFutureBase {
 	                            * that never crossed threads. When true, defer to TLS
 	                            * to serialize with the dispatcher drain. */
 	bool spawned;         /* completed by a spawned task: a waiter on it waits on that task */
+	bool actorOwned;      /* made in an actor's visit: completionQueue holds the actor job that settles it (ULTRALOCK M1) */
 	void* completionQueue;
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
@@ -337,8 +341,16 @@ extern void msNotifyFutureComplete(void);
 void* msLoopCompletionQueue(void);
 
 static inline void msFuturePublishCrossThread(void* fp) {
-	((msFutureBase*)fp)->crossThreadPublished = true;
-	((msFutureBase*)fp)->completionQueue = msLoopCompletionQueue();
+	msFutureBase* f = (msFutureBase*)fp;
+	f->crossThreadPublished = true;
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) {
+		f->actorOwned = true;
+		f->completionQueue = msActorStampCompletion(fp);
+		return;
+	}
+#endif
+	f->completionQueue = msLoopCompletionQueue();
 }
 
 /* Fire all registered callbacks via callSoon (reference parity).

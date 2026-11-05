@@ -56,6 +56,29 @@ void msCallActorDestroyHook(void* actor) {
  * of spinning, since they have no event loop. Thundering herd is acceptable
  * for <64 concurrent worker waits; 1ms timeout caps worst-case latency. */
 
+/* A future an actor's visit made settles and releases on that actor (ULTRALOCK M1): its
+ * completion is the actor job stamped at publish, never a loop channel message. */
+static inline bool msCompletionOnActor(void* fut) {
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(((msFutureBase*)fut)->actorOwned, 0)) {
+		msActorCompletionPost(fut);
+		return true;
+	}
+#endif
+	(void)fut;
+	return false;
+}
+
+static inline void msRefuseActorOwnedOnChannel(void* fut, const char* what) {
+#if MS_ACTOR_JOBS
+	if (fut != NULL && __builtin_expect(((msFutureBase*)fut)->actorOwned, 0)) {
+		fprintf(stderr, "internal: %s of a future an actor's visit made reached a loop channel (ULTRALOCK M1)\n", what);
+		abort();
+	}
+#endif
+	(void)fut; (void)what;
+}
+
 #ifdef _WIN32
 static CRITICAL_SECTION gFutCompCs;
 static CONDITION_VARIABLE gFutCompCv;
@@ -372,6 +395,7 @@ void msEnsureLoopChannel(void) {
  * the worker's Step-1 publish already set: callbacks never fire and async
  * steppers hang (Amendment A / I15). */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
+	if (msCompletionOnActor(fut)) return;
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
 	if (iocp == NULL) iocp = msFirstLoopIocp();
 	if (iocp == NULL) {
@@ -411,6 +435,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 	}
 	for (int i = 0; i < count; i++) {
 		if (futs[i] == NULL) continue;
+		msRefuseActorOwnedOnChannel(futs[i], "a deferred release");
 		msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
 		msg->fut = NULL;
 		msg->value = futs[i];
@@ -424,6 +449,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 /* A failed future noted off its owner thread rides the IOCP as kind=-4; the loop
  * thread adopts it behind the mailbox release the same poster queues next. */
 void msCompletionQueuePushOrphanNote(void* fut) {
+	msRefuseActorOwnedOnChannel(fut, "an orphan note");
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
 	if (iocp == NULL) iocp = msFirstLoopIocp();
 	if (iocp == NULL) {
@@ -602,6 +628,7 @@ static void msChannelWake(msLoopChannel* c) {
  * The submit-time ref makes the owner's msDecRefIsLast see rc>=1 (not last),
  * so it can't free until the dispatcher drain's msFutureDrcDestroy runs. */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
+    if (msCompletionOnActor(fut)) return;
     msLoopChannel* c = msChannelOf(((msFutureBase*)fut)->completionQueue);
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
@@ -628,6 +655,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
         int32_t messages = 0;
         for (; i < count && (futs[i] == NULL || ((msFutureBase*)futs[i])->completionQueue == queue); i++) {
             if (futs[i] == NULL) continue;
+            msRefuseActorOwnedOnChannel(futs[i], "a deferred release");
             msMessage* msg = msMsgAlloc(/*kind=*/-2, /*replyFut=*/futs[i]);
             messages++;
             if (last != NULL) {
@@ -655,6 +683,7 @@ __attribute__((noinline)) static void msChannelPostOne(void* queue, int32_t kind
 }
 
 void msCompletionQueuePushOrphanNote(void* fut) {
+    msRefuseActorOwnedOnChannel(fut, "an orphan note");
     msChannelPostOne(((msFutureBase*)fut)->completionQueue, /*kind=*/-4, fut);
 }
 
