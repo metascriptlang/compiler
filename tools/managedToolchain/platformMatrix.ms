@@ -1,6 +1,6 @@
 import { argv, cwd, env, platform, exit, spawn, ChildStream, ProcessErrorKind } from "std/process";
 import { appendFile, ensureDir, exists, readFile, readDir, removeAll } from "std/fs";
-import { join } from "std/fs/path";
+import { basename, join } from "std/fs/path";
 
 // msc run tools/managedToolchain/platformMatrix.ms build --out=<dir> --host=<name> --hostTarget=<target> [--bundle=<dir>] [--targets=a,b] [--consumers=x,y] [--compilers=zig,bundle] [--debuggerPath=<dir put first on PATH for lldb/gdb>]
 // msc run tools/managedToolchain/platformMatrix.ms run --out=<dir with art/ and cells.tsv> --host=<name> --hostTarget=<target>
@@ -214,6 +214,43 @@ test "a breakpoint declaration or another breakpoint is not the stop" {
 	assert !gdbStopped("Breakpoint 2, probe () at debugLine.ms:3");
 }
 
+function debugSourceLine(text: string): boolean {
+	for (const line of text.split("\n")) {
+		const at = line.lastIndexOf(" at ");
+		if (at < 0) { continue; }
+		const path = line.slice(at + 4, line.length).replaceAll("\\", "/");
+		const fields = basename(path).split(":");
+		if (fields.length > 1 && fields[0] == "debugLine.ms" &&
+			fields[1].trim().split(" ")[0] == "3") {
+			return true;
+		}
+	}
+	return false;
+}
+
+test "debugger source locations accept path prefixes and columns" {
+	for (const path of [
+		"debugLine.ms",
+		"tools/managedToolchain/matrix/debugLine.ms",
+		"/tmp/a b/debugLine.ms",
+		"C:\\work\\debugLine.ms",
+	]) {
+		assert debugSourceLine(`frame at ${path}:3`);
+		assert debugSourceLine(`frame at ${path}:3:7`);
+	}
+}
+
+test "debugger source locations reject another file or line" {
+	for (const text of [
+		"frame at debugLine.ms:30",
+		"frame at /tmp/debugLine.ms:2",
+		"frame at notdebugLine.ms:3",
+		"file debugLine.ms, line 3",
+	]) {
+		assert !debugSourceLine(text);
+	}
+}
+
 function debuggerStop(artifact: string, target: string): string {
 	const lldb = ["--batch", "-o", "b debugLine.ms:3", "-o", "run", "-o", "process status", "-o", "frame info", "-o", "quit", artifact];
 	const gdb = ["-batch", "-ex", "break debugLine.ms:3", "-ex", "run", "-ex", "frame", artifact];
@@ -223,7 +260,7 @@ function debuggerStop(artifact: string, target: string): string {
 		if (capture(name, ["--version"], 60000).code != 0) { continue; }
 		const ran = capture(name, name == "gdb" ? gdb : lldb, 120000);
 		const text = ran.out + ran.err;
-		const stopped = text.contains("at debugLine.ms:3") && (name == "gdb" ? gdbStopped(text) : text.contains("stop reason = breakpoint"));
+		const stopped = debugSourceLine(text) && (name == "gdb" ? gdbStopped(text) : text.contains("stop reason = breakpoint"));
 		if (stopped) { return `${name}: stopped at debugLine.ms:3`; }
 		verdict = `${name}: no stop at debugLine.ms:3: ${oneLine(text, 200)}`;
 	}
