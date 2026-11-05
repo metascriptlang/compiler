@@ -301,3 +301,44 @@ test "an owned nullable element moved out by one statement is emptied" {
 	const r = compileToC("class N { id: int32 = 0; kids: Vec<Owned<N> | null> = []; }\nfunction f(n: Owned<N>): Owned<N> {\nconst k = move n.kids[0];\nn.kids[0] = k;\nreturn move n;\n}\nf(new N());\n");
 	assert r.ok, r.ok ? "" : r.error;
 }
+
+const BIN = `class T { v: int32 = 0; kids: Vec<Owned<T>> = []; constructor(v: int32) { this.v = v; } }
+class Bin { op: string = "+"; left: Owned<T>; right: Owned<T>; constructor(sink l: Owned<T>, sink r: Owned<T>) { this.left = move l; this.right = move r; } }
+function use(b: Bin): int32 { return b.left.v; }
+function mk(): Owned<Bin> { const b: Owned<Bin> = new Bin(new T(1), new T(2)); return move b; }
+`;
+
+test "a moved field read before it is put back is refused" {
+	const message = refused(BIN + "function f(b: Owned<Bin>): Owned<Bin> { const l = move b.left; console.log(b.left.v, l.v); return move b; }\nf(mk());\n");
+	assert message.contains("cannot use 'b.left.v': 'b.left' was moved out of it"), message;
+}
+
+test "a holder of a moved field passed to a call before the refill is refused" {
+	const message = refused(BIN + "function f(b: Owned<Bin>): Owned<Bin> { const l = move b.left; console.log(use(b), l.v); b.left = move l; return move b; }\nf(mk());\n");
+	assert message.contains("cannot use 'b': 'b.left' was moved out"), message;
+}
+
+test "a second element moved while the first is out is refused" {
+	const message = refused(BIN + "function f(n: Owned<T>): Owned<T> { const a = move n.kids[0]; const b = move n.kids[1]; n.kids[0] = move a; n.kids[1] = move b; return move n; }\nf(new T(0));\n");
+	assert message.contains("cannot use 'n.kids[…]': 'n.kids[…]' was moved out"), message;
+}
+
+test "an element moved again on the loop's next turn without a refill is refused" {
+	const message = refused(BIN + "function f(n: Owned<T>): int32 { let s = 0; for (let i = 0; i < 2; i++) { const a = move n.kids[0]; s += a.v; } return s; }\nf(new T(0));\n");
+	assert message.contains("'n.kids[…]' was moved out"), message;
+}
+
+test "a field put back on one branch only and read after the join is refused" {
+	const message = refused(BIN + "function f(b: Owned<Bin>, flip: boolean): Owned<Bin> { const l = move b.left; if (flip) b.left = move l; console.log(b.left.v); return move b; }\nf(mk(), true);\n");
+	assert message.contains("cannot use 'b.left.v': 'b.left' was moved out of it"), message;
+}
+
+test "a local alias of the holder read before the refill is refused" {
+	const message = refused(BIN + "function f(b: Owned<Bin>): Owned<Bin> { const alias: Bin = b; const l = move b.left; console.log(alias.left.v, l.v); b.left = move l; return move b; }\nf(mk());\n");
+	assert message.contains("cannot use 'alias.left.v'"), message;
+}
+
+test "a holder returned with a field still moved out is refused" {
+	const message = refused(BIN + "function f(b: Owned<Bin>): Owned<Bin> { const l = move b.left; return move b; }\nf(mk());\n");
+	assert message.contains("cannot use 'b': 'b.left' was moved out"), message;
+}
