@@ -21,7 +21,6 @@ class ChaChaWork {
 	block: uint32[16];
 	authKey: uint8[];
 	tag: uint8[];
-	lengths: uint8[];
 }
 
 function newWork(): ChaChaWork {
@@ -31,7 +30,6 @@ function newWork(): ChaChaWork {
 		block: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 		authKey: new Array<uint8>(32),
 		tag: new Array<uint8>(16),
-		lengths: new Array<uint8>(16),
 	};
 }
 
@@ -299,10 +297,10 @@ export function chacha20Xor(
 	return true;
 }
 
-function putLengths(w: ChaChaWork, aadLength: int64, textLength: int64): void {
+function putLengths(lengths: uint8[], aadLength: int64, textLength: int64): void {
 	for (let i = 0; i < 8; i++) {
-		w.lengths[i] = ((aadLength >> ((8 * i) as int64)) & 255) as uint8;
-		w.lengths[8 + i] = ((textLength >> ((8 * i) as int64)) & 255) as uint8;
+		lengths[i] = ((aadLength >> ((8 * i) as int64)) & 255) as uint8;
+		lengths[8 + i] = ((textLength >> ((8 * i) as int64)) & 255) as uint8;
 	}
 }
 
@@ -334,8 +332,9 @@ function computeTag(
 	padPoly1305(mac);
 	updatePoly1305(mac, cipher, cipherOff, cipherLength);
 	padPoly1305(mac);
-	putLengths(w, aad.length as int64, cipherLength as int64);
-	updatePoly1305(mac, w.lengths, 0, 16);
+	const lengths = new Array<uint8>(16);
+	putLengths(lengths, aad.length as int64, cipherLength as int64);
+	updatePoly1305(mac, lengths, 0, 16);
 	finishPoly1305(mac, w.tag, 0);
 }
 
