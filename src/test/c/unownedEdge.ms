@@ -74,6 +74,22 @@ test "an Unowned edge inside an element or a type argument is refused until it i
 	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\n" + tail).contains("an element or a type argument is not built yet");
 }
 
+test "a value holding an Unowned edge does not cross a thread by move, reply or spawn result" {
+	const head = "class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\n";
+	const refused = "holding an Unowned edge is not sendable";
+	assert emitted(head + "actor A { n: int32 = 0; take(h: H): void { this.n = h.at != null ? 1 : 0; } }\nfunction f(): void { const h = new H(); const a = new A(); a.take(move h); }\nf();\n").contains(refused);
+	assert emitted(head + "actor A { make(): H { return new H(); } }\nasync function g(): Promise<int32> { const a = new A(); const h = await a.make(); return h.at == null ? 0 : 1; }\nconsole.log(await g());\n").contains(refused);
+	assert emitted(head + "async function g(): Promise<int32> { const h = new H(); const t = spawn(() => { return h.at != null ? 1 : 0; }, { move: [h] }); return await t; }\nconsole.log(await g());\n").contains(refused);
+	assert emitted(head + "class W { h: H = new H(); }\nasync function g(): Promise<int32> { const w = new W(); const t = spawn(() => { return w.h.at != null ? 1 : 0; }, { move: [w] }); return await t; }\nconsole.log(await g());\n").contains(refused);
+	assert emitted(head + "async function g(): Promise<int32> { const t = spawn(() => { return new H(); }); const h = await t; return h.at == null ? 0 : 1; }\nconsole.log(await g());\n").contains(refused);
+}
+
+test "a value holding an Unowned edge is still lent to an awaited actor call and a spawn that reads it" {
+	const head = "class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\n";
+	assert !emitted(head + "actor A { weigh(h: H): int32 { return h.at != null ? h.at.id : 0; } }\nasync function g(): Promise<int32> { const n = new N(); const h = new H(); h.at = n; const a = new A(); return await a.weigh(h); }\nconsole.log(await g());\n").contains("not sendable");
+	assert !emitted(head + "async function g(): Promise<int32> { const n = new N(); const h = new H(); h.at = n; const t = spawn(() => { return h.at != null ? h.at.id : 0; }); return await t; }\nconsole.log(await g());\n").contains("not sendable");
+}
+
 test "a local bound to an Unowned read is a plain reference, so storing into it is a strong store" {
 	const c = emitted("class N { id: int32 = 1; }\nclass H { at: Unowned<N> | null = null; }\nfunction f(h: H, m: N): int32 {\n\tlet p = h.at;\n\tp = m;\n\treturn p != null ? p.id : 0;\n}\nconst n = new N();\nconst h = new H();\nh.at = n;\nconsole.log(f(h, n));\n");
 	assert !c.contains("msUnownedAssign((&(p_1_))"), c;
