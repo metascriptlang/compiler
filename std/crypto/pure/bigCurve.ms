@@ -6,7 +6,7 @@
  */
 
 import { derJoin } from "./asn1";
-import { bigFromBytes, bigToBytes, bitLength, modInverse } from "./bigint";
+import { bigFromBytes, bigToBytes, bitLength, modInverse, modPow } from "./bigint";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
 
@@ -135,6 +135,15 @@ function affineOf(c: BigCurve, a: Jacobian): Affine | null {
 }
 
 function decodePoint(c: BigCurve, point: Readonly<uint8[]>): Affine | null {
+	if (point.length == 1 + c.size && (point[0] == 2 || point[0] == 3)) {
+		const x = bigFromBytes(point.slice(1));
+		if (x >= c.p) return null;
+		const right = fmod(x * x * x + c.a * x + c.b, c.p);
+		let y = modPow(right, (c.p + 1n) / 4n, c.p);
+		if ((y * y) % c.p != right) return null;
+		if ((y & 1n) != BigInt(point[0] & 1)) y = fmod(-y, c.p);
+		return { x, y };
+	}
 	if (point.length != 1 + 2 * c.size || point[0] != 4) return null;
 	const x = bigFromBytes(point.slice(1, 1 + c.size));
 	const y = bigFromBytes(point.slice(1 + c.size));
@@ -145,6 +154,12 @@ function decodePoint(c: BigCurve, point: Readonly<uint8[]>): Affine | null {
 
 function encodePoint(c: BigCurve, a: Affine): uint8[] {
 	return derJoin([[4], bigToBytes(a.x, c.size), bigToBytes(a.y, c.size)]);
+}
+
+export function bigExpandPoint(size: int32, point: Readonly<uint8[]>): uint8[] | null {
+	const c = bigCurve(size);
+	const decoded = decodePoint(c, point);
+	return decoded == null ? null : encodePoint(c, decoded);
 }
 
 export function bigPointValid(size: int32, point: Readonly<uint8[]>): boolean {

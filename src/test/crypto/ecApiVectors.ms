@@ -3,10 +3,101 @@ import {
 	ecdsaSign, ecdsaVerify, ecdhSync, ecdh,
 } from "std/crypto/pure/ecNative";
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
+import { readFile } from "std/fs";
+import { asInt32, asString, at, getDynamicField, parseJson } from "std/core/json";
+import { pemEncode } from "std/crypto/pure/pem";
+import { p256 } from "std/crypto/pure/p256";
+import { p384 } from "std/crypto/pure/p384";
+import { ownCurve, ecPublicPoint, ecPublicToSpki, ecPrivateToSec1 } from "std/crypto/pure/weierstrass";
 
 function must<T>(sink result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
 	return result.value;
+}
+
+test "private EC compressed public PEM preserves canonical exports" {
+	let refused = 0;
+	for (const name of ["p256", "p384"] as EcCurve[]) {
+		const file = name == "p256" ? "secp256r1" : "secp384r1";
+		const text = readFile(`std/crypto/test/vectors/ecdh_${file}_test.json`);
+		assert text.ok;
+		const root = parseJson(text.value);
+		assert root.ok;
+		const tests = root.value.getDynamicField("testGroups").at(0).getDynamicField("tests");
+		const plain = tests.at(0);
+		const compressed = tests.at(1);
+		assert plain.getDynamicField("tcId").asInt32() == 1;
+		assert compressed.getDynamicField("tcId").asInt32() == 2;
+		assert compressed.getDynamicField("result").asString() == "acceptable";
+		const canonical = pemEncode("PUBLIC KEY", plain.getDynamicField("public").asString().decodeHex());
+		const control = must(EcPublicKey.importPemSync(canonical));
+		assert must(control.exportPemSync()) == canonical;
+		const imported = EcPublicKey.importPemSync(pemEncode(
+			"PUBLIC KEY", compressed.getDynamicField("public").asString().decodeHex(),
+		));
+		if (!imported.ok) {
+			refused++;
+			continue;
+		}
+		assert imported.value.curve == name;
+		assert must(imported.value.exportPemSync()) == canonical;
+	}
+	assert refused == 0, `compressed public PEM refused ${refused}/2`;
+}
+
+test "private EC compressed embedded points preserve scalar agreement" {
+	let refused = 0;
+	for (const name of ["p256", "p384"] as EcCurve[]) {
+		const curve = ownCurve(name == "p256" ? p256 : p384);
+		const d: uint8[] = new Array<uint8>(curve.size);
+		d[curve.size - 1] = 1;
+		const point = ecPublicPoint(curve, d);
+		assert point != null;
+		const canonical = pemEncode("EC PRIVATE KEY", ecPrivateToSec1({ curve, d, point }));
+		const control = must(EcPrivateKey.importPemSync(canonical));
+		assert must(control.exportPemSync()) == canonical;
+		const compressed: uint8[] = [2 | (point[point.length - 1] & 1), ...point.slice(1, 1 + curve.size)];
+		const imported = EcPrivateKey.importPemSync(pemEncode(
+			"EC PRIVATE KEY", ecPrivateToSec1({ curve, d, point: compressed }),
+		));
+		if (!imported.ok) {
+			refused++;
+		} else {
+			assert must(imported.value.exportPemSync()) == canonical;
+			assert must(imported.value.publicKey().exportPemSync()) ==
+				must(control.publicKey().exportPemSync());
+		}
+		compressed[0] ^= 1;
+		const mismatch = EcPrivateKey.importPemSync(pemEncode(
+			"EC PRIVATE KEY", ecPrivateToSec1({ curve, d, point: compressed }),
+		));
+		assert !mismatch.ok;
+		assert mismatch.error.kind == CryptoErrorKind.InvalidKey;
+	}
+	assert refused == 0, `compressed embedded PEM refused ${refused}/2`;
+}
+
+test "private EC compressed public PEM rejects noncanonical X and wrong widths" {
+	for (const name of ["p256", "p384"] as EcCurve[]) {
+		const curve = ownCurve(name == "p256" ? p256 : p384);
+		for (const prefix of [2, 3] as uint8[]) {
+			const excessive: uint8[] = new Array<uint8>(1 + curve.size);
+			excessive.fill(255);
+			excessive[0] = prefix;
+			const noncanonical = EcPublicKey.importPemSync(pemEncode(
+				"PUBLIC KEY", ecPublicToSpki({ curve, point: excessive }),
+			));
+			assert !noncanonical.ok;
+			assert noncanonical.error.kind == CryptoErrorKind.InvalidKey;
+			for (const width of [0, curve.size - 1, curve.size + 1]) {
+				const point: uint8[] = new Array<uint8>(1 + width);
+				point[0] = prefix;
+				assert !EcPublicKey.importPemSync(pemEncode(
+					"PUBLIC KEY", ecPublicToSpki({ curve, point }),
+				)).ok;
+			}
+		}
+	}
 }
 
 test "private EC malformed PEM errors keep their kind and operation" {

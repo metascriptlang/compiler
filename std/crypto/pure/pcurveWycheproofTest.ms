@@ -32,7 +32,6 @@ interface EcdhCase {
 	private: string;
 	shared: string;
 	result: string;
-	flags: string[];
 }
 
 interface EcdhGroup {
@@ -47,7 +46,6 @@ class Tally {
 	passed: int32 = 0;
 	failed: int32 = 0;
 	acceptableRefused: int32 = 0;
-	skipped: Map<string, int32> = new Map<string, int32>();
 	failures: string[] = [];
 }
 
@@ -66,19 +64,8 @@ function record(tally: Tally, ok: boolean, label: string): void {
 	}
 }
 
-function skip(tally: Tally, reason: string): void {
-	tally.skipped.set(reason, (tally.skipped.get(reason) ?? 0) + 1);
-}
-
-function skippedCount(tally: Tally): int32 {
-	let total = 0;
-	for (const [reason, count] of tally.skipped) total += count;
-	return total;
-}
-
 function report(name: string, tally: Tally): void {
-	console.log(`${name}: ${tally.passed} passed, ${tally.failed} failed, ${skippedCount(tally)} skipped, ${tally.acceptableRefused} acceptable refused`);
-	for (const [reason, count] of tally.skipped) console.log(`  skipped ${count}: ${reason}`);
+	console.log(`${name}: ${tally.passed} passed, ${tally.failed} failed, ${tally.acceptableRefused} acceptable refused`);
 	for (const label of tally.failures) console.log(`  failed ${label}`);
 }
 
@@ -119,13 +106,6 @@ function scalarBytes(hex: string, size: int32): uint8[] | null {
 	return out;
 }
 
-function hasFlag(test: EcdhCase, flag: string): boolean {
-	for (const f of test.flags) {
-		if (f == flag) return true;
-	}
-	return false;
-}
-
 /** The shared secret through the SPKI parser, the point check and the scalar multiplication, or null where any refuses. */
 function agree(curve: Readonly<Curve>, test: EcdhCase): uint8[] | null {
 	const data = ecPublicFromSpki(test.public.decodeHex(), [ownCurve(p256), ownCurve(p384)]);
@@ -143,13 +123,7 @@ function runEcdh(name: string, curve: Readonly<Curve>): Tally {
 		for (const test of group.tests) {
 			const shared = agree(curve, test);
 			const label = `${name} #${test.tcId}`;
-			if (hasFlag(test, "CompressedPublic") || hasFlag(test, "CompressedPoint")) {
-				if (shared == null) {
-					skip(tally, "compressed public point, which the SPKI parser refuses");
-				} else {
-					record(tally, false, `${label}: a compressed point was accepted`);
-				}
-			} else if (test.result == "invalid") {
+			if (test.result == "invalid") {
 				record(tally, shared == null, label);
 			} else if (shared == null) {
 				if (test.result == "valid") {
@@ -186,6 +160,6 @@ test "Wycheproof ECDH P-256 and P-384 over SPKI public keys" {
 	const a = runEcdh("ecdh_secp256r1_test.json", p256);
 	const b = runEcdh("ecdh_secp384r1_test.json", p384);
 	assert a.failed == 0 && b.failed == 0;
-	assert a.passed == 604 && skippedCount(a) == 8;
-	assert b.passed == 1045 && skippedCount(b) == 2;
+	assert a.passed == 612;
+	assert b.passed == 1047;
 }

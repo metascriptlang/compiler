@@ -496,10 +496,19 @@ function curveRight(cm: Readonly<CurveMath>, x: Limbs): Limbs {
 	return add(f, sub(f, sub(f, sub(f, x3, x), x), x), cm.b);
 }
 
-/** An uncompressed SEC1 point (04 || x || y), checked against the curve equation; null otherwise. */
 export function decodePoint(cm: Readonly<CurveMath>, s: Readonly<uint8[]>): Point | null {
 	const f = cm.field;
 	const size = 4 * f.words;
+	if (s.length == 1 + size && (s[0] == 2 || s[0] == 3)) {
+		const xs = fromBytes(f, s, 1);
+		if (xs == null) return null;
+		const x = toMontgomery(f, xs);
+		const root = sqrt(cm, curveRight(cm, x));
+		if (root == null) return null;
+		const flip = (fromMontgomery(f, root)[0] & 1) ^ ((s[0] & 1) as uint32);
+		const y = select(f, flip, root, opp(f, root));
+		return { x, y, z: f.one };
+	}
 	if (s.length != 1 + 2 * size || s[0] != 4) return null;
 	const xs = fromBytes(f, s, 1);
 	const ys = fromBytes(f, s, 1 + size);

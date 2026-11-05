@@ -12,7 +12,7 @@ import {
 } from "./asn1";
 import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
 import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
-import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw } from "./bigCurve";
+import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw, bigExpandPoint } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
 import { wipeBytes } from "./secret";
@@ -51,10 +51,20 @@ function curveWithOid(curves: Readonly<Curve[]>, buf: Readonly<uint8[]>, item: D
 }
 
 function pointAt(buf: Readonly<uint8[]>, bits: DerItem, curve: Readonly<Curve>): uint8[] | null {
-	if (bits.tag != tagBitString || bits.end - bits.body != 2 + 2 * curve.size || buf[bits.body] != 0 || buf[bits.body + 1] != 4) return null;
+	const length = bits.end - bits.body;
+	if (bits.tag != tagBitString || length < 2 || buf[bits.body] != 0) return null;
+	const prefix = buf[bits.body + 1];
+	const compressed = (prefix == 2 || prefix == 3) && length == 2 + curve.size;
+	if (!compressed && (prefix != 4 || length != 2 + 2 * curve.size)) return null;
 	const out: uint8[] = [];
 	for (let i = bits.body + 1; i < bits.end; i++) out.push(buf[i]);
-	return out;
+	if (!compressed) return out;
+	when (js) {
+		return bigExpandPoint(curve.size, out);
+	} else {
+		const point = decodePoint(curve.math, out);
+		return point == null ? null : encodePoint(curve.math, point);
+	}
 }
 
 export function ecPublicFromSpki(der: Readonly<uint8[]>, curves: Readonly<Curve[]>): EcPublicData | null {
