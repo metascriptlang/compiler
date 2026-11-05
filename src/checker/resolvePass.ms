@@ -2327,7 +2327,7 @@ function findPredicateInfix(text: string): int32 {
 
 // "ambiguous" when the parameters match and the written returns differ, "redefinition" when the
 // parameters match and both declarations have a body, "" otherwise.
-function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclData): string {
+function overloadDeclConflict(existing: Symbol, fnType: Type, returnWritten: boolean, hasBody: boolean): string {
 	const a = existing.symbolType;
 	if (a.typeChildren.length != fnType.typeChildren.length) return "";
 	for (let i = 0; i < a.typeChildren.length; i += 1) {
@@ -2335,11 +2335,20 @@ function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclDat
 		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return "";
 		if (isReadonlyView(a.typeChildren[i]) != isReadonlyView(fnType.typeChildren[i])) return "";
 	}
-	const ea = existing.declNode != null && existing.declNode.kind == NodeKind.FunctionDecl
-		? existing.declNode.data as FunctionDeclData : null;
-	if (ea == null) return "";
-	if (ea.fnReturnType != "" && d.fnReturnType != "" && !sameType(a.typeReturn, fnType.typeReturn)) return "ambiguous";
-	return ea.fnBody != null && d.fnBody != null && !hasFlag(existing, SymbolFlag.OverloadSig) ? "redefinition" : "";
+	const decl = existing.declNode;
+	if (decl == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl)) return "";
+	const fd = decl.kind == NodeKind.FunctionDecl ? decl.data as FunctionDeclData : null;
+	const md = decl.kind == NodeKind.MethodDecl ? decl.data as MethodDeclData : null;
+	const existingReturnWritten = fd != null ? fd.fnReturnType != "" : md!.methodReturnType != "";
+	const existingHasBody = fd != null ? fd.fnBody != null : md!.methodBody != null;
+	if (existingReturnWritten && returnWritten && !sameType(a.typeReturn, fnType.typeReturn)) return "ambiguous";
+	return existingHasBody && hasBody && !hasFlag(existing, SymbolFlag.OverloadSig) ? "redefinition" : "";
+}
+
+function reportOverloadDeclConflict(ctx: CheckerContext, conflict: string, name: string, previous: Symbol, at: Node): void {
+	const prev = previous.declNode != null ? previous.declNode.location : at.location;
+	addError(ctx, conflict == "ambiguous" ? `overloaded '${name}' leads to ambiguous calls — previous declaration at line ${prev.line}`
+		: `redefinition of '${name}' — previous declaration with the same parameters at line ${prev.line}`, at.location.line, at.location.column);
 }
 
 function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol, fnType: Type, d: FunctionDeclData): void {
@@ -2361,14 +2370,39 @@ function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol
 		if (cand == sym || cand.symbolKind != SymbolKind.Function) continue;
 		if (cand.modulePath != sym.modulePath) continue;
 		if (isUnresolvedType(cand.symbolType) || cand.symbolType.kind != TypeKind.Function) continue;
-		const conflict = overloadDeclConflict(cand, fnType, d);
+		const conflict = overloadDeclConflict(cand, fnType, d.fnReturnType != "", d.fnBody != null);
 		if (conflict == "redefinition" && (hasFlag(sym, SymbolFlag.Borrow) || hasFlag(cand, SymbolFlag.Borrow))) continue;
 		if (conflict != "") {
-			const prev = cand.declNode != null ? cand.declNode.location : node.location;
-			addError(ctx, conflict == "ambiguous" ? `overloaded '${d.fnName}' leads to ambiguous calls — previous declaration at line ${prev.line}`
-				: `redefinition of '${d.fnName}' — previous declaration with the same parameters at line ${prev.line}`, node.location.line, node.location.column);
+			reportOverloadDeclConflict(ctx, conflict, d.fnName, cand, node);
 			return;
 		}
+	}
+}
+
+// A method joins its overload set at collection, earliest declaration first; it is compared with
+// the members declared before it, whose types are already resolved.
+function checkMethodOverloadDecl(ctx: CheckerContext, typeName: string, body: Node[], upTo: int32, method: Node, methodSym: Symbol, fnType: Type): void {
+	if (methodSym.overloadIdx == 0) return;
+	const md = method.data as MethodDeclData;
+	for (let i = 0; i < upTo; i += 1) {
+		const prior = body[i].kind == NodeKind.DecoratedDecl ? (body[i].data as DecoratedDeclData).decoratedNode : body[i];
+		if (prior == null || prior.kind != NodeKind.MethodDecl || prior.resolvedSym == null) continue;
+		const primary = prior.resolvedSym!;
+		if (primary.overloads.indexOf(methodSym) < 0) continue;
+		const earlier: Symbol[] = [primary];
+		for (const ov of primary.overloads) {
+			if (ov == methodSym) break;
+			earlier.push(ov);
+		}
+		for (const cand of earlier) {
+			if (isUnresolvedType(cand.symbolType) || cand.symbolType.kind != TypeKind.Function) continue;
+			const conflict = overloadDeclConflict(cand, fnType, md.methodReturnType != "", md.methodBody != null);
+			if (conflict != "") {
+				reportOverloadDeclConflict(ctx, conflict, typeName + "." + md.methodName, cand, method);
+				return;
+			}
+		}
+		return;
 	}
 }
 function refuseIteratorHelperTypes(ctx: CheckerContext, node: Node, sym: Symbol, paramTypes: Type[], returnType: Type): void {
@@ -3348,6 +3382,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			// Update the method symbol's type with resolved params/return
 			if (methodSym != null && methodSym.symbolType != null) {
 				assignType(methodSym.symbolType, fnType);
+				if (sym.instantiatedFrom == null) checkMethodOverloadDecl(ctx, d.className, d.classBody, mi, member, methodSym, fnType);
 			}
 			if (methodSym != null && isLifecycleHookName(md.methodName) && !md.methodIsStatic && sym.instantiatedFrom == null) {
 				bindLifecycleHook(ctx, sym, md.methodName, methodSym, md.nameLocation);
