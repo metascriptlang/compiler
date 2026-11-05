@@ -4,7 +4,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset,
-	RaiserSlotShape
+	RaiserSlotShape, RaiserCallShape
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, CLOSURE_LAYOUT, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, InlineFrame } from "../../ast/node";
@@ -13,6 +13,7 @@ import { RaiserInlineSite } from "../../raiser/module";
 import { CheckerError, Severity, DispatchRegistry, createDispatchRegistry } from "../../checker/context";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { raiserRefusal, stdModuleName, tiersDeclaring } from "../../module/tiers";
+import { VmLayouts, createVmLayouts } from "./layout";
 
 // --- Bytecode-compiler error queue ---
 // The expression/statement compilers used to silently emit LoadConst nil
@@ -95,15 +96,23 @@ export interface RaiserLoopStack {
 
 // --- Function map ---
 
+export interface RaiserPackedRoutine {
+	paramTypes: Type[];
+	resultType: Type | null;
+	shape: RaiserCallShape;
+	entryIdx: int32;
+}
+
 export interface RaiserFuncMap {
 	dispatchRegistry: DispatchRegistry;
 	symbolIndices: HashMap<Symbol, int32>;
 	ctorIndices: HashMap<Symbol, int32>;
 	initIndices: HashMap<Symbol, int32>;
+	packed: HashMap<int32, RaiserPackedRoutine>;
 }
 
 export function createFuncMap(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): RaiserFuncMap {
-	return { dispatchRegistry, symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>() };
+	return { dispatchRegistry, symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>(), packed: new HashMap<int32, RaiserPackedRoutine>() };
 }
 
 export interface RaiserGlobalEntry {
@@ -123,6 +132,10 @@ export interface RaiserCompState {
 	constants: RaiserValue[];
 	nextReg: int32;
 	regClasses: RaiserRegClass[];
+	layouts: VmLayouts;
+	legacyRoots: HashSet<Symbol>;
+	resultType: Type | null;
+	resultShape: RaiserSlotShape | null;
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -160,7 +173,7 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
+	return { code, constants, nextReg: 0, regClasses: [], layouts: createVmLayouts(), legacyRoots: new HashSet<Symbol>(), resultType: null, resultShape: null, locals, loopStack,
 		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>() };
 }
 
@@ -680,6 +693,11 @@ export function resolveRoutine(s: RaiserCompState, sym: Symbol | null): int32 {
 	return demandStd(routine, (): int32 => demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(placedInstances(), routine))));
 }
 
+export function legacyRoutineIndex(s: RaiserCompState, bodyIdx: int32): int32 {
+	const packed = s.funcMap.packed.get(bodyIdx);
+	return packed != null ? packed.entryIdx : bodyIdx;
+}
+
 export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 {
 	return demandStd(classSym, (): int32 => demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(placedInstances(), classSym))));
 }
@@ -717,7 +735,7 @@ export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int3
 	const pairReg = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, CLOSURE_LAYOUT), 0));
 	const fnReg = allocWord(s);
-	emitLoadConst(s, fnReg, raiserInt(funcIdx));
+	emitLoadConst(s, fnReg, raiserInt(legacyRoutineIndex(s, funcIdx)));
 	const fnConst = addConst(s, raiserConstString("fn"));
 	emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, fnConst, fnReg, 0));
 	const envConst = addConst(s, raiserConstString("env"));
@@ -929,6 +947,12 @@ export function emitImplicitReturn(s: RaiserCompState): void {
 export function emitReturnNothing(s: RaiserCompState): void {
 	if (s.receiverReg >= 0) {
 		emitRet(s, s.receiverReg);
+		return;
+	}
+	if (s.resultShape != null && s.resultShape.block) {
+		const zero = allocPackedBlock(s, s.resultShape);
+		emitInst(s, raiserABC(RaiserOpcode.ZeroN, zero, s.resultShape.words, 0));
+		emitRet(s, zero, s.resultShape);
 		return;
 	}
 	const nilReg = allocDyn(s);

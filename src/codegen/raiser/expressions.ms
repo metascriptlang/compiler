@@ -33,12 +33,18 @@ import { isCtorSignature } from "../../checker/ctorRoutine";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
-	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
+	RaiserCompState, localSlotShape, legacyRoutineIndex, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
 	isLocalString, declareLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
 	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
+import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy } from "./packedValues";
+import { packedSlotShapeOf } from "./valueCopy";
+import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
+import { vmLayoutOf } from "./layout";
+import { MemKind } from "../../raiser/layout";
+import { storesNothing, typeKey, enumMemberValue } from "../../checker/types";
 import { raiserStructSlotUnion } from "../../analyzer/classify";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue, nullIsZeroValue, emitZeroValue } from "./valueCopy";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
@@ -550,7 +556,225 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 	return reg;
 }
 
+export function storedFramePlace(s: RaiserCompState, node: Node): RaiserFramePlace | null {
+	if (node.kind == NodeKind.Identifier && resolveGlobal(s, node.resolvedSym) < 0) {
+		const shape = localSlotShape(s, node.resolvedSym);
+		if (shape != null && shape.block) return packedFramePlace(s, s.layouts,
+			resolveLocal(s, node.resolvedSym), node.resolvedSym!.symbolType!, shape);
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const owner = storedFramePlace(s, d.object);
+		if (owner != null) {
+			if (isMaybeType(peelTransparentInstance(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+			const body = peelTransparentInstance(owner.valueType);
+			const at = body.typeNames.indexOf(d.property);
+			if (at >= 0 && !storesNothing(body, body.typeChildren[at])) return packedField(s, s.layouts, owner, d.property);
+		}
+	}
+	if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		const owner = storedFramePlace(s, d.array);
+		if (owner != null && d.index.kind == NodeKind.NumberLiteral) return packedIndex(s, s.layouts, owner, (d.index.data as NumberLiteralData).value);
+	}
+	return null;
+}
+
+function packedReadOwner(s: RaiserCompState, object: Node, property: string): RaiserFramePlace | null {
+	const body = object.nodeType != null ? peelDistinct(object.nodeType) : null;
+	if (body == null || !(body.kind == TypeKind.Struct && body.typeNames.includes(property) || property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple))) return null;
+	const stored = storedFramePlace(s, object);
+	if (stored != null) return stored;
+	if (object.nodeType == null || packedSlotShapeOf(s.layouts, object.nodeType) == null) return null;
+	if (object.kind == NodeKind.CallExpr || object.kind == NodeKind.ObjectLiteral || object.kind == NodeKind.ConditionalExpr) return compilePackedExpr(s, object, object.nodeType);
+	return null;
+}
+
+function checkPackedPresent(s: RaiserCompState, place: RaiserFramePlace): void {
+	const present = emitPackedLoad(s, s.layouts, packedField(s, s.layouts, place, "present"));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, present, 0, 1));
+	emitTrap(s, "member 'value' is not accessible for type 'null' using '.'");
+}
+
+export function copyPackedExpr(s: RaiserCompState, dest: RaiserFramePlace, node: Node): void {
+	if (vmLayoutOf(s.layouts, dest.valueType).kind == MemKind.Block) emitPackedCopy(s, s.layouts, dest, compilePackedExpr(s, node, dest.valueType));
+	else {
+		const value = compileExpr(s, node);
+		const cls = regClassOf(s, dest.valueType);
+		if (classOfReg(s, value) == cls) emitPackedStore(s, s.layouts, dest, value);
+		else {
+			const converted = allocReg(s, cls);
+			emitInst(s, raiserABC(RaiserOpcode.Move, converted, value, 0));
+			emitPackedStore(s, s.layouts, dest, converted);
+		}
+	}
+}
+
+function shapedSourceCall(s: RaiserCompState, node: Node): int32 {
+	if (node.kind != NodeKind.CallExpr) return -1;
+	const d = node.data as CallExprData;
+	if (d.callee.kind != NodeKind.Identifier || resolveLocal(s, d.callee.resolvedSym) >= 0 || resolveGlobal(s, d.callee.resolvedSym) >= 0) return -1;
+	let sym = d.callee.resolvedSym;
+	if (sym != null && sym.overloads.length > 0) sym = overloadAt(sym, resolveOverloadWinner(sym, d.resolvedOverloadIdx));
+	if (sym == null || runtimeHostName(sym) != "") return -1;
+	const idx = routineIndex(s, sym);
+	const packed = s.funcMap.packed.get(idx);
+	if (packed == null) return -1;
+	let argCount = 0;
+	for (const arg of d.arguments) {
+		if (arg.nodeType == null || arg.nodeType.kind != TypeKind.Void) argCount += 1;
+	}
+	if (argCount != packed.paramTypes.length) throw new Error("internal: packed source arity mismatch");
+	const cells = reserveCells(s, d.arguments);
+	const closures = reserveClosureArgs(s, node, d.arguments);
+	const dest = allocShapedCall(s, packed.paramTypes, packed.resultType, packed.shape);
+	let slot = 0;
+	for (let i = 0; i < d.arguments.length; i += 1) {
+		const arg = d.arguments[i];
+		if (arg.nodeType != null && arg.nodeType.kind == TypeKind.Void) {
+			compileExprForEffect(s, arg);
+			continue;
+		}
+		const at = shapedArgumentBase(dest, packed.shape, slot);
+		const shape = packed.shape.params[slot];
+		if (shape.block) emitPackedCopy(s, s.layouts, packedFramePlace(s, s.layouts, at, packed.paramTypes[slot], shape), compilePackedExpr(s, arg, packed.paramTypes[slot]));
+		else compileClosureArg(s, arg, at, closures.held[i]);
+		slot += 1;
+	}
+	emitShapedCall(s, dest, idx, packed.shape);
+	releaseClosureArgs(s, closures);
+	releaseCells(s, cells);
+	return dest;
+}
+
+export function compilePackedExpr(s: RaiserCompState, node: Node, valueType: Type): RaiserFramePlace {
+	const outer = s.site;
+	enterSite(s, node);
+	const place = compilePackedExprRaw(s, node, valueType);
+	s.site = outer;
+	return place;
+}
+
+function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): RaiserFramePlace {
+	const stored = storedFramePlace(s, node);
+	if (stored != null && typeKey(stored.valueType) == typeKey(valueType)) {
+		const result = allocPackedValue(s, s.layouts, valueType);
+		emitPackedCopy(s, s.layouts, result, stored);
+		return result;
+	}
+	if (node.kind == NodeKind.MoveExpr) return compilePackedExpr(s, (node.data as MoveExprData).moveArg, valueType);
+	if (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) {
+		const inner = (node.data as HiddenStdConvData).convExpr;
+		if (inner.nodeType != null && typeKey(inner.nodeType) == typeKey(valueType)) return compilePackedExpr(s, inner, valueType);
+	}
+	if (node.kind == NodeKind.TypeAssertion) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		if (inner.nodeType != null && typeKey(inner.nodeType) == typeKey(valueType)) return compilePackedExpr(s, inner, valueType);
+		if (inner.nodeType != null && !node.flags.has(NodeFlag.ObjCheck) && !node.flags.has(NodeFlag.ConvCheck) &&
+			typeKey(peelDistinct(inner.nodeType)) == typeKey(peelDistinct(valueType))) {
+			const source = compilePackedExpr(s, inner, inner.nodeType);
+			return { base: source.base, offset: source.offset, valueType,
+				whole: source.whole, words: source.words };
+		}
+		const carrierType = inner.nodeType != null ? peelTransparentInstance(inner.nodeType) : null;
+		if (isMaybeType(carrierType) &&
+			!isMaybeType(peelTransparentInstance(valueType)) &&
+			packedSlotShapeOf(s.layouts, inner.nodeType) != null) {
+			const carrier = compilePackedExpr(s, inner, inner.nodeType!);
+			checkPackedPresent(s, carrier);
+			const payload = packedField(s, s.layouts, carrier, "value");
+			if (typeKey(payload.valueType) == typeKey(valueType)) {
+				const result = allocPackedValue(s, s.layouts, valueType);
+				emitPackedCopy(s, s.layouts, result, payload);
+				return result;
+			}
+			const aggregate = vmLayoutOf(s.layouts, payload.valueType).kind == MemKind.Block;
+			const value = aggregate ? emitPackedToLegacy(s, s.layouts, payload).reg : emitPackedLoad(s, s.layouts, payload);
+			const converted = convertProjectedValue(s, node, value, payload.valueType);
+			const result = emitLegacyToPacked(s, s.layouts, {
+				reg: converted, valueType, shape: { words: 1, block: false },
+			});
+			if (aggregate && inRefFile(classOfReg(s, value))) emitInst(s, raiserABC(RaiserOpcode.RcDec, value, 0, 0));
+			return result;
+		}
+	}
+	if (node.kind == NodeKind.BlockStmt) {
+		const stmts = (node.data as BlockStmtData).statements;
+		for (let i = 0; i < stmts.length - 1; i += 1) callRaiserStmtCompiler(s, stmts[i]);
+		if (stmts.length > 0 && stmts[stmts.length - 1].kind == NodeKind.ExprStmt) return compilePackedExpr(s, (stmts[stmts.length - 1].data as ExprStmtData).expr, valueType);
+	}
+	if (node.kind == NodeKind.CallExpr) {
+		const outerSite = setRaiserCallSite(node);
+		defer setRaiserCallSite(outerSite);
+		const call = node.data as CallExprData;
+		const namespace = namespaceMemberIdent(call.callee);
+		if (namespace != null) {
+			const original = call.callee;
+			compileNamespaceObject(s, original);
+			call.callee = namespace;
+			const result = compilePackedExpr(s, node, valueType);
+			call.callee = original;
+			return result;
+		}
+		let sym = call.callee.resolvedSym;
+		if (sym != null && sym.overloads.length > 0) sym = overloadAt(sym, resolveOverloadWinner(sym, call.resolvedOverloadIdx));
+		const idx = call.callee.kind == NodeKind.Identifier ? routineIndex(s, sym) : -1;
+		const packed = s.funcMap.packed.get(idx);
+		if (packed != null && packed.shape.result.block) {
+			if (packed.resultType == null || typeKey(packed.resultType) != typeKey(valueType)) throw new Error("internal: packed source result schema mismatch");
+			const result = shapedSourceCall(s, node);
+			if (result >= 0) return packedFramePlace(s, s.layouts, result, packed.resultType, packed.shape.result);
+		}
+		const legacy = compileCallExpr(s, node);
+		const result = emitLegacyToPacked(s, s.layouts, { reg: legacy, valueType, shape: { words: 1, block: false } });
+		if (inRefFile(classOfReg(s, legacy))) emitInst(s, raiserABC(RaiserOpcode.RcDec, legacy, 0, 0));
+		return result;
+	}
+	if (node.kind == NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		const result = allocPackedValue(s, s.layouts, valueType);
+		const alternate = condJumps(s, d.ternaryCondition, false);
+		copyPackedExpr(s, result, d.ternaryConsequent);
+		const end = emitJumpPlaceholder(s);
+		patchJumpsTo(s, alternate, codeLen(s));
+		copyPackedExpr(s, result, d.ternaryAlternate);
+		patchJumpTo(s, end, codeLen(s));
+		return result;
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const owner = packedReadOwner(s, d.object, d.property);
+		if (owner != null) {
+			if (isMaybeType(peelDistinct(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+			const result = allocPackedValue(s, s.layouts, valueType);
+			emitPackedCopy(s, s.layouts, result, packedField(s, s.layouts, owner, d.property));
+			return result;
+		}
+	}
+	if (node.kind == NodeKind.NullLiteral) return allocPackedValue(s, s.layouts, valueType);
+	if (node.kind == NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		const result = allocPackedValue(s, s.layouts, valueType);
+		const body = peelTransparentInstance(valueType);
+		for (let i = 0; i < d.keys.length; i += 1) {
+			const at = body.typeNames.indexOf(d.keys[i]);
+			if (at >= 0 && storesNothing(body, body.typeChildren[at])) compileExprForEffect(s, d.properties[i]);
+			else copyPackedExpr(s, packedField(s, s.layouts, result, d.keys[i]), d.properties[i]);
+		}
+		return result;
+	}
+	if (node.kind == NodeKind.ArrayLiteral) {
+		const result = allocPackedValue(s, s.layouts, valueType);
+		const values = (node.data as ArrayLiteralData).elements;
+		for (let i = 0; i < values.length; i += 1) copyPackedExpr(s, packedIndex(s, s.layouts, result, i), values[i]);
+		return result;
+	}
+	return emitLegacyToPacked(s, s.layouts, { reg: compileExprRaw(s, node), valueType, shape: { words: 1, block: false } });
+}
+
 function compileTypedExpr(s: RaiserCompState, node: Node): int32 {
+	if (packedSlotShapeOf(s.layouts, node.nodeType) != null &&
+		(storedFramePlace(s, node) != null || node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.ConditionalExpr)) return emitPackedToLegacy(s, s.layouts, compilePackedExpr(s, node, node.nodeType!)).reg;
 	const reg = compileExprRaw(s, node);
 	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
 	const cls = regClassOf(s, node.nodeType);
@@ -568,7 +792,75 @@ function holdsLocation(node: Node): boolean {
 	return held == TypeKind.Var || held == TypeKind.Borrow || held == TypeKind.Ref || held == TypeKind.Ptr;
 }
 
+function convertProjectedValue(
+	s: RaiserCompState, node: Node, value: int32, sourceType: Type,
+): int32 {
+	if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, value);
+	if (node.flags.has(NodeFlag.ConvCheck)) {
+		const viaObject = holdsTargetObject(sourceType, node.nodeType);
+		emitUnionConv(s, value, sourceType, node.nodeType, viaObject);
+		if (viaObject) emitObjConv(s, node, value);
+		emitLitConv(s, node, value);
+	}
+	return emitNumericConv(s, value, sourceType, node.nodeType);
+}
+
 function compileExprRaw(s: RaiserCompState, node: Node): int32 {
+	const frame = storedFramePlace(s, node);
+	if (frame != null) return vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, frame).reg : emitPackedLoad(s, s.layouts, frame);
+	if (node.kind == NodeKind.TypeAssertion) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		if (inner.nodeType != null && isMaybeType(peelTransparentInstance(inner.nodeType)) && packedSlotShapeOf(s.layouts, inner.nodeType) != null && !isMaybeType(peelTransparentInstance(node.nodeType!))) {
+			const carrier = compilePackedExpr(s, inner, inner.nodeType);
+			checkPackedPresent(s, carrier);
+			const payload = packedField(s, s.layouts, carrier, "value");
+			const value = vmLayoutOf(s.layouts, payload.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, payload).reg : emitPackedLoad(s, s.layouts, payload);
+			return convertProjectedValue(s, node, value, payload.valueType);
+		}
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const owner = packedReadOwner(s, d.object, d.property);
+		if (owner != null) {
+			const body = peelDistinct(owner.valueType);
+			if (d.property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple)) {
+				const length = allocWord(s);
+				emitLoadConst(s, length, raiserInt((body.kind == TypeKind.SizedArray ? body.typeValue : body.typeChildren.length) as int64));
+				return length;
+			}
+			const at = body.typeNames.indexOf(d.property);
+			if (at >= 0 && storesNothing(body, body.typeChildren[at])) {
+				const t = body.typeChildren[at];
+				const literal = t.kind == TypeKind.BooleanLiteral ? raiserBool(t.typeName == "true") : raiserInt(enumMemberValue(t.typeReturn!, t.typeReturn!.typeNames.indexOf(t.typeNames[0]) as int32) as int64);
+				const value = allocReg(s, regClassOf(s, t));
+				emitLoadConst(s, value, literal);
+				return value;
+			}
+			if (isMaybeType(body) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+			const field = packedField(s, s.layouts, owner, d.property);
+			return vmLayoutOf(s.layouts, field.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, field).reg : emitPackedLoad(s, s.layouts, field);
+		}
+		if (d.object.nodeType != null && isMaybeType(peelTransparentInstance(d.object.nodeType)) && packedSlotShapeOf(s.layouts, d.object.nodeType) != null) {
+			const carrier = compileExpr(s, d.object);
+			if (d.property == "value") {
+				if (node.flags.has(NodeFlag.ConvCheck)) {
+					const nil = allocBool(s);
+					emitInst(s, raiserABC(RaiserOpcode.IsKind, nil, carrier, RaiserValueKind.Nil as int32));
+					emitInst(s, raiserABC(RaiserOpcode.BTruthy, nil, 0, 1));
+					const done = emitJumpPlaceholder(s);
+					emitTrap(s, "member 'value' is not accessible for type 'null' using '.'");
+					patchJumpTo(s, done, codeLen(s));
+				}
+				return carrier;
+			}
+			const nil = allocBool(s);
+			emitInst(s, raiserABC(RaiserOpcode.IsKind, nil, carrier, RaiserValueKind.Nil as int32));
+			const present = allocBool(s);
+			emitLogicalNot(s, present, nil);
+			return present;
+		}
+	}
+
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
@@ -627,7 +919,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 				const missing = node.resolvedSym!.nativeName != "" ? checkHostBridgeCoverage(node.resolvedSym!, node) : "";
 				if (missing != "") return emitTrapValue(s, missing, node.nodeType);
 				const r = allocWord(s);
-				emitLoadConst(s, r, raiserInt(funcIdx));
+				emitLoadConst(s, r, raiserInt(legacyRoutineIndex(s, funcIdx)));
 				return r;
 			}
 			// Module-level const — the reference inlines skConst through the
@@ -1234,6 +1526,10 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 			const negated = d.operator == "!==" || d.operator == "!=";
 			if (isEqOp && (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral)) {
 				const otherSide: Node = d.left.kind == NodeKind.NullLiteral ? d.right : d.left;
+				if (otherSide.nodeType != null && isMaybeType(peelTransparentInstance(otherSide.nodeType)) && packedSlotShapeOf(s.layouts, otherSide.nodeType) != null) {
+					const carrier = compilePackedExpr(s, otherSide, otherSide.nodeType);
+					return jumpIfValue(s, emitPackedLoad(s, s.layouts, packedField(s, s.layouts, carrier, "present")), negated ? whenTrue : !whenTrue);
+				}
 				const valReg = compileExpr(s, otherSide);
 				const isNil = allocBool(s);
 				emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, valReg, RaiserValueKind.Nil as number));
@@ -1256,6 +1552,20 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 			emitInst(s, test);
 			return jumpAfterSkip(s, whenTrue);
 		}
+	}
+	if (node.nodeType != null && isMaybeType(peelTransparentInstance(node.nodeType)) && packedSlotShapeOf(s.layouts, node.nodeType) != null) {
+		const carrier = compilePackedExpr(s, node, node.nodeType);
+		const present = emitPackedLoad(s, s.layouts, packedField(s, s.layouts, carrier, "present"));
+		const payload = packedField(s, s.layouts, carrier, "value");
+		if (vmLayoutOf(s.layouts, payload.valueType).kind == MemKind.Block) return jumpIfValue(s, present, whenTrue);
+		const truthy = allocBool(s);
+		emitLoadConst(s, truthy, raiserBool(false));
+		const absent = emitBranchIfFalsy(s, present);
+		const falsy = emitBranchIfFalsy(s, emitPackedLoad(s, s.layouts, payload));
+		emitLoadConst(s, truthy, raiserBool(true));
+		patchJumpTo(s, absent, codeLen(s));
+		patchJumpTo(s, falsy, codeLen(s));
+		return jumpIfValue(s, truthy, whenTrue);
 	}
 	return jumpIfValue(s, compileExpr(s, node), whenTrue);
 }
@@ -1291,6 +1601,11 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (op == "=") {
 		const refusedTarget = refusePointerOp(s, d.left);
 		if (refusedTarget >= 0) return refusedTarget;
+		const frameDest = storedFramePlace(s, d.left);
+		if (frameDest != null) {
+			copyPackedExpr(s, frameDest, d.right);
+			return vmLayoutOf(s.layouts, frameDest.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, frameDest).reg : emitPackedLoad(s, s.layouts, frameDest);
+		}
 		const assigned = compileValueAssign(s, d.left, d.right);
 		if (assigned >= 0) return assigned;
 		const through = derefTarget(s, d.left);
@@ -1362,15 +1677,18 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		return dest;
 	}
 
-	// Null comparison: `expr === null` / `expr !== null` (and `==`/`!=`).
-	// BeqI64/BneI64 only compare intVal — Array(handle=0) shares intVal=0 with
-	// nil and would compare equal under the generic path. Mirror Nim's opcIsNil
-	// and HashLink's OJNotNull: emit a kind-aware check via the dedicated
-	// IsKind opcode whenever one side is a NullLiteral.
 	const isEqOp = op == "===" || op == "==" || op == "!==" || op == "!=";
 	const hasNullLit = d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral;
 	if (isEqOp && hasNullLit) {
 		const otherSide: Node = d.left.kind == NodeKind.NullLiteral ? d.right : d.left;
+		if (otherSide.nodeType != null && isMaybeType(peelTransparentInstance(otherSide.nodeType)) && packedSlotShapeOf(s.layouts, otherSide.nodeType) != null) {
+			const carrier = compilePackedExpr(s, otherSide, otherSide.nodeType);
+			const present = emitPackedLoad(s, s.layouts, packedField(s, s.layouts, carrier, "present"));
+			if (op == "!==" || op == "!=") return present;
+			const absent = allocBool(s);
+			emitLogicalNot(s, absent, present);
+			return absent;
+		}
 		const valReg = compileExpr(s, otherSide);
 		const dest = allocBool(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, dest, valReg, RaiserValueKind.Nil as number));
@@ -1586,6 +1904,15 @@ function compileCompoundOperand(s: RaiserCompState, op: string, right: Node): in
 function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
+	const frame = storedFramePlace(s, d.left);
+	if (frame != null) {
+		const old = emitPackedLoad(s, s.layouts, frame);
+		const rhs = compileCompoundOperand(s, op, d.right);
+		emitCompoundArith(s, op, old, old, rhs, d.left);
+		emitPackedStore(s, s.layouts, frame, old);
+		return old;
+	}
+
 
 	const refusedTarget = refusePointerOp(s, d.left);
 	if (refusedTarget >= 0) return refusedTarget;
@@ -2284,6 +2611,11 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		const refusal = funcIdx < 0 ? refusalAt(node) : "";
 		if (refusal != "") return emitTrapValue(s, refusal, node.nodeType);
 		if (funcIdx >= 0) {
+			const packed = s.funcMap.packed.get(funcIdx);
+			if (packed != null) {
+				const result = shapedSourceCall(s, node);
+				return packed.shape.result.block ? emitPackedToLegacy(s, s.layouts, packedFramePlace(s, s.layouts, result, packed.resultType!, packed.shape.result)).reg : result;
+			}
 			const declaredParams = calleeParamTypes(calleeSym);
 			const runtimeArgs: Node[] = [];
 			const runtimeParams: Type[] = [];
@@ -2508,6 +2840,13 @@ function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, targe
 
 // A result nobody reads makes `i++` the same step as `++i`: no old value is kept.
 export function compileExprForEffect(s: RaiserCompState, node: Node): void {
+	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "=") {
+		const d = node.data as BinaryExprData;
+		const dest = storedFramePlace(s, d.left);
+		if (dest != null) { copyPackedExpr(s, dest, d.right); return; }
+	}
+	if (packedSlotShapeOf(s.layouts, node.nodeType) != null) { compilePackedExpr(s, node, node.nodeType!); return; }
+
 	if (node.kind == NodeKind.UpdateExpr) compileUpdateExpr(s, node, true);
 	else if (node.kind == NodeKind.ConditionalExpr) compileConditionalForEffect(s, node);
 	else compileExpr(s, node);
@@ -2528,6 +2867,13 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
 	const inRange = node.flags.has(NodeFlag.NoOverflowCheck);
+	const frame = storedFramePlace(s, d.updateArg);
+	if (frame != null) {
+		const old = emitPackedLoad(s, s.layouts, frame);
+		const updated = emitStepped(s, old, d.updateOp, d.updateArg, inRange);
+		emitPackedStore(s, s.layouts, frame, updated);
+		return d.isPrefix ? updated : old;
+	}
 
 	const refusedTarget = refusePointerOp(s, d.updateArg);
 	if (refusedTarget >= 0) return refusedTarget;

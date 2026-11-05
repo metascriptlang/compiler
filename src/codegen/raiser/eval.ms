@@ -387,6 +387,11 @@ function reservedNameErrors(seeds: NamedSymbol[], declCtx: CheckerContext): Chec
 	return errors;
 }
 
+function engineLegacyEntry(idx: int32): int32 {
+	const packed = _engine.funcMap.packed.get(idx);
+	return packed != null ? packed.entryIdx : idx;
+}
+
 function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: NamedSymbol[]): EngineMacroResult {
 	const nested = engineCompiling();
 	if (!nested) {
@@ -412,7 +417,7 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	for (const e of takeRaiserCompileErrors()) errors.push(e);
 	_pendingHelperErrors = nested ? outerHelperErrors : [];
 	if (nested) restoreRaiserCompileErrors(outerCompileErrors);
-	return { vm: _engine.vm, funcIdx, errors };
+	return { vm: _engine.vm, funcIdx: engineLegacyEntry(funcIdx), errors };
 }
 
 registerMacroEngineCompiler(compileMacroIntoEngine);

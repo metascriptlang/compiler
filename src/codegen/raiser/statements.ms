@@ -22,10 +22,12 @@ import {
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
-import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
+import { compilePackedExpr, compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { markBoundedCounterStep } from "../../transform/util";
 import { compileOwnershipStmt } from "./drcLower";
+import { allocPackedValue } from "./packedValues";
+import { packedSlotShapeOf } from "./valueCopy";
 import { emitZeroValue, regClassOf, allocFor, zeroIsNil } from "./valueCopy";
 import { isPlainFunctionPointer, skipModifier } from "../../checker/types";
 import { hasFlag } from "../../checker/symbol";
@@ -50,8 +52,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				compileExprForEffect(s, d.argument);
 				emitReturnNothing(s);
 			} else if (d.argument != null) {
-				const reg = compileExpr(s, d.argument);
-				emitRet(s, reg);
+				if (s.resultShape != null && s.resultShape.block) emitRet(s, compilePackedExpr(s, d.argument, s.resultType!).base, s.resultShape);
+				else emitRet(s, compileExpr(s, d.argument));
 			} else {
 				emitReturnNothing(s);
 			}
@@ -176,6 +178,13 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 }
 
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
+	const shape = resolveGlobal(s, node.resolvedSym) < 0 && node.resolvedSym != null && !s.legacyRoots.has(node.resolvedSym) ? packedSlotShapeOf(s.layouts, node.nodeType) : null;
+	if (shape != null) {
+		const value = d.initializer != null ? compilePackedExpr(s, d.initializer, node.nodeType!) : allocPackedValue(s, s.layouts, node.nodeType!);
+		declareLocal(s, declaredSymbol(node, d.declName), value.base, false, shape);
+		return;
+	}
+
 	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && isScalarClass(regClassOf(s, node.nodeType));
 	if (d.initializer != null && !placeholderNull) {
 		const declared = skipModifier(node.nodeType);

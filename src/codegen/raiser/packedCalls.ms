@@ -130,7 +130,7 @@ export function emitShapedCall(
 	emitInst(s, call);
 }
 
-function locationResult(
+export function locationResult(
 	s: RaiserCompState, t: Type | null, seen: Type[],
 ): boolean {
 	if (t == null || seen.includes(t)) return false;

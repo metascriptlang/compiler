@@ -24,7 +24,7 @@ import { mangleModuleName, buildModuleNameRoots } from "../c/names";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserGlobalMap, createFuncMap,
-	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
+	createCompState, allocPackedBlock, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
@@ -33,7 +33,13 @@ import {
 } from "./context";
 import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
 import { bodyIsErrorBlind } from "../../checker/raises";
-import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
+import { compilePackedExpr, compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
+import { createLegacyEntry, locationResult } from "./packedCalls";
+import { packedSlotShapeOf } from "./valueCopy";
+import { createVmLayouts } from "./layout";
+import { RaiserSlotShape } from "../../raiser/bytecode";
+import { HiddenDerefData, ArrayAccessData, CallExprData, UnaryExprData } from "../../ast/node";
+import { isFrameOwnershipCall } from "./drcLower";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst, layoutOf, slotKindsOf } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -44,7 +50,7 @@ import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destruct
 import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
 import { analyzeProgram } from "../../analyzer/index";
 import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
-import { CheckerContext, GcMode, ExportedSymInfo, DispatchRegistry, createDispatchRegistry } from "../../checker/context";
+import { CheckerContext, GcMode, ExportedSymInfo, DispatchRegistry, createDispatchRegistry, dispatchEntryFor } from "../../checker/context";
 import { unboxFloat } from "../../raiser/marshal";
 
 registerCoreParsers();
@@ -157,29 +163,78 @@ function runtimeParamSyms(decl: Node, name: string): Symbol[] {
 	return kept;
 }
 
+function markLegacyRoot(s: RaiserCompState, node: Node): void {
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) s.legacyRoots.add(node.resolvedSym);
+	forEachChild(node, (child: Node): void => markLegacyRoot(s, child));
+}
+
+export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		if (d.arguments.length > 0 && locationResult(s, node.nodeType, [])) markLegacyRoot(s, d.arguments[0]);
+		if (isFrameOwnershipCall(d)) {
+			for (const arg of d.arguments) collectLegacyRoots(s, arg.kind == NodeKind.HiddenAddr ? (arg.data as HiddenDerefData).expr : arg);
+			return;
+		}
+	}
+	if (node.kind == NodeKind.HiddenAddr) markLegacyRoot(s, (node.data as HiddenDerefData).expr);
+	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&") markLegacyRoot(s, (node.data as UnaryExprData).operand);
+	if (node.kind == NodeKind.ArrayAccess && (node.data as ArrayAccessData).index.kind != NodeKind.NumberLiteral) markLegacyRoot(s, (node.data as ArrayAccessData).array);
+	forEachChild(node, (child: Node): void => collectLegacyRoots(s, child));
+}
+
+function planPackedRoutine(funcMap: RaiserFuncMap, idx: int32, params: Symbol[], body: Node, routine: Symbol | null, entryIdx: int32): boolean {
+	if (routine == null || routine.symbolType == null || runtimeHostName(routine) != "" || routine.symFlags.has(SymbolFlag.GeneratedOp) || dispatchEntryFor(funcMap.dispatchRegistry, routine) != null) return false;
+	const resultType = routine.symbolType.typeReturn;
+	const s = createCompState();
+	if (locationResult(s, resultType, [])) return false;
+	collectLegacyRoots(s, body);
+	const layouts = createVmLayouts();
+	const paramTypes: Type[] = [];
+	const shapes: RaiserSlotShape[] = [];
+	let block = false;
+	for (const param of params) {
+		paramTypes.push(param.symbolType!);
+		const packed = !s.legacyRoots.has(param) ? packedSlotShapeOf(layouts, param.symbolType) : null;
+		const shape: RaiserSlotShape = packed ?? { words: 1, block: false };
+		shapes.push(shape);
+		if (shape.block) block = true;
+	}
+	const result: RaiserSlotShape = packedSlotShapeOf(layouts, resultType) ?? { words: 1, block: false };
+	if (!block && !result.block) return false;
+	funcMap.packed.set(idx, { paramTypes, resultType, shape: { result, params: shapes }, entryIdx });
+	return true;
+}
+
 export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null, routine: Symbol | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
 
-	// Declare params as locals R[0..arity-1]
-	for (const paramSym of paramSyms) {
-		declareLocal(s, paramSym, allocFor(s, paramSym.symbolType));
+	collectLegacyRoots(s, body);
+	const idx = routine != null ? funcMap.symbolIndices.get(routine) : null;
+	const packed = idx != null ? funcMap.packed.get(idx) : null;
+	s.resultType = routine != null && routine.symbolType != null ? routine.symbolType.typeReturn : null;
+	s.resultShape = packed != null ? packed.shape.result : null;
+	for (let i = 0; i < paramSyms.length; i += 1) {
+		const param = paramSyms[i];
+		const shape = packed != null ? packed.shape.params[i] : null;
+		declareLocal(s, param, shape != null && shape.block ? allocPackedBlock(s, shape) : allocFor(s, param.symbolType), false, shape);
 	}
 
 	const hostName = routine != null ? runtimeHostName(routine) : "";
 	if (hostName != "") {
 		emitRet(s, compileHostForward(s, hostName, paramSyms, routine!.symbolType != null ? routine!.symbolType.typeReturn : null));
 	} else if (isExpressionBody(body)) {
-		const exprReg = compileExpr(s, body);
-		emitRet(s, exprReg);
+		if (s.resultShape != null && s.resultShape.block) emitRet(s, compilePackedExpr(s, body, s.resultType!).base, s.resultShape);
+		else emitRet(s, compileExpr(s, body));
 	} else {
 		compileStmt(s, body);
 	}
 
 	emitImplicitReturn(s);
 
-	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses, s.inlineSites);
+	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses, s.inlineSites, packed != null ? packed.shape : null);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -223,6 +278,7 @@ function compileClassInit(
 	if (globals != null) s.globals = globals;
 	const thisReg = allocRef(s);
 	s.receiverReg = thisReg;
+	if (ctorBody != null) collectLegacyRoots(s, ctorBody);
 	for (let i = 0; i < ctorSyms.length; i += 1) {
 		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
@@ -247,6 +303,8 @@ function compileClassConstructor(
 	const s = createCompState();
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
+
+	if (ctorBody != null) collectLegacyRoots(s, ctorBody);
 
 	// Declare ctor params
 	const arity = ctorArity(ctorSyms);
@@ -345,10 +403,15 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 		}
 	}
 
+	for (const r of reserved) {
+		if (planPackedRoutine(funcMap, r.idx as int32, r.paramSyms, r.body, r.routine, image.functions.length as int32)) image.functions.push(raiserPlaceholderFunc());
+	}
 	for (let i = 0; i < reserved.length; i += 1) {
 		const r = reserved[i];
 		const func = compileFuncBody(funcMap, r.fnName, r.paramSyms, r.body, null, r.routine);
 		image.functions[r.idx] = func;
+		const packed = funcMap.packed.get(r.idx as int32);
+		if (packed != null) image.functions[packed.entryIdx] = createLegacyEntry(r.idx as int32, func, packed.paramTypes, packed.resultType);
 	}
 	for (const c of ctors) {
 		image.functions[c.idx] = compileClassConstructor(funcMap, c.className, c.classBody, c.ctorSyms, c.ctorBody, null, c.classSym);
@@ -525,6 +588,10 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 	for (const _dcl of projectDecls) {
 		functions.push(raiserPlaceholderFunc());
 	}
+	for (let i = 0; i < projectDecls.length; i += 1) {
+		const dcl = projectDecls[i];
+		if (!dcl.isCtor && !dcl.isInit && planPackedRoutine(globalFuncMap, i, dcl.paramSyms, dcl.body, dcl.routine, functions.length as int32)) functions.push(raiserPlaceholderFunc());
+	}
 	const compiledFlags: boolean[] = [];
 	for (const _dcl of projectDecls) {
 		compiledFlags.push(false);
@@ -543,6 +610,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		} else {
 			functions[idx] = compileFuncBody(globalFuncMap, dcl.fnName, dcl.paramSyms, dcl.body, globals, dcl.routine);
 		}
+		const packed = globalFuncMap.packed.get(idx);
+		if (packed != null) functions[packed.entryIdx] = createLegacyEntry(idx, functions[idx], packed.paramTypes, packed.resultType);
 		setRaiserModulePath(prevModule);
 	};
 	registerRaiserFuncDemand(demandBody);
@@ -559,6 +628,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
 		s.globals = globals;
+		collectLegacyRoots(s, modules[mi].program);
 		const deinit = createCompState();
 		deinit.funcMap = globalFuncMap;
 		deinit.globals = globals;
@@ -596,7 +666,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}
-	for (const exported of exports) demandBody(exported.funcIdx);
+	for (const exported of exports) {
+		demandBody(exported.funcIdx);
+		const packed = globalFuncMap.packed.get(exported.funcIdx);
+		if (packed != null) exported.funcIdx = packed.entryIdx;
+	}
 
 	// --- Create synthetic entry function ---
 	// Calls all init functions in order, halts with last result

@@ -3,6 +3,7 @@
 // @stdout: closure caught boom
 // @stdout: resolve caught boom
 // @stdout: after
+// @stdout: ordered void middle 11
 function boom(): void { throw new Error("boom"); }
 
 function k<T>(x: T): void { console.log("k ran"); }
@@ -38,3 +39,22 @@ try {
 	console.log(`resolve caught ${(e as Error).message}`);
 }
 console.log("after");
+
+struct OrderPair { x: int64; y: int64; }
+let orderCounter: int64 = 0;
+
+@noinline function firstPair(): OrderPair {
+	const before = orderCounter;
+	orderCounter += 1;
+	return { x: before, y: 0 };
+}
+
+@noinline function bumpOrder(): void { orderCounter += 10; }
+@noinline function takeMiddle(p: OrderPair, effect: void, n: int64): int64 { return p.x * 100 + n; }
+
+@noinline function orderedMiddle(): int64 {
+	orderCounter = 0;
+	return takeMiddle(firstPair(), bumpOrder(), orderCounter);
+}
+
+console.log(`ordered void middle ${orderedMiddle()}`);

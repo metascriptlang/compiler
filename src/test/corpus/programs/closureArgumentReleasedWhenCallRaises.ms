@@ -2,6 +2,8 @@
 // @stdout: captured caught stop after 9
 // @stdout: method caught odd 3
 // @stdout: later argument caught late
+// @stdout: packed argument caught late
+// @stdout: packed void argument caught late
 // note: a function passed to a call that raises is released on the way out, as it is when the call returns: a named function, a closure that captures, a closure handed to a method of the std, and a closure whose call never starts because a later argument raises.
 function thrower(n: number): number {
 	if (n > 5) throw new Error("big");
@@ -53,3 +55,36 @@ console.log(`named ${named()}`);
 console.log(`captured ${captured()}`);
 console.log(`method ${method()}`);
 console.log(`later argument ${laterArgument()}`);
+
+struct Pair { x: int64; y: int64; }
+
+@noinline function withPair(p: Pair, f: (x: number) => number, n: number): number {
+	return (p.x as number) + f(n) + (p.y as number);
+}
+
+function laterPackedArgument(): string {
+	const k = 2;
+	try { return `${withPair({ x: 2, y: 3 }, (x: number): number => x + k, late())}`; }
+	catch (e) { return `caught ${(e as Error).message}`; }
+}
+
+console.log(`packed argument ${laterPackedArgument()}`);
+
+@noinline function withVoidPair(p: Pair, effect: void,
+	f: (x: number) => number, tail: void): number {
+	return (p.x as number) + f(p.y as number);
+}
+
+function nothing(): void {}
+
+function lateVoid(): void { throw new Error("late"); }
+
+function laterPackedVoidArgument(): string {
+	const k = 2;
+	try {
+		return `${withVoidPair({ x: 2, y: 3 }, nothing(),
+			(x: number): number => x + k, lateVoid())}`;
+	} catch (e) { return `caught ${(e as Error).message}`; }
+}
+
+console.log(`packed void argument ${laterPackedVoidArgument()}`);

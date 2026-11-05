@@ -23,17 +23,23 @@
 
 import { Node, NodeKind, NodeFlag, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
 import { isMaybeType, peelTransparentInstance, isNullableBigInt } from "../../checker/types";
+import { raiserPackedEligible } from "../../analyzer/classify";
 import { nullAccessHead, unwrapRefusesNull } from "../maybeCarrier";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeNull, makeCall, makeString, runtimeRef } from "../util";
 
 export function unwrapMaybe(program: Node, ctx: TransformContext): Node {
-	walkNode(program, unwrapMaybeNode);
+	walkNode(program, (node: Node): Node => unwrapMaybeNode(node, ctx));
 	return program;
 }
 
-function unwrapMaybeNode(node: Node): Node {
+function unwrapMaybeNode(node: Node, ctx: TransformContext): Node {
+	if (ctx.raiserBackend) {
+		if (node.nodeType != null && isMaybeType(peelTransparentInstance(node.nodeType)) && raiserPackedEligible(node.nodeType)) return node;
+		if (node.kind == NodeKind.MemberExpr && raiserPackedEligible((node.data as MemberExprData).object.nodeType) && isMaybeType(peelTransparentInstance((node.data as MemberExprData).object.nodeType!))) return node;
+		if (node.kind == NodeKind.TypeAssertion && raiserPackedEligible((node.data as TypeAssertionData).asExpr.nodeType) && isMaybeType(peelTransparentInstance((node.data as TypeAssertionData).asExpr.nodeType!))) return node;
+	}
 	if (node == null) return node;
 	const loc = node.location;
 
