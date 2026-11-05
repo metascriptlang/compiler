@@ -8,7 +8,7 @@
 #   ./tools/release.sh --upload              # Build all + upload to GitHub
 #   ./tools/release.sh --upload darwin-arm64 # Build one + upload
 #
-# Requires: msc, zig, tar, gh (for --upload)
+# Requires: msc with its prepared toolchain bundle (every target builds through it), tar, zip, gh (for --upload)
 # Output: dist/msc-<version>-<os>-<arch>.tar.gz
 #
 # Archive naming matches install.sh expectations:
@@ -86,9 +86,45 @@ for t in "${TARGETS[@]}"; do
 done
 
 # Check prerequisites
-for cmd in msc zig zip; do
+for cmd in msc zip; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "error: $cmd is required but not found in PATH"
+        exit 1
+    fi
+done
+
+# Every target, native or cross, compiles with msc's prepared bundle; one whose runtime the bundle lacks is refused
+# here, before any build, rather than failing halfway through the list.
+bundle_root() {
+    if [ -n "${MSC_NATIVE_TOOLCHAIN:-}" ]; then printf '%s' "$MSC_NATIVE_TOOLCHAIN"; return; fi
+    local dir
+    dir="$(cd "$(dirname "$(readlink -f "$(command -v msc)")")" && pwd)"
+    while [ "$dir" != "/" ]; do
+        if [ -e "$dir/std/core/system/index.ms" ]; then printf '%s/msc-toolchain' "$dir"; return; fi
+        dir="$(dirname "$dir")"
+    done
+}
+
+bundle_runtime_config() {
+    case "$1" in
+        darwin-arm64) echo darwin/aarch64-macos.cfg ;;
+        darwin-x86_64) echo darwin/x86_64-macos.cfg ;;
+        linux-arm64) echo aarch64-linux-gnu.2.31.cfg ;;
+        linux-x86_64) echo x86_64-linux-gnu.2.31.cfg ;;
+        windows-arm64) echo windows/aarch64-windows-gnu.cfg ;;
+        windows-x86_64) echo windows/x86_64-windows-gnu.cfg ;;
+    esac
+}
+
+BUNDLE="$(bundle_root)"
+if [ -z "$BUNDLE" ] || [ ! -d "$BUNDLE/runtime" ]; then
+    echo "error: no prepared toolchain bundle at '${BUNDLE:-<none>}' (msc-toolchain beside msc's runtime directory, or MSC_NATIVE_TOOLCHAIN)"
+    exit 1
+fi
+for t in "${TARGETS[@]}"; do
+    config="$(bundle_runtime_config "$t")"
+    if [ ! -f "$BUNDLE/runtime/$config" ]; then
+        echo "error: the bundle $BUNDLE has no runtime for $t (missing runtime/$config)"
         exit 1
     fi
 done
@@ -265,13 +301,12 @@ build_target() {
     local cross_flags=""
     if [ "$target" != "$HOST_TARGET" ]; then
         cross_flags=$(target_to_msc_flags "$target")
-        echo "  cross-compile: $HOST_TARGET -> $target (zig cc)"
+        echo "  cross-compile: $HOST_TARGET -> $target (prepared bundle)"
     else
         echo "  native build"
     fi
 
     # Compile
-    rm -rf out
     echo "  compiling..."
     # shellcheck disable=SC2086
     if ! msc build src/index.ms --release --strip $cross_flags --time 2>&1 | tee "$DIST_DIR/${archive_name}.log" | tail -5; then

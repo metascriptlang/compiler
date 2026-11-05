@@ -2433,7 +2433,7 @@ run_tool_test() {
 }
 
 run_tools_lane() {
-  local p rc=0 queue=0 py=0
+  local p rc=0 queue=0 py=0 release=0
   while IFS=$'\t' read -r _ p; do
     [ -f "$p" ] || continue
     case "$p" in
@@ -2441,7 +2441,8 @@ run_tools_lane() {
         if ! bash -n "$p"; then printf 'FAIL %s: bash -n\n' "$p"; rc=1
         elif [ "$p" = tools/gate.sh ] && ! bash "$p" --self-test; then printf 'FAIL %s: self-test\n' "$p"; rc=1
         fi
-        case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac ;;
+        case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac
+        case "$p" in tools/release.sh | tools/releaseToolchainTest.sh) release=1 ;; esac ;;
       tools/managedToolchain/*.py) py=1 ;;
       *.ms)
         if [ ! -x "$CAND" ]; then echo "tools: $p is checked by the candidate compiler; include the build lane"; printf 'FAIL %s: check\n' "$p"; rc=1
@@ -2450,6 +2451,7 @@ run_tools_lane() {
         fi ;;
     esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
+  if [ "$release" -eq 1 ] && ! bash tools/releaseToolchainTest.sh; then printf 'FAIL %s: self-test\n' tools/releaseToolchainTest.sh; rc=1; fi
   if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
   if [ "$py" -eq 1 ] && ! (cd tools/managedToolchain && python3 -I -m unittest discover -s . -p '*Test.py'); then printf 'FAIL %s: self-test\n' tools/managedToolchain; rc=1; fi
   return $rc
