@@ -167,18 +167,19 @@ function isWtf8SurrogateCont(b: int32): boolean {
 
 function appendEscaped(ref result: string, s: string): void {
 	result += "\"";
+	const b = s.asBytes();
 	let i = 0;
-	const len = s.byteLength;
+	const len = b.length;
 	// Walk byte-by-byte; every escape-relevant byte is ASCII. Plain content
 	// (including multi-byte UTF-8) is copied in RUNS — runs only break at
 	// ASCII escape bytes so slices stay on char boundaries and multi-byte
 	// sequences are never split.
 	let runStart = 0;
 	while (i < len) {
-		const ch = s.byteAt(i);
-		if (ch == WTF8_SURROGATE_LEAD && i + 2 < len && isWtf8SurrogateCont(s.byteAt(i + 1))) {
+		const ch = b[i] as int32;
+		if (ch == WTF8_SURROGATE_LEAD && i + 2 < len && isWtf8SurrogateCont(b[i + 1] as int32)) {
 			if (runStart < i) result += s.byteSlice(runStart, i);
-			const cp = ((ch & 15) << 12) | ((s.byteAt(i + 1) & 63) << 6) | (s.byteAt(i + 2) & 63);
+			const cp = ((ch & 15) << 12) | (((b[i + 1] as int32) & 63) << 6) | ((b[i + 2] as int32) & 63);
 			result += "\\u" + hexDigit((cp >> 12) & 15) + hexDigit((cp >> 8) & 15)
 				+ hexDigit((cp >> 4) & 15) + hexDigit(cp & 15);
 			i = i + 3;
@@ -201,7 +202,8 @@ function appendEscaped(ref result: string, s: string): void {
 		}
 		i = i + 1;
 	}
-	if (runStart < len) result += s.byteSlice(runStart, len);
+	if (runStart == 0) result += s;
+	else if (runStart < len) result += s.byteSlice(runStart, len);
 	result += "\"";
 }
 
