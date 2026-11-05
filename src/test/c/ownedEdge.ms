@@ -228,27 +228,34 @@ test "an owned slot moved out by a plain parameter's path is refused" {
 
 test "an owned slot whose holder is read before the refill is refused" {
 	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { n.kids[0] = rw2(move n.kids[0], n); return move n; }\nf(new N());\n");
-	assert message.contains("cannot move 'n.kids"), message;
+	assert message.contains("cannot use 'n': 'n.kids[…]' was moved out"), message;
 }
 
 test "an owned slot whose holder is read through an alias before the refill is refused" {
 	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { const k: N = n; n.kids[0] = rw2(move n.kids[0], k); return move n; }\nf(new N());\n");
-	assert message.contains("cannot move 'n.kids"), message;
+	assert message.contains("cannot use 'k': 'n.kids[…]' was moved out"), message;
 }
 
 test "an owned slot put back into another place is refused" {
 	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { n.kids[0] = rw(move n.kids[1]); return move n; }\nf(new N());\n");
-	assert message.contains("cannot move 'n.kids"), message;
+	assert message.contains("'n.kids[…]' was moved out"), message;
 }
 
 test "an owned slot whose index is written before the refill is refused" {
 	const message = refused(REFILL + "function g(a: Owned<N>, i: int32): Owned<N> { return move a; }\nfunction f(n: Owned<N>): Owned<N> { let i = 0; n.kids[i] = g(move n.kids[i], i++); return move n; }\nf(new N());\n");
-	assert message.contains("cannot move 'n.kids"), message;
+	assert message.contains("cannot write 'i': 'n.kids[…]' was moved out"), message;
+	const between = refused(REFILL + "function f(n: Owned<N>): Owned<N> { let i = 0; const x = move n.kids[i]; i = 1; n.kids[i] = x; return move n; }\nf(new N());\n");
+	assert between.contains("cannot write 'i'"), between;
 }
 
-test "an owned slot moved out by one statement and put back by another is refused" {
-	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { const x = move n.kids[0]; n.kids[0] = x; return move n; }\nf(new N());\n");
-	assert message.contains("cannot move 'n.kids"), message;
+test "an index written after its slot is put back is accepted" {
+	const r = compileToC(REFILL + "function f(n: Owned<N>): Owned<N> { let i = 0; const x = move n.kids[i]; n.kids[i] = x; i = 1; n.kids[i] = rw(move n.kids[i]); return move n; }\nf(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "an owned slot moved out by one statement and put back by another is accepted" {
+	const r = compileToC(REFILL + "function f(n: Owned<N>): Owned<N> { const x = move n.kids[0]; n.kids[0] = x; return move n; }\nf(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
 }
 
 test "an owned slot moved inside a closure of the refill is refused" {

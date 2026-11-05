@@ -2,7 +2,7 @@ import {
 	Node, NodeKind, Symbol, SymbolKind, FlowNode, FlowFlag, FlowList,
 	IdentifierData, BinaryExprData, MoveExprData, OutExprData, CallExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, ArrayLiteralData, ObjectLiteralData, SpreadExprData,
-	VariableDeclData, ReturnStmtData, TypeAssertionData, Type, TypeKind, BlockStmtData, ProgramData,
+	VariableDeclData, ReturnStmtData, TypeAssertionData, UpdateExprData, Type, TypeKind, BlockStmtData, ProgramData,
 	FunctionDeclData, MethodDeclData, ConstructorDeclData, ArrowFunctionData, FunctionExprData, MemberExprData, ArrayAccessData, TestDeclData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -415,11 +415,27 @@ class LockWalk {
 	skip: Node;
 	syms = new HashSet<Symbol>();
 	reads: PathRead[] = [];
+	indexSyms = new HashSet<Symbol>();
+	indexWrites: Node[] = [];
 	constructor(scope: PlaceScope, moved: Place, skip: Node) {
 		this.scope = scope;
 		this.moved = moved;
 		this.skip = skip;
+		for (const s of moved.steps) {
+			if (s.kind == StepKind.Index && s.indexSym != null) this.indexSyms.add(s.indexSym);
+		}
 	}
+}
+
+function writtenIndex(w: LockWalk, node: Node): Node | null {
+	const target = match (node.kind) {
+		NodeKind.UpdateExpr => (node.data as UpdateExprData).updateArg,
+		NodeKind.BinaryExpr => isAssignOp((node.data as BinaryExprData).operator) ? (node.data as BinaryExprData).left : null,
+		NodeKind.OutExpr => (node.data as OutExprData).outArg,
+		_ => null,
+	};
+	const ident = target != null ? stripHidden(target) : null;
+	return ident != null && ident.kind == NodeKind.Identifier && ident.resolvedSym != null && w.indexSyms.has(ident.resolvedSym) ? ident : null;
 }
 
 // A write to the moved place, or to a place that holds it, puts a value back.
@@ -456,6 +472,8 @@ function refillAt(w: LockWalk, node: Node | null): boolean {
 
 function walkLockReads(w: LockWalk, node: Node | null, outer: Node | null): void {
 	if (node == null || node == w.skip) return;
+	const index = writtenIndex(w, node);
+	if (index != null) w.indexWrites.push(index);
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym == null || !w.syms.has(sym)) return;
@@ -521,9 +539,15 @@ function checkLockedMoves(ctx: CheckerContext, scan: MoveScan, locked: LockedMov
 		const events = new HashMap<FlowNode, MoveEvent[]>();
 		events.set(event.flowNode, [{ at: event, sym: moved.root, owner: false }]);
 		const clean = new HashSet<FlowNode>();
+		const refilled = (flow: FlowNode): boolean => flow.flags.has(FlowFlag.Assignment) && refillAt(w, flow.node);
+		const written = w.indexWrites.find((ident) => ident.flowNode != null && reachingMove(scan, ident, events, clean, refilled) != null);
+		if (written != null) {
+			addOnce(ctx, `cannot write '${(written.data as IdentifierData).name}': '${pathText(arg)}' was moved out at ${lm.move.location.line}:${lm.move.location.column} and is not put back yet, and '${(written.data as IdentifierData).name}' says which element to put it back into — write '${pathText(arg)}' first`, written);
+			continue;
+		}
 		for (const read of w.reads) {
 			if (read.ident.flowNode == null || overlap(moved, read.place, true) == Overlap.Disjoint) continue;
-			const taker = reachingMove(scan, read.ident, events, clean, (flow: FlowNode): boolean => flow.flags.has(FlowFlag.Assignment) && refillAt(w, flow.node));
+			const taker = reachingMove(scan, read.ident, events, clean, refilled);
 			if (taker == null) continue;
 			const where = `${lm.move.location.line}:${lm.move.location.column}`;
 			const message = overlap(moved, read.place, true) == Overlap.Contains
