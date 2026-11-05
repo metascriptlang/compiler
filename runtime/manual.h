@@ -159,40 +159,36 @@ static inline void* msArenaAlloc(size_t size) {
 
 #else
 
-/* --- Freestanding: static arena, no malloc --- */
-
 #ifndef MS_ARENA_SIZE
-#define MS_ARENA_SIZE (256 * 1024)  /* 256KB default */
+#define MS_ARENA_SIZE (256 * 1024)
 #endif
 
-static char   _ms_arena[MS_ARENA_SIZE];
-static size_t _ms_arena_pos = 0;
+#include "runtime/allocator.h"
 
 static inline void* msArenaAlloc(size_t size) {
-    size = (size + 7) & ~(size_t)7;
-    if (_ms_arena_pos + size > MS_ARENA_SIZE) msRaiseOutOfMemory();
-    void* p = &_ms_arena[_ms_arena_pos];
-    _ms_arena_pos += size;
-    __builtin_memset(p, 0, size);
-    return p;
+    return msHeapCalloc(1, size);
 }
 
 #endif
 
 #ifndef MS_FREESTANDING_LIBC
 static inline void* msRealloc(void* old, size_t old_size, size_t new_size) {
+#ifdef MSOS_SOLANA
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
         size_t copy_size = old_size < new_size ? old_size : new_size;
         __builtin_memcpy(p, old, copy_size);
     }
     return p;
+#else
+    return msHeapRealloc(old, old_size, new_size);
+#endif
 }
 
 #ifdef MSOS_SOLANA
 static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaUsed = 0; }
 #else
-static inline void msArenaReset(void) { _ms_arena_pos = 0; }
+static inline void msArenaReset(void) { msHeapReset(); }
 #endif
 #endif
 
@@ -337,18 +333,17 @@ void* msReallocNeedsOldSize(void* old, size_t size)
 #include <stdarg.h>
 #include <math.h>
 
-/* Redirect libc allocator to arena — only in freestanding mode.
-   System headers already parsed above, so macros only affect
-   function bodies in .h inlines and .c files compiled with -include. */
+#if !MS_HEAP_USE_MALLOC
 static inline void* _ms_manual_calloc(size_t n, size_t size) {
-    return msArenaAlloc(n * size);
+    return msHeapCalloc(n, size);
 }
 void* msReallocNeedsOldSize(void* old, size_t size)
-    __attribute__((error("realloc has no old size in an arena build: call msRealloc(old, oldSize, newSize)")));
-#define malloc(s)     msArenaAlloc(s)
+    __attribute__((error("realloc requires its old size in a bare build: call msRealloc(old, oldSize, newSize)")));
+#define malloc(s)     msHeapAlloc(s)
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
 #define realloc(p, s) msReallocNeedsOldSize((p), (s))
-#define free(p)       ((void)(p))
+#define free(p)       msHeapFree(p)
+#endif
 
 #else
 
