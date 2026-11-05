@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, ThrowStmtData, SwitchStmtData, AssertStmtData, MemberExprData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier } from "../../checker/types";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier, typedArrayElement, declaredFieldType } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
@@ -67,6 +67,8 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 
 					if (srcType.kind == TypeKind.Array) {
 						return arraySpanLiteral(d.convExpr, spanTarget.typeReturn, targetType, loc);
+					} else if (typedArrayElement(srcType) != null) {
+						return typedArraySpan(d.convExpr, spanTarget.typeReturn, targetType, loc);
 					} else if (srcType.kind == TypeKind.SizedArray) {
 						// SizedArray -> Span: { data: arr.data, len: N }
 						const dataExpr = makeMember(d.convExpr, "data", loc);
@@ -155,7 +157,7 @@ function unconditionalExprsOf(stmt: Node): (Node | null)[] {
 function isArraySource(t: Type | null): boolean {
 	let s = t;
 	if (s != null && s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
-	return s != null && (s.kind == TypeKind.Array || s.kind == TypeKind.String || s.kind == TypeKind.Span);
+	return s != null && (s.kind == TypeKind.Array || s.kind == TypeKind.String || s.kind == TypeKind.Span || typedArrayElement(s) != null);
 }
 
 function spanTargetOf(t: Type | null): Type | null {
@@ -259,6 +261,25 @@ export function arraySpanLiteral(array: Node, elem: Type | null, spanType: Type,
 	const dataExpr = makeHiddenStdConv(elems, spanDataPtr(elem), loc);
 	const lenExpr = makeMember(secondRead(array), "length", loc);
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
+}
+
+// A typed array's view of its buffer's payload: { data: bytes + byteOffset, len: length }. The
+// constructor keeps byteOffset + length within the payload, so the view needs no clamp.
+function typedArraySpan(view: Node, elem: Type | null, spanType: Type, loc: SourceLocation): Node {
+	const bytes = fieldOf(fieldOf(view, "buffer", loc), "bytes", loc);
+	const offset = makeHiddenStdConv(fieldOf(secondRead(view), "byteOffset", loc), createPrimitive(TypeKind.Int64), loc);
+	const slot = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(bytes, "p", loc), offset], loc);
+	slot.nodeType = createPtr(elem);
+	const dataExpr = makeHiddenStdConv(slot, spanDataPtr(elem), loc);
+	const lenExpr = makeHiddenStdConv(fieldOf(secondRead(view), "length", loc), createPrimitive(TypeKind.Int64), loc);
+	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
+}
+
+function fieldOf(obj: Node, name: string, loc: SourceLocation): Node {
+	const member = makeMember(obj, name, loc);
+	member.nodeType = declaredFieldType(obj.nodeType, name);
+	if (member.nodeType == null) throw new Error(`internal: a typed array span source at ${loc.line}:${loc.column} has no field '${name}'`);
+	return member;
 }
 
 function spanDataPtr(elem: Type | null): Type {
@@ -435,6 +456,7 @@ function spanViewJS(src: Node, srcType: Type, loc: SourceLocation): Node | null 
 	if (srcType.kind == TypeKind.String) {
 		return makeCall(runtimeRef("asBytes", loc), [src], loc);
 	}
+	if (typedArrayElement(srcType) != null) return makeCall(runtimeRef("msSpanOf", loc), [src], loc);
 	return null;
 }
 
