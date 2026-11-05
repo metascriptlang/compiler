@@ -1867,6 +1867,15 @@ function unownedIn(t: Type | null, depth: int32): Type | null {
 	return null;
 }
 
+// The Unowned element a `Vec<Unowned<T>>` or `Unowned<T>[]` field stores, counted like a field is; null when the
+// element is not an Unowned slot or sits deeper than the field's own array.
+export function unownedElementOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	const arr = t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : t;
+	if (arr.kind != TypeKind.Array || arr.typeReturn == null || !isUnownedSlot(arr.typeReturn)) return null;
+	return unownedInside(withoutUnowned(arr.typeReturn)) == null ? arr.typeReturn : null;
+}
+
 export function unownedSlotOf(place: Node): boolean {
 	if (place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType)) return true;
 	return isUnownedSlot(place.nodeType);
