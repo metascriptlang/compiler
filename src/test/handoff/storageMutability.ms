@@ -216,7 +216,6 @@ test "a writable Span over a value container writes that container" {
 		"const t: int32[4] = [1, 2, 3, 4]; poke(t[1..3], 0);",
 		"const t: int32[4] = [1, 2, 3, 4]; t.setFirst(5);",
 		"const t: int32[4] = [1, 2, 3, 4]; const w: Span<int32> = t; w[0] = 1;",
-		"const t: int32[4] = [1, 2, 3, 4]; t[1..3][0] = 7;",
 		"const t: int32[4] = [1, 2, 3, 4]; let w: Span<int32> = t[0..1]; w = t;",
 	];
 	for (const body of refused) {
@@ -239,6 +238,44 @@ function run(): void {
 	const c = compileToCWithStd(legal);
 	assert c.ok, c.ok ? "" : c.error;
 	const js = compileProjectToJSWithStd([{ entryPath: "test/view.ms", entrySource: legal }], "test/view.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
+test "a slice bound by inference over storage the const rule keeps unwritable is a read-only view" {
+	const head = "struct Doc { bytes: Vec<int32>; }\nconst MODD: Doc = { bytes: [3, 5] };\nfunction poke(s: Span<int32>): void { s[0] = 42; }\nfunction peek(s: Readonly<Span<int32>>): int32 { return s[0]; }\n";
+	const refused = [
+		"const v: Vec<int32> = [1, 2]; const w = v[0..2]; w[0] = 9;",
+		"const w = MODD.bytes[0..2]; w[0] = 9;",
+		"const w = MODD.bytes[0..2]; const x = w[0..1]; x[0] = 9;",
+		"const v: Vec<int32> = [1, 2]; const w = v[0..2]; poke(w);",
+		"const w = MODD.bytes[0..2]; const p = w as Ptr<int32>; p[0] = 7;",
+		"const t: int32[4] = [1, 2, 3, 4]; t[1..3][0] = 7;",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/slice.ms", entrySource: source }], "test/slice.ms");
+		assert !c.ok && c.error.contains("Readonly<"), c.ok ? body : c.error;
+		assert js.startsWith("ERROR:") && js.contains("Readonly<"), body;
+	}
+	const param = head + "function relay(v: Vec<int32>): void { const w = v[0..1]; w[0] = 1; }";
+	const cp = compileToCWithStd(param);
+	assert !cp.ok && cp.error.contains("Readonly<"), cp.ok ? "accepted" : cp.error;
+	const task = head + "function w(): int32 { const v = MODD.bytes[0..2]; v[0] = 7; return 1; }\nconst h = spawn(() => w());\nconsole.log(await h);";
+	const ct = compileToCWithStd(task);
+	assert !ct.ok && ct.error.contains("Readonly<"), ct.ok ? "accepted" : ct.error;
+	const legal = head + `function run(): void {
+	let t: Vec<int32> = [1, 2]; const w = t[0..2]; w[0] = 7; poke(t[0..1]);
+	const c: Vec<int32> = [9, 8]; const r = c[0..2];
+	const m = MODD.bytes[0..2];
+	console.log(t[0], peek(r), r[1], m[1], peek(m[1..2]));
+} run();
+function read(): int32 { const v = MODD.bytes[0..2]; return v[0] + v[1]; }
+const h = spawn(() => read());
+console.log(await h);`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/slice.ms", entrySource: legal }], "test/slice.ms");
 	assert !js.startsWith("ERROR:"), js;
 }
 
