@@ -32,11 +32,15 @@ The `.ms` rewrite of every C path is arc `std-crypto-ms`; until its default swit
 
 ## 3. C against Node
 
-Numbers: `src/bench/crypto/baseline.md` (m1m and rtx, commands and trees there). The C tier leads or ties Node on every row except these, and the person closed the C-vs-Node work on 2026-11-03 with them open:
+Numbers: `src/bench/crypto/baseline.md` (m1m and rtx, commands and trees there). The person closed the C-vs-Node work on 2026-11-03 on the rows the bench had then; the rows below were behind on that date:
 
 - **Ed25519 sign/verify and X25519** (1.1-2.2x behind on both hosts): Monocypher's field is ten 25.5-bit limbs with 32x32-bit products; OpenSSL uses 51-bit limbs with 64x64→128 products (and assembly on x86-64). The fix is a 64-bit-limb field, which arc `std-crypto-ms` carries in its `.ms` Ed25519.
 - **SHA-512 at 1 MB on x86-64** (rtx 741 vs 1564 MB/s; m1m ties): mbedTLS has no x86 SHA-512 kernel, and Zen 5 has no SHA-512 instructions; OpenSSL runs an AVX2/BMI2 kernel. On aarch64 the A64 SHA-512 instructions close the gap.
 - **SHA-256 at 1 MB** within 3-5%: noise-level on loaded hosts.
+
+The rows added on 2026-11-05 put more of the C tier behind Node on rtx; their causes are not traced yet: RSA-2048 sign and OAEP decrypt (18x) and verify (6x), P-256 ECDSA and ECDH (8-17x), all on mbedTLS PSA; sha1, blake2b-512 and sha512 at 1 MB (2.1-2.6x); AES-256-CBC (1.35x).
+
+On JS, a WebCrypto call copies its `Buffer` (a plain `Array` on that backend) into a `Uint8Array` and back, so a call carrying 1 MB runs at a tenth of Node for AES-GCM and half for SHA-256; the Sync rows run `std/crypto/pure` and are 4x to 160x behind Node (`baseline.md`, rtx table of 2026-11-05).
 
 ## 4. Constants made by other implementations
 
