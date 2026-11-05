@@ -14,7 +14,9 @@ import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
-import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf } from "../checker/types";
+import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf, hasNullMember } from "../checker/types";
+import { holdsNonNullRef } from "../checker/visibility";
+import { declaredTypeOfLocation } from "../checker/fit";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym, reportTransformError } from "../transform/context";
@@ -35,7 +37,7 @@ import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, i
 import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { LocalDefs, borrowedArgsToCopy, borrowedReceiverToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { cloneIfPure } from "../transform/place";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -1010,6 +1012,28 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
+function isPathSlot(n: Node): boolean {
+	if (n.kind == NodeKind.ArrayAccess || n.kind == NodeKind.HiddenDeref) return true;
+	if (n.kind != NodeKind.MemberExpr) return false;
+	const holder = holderType((n.data as MemberExprData).object.nodeType);
+	return holder == null || holder.sym == null || !hasFlag(holder.sym, SymbolFlag.ClosureEnv);
+}
+
+function declaredSlotType(n: Node): Type | null {
+	return n.kind == NodeKind.MemberExpr ? declaredTypeOfLocation(n) ?? n.nodeType : n.nodeType;
+}
+
+function reportUnsharableMove(srcExpr: Node, dctx: DrcContext): boolean {
+	const op = sinkClassify(srcExpr.nodeType, dctx).copyFn;
+	if (op == null || !hasFlag(op, SymbolFlag.UnavailableOp) || dctx.ctx.checkerCtx == null || srcExpr.nodeType == null) return false;
+	const root = unavailableCopyRoot(srcExpr.nodeType, 0);
+	const message = `cannot move '${moveSourceText(srcExpr)}' out of its slot: '${typeDisplayName(srcExpr.nodeType)}' holds a non-null reference, so the slot cannot be left empty, and '${typeDisplayName(root)}' declares onDestroy and no onCopy, so the slot cannot keep a copy — make the slot nullable, or declare onCopy`;
+	dctx.ctx.checkerCtx.errors.push({
+		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+	});
+	return true;
+}
+
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
 	// The consuming position decides the mode — an explicit `move` never
@@ -1031,6 +1055,16 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			return node;
 		}
 	}
+	if (consume && isPathSlot(md.moveArg) && holdsNonNullRef(declaredSlotType(md.moveArg))) {
+		md.moveArg = processNode(md.moveArg, dctx, DrcMode.Normal);
+		if (isMovableLastRead(md.moveArg, dctx)) {
+			const rc = md.moveArg.kind == NodeKind.MemberExpr ? classifyMemberFieldRc(md.moveArg, dctx) : sinkClassify(md.moveArg.nodeType, dctx);
+			md.moveArg = destructiveMoveVar(md.moveArg, rc, dctx);
+		} else if (!reportUnsharableMove(md.moveArg, dctx)) {
+			md.moveArg = passCopyToSink(md.moveArg, dctx, false, false);
+		}
+		return node;
+	}
 	const element = consume && md.moveArg.kind == NodeKind.ArrayAccess;
 	dctx.inEnsureMove += 1;
 	md.moveArg = processNode(md.moveArg, dctx, consume && !element ? DrcMode.Consumed : DrcMode.Normal);
@@ -1040,7 +1074,7 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		const elemRc = sinkClassify(md.moveArg.nodeType, dctx);
 		if (elemRc.needsCleanup) {
 			dctx.inEnsureMove += 1;
-			md.moveArg = isMovableLastRead(md.moveArg, dctx) ? destructiveMoveVar(md.moveArg, elemRc, dctx) : passCopyToSink(md.moveArg, dctx);
+			md.moveArg = isMovableLastRead(md.moveArg, dctx) || hasNullMember(md.moveArg.nodeType!) ? destructiveMoveVar(md.moveArg, elemRc, dctx) : passCopyToSink(md.moveArg, dctx);
 			dctx.inEnsureMove -= 1;
 		}
 		return node;

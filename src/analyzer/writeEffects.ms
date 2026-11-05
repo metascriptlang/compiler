@@ -255,7 +255,7 @@ function fieldSlot(property: string): string {
 // slot, which every write to that field or element may hit.
 const HOLDER_MARK = "@";
 
-function holderType(t: Type | null): Type | null {
+export function holderType(t: Type | null): Type | null {
 	let cur = t;
 	for (let depth = 0; cur != null && depth < 16; depth += 1) {
 		if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Var || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent

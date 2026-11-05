@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern, extensionOfSym } from "./context";
-import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
+import { skipModifier, distinctBody, isStructType, isMaybeType, hasNullMember, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
 export function unwrapDecl(node: Node | null): Node | null {
@@ -426,6 +426,27 @@ function receiverClassOf(callee: Node): Symbol | null {
 
 export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
 	return noDefaultAt(ctx, t, 0) != null;
+}
+
+export function holdsNonNullRef(t: Type | null, depth: int32 = 0): boolean {
+	const inner = skipModifier(t);
+	if (inner == null || depth > 16 || isMaybeType(inner)) return false;
+	if (inner.kind == TypeKind.SizedArray) return inner.typeValue > 0 && holdsNonNullRef(inner.typeReturn, depth + 1);
+	if (inner.kind == TypeKind.Array) return false;
+	const wrapped = distinctBody(inner);
+	if (wrapped != null) return holdsNonNullRef(wrapped, depth + 1);
+	if (inner.kind == TypeKind.Union) return !hasNullMember(inner) && anyHoldsNonNullRef(inner.typeChildren, depth);
+	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (body.kind == TypeKind.Function || body.kind == TypeKind.Ref || (body.kind == TypeKind.Struct && !isStructType(body))) return true;
+	return (body.kind == TypeKind.Tuple || isStructType(body)) && anyHoldsNonNullRef(body.typeChildren, depth);
+}
+
+function anyHoldsNonNullRef(parts: Type[] | null, depth: int32): boolean {
+	if (parts == null) return false;
+	for (const part of parts) {
+		if (holdsNonNullRef(part, depth + 1)) return true;
+	}
+	return false;
 }
 
 function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
