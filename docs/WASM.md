@@ -148,6 +148,36 @@ certificate. LTO rows above are probes rebuilding the generated half with explic
 at compile and link, not evidence that the parent CLI's LTO option reaches it. Raw artifacts:
 m1m `~/work/rr-recompiler-441c019f/out/r9-proof/`, `r9-trace/`, and `r9-fixed/`.
 
+LTO option flow, 2026-11-05, same m1m/Node/emcc toolchain, source tree
+`0a473950c980c4226b6c817df62fc72cb8eb0cd4`: actual parent CLI builds, not manually rebuilt
+halves, using `build src/bench/wasmBoundary/main.ms --target=js --danger --lto=<strategy>`.
+The unwritten default matched thin; explicit off and full produced distinct artifacts. Three
+interleaved rounds, medians of the bench's per-process medians:
+
+| | off | thin | full |
+|---|---|---|---|
+| wasm bytes | 27708 | 30395 | 30146 |
+| callback1k, ns | 11565.3 | 6885.9 | 6930.3 |
+| primes2M, ms | 5.689 | 5.953 | 5.941 |
+
+Thin made this callback workload 40.5% faster, with 9.7% larger wasm and a 4.6% slower sieve;
+full had the same broad trade-off. These are three rounds on one host, not a universal speed
+claim. The driver uses the existing compiler policy and `--lto=off` remains the opt-out;
+see `src/compiler/cc.ms` `cliCompileFlags` and `wasmBoundary/placementBuild.ms` `wasmHalfOptions`.
+Compile/link option assembly follows Nim `15dd34468` `compiler/extccomp.nim:494–546`;
+no ownership or growth-policy change was needed.
+
+The control failed the emcc strategy and child-forwarding pins; the candidate reported 170
+passing unit tests. Each of thin/full passed 14 Danger consumer programs and the original
+bounds-trap program at Debug. `compile.ms` `nativeCtx.boundChecks` explains why that program's
+out-of-range read is not a trap oracle under Danger: the Danger/off control also did not trap.
+`src/test/wasmmix/programs/trapPoison` instead forces an engine trap independently of bounds
+checks. It passed both optimized strategies and its default mixed cell; disabling `die` made
+`blocked` and `cause` false, so the oracle rejects a missing poison guard. Its retained sources
+differ from the optimized-run inputs only in whitespace. No full suite, browser/GPU or
+rebased-main integration was certified. Raw m1m artifacts under the same work dir:
+`out/lto-fixed/`, `out/lto-remaining/`, `out/lto-final/`.
+
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
 cached memory view detached by growth to 32 MiB, and `TextEncoder` losing a lone surrogate, which
