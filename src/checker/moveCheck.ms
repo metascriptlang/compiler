@@ -463,6 +463,7 @@ function refillsElement(w: LockWalk, call: Node): boolean {
 
 function refillAt(w: LockWalk, node: Node | null): boolean {
 	if (node == null) return false;
+	if (node.kind == NodeKind.VariableDecl) return w.moved.root != null && w.moved.root.declNode == node;
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		return d.operator == "=" && refillsPlace(w, d.left);
