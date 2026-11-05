@@ -9,7 +9,7 @@
 import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData, BuiltinKind } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
+import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isUnownedSlot, withoutUnowned, unownedInside, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet, builtinKindName } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -440,7 +440,22 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	} else {
 		refuseNestedView(ctx, "a return value", t, line, col);
 	}
+	refuseUnownedPosition(ctx, "a return value", t, false, line, col);
 	return t;
+}
+
+// Unowned<T> is the type of a class or struct field, the back edge an object stores; anywhere else it is refused.
+export function refuseUnownedPosition(ctx: CheckerContext, what: string, t: Type | null, isField: boolean, line: int32, col: int32): void {
+	if (t == null) return;
+	const top = isUnownedSlot(t);
+	const inner = unownedInside(isField && top ? withoutUnowned(t) : t);
+	if (inner == null) return;
+	const target = typeDisplayName(withoutUnowned(inner));
+	if (top && !isField) {
+		addError(ctx, what + " cannot be " + typeDisplayName(t) + ": Unowned<T> is the type of a class or struct field, the back edge an object stores — declare it '" + typeDisplayName(withoutUnowned(t)) + "', which reads the target and keeps it alive while it is used", line, col);
+		return;
+	}
+	addError(ctx, what + " of type " + typeDisplayName(t) + " holds Unowned<" + target + "> inside it: an Unowned edge is counted only where a class or struct field stores it, and an element or a type argument is not built yet — store the back edge in a field", line, col);
 }
 
 export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
@@ -2394,6 +2409,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
 			? node.paramLocations[pi] : node.location;
 		refuseNestedView(ctx, "parameter '" + d.params[pi] + "'", paramTypes[pi], pLoc.line, pLoc.column);
+		refuseUnownedPosition(ctx, "parameter '" + d.params[pi] + "'", paramTypes[pi], false, pLoc.line, pLoc.column);
 	}
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
@@ -2807,6 +2823,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 		else refuseNestedView(ctx, "field '" + d.interfaceFields[wi] + "' of '" + d.interfaceName + "'", wft, wLine, wCol);
+		refuseUnownedPosition(ctx, "field '" + d.interfaceFields[wi] + "' of '" + d.interfaceName + "'", wft, true, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -3335,6 +3352,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					resolveTypeExpr(member.typeExpr, ctx);
 					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
+					refuseUnownedPosition(ctx, "static '" + pd.propName + "' of '" + d.className + "'", staticType, false, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				const sf = member.resolvedSym;
@@ -3358,6 +3376,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
 					refuseViewField(ctx, pd.propName, d.className, propType, member.location.line, member.location.column);
+					refuseUnownedPosition(ctx, "field '" + pd.propName + "' of '" + d.className + "'", propType, true, member.location.line, member.location.column);
 				} else {
 					memberTypes.push(inferredType());
 				}
@@ -3575,6 +3594,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				member.nodeType = propType;
 				memberTypes.push(propType);
 				refuseViewField(ctx, pd.propName, d.actorName, propType, member.location.line, member.location.column);
+				refuseUnownedPosition(ctx, "field '" + pd.propName + "' of actor '" + d.actorName + "'", propType, false, member.location.line, member.location.column);
 			} else {
 				memberTypes.push(inferredType());
 			}

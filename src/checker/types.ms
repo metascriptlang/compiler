@@ -1828,6 +1828,42 @@ export function isUnownedSlot(t: Readonly<Type | null>): boolean {
 	return t != null && (isUnownedRef(t) || (t.kind == TypeKind.Union && isUnownedRef(unwrapRefNullUnion(t))));
 }
 
+export function withoutUnowned(t: Type): Type {
+	if (isUnownedRef(t)) {
+		const c = copyTypeShallow(t);
+		c.typeFlags = c.typeFlags.excl(TypeFlag.IsUnowned);
+		return c;
+	}
+	if (t.kind == TypeKind.Union && isUnownedSlot(t)) {
+		const c = copyTypeShallow(t);
+		c.typeChildren = t.typeChildren.map((m) => withoutUnowned(m));
+		return c;
+	}
+	return t;
+}
+
+// The Unowned<T> a type holds in an element, a union member, a tuple slot or a type argument;
+// a class or struct is not entered, because its own fields may hold one.
+export function unownedInside(t: Type | null): Type | null {
+	return unownedIn(t, 0);
+}
+
+function unownedIn(t: Type | null, depth: int32): Type | null {
+	if (t == null || depth > 64) return null;
+	if (isUnownedRef(t)) return t;
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias
+			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var) return unownedIn(t.typeReturn, depth + 1);
+	if (t.kind == TypeKind.Ref) return t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance ? unownedIn(t.typeReturn, depth + 1) : null;
+	if (t.kind == TypeKind.Union || t.kind == TypeKind.Tuple || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Varargs || t.kind == TypeKind.Function) {
+		for (const c of t.typeChildren) {
+			const u = unownedIn(c, depth + 1);
+			if (u != null) return u;
+		}
+		if (t.kind == TypeKind.Function) return unownedIn(t.typeReturn, depth + 1);
+	}
+	return null;
+}
+
 export function unownedSlotOf(place: Node): boolean {
 	if (place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType)) return true;
 	return isUnownedSlot(place.nodeType);
