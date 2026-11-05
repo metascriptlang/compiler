@@ -60,7 +60,7 @@ export function buildWasmHalf(
 		? ""
 		: ` -sEXPORTED_RUNTIME_METHODS=${runtimeMethods.join(",")}`;
 	const linkFlags = `-sWASM_BIGINT=1 -sEXPORTED_FUNCTIONS=${exports}${runtime}`
-		+ " -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node,web"
+		+ " -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node,web"
 		+ ` --js-library=${library}`;
 	const args = [
 		"build",
@@ -71,7 +71,7 @@ export function buildWasmHalf(
 		`--output=${mjs}`,
 		`--passL=${linkFlags}`,
 	];
-	if (opts.passC != "") args.push(`--passC=${opts.passC}`);
+	args.push(`--passC=-msimd128 ${opts.passC}`);
 	if (opts.mode == MODE_RELEASE) args.push("--release");
 	if (opts.mode == MODE_DANGER) args.push("--danger");
 	const run = execFileResult(execPath, args, stage);
