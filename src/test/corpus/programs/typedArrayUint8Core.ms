@@ -6,7 +6,8 @@
 // @stdout: buffer len=4 view 0,4,4,0 off=1 tail=4,0 copy=4,4,0
 // @stdout: fill 6,6,6,1 set 6,2,3,1
 // @stdout: join 6-2-3-1 str 6,2,3,1
-// note: Uint8Array and ArrayBuffer as TS defines them: `new` by length, from bytes, and over a buffer with an offset and a length; a subscript reads and writes the view; subarray shares the bytes while slice copies them; relative and clamped begin and end; fill, set and join. Same output on every lane as on Node.
+// @stdout: from 1,2,3 sub 9,1 own 6,2,3,1
+// note: Uint8Array and ArrayBuffer as TS defines them: `new` by length, from bytes, and over a buffer with an offset and a length; a subscript reads and writes the view; subarray shares the bytes while slice copies them; relative and clamped begin and end; fill, set and join; `Uint8Array.from` copies an array or a view into a new buffer. Same output on every lane as on Node.
 
 const z = new Uint8Array(3);
 console.log(`new ${z.join(",")} len=${z.length} bytes=${z.byteLength} off=${z.byteOffset} per=${Uint8Array.BYTES_PER_ELEMENT}`);
@@ -42,3 +43,8 @@ const filled = f.join(",");
 f.set([2, 3], 1);
 console.log(`fill ${filled} set ${f.join(",")}`);
 console.log(`join ${f.join("-")} str ${f.toString()}`);
+
+const fromArray = Uint8Array.from([1, 2, 3]);
+const fromView = Uint8Array.from(f.subarray(2));
+fromView[0] = 9;
+console.log(`from ${fromArray.join(",")} sub ${fromView.join(",")} own ${f.join(",")}`);
