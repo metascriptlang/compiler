@@ -25,7 +25,9 @@ Read relevant sections when authoring or reviewing code, not this entire file at
 start. The defaults and review checklist are the common entry points; the longer recipes are
 here so a reader can finish the corresponding task without inventing an API.
 An owning edge is a separate contract from a read-only view: see [LANG §5b](LANG.md#5b-owned-edges-ownedt).
-That pointer does not approve a later ownership redesign or a Cursor migration.
+For the approved Cursor/Unowned distinction and @pure removal, read the
+[transition status](CONTRACTS.md#approved-contract-transitions); approval does not mean that the
+compiler in use already implements it.
 
 | Task | Read |
 |---|---|
@@ -524,8 +526,16 @@ count must survive until C is finished. Calling `process.exit()` is not a substi
 | `Ref<T>` | Managed heap pointer; distinct from the `ref` parameter mode. |
 | `Span<T>` | Pointer plus length; bounded non-owning access, not copied elements. |
 | `Borrow<T>` | Reads an existing location; its owner/storage must outlive every use. |
-| `Cursor<T>` | Nullable non-owning edge; does not retain or clear itself when the referent dies. |
+| `Cursor<T>` | No-count non-owning view treatment, not an implicit nullable/weak edge. Prefer inference; the approved target requires lender/lifetime proof rather than an unchecked RC override. |
+| `Unowned<T>` | Approved checked stored-edge design, not landed support or a general local/parameter/result type. Do not migrate by name alone. |
 | `Readonly<T>` | Access restriction; storage and ownership still follow `T`. |
+
+Cursor does not choose mutability or nullability for you. A mutable AST/VM view cannot simply
+be replaced with read-only Borrow. A parameter/result needs its lender; a worker view needs its
+source owners pinned through the join without count writes. Unowned has a different stored-edge
+contract and strict target/holder teardown; do not recommend it in async code yet. Read
+[LANG's definitions](LANG.md#5a-non-owning-treatment-cursort) and the
+[current enforcement limits](CONTRACTS.md#approved-contract-transitions) before migrating.
 
 Native `x as Ptr<T>` can take the address of an inline place; an integer-to-pointer conversion
 instead uses the integer as an address. Neither grants lifetime. A const place remains read-only.
@@ -1047,6 +1057,14 @@ and the annotation is not proof of safe arbitrary sharing. Keep mutable state be
 native import fails inside its implementation (§19), so it is not a green supervision recipe.
 
 ## 10. Use C directly; make the boundary explicit
+
+Do not add a new `@pure` annotation or replace it with another purity marker. Its removal is
+approved but not implemented/landed: the target frozen-const read gate uses operand provenance
+and parameter kind, not a helper-wide native-call taint. A compiler still using the old gate
+can therefore reject a target-legal binding; this is the pending compiler change, not a reason
+to invent a workaround annotation. The declaration still carries foreign retention, hidden-state
+and thread promises that the checker cannot verify. Readonly alone proves none of those, and
+result freshness is separate. See [transition status](CONTRACTS.md#approved-contract-transitions).
 
 Prefer real declarations: `import { twice } from "./bridge.h";` then `twice(21)` calls C.
 A matching adjacent `bridge.c` is compiled automatically. For example, `bridge.h`:

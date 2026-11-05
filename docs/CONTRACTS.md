@@ -53,13 +53,13 @@ that foreign code refrains from writing through another address. Review the real
 consumer, including unregister/join/release paths, rather than only the binding's signature.
 See [the authoring standard's FFI recipes](LANG-PREFERENCE.md#10-use-c-directly-make-the-boundary-explicit).
 
-Current `@pure` is a narrow **foreign write-footprint promise**: it exempts an extern from
-`WritesCell`; it is not mathematical purity, a no-hidden-read promise, a fresh-return proof
-or optimization permission. Source owners are `intrinsicBuiltins` in
-`src/checker/decoratorHelpers.ms`, `applyDecoratedInfo` in
-`src/checker/collectPass.ms`, and call-effect classification in `src/checker/effects.ms`.
-The return-alias/isolation decision in `src/checker/sendable.ms` is a separate check.
-No rename, removal or change of the default foreign trust policy is made here.
+The old extern-only `@pure` marker waives a `WritesCell` charge; it was never mathematical
+purity, a no-hidden-read promise, a fresh-return proof or optimization permission. Its removal
+is now approved, without a replacement marker. Until that change lands, the old code path is
+still in `applyDecoratedInfo` (`src/checker/collectPass.ms`) and `callEffect`/`constReadEffect`
+(`src/checker/effects.ms`). The approved target and current availability are separated
+[below](#approved-contract-transitions). Return isolation in `src/checker/sendable.ms` remains
+a separate obligation.
 
 ### Internal proof boundary: both ends are MetaScript
 
@@ -74,10 +74,17 @@ its non-owning classification is in `src/analyzer/classify.ms`. A primitive valu
 and a managed-reference target are therefore not interchangeable evidence for a proposed
 managed-header check.
 
+The approved Cursor target is a proven no-count view, not an unchecked request to omit RC.
+Prefer inference where it establishes the owner/use interval; an explicit annotation must
+not substitute for that proof. Mutability and nullability remain independent. Parameter and
+result views need their lender; read-only Borrow is not a universal mutable-view substitute.
+
 A migration must distinguish mutable local/data views, identity-only collections, stored
 back edges, arena links and join-protected worker views. Field versus local alone is not a
 lifetime proof. Making a view owning can change retention/cycles; adding counter writes can
-change thread safety. Neither is a documentation-only rename.
+change thread safety. Neither is a documentation-only rename. The separate approved Unowned
+stored-edge contract is defined in [LANG](LANG.md#stored-back-edges-unownedt), not by renaming
+all existing cursors.
 
 ## Pointer/view tools: which side, which proof
 
@@ -90,10 +97,41 @@ names a kind of check, not a certificate that every path is implemented correctl
 | `Ptr<T>` | Raw-address boundary. Type/address-shape checks do not prove target lifetime, allocation extent, alignment or foreign retention. An internal raw-address use does not become safe merely because no FFI call occurs. |
 | `Handle<T>` | `Handle.retain` explicitly retains; `Handle.borrow` does not. Neither proves that the foreign user has stopped before release/owner death, callback affinity or absence of races. Those need the real registration/teardown consumer. |
 | `Borrow<T>` | Internal, checkable access/lifetime proof. Not complete: the tested returned-call root bypasses readonly checks that locals/parameters enforce. Do not promote that acceptance to writable access. |
-| `Cursor<T>` | Internal non-owning representation. Current non-ownership does not supply a target-liveness check or checked weak-reference semantics. Stored-field lifetime and migration designs remain unresolved. |
+| `Cursor<T>` | Internal no-count view treatment. The approved target requires lender/lifetime proof; current explicit annotations are not a certificate of that proof or a weak-reference liveness check. |
+| `Unowned<T>` | Approved checked stored-edge design, not landed support. Does not keep the target alive; target death with edges remaining stops rather than producing an expired/null weak reference. Branch/async/platform limits below. |
 | `Span<T>` / `Readonly<Span<T>>` | Internal source-relative views; readonly additionally restricts writes through that view. Neither owns its source. The view/storage cases named in LANG are scoped pins, not proof for every escape or foreign pointer. |
 | `Ref<T>` / parameter `ref` | A managed storage tool and a parameter mode, respectively; not synonyms for raw `Ptr`. Follow LANG's distinct lifetime/write-back contracts. Casting their address across FFI reintroduces the foreign obligations. |
 | `Readonly<T>` | Restricts access without replacing T's owning/borrowed contract or freezing every alias. It does not by itself prove hidden foreign effects, no retention, fresh returns or thread safety. |
+
+## Approved contract transitions
+
+Approved direction and shipped enforcement are separate facts. As of this 2026-11-05 pass:
+
+| Contract | Direction and availability |
+|---|---|
+| `@pure` | Remove the marker and its `WritesCell`/`constReadEffect` policy branch. The source owner has not implemented or landed the change. No replacement purity marker or whole-function `func` contract is introduced. |
+| Cursor | Retain inference/no-count views; an explicit no-count request must not override lender/lifetime proof. This is the approved target, not proof that every current local, stored or returned shape is enforced. |
+| Unowned | Second-count stored edges, checked at target death, are approved. Fields and own-array elements are committed on an unlanded branch; arbitrary nesting/generic containers and async use are not established recipes. |
+
+The `@pure` replacement on the frozen module-const read path reuses operand provenance and
+parameter kind. Strings/scalars and readonly Ptr/Span over value-only data can pass; const-derived
+counted handles, reference containers, opaque `Ptr<void>` (even readonly), writable Ptr/Span,
+ref/out and shared T[] parameters remain restricted. A helper's native call on only its local
+operands does not taint an unrelated readonly source. This narrower gate does not prove that
+foreign code honors readonly or has no hidden aliases/global state. Those remain binding
+trust, not internal proof. It does not change result freshness, justify optimization or close
+all actor/lent-capture enforcement holes.
+
+For Unowned, target/holder destruction order is observable: a local target declared after its
+holder can die first and trigger the check; a global target must precede its holder. Arena
+links need a proved bulk teardown. A suspending frame can keep a holder alive too long, so do
+not recommend Unowned in async code yet. The branch's reported death checks cover C/Raiser on
+64-bit; its 32-bit build has no second count, and JS does not reproduce native death checks.
+Those results do not establish checked target-death behavior on either platform. Do not claim backend-independent checked
+lifetime support from the type's accepted spelling.
+
+The implementation owners supply the regression evidence before these labels change to
+landed support. A new view model, a counter protocol and a rename are not interchangeable.
 
 ## What a status means
 
@@ -149,6 +187,15 @@ The first async probe omitted discriminant narrowing and failed checking; it was
 not counted as evidence about rejection. These are documentation measurements, not new
 registered regression tests, a source-matched compiler build or a sanitizer run.
 
+A separate optional-union/struct presence module ran on the same installed compiler with
+`msc run --target=c|js|raiser <probe.ms>` on remote m1m under eight-core admission: **3/3 cells**,
+2.947 s, each printing `absent`, `number 0`, `text[]`, `text[E]`, `row absent`, `row 7`.
+It is reproduced in [LANG's nullable section](LANG.md#6-nullable-types-and-maybet-deep-dive).
+Source SHA256 `eabe72f5ea990735531b32e22d524f4b47c91d5801e1e5fde13c6698c6accfa9`;
+log SHA256 `2ebef4512df0be1dd3501c8b22235b3880ae0a9964b08b234ca643081a50ef93`.
+Zero/empty-string presence, union narrowing and struct nullability are the checked axes, not
+arbitrary nested optionals, native layout equality or a separate public Maybe constructor API.
+
 The six existing runtime consumers above produced **24 pass, 0 fail, 0 xfail, 0 xpass** in
 three targeted runs (21 s, 12 s, 16 s). Commands selected only those exact programs and
 C/JS/Raiser cells, with `MSC` naming the installed compiler; no danger/SAN/full suite ran.
@@ -160,11 +207,12 @@ research transcripts are not portable regression pins or an exhaustive safety au
 | Finding | Author-visible use or loss; disposition |
 |---|---|
 | `Ptr`, `Handle`, `Borrow`, `Readonly`, `Cursor` look similar | They answer different address, retention, access and lifetime questions. No runtime redundancy is established by the naming overlap. |
-| Read-only views versus mutable non-owning data views | Mutable AST/VM views cannot simply become read-only Borrow without losing writes. The safe representation/proof for every existing role is unresolved. |
-| Stored non-owning back edges | Compiler graphs and arena/context links need an explicit lifetime/teardown proof. Proposed ownership/Unowned designs are not current guarantees; migration and mechanism approval remain separate. |
-| Foreign operand writes versus hidden effects and result aliasing | Bindings need each relevant fact. Replacing them with one “trusted” or “pure” bit loses distinctions used at thread boundaries. No new default is chosen. |
+| Read-only views versus mutable non-owning data views | Keep mutability separate from no-count lifetime proof. The approved Cursor target does not make read-only Borrow a replacement for mutable AST/VM views; each migration still needs proof. |
+| Stored non-owning back edges | Unowned's second-count design is approved, not landed. Compiler graph/arena/context migrations still need their own lifetime/teardown proof; approval is not support evidence. |
+| Foreign operand writes versus hidden effects and result aliasing | Remove the old purity marker via the approved operand-sensitive gate. Foreign hidden-state trust, operand permissions and result isolation remain distinct; not all are compiler proofs. |
+| Maybe versus union | Presence over a payload union is not the payload union alone. Neither nullable lowering nor similar names justify deleting its absence state or promising arbitrary nested Option states. |
 | Structural constraints versus operation-based concepts | Structural shape does not require arbitrary operations to resolve. A missing concept mechanism needs a concrete consumer, not automatic porting from a reference manual. |
-| Unsupported static/value generics and ordinary value-position type queries | Authors lose those compile-time forms. Checked refusal of const generics or `typeof local` is not evidence against namespace-import queries or runtime `typeof`. |
+| Unsupported static/value generics and type-position `typeof` queries of ordinary values | Authors lose those compile-time forms. Checked refusal of const generics or `typeof local` is not evidence against namespace-import queries or runtime `typeof`. |
 | Stale names and competing “complete specifications” | This is established documentation redundancy. Redirect obsolete documents to the owning contract instead of maintaining parallel rules. |
 
 ## Relayed array/byte target — not landed
@@ -189,7 +237,8 @@ These are target/ownership distinctions, not a new support claim, independent ap
 this session or a completed reference-mechanism audit. std-ms owns implementation; its
 phase-4 measured probe will drive the later LANG/authoring rewrite.
 
-No runtime construct is approved for removal by this inventory. A removal proposal must name
-its real consumers, the replacement proof and what the author loses; a new mechanism needs
-the applicable reference trace and the person's decision. Experimental reference features
+The approved @pure removal is scoped to the transition above; it does not remove effect
+analysis or prove any other runtime construct redundant. Further removals must name their
+consumers, replacement proof and author-visible loss; a new mechanism still needs the
+applicable reference trace and the person's decision. Experimental reference features
 without a consumer are gaps in correspondence, not a backlog mandate.

@@ -3615,13 +3615,39 @@ returns a value (it stops in codegen with `unresolved type`, as any unannotated 
 
 ### 5a. Non-owning treatment (`Cursor<T>`)
 
-`Cursor<T>` changes ownership treatment, not the target's mutability or lifetime. Its inner
-representation is preserved by `getTypeDesc` (`src/codegen/c/types.ms`); non-owning lifecycle
-classification is in `src/analyzer/classify.ms`. It is not a checked weak reference, and a
-value-struct target does not acquire a managed header. Where the inner value refers to other
-storage, use requires a live owner/lifetime proof; current gaps and distinct migration roles are in
+A cursor is a non-owning view: it does not keep its source alive and takes no reference-count
+operation. This does not itself grant write access, establish nullability or prove that the
+source survives. Cursor inference is copy elision; an explicit `Cursor<T>` annotation is not
+permission to bypass the owner/lifetime obligation.
+
+**Approved target, not a claim that today's checker enforces every case:** prefer ordinary
+bindings and inferred cursors where the analysis proves the source survives every use. An
+explicit no-count view must satisfy that proof, not override it. Parameters/results need a
+lender contract; current read-only `Borrow<T>` is not a replacement for every mutable AST/VM
+view. A worker view additionally requires its own source owners to stay pinned through the
+join, with no worker-side RC/root operations. Merely pinning an object containing a non-owning
+edge does not pin that edge's target.
+
+The current representation follows the inner type (`getTypeDesc` in `src/codegen/c/types.ms`),
+and lifecycle classification is in `src/analyzer/classify.ms`. This treatment alone is not a
+liveness check; a primitive value target does not acquire a managed header. Known enforcement
+holes and the distinction from foreign trust are in
 [Advanced contracts](CONTRACTS.md#internal-proof-boundary-both-ends-are-metascript).
-This definition does not approve a new back-edge mechanism or a Cursor-to-Unowned migration.
+
+#### Stored back edges: `Unowned<T>`
+
+**Approved design, not landed language support:** Unowned is a checked non-owning stored edge,
+not another name for Cursor or a weak reference that becomes null. It does not retain the
+target. The design counts stored edges separately and stops when a target would be freed with
+edges remaining. Values read out are ordinary `T`; local copy elision remains the analyzer's
+job. Nullability is still explicit.
+
+The implementation owner has fields and field-owned array elements committed on an unlanded
+branch; neither is current main support. This is not a recommendation to use Unowned in
+async/suspending code: a lifted holder can outlive its target because of frame destruction timing. Destroy order and arena
+teardown must be established; changing a field's spelling does not prove them. Worker views,
+identity-only collections, value-struct cursors and arbitrary nested containers are not
+mechanical migration targets. See [the current status and limits](CONTRACTS.md#approved-contract-transitions).
 
 ### 5b. Owned edges (`Owned<T>`)
 
@@ -3667,9 +3693,15 @@ print the same lines). Not measured: `Owned<T>` on a generic parameter, the Rais
 
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
-MetaScript uses a unified `T | null` syntax for all nullable types. Under the hood, the compiler chooses the optimal representation based on the inner type — no user intervention needed.
+`T | null` adds absence to a payload type. Payload alternatives and presence are independent:
+`T | E` selects a payload alternative, whereas `Maybe<T | E>` describes absence or a present
+payload from that union. The presence contract is not redundant merely because its payload is
+a union. `Maybe` here names a carrier/contract, not a newly introduced public constructor API.
+For a payload that already includes null, or nested optional states, do not assume nullable
+union flattening preserves an independent outer presence discriminator; that is a separate
+representation question.
 
-#### The Three Strategies
+#### Nullable carrier choices
 
 | Source Type | Internal Representation | C Layout | Null Sentinel |
 |-------------|------------------------|----------|---------------|
@@ -3679,7 +3711,12 @@ MetaScript uses a unified `T | null` syntax for all nullable types. Under the ho
 | `Ptr<T> \| null` | Bare `Ptr<T>` (pointer) | `T*` | `NULL` (0x0) |
 | `struct \| null` | `Maybe<Struct>` (wrapper struct) | `struct { T value; bool present; }` | `present == false` |
 
-**Why the split?** Value-type structs live on the stack. There is no "null address" for a stack value — every bit pattern is a valid struct. The compiler must add an explicit `present` flag. Pointers (`Ref<T>`, `Ptr<T>`, interfaces, classes) already have a natural sentinel: the null pointer. Wrapping them in a struct would waste memory and add indirection for no benefit.
+These are examples, not an exhaustive type classification. A pointer can use NULL for absence;
+a non-pointer carrier needs a way to distinguish a present value from absence. Structs are not
+the only payloads that can need a Maybe carrier. The choice belongs to `isMaybeWrappable`,
+`createMaybeType` and nullable-union construction in `src/checker/types.ms`, not to an author
+choosing a second spelling. The table describes native representation, not a JS memory-layout
+or allocation guarantee.
 
 #### `Maybe<Struct>` — Wrapper Struct for Value Types
 
@@ -3719,7 +3756,9 @@ function process(tok: Token | null): string {
 }
 ```
 
-Note: `interface | null` and `class | null` are pointer types and use `NULL` directly — no `Maybe` wrapper needed. `Maybe` only applies to `struct` (value types) where there is no null address.
+`interface | null` and `class | null` use NULL on native. Do not generalize that representation
+to a value payload or union, and do not use truthiness as a presence check: zero and the empty
+string are present values. The measured union/struct example below distinguishes those cases.
 
 **Optional chaining** works as expected:
 ```typescript
@@ -3755,7 +3794,7 @@ c = allocBuffer();      // → c = allocBuffer()  (no wrapping)
 The compiler resolves `T | null` in the type checker's resolve pass:
 
 1. **Is `T` a pointer type?** (`Ref<T>`, `Ptr<T>`, `interface`, or `class`) → Collapse to bare `T`. Done.
-2. **Is `T` a value-type struct?** → Create `Maybe<T>` wrapper struct.
+2. **Does the payload require an explicit presence carrier?** → Construct the appropriate Maybe type, including non-struct cases; use `isMaybeWrappable`/nullable-union construction for the actual classification.
 3. Later passes handle the structural rewrites:
    - **operatorLower**: `x !== null` → `x.present` (for Maybe) or pass-through (for pointers)
    - **nullableLower**: Inserts `.value` on narrowed identifiers, wraps RHS in assignments
@@ -3770,7 +3809,37 @@ The compiler resolves `T | null` in the type checker's resolve pass:
 | `node: Ref<T> \| null` | `Ref<T>` | `node != NULL` | `node->field` | `node = x` |
 | `buf: Ptr<T> \| null` | `Ptr<T>` | `buf != NULL` | `buf->field` | `buf = x` |
 
-All of this is invisible to the programmer. You write `T | null`, check with `!== null`, and access fields normally after narrowing. The compiler picks the optimal representation and inserts the right code.
+Write `T | null`, distinguish absence explicitly, and narrow the present payload before use.
+Representation is the compiler's job; presence is part of the author's contract. On installed
+binary/support `56ad1fdf80f`, the following complete module printed `absent`, `number 0`,
+`text[]`, `text[E]`, `row absent`, `row 7` on C, JS and Raiser (2026-11-05). This verifies these
+union/struct paths, not arbitrary nested optional states or a public `Maybe<T>` constructor.
+
+```ms
+type Payload = int32 | string;
+
+function describe(input: Payload | null): string {
+	if (input === null) return "absent";
+	if (typeof input === "string") return "text[" + input + "]";
+	return "number " + input.toString();
+}
+
+struct Row { n: int32; }
+
+function describeRow(input: Row | null): string {
+	if (input === null) return "row absent";
+	return "row " + input.n.toString();
+}
+
+console.log(describe(null));
+console.log(describe(0));
+console.log(describe(""));
+console.log(describe("E"));
+console.log(describeRow(null));
+console.log(describeRow({ n: 7 }));
+```
+
+[Measurement provenance and exclusions](CONTRACTS.md#bounded-findings-not-new-features).
 
 ### 7. Efficient Concatenation
 The compiler automatically optimizes string concatenation chains (`a + b + c + d`).
@@ -4476,6 +4545,19 @@ macro deriveEq(target) {
 ```
 
 ### Extern Declarations (FFI)
+
+Foreign declarations are a trust boundary, not a proof of a native body's hidden effects,
+retention or thread behavior. Access permissions, lifetime and result aliasing remain separate.
+
+**Approved transition, not implemented/landed:** remove `@pure`, without a replacement purity
+marker. The frozen module-const read path will use operand provenance and parameter kind,
+rather than rejecting a helper merely because its body reaches an unmarked extern. Readonly
+Ptr/Span over value-only data can pass while the foreign signature must still honor readonly
+access; counted handles, opaque/writable pointers and consuming/writing parameters derived
+from the frozen const remain restricted. This is not a general `func`/`noSideEffect` contract,
+proof of hidden C state, or fresh-return guarantee. Do not describe it as already available on
+a compiler that still has the old marker. See [transition status and limits](CONTRACTS.md#approved-contract-transitions).
+
 ```typescript
 // Standard FFI (names match) — a header you @include declares the symbol
 @include("stdlib.h")
