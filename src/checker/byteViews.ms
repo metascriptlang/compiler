@@ -1,7 +1,7 @@
 import { Node, NodeKind, Type, TypeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ArrayAccessData, UpdateExprData, NumberLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
-import { skipModifier, peelTransparentInstance, typeDisplayName, hasGenericParams } from "./types";
+import { skipModifier, peelTransparentInstance, typeDisplayName, hasGenericParams, typedArrayElement } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { pointerAddressElement } from "./pointerAddress";
 
@@ -42,6 +42,8 @@ function pointerCastSupported(source: Type, target: Type, vmObjects: boolean): b
 	if (destView != null) {
 		if (source.kind == TypeKind.String && destView.kind == TypeKind.Span
 			&& destView.typeReturn != null && destView.typeReturn.kind == TypeKind.Char) return true;
+		const viewed = typedArrayElement(source);
+		if (viewed != null) return destView.kind == TypeKind.Span && samePointee(viewed, destView.typeReturn);
 		return srcView != null && destView.kind == TypeKind.Span && samePointee(srcView.typeReturn, destView.typeReturn);
 	}
 	if (target.kind == TypeKind.Ptr) {

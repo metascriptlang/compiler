@@ -4386,6 +4386,17 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 	return null;
 }
 
+// The element type a typed array views, its TypedArray<T> argument; null when `t` is no typed array.
+export function typedArrayElement(t: Type | null): Type | null {
+	let cur = t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (cur.kind == TypeKind.GenericInstance && cur.typeChildren.length == 1 && getBuiltinKind(cur) == BuiltinKind.TypedArray) return cur.typeChildren[0];
+		cur = classParentOf(cur);
+		if (cur != null && cur.kind == TypeKind.Ref && cur.typeReturn != null) cur = cur.typeReturn;
+	}
+	return null;
+}
+
 export function declaredAncestorInstance(t: Type | null, target: Type): Type | null {
 	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
 	const origin = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : null;

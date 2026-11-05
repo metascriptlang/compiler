@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isOutParam, isStringLike, isArrayType } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -570,6 +570,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (source.kind == TypeKind.String && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) {
 			return true;
 		}
+		const viewed = typedArrayElement(source);
+		if (viewed != null) return sameElement(viewed, target.typeReturn);
 	}
 
 	// Var (out param) unwrap: T -> Var<T> (caller passes T, callee gets T*)
@@ -809,6 +811,8 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	if (target.kind == TypeKind.Span) {
 		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return sameElement(source.typeReturn, target.typeReturn);
 		if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) return true;
+		const viewed = typedArrayElement(source);
+		if (viewed != null) return sameElement(viewed, target.typeReturn);
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
 	if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.kind == TypeKind.CString) return true;
@@ -1900,6 +1904,8 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			const elemRel = typeRelation(formal.typeReturn, seq.typeReturn);
 			if (elemRel >= TypeRelation.Generic) return TypeRelation.Subtype;
 		}
+		const viewed = typedArrayElement(actual);
+		if (viewed != null && typeRelation(formal.typeReturn, viewed) >= TypeRelation.Generic) return TypeRelation.Subtype;
 	}
 	// Error type = suppress cascading
 	if (formal.kind == TypeKind.Error || actual.kind == TypeKind.Error) {
