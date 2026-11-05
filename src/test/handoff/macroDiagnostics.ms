@@ -1,4 +1,4 @@
-import { compileToCWithStd, compileToJSWithStd } from "../helpers";
+import { compileToCWithStd, compileToJSWithStd, compileProjectToCWithStd, MapEntry } from "../helpers";
 import { createInterpreter, evalModule, Evaluation, Diagnostic } from "../../embed/index";
 import { resolveRuntimeDir } from "../../utils/path";
 import { mkdir, ensureDir, readFile, writeFile, remove, removeAll, exists, fileSize, modifiedTime, changeStamp } from "std/fs";
@@ -274,6 +274,18 @@ test "macro std tiers: a std routine its module's Raiser tier lacks is refused o
 		assert !result.error.contains("cannot evaluate"), result.error;
 		assert !result.error.contains("internal:"), result.error;
 	}
+}
+
+test "macro std tiers: a helper the build checked reaches a std routine whose Raiser tier has another signature, and is refused by both signatures" {
+	const entries: MapEntry[] = [
+		{ entryPath: "tiers/lib.ms", entrySource: 'import { newEncodingOutput } from "std/core/encoding/output"; export function sized(n: int64): number { return newEncodingOutput(n).length; }' },
+		{ entryPath: "tiers/main.ms", entrySource: 'import { sized } from "./lib"; const n: number = @comptime { return sized(3); }; console.log(n);' },
+	];
+	const c = compileProjectToCWithStd(entries, "tiers/main.ms");
+	assert c.startsWith("ERROR"), c;
+	assert c.contains("the Raiser tier of std/core/encoding/output declares 'newEncodingOutput' as"), c;
+	assert c.contains("not as the build's"), c;
+	assert !c.contains("internal:"), c;
 }
 
 test "macro std tiers: a @comptime block that calls a std routine the Raiser cannot run is refused at the block's call" {

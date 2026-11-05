@@ -8,6 +8,7 @@ import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
+import { typeDisplayName } from "../../checker/types";
 import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
 import { metaNodeModulePath, isMetaNodeSym } from "../../compiler/meta/nodeSym";
@@ -481,14 +482,21 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
 	if (tier == null) return null;
 	if (sym.instantiatedFrom != null) return tierInstanceOf(sym, tier);
+	const builtShape = typeDisplayName(sym.symbolType);
+	let tierShape = "";
 	for (const head of tier) {
 		if (head.name != sym.name) continue;
-		if (head.overloads.length == 0) return head;
 		for (const candidate of [head, ...head.overloads]) {
 			if (sameType(candidate.symbolType, sym.symbolType)) return candidate;
+			const shape = typeDisplayName(candidate.symbolType);
+			if (shape == builtShape) return candidate;
+			tierShape = shape;
 		}
 	}
-	queueRaiserCompileError(`the Raiser tier of ${stdModuleName(sym.modulePath)} does not declare '${sym.name}'`, sym.location.line, sym.location.column, true);
+	const refusal = tierShape != ""
+		? `the Raiser tier of ${stdModuleName(sym.modulePath)} declares '${sym.name}' as ${tierShape}, not as the build's ${builtShape}`
+		: `the Raiser tier of ${stdModuleName(sym.modulePath)} does not declare '${sym.name}'`;
+	queueRaiserCompileError(refusal, sym.location.line, sym.location.column, true);
 	return sym;
 }
 
