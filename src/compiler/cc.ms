@@ -532,6 +532,27 @@ test "an emcc link and an object compile of --danger carry the wrap flag" {
 	assert !debug.value.lead.includes("-fwrapv");
 }
 
+test "emcc compile and link honor thin and full LTO" {
+	for (const lto of ["thin", "full"]) {
+		const opts = newCliOptions();
+		opts.targetOs = "emcc";
+		opts.lto = lto;
+		const expected = ltoFlags(lto, "emcc").trim();
+		const compile = cliCompileFlags(opts);
+		assert compile.includes(expected);
+		assert cliLinkFlags(compile, opts).includes(expected);
+	}
+}
+
+test "emcc leaves LTO disabled when explicitly off" {
+	const opts = newCliOptions();
+	opts.targetOs = "emcc";
+	opts.lto = "off";
+	const compile = cliCompileFlags(opts);
+	assert !compile.includes("-flto");
+	assert !cliLinkFlags(compile, opts).includes("-flto");
+}
+
 function acceptsFilePrefixMap(cc: string): boolean {
 	const name = basename(cc);
 	return isZigCC(cc) || isGnuGcc(cc) || name == "clang" || name == "clang.exe" || name.endsWith("-clang");
@@ -696,6 +717,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	}
 	// Emscripten (browser WASM): emcc handles everything
 	if (opts.targetOs == "emcc") {
+		flags = appendFlag(flags, ltoFlags(opts.lto, "emcc"));
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}

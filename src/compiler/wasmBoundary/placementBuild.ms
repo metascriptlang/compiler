@@ -2,7 +2,33 @@ import { execPath, execFileResult, cwd } from "std/process";
 import { ensureDir, writeFile, rename, exists, remove } from "std/fs";
 import { basename, isAbsolute, join, normalize } from "std/fs/path";
 import { LEDGER_EXPORT, ledgerEntryLines } from "./wasmSide";
-import { CliOptions, MODE_RELEASE, MODE_DANGER } from "../options";
+import {
+	CliOptions,
+	MODE_RELEASE,
+	MODE_DANGER,
+	newCliOptions,
+} from "../options";
+
+function wasmHalfOptions(opts: CliOptions): string[] {
+	const args = [`--passC=-msimd128 ${opts.passC}`];
+	if (opts.lto != "") args.push(`--lto=${opts.lto}`);
+	if (opts.mode == MODE_RELEASE) args.push("--release");
+	if (opts.mode == MODE_DANGER) args.push("--danger");
+	return args;
+}
+
+test "wasm half forwards an explicit LTO strategy including off" {
+	for (const lto of ["off", "thin", "full"]) {
+		const opts = newCliOptions();
+		opts.lto = lto;
+		assert wasmHalfOptions(opts).includes(`--lto=${lto}`);
+	}
+}
+
+test "wasm half leaves the unwritten LTO default to the child driver" {
+	const args = wasmHalfOptions(newCliOptions());
+	assert !args.some((arg) => arg.startsWith("--lto="));
+}
 
 // Builds the wasm half of a placed program as its own `--os=emcc --app=lib`
 // build, in a child of the running binary because a build keeps its link flags
@@ -71,9 +97,7 @@ export function buildWasmHalf(
 		`--output=${mjs}`,
 		`--passL=${linkFlags}`,
 	];
-	args.push(`--passC=-msimd128 ${opts.passC}`);
-	if (opts.mode == MODE_RELEASE) args.push("--release");
-	if (opts.mode == MODE_DANGER) args.push("--danger");
+	for (const arg of wasmHalfOptions(opts)) args.push(arg);
 	const run = execFileResult(execPath, args, stage);
 	if (!run.started) {
 		return Result.err(
