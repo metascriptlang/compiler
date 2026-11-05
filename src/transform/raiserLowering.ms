@@ -3,6 +3,7 @@
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
 
+import { wrapTypedArraySpanSources } from "./lowering/spanLower";
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node, NodeKind, CallExprData, BuiltinKind } from "../ast/node";
 import { walkNode } from "./walker";
@@ -157,6 +158,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = liftDestructors(result, ctx, placed);
 	result = lowerUnownedStores(result, ctx);
 	result = insertVarParamDerefs(result, ctx);
+	result = wrapTypedArraySpanSources(result);
 	return result;
 }
 

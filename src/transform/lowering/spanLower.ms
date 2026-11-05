@@ -26,7 +26,7 @@ import { overloadRoutine } from "../../checker/symbol";
 // `final`: run after conditionalExprLower. The first run splits only sources it
 // could make pure — one under a ternary arm or `&&` keeps its conversion node.
 export function spanLower(program: Node, ctx: TransformContext, final: boolean): Node {
-	walkNode(program, wrapSpanCoercions);
+	walkNode(program, (node: Node): Node => wrapSpanCoercions(node, false));
 	if (!ctx.jsBackend) walkExpandBlocks(program, stabilizeSpanSources, ctx);
 	return walkNode(program, (node: Node): Node => {
 		if (!ctx.jsBackend && !final && !splitsPure(node)) return node;
@@ -308,10 +308,21 @@ function isSpanValued(t: Type): boolean {
 	return false;
 }
 
-function wrapSpanCoercions(node: Node): Node {
-	if (node.kind == NodeKind.VariableDecl) return wrapSpanDeclInit(node);
-	if (node.kind == NodeKind.BinaryExpr) return wrapSpanAssign(node);
-	if (node.kind == NodeKind.ObjectLiteral) return wrapSpanObjectFields(node);
+// The Raiser reads an array or a string as a span with no conversion, but a typed array needs the view of
+// its buffer that the conversion builds.
+export function wrapTypedArraySpanSources(program: Node): Node {
+	return walkNode(program, (node: Node): Node => wrapSpanCoercions(node, true));
+}
+
+function wrapsIntoSpan(source: Node | null, onlyTypedArrays: boolean): boolean {
+	if (source == null || source.nodeType == null || isSpanValued(source.nodeType)) return false;
+	return !onlyTypedArrays || typedArrayElement(source.nodeType) != null;
+}
+
+function wrapSpanCoercions(node: Node, onlyTypedArrays: boolean): Node {
+	if (node.kind == NodeKind.VariableDecl) return wrapSpanDeclInit(node, onlyTypedArrays);
+	if (node.kind == NodeKind.BinaryExpr) return wrapSpanAssign(node, onlyTypedArrays);
+	if (node.kind == NodeKind.ObjectLiteral) return onlyTypedArrays ? node : wrapSpanObjectFields(node);
 	if (node.kind != NodeKind.CallExpr) return node;
 	const fnType = calleeFnType(node);
 	if (fnType == null) return node;
@@ -324,7 +335,7 @@ function wrapSpanCoercions(node: Node): Node {
 			const formal = fnType.typeChildren[i + receiver];
 			if (formal != null && formal.kind == TypeKind.Span && formal.typeReturn != null) {
 				const arg = cd.arguments[i];
-				if (arg != null && arg.nodeType != null && !isSpanValued(arg.nodeType)) {
+				if (wrapsIntoSpan(arg, onlyTypedArrays)) {
 					cd.arguments[i] = makeHiddenStdConv(arg, formal, arg.location);
 				}
 			}
@@ -334,24 +345,24 @@ function wrapSpanCoercions(node: Node): Node {
 	return node;
 }
 
-function wrapSpanAssign(node: Node): Node {
+function wrapSpanAssign(node: Node, onlyTypedArrays: boolean): Node {
 	const bd = node.data as BinaryExprData;
 	if (bd.operator != "=") return node;
 	if (bd.left.nodeType == null || bd.left.nodeType.kind != TypeKind.Span || bd.left.nodeType.typeReturn == null) return node;
 	const rhs = bd.right;
-	if (rhs != null && rhs.kind != NodeKind.NullLiteral && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
+	if (rhs != null && rhs.kind != NodeKind.NullLiteral && wrapsIntoSpan(rhs, onlyTypedArrays)) {
 		bd.right = makeHiddenStdConv(rhs, bd.left.nodeType, rhs.location);
 	}
 	return node;
 }
 
-function wrapSpanDeclInit(node: Node): Node {
+function wrapSpanDeclInit(node: Node, onlyTypedArrays: boolean): Node {
 	let declType = node.nodeType;
 	if (declType == null && node.resolvedSym != null) declType = node.resolvedSym.symbolType;
 	if (declType == null || declType.kind != TypeKind.Span || declType.typeReturn == null) return node;
 	const vd = node.data as VariableDeclData;
 	const init = vd.initializer;
-	if (init != null && init.kind != NodeKind.NullLiteral && init.nodeType != null && !isSpanValued(init.nodeType)) {
+	if (init != null && init.kind != NodeKind.NullLiteral && wrapsIntoSpan(init, onlyTypedArrays)) {
 		vd.initializer = makeHiddenStdConv(init, declType, init.location);
 	}
 	return node;
