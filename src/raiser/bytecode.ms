@@ -639,7 +639,7 @@ export function slotArrayWidth(slot: number): ElemWidth {
 
 export function carriesSlot(op: RaiserOpcode): boolean {
 	return match (op) {
-		RaiserOpcode.NewArray => true,
+		RaiserOpcode.NewArray | RaiserOpcode.ArraySlice => true,
 		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
 		_ => false,
 	};

@@ -538,7 +538,7 @@ function memberLayingAlike(s: RaiserCompState, t: Type | null, name: string): Ty
 }
 
 // An array holds its elements in the register class of their type, each as wide in memory as the type is.
-function elemWidthOf(cls: RaiserRegClass, t: Type | null): ElemWidth {
+export function elemWidthOf(cls: RaiserRegClass, t: Type | null): ElemWidth {
 	if (t == null || (cls != RaiserRegClass.Word && cls != RaiserRegClass.Float && cls != RaiserRegClass.Bool)) return ElemWidth.Wide;
 	const kind = memKindOf(t);
 	if (cls == RaiserRegClass.Float) return kind == MemKind.F32 ? ElemWidth.F32 : ElemWidth.Wide;

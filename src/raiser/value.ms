@@ -1,4 +1,4 @@
-import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqUnowned, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto, seqSetLenUnfilled, seqDataAt } from "./vmSeq";
+import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqNewViewAs, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqUnowned, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto, seqSetLenUnfilled, seqDataAt } from "./vmSeq";
 // Raiser VM — Value representation
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
@@ -735,7 +735,15 @@ export function heapArrayAssignBytes(heap: RaiserArrayHeap, handle: int64, at: i
 // A view (a slice) owns no elements: it stands on the plain array it views, which it keeps alive through RC, the
 // collector and copyGraph.
 export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int64, len: int32): int64 {
-	const view = seqNewView(heap.mem, seqCellOf(base.intVal), base.intVal, off, len as int64, OWNED_BY_RECEIVER_RC as int64) | (RaiserHeapKind.Seq as int64);
+	return heldView(heap, base, seqNewView(heap.mem, seqCellOf(base.intVal), base.intVal, off, len as int64, OWNED_BY_RECEIVER_RC as int64) | (RaiserHeapKind.Seq as int64));
+}
+
+// A view of a byte array as `len` elements of `cls` and `width`, starting `byteOff` bytes into its payload.
+export function heapAllocViewAs(heap: RaiserArrayHeap, base: RaiserValue, byteOff: int64, len: int64, cls: RaiserRegClass, width: ElemWidth): int64 {
+	return heldView(heap, base, seqNewViewAs(heap.mem, seqCellOf(base.intVal), base.intVal, byteOff, len, OWNED_BY_RECEIVER_RC as int64, cls, width) | (RaiserHeapKind.Seq as int64));
+}
+
+function heldView(heap: RaiserArrayHeap, base: RaiserValue, view: int64): int64 {
 	const held = heap.seqViews.get(base.intVal);
 	if (held == null) {
 		const list: int64[] = [view];

@@ -17,13 +17,13 @@ import {
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt, BuiltinKind } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, ElemWidth, arrayClassSlot, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { raiserRefusal, stdModuleName, hostRoutineKey } from "../../module/tiers";
 import { demandNativeBridge } from "./nativeBridge";
-import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference } from "./valueCopy";
+import { emitAggregateAssign, structShapeOperand, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, slotCyclicOf, slotUncountedOf, fieldInst, newArrayInst, borrowHoldsReference, elemWidthOf } from "./valueCopy";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { typedArrayElement, declaredFieldType, createPrimitive, brandBase, isPlainFunctionPointer, runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, distinctBody, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView, declaredFieldType, isAtomicRef, isDiscriminatedUnion, getDiscriminantName, jsMemberKind, unionMemberDisplay, isAwaitable } from "../../checker/types";
@@ -2769,11 +2769,21 @@ function compileTypedArraySpan(s: RaiserCompState, view: Node): int32 {
 	const offsetReg = loadFieldOf(s, viewReg, view.nodeType, "byteOffset");
 	const lengthReg = loadFieldOf(s, viewReg, view.nodeType, "length");
 	const index = createPrimitive(TypeKind.Int64);
+	const elem = typedArrayElement(view.nodeType);
+	const cls = regClassOf(s, elem);
+	const width = elemWidthOf(cls, elem);
+	const size = width == ElemWidth.U8 || width == ElemWidth.I8 ? 1 : width == ElemWidth.U16 || width == ElemWidth.I16 ? 2 : width == ElemWidth.Wide ? 8 : 4;
 	const slotStart = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Word]);
 	emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, emitNumericConv(s, offsetReg, declaredFieldType(view.nodeType, "byteOffset"), index), 0));
-	emitInst(s, raiserABC(RaiserOpcode.AddI64, slotStart + 1, slotStart, emitNumericConv(s, lengthReg, declaredFieldType(view.nodeType, "length"), index)));
+	let count = emitNumericConv(s, lengthReg, declaredFieldType(view.nodeType, "length"), index);
+	if (size > 1) {
+		const scaled = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.MulI64, scaled, count, emitIntConst(s, size)));
+		count = scaled;
+	}
+	emitInst(s, raiserABC(RaiserOpcode.AddI64, slotStart + 1, slotStart, count));
 	const dest = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart));
+	emitInst(s, width == ElemWidth.U8 ? raiserABC(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart) : slotInst(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart, arrayClassSlot(cls, false, false, width)));
 	return dest;
 }
 

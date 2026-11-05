@@ -280,6 +280,24 @@ export function seqNewView(mem: VmMemory, base: int64, baseHandle: int64, off: i
 	return view;
 }
 
+// A view of a byte array's payload as elements of another class and width: `byteOff` is a multiple of the
+// element size, so the view's own shift turns its offset back into elements when the base moves its payload.
+export function seqNewViewAs(mem: VmMemory, base: int64, baseHandle: int64, byteOff: int64, len: int64, rc: int64, cls: RaiserRegClass, width: ElemWidth): int64 {
+	const view = newCell(mem, SEQ_CELL_SIZE, 8, SEQ_TYPE_INDEX, true);
+	setCellRc(view, rc);
+	setCellRootIdx(view, 0);
+	st64(view + 16, (cls as int64) | ((width as int64) << WIDTH_SHIFT) | (widthShift(width) << SHIFT_SHIFT));
+	st64(view, len);
+	const p = ld64(base + 8);
+	st64(view + 8, p == 0 ? 0 : p + byteOff);
+	st64(view + 24, baseHandle);
+	return view;
+}
+
+export function elemWidthBytes(width: ElemWidth): int64 {
+	return 1 << widthShift(width);
+}
+
 // How many elements into its base's payload a view starts.
 export function seqViewOffset(view: int64): int64 {
 	const base = (ld64(view + 24) >> 3) << 3;

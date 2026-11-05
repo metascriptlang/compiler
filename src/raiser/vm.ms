@@ -1,4 +1,4 @@
-import { seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqUnowned, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace, seqDataAt, seqWidth } from "./vmSeq";
+import { elemWidthBytes, seqSwapContents, seqPointViewInto, seqCyclic, seqUncounted, seqUnowned, seqClass, seqLen, seqLoad, seqStore, seqPush, seqBase, seqViewOffset, seqCount, seqClassWidth, seqLoadWide, seqPushWideInPlace, seqDataAt, seqWidth } from "./vmSeq";
 import { cellTypeIndex, isLiveCell, VmMemory, createVmMemory, reserveSlots } from "./memory";
 // Raiser VM — Bytecode executor
 
@@ -9,7 +9,7 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants, rcDecUnlessLast,
-	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
+	heapAllocViewAs, raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapUnownedElements, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
@@ -3989,7 +3989,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleArraySetLen(vm, ia, ib, ic);
 		},
 		RaiserOpcode.ArraySlice => {
-			vmHandleArraySlice(vm, ia, ib, ic);
+			vmHandleArraySlice(vm, ia, ib, ic, ((func.packed[pc] >> 56) & 255) as number);
 		},
 		RaiserOpcode.NewObject => {
 			vmHandleNewObject(vm, ia, ib, func);
@@ -5228,7 +5228,9 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	vmEvictAll(vm, evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }
 
-function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+// A slot names the class and width of a view over a byte array's payload (a typed array's Span): the bounds
+// are bytes, and the view holds the elements between them.
+function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32, slot: number): void {
 	const srcVal = getDyn(vm, ib);
 	const start = getDyn(vm, ic).intVal;
 	const end = getDyn(vm, ic + 8).intVal;
@@ -5245,6 +5247,17 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	if (seqBase(cell) != 0) {
 		base = handleValue(seqBase(cell));
 		off = seqViewOffset(cell) + start;
+	}
+	if (slot != 0) {
+		const width = slotArrayWidth(slot);
+		const size = elemWidthBytes(width);
+		if (seqWidth(cell) != ElemWidth.U8 || off % size != 0 || (end - start) % size != 0) {
+			vmError(vm, `internal: a ${size}-byte element view of bytes ${start}..${end} is not aligned to its element`); return;
+		}
+		const typed = heapAllocViewAs(vm.arrayHeap, base, off, (end - start) / size, slotArrayClass(slot), width);
+		vmIncref(vm, base);
+		setRegRef(vm, ia, RaiserValueKind.Array, typed);
+		return;
 	}
 	const view = heapAllocView(vm.arrayHeap, base, off, (end - start) as int32);
 	vmIncref(vm, base);
