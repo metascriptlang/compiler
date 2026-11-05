@@ -3272,6 +3272,11 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 	}
 }
 
+function sliceOf(slice: Node, element: Type): Type {
+	const span = createSpan(element);
+	return writeRefusal(slice, WriteSite.View) != null ? createReadonlyView(span) : span;
+}
+
 function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as ArrayAccessData;
 	// Defensive: malformed ArrayAccess may have null d.array (e.g. macro
@@ -3425,7 +3430,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 				node.nodeType = errorType(); return;
 			}
 			accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
-				: createSpan(getElementType(arrType));
+				: sliceOf(node, getElementType(arrType));
 		} else if (arrType.kind == TypeKind.String) {
 			accessType = stringType();
 		} else {
