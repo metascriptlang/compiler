@@ -15,6 +15,7 @@ import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, json
 import {
 	EncodingBytes, EncodingIndex, newEncodingOutput, freshEncodingOutputBytes,
 } from "std/core/encoding/output";
+import { byteIsAscii } from "std/core/string/bytes";
 
 const DEPTH_LIMIT: int32 = 1000;
 
@@ -30,6 +31,7 @@ type ParseResult = Result<JsonValue, string>;
 // ===== Public API =====
 
 export function parseJson(input: string): Result<JsonValue, string> {
+	markAsciiForSlices(input);
 	const b = input.asBytes();
 	let pos = skipWs(b, 0);
 	const value = try parseValue(input, b, pos);
@@ -41,6 +43,12 @@ export function parseJson(input: string): Result<JsonValue, string> {
 }
 
 // ===== Scanning Helpers =====
+
+// The byte-slice kernel copies an ASCII source without the UTF-8 boundary repair and marks each
+// slice ASCII, but only when the source's ASCII bit is already cached; this check caches it.
+function markAsciiForSlices(input: string): void {
+	byteIsAscii(input);
+}
 
 function skipWs(b: Bytes, pos: int32): int32 {
 	let p = pos;
