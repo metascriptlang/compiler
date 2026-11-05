@@ -39,6 +39,7 @@ const pkcs8 = (prefix, raw) => crypto.createPrivateKey({ key: Buffer.concat([Buf
 const edKey = pkcs8("302e020100300506032b657004220420", b32);
 const edPublic = crypto.createPublicKey(edKey);
 const edSig = crypto.sign(null, b64, edKey);
+if (!crypto.verify(null, b64, edPublic, edSig)) throw new Error("ed25519 verify preflight failed");
 bench("ed25519 sign 64 B", 0, () => { sink += crypto.sign(null, b64, edKey).length; });
 bench("ed25519 signSync 64 B", 0, () => { sink += crypto.sign(null, b64, edKey).length; });
 bench("ed25519 verify 64 B", 0, () => { if (crypto.verify(null, b64, edPublic, edSig)) sink += 1; });
@@ -64,6 +65,7 @@ function open(algorithm, key, box) {
 }
 bench("aes-256-gcm seal 1 MB", 1048576, () => { sink += seal("aes-256-gcm", b32, 12, b1m); });
 const aesBox = sealed("aes-256-gcm", b32, b1m);
+if (open("aes-256-gcm", b32, aesBox) != b1m.length) throw new Error("aes-gcm open preflight failed");
 bench("aes-256-gcm open 1 MB", 1048576, () => { sink += open("aes-256-gcm", b32, aesBox); });
 bench("aes-256-gcm sealSync 1 MB", 1048576, () => { sink += seal("aes-256-gcm", b32, 12, b1m); });
 bench("aes-256-cbc encrypt 1 MB", 1048576, () => {
@@ -72,18 +74,22 @@ bench("aes-256-cbc encrypt 1 MB", 1048576, () => {
 });
 bench("chacha20-poly1305 seal 1 MB", 1048576, () => { sink += seal("chacha20-poly1305", b32, 12, b1m); });
 const chachaBox = sealed("chacha20-poly1305", b32, b1m);
+if (open("chacha20-poly1305", b32, chachaBox) != b1m.length) throw new Error("chacha20 open preflight failed");
 bench("chacha20-poly1305 open 1 MB", 1048576, () => { sink += open("chacha20-poly1305", b32, chachaBox); });
 
 const rsa = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 const rsaSig = crypto.sign("sha256", b64, rsa.privateKey);
 const oaep = { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" };
 const rsaSealed = crypto.publicEncrypt({ key: rsa.publicKey, ...oaep }, b32);
+if (!crypto.verify("sha256", b64, rsa.publicKey, rsaSig)) throw new Error("rsa verify preflight failed");
+if (crypto.privateDecrypt({ key: rsa.privateKey, ...oaep }, rsaSealed).length != 32) throw new Error("rsa oaep preflight failed");
 bench("rsa-2048 sign pkcs1 64 B", 0, () => { sink += crypto.sign("sha256", b64, rsa.privateKey).length; });
 bench("rsa-2048 verify pkcs1 64 B", 0, () => { if (crypto.verify("sha256", b64, rsa.publicKey, rsaSig)) sink += 1; });
 bench("rsa-2048 oaep decrypt 32 B", 0, () => { sink += crypto.privateDecrypt({ key: rsa.privateKey, ...oaep }, rsaSealed).length; });
 
 const ec = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 const ecSig = crypto.sign("sha256", b64, ec.privateKey);
+if (!crypto.verify("sha256", b64, ec.publicKey, ecSig)) throw new Error("ecdsa verify preflight failed");
 bench("ecdsa-p256 sign 64 B", 0, () => { sink += crypto.sign("sha256", b64, ec.privateKey).length; });
 bench("ecdsa-p256 verify 64 B", 0, () => { if (crypto.verify("sha256", b64, ec.publicKey, ecSig)) sink += 1; });
 bench("ecdh-p256 shared", 0, () => { sink += crypto.diffieHellman({ privateKey: ec.privateKey, publicKey: ec.publicKey }).length; });

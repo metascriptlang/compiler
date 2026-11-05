@@ -50,6 +50,7 @@ bench("argon2id t3 m4M p1", 0, () => { sink += must(argon2HashRawSync(b32, b32, 
 const edKey = must(await Ed25519PrivateKey.fromSeed(b32));
 const edPublic = edKey.publicKey();
 const edSig = must(await edSign(edKey, b64));
+if (!(await edVerify(edPublic, edSig, b64))) throw new Error("ed25519 verify preflight failed");
 await benchAsync("ed25519 sign 64 B", 0, async () => { sink += must(await edSign(edKey, b64)).length; });
 bench("ed25519 signSync 64 B", 0, () => { sink += must(edSignSync(edKey, b64)).length; });
 await benchAsync("ed25519 verify 64 B", 0, async () => { if (await edVerify(edPublic, edSig, b64)) sink += 1; });
@@ -61,18 +62,22 @@ await benchAsync("x25519 shared", 0, async () => { sink += must(await sharedSecr
 const aesKey = must(AesKey.import(b32));
 await benchAsync("aes-256-gcm seal 1 MB", 1048576, async () => { sink += must(await aesSeal(aesKey, b1m)).length; });
 const aesSealed = must(await aesSeal(aesKey, b1m));
+if (must(await aesOpen(aesKey, aesSealed)).length != b1m.length) throw new Error("aes-gcm open preflight failed");
 await benchAsync("aes-256-gcm open 1 MB", 1048576, async () => { sink += must(await aesOpen(aesKey, aesSealed)).length; });
 bench("aes-256-gcm sealSync 1 MB", 1048576, () => { sink += must(aesSealSync(aesKey, b1m)).length; });
 await benchAsync("aes-256-cbc encrypt 1 MB", 1048576, async () => { sink += must(await cbcEncrypt(aesKey, b1m, b32.slice(0, 16))).length; });
 const chachaKey = must(ChaChaKey.import(b32));
 await benchAsync("chacha20-poly1305 seal 1 MB", 1048576, async () => { sink += must(await chachaSeal(chachaKey, b1m)).length; });
 const chachaSealed = must(await chachaSeal(chachaKey, b1m));
+if (must(await chachaOpen(chachaKey, chachaSealed)).length != b1m.length) throw new Error("chacha20 open preflight failed");
 await benchAsync("chacha20-poly1305 open 1 MB", 1048576, async () => { sink += must(await chachaOpen(chachaKey, chachaSealed)).length; });
 
 const rsaKey = must(await RsaPrivateKey.generate(2048));
 const rsaPublic = rsaKey.publicKey();
 const rsaSig = must(await rsaSign(rsaKey, b64));
 const rsaSealed = must(await rsaEncrypt(rsaPublic, b32));
+if (!(await rsaVerify(rsaPublic, b64, rsaSig))) throw new Error("rsa verify preflight failed");
+if (must(await rsaDecrypt(rsaKey, rsaSealed)).length != 32) throw new Error("rsa oaep preflight failed");
 await benchAsync("rsa-2048 sign pkcs1 64 B", 0, async () => { sink += must(await rsaSign(rsaKey, b64)).length; });
 await benchAsync("rsa-2048 verify pkcs1 64 B", 0, async () => { if (await rsaVerify(rsaPublic, b64, rsaSig)) sink += 1; });
 await benchAsync("rsa-2048 oaep decrypt 32 B", 0, async () => { sink += must(await rsaDecrypt(rsaKey, rsaSealed)).length; });
@@ -80,6 +85,7 @@ await benchAsync("rsa-2048 oaep decrypt 32 B", 0, async () => { sink += must(awa
 const ecKey = must(await EcPrivateKey.generate("p256"));
 const ecPublic = ecKey.publicKey();
 const ecSig = must(await ecdsaSign(ecKey, b64));
+if (!(await ecdsaVerify(ecPublic, b64, ecSig))) throw new Error("ecdsa verify preflight failed");
 await benchAsync("ecdsa-p256 sign 64 B", 0, async () => { sink += must(await ecdsaSign(ecKey, b64)).length; });
 await benchAsync("ecdsa-p256 verify 64 B", 0, async () => { if (await ecdsaVerify(ecPublic, b64, ecSig)) sink += 1; });
 await benchAsync("ecdh-p256 shared", 0, async () => { sink += must(await ecdh(ecKey, ecPublic)).length; });
