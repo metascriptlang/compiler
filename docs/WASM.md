@@ -200,6 +200,22 @@ WebGL2 screenshots or M5 completion. The verification recipe's final hash glob e
 a generated directory after all assertions passed; explicit-file hashes subsequently matched
 without rerunning the product checks.
 
+Callback-specialization reassessment, 2026-11-05: inspected the checked R8 tree
+`1fafa1c260a74e86fbd2fc9763fe8bf0473a15a3` benchmark's wasm with `wasm-dis` from the same
+emcc SDK. The companion maps `_msb_benchWasm_each` to export `D`, function `$37`; its loop
+calls `$fimport$14` directly, which the import table maps to `msb_cb_i_i`. All three remaining
+`call_indirect` sites in that function are outside every loop. The audited wasm has the same
+`cf4729b1…` SHA256 recorded below. Raw proof: m1m `out/r8-green/r7-direct-loop-proof.txt`
+and `callback-export.wat`.
+
+The old specialization experiment targeted the closure-thunk/indirect hop in this hot loop.
+Existing thin LTO has already removed it, consistent with the measured callback reduction
+from 11.57 to 6.89 ns per callback above. Adding a compiler specializer solely to reproduce
+that result would duplicate existing work. This is a finding about this benchmark, not proof
+that every recursive, multi-callback or nested callback shape is devirtualized. Reopen that
+optimization when a named real-consumer hot loop still contains the indirect hop under the
+chosen LTO strategy; no callback registry, generation check or failure guard was removed.
+
 Result-import wrapper check, 2026-11-05, m1m/Node 24.1.0/emcc 5.0.5, tree
 `1fafa1c260a74e86fbd2fc9763fe8bf0473a15a3`: three interleaved rounds of the real generated
 `src/bench/wasmBoundary/main.ms` bundle, built with `--target=js --danger` (default thin LTO).
