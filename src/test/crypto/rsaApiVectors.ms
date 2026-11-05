@@ -12,6 +12,13 @@ import {
 } from "std/crypto/pure/rsaFixtures";
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
 import { encodeHex, decodeHex } from "std/core/encoding";
+import { readFile } from "std/fs";
+import {
+	JsonKind, asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
+import {
+	rsaPublicFromSpki, rsaVerifyPkcs1,
+} from "std/crypto/pure/rsa";
 
 when (c) {
 	import {
@@ -37,6 +44,63 @@ function refused<T>(
 		assert result.error.kind == kind;
 		assert result.error.operation == operation;
 	}
+}
+
+test "private RSA PKCS1 verify API checks all 776 pinned Wycheproof cases" {
+	let valid = 0;
+	let invalid = 0;
+	let acceptable = 0;
+	for (const hash of ["sha256", "sha384", "sha512"]) {
+		const text = readFile(
+			`std/crypto/test/vectors/rsa_signature_2048_${hash}_test.json`,
+		);
+		assert text.ok;
+		const parsed = parseJson(text.value);
+		assert parsed.ok;
+		const groups = parsed.value.getDynamicField("testGroups");
+		assert groups.kind == JsonKind.Array;
+		let count = 0;
+		for (let g = 0; g < groups.length(); g++) {
+			const group = groups.at(g);
+			const expectedHash = hash == "sha256" ? "SHA-256" :
+				hash == "sha384" ? "SHA-384" : "SHA-512";
+			assert group.getDynamicField("sha").asString() == expectedHash;
+			const key = must(RsaPublicKey.importPemSync(
+				group.getDynamicField("publicKeyPem").asString(),
+			));
+			const raw = rsaPublicFromSpki(
+				group.getDynamicField("publicKeyDer").asString().decodeHex(),
+			);
+			assert raw != null;
+			const tests = group.getDynamicField("tests");
+			assert tests.kind == JsonKind.Array;
+			for (let t = 0; t < tests.length(); t++) {
+				const vector = tests.at(t);
+				const id = vector.getDynamicField("tcId").asInt32();
+				const data = vector.getDynamicField("msg").asString().decodeHex();
+				const signature = vector.getDynamicField("sig").asString()
+					.decodeHex();
+				const accepted = verifySync(key, data, signature, hash, "pkcs1v15");
+				const category = vector.getDynamicField("result").asString();
+				if (category == "valid") {
+					assert accepted, `RSA PKCS1 ${hash} tcId ${id}: valid rejected`;
+					valid++;
+				} else if (category == "invalid") {
+					assert !accepted, `RSA PKCS1 ${hash} tcId ${id}: invalid accepted`;
+					invalid++;
+				} else {
+					assert category == "acceptable" && id == 8;
+					assert accepted == rsaVerifyPkcs1(raw, hash, data, signature),
+						`RSA PKCS1 ${hash} tcId ${id}: changed acceptable-case policy`;
+					acceptable++;
+				}
+				count++;
+			}
+		}
+		assert count == parsed.value.getDynamicField("numberOfTests").asInt32();
+		assert count == (hash == "sha384" ? 258 : 259);
+	}
+	assert valid == 24 && invalid == 749 && acceptable == 3;
 }
 
 test "private RSA key API preserves every native PEM format" {
