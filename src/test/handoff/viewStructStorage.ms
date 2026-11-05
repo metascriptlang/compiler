@@ -1,5 +1,21 @@
 import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
 
+test "a parameter whose union holds a view is refused on a constructor and a method as on a function" {
+	const refused = [
+		["class W { n: number; constructor(src: number | Readonly<Span<uint8>>) { this.n = 0; } }", "parameter 'src' of type Readonly<Span<uint8>> | number cannot hold Readonly<Span<uint8>> inside it"],
+		["class W { n: number = 0; set(src: number | Readonly<Span<uint8>>): void {} }", "parameter 'src' of type Readonly<Span<uint8>> | number cannot hold Readonly<Span<uint8>> inside it"],
+		["function f(src: number | Readonly<Span<uint8>>): number { return 0; }", "parameter 'src' of type Readonly<Span<uint8>> | number cannot hold Readonly<Span<uint8>> inside it"],
+	];
+	const missed: string[] = [];
+	for (const row of refused) {
+		const c = compileToCWithStd(row[0]);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/viewParam.ms", entrySource: row[0] }], "test/viewParam.ms");
+		if (c.ok || c.error.indexOf(row[1]) < 0) missed.push(row[0] + " — C: " + (c.ok ? "compiled" : c.error));
+		if (!js.startsWith("ERROR:") || js.indexOf(row[1]) < 0) missed.push(row[0] + " — JS: " + js);
+	}
+	assert missed.length == 0, missed.join("\n");
+}
+
 test "a struct that holds a view is a view: refused where a view is stored" {
 	const chunk = "struct Chunk { bytes: Readonly<Span<uint8>>; n: int32; }\n";
 	const refused = [
