@@ -6,6 +6,7 @@
 //  3. (removed) pointerParam — now handled at codegen time (Reference: indirect location parity)
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
 //  5. optionalCoercion    — wrap T returns for T|null return types
+//  6. presizedPush      — build an array a counted loop pushes onto once per step the way `map` does: presized, written by index (NIM-REF TR-41)
 //  7. inductionPointer    — carry a Span index of a @computedGoto loop as a pointer under --danger (it reads the final shape of every access and call)
 //  8. loopSpanCache      — hold the length and data of the arrays a call-free loop reads or fills in a local Span under --danger (last, so it leaves a computed-goto loop as inductionPointer shaped it)
 //  9. constDataMark      — flag array literals of deep-constant elements so codegen copies one static initializer (last: the elements are in their final shape)
@@ -26,6 +27,7 @@ import { coerceOptionals } from "./optionalCoercion";
 import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
+import { lowerPresizedPushes } from "./presizedPush";
 import { lowerInductionPointers } from "./inductionPointer";
 import { lowerLoopSpans } from "./loopSpanCache";
 import { markConstData } from "./constDataMark";
@@ -51,6 +53,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.lowerDownConversions");
 	result = insertVarParamDerefs(result, ctx);
 	flowLap("pass.insertVarParamDerefs");
+	result = lowerPresizedPushes(result, ctx);
+	flowLap("pass.lowerPresizedPushes");
 	result = lowerInductionPointers(result, ctx);
 	flowLap("pass.lowerInductionPointers");
 	result = lowerLoopSpans(result, ctx);

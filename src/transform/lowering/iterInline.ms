@@ -1073,7 +1073,7 @@ function freshLike(old: Symbol, ctx: TransformContext, unique: boolean): Symbol 
 	return fresh;
 }
 
-function cloneFresh(node: Node, renames: HashMap<Symbol, Symbol>, ctx: TransformContext, unique: boolean): Node {
+export function cloneFresh(node: Node, renames: HashMap<Symbol, Symbol>, ctx: TransformContext, unique: boolean): Node {
 	const copy = cloneNodeKeepSem(node);
 	copyLabels(node, copy);
 	const labels = new HashMap<string, string>();

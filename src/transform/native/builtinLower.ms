@@ -502,7 +502,7 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // setLength is the real API. arr.length = n is syntactic sugar.
 // Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
 
-function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
+export function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator != "=") return node;
