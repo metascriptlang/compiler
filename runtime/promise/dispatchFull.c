@@ -30,10 +30,9 @@ static _Atomic(msActorPollFn) msActorPollHook = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
 static _Atomic(msActorPollFn) msActorIdleHook = NULL;
 void msSetActorIdleHook(bool (*hook)(void)) { atomic_store_explicit(&msActorIdleHook, hook, memory_order_release); }
-static _Atomic(msActorPollFn) msActorReadyHook = NULL;
-void msSetActorReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorReadyHook, hook, memory_order_relaxed); }
 static _Atomic(msActorPollFn) msActorParkReadyHook = NULL;
 void msSetActorParkReadyHook(bool (*hook)(void)) { atomic_store_explicit(&msActorParkReadyHook, hook, memory_order_relaxed); }
+bool msLoopHasReadyWork(void);
 
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
@@ -496,7 +495,7 @@ bool msCompletionQueueDrain(void) {
 bool msCompletionQueueDrainAll(void) { return msCompletionQueueDrain(); }
 void* msLoopCompletionQueue(void) { return NULL; }
 bool msWorkerLoopPump(void) { return false; }
-bool msWorkerLoopPending(void) { return false; }
+bool msWorkerLoopPending(void) { return msLoopHasReadyWork(); }
 int msWorkerTimerDelayMs(void) { return -1; }
 static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
@@ -737,8 +736,9 @@ bool msCompletionQueueDrain(void) {
 /* A push into the thread's own channel sends no wake (msChannelWake), so a worker
  * reads its channel before it parks. */
 bool msWorkerLoopPending(void) {
-    return tlWorkerChannel != NULL
-        && atomic_load_explicit(&tlWorkerChannel->queue.tail->next, memory_order_acquire) != NULL;
+    if (tlWorkerChannel != NULL
+        && atomic_load_explicit(&tlWorkerChannel->queue.tail->next, memory_order_acquire) != NULL) return true;
+    return msLoopHasReadyWork();
 }
 
 bool msWorkerLoopPump(void) {
@@ -970,14 +970,8 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 	}
 }
 
-/* Standard reference adjustTimeout pattern */
-static bool msLoopReadyIn(msDispatcher* d) {
-	if (d != NULL && msDequeLen(&d->callbacks) > 0) return true;
-	msActorPollFn actorReady = atomic_load_explicit(&msActorReadyHook, memory_order_relaxed);
-	return actorReady != NULL && actorReady();
-}
-
-/* Asked only by a loop about to park in its I/O engine (msIoRunOnce, msUringWait). */
+/* The one question every loop asks before it sleeps (a worker's condvar, an I/O engine poll, the
+ * host's next delay): it drops the amortized actor wake, so a send after it wakes the sleeper. */
 bool msLoopHasReadyWork(void) {
 	if (gDispatcher != NULL && msDequeLen(&gDispatcher->callbacks) > 0) return true;
 	msActorPollFn ready = atomic_load_explicit(&msActorParkReadyHook, memory_order_relaxed);
@@ -985,7 +979,8 @@ bool msLoopHasReadyWork(void) {
 }
 
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
-	if (msLoopReadyIn(d)) return 0;
+	(void)d;
+	if (msLoopHasReadyWork()) return 0;
 	/* Cap to actor idle timeout if set (ensures idle scan fires on time) */
 	if (msActorIdleCapMs > 0 && (pollTimeout < 0 || msActorIdleCapMs < pollTimeout)) {
 		pollTimeout = msActorIdleCapMs;
@@ -1028,7 +1023,8 @@ static bool msRunOnceIn(int timeoutMs) {
 	}
 
 	/* Step 2: Poll for cross-thread completions + I/O events */
-	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
+	/* A turn that ran work polls without waiting, so only a turn about to sleep asks (and drops the wake token). */
+	int adj = didWork ? 0 : msAdjustTimeout(d, timeoutMs, nextTimer);
 #ifdef _WIN32
 	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
 	 * Worker already set value + finished (Step 1, see thread.h:99-103); main thread

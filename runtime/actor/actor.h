@@ -1820,7 +1820,6 @@ extern _Atomic(int) msNextActorRR;        /* round-robin assignment counter */
 /* Forward declarations */
 extern void msSetActorPollHook(bool (*hook)(void));  /* dispatch.c */
 extern void msSetActorIdleHook(bool (*hook)(void));  /* dispatch.c */
-extern void msSetActorReadyHook(bool (*hook)(void)); /* dispatch.c */
 extern void msSetActorParkReadyHook(bool (*hook)(void)); /* dispatch.c */
 static inline bool msActorSystemIdle(void);           /* defined below */
 static inline void msActorShutdownAtExit(void);       /* defined below */
@@ -1854,13 +1853,7 @@ static inline bool msActorPollEventLoop(void) {
     return msActorPollLocal();
 }
 
-static inline bool msActorLocalRunQueued(void) {
-    int id = msMySchedulerID;
-    return id >= 0 && id < msSchedulerCount
-        && atomic_load_explicit(&msSchedulers[id].runHead, memory_order_relaxed) != NULL;
-}
-
-/* A loop about to park in its I/O engine drops the amortized wake before its last look at
+/* A loop about to sleep (a worker's condvar, an I/O engine poll, the host's wait) drops the amortized wake before its last look at
  * the run queue: a sender then either sees the flag dropped and wakes the loop, or pushed
  * before the re-read (the seq_cst exchange in msActorScheduleEdge pairs with the fence). */
 static inline bool msActorLocalRunQueuedBeforePark(void) {
@@ -1887,7 +1880,6 @@ static inline void msActorSystemInit(void) {
     msCDInit();
     msSetActorPollHook(msActorPollEventLoop);
     msSetActorIdleHook(msActorSystemIdle);
-    msSetActorReadyHook(msActorLocalRunQueued);
     msSetActorParkReadyHook(msActorLocalRunQueuedBeforePark);
     msSetActorExitHook(msActorShutdownAtExit);
     atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
