@@ -64,6 +64,9 @@ static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int
 	return q;
 }
 
+#if defined(__EMSCRIPTEN__)
+__attribute__((noinline))
+#endif
 void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) {
 	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;

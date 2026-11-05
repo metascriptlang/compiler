@@ -74,6 +74,17 @@ function nullableEntryFor(names: string[]) {
 	return wasmEntrySource(manifestFrom(NULLABLE, names).functions, (p: string) => "./calc");
 }
 
+const ARRAY_GROWTH_REFERENCE = '@emit("void* const msbKeepArrayGrowth[] '
+	+ '__attribute__((used)) = { (void*)msArrayPrepareAdd };");';
+
+test "wasm entry: scalar-only exports keep array growth addressable" {
+	assert entryFor(["isEven"]).source.includes(ARRAY_GROWTH_REFERENCE);
+}
+
+test "wasm entry: Vec exports keep array growth addressable" {
+	assert entryFor(["scale"]).source.includes(ARRAY_GROWTH_REFERENCE);
+}
+
 test "wasm entry: an unsigned callback value crosses its signed wire by its bits, so a value past the signed range does not trap" {
 	const s = entryFor(["probeU32", "probeU64"]).source;
 	assert s.includes("msbm0_probeU32((a0: uint32): uint32 => { const w = msb_cb_i_i(cb, msbWireU32(a0)); msbCheck(); return msbUnwireU32(w); })");

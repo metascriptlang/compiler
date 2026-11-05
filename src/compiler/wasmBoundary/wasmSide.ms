@@ -645,6 +645,10 @@ function entryLines(
 		const box = usage.viewElements.length > 0 ? ", VecBox" : "";
 		lines.push(`import { Handle${box} } from "std/ffi";`);
 	}
+	lines.push(
+		'@emit("void* const msbKeepArrayGrowth[] '
+			+ '__attribute__((used)) = { (void*)msArrayPrepareAdd };");',
+	);
 	for (const l of unsignedWireLines()) lines.push(l);
 	if (usage.hasString) for (const l of stringHelperLines()) lines.push(l);
 	if (usage.hasScalarSome) {
