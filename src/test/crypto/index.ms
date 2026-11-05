@@ -2,6 +2,7 @@
 
 import "./aeadOracle";
 import "./aesApiVectors";
+import "./argon2ApiVectors";
 import "./blake2bApiVectors";
 import "./chachaApiVectors";
 import "./ed25519ApiVectors";
