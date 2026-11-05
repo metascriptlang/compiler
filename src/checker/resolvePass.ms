@@ -465,6 +465,14 @@ export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | nu
 	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + nestedViewShown(t, view)
 		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
 }
+function refuseNestedViewParams(ctx: CheckerContext, routine: Node, names: string[], types: Type[]): void {
+	for (let pi = 0; pi < types.length && pi < names.length; pi += 1) {
+		const pLoc = routine.paramLocations != null && pi < routine.paramLocations.length && routine.paramLocations[pi] != null
+			? routine.paramLocations[pi] : routine.location;
+		refuseNestedView(ctx, "parameter '" + names[pi] + "'", types[pi], pLoc.line, pLoc.column);
+	}
+}
+
 function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
 	const view = findViewType(t);
 	if (view == null) return;
@@ -3194,6 +3202,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
+	refuseNestedViewParams(ctx, member, cd.ctorParams, paramTypes);
 	const defaults = cd.ctorDefaults != null ? cd.ctorDefaults : [];
 	if (member.flags.has(NodeFlag.Abstract)) addError(ctx, "'abstract' modifier can only appear on a class, method, or property declaration", member.location.line, member.location.column);
 	if (!isCtorSignature(member)) {
@@ -3317,6 +3326,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column, member.typeExprs);
 			if (receiver != null) paramTypes[0] = receiver;
 			wrapModifierTypes(md.methodFlags, paramTypes);
+			refuseNestedViewParams(ctx, member, md.methodParams, paramTypes);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column, member.typeExpr) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
@@ -3546,6 +3556,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.actorBody[mi]), methodGenericNames.join(","));
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column, member.typeExprs);
+			refuseNestedViewParams(ctx, member, md.methodParams, paramTypes);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column, member.typeExpr) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
