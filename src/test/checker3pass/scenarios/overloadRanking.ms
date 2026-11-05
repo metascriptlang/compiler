@@ -148,6 +148,43 @@ function size(this b: Box): int32 { return 2; }
 	assert errors[1] == "redefinition of 'size' — previous declaration with the same parameters at line 5", errors.join("\n");
 }
 
+test "a class method declared twice with the same parameters is refused at the second declaration" {
+	const errors = checkOnly(`
+class C {
+	m(x: int32): int32 { return x; }
+	m(x: int32): string { return "s"; }
+	n(x: int32) { return x; }
+	n(x: int32) { return x + 1; }
+	static s(x: int32): int32 { return x; }
+	static s(x: int32): int32 { return x + 1; }
+}
+class G<T> {
+	v(x: T): int32 { return 1; }
+	v(x: T): int32 { return 2; }
+}
+`).errors;
+	assert errors.length == 4, errors.join("\n");
+	assert errors[0] == "overloaded 'C.m' leads to ambiguous calls — previous declaration at line 3", errors.join("\n");
+	assert errors[1] == "redefinition of 'C.n' — previous declaration with the same parameters at line 5", errors.join("\n");
+	assert errors[2] == "redefinition of 'C.s' — previous declaration with the same parameters at line 7", errors.join("\n");
+	assert errors[3] == "redefinition of 'G.v' — previous declaration with the same parameters at line 11", errors.join("\n");
+}
+
+test "class methods whose parameters differ, or a static beside an instance method, are not redefinitions" {
+	const errors = checkOnly(`
+class C {
+	m(x: int32): int32 { return x; }
+	m(x: string): string { return x; }
+	t(): int32 { return 1; }
+	static t(c: C): int32 { return 2; }
+}
+const c = new C();
+const a: int32 = c.m(1);
+const b: string = c.m("s");
+`).errors;
+	assert errors.length == 0, errors.join("\n");
+}
+
 test "a signature followed by its body, and bodies whose parameters differ, are not redefinitions" {
 	const errors = checkOnly(`
 function k(x: int32): int32;
