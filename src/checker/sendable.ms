@@ -8,7 +8,7 @@ import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect,
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding, isPromiseBuiltin } from "./symbol";
-import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createBitSet, createDistinct, createEnum, createSizedArray, createUnionInOrder, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, unwrapRefNullUnion, isAtomicRef, isNumeric, isReadonlyView, isValueOnlyType, stringType, typeCarriesRef, typeDisplayName, isUnownedRef, withoutUnowned } from "./types";
 import { recordBodyRead } from "./bodyReads";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
@@ -232,6 +232,9 @@ export function checkActorReplies(ctx: CheckerContext, raw: Node): void {
 			member.location.line, member.location.column);
 		return;
 	}
+	const fnType = member.resolvedSym.symbolType;
+	if (fnType != null && fnType.kind == TypeKind.Function
+		&& refuseUnownedCrossing(ctx, `the reply of actor method '${d.methodName}'`, fnType.typeReturn, member.location.line, member.location.column)) return;
 	const results: Node[] = [];
 	collectResults(d.methodBody, results);
 	const here = ctx.currentFunction;
@@ -332,6 +335,7 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	else if (sent.kind == NodeKind.Identifier && isSendableFunction(t)) consumeSentClosure(ctx, sent);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& sent.kind != NodeKind.MoveExpr;
+	if (!isPlainRefBorrow && refuseUnownedCrossing(ctx, describeExpr(sent) == "an expression" ? `arg ${pi}` : "'" + describeExpr(sent) + "'", t, argNode.location.line, argNode.location.column)) return false;
 	if (t.kind != TypeKind.Function) {
 		const path = plainFunctionPath(t, []);
 		if (path != null) {
@@ -727,6 +731,8 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		checkClosureCaptures(ctx, source, "spawn");
 		refuseViewResult(ctx, source);
 	}
+	const thunkType = source.nodeType;
+	if (thunkType != null && thunkType.kind == TypeKind.Function) refuseUnownedCrossing(ctx, "the result of this spawn", thunkType.typeReturn, spawnNode.location.line, spawnNode.location.column);
 	requireSpawnSafe(ctx, closure, "spawn runs this thunk on another thread", spawnNode);
 	refuseBorrowedAwaitable(ctx, closure, spawnNode);
 	if (isIsolatedThunk(ctx, source)) spawnNode.flags = spawnNode.flags.incl(NodeFlag.Isolated);
@@ -1297,6 +1303,33 @@ function holdsView(t: Type | null, seen: Type[]): boolean {
 		},
 		_ => false,
 	};
+}
+
+// The Unowned<T> a value reaches through its fields, elements and type arguments, classes included,
+// because a graph that crosses carries every edge its objects store.
+function unownedReached(t: Type | null, seen: Type[]): Type | null {
+	if (t == null || seen.includes(t) || isActorRef(t)) return null;
+	if (isUnownedRef(t)) return t;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Set | TypeKind.Distinct | TypeKind.Alias | TypeKind.Sink => unownedReached(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance => {
+			for (const c of t.typeChildren) {
+				const found = unownedReached(c, seen);
+				if (found != null) return found;
+			}
+			return t.kind == TypeKind.GenericInstance ? unownedReached(t.typeReturn, seen) : null;
+		},
+		_ => null,
+	};
+}
+
+export function refuseUnownedCrossing(ctx: CheckerContext, what: string, t: Type | null, line: int32, column: int32): boolean {
+	const edge = unownedReached(t, []);
+	if (edge == null) return false;
+	addError(ctx, `${what} crosses to another thread, but ${typeDisplayName(t!)} holds Unowned<${typeDisplayName(withoutUnowned(edge))}>: its count belongs to the thread that owns the target, so a value holding an Unowned edge is not sendable — send the data without the back edge, or lend it to an awaited call or a spawn that only reads it`,
+		line, column);
+	return true;
 }
 
 function refuseViewResult(ctx: CheckerContext, thunk: Node): void {
