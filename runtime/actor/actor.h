@@ -1360,6 +1360,8 @@ static inline void msActorDeferRetire(msActor* a) {
 /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
  * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
 static inline void msActorRetireState(msActor* a) {
+    msActor* prevActor = msCurrentActor;
+    msCurrentActor = a;
     msRootsEnterActor(&a->roots);
     if (a->state != NULL) {
         const msTypeInfo* __st = msHeader(a->state)->type;
@@ -1369,6 +1371,7 @@ static inline void msActorRetireState(msActor* a) {
     }
     msOrcCollect();
     msRootsLeaveActor(&a->roots);
+    msCurrentActor = prevActor;
     msRootsAdopt(&a->roots);
 }
 
@@ -1445,7 +1448,12 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         }
     }
     msMpscDestroy(&a->mailbox);
-    if (a->jobs != NULL) msActorJobsTeardown(a->jobs);
+    if (a->jobs != NULL) {
+        msActor* prevActor = msCurrentActor;
+        msCurrentActor = a;
+        msActorJobsTeardown(a->jobs);
+        msCurrentActor = prevActor;
+    }
     if (a->links != NULL) free(a->links);
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);
