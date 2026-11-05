@@ -1,6 +1,7 @@
-// note: a class whose data is an Owned union of records holding its children, written through an alias declared before or after the class, builds and walks a tree; the whole tree is out of the collector (pinned in src/test/c/ownedEdge.ms).
+// note: a class whose data is an Owned union of records holding its children, written through an alias declared before or after the class, builds and walks a tree, reads a nullable owned union and an owned tuple as plain values; the whole tree is out of the collector (pinned in src/test/c/ownedEdge.ms).
 // @stdout: before 15
 // @stdout: after 27
+// @stdout: pair 7 3
 type D = { l: Owned<N>, r: Owned<N> } | { x: int32 };
 class N {
 	k: int32 = 0;
@@ -11,7 +12,7 @@ class N {
 
 class M {
 	k: int32 = 0;
-	data: Owned<E> = { x: 0 };
+	data: Owned<E> | null = null;
 	constructor(k: int32) { this.k = k; }
 }
 type E = { l: Owned<M>, r: Owned<M> } | { x: int32 };
@@ -44,7 +45,8 @@ function mleaf(k: int32): Owned<M> {
 }
 
 function msum(m: M): int32 {
-	const d: E = m.data;
+	const d: E | null = m.data;
+	if (d == null) return m.k;
 	if ("l" in d) return m.k + msum(d.l) + msum(d.r);
 	return m.k + d.x;
 }
@@ -58,3 +60,11 @@ function mpair(k: int32, sink l: Owned<M>, sink r: Owned<M>): Owned<M> {
 }
 
 console.log("after " + msum(mpair(2, mpair(1, mleaf(3), mleaf(4)), mleaf(5))));
+
+function firstOf(sink kid: Owned<N>, k: int32): int32 {
+	const owned: [Owned<N> | null, int32] = [move kid, k];
+	const plain: [N | null, int32] = owned;
+	const n = plain[0];
+	return n == null ? -1 : n.k;
+}
+console.log("pair " + firstOf(leaf(7), 3) + " " + 3);

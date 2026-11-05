@@ -69,6 +69,13 @@ test "an Owned union slot reads as a plain union or member without a copy of the
 	assert r.ok, r.ok ? "" : r.error;
 }
 
+test "an owned value type and its plain twin share one C struct" {
+	const decls = "type A = { l: Owned<N> };\ntype B = { x: int32 };\nclass N { k: int32 = 0; data: Owned<A> | Owned<B> | null = null; pair: [Owned<N> | null, int32] = [null, 0]; }\nclass H { d: A | B | null = null; pair: [N | null, int32] = [null, 0]; }\n";
+	const r = compileToC(decls + "function f(n: N): int32 { const d: A | B | null = n.data; const p: [N | null, int32] = n.pair; return d == null ? p[1] : 1; }\nconsole.log(f(new N()), new H().pair[1]);\n");
+	assert r.ok, r.ok ? "" : r.error;
+	if (r.ok) assert !r.value.contains("OwnedRef"), "a struct name spells Owned";
+}
+
 test "a plain edge into a record that owns its holder is cyclic" {
 	assert verdict("type D = { l: Owned<N> } | { x: int32 };\nclass N { data: D = { x: 1 }; }\nconst n = new N();", "N") == "cyclic";
 }

@@ -1690,12 +1690,13 @@ function moduleQualifiedName(inner: Type): string {
 	return owner == "" ? inner.typeName : inner.typeName + "_" + identSafeKey(owner);
 }
 
-function maybeCacheKey(inner: Type): string {
+function maybeCacheKey(inner: Type, considerOwned: boolean = true): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
 	if (inner.kind == TypeKind.NumberLiteral) return "nl_" + identSafeKey(inner.typeName);
-	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
+	const key = (t: Type): string => considerOwned ? typeKey(t) : backendTypeKey(t);
+	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(key(inner));
 	if (inner.kind == TypeKind.Set) {
-		return inner.typeReturn != null ? "set_" + maybeCacheKey(inner.typeReturn) : "set_any";
+		return inner.typeReturn != null ? "set_" + maybeCacheKey(inner.typeReturn, considerOwned) : "set_any";
 	}
 	if (inner.typeName != "" && hasNominalIdentity(inner)) return moduleQualifiedName(inner);
 	if (literalUnionBase(inner) != null) {
@@ -1708,10 +1709,10 @@ function maybeCacheKey(inner: Type): string {
 		for (const m of members) key = key + "_" + m;
 		return key;
 	}
-	if (inner.kind == TypeKind.Function) return "fn_" + identSafeKey(typeKey(inner));
+	if (inner.kind == TypeKind.Function) return "fn_" + identSafeKey(key(inner));
 	const k = inner.kind;
 	if (k == TypeKind.Union || k == TypeKind.Array || k == TypeKind.Tuple || k == TypeKind.Span || k == TypeKind.SizedArray) {
-		return "p" + (k as number) + "_" + identSafeKey(typeKey(inner));
+		return "p" + (k as number) + "_" + identSafeKey(key(inner));
 	}
 	const scalar = k == TypeKind.Number ? TypeKind.Float64 : k;
 	return "p" + (scalar as number);
@@ -1739,7 +1740,7 @@ export function createMaybeType(inner: Type): Type {
 	}
 	const t = emptyType();
 	t.kind = TypeKind.Struct;
-	t.typeName = "Maybe_" + maybeCacheKey(representedPayload(inner));
+	t.typeName = "Maybe_" + maybeCacheKey(representedPayload(inner), false);
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
 	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe).incl(TypeFlag.Spelled);
@@ -3960,7 +3961,7 @@ export function tupleTypeName(t: Readonly<Type | null>): string {
 
 export function tupleTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null || t.kind != TypeKind.Tuple) return "";
-	return "msTuple_" + _stdHashToBase36(typeKeyIn(roots, t, []));
+	return "msTuple_" + _stdHashToBase36(typeKeyIn(roots, t, [], false));
 }
 
 export function spelled(t: Type): Type {
@@ -4120,16 +4121,20 @@ export function typeKey(t: Readonly<Type>): string {
 	return typeKeyIn(buildModuleNameRoots(), t, []);
 }
 
+export function backendTypeKey(t: Readonly<Type>): string {
+	return typeKeyIn(buildModuleNameRoots(), t, [], false);
+}
+
 // `keying` holds the types whose keys are being built, so a type met again inside its own key ends
 // it; each key owns its list because modules are emitted on parallel workers.
-function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
+function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[], considerOwned: boolean = true): string {
 	if (t == null) return "null";
 	for (let i = 0; i < keying.length; i += 1) {
 		if (keying[i] == t) return "rec" + (keying.length - i).toString();
 	}
 	keying.push(t);
 	defer keying.pop();
-	return typeKeyInner(roots, t, keying);
+	return typeKeyInner(roots, t, keying, considerOwned);
 }
 
 function genericParamKey(roots: Readonly<ModuleNameRoots>, name: string, sym: Readonly<Symbol>): string {
@@ -4138,10 +4143,10 @@ function genericParamKey(roots: Readonly<ModuleNameRoots>, name: string, sym: Re
 	return `${name}#${sym.itemModule}.${sym.item}`;
 }
 
-function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[]): string {
+function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keying: Cursor<Readonly<Type>>[], considerOwned: boolean): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
-	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(roots, t.typeReturn, keying);
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(roots, t.typeReturn, keying, considerOwned);
 	if (t.kind == TypeKind.GenericParam && t.sym != null) return genericParamKey(roots, t.typeName, t.sym);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKeyIn(roots, t));
 	if (t.kind == TypeKind.StringLiteral) return "strlit" + t.typeName.length.toString() + ":" + t.typeName;
@@ -4152,7 +4157,7 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying, considerOwned) : "any");
 				i += 1;
 			}
 			return k + ">";
@@ -4167,14 +4172,14 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 		TypeKind.Float32 => "float32",
 		TypeKind.BigInt => "bigint",
 		TypeKind.Array => {
-			return "Array(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
+			return "Array(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")";
 		},
 		TypeKind.Tuple => {
 			let k = "tuple(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + typeKeyIn(roots, t.typeChildren[i], keying);
+				k = k + typeKeyIn(roots, t.typeChildren[i], keying, considerOwned);
 				i += 1;
 			}
 			return k + ")";
@@ -4184,54 +4189,54 @@ function typeKeyInner(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, keyin
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying, considerOwned) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "void");
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "void");
 		},
 		TypeKind.Union => {
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "null");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying, considerOwned) : "null");
 				i += 1;
 			}
 			return k + ")";
 		},
 		TypeKind.Span => {
-			return "Span(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
+			return "Span(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")";
 		},
 		TypeKind.Set => {
-			return "BitSet(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
+			return "BitSet(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")";
 		},
 		TypeKind.SizedArray => {
-			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")";
+			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")";
 		},
 		TypeKind.Ref => {
 			const inner = refSubstInner(t);
-			return refWrapperName(t) + "Ref(" + (inner != null ? typeKeyIn(roots, inner, keying) : "any") + ")";
+			return (considerOwned || !isOwnedRef(t) ? refWrapperName(t) : "") + "Ref(" + (inner != null ? typeKeyIn(roots, inner, keying, considerOwned) : "any") + ")";
 		},
-		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
-		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
-		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
-		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
-		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "any") + ")",
+		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")",
+		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")",
+		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")",
+		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")",
+		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "any") + ")",
 		TypeKind.Struct => {
 			let k = "anon(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "any");
+				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying, considerOwned) : "any");
 				i += 1;
 			}
 			return k + ")";
 		},
 		_ => {
-			let k = "k" + (t.kind as number).toString() + "<" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying) : "") + ">(";
+			let k = "k" + (t.kind as number).toString() + "<" + (t.typeReturn != null ? typeKeyIn(roots, t.typeReturn, keying, considerOwned) : "") + ">(";
 			for (let i = 0; i < t.typeChildren.length; i += 1) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying) : "null");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(roots, t.typeChildren[i], keying, considerOwned) : "null");
 			}
 			return k + ")";
 		},
