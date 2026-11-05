@@ -60,7 +60,10 @@ Push the branch; CI runs on every push to `release/**`.
 git push -u origin release/$V
 ```
 
-Run the local gates inside the release worktree:
+Run the release ladder from the release worktree, with every heavy command admitted through
+`~/metascript/.gate-host/run-remote.sh` (workspace `CLAUDE.md` §Shared machines). Split the
+macOS-only checks from portable checks, and build the candidate in the same admitted call as
+its consumers. The commands below name the checks, not permission to run them on this Mac:
 
 ```bash
 msc build src/index.ms --danger --output=msc
@@ -70,7 +73,8 @@ MSCORPUS_SAN=1 msc run src/test/corpus/run.ms
 msc run --target=raiser src/test/guard/run.ms
 ```
 
-Then check the self-host fixpoint on emitted C. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:
+Then check the self-host fixpoint on emitted C through the same remote admission, keeping
+both generations and their comparison in one call. `tools/gate.sh --release` does not run it. Binaries are not reproducible, so compare the `.c` files:
 
 ```bash
 ./msc build src/index.ms --danger --cc=clang --output=/tmp/fx/gen1
@@ -79,7 +83,8 @@ cp out/release/.cache/*.c /tmp/fx/A/
 cp out/release/.cache/*.c /tmp/fx/B/
 ```
 
-Cache file names end in a fingerprint (`<module>_x_ms.<hex>_<hex>.c`) that changes with the building compiler. `diff -rq A B` therefore reports every file. Pair the files by the name before the fingerprint and compare their contents. On 2026-09-19, 322 of 322 modules were identical while `gen1` and `gen2` differed as binaries. A side with 0 files means the wrong cache directory was copied: `--danger` and `--release` write `out/release/.cache`, a plain build writes `out/debug/.cache`.
+Cache file names end in a fingerprint (`<module>_x_ms.<hex>_<hex>.c`) that changes with the building compiler. `diff -rq A B` therefore reports every file. Pair the files by the name before the fingerprint and compare their contents. On 2026-09-19, 322 of 322 modules were identical while `gen1` and `gen2` differed as binaries
+(tree not recorded; not rerun for this documentation repair). A side with 0 files means the wrong cache directory was copied: `--danger` and `--release` write `out/release/.cache`, a plain build writes `out/debug/.cache`.
 
 Never run `tools/syncLocalBinary.ms` from a worktree whose `vendor/` is incomplete: it mirrors `vendor/` into `~/.metascript/` and deletes what the source lacks.
 

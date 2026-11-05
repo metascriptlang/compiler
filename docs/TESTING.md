@@ -1,8 +1,13 @@
 # Testing — tiers, the corpus contract, and what a run costs
 
-The rules an agent needs while writing a test are in [`src/test/CLAUDE.md`](../src/test/CLAUDE.md). This file holds the detail behind them: one example per tier, the corpus authoring contract, which compiler a runner exercises, and the emit-diff recipe `tools/gate.sh` runs.
+The rules an agent needs while writing a test are in [`src/test/CLAUDE.md`](../src/test/CLAUDE.md). This file holds the detail behind them: one example per tier, the corpus authoring contract, which compiler a runner exercises, and the by-hand emit-diff A/B method. No gate runs that selector.
 
-Moved here from `src/test/CLAUDE.md` on 2026-09-19. Re-checked that day: every directive below is read by `src/test/corpus/run.ms`; `msc test src/test/fixedbugs/bug048.ms` took 12 s wall at load 18 (historical path; the scope regression now lives in [`src/test/lang/testBlockScope.ms`](../src/test/lang/testBlockScope.ms)). NOT re-measured: every other timing and count in the emit-diff section keeps the date it was taken on, and the tier examples were not recompiled.
+Moved here from `src/test/CLAUDE.md` on 2026-09-19. Re-checked that day: every directive below is read by `src/test/corpus/run.ms`; `msc test src/test/fixedbugs/bug048.ms` took 12 s wall at load 18 (historical path; the scope regression now lives in [`src/test/lang/testBlockScope.ms`](../src/test/lang/testBlockScope.ms)). NOT re-measured: every other timing and count in the emit-diff section keeps the date it was taken on, and the tier examples were not recompiled. An older timing/counter record without an explicit
+source tree has **tree not recorded**; it is not a current budget or fresh certification.
+
+Terminology: a gate **lane** is a stage; a backend/configuration run of one corpus program is
+a **cell**. Historical transcripts and environment names such as `MSCORPUS_LANES` retain the
+spelling used then; they do not add another current meaning of “lane”.
 
 ## Tiers
 
@@ -88,6 +93,8 @@ the new C/ORC/JS consumer prints `generic-distinct-value 14 21 3 true 4`.
 `MSC=./msc-next MSCORPUS_ONLY=genericDistinctValueRead MSCORPUS_LANES=c,orc,js
 MSCORPUS_BUILD_JOBS=1 MSCORPUS_JOBS=1 ./msc-next run --target=raiser
 src/test/corpus/run.ms` reports `4 pass · 0 fail · 0 xfail · 0 xpass`.
+This is a historical recipe/result: `orc` is not a current corpus cell. Current cell names
+and selection rules are the runner's header; do not copy this old environment unchanged.
 `msc-next test <file> --tests-in-dir` passes `lang/macroHiddenConversions` 9/9,
 `handoff/valueOfProtocol` 19/19 and `c/protocols` 31/31; the macro file also
 passes with `--target=js` (9 local tests, 70 including std dependencies).
@@ -156,46 +163,23 @@ contracts both passed 14/14 natively; the runtime sibling printed
 Standalone programs (not `test {}` files) print deterministic stdout and exit.
 Use a semantic entry name (`topicName.ms`, or `topicName/main.ms` with sibling
 modules); the older `NNN-topic` names remain discoverable. `corpus/run.ms`
-discovers both forms and runs each entry through its selected lanes.
+discovers both forms and runs each entry through its selected cells.
 
 Authoring contract — the runner stays a dumb executor; the program's
 contract lives entirely in its directive head (leading `// @...` comment
 lines), and ALL determinism obligations live on the program:
 
-- **Directive head** — one directive per line:
-  - `// @exit: <n>` — expected exit code, all lanes (default 0).
-  - `// @skip-js: <reason>` — C-only program; the JS lane skips it and
-    logs the reason. The skip list doubles as the JS backend's worklist.
-  - `// @maxrss: <MB>` — RSS program: built + run on the `c` lane and the
-    `danger` lane (`--danger`: `-O3 -flto`, `--cc=clang`) via
-    `/usr/bin/time -l`, asserting exit + signal + stdout + peak RSS (the
-    former native/ tier semantics).
-  - `// @stdout: <substr>` — merged output must CONTAIN the substring.
-    Every `@stdout` line of a program is checked and each missing one is named
-    (`guard/corpusStdoutEveryLine.ms`; before it, only the last line was).
-    Pin the whole line: a pin that stops at the key (`acc=`) passes on any
-    value, and one that is part of a longer line passes inside a wrong one
-    (`prevented` inside `not prevented`).
-    Enforced on every lane (RSS, SAN **and** parity). Byte-compare across lanes stays the
-    primary assertion, so most programs still want no `@stdout`; reach for
-    it when the lanes cannot judge correctness on their own, i.e. when
-    every lane could be wrong in the same way (see `013-int64Fidelity`,
-    which additionally grades itself into the exit code).
-  - `// @xfail(<lane>): <reason>` — known-fail for one lane; XPASS is
-    reported loud so a stale marker cannot lie silently.
-  - `// @serial` — contention-sensitive (actor/spawn stress): its run
-    cells execute one at a time after the parallel drain.
-  - `// @ledger-slack(<MangledType>): <N>` — san lane only: exactly N
-    objects of that type legitimately survive exit (module-level RC
-    values are NOT destroyed at exit — probe-verified 2026-07-29; the
-    compiler-side question is open). EXACT-match: a diff other than N
-    fails, and diff 0 with slack declared fails as "slack unused" so the
-    marker self-cleans if global-destroy ever lands. Never use @xfail for
-    a survivor — it would mask every future real leak in that program.
+- **Directive head** — one directive per line; the supported directives and their meaning
+  are the header of `src/test/corpus/run.ms`, not a second copied inventory here.
+  Pin the whole `@stdout` line: `acc=` passes on any value and `prevented` passes inside
+  `not prevented`. Byte comparison across cells remains the primary assertion; add an
+  absolute output oracle when all cells could be wrong together (`013-int64Fidelity`).
+  `@ledger-slack` is exact, not a broad exemption: never replace it with `@xfail`, which
+  would hide every future real leak in that program.
 - **Programs WITHOUT `@maxrss` are parity programs**: run through the `c`,
-  `danger` and (unless `@skip-js`) `js` and `esm` lanes, plus `raiser` when
+  `danger` and (unless `@skip-js`) `js` and `esm` cells, plus `raiser` when
   `MSCORPUS_RAISER=1` turns it on.
-- **EVERY program is byte-compared across all of its lanes** — no golden
+- **EVERY program is byte-compared across all of its cells** — no golden
   files, nothing to bless, nothing to drift. The axes are independent and
   each catches its own class: C↔JS (backend), O0↔danger (UB the optimizer is free to exploit,
   and DCE masking leaks). A program whose output legitimately differs on
@@ -230,11 +214,11 @@ lines), and ALL determinism obligations live on the program:
   `1 r0 3`. Mandatory unregistered owners still require their own proof.
 - **Write RC-stress shapes deliberately**: churn in loops, values relayed
   through calls then dropped unread, throw/catch unwinding mid-build,
-  refcounted values held across await. The plain lane asserts behavior;
+  refcounted values held across await. The plain cell asserts behavior;
   the same program under the sanitizer lane becomes a leak/double-free
   probe for free.
 
-Divergences between lanes are CONTRACTS, not normalizations: when lanes
+Divergences between cells are CONTRACTS, not normalizations: when cells
 legitimately differ (e.g. uncaught-error report format on stderr), the
 runner documents it once (stderr is not compared for `@exit:` programs) —
 it never fuzzy-matches. If float printing differs between the C and JS
@@ -249,7 +233,7 @@ alloc/destroy balances at exit. A guard is only trusted after it has been
 PROVEN RED against the drift it targets. Methodology and ledger details:
 `guard/README.md`; runner: `guard/run.ms`, run on Raiser.
 
-### Flow A/B (`perf/run.ms`)
+### Flow A/B (`src/bench/compiler/run.ms`)
 
 Not a pass/fail tier: it tables what one change moved, flow by flow, between two compilers. Use and reading: [`BUILD-PERF.md`](BUILD-PERF.md) §Measuring by flow.
 
@@ -399,7 +383,7 @@ Measured per-file costs of edit-loop checks, and the checks that do not fit the 
 - **Generic-default checks, 2026-11-01:** after a candidate build on shared RTX, tree `dc1042f79c8d31515f05c064de1932aab375b25b`, `./msc test src/test/handoff/genericDefaultValidation.ms --tests-in-dir` reported `Tests 7 passed (7)` in **180.309 s** (12.335 s test body); `./msc test src/checker/preludePack.ms --tests-in-dir` reported `Tests 801 passed (801)` in **96.596 s** (41.888 s body). These are slow checks, not repeatable edit-loop recipes. On oci-u, tree `7355a2992aa6df7275ae1668459eba4e0c9dd4f5`, the expanded metadata check reported `Tests 13 passed (13)` in **55.24 s** (12.599 s body), and `./msc test src/test/handoff/genericDefaultClone.ms --tests-in-dir` reported `Tests 4 passed (4)` in **5.19 s**. Different hosts and test matrices, with cache warmth/load uncontrolled: this is not an A/B or a general warm-cost guarantee. Use the clone-only pin for clone edits; another pack edit needs a focused under-60 s check rather than repeating the slow owner run.
 - **Macro-default retention, 2026-11-01:** on oci-u, candidate source tree `c2b99a18bdfffa5b873ce59c7fb80f87069feadb`, `./msc test src/test/handoff/genericDefaultMacro.ms --tests-in-dir` reported `Tests 7 passed (7)` in **63.649 s** (18.213 s test body). The identical pin on the old adoption implementation reported `6 passed | 1 failed (7)` in **131.982 s** (66.896 s body), reaching the expected missing-header/default assertions for all four declaration kinds. These are slow-check observations with uncontrolled load/cache warmth, not a speed A/B; the aggregate file is not an under-60 s edit-loop recipe. No cheaper selector or Windows/macOS timing was verified.
 - **Defining-scope body-read pin, 2026-11-01:** on oci-u, restored source tree `831484abdce1d032a5e82ad0518add8cc6746ac9`, `./msc test src/test/handoff/genericDefaultMacro.ms --tests-in-dir` took **71 s** and reported `Tests 1 passed (1)` (1 ms body) with the input temporarily restricted to its imports and first, defining-scope recorder test. Tested prefix SHA256: `1b4d3328cb32d3b53847d1bbcb95cdd3508fa1b3fef93bc8363a99d57cb82194`; the full file was restored afterward. This is an isolated slow-check observation, not a full macro-aggregate result or an under-60 s recipe. No cheaper native compilation or other-platform timing was verified.
-- **Committed type-replay consumers, 2026-11-01:** on oci-u, source tree `15dcaf423fc03eb50a6850232e33833901f40b16`, `./msc test --time <file> --tests-in-dir` reported `Tests 19 passed (19)` for `src/test/c/cFunctionPointer.ms` in **86.988 s**, `Tests 11 passed (11)` for `src/test/c/aggregateRelation.ms` in **63.540 s**, and `Tests 13 passed (13)` for `src/test/handoff/genericDefaultValidation.ms` in **63.990 s**. Each was run once after the candidate build; these include compilation and exceed the edit-loop budget. The lexical endpoint/diagnostic pins in `src/parser/typeAnnotation.ms` and `src/parser/statements/declaration.ms` passed 98/98 and 269/269 in 5.704 s and 13.587 s respectively; use those owners for that contract, retaining the native consumers when their boundary changes. Load/cache warmth were uncontrolled; no speed A/B or other-platform timing was verified.
+- **Committed type-replay consumers, 2026-11-01:** on oci-u, source tree `15dcaf423fc03eb50a6850232e33833901f40b16`, `./msc test --time <file> --tests-in-dir` reported `Tests 19 passed (19)` for `src/test/c/cFunctionPointer.ms` in **86.988 s**, `Tests 11 passed (11)` for `src/test/handoff/aggregateRelation.ms` in **63.540 s**, and `Tests 13 passed (13)` for `src/test/handoff/genericDefaultValidation.ms` in **63.990 s**. Each was run once after the candidate build; these include compilation and exceed the edit-loop budget. The lexical endpoint/diagnostic pins in `src/parser/typeAnnotation.ms` and `src/parser/statements/declaration.ms` passed 98/98 and 269/269 in 5.704 s and 13.587 s respectively; use those owners for that contract, retaining the native consumers when their boundary changes. Load/cache warmth were uncontrolled; no speed A/B or other-platform timing was verified.
 - **Checked declaration projection, 2026-11-01:** `./msc test src/test/js/declarations.ms --tests-in-dir` took **103 s wall** on oci-u; stdout reported **35 passed (35)** and **35258 ms** in the test binary. Measured compiler/test bodies are now in `20117e62a66`; the actual pre-commit source snapshot was 5,454 files, aggregate SHA256 `28719531e2e423842c07e04a39c8ffeab16d9f093544ed76abf2bffba5e7bd16` (`/tmp/declarationIntegratedEvidence10ab/local.final.json`), not a claim that the later commit itself was executed. The raw log says `INTEGRATED native rc=0 wall=103s`. This is a slow native check, not a sub-60 s edit-loop recipe; select the changed contract rather than rerunning all 35 for a package-fixture-only change. No cold/warm or cross-host speed comparison was measured.
 - **Completion-context native consumer, 2026-11-04:** on oci-u (Linux, actual affinity/nproc 8), `MSC_NO_GLOBAL_CACHE=1 MSC_CACHE_DIR=<fresh-private-dir> ./msc test src/test/handoff/editorRecovery.ms --tests-in-dir --verbose --time` took **73 s wall**, printed `compiled in 71603.ms`, then `running tests`, and reported **3 passed (3)** in **1 ms**. Candidate SHA256 `330f428669bcd8fe85c9c9f3a741a4f4a5711bf395bcfa06a84e1e007583acc7`; measured source was committed tree `caeb024464899796cb648063bbd46fbb95567b2f` plus uncommitted completion/context pins (5,979-file src/std/runtime manifest `5dcba33c867edc174175831ec767515b006e1c6e04ba8e590755c76d0b9b888d`). This is a slow native check, not a sub-60 s recipe or a speed A/B. No other-platform timing or cheaper native compilation was verified.
 - **Over budget now, warm:**
@@ -409,16 +393,14 @@ Measured per-file costs of edit-loop checks, and the checks that do not fit the 
   - `src/compiler/lsp/server.ms`: 82 s warm, 105 s first run; it runs `lifecycle.ms`'s tests too (same run).
   - A first run of a compiler-module test is over 60 s for every file that imports most of the compiler, because its test build redoes the front end of that graph. Making the front end reachability-driven, as the reference transforms a routine only when codegen first needs it, saves an estimated 3–4 s: the `inject.ms` test build still reaches 72% of the function-body nodes. The remaining lever is reusing each module's front-end output across builds.
 
-## Emit-diff selector — corpus confidence for narrow fixes
+## Emit-diff A/B — by hand, for narrow fixes
 
 Measured 2026-09-05 on the bug130 fix (checker identity-fit for narrowed
 union refs): 180 programs × 2 binaries = **334 s**, 2309 emitted C files
 hash-compared, **0 diffs** — with the selector's sensitivity PROVEN on the
-bug shape first (20-line C diff on the minimal repro). Full corpus skipped
-with evidence, not silently: every lane compiles the same emitted C, so
-byte-identical C means no lane outcome can change. The C argument covers the JS lanes too: identical
-C ⇒ the changed checker branch never fired for that program ⇒ the JS emitter
-saw the same checker output as before.
+bug shape first (20-line C diff on the minimal repro). That historical selector used the matching emits to skip its corpus run. Matching C is a
+control for emitted C, not a universal proof about diagnostics, JS output, lifetime or every
+runtime environment. Do not carry that selector's inference forward as a safety certificate.
 
 **`tools/gate.sh` emits no program to select what the corpus lanes run.** The land gate runs
 corpus and SAN on the programs the slice adds or edits and those its owner names with
@@ -454,7 +436,8 @@ path or cwd noise); `011-truthy` is the sensitivity evidence (its C gained the
 programs: `--gc=orc` C is byte-identical to `--gc=drc` C on 215/215, so it is
 not emitted; `--danger` C differs on 34/215 (range checks dropped), so it is.
 
-The gate does NOT narrow — it runs the lane whole and says why — under
+Historical retired-selector behavior, not today's lane-selection algorithm: the gate did
+not narrow — it ran the lane whole — under
 `--lanes`, `--release` and `--record`. A change no emit can show (`runtime/`,
 `vendor/`, a `std/` file that is not a module, the corpus runner, the compiler
 files that choose build flags) moves the support stamp instead, so no record
@@ -481,22 +464,16 @@ binary + `runtime/` + `vendor/` (`src/compiler/cache.ms`), so EVERY new
 candidate binary starts cold — a full run never gets cheaper while
 iterating.
 
-Recipe:
+For a narrow manual A/B, choose the exact real consumers from the changed contract first.
+Build/control and candidate checks use remote admission and matched support/input/toolchain
+provenance. Emit each selected consumer separately so output paths cannot collide, and keep
+its required backend variants distinct. A matching emit answers only the emitted-code question;
+run the smallest consumer that observes the behavior, including native lifetime/SAN when owed.
 
-1. Two binaries, one tree state: control = HEAD (throwaway `git worktree`,
-   built with the last good binary), candidate = HEAD+fix. Run each from its
-   OWN cwd — `--emit=c` writes `out/debug/<mangled>.c` relative to cwd and
-   the flat mangled names collide across programs.
-2. For every `programs/NNN-*` entry: `msc build <entry> --emit=c`,
-   then sweep `out/debug/*.c` aside into a per-program dir. Shared std
-   modules are identical anyway; the entry module is what carries the diff.
-3. Hash-compare both sides per program. Identical ⇒ provably unaffected.
-   Differing set A ⇒ run `MSCORPUS_FILTER=<exact-name>` (plain + SAN) on
-   exactly those programs.
-4. "A empty AND corpus green" on a brand-new bug shape means the corpus had
-   NO coverage of it — the fix's repro belongs in `corpus/programs/` anyway
-   (the bug-fix checklist in `src/test/CLAUDE.md`), and that new program is the one thing to run through all
-   lanes.
+Do not emit every corpus program as an edit-loop selector, invent a control worktree outside
+the worktree rules, or use the retired `MSCORPUS_FILTER` recipe. Named corpus selection uses
+`MSCORPUS_ONLY` as defined by `src/test/corpus/run.ms`. A new failure shape still needs a
+registered regression with an absolute oracle even if an older corpus sample emitted no diff.
 
 Traps, all paid for on 2026-09-05:
 
@@ -508,11 +485,9 @@ Traps, all paid for on 2026-09-05:
 - **Const-foldable repros lie**: one literal-based repro folded to a
   composite temp on the control binary and compiled fine there. Build values
   through a function call so the argument is a real local.
-- `MSCORPUS_FILTER` is substring (`name.contains`), not prefix — "2" matches
-  012/102/202/…. `MSCORPUS_ONLY=a,b` takes exact names and fails loud on a
-  name that is not a program; `MSCORPUS_LANES=c,js,esm` builds those
-  parity cells alone (the lanes are `c`/`danger`/`js`/`esm`/`raiser`; an unknown
-  lane, or combined with `MSCORPUS_SAN=1`: error).
+- The historical substring filter could match unintended programs. Use exact named selection
+  and the current cell names from the corpus runner, not a copied old environment recipe.
+  `MSCORPUS_LANES` retains its historical variable name; its values select backend cells.
 - The selector degenerates for broad changes (codegen/runtime/analyzer work
   that rewrites most programs' C): |A| large ⇒ the full run is the honest
   option. |A| is self-calibrating, no guessing up front.

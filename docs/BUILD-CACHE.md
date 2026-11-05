@@ -30,7 +30,8 @@ resolved), `src/compiler/options.ms` (`applyCacheConfig`), `src/compiler/cache.m
 `markUsed`), `src/checker/preludePack.ms` (`packBase`, `packRoot`).
 Package downloads in `$HOME/.metascript/cache/extracted` belong to the package manager
 (`src/compiler/package/cache.ms`), and `$HOME/.metascript/cache/gate-results` to `tools/gate.sh`
-(`RESULTS`, the corpus passes a gate selects by: [TESTING.md](TESTING.md) "Emit-diff selector");
+(`RESULTS`, corpus passes a gate records; only `--select` reads them:
+[TESTING.md](TESTING.md) “Emit-diff A/B”);
 neither is part of the compiler cache, and neither moves with a chosen global root. `objects/` is
 written by older compilers only, and `gate-ctl` by gates before the records.
 
