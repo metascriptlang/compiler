@@ -556,7 +556,7 @@ function elemWidthOf(cls: RaiserRegClass, t: Type | null): ElemWidth {
 
 export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
 	const cls = regClassOf(s, elementType);
-	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(cls, isCyclicType(elementType), isUncountedElement(elementType), elemWidthOf(cls, elementType)));
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(cls, isCyclicType(elementType), isUncountedElement(elementType), elemWidthOf(cls, elementType), isUnownedSlot(elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

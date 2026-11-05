@@ -383,8 +383,8 @@ test "orcCollect frees a cycle that runs through an array, holding handles as it
 	const o = allocNode(obj);
 	const items = heapAllocArray(arr);
 	const words = heapAllocArrayOf(arr, RaiserRegClass.Ref);
-	heapArraySetFlags(arr, items, true, false);
-	heapArraySetFlags(arr, words, true, false);
+	heapArraySetFlags(arr, items, true, false, false);
+	heapArraySetFlags(arr, words, true, false, false);
 	heapObjectSetField(arr, obj, o, "items", raiserArray(items));
 	heapArrayPush(arr, items, raiserArray(words));
 	heapArrayPush(arr, words, handleValue(o));

@@ -5,7 +5,7 @@ import { isRuntimeProcSym, isRuntimeProcCall } from "../../transform/util";
 import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
-import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT, ROW_UNOWNED_TAKE } from "./drcRows";
+import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT, ROW_UNOWNED_TAKE, ROW_UNOWNED_GIVE } from "./drcRows";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol, AttachedOp,
@@ -1990,6 +1990,12 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		const taken = compileExpr(s, d.arguments[0]);
 		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, taken, 1, 0));
 		return taken;
+	}
+	if (ownershipRow(d.callee.resolvedSym) == ROW_UNOWNED_GIVE) {
+		const given = compileExpr(s, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.RcInc, given, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, given, 0, 0));
+		return given;
 	}
 	refuseOwnershipCall(node);
 	const nsCallee = namespaceMemberIdent(d.callee);

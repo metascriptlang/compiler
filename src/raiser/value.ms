@@ -1,4 +1,4 @@
-import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto, seqSetLenUnfilled, seqDataAt } from "./vmSeq";
+import { SEQ_TYPE_INDEX, seqNew, seqNewView, seqFree, seqDynKind, seqDynBits, seqDynStore, seqPushDyn, seqInsertDyn, seqLen, seqClass, seqWidth, seqCyclic, seqUncounted, seqUnowned, seqSetFlags, seqBase, seqLoad, seqStore, seqPush, seqSetLen, seqRemove, seqInsert, seqReverse, seqViewOffset, seqPointViewInto, seqSetLenUnfilled, seqDataAt } from "./vmSeq";
 // Raiser VM — Value representation
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
@@ -620,6 +620,7 @@ export interface RaiserArrayHeap {
 	orcRoots: int64[];
 	orcThreshold: number;
 	futures: RaiserFutureCounts | null;
+	unowned: HashMap<int64, int32>;  // per object: the Unowned<T> edges that point at it; an object with none has no entry
 }
 
 // The counts of the VM's future table, which every heap of that VM shares, so a future held in a register, a
@@ -685,7 +686,7 @@ export const OWNED_BY_RECEIVER_RC: int32 = 1;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const orcRoots: int64[] = [];
-	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null };
+	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null, unowned: new HashMap<int64, int32>() };
 }
 
 @inline
@@ -767,11 +768,27 @@ export function heapArrayUncounted(heap: RaiserArrayHeap, handle: int64): boolea
 	return seqUncounted(seqCellOf(arrayBaseOf(heap, handle)));
 }
 
+export function heapArrayUnowned(heap: RaiserArrayHeap, handle: int64): boolean {
+	return seqUnowned(seqCellOf(arrayBaseOf(heap, handle)));
+}
+
+export function heapUnownedRc(heap: RaiserArrayHeap, handle: int64, up: boolean): void {
+	if (handle == 0) return;
+	const left = (heap.unowned.has(handle) ? heap.unowned.get(handle)! : 0) + (up ? 1 : -1);
+	if (left == 0) heap.unowned.delete(handle);
+	else heap.unowned.set(handle, left);
+}
+
+export function heapUnownedElements(heap: RaiserArrayHeap, handle: int64, from: number, up: boolean): void {
+	const c = seqCellOf(handle);
+	for (let i = from; i < seqLen(c); i += 1) heapUnownedRc(heap, seqLoad(c, i), up);
+}
+
 // A new empty array in `dst` of the element class, width and flags of the array `source` (or the one it stands on) in `src`.
 export function heapAllocArrayLike(dst: RaiserArrayHeap, src: RaiserArrayHeap, source: int64): int64 {
 	const base = seqCellOf(arrayBaseOf(src, source));
 	const handle = heapAllocArrayOf(dst, seqClass(base), seqWidth(base));
-	heapArraySetFlags(dst, handle, seqCyclic(base), seqUncounted(base));
+	heapArraySetFlags(dst, handle, seqCyclic(base), seqUncounted(base), seqUnowned(base));
 	return handle;
 }
 
@@ -783,8 +800,8 @@ export function heapArraySetRc(heap: RaiserArrayHeap, handle: int64, rc: int32):
 	setCellRc(seqCellOf(handle), rc as int64);
 }
 
-export function heapArraySetFlags(heap: RaiserArrayHeap, handle: int64, cyclic: boolean, uncounted: boolean): void {
-	seqSetFlags(seqCellOf(handle), cyclic, uncounted);
+export function heapArraySetFlags(heap: RaiserArrayHeap, handle: int64, cyclic: boolean, uncounted: boolean, unowned: boolean): void {
+	seqSetFlags(seqCellOf(handle), cyclic, uncounted, unowned);
 }
 
 // The number of values the array holds: its elements, or the one array a Dyn view stands on.
@@ -1691,6 +1708,8 @@ function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handl
 	const base = seqBase(c);
 	if (base != 0) {
 		removeSeqView(arrHeap, base, handle);
+	} else if (seqUnowned(c)) {
+		heapUnownedElements(arrHeap, handle, 0, false);
 	} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 		for (let i = 0; i < seqLen(c); i += 1) {
 			const child = seqLoad(c, i);
@@ -1900,6 +1919,7 @@ function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 		const copied = copyBorrowable(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(srcArr, sourceHandle, i), uncounted, map);
 		heapArrayPush(dstArr, job.dst, copied);
 		if (!uncounted) rcIncref(dstArr, dstObj, copied);
+		else if (heapArrayUnowned(srcArr, sourceHandle)) heapUnownedRc(dstArr, copied.intVal, true);
 	}
 }
 

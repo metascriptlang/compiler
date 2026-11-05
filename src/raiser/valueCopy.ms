@@ -1,7 +1,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
-	heapAllocArray, heapSeqHandles, heapAllocArrayLike, heapArrayUncounted, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	heapAllocArray, heapSeqHandles, heapAllocArrayLike, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
 	isObjectCell, objectCellClass, objectCellHandle, seqCellOf, handleValue, rcCountOf, OWNED_BY_RECEIVER_RC,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
 	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, heapBoxValue, raiserFloat, raiserBool
@@ -112,11 +112,13 @@ export function copyTypedValue(
 	if (plan.kind == RaiserCopyKind.Array && value.kind == RaiserValueKind.Array) {
 		const handle = heapAllocArrayLike(arrays, arrays, value.intVal);
 		const uncounted = heapArrayUncounted(arrays, value.intVal);
+		const unowned = heapArrayUnowned(arrays, value.intVal);
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
 			const original = heapArrayGet(arrays, value.intVal, i);
 			if (uncounted) {
 				heapArrayPush(arrays, handle, original);
+				if (unowned) heapUnownedRc(arrays, original.intVal, true);
 				continue;
 			}
 			const copied = copyTypedValue(arrays, objects, original, plans, plan.children[0]);

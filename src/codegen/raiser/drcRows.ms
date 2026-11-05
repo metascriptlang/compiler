@@ -21,6 +21,7 @@ export const ROW_UNOWNED_INC: int32 = 18;
 export const ROW_UNOWNED_DEC: int32 = 19;
 export const ROW_UNOWNED_ASSIGN: int32 = 20;
 export const ROW_UNOWNED_TAKE: int32 = 21;
+export const ROW_UNOWNED_GIVE: int32 = 22;
 
 const rows = new HashMap<string, int32>();
 
@@ -31,20 +32,20 @@ function define(row: int32, names: string[]): void {
 define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
 define(ROW_DECREF, [
 	"msDecref", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
-	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayAtomicRefDestroy",
-	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msAtomicRefArrayDestroy",
+	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayUnownedRefDestroy", "msArrayAtomicRefDestroy",
+	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msUnownedRefArrayDestroy", "msAtomicRefArrayDestroy",
 ]);
 define(ROW_DECREF_CYCLIC, ["msDecrefCyclic"]);
 define(ROW_CLEAR, [
 	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msStructCellWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
 ]);
-define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink"]);
+define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msClosureSink", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink", "msArrayUnownedRefSink"]);
 define(ROW_SHARE, ["msStringCopy"]);
 define(ROW_HELD, ["msHeldCount"]);
 define(ROW_KEPT, ["msDestroyLeftNoRef"]);
 define(ROW_COPY_VALUE, [
-	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayAtomicRefCopy",
+	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayUnownedRefCopy", "msArrayAtomicRefCopy",
 	"msArrayClosureCopy", "msStructCellCopy",
 ]);
 
@@ -56,6 +57,7 @@ define(ROW_UNOWNED_INC, ["msUnownedIncref"]);
 define(ROW_UNOWNED_DEC, ["msUnownedDecref"]);
 define(ROW_UNOWNED_ASSIGN, ["msUnownedAssign"]);
 define(ROW_UNOWNED_TAKE, ["msUnownedTake"]);
+define(ROW_UNOWNED_GIVE, ["msUnownedGive"]);
 define(ROW_STR_APPEND, ["msStringAppend"]);
 define(ROW_STR_APPEND_CHAR, ["msStringAppendChar"]);
 define(ROW_STR_APPEND_CODEPOINT, ["msStringAppendCodePoint"]);

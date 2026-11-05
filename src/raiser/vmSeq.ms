@@ -17,6 +17,7 @@ const CLASS_MASK: int64 = 7;
 const WIDTH_SHIFT: int64 = 3;
 const CYCLIC_BIT: int64 = 64;
 const UNCOUNTED_BIT: int64 = 128;
+const UNOWNED_BIT: int64 = 2048;
 const SHIFT_SHIFT: int64 = 8;
 const DYN_SHIFT: int64 = 4;
 
@@ -67,8 +68,12 @@ export function seqUncounted(c: int64): boolean {
 	return (ld64(c + 16) & UNCOUNTED_BIT) != 0;
 }
 
-export function seqSetFlags(c: int64, cyclic: boolean, uncounted: boolean): void {
-	st64(c + 16, (ld64(c + 16) & ~(CYCLIC_BIT | UNCOUNTED_BIT)) | (cyclic ? CYCLIC_BIT : 0) | (uncounted ? UNCOUNTED_BIT : 0));
+export function seqUnowned(c: int64): boolean {
+	return (ld64(c + 16) & UNOWNED_BIT) != 0;
+}
+
+export function seqSetFlags(c: int64, cyclic: boolean, uncounted: boolean, unowned: boolean): void {
+	st64(c + 16, (ld64(c + 16) & ~(CYCLIC_BIT | UNCOUNTED_BIT | UNOWNED_BIT)) | (cyclic ? CYCLIC_BIT : 0) | (uncounted ? UNCOUNTED_BIT : 0) | (unowned ? UNOWNED_BIT : 0));
 }
 
 @inline

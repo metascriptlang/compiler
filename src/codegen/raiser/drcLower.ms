@@ -483,7 +483,10 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		emitZeroNilElements(s, target, placeOf(d.arguments[0]).nodeType);
 	}
 	else if (row == ROW_UNOWNED_INC) emitInst(s, raiserABC(RaiserOpcode.UnownedRc, refRegister(s, name, d.arguments[0]), 1, 0));
-	else if (row == ROW_UNOWNED_DEC) emitInst(s, raiserABC(RaiserOpcode.UnownedRc, refRegister(s, name, d.arguments[0]), 0, 0));
+	else if (row == ROW_UNOWNED_DEC) {
+		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, refRegister(s, name, d.arguments[0]), 0, 0));
+		if (localOfPlace(s, placeOf(d.arguments[0])) < 0) emitClear(s, name, d.arguments[0], false);
+	}
 	else if (row == ROW_UNOWNED_ASSIGN) emitUnownedAssign(s, name, d.arguments[0], d.arguments[1]);
 	else if (row != ROW_TRACE) throw new Error(`internal: ownership row ${row} of ${name} has no emitter`);
 	return true;

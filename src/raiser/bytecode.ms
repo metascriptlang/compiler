@@ -598,16 +598,24 @@ export function branchOffset(field: number): int64 {
 // A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
 // An uncounted element (a cursor or a pointer to an uncounted type, the checker's isUncountedElement) adds
 // ARRAY_UNCOUNTED_SLOT: the array borrows its elements, so its destroy and copy never count them.
+// Element class code ARRAY_UNOWNED_CLASS is a Ref element held on its Unowned<T> count: the array counts that
+// count where a counted array counts the strong one, and is uncounted otherwise.
 export const ARRAY_CYCLIC_SLOT = 64;
 export const ARRAY_UNCOUNTED_SLOT = 128;
+const ARRAY_UNOWNED_CLASS = 7;
 const ARRAY_WIDTH_SHIFT = 3;
 
 // How a Word, Float or Bool element sits in memory: a Word element is a signed or unsigned integer of the
 // width named, a Float element a 64-bit or (F32) 32-bit float, any other element 8 bytes.
 export enum ElemWidth { Wide, I32, I16, I8, U32, U16, U8, F32 }
 
-export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false, width: ElemWidth = ElemWidth.Wide): number {
+export function arrayClassSlot(cls: RaiserRegClass, cyclic: boolean = false, uncounted: boolean = false, width: ElemWidth = ElemWidth.Wide, unowned: boolean = false): number {
+	if (unowned) return ARRAY_UNOWNED_CLASS + ARRAY_UNCOUNTED_SLOT;
 	return (cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1) + ((width as number) << ARRAY_WIDTH_SHIFT) + (cyclic ? ARRAY_CYCLIC_SLOT : 0) + (uncounted ? ARRAY_UNCOUNTED_SLOT : 0);
+}
+
+export function slotArrayUnowned(slot: number): boolean {
+	return (slot & 7) == ARRAY_UNOWNED_CLASS;
 }
 
 export function slotArrayCyclic(slot: number): boolean {
@@ -620,6 +628,7 @@ export function slotArrayUncounted(slot: number): boolean {
 
 export function slotArrayClass(slot: number): RaiserRegClass {
 	const base = slot & 7;
+	if (base == ARRAY_UNOWNED_CLASS) return RaiserRegClass.Ref;
 	if (base < 0 || base > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
 	return base == 0 ? RaiserRegClass.Dyn : (base - 1) as RaiserRegClass;
 }
