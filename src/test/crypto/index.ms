@@ -10,6 +10,7 @@ import "./ecApiVectors";
 import "./ecdhApiSmoke";
 import "./ecdhInvalidApiVectors";
 import "./ecdhValidApiVectors";
+import "./ecdhAcceptableApiVectors";
 import "./ed25519ApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
