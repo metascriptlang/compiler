@@ -18,6 +18,7 @@ import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
 import "./kdfApiVectors";
 import "./rsaApiVectors";
+import "./rsaPrivateImportBounds";
 import "./x25519ApiVectors";
 import "./x25519Wycheproof";
 

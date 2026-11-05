@@ -145,7 +145,7 @@ function privateFromSequence(
 	const values: uint8[][] = [];
 	for (let i = 1; i < 9; i++) {
 		const value = derUnsigned(buf, parts[i]);
-		if (value == null) return null;
+		if (value == null || (value.length == 1 && value[0] == 0)) return null;
 		values.push(value);
 	}
 	const key: RsaPrivateData = {
