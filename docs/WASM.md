@@ -99,8 +99,8 @@ a `Float32Array` (with a `Float32Array` input `sumSpan` measured 1073 against ne
 2M times (presized, the wasm half runs 4.45 ms, and it equals the native C build, 5.79 ms against
 5.85 ms unpresized). Emscripten flags (`-O2`, `-flto`, `-msimd128`, emmalloc, no memory growth)
 moved the sieve under 1%; the earlier `-msimd128` probe cut the `scaleSpan` wasm loop 434 → 105 ns.
-Not explained: a wasm half exporting one function ran the sieve at 8.8 ms against 5.85 ms with
-the full export list, from the same C.
+An earlier one-export sieve ran at 8.8 ms against 5.85 ms with the full export list;
+the array-growth trace below resolves that cliff.
 
 The MetaScript bench is `src/bench/wasmBoundary/main.ms` and `benchWasm.ms`; the neon crate
 `lib.rs`/`bench.mjs` remains outside the repo (m1m `~/neonbench`). Not measured: browsers,
@@ -118,6 +118,35 @@ The candidate reported `wasmmix: 74/74 pass` and 256 passing boundary-unit tests
 fixed SIMD code generation and existing Node oracles, not browser support, GPU output, other
 hosts or rebased-main integration. No relaxed SIMD or fast-math. Full raw evidence:
 m1m `~/work/rr-recompiler-441c019f/out/simd-proof/`.
+
+Array-growth cliff, 2026-11-05, m1m, Node 24.1.0, emcc 5.0.5, Binaryen 129 (`0bb686f83`).
+The single-export arm isolates `primes` from the same bench into its own module; no kernel
+changes. Three alternating seven-arm rounds, each median of seven batches of ten calls after
+three warmup batches; every call asserted 148933 primes. Probe medians, ms/call:
+
+| single | full exports | single + keep table | noinline only | LTO | keep + LTO | keep + noinline + LTO |
+|---|---|---|---|---|---|---|
+| 8.746 | 5.912 | 5.899 | 8.737 | 7.069 | 9.094 | 6.048 |
+
+The root is optimizer shape, not array growth or ownership. Binaryen `0bb686f83`
+`src/passes/Inlining.cpp:157–158` inlines a single-reference function aggressively;
+`:230–232` counts function-address references too. The named-symbol trace and timed wasm
+have different whole-file hashes, but their prime bodies match after ignoring only function
+and call indices: **1558 WAT lines/21 locals → 176/8**, replacing the inlined allocation/growth
+body with one helper call. The LTO trace also exposes an allocation branch inside the hot loop;
+the Emscripten-only `noinline` keeps it behind the growth helper. These are emitted-code
+constraints, not a change to the algorithm in `msArrayPrepareAdd`.
+
+Production source tree `84d3c1eef183d6e7a24a9d8734607e920c77e4e6`, three paired runs:
+single-export **8.692 → 5.880 ms** (32.35% faster), wasm **18182 → 18311 bytes**; full bench
+**27656 → 27708 bytes**. Scalar-only probe: **9323 → 9526 bytes**, same result 5. That small
+retention cost is paid even when the boundary exposes no arrays. Full-bench callback median
+was 2.08% slower with noisy opposite-direction pairs; no callback gain is claimed. Generator
+pins failed twice on the control, then reported `Tests 30 passed (30)`; six named wasmmix
+consumers reported `wasmmix: 6/6 pass`. This is not a new 74-program sweep or browser/GPU
+certificate. LTO rows above are probes rebuilding the generated half with explicit `-flto`
+at compile and link, not evidence that the parent CLI's LTO option reaches it. Raw artifacts:
+m1m `~/work/rr-recompiler-441c019f/out/r9-proof/`, `r9-trace/`, and `r9-fixed/`.
 
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
