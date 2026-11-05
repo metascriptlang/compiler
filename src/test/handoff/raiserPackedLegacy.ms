@@ -30,8 +30,9 @@ import {
 } from "../../raiser/value";
 import { RaiserVM, execModule } from "../../raiser/vm";
 import { MemKind } from "../../raiser/layout";
-import { execFileCapture, cwd } from "std/process";
-import { writeFile } from "std/fs";
+import { execFileCapture } from "std/process";
+import { mkdirExclusive, removeAll, writeFile } from "std/fs";
+import { tmpDir } from "std/os";
 
 function floatBits(n: float64): int64 {
 	return slotWord(RaiserRegClass.Float, raiserFloat(n));
@@ -298,11 +299,17 @@ test "raiserPackedLegacy: wrapper metadata matches a native C layout oracle" {
 		+ `_Static_assert(_Alignof(struct Pair)==${a.align}, "align");\n`
 		+ `_Static_assert(offsetof(struct Pair,value)==${a.slots[1].offset}, "offset");\n`
 		+ `_Static_assert(sizeof(int32_t)==${b.size}, "literal size");\n`;
-	const file = cwd() + "/scratch/typed-memory/packedLegacy/layoutOracle.c";
-	assert writeFile(file, text).ok;
-	const compiled = execFileCapture("cc", ["-std=c11", "-fsyntax-only", file]);
-	assert compiled.ok, compiled.ok ? "" : compiled.error.errorOutput;
-	assert a.slots[1].kind == MemKind.U16 && b.kind == MemKind.I32;
+	const dir = tmpDir() + "/ms-packedLegacy-" + String(Math.floor(Math.random() * 1000000000));
+	assert mkdirExclusive(dir).ok;
+	try {
+		const file = dir + "/layoutOracle.c";
+		assert writeFile(file, text).ok;
+		const compiled = execFileCapture("cc", ["-std=c11", "-fsyntax-only", file]);
+		assert compiled.ok, compiled.ok ? "" : compiled.error.errorOutput;
+		assert a.slots[1].kind == MemKind.U16 && b.kind == MemKind.I32;
+	} finally {
+		assert removeAll(dir).ok;
+	}
 }
 
 test "raiserPackedLegacy: erased literals and void restore declared legacy metadata" {
