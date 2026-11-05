@@ -12,7 +12,7 @@ import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { compileExpr, compileIndex } from "./expressions";
 import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, nullIsZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
 import {
-	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT, ROW_TRACE, ROW_SET_LEN,
+	ROW_INCREF, ROW_DECREF, ROW_DECREF_CYCLIC, ROW_CLEAR, ROW_SINK, ROW_SHARE, ROW_KEPT, ROW_COPY_VALUE, ROW_STR_APPEND, ROW_STR_APPEND_CHAR, ROW_STR_APPEND_CODEPOINT, ROW_TRACE, ROW_SET_LEN, ROW_UNOWNED_INC, ROW_UNOWNED_DEC, ROW_UNOWNED_ASSIGN,
 	ownershipName, ownershipRow,
 } from "./drcRows";
 
@@ -385,6 +385,17 @@ function emitMaterialize(s: RaiserCompState, name: string, dest: Node): void {
 	patchJumpTo(s, present, codeLen(s));
 }
 
+// The old target is read out before the store, so a local slot that the store rebinds still names it.
+function emitUnownedAssign(s: RaiserCompState, name: string, dest: Node, src: Node): void {
+	const incoming = compileExpr(s, src);
+	emitInst(s, raiserABC(RaiserOpcode.UnownedRc, incoming, 1, 0));
+	const held = refRegister(s, name, dest);
+	const old = allocReg(s, classOfReg(s, held));
+	emitInst(s, raiserABC(RaiserOpcode.Move, old, held, 0));
+	emitPlaceStore(s, name, placeOf(dest), incoming);
+	emitInst(s, raiserABC(RaiserOpcode.UnownedRc, old, 0, 0));
+}
+
 function isHooklessCellWasMoved(call: CallExprData): boolean {
 	const type = call.arguments.length == 1 ? placeOf(call.arguments[0]).nodeType : null;
 	return isCellHook(call, SymbolFlag.WasMovedOp) && type != null && userHookAt(type, AttachedOp.AttachedWasMoved) == null;
@@ -471,6 +482,9 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, target, len, 0));
 		emitZeroNilElements(s, target, placeOf(d.arguments[0]).nodeType);
 	}
+	else if (row == ROW_UNOWNED_INC) emitInst(s, raiserABC(RaiserOpcode.UnownedRc, refRegister(s, name, d.arguments[0]), 1, 0));
+	else if (row == ROW_UNOWNED_DEC) emitInst(s, raiserABC(RaiserOpcode.UnownedRc, refRegister(s, name, d.arguments[0]), 0, 0));
+	else if (row == ROW_UNOWNED_ASSIGN) emitUnownedAssign(s, name, d.arguments[0], d.arguments[1]);
 	else if (row != ROW_TRACE) throw new Error(`internal: ownership row ${row} of ${name} has no emitter`);
 	return true;
 }

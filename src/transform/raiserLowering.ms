@@ -54,6 +54,7 @@ import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerValueParamSnapshot } from "./lowering/valueParamSnapshot";
 import { liftDestructors } from "./lowering/destructorLifting";
+import { lowerUnownedStores } from "./native/unownedStoreLower";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerStringIndexReads } from "./lowering/stringIndexLower";
@@ -154,6 +155,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = unwrapMaybe(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = liftDestructors(result, ctx, placed);
+	result = lowerUnownedStores(result, ctx);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

@@ -253,6 +253,9 @@ export interface RaiserVM {
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
+	unowned: HashMap<int64, int32>;  // per object: the Unowned<T> edges that point at it; an object with none has no entry
+	unownedDeferred: int64[];        // objects whose free waits for the end of the collector's dead set
+	finalizeMark: int32;  // while the collector's dead set drains, the height of `dropped` under it; -1 outside
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
@@ -368,7 +371,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, unowned: new HashMap<int64, int32>(), unownedDeferred: [], finalizeMark: -1, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -1916,8 +1919,9 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], extr
 }
 
 function vmLedgerCollect(vm: RaiserVM): void {
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	vmCondemnCycles(vm);
 	while (vm.dropped.length > 0) vmDestroyWalk(vm, vm.dropped.pop());
+	if (vm.finalizeMark >= 0) vmEndFinalize(vm);
 }
 
 function vmProgramLedger(vm: RaiserVM): void {
@@ -3785,7 +3789,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleLength(text);
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Catch: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Catch: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.UnownedRc: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -4119,6 +4123,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.RcKeptCheck => {
 			vmRcKeptCheck(vm, ia, ib);
 		},
+		RaiserOpcode.UnownedRc => {
+			vmUnownedRc(vm, innerHandle(vm, vm.regs.slots[vm.base + ia]), ib == 1);
+		},
 		RaiserOpcode.ArrayPop => {
 			vmHandleArrayPop(vm, ia, ib);
 		},
@@ -4421,8 +4428,48 @@ function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 
 // Every cell is freed here, so a collector that tracks cells has one place to forget them.
 function vmFreeCell(vm: RaiserVM, handle: int64): void {
+	if (vm.unowned.size > 0 && vm.unowned.has(handle)) {
+		vmUnownedOutlives(vm, handle);
+		return;
+	}
 	orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
 	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
+}
+
+function vmUnownedRc(vm: RaiserVM, handle: int64, up: boolean): void {
+	if (handle == 0) return;
+	const left = (vm.unowned.has(handle) ? vm.unowned.get(handle)! : 0) + (up ? 1 : -1);
+	if (left == 0) vm.unowned.delete(handle);
+	else vm.unowned.set(handle, left);
+}
+
+// An object freed while Unowned<T> edges still point at it: edges held by cyclic garbage are released
+// by collecting once, and inside a collection by the rest of its dead set; whatever is left would dangle.
+function vmUnownedOutlives(vm: RaiserVM, handle: int64): void {
+	vm.unownedDeferred.push(handle);
+	if (vm.finalizeMark < 0) vmCondemnCycles(vm);
+}
+
+function vmCondemnCycles(vm: RaiserVM): void {
+	const outer = vm.finalizeMark < 0;
+	if (outer) vm.finalizeMark = vm.dropped.length as int32;
+	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	if (outer && vm.dropped.length == vm.finalizeMark) vmEndFinalize(vm);
+}
+
+function vmEndFinalize(vm: RaiserVM): void {
+	vm.finalizeMark = -1;
+	while (vm.unownedDeferred.length > 0) {
+		const handle = vm.unownedDeferred.pop();
+		if (vm.unowned.has(handle)) {
+			const name = objectCellClass(handle).name;
+			vmError(vm, `${vm.unowned.get(handle)!} Unowned<${name}> edge(s) still point at the ${name} being freed; each would dangle`);
+			vm.unownedDeferred.length = 0;
+			return;
+		}
+		orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
+		rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
+	}
 }
 
 function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
@@ -4464,11 +4511,11 @@ function vmReleaseChild(vm: RaiserVM, handle: int64, cyclic: boolean): void {
 
 function vmRegisterCyclic(vm: RaiserVM, handle: int64): void {
 	if (!orcRegisterCandidate(vm.arrayHeap, vm.objectHeap, handle)) return;
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	vmCondemnCycles(vm);
 }
 
 function vmCollectCycles(vm: RaiserVM): void {
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	vmCondemnCycles(vm);
 	vmDrain(vm);
 }
 
@@ -4556,9 +4603,15 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 // whose return comes back here.
 function vmDrain(vm: RaiserVM): void {
 	while (vm.dropped.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) {
+		if (vm.dropped.length == vm.finalizeMark) {
+			vmEndFinalize(vm);
+			if (vm.halted) return;
+			continue;
+		}
 		const handle = vm.dropped.pop();
 		vmDestroyTop(vm, handle);
 	}
+	if (vm.finalizeMark >= 0 && vm.dropped.length <= vm.finalizeMark && vm.disposing.length == 0 && vm.dropNest == 0) vmEndFinalize(vm);
 	if (vm.sched.futures.counts.dead.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) vmDrainFutures(vm);
 }
 

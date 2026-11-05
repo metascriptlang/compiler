@@ -9,7 +9,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, M
 import { MemKind, memKindOf } from "../../raiser/layout";
 import { RaiserValue, RaiserValueKind, createClassType, CLOSURE_LAYOUT, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
-import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, unwrapRefNullUnion, isPlainFunctionPointer, isCountedRef } from "../../checker/types";
+import { peelToRepr, unwrapRef, isUncountedElement, getElementType, isAwaitable, unwrapRefNullUnion, isPlainFunctionPointer, isCountedRef, isUnownedSlot } from "../../checker/types";
 import { createNameSet } from "../../transform/context";
 import { canFormAcycle } from "../../transform/cycles";
 import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, resolveRoutine, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType, layoutOperand } from "./context";
@@ -475,7 +475,7 @@ export function slotUncountedOf(t: Type | null): boolean[] {
 	const shape = peelToStructOrUnion(t);
 	const flags: boolean[] = [];
 	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
-	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && (isUncountedElement(shape.typeChildren[i]) || isViewSlot(shape.typeChildren[i])));
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && (isUncountedElement(shape.typeChildren[i]) || isViewSlot(shape.typeChildren[i]) || isUnownedSlot(shape.typeChildren[i])));
 	return flags;
 }
 
@@ -496,7 +496,7 @@ export function slotCyclicOf(t: Type | null): boolean[] {
 	const shape = peelToStructOrUnion(t);
 	const flags: boolean[] = [];
 	if (shape == null || shape.kind != TypeKind.Struct || isMaybeType(shape)) return flags;
-	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && isCyclicType(shape.typeChildren[i]));
+	for (let i = 0; i < shape.typeNames.length; i += 1) flags.push(i < shape.typeChildren.length && isCyclicType(shape.typeChildren[i]) && !isUnownedSlot(shape.typeChildren[i]));
 	return flags;
 }
 

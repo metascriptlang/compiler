@@ -239,9 +239,10 @@ export enum RaiserOpcode {
 	IntToF64,         // ABC: floats[A] = words[B] read as a signed integer; the layout's form of a Conv to F64 from a Word register
 	UIntToF64,        // ABC: floats[A] = words[B] read as an unsigned 64-bit integer; the layout's form of a Conv to F64 from U64
 	LoadConstW,       // ABx: R[A] = the raw word of constant K[Bx], a Word, Bool or Float register; the layout's form of such a LoadConst
+	UnownedRc,        // ABC: the count of Unowned<T> edges to the object in refs[A] goes up by one when B = 1, down by one when B = 0; nil stays as it is
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.LoadConstW;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.UnownedRc;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -384,7 +385,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
-		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue => "y--",
+		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue | RaiserOpcode.UnownedRc => "y--",
 		RaiserOpcode.WasMoved => "x--",
 		RaiserOpcode.SinkValue => "yy-",
 		RaiserOpcode.AssignInPlace => "yy-",
@@ -847,5 +848,6 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.AssignInPlace, 0) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 1) == RaiserRole.Slot && opRole(RaiserOpcode.AssignInPlace, 2) == RaiserRole.None;
 	assert opRole(RaiserOpcode.FutureRead, 0) == RaiserRole.Any && opRole(RaiserOpcode.FutureRead, 1) == RaiserRole.None;
 	assert opRole(RaiserOpcode.IntToF64, 0) == RaiserRole.Float && opRole(RaiserOpcode.UIntToF64, 1) == RaiserRole.Int;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Word && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
+	assert opRole(RaiserOpcode.LoadConstW, 0) == RaiserRole.Word && opRole(RaiserOpcode.LoadConstW, 1) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Slot && opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
 }
