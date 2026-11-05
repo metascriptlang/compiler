@@ -358,7 +358,7 @@ function referenceText(n: Node): string {
 	return n.kind == NodeKind.Identifier ? (n.data as IdentifierData).name : (n.data as MemberExprData).property;
 }
 
-function closureFunction(n: Node): Node | null {
+export function closureFunction(n: Node): Node | null {
 	if (!n.flags.has(NodeFlag.Closure)) return null;
 	const values = (n.data as ObjectLiteralData).properties;
 	if (values.length != 2 || values[1].kind != NodeKind.NullLiteral) return null;

@@ -1,8 +1,9 @@
 // A loop holding no call, no array-variable assignment and no `.length` write cannot change any array
 // header, so its arrays are read through a local Span. Admitting any other node kind here breaks
-// that rule: a header change inside the loop would go unseen.
+// that rule: a header change inside the loop would go unseen. The one call admitted goes through a
+// const closure with no env whose routine body keeps the same rule, touches no array and calls nothing.
 
-import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData, CallExprData, FunctionDeclData, ReturnStmtData } from "../../ast/node";
 import { isRoutineNode } from "../../ast/shape";
 import { peelTransparentInstance, peelToRepr, createSpan, isNumeric } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
@@ -11,6 +12,8 @@ import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, fres
 import { makeBlock, makeVarDecl, makeIdentResolved, makeHiddenDeref } from "../util";
 import { arraySpanLiteral } from "../lowering/spanLower";
 import { isArrayLengthGuard } from "../lowering/forOfLower";
+import { extractBodyStmts } from "../util";
+import { closureFunction } from "./hcrIndirect";
 
 class Cached {
 	array: Symbol;
@@ -23,14 +26,56 @@ class LoopCache {
 	ctx: TransformContext;
 	bound: SymSet;
 	cached: Cached[];
+	closures: HashMap<Symbol, Symbol>;
+	routines: HashMap<Symbol, Node>;
+	inCallee: boolean;
 }
 
 export function lowerLoopSpans(program: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend || ctx.raiserBackend || ctx.boundChecks) return program;
-	const st: LoopCache = { ctx, bound: createSymSet(), cached: [] };
+	const st: LoopCache = { ctx, bound: createSymSet(), cached: [], closures: new HashMap<Symbol, Symbol>(), routines: new HashMap<Symbol, Node>(), inCallee: false };
+	collectCallees(program, st);
 	dropProvenLengthGuards(program, st);
 	scan(program, st);
 	return program;
+}
+
+function collectCallees(n: Node, st: LoopCache): void {
+	if (isRoutineNode(n) && n.resolvedSym != null) st.routines.set(n.resolvedSym, n);
+	if (n.kind == NodeKind.VariableDecl && n.resolvedSym != null) {
+		const d = n.data as VariableDeclData;
+		const target = d.declKind == DeclKind.Const && d.initializer != null ? closureFunction(d.initializer) : null;
+		if (target != null && target.resolvedSym != null) st.closures.set(n.resolvedSym, target.resolvedSym);
+	}
+	forEachChild(n, (c: Node): void => collectCallees(c, st));
+}
+
+function isStableCall(n: Node, st: LoopCache): boolean {
+	const d = n.data as CallExprData;
+	if (st.inCallee || d.callee.kind != NodeKind.Identifier || d.callee.resolvedSym == null || !isScalar(n.nodeType)) return false;
+	const fn = st.closures.get(d.callee.resolvedSym);
+	const decl = fn != null ? st.routines.get(fn) : null;
+	if (decl == null) return false;
+	for (const a of d.arguments) {
+		if (!isHeaderStable(a, st)) return false;
+	}
+	const outer = st.cached;
+	st.cached = [];
+	st.inCallee = true;
+	const stmts = extractBodyStmts((decl.data as FunctionDeclData).fnBody);
+	let ok = true;
+	for (let i = 0; ok && i < stmts.length; i++) {
+		const s = stmts[i];
+		if (s.kind != NodeKind.ReturnStmt) ok = isHeaderStable(s, st);
+		else {
+			const value = (s.data as ReturnStmtData).argument;
+			ok = i == stmts.length - 1 && value != null && isHeaderStable(value, st);
+		}
+	}
+	ok = ok && st.cached.length == 0;
+	st.inCallee = false;
+	st.cached = outer;
+	return ok;
 }
 
 function dropProvenLengthGuards(n: Node, st: LoopCache): void {
@@ -198,6 +243,7 @@ function isHeaderStable(n: Node, st: LoopCache): boolean {
 		const arg = (n.data as UpdateExprData).updateArg;
 		return (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.ArrayAccess) && isHeaderStable(arg, st);
 	}
+	if (n.kind == NodeKind.CallExpr) return isStableCall(n, st);
 	if (n.kind == NodeKind.ConditionalExpr) return allHeaderStable(n, st);
 	if (n.kind == NodeKind.TypeAssertion) return isScalar(n.nodeType) && allHeaderStable(n, st);
 	if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
