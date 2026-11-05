@@ -1291,7 +1291,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		iterateSpreadSource(ctx, d.newArguments[ai]);
 		const argType = d.newArguments[ai].nodeType;
 		if (argExpected != null && argType != null) {
-			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
+			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], peelSink(argExpected), argType);
 		}
 		if (classSym != null && classSym.symbolKind == SymbolKind.Actor) checkActorArgSendable(ctx, node, d.newArguments[ai], ai, true);
 		ai = ai + 1;
