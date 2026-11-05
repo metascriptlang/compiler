@@ -51,6 +51,33 @@ test "an owned edge into a class with a plain edge back is cyclic" {
 	assert verdict(decls, "B") == "cyclic";
 }
 
+test "Owned of an alias that names its own holder keeps the owned edge" {
+	assert verdict("type D = { l: Owned<N>, r: Owned<N> } | { x: int32 };\nclass N { data: Owned<D> = { x: 1 }; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { data: Owned<D> = { x: 1 }; }\ntype D = { l: Owned<N>, r: Owned<N> } | { x: int32 };\nconst n = new N();", "N") == "acyclic";
+	assert verdict("type D = { l: Owned<N> } | { x: int32 };\nclass N { data: Owned<D> | null = null; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("type P = N;\nclass N { next: Owned<P> | null = null; }\nconst n = new N();", "N") == "acyclic";
+}
+
+test "Owned of a union of records owns whichever record the slot holds" {
+	assert verdict("class N { data: Owned<{ l: Owned<N>, r: Owned<N> } | { x: int32 }> = { x: 1 }; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("type D = Owned<{ l: Owned<N> }> | Owned<{ x: int32 }>;\nclass N { data: D = { x: 1 }; }\nconst n = new N();", "N") == "acyclic";
+}
+
+test "an Owned union slot reads as a plain union or member without a copy of the owner" {
+	const decls = "type A = { l: Owned<N> };\ntype B = { x: int32 };\nclass N { k: int32 = 0; ab: Owned<A> | Owned<B> = { x: 1 }; }\nfunction arg(d: A | B): int32 { return \"x\" in d ? d.x : 0; }\n";
+	const r = compileToC(decls + "function f(n: N): int32 { const d: B | A = n.ab; const e: A | B = n.ab; const a = n.ab as A; return arg(n.ab) + arg(d) + arg(e) + a.l.k; }\nconsole.log(f(new N()));\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "a plain edge into a record that owns its holder is cyclic" {
+	assert verdict("type D = { l: Owned<N> } | { x: int32 };\nclass N { data: D = { x: 1 }; }\nconst n = new N();", "N") == "cyclic";
+}
+
+test "Owned of a union with a member that is not a class is refused" {
+	assert refused("class N { data: Owned<{ x: int32 } | string> = { x: 1 }; }\nconst n = new N();\n").contains("member 'string' is not a class");
+	assert refused("type D = { x: int32 } | int32;\nclass N { data: Owned<D> = 1; }\nconst n = new N();\n").contains("is not a class");
+}
+
 test "owned edges through a generic class stay acyclic" {
 	assert verdict("class Node<T> { v: T; kids: Vec<Owned<Node<T>>> = []; constructor(v: T) { this.v = v; } }\nconst n = new Node<int32>(1);", "Node_") == "acyclic";
 }

@@ -3178,7 +3178,8 @@ export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type)
 }
 
 export function convertUnionToUnion(expr: Node, source: Type, target: Type): Node {
-	const declared = declaredTagUnionOf(expr);
+	const stored = declaredTagUnionOf(expr);
+	const declared = stored != null && !isOwnedRef(owningEdge(source)) ? withoutOwned(stored) : stored;
 	if (declared != null && sameCarrier(declared, target)) {
 		expr.nodeType = target;
 		return expr;
@@ -3521,8 +3522,10 @@ function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null 
 }
 
 function owningEdge(t: Type): Type | null {
-	const held = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
-	return held != null && held.kind == TypeKind.Ref ? held : null;
+	if (isMaybeType(t)) return t.typeReturn != null ? owningEdge(t.typeReturn) : null;
+	if (t.kind != TypeKind.Union) return t.kind == TypeKind.Ref ? t : null;
+	const owned = t.typeChildren.find((m) => isOwnedRef(m));
+	return owned ?? t.typeChildren.find((m) => m.kind == TypeKind.Ref) ?? null;
 }
 
 export function isFreshOwnable(n: Node): boolean {
@@ -3560,7 +3563,11 @@ export function fitOwnership(ctx: CheckerContext, expr: Node, formal: Type, expr
 		expr.nodeType = createOwned(exprType);
 		return expr.nodeType;
 	}
-	const released = releasedOwnedEdge(formal, exprType);
+	return releaseOwnedRead(expr, formal, exprType);
+}
+
+export function releaseOwnedRead(expr: Node, slot: Type, exprType: Type): Type {
+	const released = releasedOwnedEdge(slot, exprType);
 	if (released != exprType) releaseOwned(expr);
 	return released;
 }

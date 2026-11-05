@@ -1887,7 +1887,7 @@ export function isOwnedRef(t: Readonly<Type | null>): boolean {
 
 export function isSinkTypeForParam(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
-	return t.kind == TypeKind.Sink || isOwnedRef(t) || (t.kind == TypeKind.Union && isOwnedRef(unwrapRefNullUnion(t)));
+	return t.kind == TypeKind.Sink || isOwnedRef(t) || (t.kind == TypeKind.Union && t.typeChildren.some((m) => isOwnedRef(m)));
 }
 
 export function withoutOwned(t: Type): Type {
@@ -1899,11 +1899,15 @@ export function withoutOwned(t: Type): Type {
 		t.plainType = c;
 		return c;
 	}
-	if (t.kind == TypeKind.Union && unwrapRefNullUnion(t) != null && t.typeChildren.some((m) => isOwnedRef(m))) {
+	if (t.kind == TypeKind.Union && t.typeChildren.some((m) => isOwnedRef(m))) {
 		const c = copyTypeShallow(t);
 		c.typeChildren = t.typeChildren.map((m) => withoutOwned(m));
 		t.plainType = c;
 		return c;
+	}
+	if (isMaybeType(t) && t.typeReturn != null && withoutOwned(t.typeReturn) != t.typeReturn) {
+		t.plainType = createMaybeType(withoutOwned(t.typeReturn));
+		return t.plainType;
 	}
 	return t;
 }
@@ -1912,7 +1916,7 @@ export function ownedEdgeOf(t: Type | null, depth: int32 = 0): Type | null {
 	if (t == null || depth > 8) return null;
 	if (isOwnedRef(t)) return t;
 	return match (t.kind) {
-		TypeKind.Union => ownedEdgeOf(unwrapRefNullUnion(t), depth + 1),
+		TypeKind.Union => unwrapRefNullUnion(t) != null ? ownedEdgeOf(unwrapRefNullUnion(t), depth + 1) : firstOwnedEdge(t.typeChildren, depth),
 		TypeKind.Array | TypeKind.SizedArray => ownedEdgeOf(t.typeReturn, depth + 1),
 		TypeKind.Struct | TypeKind.Tuple => firstOwnedEdge(t.typeChildren, depth),
 		TypeKind.Alias => ownedEdgeOf(peelThrough(t, PEEL_ALIAS), depth + 1),

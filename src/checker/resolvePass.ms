@@ -9,7 +9,7 @@
 import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData, BuiltinKind } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isUnownedSlot, withoutUnowned, unownedInside, unownedElementOf, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
+import { getAttachedOp, setAttachedOp, peelThrough, PEEL_ALIAS, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isUnownedSlot, withoutUnowned, unownedInside, unownedElementOf, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet, builtinKindName } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -49,8 +49,18 @@ interface ForwardOwner {
 	member: Type;
 }
 
+interface ForwardWrap {
+	target: Type;
+	inner: Type;
+	wrap: AnnotationWrap;
+	ctx: CheckerContext;
+	line: int32;
+	col: int32;
+}
+
 const _forwardNullables: ForwardNullable[] = [];
 const _forwardOwners: ForwardOwner[] = [];
+const _forwardWraps: ForwardWrap[] = [];
 
 function declaresType(t: Type | null, sym: Symbol): boolean {
 	let peeled = t;
@@ -87,7 +97,26 @@ function recordForwardFields(owner: Type, fieldTypes: Type[]): void {
 	}
 }
 
+function deferWrapUntilAliasShaped(ctx: CheckerContext, wrap: AnnotationWrap, inner: Type, line: int32, col: int32): Type {
+	const target = copyTypeShallow(inner);
+	_forwardWraps.push({ target: target, inner: inner, wrap: wrap, ctx: ctx, line: line, col: col });
+	return target;
+}
+
 function settleForwardTypes(): void {
+	let w = 0;
+	while (w < _forwardWraps.length) {
+		const entry = _forwardWraps[w];
+		if (isForwardAlias(entry.inner)) {
+			w = w + 1;
+			continue;
+		}
+		_forwardWraps.splice(w, 1);
+		const settled = entry.wrap == AnnotationWrap.Owned
+			? ownedAnnotationOf(entry.ctx, entry.inner, entry.line, entry.col)
+			: unownedAnnotationOf(entry.ctx, entry.inner, entry.line, entry.col);
+		assignType(entry.target, settled);
+	}
 	let i = 0;
 	while (i < _forwardNullables.length) {
 		const entry = _forwardNullables[i];
@@ -959,7 +988,10 @@ function readonlyAnnotationOf(viewed: Type): Type {
 }
 
 function ownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isForwardAlias(inner)) return deferWrapUntilAliasShaped(ctx, AnnotationWrap.Owned, inner, line, col);
 	if (isUnresolvedType(inner) || inner.kind == TypeKind.Error) return inner;
+	const union = peelThrough(inner, PEEL_ALIAS);
+	if (union != null && union.kind == TypeKind.Union) return ownedUnionOf(ctx, inner, union, line, col);
 	if (inner.kind != TypeKind.Ref || isAtomicRef(inner) || (inner.typeReturn != null && isValuePointee(inner.typeReturn))) {
 		addError(ctx, "Owned<T> takes a class type, got '" + typeDisplayName(inner) + "': a Vec or string is already unique, and a struct is a value", line, col);
 		return inner;
@@ -967,7 +999,25 @@ function ownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: i
 	return createOwned(inner);
 }
 
+// Owned<A | B> owns whichever record or class the slot holds: each member is an owned edge.
+function ownedUnionOf(ctx: CheckerContext, written: Type, union: Type, line: int32, col: int32): Type {
+	const members: Type[] = [];
+	for (const m of union.typeChildren) {
+		if (m.kind == TypeKind.Null) {
+			members.push(m);
+			continue;
+		}
+		if (m.kind != TypeKind.Ref || isAtomicRef(m) || (m.typeReturn != null && isValuePointee(m.typeReturn))) {
+			addError(ctx, "Owned<T> takes a class type or a union of classes, got '" + typeDisplayName(written) + "': its member '" + typeDisplayName(m) + "' is not a class", line, col);
+			return written;
+		}
+		members.push(createOwned(m));
+	}
+	return createUnionInOrder(members);
+}
+
 function unownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isForwardAlias(inner)) return deferWrapUntilAliasShaped(ctx, AnnotationWrap.Unowned, inner, line, col);
 	if (isUnresolvedType(inner) || inner.kind == TypeKind.Error) return inner;
 	if (inner.kind != TypeKind.Ref || isAtomicRef(inner) || isOwnedRef(inner) || (inner.typeReturn != null && isValuePointee(inner.typeReturn))) {
 		addError(ctx, "Unowned<T> takes a class type, got '" + typeDisplayName(inner) + "': it points at an object without owning it", line, col);

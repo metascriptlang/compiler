@@ -37,6 +37,12 @@ test "owned children with an Unowned parent edge are acyclic" {
 	assert verdict("class N { left: Owned<N> | null = null; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";
 }
 
+test "Unowned of an alias that names its own holder keeps the back edge" {
+	assert verdict("type P = N;\nclass N { kids: Vec<Owned<N>> = []; up: Unowned<P> | null = null; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { kids: Vec<Owned<N>> = []; up: Unowned<P> | null = null; }\ntype P = N;\nconst n = new N();", "N") == "acyclic";
+	assert verdict("type P = N;\nclass N { ups: Vec<Unowned<P>> = []; }\nconst n = new N();", "N") == "acyclic";
+}
+
 test "a store into an Unowned slot counts on the second count" {
 	const c = emitted("class T { id: int32 = 0; }\nclass H { at: Unowned<T> | null = null; }\nconst t = new T();\nconst h = new H();\nh.at = t;\nconsole.log(t.id);\n");
 	assert c.contains("msUnownedAssign"), c;
