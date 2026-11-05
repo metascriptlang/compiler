@@ -3,7 +3,28 @@
 #include <stddef.h>
 #include <string.h>
 
+static int msManualUnownedChecks(void) {
+	msRefHeader first = {0}, second = {0};
+	first.rc = 37;
+	second.rc = 53;
+	void* p = &first + 1;
+	void* q = &second + 1;
+	void* slot = p;
+	msUnownedIncref(p);
+	msUnownedDecref(p);
+	msUnownedAssign(&slot, q);
+	if (slot != q) return 1;
+	int visits = 0;
+	if (msUnownedTake((visits++, p)) != p || msUnownedGive((visits++, q)) != q || visits != 2) return 1;
+	msUnownedIncref(NULL);
+	msUnownedDecref(NULL);
+	msUnownedAssign(&slot, NULL);
+	if (slot != NULL || msUnownedTake(NULL) != NULL || msUnownedGive(NULL) != NULL) return 1;
+	return first.rc != 37 || second.rc != 53;
+}
+
 int32_t msBareHeapReuseChecks(void) {
+	if (msManualUnownedChecks()) return 8;
 	for (size_t order = 0; order < 2; order++) {
 		void* left = msMemAlloc(24 * 1024);
 		void* right = msMemAlloc(24 * 1024);

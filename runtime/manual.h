@@ -519,6 +519,13 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msDropDefer(o, f, a)  ((void)(o), (void)(f), (void)(a))
 #define msAtomicIncref(p)     ((void)0)
 #define msAtomicDecref(p)     ((void)0)
+#define msUnownedIncref(p)    ((void)0)
+#define msUnownedDecref(p)    ((void)0)
+
+static inline void msUnownedAssignAt(void** slot, void* p) { *slot = p; }
+#define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
+static inline void* msUnownedTake(void* p) { return p; }
+static inline void* msUnownedGive(void* p) { return p; }
 
 #define msClosureDestroy(c)   do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureCopy(c)      ((void)0)
