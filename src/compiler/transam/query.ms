@@ -6,17 +6,23 @@
 //
 // Arrays passed by pointer — bare T[] types.
 
-import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, queryKeysEqual } from "./revision";
-
+import {
+	TaQueryKey,
+	TaQueryKind,
+	TaQueryState,
+	TaDurability,
+	createQueryKey,
+	queryKeysEqual,
+} from "./revision";
 
 // ===== Cache Entry — per-query metadata (NOT the result value) =====
 
 export class TaCacheEntry {
 	key: TaQueryKey;
 	state: TaQueryState;
-	accessedAt: int32;      // cache clock at last get or put, for LRU eviction
-	computedAt: int32;      // revision when last computed
-	verifiedAt: int32;      // revision when last verified green
+	accessedAt: int32; // cache clock at last get or put, for LRU eviction
+	computedAt: int32; // revision when last computed
+	verifiedAt: int32; // revision when last verified green
 	durability: TaDurability;
 	changedAt: int32;
 	dependencies: TaQueryKey[];
@@ -57,7 +63,8 @@ export function pushFrame(stack: TaDependencyStack, key: TaQueryKey): void {
 	const frame: TaDependencyFrame = {
 		queryKey: key,
 		deps: [],
-		minDurability: TaDurability.High,  // starts at highest, lowered by deps
+		minDurability:
+			TaDurability.High, // starts at highest, lowered by deps
 	};
 	stack.frames.push(frame);
 }
@@ -71,15 +78,23 @@ export function hasActiveFrame(stack: TaDependencyStack): boolean {
 }
 
 function topFrame(stack: TaDependencyStack, what: string): TaDependencyFrame {
-	if (stack.frames.length == 0) throw new Error(`internal: ${what} with no query frame active`);
+	if (stack.frames.length == 0) {
+		throw new Error(`internal: ${what} with no query frame active`);
+	}
 	return stack.frames[stack.frames.length - 1];
 }
 
-export function recordDependency(stack: TaDependencyStack, depKey: TaQueryKey): void {
+export function recordDependency(
+	stack: TaDependencyStack,
+	depKey: TaQueryKey,
+): void {
 	topFrame(stack, "a dependency is recorded").deps.push(depKey);
 }
 
-export function recordDurability(stack: TaDependencyStack, dur: TaDurability): void {
+export function recordDurability(
+	stack: TaDependencyStack,
+	dur: TaDurability,
+): void {
 	const frame = topFrame(stack, "a durability is recorded");
 	// Durability enum: Low=0, Medium=1, High=2. Lower value = less stable.
 	// Use equality checks since < on enums not supported by checker.
@@ -165,7 +180,7 @@ test "minDurability tracks lowest" {
 	assert stack.frames[0].minDurability == TaDurability.Medium;
 	recordDurability(stack, TaDurability.Low);
 	assert stack.frames[0].minDurability == TaDurability.Low;
-	recordDurability(stack, TaDurability.High);  // doesn't raise
+	recordDurability(stack, TaDurability.High); // doesn't raise
 	assert stack.frames[0].minDurability == TaDurability.Low;
 	popFrame(stack);
 }
@@ -174,11 +189,21 @@ test "recording a dependency or a durability with no frame active fails loud" {
 	const stack = createDependencyStack();
 	const depKey = createQueryKey(TaQueryKind.FileText, 0);
 	let dependency = "";
-	try { recordDependency(stack, depKey); } catch (e) { dependency = (e as Error).message; }
-	assert dependency == "internal: a dependency is recorded with no query frame active", dependency;
+	try {
+		recordDependency(stack, depKey);
+	} catch (e) {
+		dependency = (e as Error).message;
+	}
+	assert dependency ==
+		"internal: a dependency is recorded with no query frame active", dependency;
 	let durability = "";
-	try { recordDurability(stack, TaDurability.Low); } catch (e) { durability = (e as Error).message; }
-	assert durability == "internal: a durability is recorded with no query frame active", durability;
+	try {
+		recordDurability(stack, TaDurability.Low);
+	} catch (e) {
+		durability = (e as Error).message;
+	}
+	assert durability ==
+		"internal: a durability is recorded with no query frame active", durability;
 }
 
 test "recording after the last frame was popped fails loud" {
@@ -186,6 +211,11 @@ test "recording after the last frame was popped fails loud" {
 	pushFrame(stack, createQueryKey(TaQueryKind.Parse, 0));
 	popFrame(stack);
 	let message = "";
-	try { recordDependency(stack, createQueryKey(TaQueryKind.FileText, 0)); } catch (e) { message = (e as Error).message; }
-	assert message == "internal: a dependency is recorded with no query frame active", message;
+	try {
+		recordDependency(stack, createQueryKey(TaQueryKind.FileText, 0));
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message ==
+		"internal: a dependency is recorded with no query frame active", message;
 }

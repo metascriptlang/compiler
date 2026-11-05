@@ -5,17 +5,21 @@
 //
 // Arrays passed by pointer — bare T[] types.
 
-import { TaQueryKey, TaQueryKind, TaQueryState, createQueryKey } from "./revision";
+import {
+	TaQueryKey,
+	TaQueryKind,
+	TaQueryState,
+	createQueryKey,
+} from "./revision";
 import { TaCacheEntry, createCacheEntry } from "./query";
-
 
 // ===== Cache Store =====
 
 export class TaCacheStore {
 	entries: TaCacheEntry[];
-	accessClock: int32;            // monotonic clock, incremented on each access
+	accessClock: int32; // monotonic clock, incremented on each access
 	capacity: int32;
-	fileIndex: HashMap<int32, TaCacheEntry[]>;  // fileId → entries, for lookup
+	fileIndex: HashMap<int32, TaCacheEntry[]>; // fileId → entries, for lookup
 	hits: int32;
 	misses: int32;
 	recomputed: int32[];
@@ -25,7 +29,11 @@ export class TaCacheStore {
 }
 
 export function createCacheStore(capacity: int32): TaCacheStore {
-	if (capacity < 1) throw new Error("internal: cache capacity must be at least 1, got " + capacity);
+	if (capacity < 1) {
+		throw new Error(
+			"internal: cache capacity must be at least 1, got " + capacity,
+		);
+	}
 	return {
 		entries: [],
 		accessClock: 0,
@@ -46,7 +54,9 @@ function findEntry(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry | null {
 	const indexed = cache.fileIndex.get(key.fileId);
 	if (indexed != null) {
 		for (const entry of indexed) {
-			if (entry.key.queryKind == key.queryKind) return entry;
+			if (entry.key.queryKind == key.queryKind) {
+				return entry;
+			}
 		}
 	}
 	return null;
@@ -58,7 +68,9 @@ export function cacheContains(cache: TaCacheStore, key: TaQueryKey): boolean {
 
 function positionOf(list: TaCacheEntry[], entry: TaCacheEntry): int32 {
 	for (let i = 0; i < list.length; i++) {
-		if (list[i] == entry) return i;
+		if (list[i] == entry) {
+			return i;
+		}
 	}
 	throw new Error("internal: cache entry is not in its list");
 }
@@ -68,9 +80,14 @@ function touch(cache: TaCacheStore, entry: TaCacheEntry): void {
 	entry.accessedAt = cache.accessClock;
 }
 
-export function cacheGet(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry | null {
+export function cacheGet(
+	cache: TaCacheStore,
+	key: TaQueryKey,
+): TaCacheEntry | null {
 	const entry = findEntry(cache, key);
-	if (entry != null) touch(cache, entry);
+	if (entry != null) {
+		touch(cache, entry);
+	}
 	return entry;
 }
 
@@ -91,13 +108,17 @@ function findEvictIndex(cache: TaCacheStore): int32 {
 function removeFromFileIndex(cache: TaCacheStore, entry: TaCacheEntry): void {
 	const fid = entry.key.fileId;
 	const indexed = cache.fileIndex.get(fid);
-	if (indexed == null) return;
+	if (indexed == null) {
+		return;
+	}
 	const at = positionOf(indexed, entry);
 	for (let i = at; i < indexed.length - 1; i++) {
 		indexed[i] = indexed[i + 1];
 	}
 	indexed.pop();
-	if (indexed.length == 0) cache.fileIndex.delete(fid);
+	if (indexed.length == 0) {
+		cache.fileIndex.delete(fid);
+	}
 }
 
 function evictAt(cache: TaCacheStore, idx: int32): void {
@@ -113,7 +134,9 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	if (old != null) {
 		cache.entries[positionOf(cache.entries, old)] = entry;
 		const sameFile = cache.fileIndex.get(entry.key.fileId);
-		if (sameFile != null) sameFile[positionOf(sameFile, old)] = entry;
+		if (sameFile != null) {
+			sameFile[positionOf(sameFile, old)] = entry;
+		}
 		touch(cache, entry);
 		return;
 	}
@@ -135,7 +158,9 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 
 export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 	const entry = findEntry(cache, key);
-	if (entry == null) return false;
+	if (entry == null) {
+		return false;
+	}
 	evictAt(cache, positionOf(cache.entries, entry));
 	return true;
 }
@@ -218,7 +243,7 @@ test "accessed entry not evicted" {
 	// Touch k1 so k2 becomes LRU
 	cacheGet(cache, k1);
 	cachePut(cache, e3);
-	assert cacheContains(cache, k1);  // was touched
+	assert cacheContains(cache, k1); // was touched
 	assert !cacheContains(cache, k2); // evicted (LRU)
 	assert cacheContains(cache, k3);
 }
@@ -255,8 +280,14 @@ test "remove nonexistent returns false" {
 test "get put remove address one entry per kind and file id" {
 	const cache = createCacheStore(100);
 	for (let fileId = 0; fileId < 5; fileId++) {
-		cachePut(cache, createCacheEntry(createQueryKey(TaQueryKind.Parse, fileId)));
-		cachePut(cache, createCacheEntry(createQueryKey(TaQueryKind.TypeCheck, fileId)));
+		cachePut(
+			cache,
+			createCacheEntry(createQueryKey(TaQueryKind.Parse, fileId)),
+		);
+		cachePut(
+			cache,
+			createCacheEntry(createQueryKey(TaQueryKind.TypeCheck, fileId)),
+		);
 	}
 	assert cache.entries.length == 10;
 	const parse3 = cacheGet(cache, createQueryKey(TaQueryKind.Parse, 3));
@@ -268,9 +299,12 @@ test "get put remove address one entry per kind and file id" {
 	assert cacheGet(cache, createQueryKey(TaQueryKind.TypeCheck, 3)) != null;
 	assert cache.entries.length == 9;
 	assert !cacheRemove(cache, createQueryKey(TaQueryKind.Parse, 3));
-	const replacement = createCacheEntry(createQueryKey(TaQueryKind.TypeCheck, 3));
+	const replacement = createCacheEntry(
+		createQueryKey(TaQueryKind.TypeCheck, 3),
+	);
 	cachePut(cache, replacement);
-	assert cacheGet(cache, createQueryKey(TaQueryKind.TypeCheck, 3)) == replacement;
+	assert cacheGet(cache, createQueryKey(TaQueryKind.TypeCheck, 3)) ==
+		replacement;
 	assert cache.entries.length == 9;
 }
 

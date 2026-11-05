@@ -6,27 +6,36 @@
 //
 // Arrays passed by pointer — bare T[] types.
 
-
-
 // ===== Module Dependency Graph =====
 
 export class TaModuleDepGraph {
-	forwardAdj: int32[][];  // importerFileId → [importedFileId, ...] in import order
-	reverseAdj: int32[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
-	registeredAt: HashMap<int32, int32>;  // fileId → revision when exports registered; absent = never
+	forwardAdj: int32[][]; // importerFileId → [importedFileId, ...] in import order
+	reverseAdj: int32[][]; // importedFileId → [importerFileId, ...] for O(1) reverse lookup
+	registeredAt: HashMap<int32, int32>; // fileId → revision when exports registered; absent = never
 }
 
 export function createModuleDepGraph(): TaModuleDepGraph {
-	return { forwardAdj: [], reverseAdj: [], registeredAt: new HashMap<int32, int32>() };
+	return {
+		forwardAdj: [],
+		reverseAdj: [],
+		registeredAt: new HashMap<int32, int32>(),
+	};
 }
 
 // ===== Export Registration Revision =====
 
-export function getRegisteredAt(deps: TaModuleDepGraph, fileId: int32): int32 | null {
+export function getRegisteredAt(
+	deps: TaModuleDepGraph,
+	fileId: int32,
+): int32 | null {
 	return deps.registeredAt.get(fileId);
 }
 
-export function setRegisteredAt(deps: TaModuleDepGraph, fileId: int32, rev: int32): void {
+export function setRegisteredAt(
+	deps: TaModuleDepGraph,
+	fileId: int32,
+	rev: int32,
+): void {
 	deps.registeredAt.set(fileId, rev);
 }
 
@@ -36,10 +45,18 @@ export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: int32): void {
 
 // ===== Edge Operations =====
 
-function edgeExists(deps: TaModuleDepGraph, importer: int32, imported: int32): boolean {
-	if (imported >= deps.reverseAdj.length) return false;
+function edgeExists(
+	deps: TaModuleDepGraph,
+	importer: int32,
+	imported: int32,
+): boolean {
+	if (imported >= deps.reverseAdj.length) {
+		return false;
+	}
 	for (const existing of deps.reverseAdj[imported]) {
-		if (existing == importer) return true;
+		if (existing == importer) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -56,7 +73,9 @@ export function recordModuleImport(
 	importerFileId: int32,
 	importedFileId: int32,
 ): void {
-	if (edgeExists(deps, importerFileId, importedFileId)) return;
+	if (edgeExists(deps, importerFileId, importedFileId)) {
+		return;
+	}
 	ensureAdjacency(deps.forwardAdj, importerFileId);
 	ensureAdjacency(deps.reverseAdj, importedFileId);
 	deps.forwardAdj[importerFileId].push(importedFileId);
@@ -64,7 +83,9 @@ export function recordModuleImport(
 }
 
 export function clearImportsFor(deps: TaModuleDepGraph, fileId: int32): void {
-	if (fileId < 0 || fileId >= deps.forwardAdj.length) return;
+	if (fileId < 0 || fileId >= deps.forwardAdj.length) {
+		return;
+	}
 	const imports = deps.forwardAdj[fileId];
 	for (const imported of imports) {
 		const rev = deps.reverseAdj[imported];
@@ -80,7 +101,9 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: int32): void {
 // ===== Queries =====
 
 function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32[] {
-	if (fileId < 0 || fileId >= deps.reverseAdj.length) return [];
+	if (fileId < 0 || fileId >= deps.reverseAdj.length) {
+		return [];
+	}
 	const rev = deps.reverseAdj[fileId];
 	const result: int32[] = [];
 	for (const importer of rev) {
@@ -90,11 +113,14 @@ function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32[] {
 }
 
 // BFS: returns all files that transitively depend on the given file
-export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: int32): int32[] {
+export function getTransitiveDependents(
+	deps: TaModuleDepGraph,
+	fileId: int32,
+): int32[] {
 	const result: int32[] = [];
 	const queue: int32[] = [];
 	const visited: HashSet<int32> = new HashSet<int32>();
-	visited.add(fileId);  // don't include seed in results
+	visited.add(fileId); // don't include seed in results
 	queue.push(fileId);
 
 	while (queue.length > 0) {
@@ -114,9 +140,14 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: int32): 
 // ===== Forward Edge Queries =====
 
 // Get all fileIds that `fileId` imports (forward edges), in import order
-export function getDirectImports(deps: TaModuleDepGraph, fileId: int32): int32[] {
+export function getDirectImports(
+	deps: TaModuleDepGraph,
+	fileId: int32,
+): int32[] {
 	const result: int32[] = [];
-	if (fileId < 0 || fileId >= deps.forwardAdj.length) return result;
+	if (fileId < 0 || fileId >= deps.forwardAdj.length) {
+		return result;
+	}
 	for (const imported of deps.forwardAdj[fileId]) {
 		result.push(imported);
 	}
@@ -125,20 +156,32 @@ export function getDirectImports(deps: TaModuleDepGraph, fileId: int32): int32[]
 
 // Detect if importing `targetId` from `sourceId` creates a cycle.
 // DFS from targetId following forward edges. Returns cycle path if reaches sourceId, [] otherwise.
-export function detectCycle(deps: TaModuleDepGraph, sourceId: int32, targetId: int32): int32[] {
-	if (sourceId == targetId) return [sourceId];
+export function detectCycle(
+	deps: TaModuleDepGraph,
+	sourceId: int32,
+	targetId: int32,
+): int32[] {
+	if (sourceId == targetId) {
+		return [sourceId];
+	}
 	const visited: int32[] = [];
 	const stack: int32[] = [targetId];
 
 	while (stack.length > 0) {
 		const current = stack.pop();
-		if (int32ListContains(visited, current)) continue;
+		if (int32ListContains(visited, current)) {
+			continue;
+		}
 		visited.push(current);
 
-		if (current == sourceId) return [sourceId, targetId];
+		if (current == sourceId) {
+			return [sourceId, targetId];
+		}
 
 		for (const imported of getDirectImports(deps, current)) {
-			if (!int32ListContains(visited, imported)) stack.push(imported);
+			if (!int32ListContains(visited, imported)) {
+				stack.push(imported);
+			}
 		}
 	}
 	return [];
@@ -148,7 +191,9 @@ export function detectCycle(deps: TaModuleDepGraph, sourceId: int32, targetId: i
 
 function int32ListContains(list: int32[], val: int32): boolean {
 	for (const item of list) {
-		if (item == val) return true;
+		if (item == val) {
+			return true;
+		}
 	}
 	return false;
 }
@@ -178,16 +223,16 @@ test "no duplicate edges" {
 
 test "direct importers" {
 	const deps = createModuleDepGraph();
-	recordModuleImport(deps, 0, 1);  // 0 imports 1
-	recordModuleImport(deps, 2, 1);  // 2 imports 1
+	recordModuleImport(deps, 0, 1); // 0 imports 1
+	recordModuleImport(deps, 2, 1); // 2 imports 1
 	const imps = getDirectImporters(deps, 1);
 	assert imps.length == 2;
 }
 
 test "transitive: A->B->C" {
 	const deps = createModuleDepGraph();
-	recordModuleImport(deps, 0, 1);  // 0 imports 1
-	recordModuleImport(deps, 1, 2);  // 1 imports 2
+	recordModuleImport(deps, 0, 1); // 0 imports 1
+	recordModuleImport(deps, 1, 2); // 1 imports 2
 	const result = getTransitiveDependents(deps, 2);
 	assert result.length == 2;
 	// Both 0 and 1 depend on 2
@@ -197,10 +242,10 @@ test "transitive: A->B->C" {
 
 test "diamond: A->B, A->C, B->D, C->D" {
 	const deps = createModuleDepGraph();
-	recordModuleImport(deps, 0, 1);  // A imports B
-	recordModuleImport(deps, 0, 2);  // A imports C
-	recordModuleImport(deps, 1, 3);  // B imports D
-	recordModuleImport(deps, 2, 3);  // C imports D
+	recordModuleImport(deps, 0, 1); // A imports B
+	recordModuleImport(deps, 0, 2); // A imports C
+	recordModuleImport(deps, 1, 3); // B imports D
+	recordModuleImport(deps, 2, 3); // C imports D
 	const result = getTransitiveDependents(deps, 3);
 	assert result.length == 3;
 	assert int32ListContains(result, 0);
@@ -210,8 +255,8 @@ test "diamond: A->B, A->C, B->D, C->D" {
 
 test "cycle: A->B->A does not infinite loop" {
 	const deps = createModuleDepGraph();
-	recordModuleImport(deps, 0, 1);  // A imports B
-	recordModuleImport(deps, 1, 0);  // B imports A
+	recordModuleImport(deps, 0, 1); // A imports B
+	recordModuleImport(deps, 1, 0); // B imports A
 	const result = getTransitiveDependents(deps, 0);
 	assert result.length == 1;
 	assert int32ListContains(result, 1);
@@ -253,7 +298,8 @@ test "direct imports keep import order on a diamond across record and clear" {
 	assert imports.length == 2 && imports[0] == 3 && imports[1] == 1;
 	clearImportsFor(deps, 1);
 	assert getDirectImporters(deps, 3).length == 2;
-	assert getDirectImporters(deps, 3)[0] == 2 && getDirectImporters(deps, 3)[1] == 0;
+	assert getDirectImporters(deps, 3)[0] == 2 &&
+		getDirectImporters(deps, 3)[1] == 0;
 }
 
 test "direct imports of an unknown file are empty" {

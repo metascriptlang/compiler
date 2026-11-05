@@ -6,7 +6,12 @@ export class TaAbsentProbes {
 }
 
 export function createAbsentProbes(): TaAbsentProbes {
-	return { depth: 0, revision: -1, paths: new HashSet<string>(), diskProbes: 0 };
+	return {
+		depth: 0,
+		revision: -1,
+		paths: new HashSet<string>(),
+		diskProbes: 0,
+	};
 }
 
 export function enterCheckProbes(probes: TaAbsentProbes): void {
@@ -14,13 +19,22 @@ export function enterCheckProbes(probes: TaAbsentProbes): void {
 }
 
 export function leaveCheckProbes(probes: TaAbsentProbes): void {
-	if (probes.depth <= 0) throw new Error("internal: leaveCheckProbes without a check in progress");
+	if (probes.depth <= 0) {
+		throw new Error("internal: leaveCheckProbes without a check in progress");
+	}
 	probes.depth -= 1;
-	if (probes.depth == 0) probes.paths = new HashSet<string>();
+	if (probes.depth == 0) {
+		probes.paths = new HashSet<string>();
+	}
 }
 
-function inCheckAt(probes: TaAbsentProbes, revision: int32): HashSet<string> | null {
-	if (probes.depth == 0) return null;
+function inCheckAt(
+	probes: TaAbsentProbes,
+	revision: int32,
+): HashSet<string> | null {
+	if (probes.depth == 0) {
+		return null;
+	}
 	if (probes.revision != revision) {
 		probes.revision = revision;
 		probes.paths = new HashSet<string>();
@@ -28,14 +42,24 @@ function inCheckAt(probes: TaAbsentProbes, revision: int32): HashSet<string> | n
 	return probes.paths;
 }
 
-export function knownAbsentAt(probes: TaAbsentProbes, path: string, revision: int32): boolean {
+export function knownAbsentAt(
+	probes: TaAbsentProbes,
+	path: string,
+	revision: int32,
+): boolean {
 	const paths = inCheckAt(probes, revision);
 	return paths != null && paths.has(path);
 }
 
-export function recordAbsentAt(probes: TaAbsentProbes, path: string, revision: int32): void {
+export function recordAbsentAt(
+	probes: TaAbsentProbes,
+	path: string,
+	revision: int32,
+): void {
 	const paths = inCheckAt(probes, revision);
-	if (paths != null) paths.add(path);
+	if (paths != null) {
+		paths.add(path);
+	}
 }
 
 export function recordDiskProbe(probes: TaAbsentProbes): void {

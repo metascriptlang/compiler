@@ -12,7 +12,12 @@ import { CancelCtx, stopForInput, isCancelled } from "../../checker/context";
 // ===== Cancellation Context =====
 
 export function createCancelContext(): CancelCtx {
-	return { version: 0, cancelled: false, inputPending: null, stoppedForInput: false };
+	return {
+		version: 0,
+		cancelled: false,
+		inputPending: null,
+		stoppedForInput: false,
+	};
 }
 
 // ===== Cancellation API =====

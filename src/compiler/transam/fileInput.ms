@@ -7,7 +7,6 @@
 
 import { TaDurability } from "./revision";
 
-
 // ===== File Entry =====
 
 class TaFileEntry {
@@ -24,8 +23,8 @@ class TaFileEntry {
 export class TaFileInputStore {
 	files: TaFileEntry[];
 	nextFileId: int32;
-	pathIndex: HashMap<string, int32>;  // filePath → array index (O(1) lookup)
-	lastChange: int32[];                // per TaDurability: revision of the last input change at or above it
+	pathIndex: HashMap<string, int32>; // filePath → array index (O(1) lookup)
+	lastChange: int32[]; // per TaDurability: revision of the last input change at or above it
 }
 
 export function createFileInputStore(): TaFileInputStore {
@@ -40,23 +39,34 @@ export function createFileInputStore(): TaFileInputStore {
 // ===== Lookup =====
 
 function findByPath(store: TaFileInputStore, filePath: string): int32 {
-	if (store.pathIndex.has(filePath)) return store.pathIndex.get(filePath) as int32;
+	if (store.pathIndex.has(filePath)) {
+		return store.pathIndex.get(filePath) as int32;
+	}
 	return -1;
 }
 
 function findByFileId(store: TaFileInputStore, fileId: int32): int32 {
-	if (fileId >= 0 && fileId < store.files.length) return fileId;
+	if (fileId >= 0 && fileId < store.files.length) {
+		return fileId;
+	}
 	return -1;
 }
 
 // ===== Public API =====
 
 // Returns true if content actually changed (new file or different source)
-export function setFileText(store: TaFileInputStore, filePath: string, source: string, revision: int32): boolean {
+export function setFileText(
+	store: TaFileInputStore,
+	filePath: string,
+	source: string,
+	revision: int32,
+): boolean {
 	const idx = findByPath(store, filePath);
 	if (idx >= 0) {
 		const file = store.files[idx];
-		if (file.present && file.source == source) return false;
+		if (file.present && file.source == source) {
+			return false;
+		}
 		file.present = true;
 		file.source = source;
 		file.changedAt = revision;
@@ -81,31 +91,53 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 
 // The id of a path's input, a path with no file included: an importer that found nothing at a
 // candidate path depends on that path, so writing the file there changes the input it read.
-export function getInputId(store: TaFileInputStore, filePath: string, revision: int32): int32 {
+export function getInputId(
+	store: TaFileInputStore,
+	filePath: string,
+	revision: int32,
+): int32 {
 	const idx = findByPath(store, filePath);
-	if (idx >= 0) return store.files[idx].fileId;
+	if (idx >= 0) {
+		return store.files[idx].fileId;
+	}
 	const fileId = store.nextFileId;
 	store.nextFileId = store.nextFileId + 1;
 	store.pathIndex.set(filePath, store.files.length);
-	store.files.push({ filePath, source: "", changedAt: revision, fileId, durability: TaDurability.Low, present: false });
+	store.files.push({
+		filePath,
+		source: "",
+		changedAt: revision,
+		fileId,
+		durability: TaDurability.Low,
+		present: false,
+	});
 	return fileId;
 }
 
 export function getFileText(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return "";
+	if (idx < 0) {
+		return "";
+	}
 	return store.files[idx].source;
 }
 
-export function getFileChangedAt(store: TaFileInputStore, fileId: int32): int32 | null {
+export function getFileChangedAt(
+	store: TaFileInputStore,
+	fileId: int32,
+): int32 | null {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return null;
+	if (idx < 0) {
+		return null;
+	}
 	return store.files[idx].changedAt;
 }
 
 export function getFileId(store: TaFileInputStore, filePath: string): int32 {
 	const idx = findByPath(store, filePath);
-	if (idx < 0 || !store.files[idx].present) return -1;
+	if (idx < 0 || !store.files[idx].present) {
+		return -1;
+	}
 	return store.files[idx].fileId;
 }
 
@@ -114,7 +146,10 @@ export function hasFile(store: TaFileInputStore, filePath: string): boolean {
 }
 
 // A path a resolution probed and found no file at; a check that probed it depends on it.
-export function isProbedAbsent(store: TaFileInputStore, filePath: string): boolean {
+export function isProbedAbsent(
+	store: TaFileInputStore,
+	filePath: string,
+): boolean {
 	const idx = findByPath(store, filePath);
 	return idx >= 0 && !store.files[idx].present;
 }
@@ -122,7 +157,9 @@ export function isProbedAbsent(store: TaFileInputStore, filePath: string): boole
 // Reverse lookup: fileId → file path. Returns "" if not found.
 export function getFilePath(store: TaFileInputStore, fileId: int32): string {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0 || !store.files[idx].present) return "";
+	if (idx < 0 || !store.files[idx].present) {
+		return "";
+	}
 	return store.files[idx].filePath;
 }
 
@@ -132,35 +169,61 @@ export function getFileCount(store: TaFileInputStore): int32 {
 }
 
 // Get file path by sequential index (0..count-1). Returns "" if out of range.
-export function getFilePathByIndex(store: TaFileInputStore, index: int32): string {
-	if (index < 0 || index >= store.files.length || !store.files[index].present) return "";
+export function getFilePathByIndex(
+	store: TaFileInputStore,
+	index: int32,
+): string {
+	if (index < 0 || index >= store.files.length || !store.files[index].present) {
+		return "";
+	}
 	return store.files[index].filePath;
 }
 
 // ===== Durability =====
 
-export function getFileDurability(store: TaFileInputStore, fileId: int32): TaDurability {
+export function getFileDurability(
+	store: TaFileInputStore,
+	fileId: int32,
+): TaDurability {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0) return TaDurability.Low;
+	if (idx < 0) {
+		return TaDurability.Low;
+	}
 	return store.files[idx].durability;
 }
 
 // A write at durability D moves the marker of every durability up to D, so a High
 // write also leaves Low and Medium entries unverified.
-function moveChangeMarkers(store: TaFileInputStore, durability: TaDurability, revision: int32): void {
+function moveChangeMarkers(
+	store: TaFileInputStore,
+	durability: TaDurability,
+	revision: int32,
+): void {
 	const level = durability as int32;
-	for (let d = 0; d <= level; d++) store.lastChange[d] = revision;
+	for (let d = 0; d <= level; d++) {
+		store.lastChange[d] = revision;
+	}
 }
 
-export function getLastChange(store: TaFileInputStore, dur: TaDurability): int32 {
+export function getLastChange(
+	store: TaFileInputStore,
+	dur: TaDurability,
+): int32 {
 	return store.lastChange[dur as int32];
 }
 
 // Changing a file's durability is a write at its old durability: an entry computed
 // while the file was High cannot keep skipping it once the file may change as Low.
-export function setFileDurability(store: TaFileInputStore, fileId: int32, dur: TaDurability, revision: int32): void {
+export function setFileDurability(
+	store: TaFileInputStore,
+	fileId: int32,
+	dur: TaDurability,
+	revision: int32,
+): void {
 	const idx = findByFileId(store, fileId);
-	if (idx < 0 || store.files[idx].durability == dur) return;
+	if (idx < 0 || store.files[idx].durability == dur) {
+		return;
+	}
 	moveChangeMarkers(store, store.files[idx].durability, revision);
 	store.files[idx].durability = dur;
 }

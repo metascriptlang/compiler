@@ -3,37 +3,35 @@
 // All other transam/ files import from here.
 // Ta-prefixed to avoid C namespace collision.
 
-
-
 // ===== Query Kind — what type of computation is cached =====
 
 export enum TaQueryKind {
-	FileText,     // input: raw source text
-	FileHash,     // input: content hash
-	Preprocess,   // derived: raw text -> preprocessed source (.h translation, .h import inlining)
-	Parse,        // derived: source -> AST
-	TypeCheck,    // derived: AST -> CheckerContext
-	Transform,    // derived: typed AST -> transformed AST
-	Analyze,      // derived: transformed -> DRC-injected AST
-	ModuleDeps,   // derived: parse -> import list
+	FileText, // input: raw source text
+	FileHash, // input: content hash
+	Preprocess, // derived: raw text -> preprocessed source (.h translation, .h import inlining)
+	Parse, // derived: source -> AST
+	TypeCheck, // derived: AST -> CheckerContext
+	Transform, // derived: typed AST -> transformed AST
+	Analyze, // derived: transformed -> DRC-injected AST
+	ModuleDeps, // derived: parse -> import list
 	Lower,
-	Impl,         // derived: module implementation digest, the NeedsImpl edge target
+	Impl, // derived: module implementation digest, the NeedsImpl edge target
 }
 
 // ===== Query State — red-green verification state =====
 
 export enum TaQueryState {
-	Green,   // verified current this revision
-	Red,     // potentially stale, needs verification
-	Yellow,  // currently being verified (cycle detection)
+	Green, // verified current this revision
+	Red, // potentially stale, needs verification
+	Yellow, // currently being verified (cycle detection)
 }
 
 // ===== Durability — how stable is this input? =====
 
 export enum TaDurability {
-	Low,     // user source (src/*.ms) — changes frequently
-	Medium,  // config files
-	High,    // std library — skip verification
+	Low, // user source (src/*.ms) — changes frequently
+	Medium, // config files
+	High, // std library — skip verification
 }
 
 // ===== Revision — monotonically increasing counter =====
@@ -49,7 +47,9 @@ export function createRevision(): TaRevision {
 export const TA_REVISION_MAX: int32 = 2147483647;
 
 export function nextRevision(rev: TaRevision): int32 {
-	if (rev.value >= TA_REVISION_MAX) throw new Error("internal: Trans-Am revision exhausted at " + rev.value);
+	if (rev.value >= TA_REVISION_MAX) {
+		throw new Error("internal: Trans-Am revision exhausted at " + rev.value);
+	}
 	return rev.value + 1;
 }
 
@@ -61,7 +61,7 @@ export function incrementRevision(rev: TaRevision): void {
 
 export struct TaQueryKey {
 	queryKind: TaQueryKind;
-	fileId: int32;         // sequential file ID (not content hash in Phase 1)
+	fileId: int32; // sequential file ID (not content hash in Phase 1)
 }
 
 export function createQueryKey(kind: TaQueryKind, fileId: int32): TaQueryKey {
@@ -132,7 +132,11 @@ test "the revision refuses to pass its maximum" {
 	incrementRevision(rev);
 	assert rev.value == TA_REVISION_MAX;
 	let refused = false;
-	try { incrementRevision(rev); } catch (e) { refused = true; }
+	try {
+		incrementRevision(rev);
+	} catch (e) {
+		refused = true;
+	}
 	assert refused;
 	assert rev.value == TA_REVISION_MAX;
 }
