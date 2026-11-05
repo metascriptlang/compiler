@@ -150,6 +150,7 @@ import "./preludeExportOwnership";
 import "./raiserProgramArgv";
 import "./raiserProjectImage";
 import "./raiserPackedPlaces";
+import "./raiserPackedLegacy";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
 import "./raiserValueUnionCopy";

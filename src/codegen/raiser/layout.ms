@@ -1,7 +1,7 @@
 import { Type, TypeKind } from "../../ast/node";
 import {
 	TargetInfo, hostTargetInfo, sizeOfType, alignOfType, offsetOfField, storesNothing, enumStorageKind, unwrapRefNullUnion, literalUnionBase,
-	createStruct, createPrimitive, isAwaitable, typeDisplayName, typeKey, offsetOfUnionPayload, isPlainFunctionPointer,
+	createStruct, createPrimitive, isAwaitable, typeDisplayName, typeKey, offsetOfUnionPayload, isPlainFunctionPointer, numberLiteralBase,
 } from "../../checker/types";
 import { MemKind, VmSlot, VmLayout, CELL_HEADER_SIZE } from "../../raiser/layout";
 
@@ -17,8 +17,16 @@ export function createVmLayouts(): VmLayouts {
 
 function stripped(t: Type): Type {
 	let cur = t;
-	while ((cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Alias || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent) && cur.typeReturn != null) cur = cur.typeReturn;
-	return cur;
+	while (true) {
+		if (cur.kind == TypeKind.NumberLiteral) {
+			cur = numberLiteralBase(cur);
+		} else if ((cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Alias ||
+			cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent ||
+			cur.kind == TypeKind.GenericInstance && !isAwaitable(cur)) &&
+			cur.typeReturn != null) {
+			cur = cur.typeReturn;
+		} else return cur;
+	}
 }
 
 export function memKindOf(t: Type): MemKind {
