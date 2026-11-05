@@ -5,6 +5,7 @@ import "./aesApiVectors";
 import "./argon2ApiVectors";
 import "./blake2bApiVectors";
 import "./chachaApiVectors";
+import "./coreApiVectors";
 import "./ecApiVectors";
 import "./ed25519ApiVectors";
 import "./hashApiVectors";

@@ -305,6 +305,12 @@ function finishExtHmac(ctx: ExtHmacCtx): uint8[] {
 	return result;
 }
 
+export function init(): boolean {
+	return true;
+}
+
+export function cleanup(): void {}
+
 // ===== Hash and HMAC =====
 
 export function digestSync(
@@ -355,6 +361,53 @@ export function hmacSync(
 	const ctx = newExtHmac(algorithm, bytesOf(key));
 	updateExtHmac(ctx, bytesOf(data));
 	return Result.ok(finishExtHmac(ctx) as Buffer);
+}
+
+export async function digest(
+	algorithm: HashAlgorithm,
+	data: Bytes,
+): Promise<Result<Buffer, CryptoError>> {
+	return digestSync(algorithm, data);
+}
+
+export async function hmac(
+	algorithm: HashAlgorithm,
+	key: Bytes,
+	data: Bytes,
+): Promise<Result<Buffer, CryptoError>> {
+	return hmacSync(algorithm, key, data);
+}
+
+export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> {
+	return digestSync("sha256", data);
+}
+export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> {
+	return digestSync("sha384", data);
+}
+export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> {
+	return digestSync("sha512", data);
+}
+export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> {
+	return digestSync("sha1", data);
+}
+export function md5Sync(data: Bytes): Result<Buffer, CryptoError> {
+	return digestSync("md5", data);
+}
+
+export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync("sha256", data);
+}
+export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync("sha384", data);
+}
+export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync("sha512", data);
+}
+export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync("sha1", data);
+}
+export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> {
+	return digestSync("md5", data);
 }
 
 export class Hasher {
