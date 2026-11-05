@@ -44,6 +44,7 @@ msc-*
 docs/*
 !docs/HCR.md
 !docs/LANG.md
+!docs/CONTRACTS.md
 !docs/PACKAGE.md
 !docs/LANG-CONCURRENCE.md
 !docs/LANG-INTERLOP.md

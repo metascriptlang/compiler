@@ -125,6 +125,10 @@ Which flow a run belongs to, and the check for each kind of change, is in [`src/
 
 **Before changing any status claim in `docs/`, run it and measure it**, because reading the checker or finding the code path tells you code exists, not that it works or what it costs. Write the smallest `.ms` that exercises the claim, `msc run` / `msc build` it, and quote the real output in the edit.
 
+Before changing memory, views, FFI or thread-crossing behavior, use [CONTRACTS.md](docs/CONTRACTS.md) to separate layout, access, lifetime, effects, result aliasing and concurrent callability. Trace the relevant reference and real consumer for each affected promise, because one proof does not establish the others. Distinguish a foreign declaration the compiler must trust from an internal proof it could check; an accepted unsafe internal shape is an enforcement hole, not a new supported contract.
+
+When publishing support or proposing a rename/removal, classify the exact shape as supported in the checked scope, an enforcement hole, unsupported or unverified. Carry forward matching evidence with its source tree, binary/support provenance and exclusions; otherwise run the smallest distinguishing consumer, because source presence and checker acceptance do not prove runtime safety. Keep concept-policy choices and unapproved designs separate from documentation repair.
+
 1. **A doc's `TODO` / `PAUSED` / `NOT YET` is a hypothesis, not a fact**: they are written when someone is blocked and rarely revisited.
 2. **Never generalize from one probe variant.** Vary the axis you are claiming about and put the matrix in the doc.
 3. **Say what you did NOT verify**, because a corrected table with unverified neighbours looks freshly audited.

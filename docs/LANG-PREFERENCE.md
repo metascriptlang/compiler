@@ -9,6 +9,9 @@ their reasons, runnable compositions and the limits attached to their checked ba
 Language-design decisions and dated experiments are retained in LANG's
 [historical appendix](LANG.md#appendix-historical-design-records), not in a separate primitive
 specification.
+Before combining views, native bindings or parallel work, read [Advanced contracts](CONTRACTS.md)
+for the separate foreign-trust and internal-proof boundaries and the evidence required for a
+support claim. That guide does not add a third language specification.
 Project-specific build/release rules remain in the project's instructions, not in this standard.
 
 Write TypeScript-shaped code with explicit widths, ownership and deliberate concurrency.
@@ -21,6 +24,8 @@ of identical storage, allocation or host behavior.
 Read relevant sections when authoring or reviewing code, not this entire file at every session
 start. The defaults and review checklist are the common entry points; the longer recipes are
 here so a reader can finish the corresponding task without inventing an API.
+An owning edge is a separate contract from a read-only view: see [LANG §5b](LANG.md#5b-owned-edges-ownedt).
+That pointer does not approve a later ownership redesign or a Cursor migration.
 
 | Task | Read |
 |---|---|
@@ -2110,7 +2115,7 @@ BUILD `38009de37` on macOS arm64 with Node `24.1.0`; they are still scoped obser
 not permanent prohibitions or desired future semantics. Broader design/host boundaries remain
 requirements, not a claim that every combination was executed.
 
-| Surface | Current disposition |
+| Surface | Last recorded disposition (row date/baseline applies) |
 |---|---|
 | `super(...)` / `super.method()` | Constructor chaining and `super.m()` run on C, JS and the Raiser (`super.m()` since 2026-10-31, corpus `1266-superMethodCall`); a parent's field through `super` is refused, as in TS. |
 | `abstract` | `new` on an abstract class and an unanswered abstract method are refused (since 2026-10-31, checker3pass `abstractMembers`); an `abstract` property cannot be implemented yet. |
@@ -2124,7 +2129,7 @@ requirements, not a claim that every combination was executed.
 | Supervisor | The checked namespace import fails on C and JS on Promise<number> comparisons/indexing inside the implementation. Restart design/API is not a green recipe. |
 | Cross-caller protocols | Caller-visible extensions work for instantiation, not guaranteed independent cached meanings for the same concrete type. Keep implementations coherent/type-local. |
 | Lifetime/cross-thread law | §§6 and 9 are obligations, not proof that all retained addresses, thread affinity, shutdown races or unsafe closure shapes are diagnosed. |
-| Proposed ownership syntax | `lent`, WeakRef and author acyclic/thread-bound annotations are not substitutes for the current documented model. Do not invent syntax from designs. |
+| Ownership designs versus assertions | `lent`, WeakRef and proposed thread-bound syntax are not authoring recipes merely because a design exists. Recognized `@acyclic` is a collector assertion, not a checked lifetime/back-edge proof; do not use it to substitute for ownership/teardown obligations. |
 | JSON width/shape | Full-uint64 stringify is not lossless: C debug refuses `2^63`, native danger writes a negative number and JS refuses it. The checked typed top-level int32-array parse is refused. |
 | Serialization ecosystem | JSON/CBOR and UntypedTree do not establish planned common typed codecs, per-format overrides, rename/skip/default, streaming/transcoding or additional formats. |
 | Other proposed extensions | Concepts/where constraints, custom literal suffixes, multimethod vtables, `.parallel()`, custom awaitable annotations and mixed-JS/WASM ownership are not current recipes merely because designs survive. |
@@ -2139,6 +2144,10 @@ interception (§§14–15), and packages/targets/std/tooling (§§16–18). Hist
 not promoted to available authoring APIs.
 
 ## Verification scope
+
+This older matrix is not a current target-support table. In particular, a JS failure at its
+recorded baseline does not establish current absence; adjacent/newer shapes need their own
+consumer evidence. The boundary-framework repair did not rerun these 46 entry consumers.
 
 The official-standard revision was checked on macOS arm64, Node `24.1.0`, installed
 `msc 0.3.4`, binary/support BUILD `38009de37` (tree `4cfe2614d7ab4ec95d5179c9aa0959a3e75c1a5a`).

@@ -4,7 +4,9 @@ This is the language reference: syntax and meaning, typing and conversion rules,
 ownership and lifetime contracts, accepted and refused programs, and target-specific behavior.
 For preferred data/API choices, module organization, formatting and complete authoring recipes,
 read the [MetaScript Authoring Standard](LANG-PREFERENCE.md). The handbook applies these contracts;
-it is not a second language specification.
+it is not a second language specification. Before combining ownership, native bindings or parallel
+work, read [Advanced contracts](CONTRACTS.md): foreign trust and internal proof gaps are different
+boundaries, and acceptance is not a safety certificate.
 
 Language-design rationale and dated measurements live in the
 [historical design appendix](#appendix-historical-design-records). That appendix records earlier
@@ -15,7 +17,7 @@ stages and their evidence, not current feature status or additional language rul
 | Type | Description | C Mapping |
 |------|-------------|-----------|
 | `number` | IEEE 754 f64 (default numeric) | `double` |
-| `string` | Immutable UTF-8 (surface); COW + in-place-append engine internal | `msString` |
+| `string` | Immutable text; UTF-8 storage, UTF-16 default indexing | `msString` |
 | `boolean` | true/false | `bool` |
 | `char` | 8-bit character (numeric) | `char` / `int8_t` |
 | `cstring` | C-compatible string pointer | `const char*` |
@@ -220,21 +222,15 @@ Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoerc
 
 `uint8[]` is a dynamic array of unsigned bytes. It is the standard type for binary data — file I/O, network buffers, cryptographic operations, and binary protocols.
 
-In the C backend, `uint8[]` shares an identical memory layout with `string` (see [String ↔ Byte Array Bridge](#7-zero-copy-string--byte-array-bridge-binary-parity)). This enables zero-copy conversion between text and binary data via `.asBytes()` and `.asString()`.
+The [string ↔ byte bridge](#9-string--byte-bridge) distinguishes an owning array from a
+read-only view: `asBytes()` borrows a string's bytes; `asString()` decodes bytes into a new string.
+Neither is permission to reinterpret their ownership or mutate a string through a byte view.
 
 ```typescript
-// Binary buffer
 const buf: uint8[] = [0x48, 0x65, 0x6C, 0x6C, 0x6F];
-
-// Zero-copy cast to string (valid UTF-8 in this case)
-const text = buf.asString();   // "Hello"
-
-// Reading from file returns bytes, cast to string for text processing
-const data: uint8[] = readFile("config.json");
-const json = data.asString();
-
-// Index access returns uint8
-const firstByte: uint8 = buf[0];   // 0x48
+const text = buf.asString();
+const view = text.asBytes();
+const firstByte: uint8 = buf[0];
 ```
 
 ## Keywords (99 total)
@@ -800,36 +796,19 @@ body. Not covered: an `abstract` property, since a subclass cannot redeclare an 
 
 ### Interfaces
 
-Interfaces are **reference types** — heap-allocated, reference-counted via DRC. They work identically across JS and C backends. Interfaces can have both fields and method signatures.
+Interfaces describe reference-shaped data. The current body syntax declares fields; use a
+function-typed field when the shape carries callable behavior.
 
 ```typescript
-// Data shape (fields only)
-interface Point {
-    x: number;
-    y: number;
-    label?: string;        // Optional property
-}
-
-// Behavioral contract (with methods)
-interface Shape {
-    area(): number;
-    perimeter(): number;
-}
-
-// Both (fields + methods)
-interface ISerializable {
-    id: string;
-    function serialize(): string;
-}
-
-// Extends
-interface Circle extends Shape {
-    radius: number;
-}
-
-// Construction — object literals (heap-allocated, reference-counted)
-const p: Point = { x: 1.0, y: 2.0 };
+interface Shape { area: () => number; }
+const shape: Shape = { area: () => 4 };
+console.log(shape.area());
 ```
+
+A TS-style method signature (`interface Shape { area(): number; }`) was refused with
+`Parse: Expected field name in interface at line 1` on installed binary/support `56ad1fdf80f`;
+the function-field control above passed `msc check`. This is an unsupported syntax shape,
+not proof of runtime dispatch parity or a decision to keep the TS incompatibility.
 
 **Optional fields**: `label?: string` desugars to `label: (string) | null` — omitting the field at construction stores `null`, and a null check narrows back to the base type (verified 2026-08-13, corpus `015-optionalFieldNull`, C+JS):
 
@@ -855,7 +834,11 @@ if (h.cb !== null) { h.cb(7); }           // narrow, then call
 
 ### Structs
 
-Structs are **value types** — stack-allocated, no refcounting, no DRC overhead. Pure data containers: no methods, no vtable. Structs are a MetaScript extension (Layer 2) — an opt-in performance optimization for hot paths.
+Structs are **value types**; their fields and lifecycle hooks determine the cleanup owed.
+“Value” does not mean “no DRC overhead” when a field owns managed data. A parameter's ABI
+optimization is not write-back permission: see [parameter modes](#parameter-modifiers).
+Other behavior is written as extension functions; current syntax and authoring choices are
+in [LANG-PREFERENCE.md](LANG-PREFERENCE.md#5-values-for-data-references-for-sharing).
 
 ```typescript
 // Direct declaration (fields only)
@@ -2100,6 +2083,9 @@ and the Raiser; JS runs none. Measured on the same candidate: `const t = mk(9); 
 prints `end`, `destroy R 9`, `destroy R 0` on C and `end`, `destroy R 9` on the Raiser, which runs no hook on
 the moved-from zeros (inbox card `2026-11-02-raiser-skips-hook-of-moved-from-value.md`);
 `const h: Holder = { r: mk(8), tag: "t" }` prints `destroy R 8` once on both.
+
+### Defer
+
 ```typescript
 // Execute at scope end (LIFO order)
 function process(): void {
@@ -2539,7 +2525,9 @@ String and pointer types pass through without boxing (they are already pointer-s
 - **Promise<T>** handles async execution (suspend/resume)
 - **Result<T, E>** handles typed errors (no exceptions needed)
 
-The key guarantee: **a `Promise<Result<T, E>>` never rejects**. Errors are always typed `Result` values inside a successfully-resolved promise. The compiler enforces this at compile time.
+`Result.err(e)` is a typed value carried by a fulfilled promise. The type is **not a no-rejection
+guarantee**: an awaited promise can reject and a called function can throw. Handle that separate
+failure path at the boundary that owns it; a typed return annotation does not convert it into `E`.
 
 #### Basic Usage
 
@@ -2591,61 +2579,50 @@ const user = $tmp.ok ? $tmp.value : defaultUser;
 | `await p` | `Promise<T>` | `T` | Promise rejects → exception propagates |
 | `try expr` | `Result<T,E>` | `T` | Early-returns `Result.err(e)` |
 | `try expr catch fallback` | `Result<T,E>` | `T` | Uses fallback value |
-| `try await p` | `Promise<Result<T,E>>` | `T` | Early-returns `Result.err(e)` |
-| `try await p catch fallback` | `Promise<Result<T,E>>` | `T` | Uses fallback value |
+| `try await p` | `Promise<Result<T,E>>` | `T` | A fulfilled `Result.err(e)` early-returns; rejection is a separate path |
+| `try await p catch fallback` | `Promise<Result<T,E>>` | `T` | Result error uses the fallback; do not infer universal rejection handling from the type |
 
-#### Compiler Safety: No-Rejection Guarantee
+#### Checked restriction and failure channels
 
-The compiler enforces two rules inside async functions returning `Promise<Result<T, E>>`:
+A direct `throw` in an async function returning `Promise<Result<T,E>>` is refused with
+`throw is not allowed in a function returning Promise<Result<T,E>> — use Result.err(...) instead`.
+That local restriction does not prove transitive no-throw/no-rejection behavior. A plain
+`await Promise<T>` in the same context was accepted, not banned.
 
-**V1 — Throw Ban:** `throw` statements are forbidden. Use `Result.err()` instead.
+For example, this function can reject:
 
 ```typescript
-async function bad(): Promise<Result<number, string>> {
-    throw new Error("boom");  // COMPILE ERROR
-    // Fix: return Result.err("boom");
+async function rejectedInput(): Promise<int32> {
+    throw new Error("operand");
+}
+
+async function wrapped(): Promise<Result<int32, string>> {
+    const value = await rejectedInput();
+    return Result.ok(value);
+}
+
+try {
+    await wrapped();
+} catch (error) {
+    console.log((error as Error).message);
 }
 ```
 
-**V2 — Unguarded Await Ban:** `await` on a plain `Promise<T>` (non-Result) must be wrapped with `try ... catch` to handle potential rejection.
-
-```typescript
-async function example(): Promise<Result<number, string>> {
-    // ERROR: bare await on Promise<string> — could reject and break the contract
-    const data = await riskyCall();
-
-    // OK: guarded with try...catch — rejection converted to Result.err
-    const data = try await riskyCall() catch "fallback";
-
-    // OK: inside try/catch statement — rejection is handled
-    try {
-        const data = await riskyCall();
-    } catch (e) {
-        return Result.err("wrapped: " + e);
-    }
-
-    // OK: await on Promise<Result<T,E>> — already typed errors
-    const user = await fetchUser(42);  // Promise<Result<User, string>> — no guard needed
-
-    return Result.ok(42);
-}
-```
-
-**Why V2?** If `riskyCall()` returns a plain `Promise<string>` that rejects, the rejection propagates up and our `Promise<Result<T,E>>` also rejects — breaking the no-rejection guarantee. V2 forces you to handle the rejection path explicitly.
-
-| Awaited Type | Guard Required? | Reason |
-|---|---|---|
-| `Promise<Result<T,E>>` | No | Already typed errors — Result handles failure |
-| `Promise<T>` (non-Result) | Yes — `try await ... catch` | Rejection could propagate and break contract |
+A second checked shape called a synchronous throwing function from the Result-returning async
+body; it rejected too. Returning `Result.err("typed")` instead fulfilled with the error value.
+The three paths printed `rejected operand`, `rejected callee`, `error typed` on C, JS and Raiser
+using installed binary/support `56ad1fdf80f` (source tree and measurement scope in
+[Advanced contracts](CONTRACTS.md#bounded-findings-not-new-features)). This is not a claim that
+all callback, extern or nested-await combinations were exercised.
 
 #### Comparison: Promise<T> vs Promise<Result<T, E>>
 
 | Aspect | `Promise<T>` | `Promise<Result<T,E>>` |
 |---|---|---|
-| Error signaling | Rejection (untyped) | `Result.err(e)` (typed) |
-| Needs try/catch? | Yes | No — use `try await` |
-| Error type known? | No (`unknown`) | Yes (`E`) |
-| Can reject? | Yes | No (compiler-enforced) |
+| Error signaling | Rejection | Typed `Result.err(e)` value, plus possible rejection |
+| Needs try/catch? | At the rejection-handling boundary | Also at the rejection-handling boundary; `try await` propagates typed Result errors |
+| Error type known? | Not from `Promise<T>` | `E` describes Result errors, not every rejection |
+| Can reject? | Yes | Yes |
 | Recommended for | Fire-and-forget, side effects | All fallible async operations |
 
 #### Real-World Example
@@ -2671,7 +2648,8 @@ async function handleRequest(): Promise<Result<Response, string>> {
 }
 ```
 
-Every `try await` either succeeds (unwraps the value) or short-circuits with a typed error. No exception handling, no untyped errors, no surprise rejections.
+For a fulfilled promise, `try await` unwraps the value or propagates the typed Result error.
+The example does not establish that its dependencies never throw or reject.
 
 ### Actors
 
@@ -2739,40 +2717,20 @@ directly — use actor methods` at the read.
 
 Every actor has a `pid` field (int64) — its unique runtime identity, always nonisolated.
 
-#### The 3 Transfer Rules
+#### Transfer verbs
 
-Data crossing actor boundaries follows three rules:
+Actor boundaries distinguish COPY, MOVE, BORROW and SHARE. A value copy, an ownership
+transfer, an awaited read-only borrow and explicit atomic sharing are different obligations;
+`isSendable` in `src/checker/sendable.ms` owns their classification. Readonly fields do not
+turn an ordinary reference into an `Arc<T>` or establish exclusive ownership.
 
-```
-actor.method(data)
-       |
-       +-- Is `move` keyword present?
-       |     YES --> MOVE: transfer pointer, invalidate source (zero-copy)
-       |     NO  |
-       |         v
-       +-- Is data provably immutable?
-       |   (value type, or Ref<T> with all fields readonly)
-       |     YES --> SHARE: pass pointer, incref (zero-copy)
-       |     NO  |
-       |         v
-       +-- COPY: value types copied automatically
-       |   Ref<T> with mutable fields: must use `move`
-```
-
-```typescript
-// Value types — always safe (COPY):
-counter.add(42);                    // number copied into message
-
-// Immutable Ref<T> — safe to share (SHARE):
-interface FrozenConfig { readonly host: string; readonly port: number; }
-const cfg: FrozenConfig = { host: "0.0.0.0", port: 443 };
-server.configure(cfg);              // shared pointer, zero-copy
-
-// Mutable Ref<T> — must transfer ownership (MOVE):
-let state: MutableState = { count: 0 };
-worker.process(move state);         // zero-copy, state invalidated
-// state.count;                     // COMPILE ERROR: used after move
-```
+A checked contrast used `interface Config { readonly port: int32; }` with a local const
+instance: passing it to a void actor SEND was refused with
+`fire-and-forget actor call would share a plain reference across threads`; passing it to an
+immediately awaited value-returning CALL passed `msc check` on installed binary/support
+`56ad1fdf80f`. This checks the SEND/CALL distinction, not native retention or every actor
+argument shape. Use the [authoring recipes](LANG-PREFERENCE.md#9-one-awaitable-surface-three-execution-tools)
+and [boundary obligations](CONTRACTS.md), not a blanket “readonly means shareable” rule.
 
 #### Spawn Inside Actors
 
@@ -2785,7 +2743,7 @@ actor Worker {
     compute(): number {
         // OK: read-only field borrow in spawn thunk
         const h = spawn(() => {
-            let sum = 0;
+            let sum: number = 0;
             for (const v of this.data) sum = sum + v;
             return sum;
         });
@@ -3218,7 +3176,8 @@ remain unverified/unimplemented respectively. Architecture, measurements and lim
 
 ## Strings and Characters
 
-MetaScript provides a high-performance string system that is a systems-programming superset of TypeScript. It adds support for in-place mutation, primitive characters, zero-copy views, and binary-compatible byte array bridging.
+Strings are immutable text values. Primitive characters and read-only byte views serve
+systems work without making text storage a writable byte array.
 
 ### 0. The Index-Space Contract (normative)
 
@@ -3232,7 +3191,7 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 - **`s[i]` behaves like TypeScript**: it is equivalent to `charAt(i)` and yields the i-th UTF-16 code unit as a `string`. Sole documented deviation: out-of-range yields `""`, not `undefined`.
 - **ASCII fast path**: when the is-ASCII flag holds, byte index == code-unit index and both tiers run at byte speed. Non-ASCII TS-tier calls pay a UTF-8 decode walk.
 - **Bridge**: `asBytes()` is a zero-copy borrow of the buffer (C: Cursor bit-cast; JS: identity). `asString()` on a `uint8[]` or a `Readonly<Span<uint8>>` decodes WTF-8 into a fresh owned string: an ill-formed sequence becomes one U+FFFD per maximal subpart, as `TextDecoder` reads it, while an encoded surrogate stays and a split surrogate pair joins, so `s.asBytes().asString()` gives back `s` even with a lone surrogate. `[0x61, 0xE2, 0x62, 0xFF, 0xC3].asString()` has the code units `61 fffd 62 fffd fffd` on C and JS (measured 2026-10-28; corpus `bytesAsStringDecodesWtf8` covers C, JS and the Raiser).
-- Index **assignment** (`s[i] = c`) is byte-space legacy and slated to move to an explicit byte-tier form; treat it as byte-tier today.
+- Index assignment is not a byte-tier mutation API: strings are immutable. Use a mutable byte array when the algorithm needs writes, then decode it with `asString()`.
 
 ### 1. The `char` Primitive
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
@@ -3250,12 +3209,16 @@ const first = s[0];        // "h" — string, TS semantics
 const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
 ```
 
-### 2. Mutable Strings
-Strings in MetaScript are mutable when declared with `let`. All standard TypeScript string methods (`slice`, `replace`, etc.) remain available and return new strings.
+### 2. Length and byte length
+A `let` binding may be rebound; that does not make the string's contents mutable. String
+operations such as `slice` and `replace` return strings rather than granting writable access.
 
 - **`.length`**: Returns the number of characters (UTF-16 code units), matching TypeScript behavior.
 - **`.byteLength`**: Returns the raw number of bytes in the UTF-8 buffer (Systems-optimized).
-  A `Buffer` is a brand over `uint8[]` (`uint8[] & { __brand: "Buffer" }`, see "A brand over an array") on every target, so `buf.length` and `buf.byteLength()` count its bytes:
+  **Recorded implementation, not the unlanded Node-Buffer target:** the observations below
+  use the `uint8[]` brand. The relayed phased replacement is kept separate in
+  [Advanced contracts](CONTRACTS.md#relayed-arraybyte-target--not-landed); it is not a new pass claim.
+  A `Buffer` is a brand over `uint8[]` (`uint8[] & { __brand: "Buffer" }`, see "A brand over an array") in that snapshot, so `buf.length` and `buf.byteLength()` count its bytes:
   `Buffer.fromArray([0xE2, 0x82, 0xAC, 0x41]).length` is 4 on C and JS (measured 2026-10-28).
   It widens to `uint8[]` where one is expected, and a `uint8[]` becomes a `Buffer` only through `as Buffer`.
   Like Node's Buffer it prints as text, serializes as `{ "type": "Buffer", "data": [...] }` and inspects as `<Buffer 61 62 63>`:
@@ -3320,26 +3283,29 @@ const data: LargeData[] = [...];
 const item: Borrow<LargeData> = data[0];
 ```
 
+The readonly/lifetime rules above describe the intended Borrow contract, not complete
+coverage: on installed binary/support `56ad1fdf80f`, Borrow-returning calls accepted writes/ref
+uses that Borrow locals/parameters rejected. See the [bounded enforcement finding](CONTRACTS.md#bounded-findings-not-new-features).
+
 Measured 2026-10-08, C, JS and the Raiser alike: corpus `borrowLocalReadsThroughAddress` prints `card=3/2 scalar=8/true/7 text=5/hello!/true struct=6/10 class=5 field=5/12 element=3 param=16 generic=4/x copy=7 alias=9/7 temp=5/8/4 nested=2` on each, covering scalar, string, struct, array and class `T`, local, field, element and parameter sources, a generic instance, a change through an alias or a callee (`alias=9/7`) and a temporary argument to a `Borrow<T>` parameter.
 
 ### 5. Reference Types (`Ref<T>` and `Ptr<T>`)
 
-MetaScript has two explicit pointer types for heap-allocated data, following the same architecture as the standard reference's `ref T` and `ptr T`.
+`Ref<T>` boxes a value in managed storage. `Ptr<T>` is a raw address; it does not imply
+heap allocation, retention or a checked lifetime. Do not confuse either with the `ref`
+parameter mode. Boundary/proof limits are in [Advanced contracts](CONTRACTS.md#pointerview-tools-which-side-which-proof).
 
 | Type | Semantics | Lifecycle | C Mapping |
 |------|-----------|-----------|-----------|
-| `Ref<T>` | Heap-allocated, reference-counted | Automatic (DRC) | `T*` with `msRefHeader` |
-| `Ptr<T>` | Heap-allocated, untraced | Manual (no RC) | `T*` (raw) |
+| `Ref<T>` | Heap-allocated, reference-counted | Automatic (DRC) | `T*` to a counted cell |
+| `Ptr<T>` | Raw address; allocation is independent | Does not own/retain the target | `T*` (raw) |
 
 - **`Ref<T>`**: A managed heap pointer. The DRC system automatically inserts `=destroy`, `=copy`, and `=sink` operations. `T` is a value type (a struct, a number, a string); a class or interface `C` is refused, because its value is already a counted reference: write `C` (§Class = `Ref<Object>`).
-- **`Ptr<T>`**: An unmanaged heap pointer. No reference counting — the programmer is responsible for the lifetime. Use for C FFI, arena-allocated objects, or performance-critical paths where RC overhead is unacceptable.
+- **`Ptr<T>`**: A raw address whose target must remain valid for every use. Type checking does not establish allocation extent, retention or arbitrary foreign effects. Do not choose it merely to suppress managed ownership.
 
 ```typescript
 // Explicit Ref — heap-allocated with automatic RC
 const node: Ref<ASTNode> = { kind: "binary", left: a, right: b };
-
-// Explicit Ptr — heap-allocated, no RC (manual lifetime)
-const buf: Ptr<Buffer> = arenaAlloc(arena, sizeof Buffer);
 
 // Ptr for C interop — the @include'd header declares the C symbols
 @include("stdlib.h")
@@ -3392,8 +3358,8 @@ A `ref` / `out` argument of any type reaches the caller's location on the Raiser
 
 The plain-struct pointer arrays exercised here hold uncounted addresses: before,
 `const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by decrementing
-a stack address. This is not a blanket rule for every `Ptr<T>`; counted-pointee
-handling remains `isUncountedPtrElement` (`src/checker/types.ms`), unchanged here.
+a stack address. This is not a blanket rule for every `Ptr<T>`; follow the counted-pointee materialization
+owner named below rather than inferring a rule from these plain-struct cases.
 
 Measured 2026-10-03 on tree `ee6fccbb` with `msc run` (C, `--gc=orc`, `--target=js`,
 `--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
@@ -3462,44 +3428,18 @@ and the Raiser VM (ASan: stack-use-after-return); a pointer into a `T[]` that gr
 on C and `9` on JS (ASan: heap-use-after-free). Still not checked: an address handed to a closure,
 or returned through a call (`identity(s as Ptr<S>)`).
 
-#### Linked structures: arena ownership + `Ptr<T>` links
+#### Non-owning links need a teardown proof
 
-An **owning** self-referential field makes the generated destroy hook recurse per
-node — stack depth equals chain length, so a long list overflows the stack at
-scope exit. The compiler warns on this shape:
+A stored back edge and a temporary data view have different lifetime requirements. An arena
+owning all nodes does not by itself establish that every stored edge is cleared before its
+target dies, or that traversal/destruction may dereference it in any order. The former raw-
+Ptr linked-list example is retired, not a checked recipe to replace mechanically with Cursor.
+Current non-ownership and proposed checked back-edge designs must remain distinct; see
+[the internal proof boundary](CONTRACTS.md#internal-proof-boundary-both-ends-are-metascript).
 
-```
-warning: owning self-referential field 'next' in 'Tok': destroy recurses per node —
-a long chain overflows the stack; for non-owning links use Ptr<Tok> with an
-arena/array owner
-```
-
-The sanctioned pattern: an arena (plain array) owns every node; the links are
-non-owning `Ptr<T>`. Dropping the structure is then a flat array destroy:
-
-```typescript
-interface Tok {
-    value: string;
-    next: Ptr<Tok>;               // non-owning link — destroy hook skips it
-}
-
-const arena: Tok[] = [];          // the arena owns every node
-arena.push({ value: "a", next: null as unknown as Ptr<Tok> });
-arena.push({ value: "b", next: null as unknown as Ptr<Tok> });
-arena[0].next = arena[1];         // Ref ↔ Ptr assign both ways, no cast needed
-let cur: Ptr<Tok> = arena[0];
-while (cur !== null) { use(cur.value); cur = cur.next; }   // transparent access
-```
-
-Trees built through arrays (`children: Node[]`) are depth-bounded and are NOT
-flagged — only direct self-ref links recurse by chain length.
-
-DRC rule at the boundary: when a `Ptr<T>` whose pointee is a counted object flows
-into an **owning** position (a `T[]` element, a `T`-typed return, a `T` field in a
-literal), the compiler materializes ownership with an incref — and a `Ptr`
-variable is never *moved* into such a slot (it holds a borrow; there is no
-ownership to transfer). `Ptr<void>` / `Ptr` to plain structs (malloc/FFI memory,
-no rc header) are never touched by this rule.
+Ownership materialization is a separate question: `sinkClassify` in
+`src/analyzer/classify.ms` owns counted-pointee treatment at sink/return boundaries. That
+operation does not prove arbitrary raw-address validity or stored-edge teardown.
 
 #### Class = `Ref<Object>` (Sugar)
 
@@ -3523,15 +3463,15 @@ class Point {
 This means:
 - **`interface`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted (like class)
 - **`class`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted, with methods
-- **`struct`** declares a **value type** — stack-allocated, auto-optimized passing (compiler picks value or pointer based on size + mutation)
+- **`struct`** declares a **value type**; passing/ABI optimization does not grant write-back. Use the explicit [parameter modes](#parameter-modifiers).
 - Users can write `Ref<T>` to box a value type and `Ptr<T>` for memory they manage. `Ref<C>` for a class or interface `C` would box a reference, so the checker refuses it at the type. Measured 2026-11-01 on C and JS (candidate of `wt/fix-ref-of-class` over main `98676df2eb8`): with `class P`, `const r: Ref<P> = a` and a `Ref<P>` parameter give `error: Ref<T> takes a value type, got 'P': a class value is already a counted reference, so write 'P'`; with `interface I`, a `Ref<I>` parameter gives `... got 'I': an interface value is already a counted reference, so write 'I'`. The build before the fix compiled all three, printed `class alias 3 3 same true` on JS and panicked on C (`member access within misaligned address`). A generic that builds such a Ref is refused where it is instantiated, measured the same way: `struct Box<T> { r: Ref<T>; }` used as `Box<P>` gives `Ref<T> takes a value type, but 'Box<P>' binds T = 'P': a class value is already a counted reference` (before: C panicked with `member access within null pointer`, JS printed `gs 3`); `set<P>(a, a)` for `function set<T>(r: Ref<T>, v: T)` gives `... but 'set<P>' binds T = 'P' ...` (before: `gx 0` on both); `new H(new P())` for a class `H<T>` with a `Ref<T> | null` field gives `... but 'H<P>' binds T = 'P' ...`; and `mk(new P())` for `function mk<T>(v: T): T { let r: Ref<T> | null = null; return v; }` gives `... but 'mk<P>' instantiated at 3:13 binds T = 'P' ...` while `mk(1)` and `Box<S>` for a struct `S` still run (`values 1 1 5`). An inferred `set(a, a)` still compiles and prints `gf 0` on both builds: inference binds `T` to the body of `P`, so `Ref<T>` there is `P` itself and no Ref is stacked; writing through it (`r[] = v`) is refused with `this operand is P, which is already a reference: use it without '[]'`.
 
 | Declaration | Internal Type | Allocation | Passed As |
 |-------------|--------------|------------|-----------|
 | `interface Foo { ... }` | `Ref<Struct>` | Heap (RC) | `Foo*` (pointer) |
 | `class Foo { ... }` | `Ref<Struct>` | Heap (RC) | `Foo*` (pointer) |
-| `struct Foo { ... }` | `Struct` | Stack | Auto: value or `Foo*` (size + mutation) |
-| `const x: Ptr<Foo> = ...` | `Ptr<Struct>` | Heap (manual) | `Foo*` (pointer) |
+| `struct Foo { ... }` | `Struct` | Value storage; ABI is not write-back permission | See parameter modes |
+| `const x: Ptr<Foo> = ...` | Raw address | No allocation implied | `Foo*` (pointer) |
 
 #### Nullable Pointers
 
@@ -3555,7 +3495,8 @@ the checker keeps them apart from the bare types. Measured 2026-09-24 (wt/c-ffi 
 | `const q: T = null;` | error | ok |
 | `f(null)` for `function f(p: T)` | error | ok |
 
-An uninitialized `let q: Ptr<P>;` is accepted. Not measured: `Cursor<T>`, which accepts null by design.
+An uninitialized `let q: Ptr<P>;` was accepted in that measurement. Cursor nullability was
+not measured there; do not infer its rule from the Ref/Ptr matrix.
 
 A struct value passed to a `Ptr<S> | null` parameter of an `extern` C function (hand-written or
 imported from a header) is passed by address, valid for the call, as a `Borrow<S>` argument is
@@ -3671,6 +3612,16 @@ from the prelude pack (the pack rebuilds the extension registry without the coll
 hooks, so by reading it keeps the earlier registry lookup, which the std class hooks still go through
 with byte-identical C for `std/crypto`); a generic distinct type; an unannotated class method that
 returns a value (it stops in codegen with `unresolved type`, as any unannotated method return does).
+
+### 5a. Non-owning treatment (`Cursor<T>`)
+
+`Cursor<T>` changes ownership treatment, not the target's mutability or lifetime. Its inner
+representation is preserved by `getTypeDesc` (`src/codegen/c/types.ms`); non-owning lifecycle
+classification is in `src/analyzer/classify.ms`. It is not a checked weak reference, and a
+value-struct target does not acquire a managed header. Where the inner value refers to other
+storage, use requires a live owner/lifetime proof; current gaps and distinct migration roles are in
+[Advanced contracts](CONTRACTS.md#internal-proof-boundary-both-ends-are-metascript).
+This definition does not approve a new back-edge mechanism or a Cursor-to-Unowned migration.
 
 ### 5b. Owned edges (`Owned<T>`)
 
@@ -4210,111 +4161,36 @@ Rules:
 - **Generic class** with extension method: blocked by pre-existing class-constructor monomorphization gap. Use generic `interface` instead, which works end-to-end.
 - **No infinite chain**: single-step coercion only; explicit chains require explicit calls.
 
-### 9. Zero-Copy String ↔ Byte Array Bridge (Binary Parity)
+### 9. String ↔ byte bridge
 
-MetaScript strings and `uint8[]` byte arrays share an identical memory layout in the C backend. This enables zero-copy conversion between text and binary data — no allocation, no memcpy, just a type reinterpretation.
-
-This follows the same principle as Zig (where `[]const u8` *is* the string type) and the standard reference (where `string` and `seq[byte]` are binary-compatible and convertible via `cast`).
-
-#### Memory Layout (C Backend)
-
-Both types use the exact same C structure:
-
-```c
-// msString and msUint8Array are structurally identical
-typedef struct {
-    int64_t len;
-    struct {
-        int64_t cap;
-        uint8_t data[];  // Flexible array member
-    }* p;
-} msString, msUint8Array;
-```
-
-The `len` field, the `cap` field, and the `data[]` flexible array member are at identical offsets. A pointer to one is a valid pointer to the other.
-
-#### Conversion Methods
+`asBytes()` exposes a string as `Readonly<Span<uint8>>`: a borrow, not an owning byte array
+or permission to write. `asString()` decodes bytes into a new string using the
+[Index-Space Contract](#0-the-index-space-contract-normative). Layout resemblance is not
+permission to exchange ownership, skip decoding or reinterpret a managed array as a string.
 
 ```typescript
-const text: string = "hello world";
-
-// String → Bytes: zero-copy bit-cast (0 CPU cycles)
-const bytes: uint8[] = text.asBytes();
-
-// Bytes → String: zero-copy bit-cast (0 CPU cycles)
-const back: string = bytes.asString();
+const bytes: uint8[] = [65, 66];
+const text = bytes.asString();
+bytes[0] = 90;
+console.log(`${text} ${bytes.asString()}`);
+const view = text.asBytes();
+console.log(`${view.length} ${view[0]} ${view[1]}`);
+const alias = bytes;
+alias.push(67);
+console.log(`${bytes.length} ${alias.length}`);
 ```
 
-In generated C code, these compile to plain casts — no function call:
-```c
-msUint8Array bytes = (msUint8Array)text;   // .asBytes()
-msString back = (msString)bytes;           // .asString()
-```
+C, JS and Raiser printed `AB ZB`, `2 65 66`, `3 3` using installed binary/support
+`56ad1fdf80f`: decoding detached the string; two array bindings still shared an array.
+A write through `text.asBytes()` was refused with
+`cannot write through Readonly<Span<uint8>> — a read-only view never converts back to the mutable type`.
+These checks cover ASCII detachment, view reads and array aliasing, not every malformed byte
+sequence, retained foreign pointer or layout.
 
-#### Why It Works: The Null-Terminator Guarantee
-
-MetaScript strings are always null-terminated (`data[len] == '\0'`). To maintain binary parity, all `uint8[]` allocations also include an extra byte and null-terminate by default. This means every byte array is "string-ready" without any extra work.
-
-```
-msString "hello":
-  len=5, p -> { cap=8, data=['h','e','l','l','o','\0', ...] }
-
-uint8[] from network recv:
-  len=5, p -> { cap=8, data=[0x68,0x65,0x6C,0x6C,0x6F,'\0', ...] }
-
-Same bits. Same layout. Cast is free.
-```
-
-#### Copy-on-Write (COW) Across the Bridge
-
-String literals use a flag bit in `cap` (`MS_STRLIT_FLAG`) to mark them as read-only (Copy-on-Write). This flag is preserved across the cast:
-
-```typescript
-const greeting = "hello";              // COW literal
-const bytes = greeting.asBytes();      // Still COW — mutation triggers copy
-bytes[0] = 72;                         // COW copy happens here (same as mutating a string literal)
-```
-
-#### Ownership and Lifecycle
-
-Because `string` and `uint8[]` share the same layout, the DRC (Deterministic Reference Counting) system treats them identically:
-
-- **Destroy**: Same deallocation path for both types
-- **Copy**: Same deep-copy semantics on assignment
-- **Move**: `move` transfers ownership with zero cost for both types
-- **Sink**: Last-use optimization applies equally
-
-```typescript
-const data: uint8[] = readFile("input.bin");
-const text = data.asString();   // Zero-copy cast
-// 'data' and 'text' point to the same memory
-// DRC tracks the lifecycle — only one destroy at scope exit
-```
-
-#### UTF-8 Safety
-
-`.asString()` is a zero-copy cast — it does not validate UTF-8. This is by design: in practice, the consumer (JSON parser, HTTP parser, etc.) validates encoding as part of its own parsing pass, touching the same cache lines it would anyway. A separate validation step would scan the data twice for no benefit.
-
-If you receive bytes from an untrusted source, the parser itself will reject invalid UTF-8 — you don't need a pre-validation gate.
-
-#### Use Cases
-
-| Scenario | Pattern |
-| :--- | :--- |
-| Parse binary protocol | `recv() → uint8[] → .asString() → parse` (zero-copy) |
-| Hash file contents | `readFile() → string → .asBytes() → hash(bytes)` (zero-copy) |
-| JSON from network | `socket.read() → uint8[] → .asString() → JSON.parse()` (zero-copy) |
-| Encode string to wire | `response.asBytes() → socket.write(bytes)` (zero-copy) |
-
-#### Comparison with Other Languages
-
-| Language | String Type | Byte Type | Conversion Cost |
-| :--- | :--- | :--- | :--- |
-| **MetaScript** | `string` | `uint8[]` | Zero (bit-cast) |
-| **Zig** | `[]const u8` | `[]const u8` | Zero (same type) |
-| **Rust** | `String` / `&str` | `Vec<u8>` / `&[u8]` | Zero (`into_bytes`) + UTF-8 check on reverse |
-| **Go** | `string` | `[]byte` | Copy (immutable→mutable) |
-| **TypeScript** | `string` | `Uint8Array` | Copy (TextEncoder/Decoder) |
+The existing WTF-8 corpus named in §0 owns encoding edge cases; this rewrite did not rerun it.
+Decoding text is not schema, range or protocol validation. Check those independent obligations
+at the data boundary. Full measurement provenance and exclusions are in
+[Advanced contracts](CONTRACTS.md#bounded-findings-not-new-features).
 
 ---
 
@@ -4324,8 +4200,8 @@ If you receive bytes from an untrusted source, the parser itself will reject inv
 | :--- | :--- | :--- | :--- |
 | **Ownership** | Owned (Heap/RC) | Borrowed (View) | Owned (Heap/RC) |
 | **Slicing** | Returns new `string` (Copy) | Returns `Span<char>` (Zero-copy) | Returns new `uint8[]` (Copy) |
-| **Mutation** | Allowed (COW-protected) | Allowed on a `char` buffer; a string's view is `Readonly<Span<char>>` | Allowed (direct) |
-| **Bridge** | `.asBytes()` → `uint8[]` | N/A | `.asString()` → `string` |
+| **Mutation** | Refused | Allowed on a `char` buffer; a string's view is `Readonly<Span<char>>` | Allowed (direct) |
+| **Bridge** | `.asBytes()` → `Readonly<Span<uint8>>` | N/A | `.asString()` → a new `string` |
 | **Use Case** | Text processing, standard TS | Parsing, high-perf views | Binary I/O, protocols, hashing |
 
 ## Collections and Compound Types
@@ -4536,7 +4412,9 @@ Value-typed bindings that look like copies are passed by pointer for speed; the 
 - **Value params** (`function f(v: Vec<T>)`): interior writes (`v[0] = …`, `v.x = …`) AND builtin mutators (`v.push/pop/shift/unshift/splice/sort/reverse/fill/…`) are compile errors. `T[]` params stay fully writable — aliasing is their contract, and the caller sees it.
 - **for-of bindings** over value elements: same rule (the binding is a per-iteration copy); rebinding the loop variable stays legal; `T[]` elements stay writable.
 - To mutate the CALLER's data, say so in the signature: `ref`/`out` params (write-back works on both backends since 2026-08-28). For a scratch copy, copy explicitly: `let local = v;`.
-- **Known gap (planned)**: user-defined struct methods that write `this` are not yet detected at call sites through value bindings (`c.bump()` slips where `c.n = 1` errors). The design follows the language's inference philosophy — NO new keywords: the checker will scan method bodies for `this` writes (the `mutatedParams` mechanism) and flag such calls. `ref`/`out` stays reserved for caller-visible write-back params, never a required annotation.
+- Write-back is explicit: a struct extension that modifies its receiver uses `this ref x: S`.
+  Follow the parameter modes above; a historical automatic mutation-inference plan is not
+  permission to write through a value parameter.
 
 #### Summary Table
 
@@ -5127,81 +5005,24 @@ Rejected:
 
 ## Memory Management
 
-### ORC Mode (Default)
-- Automatic reference counting with cycle detection
-- Lifecycle hooks: `=destroy`, `=copy`, `=sink`, `=wasMoved`, `=trace`
-- Shared by default (TypeScript semantics)
-- `move` for optional ownership transfer optimization
+Memory-management modes and host restrictions are owned by [BARE.md](BARE.md);
+the command parser is `src/compiler/options.ms`. Do not infer an allocator API or current
+option spelling from an old ORC/NONE design table.
 
-### NONE Mode (`--gc:none`)
-- Manual memory with allocator pattern
-- `defer` for cleanup
-- Arena, Pool, FixedBuffer allocators
+Value copying, shared references, non-owning views and user lifecycle hooks are separate
+contracts above, not one “shared by default” rule. Placement rationale is in
+[ANALYZER.md](ANALYZER.md); foreign retention and internal enforcement limits are in
+[Advanced contracts](CONTRACTS.md).
 
-## AST Node Kinds (112 total)
+## AST node kinds
 
-### Literals (6)
-`number_literal`, `bigint_literal`, `string_literal`, `regex_literal`, `boolean_literal`, `null_literal`
-
-### Identifier (1)
-`identifier`
-
-### Expressions (25)
-`binary_expr`, `unary_expr`, `update_expr`, `call_expr`, `member_expr`, `new_expr`, `array_expr`, `object_expr`, `function_expr`, `conditional_expr`, `spread_element`, `move_expr`, `out_expr`, `await_expr`, `try_expr`, `yield_expr`, `type_assertion_expr`, `stmt_expr`, `custom_infix_expr`, `custom_prefix_expr`, `optional_wrap`, `optional_none`, `optional_unwrap`, `range_check_expr`, `implicit_conv`
-
-### String Coercion Nodes (4)
-`string_concat_expr`, `string_append_expr`, `string_assign_expr`, `string_sink_expr`
-
-### Statements (16)
-`block_stmt`, `expression_stmt`, `if_stmt`, `while_stmt`, `for_stmt`, `for_of_stmt`, `switch_stmt`, `match_stmt`, `return_stmt`, `break_stmt`, `continue_stmt`, `variable_stmt`, `try_stmt`, `throw_stmt`, `defer_stmt`, `unreachable_stmt`
-
-### Declarations (8)
-`function_decl`, `class_decl`, `enum_decl`, `interface_decl`, `struct_decl`, `type_alias_decl`, `import_decl`, `export_decl`
-
-### Class Members (3)
-`property_decl`, `method_decl`, `constructor_decl`
-
-### Type Annotation (1)
-`type_annotation`
-
-### Macro Nodes (11)
-`macro_decl`, `extern_macro_decl`, `extern_function_decl`, `extern_var_decl`, `extern_const_decl`, `extern_class_decl`, `extern_enum_decl`, `extern_type_decl`, `macro_invocation`, `comptime_block`, `compile_error`, `quote_expr`
-
-### JSX (4)
-`jsx_element`, `jsx_fragment`, `jsx_text`, `jsx_expression_container`
-
-### Program (1)
-`program`
+`NodeKind` in `std/meta/node.ms` is the list; macros access it through `std/meta`.
+Do not infer runtime support from an AST node's existence.
 
 ## Compilation Pipeline
 
-```
-Source (.ms)
-    |
-    v
-Lexer -> Tokens
-    |
-    v
-Parser -> AST
-    |
-    v
-Macro Expansion -> Expanded AST
-    |
-    v
-Type Checker (3-pass)
-    |- Pass 1: Collect declarations (all modules)
-    |- Pass 2: Propagate export types to imports
-    |- Pass 3: Resolve, infer, check (all modules)
-    |
-    v
-Transforms (analyzer, lambda lifting, lowering)
-    |
-    v
-Code Generation (C / JS / Erlang)
-    |
-    v
-Output
-```
+Phase ownership and backend differences are defined in [PIPELINE.md](PIPELINE.md).
+An emitted representation is not an additional language rule or support certificate.
 
 ## Testing Framework
 
