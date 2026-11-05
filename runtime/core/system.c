@@ -223,6 +223,18 @@ _Noreturn void msRaiseDestroyKeptSelf(void* p) {
 	exit(1);
 }
 
+_Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left) {
+	fprintf(stderr, "Error: %lld Unowned<%s> edge(s) still point at the %s being freed; each would dangle\n", (long long)left, msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseUnownedOverflow(void* p) {
+	fprintf(stderr, "Error: too many Unowned<%s> edges point at one %s\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
 	fprintf(stderr, "Error: slice %lld..%lld out of bounds (length %lld)\n",
 		(long long)start, (long long)end, (long long)len);

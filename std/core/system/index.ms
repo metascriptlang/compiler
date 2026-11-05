@@ -371,6 +371,15 @@ extern function msAtomicIncref(p: Ptr<void>): void;
 extern function msAtomicDecref(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msUnownedIncref(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedDecref(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedAssign(slot: Ptr<void>, p: Ptr<void>): void;
+
+@compilerFunc
 extern function msPtrWasMoved(p: Ptr<void>): void;
 
 @compilerFunc

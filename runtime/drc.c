@@ -651,7 +651,7 @@ static inline void incCount(msRefHeader* h) {
 }
 
 static inline void setLastRefCount(msRefHeader* h) {
-	h->rc &= MS_RC_MASK;
+	h->rc &= MS_RC_MASK | MS_UNOWNED_MASK;
 }
 
 /* ===== Helper: call type's trace hook ===== */
@@ -804,6 +804,32 @@ static void forEachEdge(msGcEnv* j, void* p, const msTypeInfo* type, bool drop) 
 
 static _Thread_local bool msOrcFinalizing = false;
 
+/* A cell freed while the collector finalizes may still be the target of Unowned
+ * edges held by cells later in the same dead set; its free waits for the end of the set. */
+static _Thread_local msCellSeq msUnownedDeferred;
+
+_Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left);
+
+static void drainUnownedDeferred(void) {
+	while (msUnownedDeferred.len > 0) {
+		void* p = msUnownedDeferred.data[--msUnownedDeferred.len].ptr;
+		intptr_t left = msHeader(p)->rc & MS_UNOWNED_MASK;
+		if (left != 0) msRaiseUnownedOutlives(p, left >> 4);
+		msDestroyAndDispose(p);
+	}
+}
+
+void msUnownedOutlives(void* p) {
+	if (msOrcFinalizing) {
+		msCellSeqPush(&msUnownedDeferred, (msCell){ p, NULL });
+		return;
+	}
+	msOrcCollect();
+	intptr_t left = msHeader(p)->rc & MS_UNOWNED_MASK;
+	if (left != 0) msRaiseUnownedOutlives(p, left >> 4);
+	msDestroyAndDispose(p);
+}
+
 static void finalizeCollected(msGcEnv* j) {
 	msCellSeq* set = &j->toFree;
 	msOrcFinalizing = true;
@@ -832,6 +858,7 @@ static void finalizeCollected(msGcEnv* j) {
 		msDestroyAndDispose(p);
 	}
 	msOrcFinalizing = false;
+	drainUnownedDeferred();
 }
 
 /* ===== Core Collection (collectCyclesBacon parity) ===== */

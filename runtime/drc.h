@@ -25,11 +25,23 @@
 #include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
-/* rc field = [count:60][flags:4] (intptr_t).
+/* rc field = [strong:37][unowned:23][flags:4] (intptr_t) on 64-bit, [strong:28][flags:4] on 32-bit.
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
- * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits. */
-#define MS_RC_INCREMENT 16
+ * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits.
+ * The unowned field counts the Unowned<T> edges that point at the object. The strong
+ * count sits on top because trial deletion takes it below zero for a moment. */
 #define MS_RC_MASK      15   /* lower 4 bits: color + flags */
+#if INTPTR_MAX > 0x7fffffff
+#define MS_RC_SHIFT          27
+#define MS_UNOWNED_INCREMENT ((intptr_t)16)
+#define MS_UNOWNED_MASK      ((intptr_t)0x7fffff << 4)
+#else
+#define MS_RC_SHIFT          4
+#define MS_UNOWNED_INCREMENT ((intptr_t)0)
+#define MS_UNOWNED_MASK      ((intptr_t)0)
+#endif
+#define MS_RC_INCREMENT      ((intptr_t)1 << MS_RC_SHIFT)
+#define MS_RC_STRONG_MASK    (~(intptr_t)MS_RC_MASK & ~MS_UNOWNED_MASK)
 
 /* ===== Reference Header ===== */
 
@@ -356,8 +368,8 @@ static inline bool msDecRefIsLast(void* p) {
 	MS_RC_FAMILY_CHECK(p, false, "msDecRefIsLast");
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
-	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
-	if ((h->rc & ~MS_RC_MASK) != 0) {
+	 * rc starts at 0 from msAlloc. (rc & MS_RC_STRONG_MASK)==0 means sole owner. */
+	if ((h->rc & MS_RC_STRONG_MASK) != 0) {
 		h->rc -= MS_RC_INCREMENT;
 		return false;
 	}
@@ -376,16 +388,43 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
 	MS_RC_FAMILY_CHECK(p, true, "msAtomicDecRefIsLast");
 	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
-	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
+	if ((old & MS_RC_STRONG_MASK) == MS_RC_INCREMENT) {
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		return true;
 	}
 	return false;
 }
 
+void msUnownedOutlives(void* p);
+_Noreturn void msRaiseUnownedOverflow(void* p);
+
+static inline void msUnownedIncref(void* p) {
+	if (p != NULL && MS_UNOWNED_INCREMENT != 0) {
+		msRefHeader* h = msHeader(p);
+		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_MASK) msRaiseUnownedOverflow(p);
+		h->rc += MS_UNOWNED_INCREMENT;
+	}
+}
+
+static inline void msUnownedDecref(void* p) {
+	if (p != NULL) msHeader(p)->rc -= MS_UNOWNED_INCREMENT;
+}
+
+static inline void msUnownedAssignAt(void** slot, void* p) {
+	msUnownedIncref(p);
+	void* old = *slot;
+	*slot = p;
+	msUnownedDecref(old);
+}
+#define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
+
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
+		if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
+			msUnownedOutlives(p);
+			return;
+		}
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots, else msOrcCollect later walks a dangling root
@@ -398,6 +437,10 @@ static inline void msDestroyAndDispose(void* p) {
 
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
+	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
+		msUnownedOutlives(p);
+		return;
+	}
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
 	MS_HCR_COUNT(h->type, -1);
@@ -454,7 +497,6 @@ static inline bool msDropEdgeLast(void* owner, void* p) {
 #define MS_MAYBE_CYCLE 4
 #define MS_COLLECTING  8  /* in a dead set the collector is finalizing */
 #define MS_COLOR_MASK  3
-#define MS_RC_SHIFT    4
 
 typedef struct {
 	void* ptr;
@@ -518,7 +560,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	MS_RC_FAMILY_CHECK(p, false, "msOrcDecRefIsLast");
 	msRefHeader* h = msHeader(p);
-	bool isLast = (h->rc & ~MS_RC_MASK) == 0;
+	bool isLast = (h->rc & MS_RC_STRONG_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
