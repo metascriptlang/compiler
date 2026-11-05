@@ -1,6 +1,8 @@
 // Crypto — Comprehensive Test Suite
 
 import "./aeadOracle";
+import "./aesApiVectors";
+import "./hashApiVectors";
 import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
 import "./kdfApiVectors";
