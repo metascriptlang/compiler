@@ -78,8 +78,21 @@ export function byteAt(this s: string, idx: int32): int32 {
 	return b[idx] as int32;
 }
 
+/** True when every character of `s` is ASCII: its WTF-8 bytes and its UTF-16 units then count the same. */
+export function byteIsAscii(s: string): boolean {
+	const b = wtf8Cached(s);
+	@emit(`return ${b}.length === ${s}.length;`);
+	unreachable;
+}
+
 export function byteSlice(this s: string, start: int32, end: int32): string {
 	const b = wtf8Cached(s);
+	if (byteIsAscii(s)) {
+		const from = start < 0 ? 0 : start;
+		const to = end > b.length ? b.length : end;
+		if (to <= from) return "";
+		@emit(`return ${s}.substring(${from}, ${to});`);
+	}
 	const sub: uint8[] = [];
 	for (let i = start < 0 ? 0 : start; i < end && i < b.length; i += 1) {
 		sub.push(b[i]);
