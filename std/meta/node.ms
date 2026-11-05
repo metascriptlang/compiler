@@ -93,6 +93,7 @@ export enum TypeFlag {
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
 	IsOwned,              // Owned<T> on a class Ref: the unique owning edge, so a cycle needs a non-owned edge and a copy of it is refused
+	IsUnowned,            // Unowned<T> on a class Ref: a stored edge counted on the target's second count; it never keeps the target alive and its target cannot die while it exists
 }
 
 // ===== Attached Lifecycle Ops =====

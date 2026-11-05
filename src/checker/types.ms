@@ -1813,6 +1813,26 @@ export function createOwned(ref: Type): Type {
 	return c;
 }
 
+export function createUnowned(ref: Type): Type {
+	if (isUnownedRef(ref)) return ref;
+	const c = copyTypeShallow(ref);
+	c.typeFlags = c.typeFlags.incl(TypeFlag.IsUnowned);
+	return c;
+}
+
+export function isUnownedRef(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsUnowned);
+}
+
+export function isUnownedSlot(t: Readonly<Type | null>): boolean {
+	return t != null && (isUnownedRef(t) || (t.kind == TypeKind.Union && isUnownedRef(unwrapRefNullUnion(t))));
+}
+
+export function unownedSlotOf(place: Node): boolean {
+	if (place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType)) return true;
+	return isUnownedSlot(place.nodeType);
+}
+
 export function isOwnedRef(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsOwned);
 }
@@ -2306,6 +2326,7 @@ export function refWrapperName(t: Readonly<Type>): string {
 	if (isLockedRef(t)) return "Locked";
 	if (isAtomicRef(t)) return "Arc";
 	if (isOwnedRef(t)) return "Owned";
+	if (isUnownedRef(t)) return "Unowned";
 	return "";
 }
 
@@ -5979,6 +6000,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayNameInner(lockedPayloadType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsOwned) && isOwnedRef(t)) return "Owned<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsOwned), open, shapes) + ">";
+	if (!shown.has(TypeFlag.IsUnowned) && isUnownedRef(t)) return "Unowned<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsUnowned), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsReadonly) && isReadonlyView(t) && !isUnionOfViewsAndNull(t)) return "Readonly<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsReadonly), open, shapes) + ">";
 	if (!shown.has(TypeFlag.IsSendable) && isSendableFunction(t)) return "Sendable<" + typeDisplayNameInner(t, shown.incl(TypeFlag.IsSendable), open, shapes) + ">";
 	if (isIterator(t)) return "Iterator<" + typeDisplayNameInner(getIteratorYieldType(t), 0 as BitSet<TypeFlag>, open, shapes) + ">";
