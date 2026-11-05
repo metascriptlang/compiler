@@ -128,7 +128,10 @@ function parseValue(input: string, b: Bytes, ref pos: int32): ParseResult {
 			pos = pos + 1;
 			if (pos >= len) return errorAt(unterminated(isObject), openedAt(b, depth));
 			pos = skipWs(b, pos);
-			if (isObject) addKey(open[depth - 1], try parseKey(input, b, pos));
+			if (isObject) {
+				const key = try parseKey(input, b, pos);
+				addKey(open[depth - 1], key);
+			}
 			break;
 		}
 	}
