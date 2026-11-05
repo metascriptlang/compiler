@@ -98,13 +98,26 @@ a `Float32Array` (with a `Float32Array` input `sumSpan` measured 1073 against ne
 `makeVec` returns a `Float32Array`; the Rust sieve presizes with `vec![true; n]` while ours pushes
 2M times (presized, the wasm half runs 4.45 ms, and it equals the native C build, 5.79 ms against
 5.85 ms unpresized). Emscripten flags (`-O2`, `-flto`, `-msimd128`, emmalloc, no memory growth)
-moved the sieve under 1%; `-msimd128` cut the `scaleSpan` wasm loop 434 → 105 ns and is not on.
+moved the sieve under 1%; the earlier `-msimd128` probe cut the `scaleSpan` wasm loop 434 → 105 ns.
 Not explained: a wasm half exporting one function ran the sieve at 8.8 ms against 5.85 ms with
 the full export list, from the same C.
 
-The bench sources are `main.ms`/`benchWasm.ms` and the neon crate `lib.rs`/`bench.mjs`; they
-live outside the repo (m1m `~/neonbench`). Not measured: browsers, Windows since these changes,
-the browser column of the oracle.
+The MetaScript bench is `src/bench/wasmBoundary/main.ms` and `benchWasm.ms`; the neon crate
+`lib.rs`/`bench.mjs` remains outside the repo (m1m `~/neonbench`). Not measured: browsers,
+Windows since these changes, the browser column of the oracle.
+
+Fixed SIMD, 2026-11-05, m1m, Node, Emscripten, `--danger`: source tree
+`f6b1c221ec1f182946426b6188950cb5aba6697e` (the retained bench differs only in whitespace and
+an import trailing comma). Build control/candidate compilers with `--danger --lto=off`, then
+`build src/bench/wasmBoundary/main.ms --target=js --danger --output=<arm>/main.mjs` and run
+`node <arm>/main.mjs`: three alternating control/candidate pairs, each median of seven timed
+runs after three warmups. `scaleSpan1k` medians **2704.0 → 2370.6 ns** (12.3% faster); all three
+pairs improved. Sum, callback and sieve rows showed no consistent improvement. The disassembly
+pin reported `control no f32x4.mul; candidate f32x4.mul present`; wasm grew **27490 → 27656 bytes**.
+The candidate reported `wasmmix: 74/74 pass` and 256 passing boundary-unit tests. These prove
+fixed SIMD code generation and existing Node oracles, not browser support, GPU output, other
+hosts or rebased-main integration. No relaxed SIMD or fast-math. Full raw evidence:
+m1m `~/work/rr-recompiler-441c019f/out/simd-proof/`.
 
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
