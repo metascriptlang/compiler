@@ -3,7 +3,7 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, IfStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, finishNode, finishOnce, finishAfter, finishToken, parenGroupThen, takeTrailingDecls } from "../cursor";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, finishNode, finishOnce, finishAfter, finishToken, parenGroupThen, takeTrailingDecls, peekIndex, tokenAt, matchingParenIndex } from "../cursor";
 import { captureGenericTypeArgs } from "../generics";
 import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
@@ -349,10 +349,50 @@ function pickWhenBranch(conds: Node[], blocks: Node[], elseBlock: Node | null, a
 	return elseBlock != null ? blockStatements(elseBlock) : [];
 }
 
+function isRaiserHead(state: ParserState): boolean {
+	const name = peek(state, 2);
+	return peek(state, 1).kind == TokenKind.LParen && name.kind == TokenKind.Ident && name.value == "raiser" && peek(state, 3).kind == TokenKind.RParen;
+}
+
+function headNamesRaiser(state: ParserState): boolean {
+	const open = peekIndex(state, 1);
+	const close = matchingParenIndex(state, open);
+	for (let i = open + 1; i < close; i += 1) {
+		const t = tokenAt(state, i);
+		if (t.kind == TokenKind.Ident && t.value == "raiser") return true;
+	}
+	return false;
+}
+
+function parseWhenRaiser(state: ParserState): NodesResult {
+	const whenToken = current(state);
+	advance(state);
+	try parseWhenHead(state);
+	const vmBlock = try parseBlockStmt(state);
+	if (current(state).kind != TokenKind.Else || peek(state, 1).kind == TokenKind.When) {
+		return Result.err(`'when (raiser)' takes exactly one else block and no 'else when' at line ${current(state).line}: the else is what every other backend runs`);
+	}
+	advance(state);
+	const otherBlock = try parseBlockStmt(state);
+	if (isDefined(getParserDefines(), "raiser")) {
+		const picked = blockStatements(vmBlock);
+		for (const s of picked) s.flags = s.flags.incl(NodeFlag.WhenPicked);
+		return Result.ok(picked);
+	}
+	const node = createNode(NodeKind.IfStmt, { condition: whenFlag(true, whenToken), consequent: vmBlock, alternate: otherBlock }, whenToken);
+	finishAfter(node, otherBlock);
+	node.flags = node.flags.incl(NodeFlag.WhenRaiser).incl(NodeFlag.WhenPicked);
+	return Result.ok([node]);
+}
+
 // Every branch is PARSED (a dead branch must still be syntactically valid — Haxe says
 // the same) but only the first true one is selected; later conditions are parsed for
 // their tokens and not consulted, mirroring semWhen's early return.
-export function parseWhenChain(state: ParserState): NodesResult {
+export function parseWhenChain(state: ParserState, inBody: boolean): NodesResult {
+	if (inBody && isRaiserHead(state)) return parseWhenRaiser(state);
+	if (inBody && headNamesRaiser(state)) {
+		return Result.err(`In a function body 'raiser' stands alone in its 'when': write 'when (raiser) { … } else { … }' at line ${current(state).line}, because the body is checked once and the Raiser picks its branch when it runs the body, as every other backend picks the else`);
+	}
 	const whenToken = current(state);
 	advance(state); // consume 'when'
 	const conds: Node[] = [try parseWhenHead(state)];
@@ -388,7 +428,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 	const stmts: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		if (startsWhen(state)) {
-			const picked = try parseWhenChain(state);
+			const picked = try parseWhenChain(state, true);
 			for (const w of picked) { stmts.push(w); }
 			continue;
 		}
@@ -428,7 +468,7 @@ export function parseProgram(state: ParserState): NodeResult {
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
 		if (startsWhen(state)) {
-			const chain = parseWhenChain(state);
+			const chain = parseWhenChain(state, false);
 			if (chain.ok) {
 				for (const w of chain.value) {
 					if (w.flags.has(NodeFlag.WhenDeferred)) {

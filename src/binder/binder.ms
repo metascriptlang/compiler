@@ -11,7 +11,7 @@
 import { parseSource } from "../parser/statements/validation";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import {
-	Node, NodeKind, createNodeAt,
+	Node, NodeKind, NodeFlag, createNodeAt,
 	FlowNode, FlowFlag, FlowList,
 	FlowSwitchClauseData, FlowReduceLabelData,
 	// NodeData variants
@@ -308,8 +308,12 @@ function bindIfStmt(state: BinderState, node: Node): void {
 	const thenLabel = createBranchLabel();
 	const elseLabel = createBranchLabel();
 	const postLabel = createBranchLabel();
-	// bindCondition splits currentFlow along True/False edges
-	bindCondition(state, d.condition, thenLabel, elseLabel);
+	if (node.flags.has(NodeFlag.WhenRaiser)) {
+		addAntecedent(thenLabel, state.currentFlow);
+		addAntecedent(elseLabel, state.currentFlow);
+	} else {
+		bindCondition(state, d.condition, thenLabel, elseLabel);
+	}
 	state.currentFlow = finishFlowLabel(thenLabel);
 	bindStatement(state, d.consequent);
 	addAntecedent(postLabel, state.currentFlow);

@@ -477,6 +477,7 @@ export enum NodeFlag {
 	DecoratorRefused, // checker: a decorator on this declaration was refused, so a check that would only follow from it skips the declaration
 	LendsPastCall, // checker: this call of an async routine returns while a spawn it started still borrows from the caller, so a scope exit joins its promise
 	InBounds,      // transform: the for-of lowering's own element read, whose index the loop keeps below the length its tail guard rechecks
+	WhenRaiser,    // parser: a body's `when (raiser) { … } else { … }` kept as an IfStmt; the Raiser lowering takes the consequent, every other backend the alternate
 }
 
 // ===== Node Kind Enum =====

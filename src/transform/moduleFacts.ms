@@ -50,6 +50,7 @@ export function factsOf(node: Node): BitSet<ModuleFact> {
 		NodeKind.BinaryExpr => factIf(lowersAsNullish((node.data as BinaryExprData).operator), ModuleFact.Nullish),
 		NodeKind.SpreadExpr => NO_FACTS.incl(ModuleFact.Spread),
 		NodeKind.SwitchStmt => factIf(!(node.data as SwitchStmtData).switchLowered, ModuleFact.Switch),
+		NodeKind.IfStmt => factIf(node.flags.has(NodeFlag.WhenRaiser), ModuleFact.WhenRaiser),
 		_ => NO_FACTS,
 	};
 	return node.flags.has(NodeFlag.WasAsync) ? own.incl(ModuleFact.Async) : own;

@@ -7,6 +7,7 @@ import { wrapTypedArraySpanSources } from "./lowering/spanLower";
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node, NodeKind, CallExprData, BuiltinKind } from "../ast/node";
 import { walkNode } from "./walker";
+import { pickWhenRaiser } from "./lowering/whenRaiserPick";
 import { WriteSummaries } from "../analyzer/writeEffects";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
@@ -91,7 +92,7 @@ function dropUnionTextMemberTexts(program: Node): Node {
 }
 
 function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, namesEnums: boolean, inlining: CallInlining): Node {
-	let result = dropUnionTextMemberTexts(eraseVoidParamReads(planModuleTdz(program, ctx)));
+	let result = dropUnionTextMemberTexts(eraseVoidParamReads(planModuleTdz(pickWhenRaiser(program, true), ctx)));
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);

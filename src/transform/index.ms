@@ -113,6 +113,7 @@ import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
+import { pickWhenRaiser } from "./lowering/whenRaiserPick";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerAssert } from "./native/assertLower";
@@ -225,6 +226,8 @@ export function transformProgramHead(program: Node, checkerCtx: CheckerContext, 
 	flowLap("pass.dropCtorSignatures");
 	result = eraseBrandTypes(result, ctx);
 	flowLap("pass.eraseBrandTypes");
+	if (runs(result, ctx, fact(ModuleFact.WhenRaiser), "pass.pickWhenRaiser")) result = pickWhenRaiser(result, false);
+	flowLap("pass.pickWhenRaiser");
 	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
 	result = lowerBorrow(result, ctx);

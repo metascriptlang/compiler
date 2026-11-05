@@ -23,6 +23,7 @@ export enum ModuleFact {
 	Nullish,
 	Spread,
 	Switch,
+	WhenRaiser,
 }
 
 export class TransformContext {

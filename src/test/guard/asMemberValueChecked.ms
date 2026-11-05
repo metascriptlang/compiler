@@ -69,8 +69,12 @@ type RowOrLists = Row | int32[] | string[];
 
 function sameHeld(x: RowOrLists, y: RowOrLists): boolean {
 	let same = true;
-	when (js || raiser) {
+	when (js) {
 		same = x == y;
+	}
+	when (raiser) {
+		same = x == y;
+	} else {
 	}
 	return same;
 }

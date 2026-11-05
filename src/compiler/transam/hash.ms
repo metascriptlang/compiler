@@ -137,7 +137,7 @@ export function surfaceText(node: Node | null): string {
 	return textOf(hashInto(createText(), node, false));
 }
 
-const HASHED_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.Optional | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.TypeModifier | NodeFlag.ValueUnion | NodeFlag.Parenthesized | NodeFlag.QuoteSplice | NodeFlag.WhenDeferred | NodeFlag.WhenPicked | NodeFlag.CommaWritten | NodeFlag.ExplicitDeref;
+const HASHED_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.Optional | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.TypeModifier | NodeFlag.ValueUnion | NodeFlag.Parenthesized | NodeFlag.QuoteSplice | NodeFlag.WhenDeferred | NodeFlag.WhenRaiser | NodeFlag.WhenPicked | NodeFlag.CommaWritten | NodeFlag.ExplicitDeref;
 
 function hFlags(h: TaText, flags: BitSet<NodeFlag>): TaText {
 	if (flags.isEmpty()) return hNull(h);

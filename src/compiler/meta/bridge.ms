@@ -873,6 +873,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	if (!_marshalsBuilt && !node.flags.has(NodeFlag.FromTemplate)) wireSet(arrHeap, objHeap, handle, "argOrigin", raiserInt(1));
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
 	if (!syntaxFlags.isEmpty()) wireSet(arrHeap, objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
+	if (node.flags.has(NodeFlag.WhenRaiser)) setBool(arrHeap, objHeap, handle, "whenRaiser", true);
 	if (node.resolvedSym != null && declaresLocal(node)) {
 		wireSet(arrHeap, objHeap, handle, "declSymHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 	}
@@ -1839,6 +1840,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
 					}
 					out.flags = out.flags.union(rawFlags.intersection(PARSER_NODE_FLAGS));
+					if (readBool(arrHeap, objHeap, handle, "whenRaiser")) out.flags = out.flags.incl(NodeFlag.WhenRaiser);
 					if (typed != null && readBool(arrHeap, objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
 					const declHandle = wireGet(arrHeap, objHeap, handle, "declSymHandle");
 					if (declHandle.kind == RaiserValueKind.Int && declaresLocal(out)) {
@@ -3014,6 +3016,17 @@ test "round-trip drops pipeline flags and keeps the syntax beside them" {
 	orig.flags = orig.flags.incl(NodeFlag.Sem).incl(NodeFlag.Transf).incl(NodeFlag.LastRead).incl(NodeFlag.Parenthesized);
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	assert back.flags == (0 as BitSet<NodeFlag>).incl(NodeFlag.Parenthesized);
+}
+
+test "a body's when (raiser) keeps both blocks through a macro round trip" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.WhenRaiser).incl(NodeFlag.WhenPicked);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.flags == orig.flags;
+	assert takeWireRefusals().length == 0;
 }
 
 test "a pipeline flag forged by a macro is refused and does not reach the node" {
