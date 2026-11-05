@@ -9,9 +9,10 @@ import { forEachChild } from "../../ast/visitor";
 import { peelTransparentInstance } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext, freshTemp, newLoweredSym } from "../context";
-import { makeVarDecl, makeIdentResolved, makeBinary, makeAssign, makeArrayAccess, makeMember, makeExprStmt, makeIf, makeWhile, makeBlock, makeHiddenDeref, makeNumber } from "../util";
+import { makeVarDecl, makeIdentResolved, makeBinary, makeAssign, makeArrayAccess, makeMember, makeExprStmt, makeIf, makeWhile, makeBlock, makeHiddenDeref, makeNumber, isRuntimeProcCall } from "../util";
 import { cloneFresh } from "../lowering/iterInline";
 import { lowerLengthAssign } from "./builtinLower";
+import { checkedScalarTarget } from "./intCheckInject";
 
 const PUSH_NATIVES = ["msGenericArrayPush", "msNumberArrayPush", "msStringArrayPush", "msUint8ArrayPush"];
 
@@ -25,7 +26,7 @@ class Build {
 }
 
 export function lowerPresizedPushes(program: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend || ctx.raiserBackend || ctx.boundChecks) return program;
+	if (ctx.jsBackend || ctx.raiserBackend) return program;
 	visit(program, ctx);
 	return program;
 }
@@ -166,6 +167,11 @@ function isUnitStep(s: Node, counter: Symbol): boolean {
 		const u = e.data as UpdateExprData;
 		return u.updateOp == "++" && names(u.updateArg, counter);
 	}
+	const target = checkedScalarTarget(e);
+	if (target != null) {
+		const args = (e.data as CallExprData).arguments;
+		return names(target, counter) && (isRuntimeProcCall(e, "msPostInc") || (isRuntimeProcCall(e, "msAddAssign") && isOne(args[1])));
+	}
 	if (e.kind != NodeKind.BinaryExpr) return false;
 	const d = e.data as BinaryExprData;
 	if (!names(d.left, counter)) return false;
@@ -181,6 +187,8 @@ function stepSafe(n: Node, counter: Symbol): boolean {
 			|| n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.DeferStmt) return false;
 	if (n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) && names((n.data as BinaryExprData).left, counter)) return false;
 	if (n.kind == NodeKind.UpdateExpr && names((n.data as UpdateExprData).updateArg, counter)) return false;
+	const target = checkedScalarTarget(n);
+	if (target != null && names(target, counter)) return false;
 	let ok = true;
 	forEachChild(n, (c: Node): void => {
 		if (ok && !stepSafe(c, counter)) ok = false;

@@ -13,13 +13,13 @@
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
 // and its result is converted back, so it wraps at its own width.
 
-import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, createPrimitive, typeDisplayName } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef, makeNumber } from "../util";
+import { makeCall, runtimeRef, makeNumber, isRuntimeProcSym } from "../util";
 import { is64Kind, isSignedKind, isFloatKind } from "../numKinds";
 
 export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
@@ -54,6 +54,25 @@ function toInt32Operand(operand: Node): Node {
 	const call = makeCall(runtimeRef("msToInt32", operand.location), [d.convExpr], operand.location);
 	call.nodeType = d.convType;
 	return call;
+}
+
+const WRITING_OPS = writingOpNames();
+
+function writingOpNames(): HashSet<string> {
+	const names = new HashSet<string>();
+	names.add("msPostInc");
+	names.add("msPostDec");
+	for (const prefix of ["msAdd", "msSub", "msMul", "msDiv", "msMod", "msPow", "msPowWrap", "msAnd", "msOr", "msXor", "msShl", "msShr", "msShrU"]) {
+		for (const width of ["", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "F64"]) names.add(prefix + "Assign" + width);
+	}
+	return names;
+}
+
+// The variable or element a call this pass makes writes, as the `+=` or `++` it replaced would.
+export function checkedScalarTarget(n: Node): Node | null {
+	if (n.kind != NodeKind.CallExpr || n.resolvedSym == null) return null;
+	const name = n.resolvedSym.nativeName != "" ? n.resolvedSym.nativeName : n.resolvedSym.name;
+	return WRITING_OPS.has(name) && isRuntimeProcSym(n.resolvedSym, name) ? (n.data as CallExprData).arguments[0] : null;
 }
 
 export function injectIntChecks(program: Node, ctx: TransformContext): Node {
