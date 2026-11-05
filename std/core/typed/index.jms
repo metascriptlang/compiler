@@ -1,0 +1,51 @@
+// The prelude's typed arrays on the JS backend: the host's own classes, so a value crosses to a
+// JS API with no copy. A subscript outside the view stops like an array index does, where the
+// host would read undefined and drop the write.
+
+// A native typed array answers `length` and `[i]` as an array does, so the module reads its
+// elements through the array access, which checks the index the same way.
+extern function elementsOf(a: Readonly<Uint8Array>): Readonly<uint8[]> from "#";
+extern function writableElementsOf(a: Uint8Array): uint8[] from "#";
+
+export extern class ArrayBuffer {
+	byteLength: number;
+	constructor(byteLength: number = 0) {}
+}
+
+export extern function slice(this b: ArrayBuffer, begin: number = 0, end: number = b.byteLength): ArrayBuffer from "#.slice(#, #)";
+
+export extern class TypedArray<T> {
+	buffer: ArrayBuffer;
+	byteOffset: number;
+	length: number;
+	byteLength: number;
+}
+
+export extern class Uint8Array extends TypedArray<uint8> {
+	static BYTES_PER_ELEMENT: number;
+	constructor(
+		source: number | Readonly<uint8[]> | ArrayBuffer = 0,
+		byteOffset: number = 0,
+		length: number = source instanceof ArrayBuffer ? source.byteLength - byteOffset : 0,
+	) {}
+}
+
+export extern function subarray(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.subarray(#, #)";
+export extern function slice(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.slice(#, #)";
+export extern function fill(this a: Uint8Array, value: uint8, begin: number = 0, end: number = a.length): Uint8Array from "#.fill(#, #, #)";
+export extern function join(this a: Uint8Array, separator: string = ","): string from "#.join(#)";
+export extern function toString(this a: Uint8Array): string from "#.toString()";
+
+export function `[]`(this a: Readonly<Uint8Array>, index: number): uint8 {
+	return elementsOf(a)[index];
+}
+
+export function `[]=`(this a: Uint8Array, index: number, value: uint8): void {
+	writableElementsOf(a)[index] = value;
+}
+
+export function set(this a: Uint8Array, source: Readonly<Span<uint8>>, offset: number = 0): void {
+	if (offset + source.length > a.length) throw new RangeError("offset is out of bounds");
+	const into = writableElementsOf(a);
+	for (let i = 0; i < source.length; i++) into[offset + i] = source[i];
+}

@@ -1,0 +1,13 @@
+// The prelude's typed arrays on the C backend: the classes are the shared core, the subscripts
+// read and write inside the view, so an index outside it stops like an array index does.
+
+export { ArrayBuffer, TypedArray, Uint8Array } from "./core";
+import { Uint8Array } from "./core";
+
+export function `[]`(this a: Readonly<Uint8Array>, index: number): uint8 {
+	return a.buffer.bytes[a.byteOffset .. a.byteOffset + a.length][index];
+}
+
+export function `[]=`(this a: Uint8Array, index: number, value: uint8): void {
+	a.buffer.bytes[a.byteOffset .. a.byteOffset + a.length][index] = value;
+}
