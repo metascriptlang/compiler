@@ -204,3 +204,59 @@ test "an owned value cast to Owned passes the checker" {
 	const message = refused(CAST + "function same(o: Owned<N>): Owned<N> { return o as Owned<N>; }\n");
 	assert !message.contains("cannot cast"), message;
 }
+
+const REFILL = `class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }
+class P { head: Owned<N>; constructor(sink head: Owned<N>) { this.head = move head; } }
+function rw(n: Owned<N>): Owned<N> { return move n; }
+function rw2(n: Owned<N>, other: N): Owned<N> { return move n; }
+`;
+
+test "an owned element moved out and put back by the same assignment is accepted" {
+	const r = compileToC(REFILL + "function f(n: Owned<N>): Owned<N> {\nfor (let i = 0; i < n.kids.length; i++) n.kids[i] = rw(move n.kids[i]);\nreturn move n;\n}\nf(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "an owned field of a ref parameter moved out and put back by the same assignment is accepted" {
+	const r = compileToC(REFILL + "function f(ref p: P): void { p.head = rw(move p.head); }\nlet p = new P(new N());\nf(p);\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "an owned slot moved out by a plain parameter's path is refused" {
+	const message = refused(REFILL + "function f(n: N): void { n.kids[0] = rw(move n.kids[0]); }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot whose holder is read before the refill is refused" {
+	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { n.kids[0] = rw2(move n.kids[0], n); return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot whose holder is read through an alias before the refill is refused" {
+	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { const k: N = n; n.kids[0] = rw2(move n.kids[0], k); return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot put back into another place is refused" {
+	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { n.kids[0] = rw(move n.kids[1]); return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot whose index is written before the refill is refused" {
+	const message = refused(REFILL + "function g(a: Owned<N>, i: int32): Owned<N> { return move a; }\nfunction f(n: Owned<N>): Owned<N> { let i = 0; n.kids[i] = g(move n.kids[i], i++); return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot moved out by one statement and put back by another is refused" {
+	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { const x = move n.kids[0]; n.kids[0] = x; return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned slot moved inside a closure of the refill is refused" {
+	const message = refused(REFILL + "function f(n: Owned<N>): Owned<N> { n.kids[0] = rw((() => move n.kids[0])()); return move n; }\nf(new N());\n");
+	assert message.contains("cannot move 'n.kids"), message;
+}
+
+test "an owned nullable element moved out by one statement is emptied" {
+	const r = compileToC("class N { id: int32 = 0; kids: Vec<Owned<N> | null> = []; }\nfunction f(n: Owned<N>): Owned<N> {\nconst k = move n.kids[0];\nn.kids[0] = k;\nreturn move n;\n}\nf(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
