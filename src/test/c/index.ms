@@ -71,7 +71,6 @@ import "./ctorOwnership";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
-import "./pureExtern";
 import "./trimLineDirective";
 import "./forOfCounterEmit";
 import "./forOfIteratorResultScope";
