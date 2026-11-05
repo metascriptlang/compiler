@@ -33,6 +33,7 @@
 // goes red for another reason, fails the run, because a check that cannot go red checks nothing.
 import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, mkdirExclusive, symlink } from "std/fs";
+import { addressSanitizerArgs } from "../nativeSanitizer";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -485,7 +486,9 @@ function runOsLane(probe: Probe): void {
 function runOsAsanLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os} asan]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}.asan`;
-	const b = buildProbe(probe, `${probe.os} asan`, ["build", probe.path, `--os=${probe.os}`, "--sanitize=address", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.${probe.os}.asan.build`);
+	const args = ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`];
+	for (const arg of addressSanitizerArgs(`${OUT}/san`)) args.push(arg);
+	const b = buildProbe(probe, `${probe.os} asan`, args, `${LOG_DIR}/${probe.name}.${probe.os}.asan.build`);
 	if (!succeeded(b)) {
 		const errs = firstErrorLines(both(b));
 		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
