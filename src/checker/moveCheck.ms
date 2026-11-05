@@ -3,11 +3,13 @@ import {
 	IdentifierData, BinaryExprData, MoveExprData, OutExprData, CallExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, ArrayLiteralData, ObjectLiteralData, SpreadExprData,
 	VariableDeclData, ReturnStmtData, TypeAssertionData, Type, TypeKind, BlockStmtData, ProgramData,
-	FunctionDeclData, MethodDeclData, ConstructorDeclData, ArrowFunctionData, FunctionExprData,
+	FunctionDeclData, MethodDeclData, ConstructorDeclData, ArrowFunctionData, FunctionExprData, MemberExprData, ArrayAccessData, TestDeclData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isAssignOp } from "../ast/operators";
-import { CheckerContext, addError } from "./context";
+import { CheckerContext, LockedMove, addError } from "./context";
+import { Overlap, Place, PlaceScope, StepKind, overlap, placeOf, placeScope } from "./places";
+import { routineBody } from "./effects";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { ownedEdgeOf, isSinkTypeForParam, typeDisplayName } from "./types";
 import { calledRoutineType } from "./effects";
@@ -352,8 +354,12 @@ export function checkMovesIn(ctx: CheckerContext, root: Node | null): void {
 	for (const f of scan.faults) {
 		addOnce(ctx, `cannot move '${(f.at.data as IdentifierData).name}': ${f.why}`, f.at);
 	}
-	if (scan.moves.length == 0) return;
+	const locked = ctx.lockedMoves;
+	ctx.lockedMoves = [];
+	if (scan.moves.length == 0 && locked.length == 0) return;
 	numberNodes(root, scan);
+	checkLockedMoves(ctx, scan, locked);
+	if (scan.moves.length == 0) return;
 	const reported = new HashSet<Node>();
 	for (const sym of scan.moved) {
 		const reads = scan.reads.get(sym);
@@ -367,6 +373,164 @@ export function checkMovesIn(ctx: CheckerContext, root: Node | null): void {
 			if (taker == null || reported.has(taker.at)) continue;
 			reported.add(taker.at);
 			report(ctx, taker, read);
+		}
+	}
+}
+
+function pathBase(n: Node): Node | null {
+	return match (n.kind) {
+		NodeKind.MemberExpr => (n.data as MemberExprData).object,
+		NodeKind.ArrayAccess => (n.data as ArrayAccessData).array,
+		NodeKind.TypeAssertion => (n.data as TypeAssertionData).asExpr,
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => (n.data as HiddenDerefData).expr,
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => (n.data as HiddenStdConvData).convExpr,
+		_ => null,
+	};
+}
+
+function rootIdentOf(n: Node | null): Node | null {
+	let at = n;
+	while (at != null && at.kind != NodeKind.Identifier) at = pathBase(at);
+	return at;
+}
+
+function pathText(n: Node): string {
+	return match (n.kind) {
+		NodeKind.Identifier => (n.data as IdentifierData).name,
+		NodeKind.MemberExpr => pathText((n.data as MemberExprData).object) + "." + (n.data as MemberExprData).property,
+		NodeKind.ArrayAccess => pathText((n.data as ArrayAccessData).array) + "[…]",
+		_ => pathBase(n) != null ? pathText(pathBase(n)!) : "…",
+	};
+}
+
+interface PathRead {
+	ident: Node;
+	at: Node;
+	place: Place;
+}
+
+class LockWalk {
+	scope: PlaceScope;
+	moved: Place;
+	skip: Node;
+	syms = new HashSet<Symbol>();
+	reads: PathRead[] = [];
+	constructor(scope: PlaceScope, moved: Place, skip: Node) {
+		this.scope = scope;
+		this.moved = moved;
+		this.skip = skip;
+	}
+}
+
+// A write to the moved place, or to a place that holds it, puts a value back.
+function refillsPlace(w: LockWalk, target: Node | null): boolean {
+	const p = placeOf(w.scope, target);
+	if (p == null || p.root != w.moved.root) return false;
+	const o = overlap(p, w.moved, false);
+	return o == Overlap.Same || o == Overlap.Contains;
+}
+
+// The element store `xs[i] = v` after the checker turned it into `xs.[]=(i, v)`.
+function refillsElement(w: LockWalk, call: Node): boolean {
+	const d = call.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr || (d.callee.data as MemberExprData).property != "[]=" || d.arguments.length != 2) return false;
+	const holder = placeOf(w.scope, (d.callee.data as MemberExprData).object);
+	const moved = w.moved;
+	if (holder == null || holder.root != moved.root || holder.steps.length + 1 != moved.steps.length) return false;
+	const last = moved.steps[moved.steps.length - 1];
+	if (last.kind != StepKind.Index || overlap(holder, moved, false) != Overlap.Contains) return false;
+	const index = stripHidden(d.arguments[0]);
+	if (index == null) return false;
+	if (index.kind == NodeKind.Identifier) return last.indexSym != null && index.resolvedSym == last.indexSym;
+	return index.kind == NodeKind.NumberLiteral && last.indexSym == null && (index.data as { intVal: int64 }).intVal == last.constant;
+}
+
+function refillAt(w: LockWalk, node: Node | null): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		return d.operator == "=" && refillsPlace(w, d.left);
+	}
+	return node.kind == NodeKind.CallExpr && refillsElement(w, node);
+}
+
+function walkLockReads(w: LockWalk, node: Node | null, outer: Node | null): void {
+	if (node == null || node == w.skip) return;
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		if (sym == null || !w.syms.has(sym)) return;
+		const at = outer ?? node;
+		const place = placeOf(w.scope, at) ?? placeOf(w.scope, node);
+		if (place != null && place.root == w.moved.root) w.reads.push({ ident: node, at, place });
+		return;
+	}
+	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "=" && refillAt(w, node)) {
+		walkTargetParts(w, (node.data as BinaryExprData).left);
+		walkLockReads(w, (node.data as BinaryExprData).right, null);
+		return;
+	}
+	if (node.kind == NodeKind.CallExpr && refillAt(w, node)) {
+		walkTargetParts(w, ((node.data as CallExprData).callee.data as MemberExprData).object);
+		for (const a of (node.data as CallExprData).arguments) walkLockReads(w, a, null);
+		return;
+	}
+	const base = pathBase(node);
+	forEachChild(node, (child: Node): void => { walkLockReads(w, child, child == base ? (outer ?? node) : null); });
+}
+
+// A refilled target is written, not read; only the indexes along it are read.
+function walkTargetParts(w: LockWalk, target: Node | null): void {
+	let at = target;
+	while (at != null && at.kind != NodeKind.Identifier) {
+		if (at.kind == NodeKind.ArrayAccess) walkLockReads(w, (at.data as ArrayAccessData).index, null);
+		at = pathBase(at);
+	}
+}
+
+function routineBodyNode(routine: Node): Node | null {
+	if (routine.kind == NodeKind.TestDecl) return (routine.data as TestDeclData).testBody;
+	return routineBody(routine);
+}
+
+function aliasesOf(w: LockWalk, node: Node | null): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier && node.resolvedSym != null && !w.syms.has(node.resolvedSym)) {
+		const p = placeOf(w.scope, node);
+		if (p != null && p.root == w.moved.root) w.syms.add(node.resolvedSym);
+	}
+	forEachChild(node, (child: Node): void => { aliasesOf(w, child); });
+}
+
+function checkLockedMoves(ctx: CheckerContext, scan: MoveScan, locked: LockedMove[]): void {
+	for (const lm of locked) {
+		const body = routineBodyNode(lm.routine);
+		const scope = placeScope(lm.routine, body);
+		const arg = (lm.move.data as MoveExprData).moveArg;
+		const moved = placeOf(scope, arg);
+		const event = rootIdentOf(arg);
+		if (moved == null || moved.root == null || event == null || event.flowNode == null) continue;
+		if (ctx.capturedSyms.has(moved.root)) {
+			addOnce(ctx, `cannot move '${pathText(arg)}': a closure captures '${moved.root.name}', and the closure could read the moved slot before it is put back — move it out of a local the closure does not capture`, arg);
+			continue;
+		}
+		const w = new LockWalk(scope, moved, lm.move);
+		w.syms.add(moved.root);
+		aliasesOf(w, body);
+		walkLockReads(w, body, null);
+		w.reads.push({ ident: event, at: arg, place: moved });
+		const events = new HashMap<FlowNode, MoveEvent[]>();
+		events.set(event.flowNode, [{ at: event, sym: moved.root, owner: false }]);
+		const clean = new HashSet<FlowNode>();
+		for (const read of w.reads) {
+			if (read.ident.flowNode == null || overlap(moved, read.place, true) == Overlap.Disjoint) continue;
+			const taker = reachingMove(scan, read.ident, events, clean, (flow: FlowNode): boolean => flow.flags.has(FlowFlag.Assignment) && refillAt(w, flow.node));
+			if (taker == null) continue;
+			const where = `${lm.move.location.line}:${lm.move.location.column}`;
+			const message = overlap(moved, read.place, true) == Overlap.Contains
+				? `cannot use '${pathText(read.at)}': '${pathText(arg)}' was moved out of it at ${where} and is not put back yet — put a value back into '${pathText(arg)}' first`
+				: `cannot use '${pathText(read.at)}': '${pathText(arg)}' was moved out at ${where} and is not put back yet — write '${pathText(arg)}' first`;
+			addOnce(ctx, message, read.at);
+			break;
 		}
 	}
 }

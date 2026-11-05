@@ -1569,6 +1569,12 @@ export enum GcMode {
 	Manual,
 }
 
+// A move out of a slot with no default value, which the routine must not read again until it writes the slot back.
+export interface LockedMove {
+	move: Node;
+	routine: Node;
+}
+
 export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
@@ -1589,6 +1595,7 @@ export class CheckerContext {
 	identifierMoves: Node[];
 	refillTarget: Node | null;
 	refillValue: Node | null;
+	lockedMoves: LockedMove[];
 	staticInitBoundary: Cursor<Scope>;
 	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
@@ -1698,6 +1705,7 @@ export function createContext(): CheckerContext {
 		identifierMoves: [],
 		refillTarget: null,
 		refillValue: null,
+		lockedMoves: [],
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		hookBodyBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,

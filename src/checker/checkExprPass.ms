@@ -1363,7 +1363,7 @@ function elementSlotType(access: Node): Type | null {
 function refuseEmptiedSlot(ctx: CheckerContext, place: Node, move: Node): void {
 	const isField = place.kind == NodeKind.MemberExpr;
 	const slot = (isField ? declaredTypeOfLocation(place) : elementSlotType(place)) ?? place.nodeType;
-	if (!requiresInit(ctx, slot) || refilledInPlace(ctx, place, move)) return;
+	if (!requiresInit(ctx, slot) || refilledInPlace(ctx, place, move) || lockedUntilRefill(ctx, place, move)) return;
 	const holders: Type[] = [];
 	const root = ownedPathRoot(ctx, place, holders);
 	const body = root != null ? routineBodyOf(ctx.currentFunction) : null;
@@ -1397,6 +1397,18 @@ function refilledInPlace(ctx: CheckerContext, place: Node, move: Node): boolean 
 	if (moved == null || refilled == null || moved.root == null || ctx.capturedSyms.has(moved.root) || !ownsPathRoot(moved.rootKind)) return false;
 	if (overlap(moved, refilled, false) != Overlap.Same) return false;
 	return !touchedBeforeRefill(scope, value, move, moved);
+}
+
+// A move out of a path whose root the frame owns leaves the slot sharing the value; the routine may not read it,
+// anything inside it or its holders until it writes it back (checked after the routine, moveCheck.ms).
+function lockedUntilRefill(ctx: CheckerContext, place: Node, move: Node): boolean {
+	const routine = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
+	if (routine == null) return false;
+	const moved = placeOf(placeScope(routine, routineBodyOf(ctx.currentFunction)), place);
+	if (moved == null || moved.root == null || ctx.capturedSyms.has(moved.root)) return false;
+	if (moved.rootKind != RootKind.Local && moved.rootKind != RootKind.OwnedParam && moved.rootKind != RootKind.SinkParam) return false;
+	ctx.lockedMoves.push({ move, routine });
+	return true;
 }
 
 function ownsPathRoot(kind: RootKind): boolean {
