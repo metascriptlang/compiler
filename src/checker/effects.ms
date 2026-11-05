@@ -1294,14 +1294,17 @@ function lentToForeign(call: Node, what: BorrowSource, name: string, how: string
 function foreignSlotTakesNothing(formal: Type | null, actual: Type | null): boolean {
 	if (formal == null || formal.kind == TypeKind.Var) return false;
 	if (formal.kind == TypeKind.Sink || !holdsPointerByValue(formal, 0)) return true;
+	if (formal.kind == TypeKind.Array) return elementsValueOnly(formal, actual);
 	if (!isReadonlyView(formal)) return false;
-	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.Span || formal.kind == TypeKind.Ptr) {
-		let passed = actual;
-		while (passed != null && (passed.kind == TypeKind.Ref || passed.kind == TypeKind.Var) && passed.typeReturn != null) passed = passed.typeReturn;
-		const elem = formal.typeReturn != null && hasGenericParams(formal.typeReturn) && passed != null ? passed.typeReturn : formal.typeReturn;
-		return elem != null && elem.kind != TypeKind.Void && isValueOnlyType(elem);
-	}
+	if (formal.kind == TypeKind.Span || formal.kind == TypeKind.Ptr) return elementsValueOnly(formal, actual);
 	return formal.kind == TypeKind.Struct && formal.typeChildren.every((f: Type): boolean => isValueOnlyType(f));
+}
+
+function elementsValueOnly(formal: Type, actual: Type | null): boolean {
+	let passed = actual;
+	while (passed != null && (passed.kind == TypeKind.Ref || passed.kind == TypeKind.Var) && passed.typeReturn != null) passed = passed.typeReturn;
+	const elem = formal.typeReturn != null && hasGenericParams(formal.typeReturn) && passed != null ? passed.typeReturn : formal.typeReturn;
+	return elem != null && elem.kind != TypeKind.Void && isValueOnlyType(elem);
 }
 
 function paramStoreEffect(sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
