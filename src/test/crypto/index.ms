@@ -8,6 +8,7 @@ import "./chachaApiVectors";
 import "./coreApiVectors";
 import "./ecApiVectors";
 import "./ecdhApiSmoke";
+import "./ecdhInvalidApiVectors";
 import "./ed25519ApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
