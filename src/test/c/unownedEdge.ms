@@ -64,14 +64,19 @@ test "Unowned is a field type: a local, a parameter, a return or a static that n
 	assert emitted(head + "class S { static at: Unowned<N> | null = null; }\nconsole.log(S.at == null);\n").contains("Unowned<T> is the type of a class or struct field");
 }
 
-test "an Unowned edge inside an element or a type argument is refused until it is counted there" {
+test "an Unowned element of a field's own array is pushed on the second count and popped back strong" {
+	const body = "\nfunction f(h: H, n: N): int32 {\n\th.ups.push(n);\n\treturn h.ups.pop().id;\n}\nconsole.log(f(new H(), new N()));\n";
+	for (const field of ["Vec<Unowned<N>>", "Unowned<N>[]"]) {
+		const c = emitted(`class N { id: int32 = 1; }\nclass H { ups: ${field} = []; }` + body);
+		assert c.contains("msUnownedTake(n_p1)"), c;
+		assert c.contains("msUnownedGive("), c;
+	}
+}
+
+test "an Unowned edge deeper than a field's own array, or in a type argument, is refused until it is counted there" {
 	const head = "class N { id: int32 = 1; }\n";
-	const tail = "console.log(new H().ups.size >= 0);\n";
-	assert emitted(head + "class H { ups: Vec<Unowned<N>> = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
-	assert emitted(head + "class H { ups: Unowned<N>[] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
-	assert emitted(head + "class H { ups: Unowned<N>[][] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
-	assert emitted(head + "class H { ups: (Unowned<N> | null)[] = []; }\nconsole.log(new H().ups.length);\n").contains("an element or a type argument is not built yet");
-	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\n" + tail).contains("an element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: Unowned<N>[][] = []; }\nconsole.log(new H().ups.length);\n").contains("a deeper element or a type argument is not built yet");
+	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\nconsole.log(new H().ups.size >= 0);\n").contains("a deeper element or a type argument is not built yet");
 }
 
 test "a value holding an Unowned edge does not cross a thread by move, reply or spawn result" {
