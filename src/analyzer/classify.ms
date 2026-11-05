@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant } from "../checker/types";
+import { isUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -149,6 +149,9 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 	}
 	if (isUncountedElement(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
+	if (isUnownedSlot(elem)) {
+		return makeRcInfo(RcKind.Named, "", "msArrayUnownedRefDestroy", "msArrayUnownedRefCopy", "msArrayRefWasMoved", "msArrayUnownedRefSink", true);
 	}
 	if (isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache)) {
 		return makeRcInfo(RcKind.Named, "", "msArrayAcyclicRefDestroy", "msArrayAcyclicRefCopy", "msArrayRefWasMoved", "msArrayAcyclicRefSink", true);

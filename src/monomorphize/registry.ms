@@ -96,7 +96,8 @@ export function monoTypeKey(t: Readonly<Type | null>): string {
 export function monoTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null) return "null";
 	const key = monoTypeKeyBody(roots, t);
-	return t.typeFlags.has(TypeFlag.IsReadonly) ? "ro_" + key : key;
+	const counted = t.typeFlags.has(TypeFlag.IsUnowned) ? "unowned_" + key : key;
+	return t.typeFlags.has(TypeFlag.IsReadonly) ? "ro_" + counted : counted;
 }
 
 function monoDeclaredName(t: Readonly<Type>): string {

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion, isClassOrArrayRef } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, isUnownedSlot, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, isTagCarriedUnion, isClassOrArrayRef } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName, monoInstanceNameIn } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -244,7 +244,7 @@ export function arrayOpElement(elem: Readonly<Type | null>): Readonly<Type | nul
 export function opTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return opTypeKeyIn(roots, t.typeReturn);
-	if (t.kind == TypeKind.Array) return "array:" + opTypeKeyIn(roots, arrayOpElement(t.typeReturn));
+	if (t.kind == TypeKind.Array) return (isUnownedSlot(t.typeReturn) ? "array:unowned:" : "array:") + opTypeKeyIn(roots, arrayOpElement(t.typeReturn));
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
 		const counting = isAtomicRef(t) ? "atomic:" : "";
 		return (t.kind == TypeKind.Ref ? "ref:" : "ptr:") + counting + opTypeKeyIn(roots, t.typeReturn);
