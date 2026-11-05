@@ -3,6 +3,7 @@
 import "./aeadOracle";
 import "./aesApiVectors";
 import "./chachaApiVectors";
+import "./ed25519ApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
 import "./hmacBorrowedInputs";
