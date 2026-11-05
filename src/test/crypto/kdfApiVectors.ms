@@ -7,7 +7,11 @@ import {
 import { CryptoErrorKind } from "std/crypto/errors";
 import { hashKind } from "std/crypto/pure/hash";
 import { pbkdf2Of, hkdfOf } from "std/crypto/pure/hmac";
-import { encodeHex } from "std/core/encoding";
+import { encodeHex, decodeHex } from "std/core/encoding";
+import { readFile } from "std/fs";
+import {
+	JsonKind, asInt32, asString, at, getDynamicField, length, parseJson,
+} from "std/core/json";
 
 when (c) {
 	import {
@@ -149,6 +153,55 @@ when (c) {
 			assert hk.value.encodeHex() == vector.hkdf, vector.algorithm;
 		}
 	}
+}
+
+test "private HKDF API matches every pinned Wycheproof SHA case" {
+	const algorithms: HashAlgorithm[] = ["sha1", "sha256", "sha384", "sha512"];
+	let valid = 0;
+	let invalid = 0;
+	for (const algorithm of algorithms) {
+		const text = readFile(
+			`std/crypto/test/vectors/hkdf_${algorithm}_test.json`,
+		);
+		assert text.ok;
+		const parsed = parseJson(text.value);
+		assert parsed.ok;
+		const groups = parsed.value.getDynamicField("testGroups");
+		assert groups.kind == JsonKind.Array;
+		let count = 0;
+		for (let g = 0; g < groups.length(); g++) {
+			const tests = groups.at(g).getDynamicField("tests");
+			assert tests.kind == JsonKind.Array;
+			for (let t = 0; t < tests.length(); t++) {
+				const vector = tests.at(t);
+				const result = hkdfSync(algorithm,
+					vector.getDynamicField("ikm").asString().decodeHex(),
+					vector.getDynamicField("salt").asString().decodeHex(),
+					vector.getDynamicField("info").asString().decodeHex(),
+					vector.getDynamicField("size").asInt32());
+				const category = vector.getDynamicField("result").asString();
+				const id = vector.getDynamicField("tcId").asInt32();
+				assert category == "valid" || category == "invalid";
+				if (category == "valid") {
+					assert result.ok, `HKDF ${algorithm} tcId ${id}`;
+					assert result.value.encodeHex() ==
+						vector.getDynamicField("okm").asString(),
+						`HKDF output ${algorithm} tcId ${id}`;
+					valid++;
+				} else {
+					assert !result.ok, `HKDF accepted ${algorithm} tcId ${id}`;
+					assert result.error.kind == CryptoErrorKind.InvalidInput;
+					assert result.error.operation == "hkdf";
+					invalid++;
+				}
+				count++;
+			}
+		}
+		assert count == parsed.value.getDynamicField("numberOfTests").asInt32();
+		assert count == (algorithm == "sha1" ? 87 :
+			algorithm == "sha256" ? 86 : 83);
+	}
+	assert valid == 327 && invalid == 12;
 }
 
 test "private SHA-256 KDF remains the passing neighbour" {
