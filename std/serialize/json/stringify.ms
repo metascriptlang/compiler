@@ -1,7 +1,6 @@
 // MetaScript JSON2 — Serializer
 //
-// Two-path: compact (stringify) and pretty (stringifyPretty).
-// Recursive dispatch via match on value.kind.
+// Compact (stringify) and pretty (stringifyPretty) share one walk.
 
 import { JsonKind, JsonValue } from "./types";
 import { jsonNull, jsonBool, jsonNumber, jsonInt, jsonString, jsonArray, jsonObject } from "./builder";
@@ -13,11 +12,97 @@ import { jsonNull, jsonBool, jsonNumber, jsonInt, jsonString, jsonArray, jsonObj
 @compilerFunc
 export function stringify(value: JsonValue, color: boolean = false): string {
 	let out = "";
-	appendJson(out, value, color);
+	appendTree(out, value, color, false, 0);
 	return out;
 }
 
-function appendJson(ref out: string, value: JsonValue, color: boolean): void {
+// ===== Pretty Stringify =====
+
+export function stringifyPretty(value: JsonValue, indent: number): string {
+	let out = "";
+	appendTree(out, value, false, true, indent);
+	return out;
+}
+
+function appendTree(ref out: string, root: JsonValue, color: boolean, pretty: boolean, indent: number): void {
+	if (!appendOpening(out, root, color, pretty)) return;
+	const open: JsonValue[] = [root];
+	const next: int32[] = [0];
+	while (open.length > 0) {
+		const depth = open.length;
+		const i = next[depth - 1];
+		if (i < childCount(open[depth - 1])) {
+			if (i > 0) out += pretty ? ",\n" : color ? ", " : ",";
+			if (pretty) appendIndent(out, indent * depth);
+			next[depth - 1] = i + 1;
+			if (appendChild(out, open[depth - 1], i, color, pretty)) {
+				open.push(childAt(open[depth - 1], i));
+				next.push(0);
+			}
+			continue;
+		}
+		if (pretty) {
+			out += "\n";
+			appendIndent(out, indent * (depth - 1));
+		}
+		out += closer(open[depth - 1].kind == JsonKind.Object, color, pretty);
+		open.shrink(depth - 1);
+		next.shrink(depth - 1);
+	}
+}
+
+function appendChild(ref out: string, parent: JsonValue, i: int32, color: boolean, pretty: boolean): boolean {
+	if (parent.kind == JsonKind.Object) {
+		appendKey(out, parent.keys[i], color, pretty);
+		return appendOpening(out, parent.values[i], color, pretty);
+	}
+	if (parent.kind == JsonKind.Array) return appendOpening(out, parent.items[i], color, pretty);
+	return false;
+}
+
+function appendOpening(ref out: string, value: JsonValue, color: boolean, pretty: boolean): boolean {
+	if (childCount(value) == 0) {
+		appendLeaf(out, value, color);
+		return false;
+	}
+	out += opener(value.kind == JsonKind.Object, color, pretty);
+	return true;
+}
+
+function childAt(parent: JsonValue, i: int32): JsonValue {
+	if (parent.kind == JsonKind.Object) return parent.values[i];
+	if (parent.kind == JsonKind.Array) return parent.items[i];
+	return jsonNull();
+}
+
+function childCount(value: JsonValue): int32 {
+	if (value == null) return 0;
+	if (value.kind == JsonKind.Array) return value.items.length;
+	if (value.kind == JsonKind.Object) return value.keys.length;
+	return 0;
+}
+
+function opener(isObject: boolean, color: boolean, pretty: boolean): string {
+	if (!isObject) return pretty ? "[\n" : "[";
+	return pretty ? "{\n" : color ? "{ " : "{";
+}
+
+function closer(isObject: boolean, color: boolean, pretty: boolean): string {
+	if (!isObject) return "]";
+	return color && !pretty ? " }" : "}";
+}
+
+function appendKey(ref out: string, key: string, color: boolean, pretty: boolean): void {
+	if (color && !pretty) {
+		out += key;
+		out += ": ";
+		return;
+	}
+	appendEscaped(out, key);
+	out += pretty ? ": " : ":";
+}
+
+function appendLeaf(ref out: string, value: JsonValue, color: boolean): void {
 	if (value == null) {
 		out += color ? "\x1b[2mnull\x1b[0m" : "null";
 		return;
@@ -38,98 +123,14 @@ function appendJson(ref out: string, value: JsonValue, color: boolean): void {
 			appendEscaped(out, value.strVal);
 			if (color) out += "\x1b[0m";
 		},
-		JsonKind.Array => {
-			out += "[";
-			let i = 0;
-			while (i < value.items.length) {
-				if (i > 0) out += color ? ", " : ",";
-				appendJson(out, value.items[i], color);
-				i = i + 1;
-			}
-			out += "]";
-		},
-		JsonKind.Object => {
-			out += color ? "{ " : "{";
-			let i = 0;
-			while (i < value.keys.length) {
-				if (i > 0) out += color ? ", " : ",";
-				if (color) {
-					out += value.keys[i];
-					out += ": ";
-				} else {
-					appendEscaped(out, value.keys[i]);
-					out += ":";
-				}
-				appendJson(out, value.values[i], color);
-				i = i + 1;
-			}
-			out += color ? " }" : "}";
-		},
 		JsonKind.Int => {
 			if (color) out += "\x1b[33m";
 			out += value.intVal.toString();
 			if (color) out += "\x1b[0m";
 		},
-		JsonKind.Null => { out += color ? "\x1b[2mnull\x1b[0m" : "null"; },
+		JsonKind.Array => { out += "[]"; },
+		JsonKind.Object => { out += color ? "{  }" : "{}"; },
 		_ => { out += color ? "\x1b[2mnull\x1b[0m" : "null"; },
-	};
-}
-
-// ===== Pretty Stringify =====
-
-export function stringifyPretty(value: JsonValue, indent: number): string {
-	let out = "";
-	appendPretty(out, value, indent, 0);
-	return out;
-}
-
-function appendPretty(ref out: string, value: JsonValue, indent: number, depth: number): void {
-	if (value == null) {
-		out += "null";
-		return;
-	}
-	match (value.kind) {
-		JsonKind.Bool => { out += value.boolVal ? "true" : "false"; },
-		JsonKind.Number => { out += jsonNumberStr(value.numVal); },
-		JsonKind.Int => { out += value.intVal.toString(); },
-		JsonKind.String => { appendEscaped(out, value.strVal); },
-		JsonKind.Array => {
-			if (value.items.length == 0) {
-				out += "[]";
-				return;
-			}
-			out += "[\n";
-			let i = 0;
-			while (i < value.items.length) {
-				if (i > 0) out += ",\n";
-				appendIndent(out, indent * (depth + 1));
-				appendPretty(out, value.items[i], indent, depth + 1);
-				i = i + 1;
-			}
-			out += "\n";
-			appendIndent(out, indent * depth);
-			out += "]";
-		},
-		JsonKind.Object => {
-			if (value.keys.length == 0) {
-				out += "{}";
-				return;
-			}
-			out += "{\n";
-			let i = 0;
-			while (i < value.keys.length) {
-				if (i > 0) out += ",\n";
-				appendIndent(out, indent * (depth + 1));
-				appendEscaped(out, value.keys[i]);
-				out += ": ";
-				appendPretty(out, value.values[i], indent, depth + 1);
-				i = i + 1;
-			}
-			out += "\n";
-			appendIndent(out, indent * depth);
-			out += "}";
-		},
-		_ => { out += "null"; },
 	};
 }
 
@@ -357,6 +358,20 @@ test "stringifyPretty nested with indent 2" {
 	const vals: JsonValue[] = [jsonArray([jsonNumber(1), jsonObject(["x"], [jsonString("y")])]), jsonArray([]), jsonObject([], [])];
 	const want = "{\n  \"a\": [\n    1,\n    {\n      \"x\": \"y\"\n    }\n  ],\n  \"e\": [],\n  \"o\": {}\n}";
 	assert stringifyPretty(jsonObject(keys, vals), 2) == want;
+}
+
+test "stringify writes a tree nested past the parse limit without running out of stack" {
+	let v = jsonInt(1);
+	for (let i = 0; i < 3000; i = i + 1) v = jsonObject(["a"], [jsonArray([v])]);
+	assert stringify(v).length == 3000 * 8 + 1;
+	assert stringify(v, true).length == 3000 * 9 + 10;
+	assert stringifyPretty(jsonArray([jsonArray([jsonInt(1)])]), 1) == "[\n [\n  1\n ]\n]";
+}
+
+test "stringify color mode writes empty containers as the walk opens and closes them" {
+	assert stringify(jsonObject([], []), true) == "{  }";
+	assert stringify(jsonArray([]), true) == "[]";
+	assert stringifyPretty(jsonObject(["a"], [jsonArray([])]), 2) == "{\n  \"a\": []\n}";
 }
 
 test "stringifyPretty scalars and non-finite" {
