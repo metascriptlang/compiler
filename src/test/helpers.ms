@@ -148,8 +148,8 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
-	inferRaises([analyzed]);
 	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
+	inferRaises([lowered]);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(lowered, checkerCtx, modPath, aliveSet));
