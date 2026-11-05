@@ -1254,14 +1254,17 @@ function newViewArgEffect(newNode: Node): EffectCause | null {
 function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[], name: string): EffectCause | null {
 	for (let i = 0; i < passed.length; i += 1) {
 		const what = borrowedOf(passed[i]);
-		if (what == null) continue;
+		const lent = what ?? castBorrow(passed[i]);
+		if (lent == null) continue;
 		for (const t of targets) {
 			if (isExternalRoutine(t)) {
+				if (isStdBuiltinWritingNothing(t)) continue;
 				const sig = call.kind == NodeKind.CallExpr && t == targets[0] ? calledRoutineType(call) : t.symbolType;
 				const formal = sig != null && i < sig.typeChildren.length ? sig.typeChildren[i] : null;
-				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType)) return lentToForeign(call, what, name, "through a parameter of type '" + typeNameOf(formal) + "'");
+				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType)) return lentToForeign(call, lent, name, "through a parameter of type '" + typeNameOf(formal) + "'");
 				continue;
 			}
+			if (what == null) continue;
 			const decl = unpackDecl(t.declNode);
 			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
 			const c = i < params.length ? paramStoreEffect(t, decl!, i, params[i]) : null;
@@ -1269,6 +1272,16 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 		}
 	}
 	return null;
+}
+
+function castBorrow(arg: Node | null): BorrowSource | null {
+	if (arg == null) return null;
+	let cur = peelConv(arg);
+	if (cur.kind != NodeKind.TypeAssertion && cur.kind != NodeKind.HiddenAddr) return null;
+	while (cur.kind == NodeKind.TypeAssertion || cur.kind == NodeKind.HiddenAddr) {
+		cur = peelConv(cur.kind == NodeKind.TypeAssertion ? (cur.data as TypeAssertionData).asExpr : (cur.data as HiddenDerefData).expr);
+	}
+	return borrowedOf(cur);
 }
 
 const FOREIGN_ADVICE = "C may count or write what it receives there while another thread reads the same value, so pass an explicit copy (clone or spread), or declare that parameter Readonly over value-only data when C only reads it";
@@ -1279,8 +1292,8 @@ function lentToForeign(call: Node, what: BorrowSource, name: string, how: string
 }
 
 function foreignSlotTakesNothing(formal: Type | null, actual: Type | null): boolean {
-	if (formal == null || formal.kind == TypeKind.Var || formal.kind == TypeKind.Sink) return false;
-	if (!holdsPointerByValue(formal, 0)) return true;
+	if (formal == null || formal.kind == TypeKind.Var) return false;
+	if (formal.kind == TypeKind.Sink || !holdsPointerByValue(formal, 0)) return true;
 	if (!isReadonlyView(formal)) return false;
 	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.Span || formal.kind == TypeKind.Ptr) {
 		let passed = actual;
