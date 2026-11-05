@@ -4091,7 +4091,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		const substitutedValue = skipModifier(substituted);
 		if (substitutedValue != null && instantiatedUnionBehind(substitutedValue).kind == TypeKind.Union && arg.nodeType != null) {
-			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType, ctx);
+			let uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType, ctx);
+			if (uw == null as unknown as Node) uw = fitNumericIntoUnion(ctx, arg, arg.nodeType, substitutedValue);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;
 				if (pi < argTypes.length) argTypes[pi] = substitutedValue;
