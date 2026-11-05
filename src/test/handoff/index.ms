@@ -102,6 +102,7 @@ import "./comptimeHostEffects";
 import "./comptimeMacroValues";
 import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
+import "./icDispatchReads";
 import "./bitSetCaseLabel";
 import "./destructuringRestLast";
 import "./destructuringWriteTargets";

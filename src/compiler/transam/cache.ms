@@ -10,6 +10,7 @@ import {
 	TaQueryKind,
 	TaQueryState,
 	createQueryKey,
+	queryKeysEqual,
 } from "./revision";
 import { TaCacheEntry, createCacheEntry } from "./query";
 
@@ -163,6 +164,26 @@ export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 	}
 	evictAt(cache, positionOf(cache.entries, entry));
 	return true;
+}
+
+export function cacheInvalidateReaders(cache: TaCacheStore, key: TaQueryKey): void {
+	const pending: TaQueryKey[] = [key];
+	while (pending.length > 0) {
+		const changed = pending.pop()!;
+		for (let i = cache.entries.length - 1; i >= 0; i -= 1) {
+			const entry = cache.entries[i];
+			let reads = false;
+			for (const dep of entry.dependencies) {
+				if (queryKeysEqual(dep, changed)) {
+					reads = true;
+					break;
+				}
+			}
+			if (!reads) continue;
+			pending.push(entry.key);
+			cacheRemove(cache, entry.key);
+		}
+	}
 }
 
 // ===== Tests =====

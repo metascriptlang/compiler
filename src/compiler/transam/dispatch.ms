@@ -9,7 +9,9 @@ import {
 	createStruct, createRef, createFunction, stringType,
 } from "../../checker/types";
 import { dispatchDigest } from "./digest";
-import { TaCacheStore, cacheGet, createCacheStore } from "./cache";
+import {
+	TaCacheStore, cacheGet, createCacheStore, cacheInvalidateReaders,
+} from "./cache";
 import {
 	TaFileInputStore, getFileId, createFileInputStore, setFileText,
 } from "./fileInput";
@@ -63,8 +65,12 @@ function publishFamily(
 	const row = store.families.get(name);
 	const output = row != null ? row.output : "";
 	const previous = cacheGet(cache, key);
-	const changedAt = previous != null && store.outputs.get(name) == output
+	const equal = store.outputs.get(name) == output;
+	const changedAt = previous != null && equal
 		? previous.changedAt : store.revision;
+	if (!equal) {
+		cacheInvalidateReaders(cache, key);
+	}
 	pushFrame(stack, key);
 	if (row != null) {
 		for (const path of row.modules) {
@@ -160,6 +166,7 @@ export function trackDispatchReads(
 			publishFamily(store, name, id, cache, inputs, stack);
 		}
 		recordDependency(stack, key);
+		recordDurability(stack, TaDurability.Low);
 	});
 }
 
