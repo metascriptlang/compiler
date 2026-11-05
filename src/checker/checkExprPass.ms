@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag,
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { genericParamsOf, unownedSlotOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedNumberDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound } from "./types";
+import { genericParamsOf, unownedSlotOf, isOwnedRef, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedNumberDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
 import { stdSymbol, markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, routineFlags, routineSuspends, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
@@ -1407,8 +1407,51 @@ function lockedUntilRefill(ctx: CheckerContext, place: Node, move: Node): boolea
 	const moved = placeOf(placeScope(routine, routineBodyOf(ctx.currentFunction)), place);
 	if (moved == null || moved.root == null || ctx.capturedSyms.has(moved.root)) return false;
 	if (moved.rootKind != RootKind.Local && moved.rootKind != RootKind.OwnedParam && moved.rootKind != RootKind.SinkParam) return false;
+	const holders: Type[] = [];
+	if (!reachedOnlyThroughOwners(place, holders) || destroyHookReuse(holders, "") != "") return false;
 	ctx.lockedMoves.push({ move, routine });
 	return true;
+}
+
+function reachedOnlyThroughOwners(place: Node, holders: Type[]): boolean {
+	let n = place;
+	while (true) {
+		while (n.kind == NodeKind.MemberExpr || n.kind == NodeKind.ArrayAccess) {
+			const holder = pathHolder(n.kind == NodeKind.MemberExpr ? (n.data as MemberExprData).object : (n.data as ArrayAccessData).array);
+			const stored = storageType(holder);
+			if (stored != null) holders.push(stored);
+			if (holder.kind != NodeKind.Identifier && !holdsInPlaceOrOwns(stored)) return false;
+			n = holder;
+		}
+		const aliased = n.kind == NodeKind.Identifier ? aliasedPath(n) : null;
+		if (aliased == null) return n.kind == NodeKind.Identifier;
+		if (!holdsInPlaceOrOwns(storageType(n))) return false;
+		n = aliased;
+	}
+}
+
+function pathHolder(at: Node): Node {
+	let holder = at;
+	while (holder.kind == NodeKind.HiddenDeref || holder.kind == NodeKind.HiddenSubConv || holder.kind == NodeKind.HiddenStdConv || holder.kind == NodeKind.TypeAssertion) {
+		holder = holder.kind == NodeKind.HiddenDeref ? (holder.data as HiddenDerefData).expr
+			: holder.kind == NodeKind.TypeAssertion ? (holder.data as TypeAssertionData).asExpr
+			: (holder.data as HiddenStdConvData).convExpr;
+	}
+	return holder;
+}
+
+function aliasedPath(local: Node): Node | null {
+	const decl = local.resolvedSym != null ? local.resolvedSym.declNode : null;
+	const init = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
+	const path = init != null ? pathHolder(init) : null;
+	return path != null && (path.kind == NodeKind.MemberExpr || path.kind == NodeKind.ArrayAccess) ? path : null;
+}
+
+function holdsInPlaceOrOwns(t: Type | null): boolean {
+	const held = skipModifier(t);
+	if (held == null) return false;
+	if (heldByValue(held) || isOwnedRef(held)) return true;
+	return held.kind == TypeKind.Union && held.typeChildren.every((m: Type): boolean => m.kind == TypeKind.Null || isOwnedRef(m));
 }
 
 function ownsPathRoot(kind: RootKind): boolean {
