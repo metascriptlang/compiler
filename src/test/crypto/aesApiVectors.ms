@@ -83,6 +83,59 @@ test "private AES GCM API checks supported Wycheproof cases and refusals" {
 		parsed.value.getDynamicField("numberOfTests").asInt32();
 }
 
+test "private AES CBC API checks supported Wycheproof padding cases" {
+	const text = readFile("std/crypto/test/vectors/aes_cbc_pkcs5_test.json");
+	assert text.ok;
+	const parsed = parseJson(text.value);
+	assert parsed.ok;
+	const groups = parsed.value.getDynamicField("testGroups");
+	assert groups.kind == JsonKind.Array;
+	let valid = 0;
+	let invalid = 0;
+	let unsupportedKey = 0;
+	for (let g = 0; g < groups.length(); g++) {
+		const tests = groups.at(g).getDynamicField("tests");
+		assert tests.kind == JsonKind.Array;
+		for (let t = 0; t < tests.length(); t++) {
+			const vector = tests.at(t);
+			const raw = vector.getDynamicField("key").asString().decodeHex();
+			const key = AesKey.import(raw);
+			if (raw.length == 24) {
+				assert !key.ok;
+				assert key.error.kind == CryptoErrorKind.InvalidKey;
+				unsupportedKey++;
+				continue;
+			}
+			assert raw.length == 16 || raw.length == 32;
+			assert key.ok;
+			const iv = vector.getDynamicField("iv").asString().decodeHex();
+			assert iv.length == 16;
+			const cipherHex = vector.getDynamicField("ct").asString();
+			const cipher = cipherHex.decodeHex();
+			const opened = cbcDecryptSync(key.value, cipher, iv);
+			const category = vector.getDynamicField("result").asString();
+			const id = vector.getDynamicField("tcId").asInt32();
+			assert category == "valid" || category == "invalid";
+			if (category == "valid") {
+				const plain = vector.getDynamicField("msg").asString();
+				assert opened.ok, `AES CBC tcId ${id}`;
+				assert opened.value.encodeHex() == plain;
+				assert must(cbcEncryptSync(key.value, plain.decodeHex(), iv))
+					.encodeHex() == cipherHex;
+				valid++;
+			} else {
+				assert !opened.ok, `AES CBC accepted tcId ${id}`;
+				assert opened.error.kind == CryptoErrorKind.DecryptionFailed;
+				invalid++;
+			}
+			assert cipher.encodeHex() == cipherHex;
+		}
+	}
+	assert valid == 48 && invalid == 96 && unsupportedKey == 72;
+	assert valid + invalid + unsupportedKey ==
+		parsed.value.getDynamicField("numberOfTests").asInt32();
+}
+
 test "private AES API opens the NIST empty GCM vector" {
 	const key = must(AesKey.import(new Array<uint8>(16)));
 	const sealed = (
