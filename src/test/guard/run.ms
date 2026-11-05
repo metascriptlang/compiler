@@ -463,7 +463,22 @@ function runOsLane(probe: Probe): void {
 		return;
 	}
 	ok(tag);
-	if (probe.wantAsan) runOsAsanLane(probe);
+	if (probe.wantAsan) {
+		const exe = binExecutable(bin);
+		if (exe == "") {
+			fail(tag, `build reported success but no binary at ${bin}`);
+			return;
+		}
+		const run = execFileResult(exe, []);
+		const merged = both(run);
+		writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.out`, merged);
+		if (!succeeded(run) || !merged.contains("GUARD-OK")) {
+			fail(`${tag} run`, statusWithReasons(run));
+			return;
+		}
+		ok(`${tag} run`);
+		runOsAsanLane(probe);
+	}
 }
 
 // A bare binary runs on the host, where ASan refuses the overlapping copy an SBF syscall refuses.
