@@ -85,10 +85,13 @@ function privateOfPem(pem: string): EcPrivateData | null {
 	} else if (block.label == "EC PRIVATE KEY") {
 		data = ecPrivateFromSec1(block.der, curves());
 	}
+	wipeBytes(block.der);
 	if (data == null) return null;
 	const point = ecPublicPoint(data.curve, data.d);
-	if (point == null) return null;
-	if (data.point.length > 0 && !sameBytes(data.point, point)) return null;
+	if (point == null || (data.point.length > 0 && !sameBytes(data.point, point))) {
+		wipeBytes(data.d);
+		return null;
+	}
 	return { curve: data.curve, d: data.d, point };
 }
 
@@ -166,7 +169,12 @@ export class EcPrivateKey {
 	}
 
 	exportPemSync(): Result<string, CryptoError> {
-		return Result.ok(pemEncode("EC PRIVATE KEY", ecPrivateToSec1(this._data)));
+		const der = ecPrivateToSec1(this._data);
+		try {
+			return Result.ok(pemEncode("EC PRIVATE KEY", der));
+		} finally {
+			wipeBytes(der);
+		}
 	}
 
 	async exportPem(): Promise<Result<string, CryptoError>> {
