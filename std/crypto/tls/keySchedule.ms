@@ -3,7 +3,7 @@
  * Derive-Secret and the traffic key and IV of a secret.
  */
 
-import { newHmac, updateHmac, finishHmacInto, hmacOf } from "../pure/hmac";
+import { newHmac, updateHmac, finishHmacInto, hmacOf, wipeHmac } from "../pure/hmac";
 import { hashOf } from "../pure/hash";
 import { newHashState } from "../pure/state";
 import { wipeBytes } from "../pure/secret";
@@ -49,6 +49,7 @@ export function hkdfExpand(
 		index += 1;
 	}
 	wipeBytes(block);
+	wipeHmac(hmac);
 	return out;
 }
 
