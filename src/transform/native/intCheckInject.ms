@@ -267,6 +267,24 @@ function ownWidthName(prefix: string, t: Type): string {
 	return prefix + suffix;
 }
 
+const INT_CHECK_HELPERS: HashSet<string> = intCheckHelperNames();
+
+function intCheckHelperNames(): HashSet<string> {
+	const names = new HashSet<string>();
+	for (const name of ["msAddAssign", "msSubAssign", "msMulAssign", "msPostInc", "msPostDec"]) names.add(name);
+	for (const prefix of ["msAdd", "msSub", "msMul", "msNeg", "msDiv", "msMod", "msDivAssign", "msModAssign"]) {
+		for (const suffix of ["I8", "I16", "I32", "I64", "U32", "U64"]) names.add(prefix + suffix);
+	}
+	return names;
+}
+
+export function isIntCheckCall(n: Node): boolean {
+	const sym = n.kind == NodeKind.CallExpr ? n.resolvedSym : null;
+	if (sym == null) return false;
+	const name = sym.nativeName != "" ? sym.nativeName : sym.name;
+	return INT_CHECK_HELPERS.has(name) && isRuntimeProcSym(sym, name);
+}
+
 function helperKind(t: Type): TypeKind {
 	if (is64Kind(t.kind)) return t.kind;
 	return isSignedKind(t.kind) ? TypeKind.Int32 : TypeKind.Uint32;

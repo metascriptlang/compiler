@@ -1,7 +1,9 @@
 // A loop holding no call, no array-variable assignment and no `.length` write cannot change any array
 // header, so its arrays are read through a local Span. Admitting any other node kind here breaks
-// that rule: a header change inside the loop would go unseen. The one call admitted goes through a
-// const closure with no env whose routine body keeps the same rule, touches no array and calls nothing.
+// that rule: a header change inside the loop would go unseen. The calls admitted are an integer check
+// (it reads and writes scalars or an element, and raises), and one through a const closure with no env
+// whose routine body keeps the same rule, touches no array and calls nothing. A checked build caches
+// only a loop that stores an element: a read-only loop gains nothing, and its reduction is blockReduce's.
 
 import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData, CallExprData, FunctionDeclData, ReturnStmtData } from "../../ast/node";
 import { isRoutineNode } from "../../ast/shape";
@@ -14,6 +16,7 @@ import { arraySpanLiteral } from "../lowering/spanLower";
 import { isArrayLengthGuard } from "../lowering/forOfLower";
 import { extractBodyStmts } from "../util";
 import { closureFunction } from "./hcrIndirect";
+import { isIntCheckCall } from "./intCheckInject";
 
 class Cached {
 	array: Symbol;
@@ -32,10 +35,10 @@ class LoopCache {
 }
 
 export function lowerLoopSpans(program: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend || ctx.raiserBackend || ctx.boundChecks) return program;
+	if (ctx.jsBackend || ctx.raiserBackend) return program;
 	const st: LoopCache = { ctx, bound: createSymSet(), cached: [], closures: new HashMap<Symbol, Symbol>(), routines: new HashMap<Symbol, Node>(), inCallee: false };
 	collectCallees(program, st);
-	dropProvenLengthGuards(program, st);
+	if (!ctx.boundChecks) dropProvenLengthGuards(program, st);
 	scan(program, st);
 	return program;
 }
@@ -134,7 +137,18 @@ function scanStatements(stmts: Node[], st: LoopCache): Node[] {
 function cachesDeclaredArrays(loop: Node, st: LoopCache): boolean {
 	st.cached = [];
 	if (!isHeaderStable(loop, st)) return false;
-	return st.cached.length > 0;
+	return st.cached.length > 0 && (!st.ctx.boundChecks || storesElement(loop));
+}
+
+function storesElement(n: Node): boolean {
+	if (n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) && (n.data as BinaryExprData).left.kind == NodeKind.ArrayAccess) return true;
+	if (n.kind == NodeKind.UpdateExpr && (n.data as UpdateExprData).updateArg.kind == NodeKind.ArrayAccess) return true;
+	if (isIntCheckCall(n) && (n.data as CallExprData).arguments.length > 0 && (n.data as CallExprData).arguments[0].kind == NodeKind.ArrayAccess) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && storesElement(c)) found = true;
+	});
+	return found;
 }
 
 function isScalar(t: Type | null): boolean {
@@ -243,6 +257,7 @@ function isHeaderStable(n: Node, st: LoopCache): boolean {
 		const arg = (n.data as UpdateExprData).updateArg;
 		return (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.ArrayAccess) && isHeaderStable(arg, st);
 	}
+	if (isIntCheckCall(n)) return argumentsHeaderStable(n, st);
 	if (n.kind == NodeKind.CallExpr) return isStableCall(n, st);
 	if (n.kind == NodeKind.ConditionalExpr) return allHeaderStable(n, st);
 	if (n.kind == NodeKind.TypeAssertion) return isScalar(n.nodeType) && allHeaderStable(n, st);
@@ -250,6 +265,13 @@ function isHeaderStable(n: Node, st: LoopCache): boolean {
 		return isScalar((n.data as HiddenStdConvData).convType) && allHeaderStable(n, st);
 	}
 	return false;
+}
+
+function argumentsHeaderStable(n: Node, st: LoopCache): boolean {
+	for (const a of (n.data as CallExprData).arguments) {
+		if (!isHeaderStable(a, st)) return false;
+	}
+	return true;
 }
 
 function spanDecl(c: Cached, at: Node): Node {
