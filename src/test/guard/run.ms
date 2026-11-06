@@ -487,6 +487,7 @@ function runOsAsanLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os} asan]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}.asan`;
 	const args = ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`];
+	for (const arg of probe.osArgs) args.push(arg);
 	for (const arg of addressSanitizerArgs(`${OUT}/san`)) args.push(arg);
 	const b = buildProbe(probe, `${probe.os} asan`, args, `${LOG_DIR}/${probe.name}.${probe.os}.asan.build`);
 	if (!succeeded(b)) {
