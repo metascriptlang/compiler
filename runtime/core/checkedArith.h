@@ -192,6 +192,21 @@ MS_RANGE_SUM_BLOCK_(I64, int64_t, INT64_MIN, INT64_MAX, I64, int64_t)
 #define msRangeSumFitsI64I32(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I32_, acc, a, b, e, lo, hi, tmax, sub)
 #define msRangeSumFitsI64I64(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I64_, acc, a, b, e, lo, hi, tmax, sub)
 
+#define MS_SPAN_MAP_BLOCK_(E, ET) \
+static inline int msSpanMapFits##E##_(int64_t len, const ET* p, int64_t b, int64_t e, int64_t lo, int64_t hi) { \
+	if (b < 0 || e > len || e <= b) return 0; \
+	ET mn = p[b], mx = p[b]; \
+	for (int64_t i = b + 1; i < e; i++) { mn = p[i] < mn ? p[i] : mn; mx = p[i] > mx ? p[i] : mx; } \
+	return mn >= lo && mx <= hi; \
+}
+MS_SPAN_MAP_BLOCK_(I8, int8_t)
+MS_SPAN_MAP_BLOCK_(I16, int16_t)
+MS_SPAN_MAP_BLOCK_(I32, int32_t)
+#define msSpanMapFits_(fn, s, d, b, e, lo, hi) fn((s).len < (d).len ? (s).len : (d).len, (s).data, (b), (e), (lo), (hi))
+#define msSpanMapFitsI8(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI8_, s, d, b, e, lo, hi)
+#define msSpanMapFitsI16(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI16_, s, d, b, e, lo, hi)
+#define msSpanMapFitsI32(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI32_, s, d, b, e, lo, hi)
+
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
 	if (acc > max) return 0;
 	return term <= (max - acc) / (uint64_t)n;
