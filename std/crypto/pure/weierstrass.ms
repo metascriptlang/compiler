@@ -121,7 +121,10 @@ function privateFromSec1(buf: Readonly<uint8[]>, seq: DerItem, outer: Curve | nu
 	let point: uint8[] = [];
 	if (bits != null) {
 		const found = pointAt(buf, bits, curve);
-		if (found == null) return null;
+		if (found == null) {
+			wipeBytes(d);
+			return null;
+		}
 		point = found;
 	}
 	return { curve, d, point };
@@ -150,10 +153,13 @@ export function ecPrivateFromPkcs8(der: Readonly<uint8[]>, curves: Readonly<Curv
 }
 
 function sec1Body(key: EcPrivateData, withParameters: boolean): uint8[] {
-	const parts: uint8[][] = [derSmallInteger(1), derOctets(key.d)];
+	const secret = derOctets(key.d);
+	const parts: uint8[][] = [derSmallInteger(1), secret];
 	if (withParameters) parts.push(derTlv(0xa0, derOidOf(key.curve.oid)));
 	if (key.point.length > 0) parts.push(derTlv(0xa1, derBits(key.point)));
-	return derSequence(parts);
+	const out = derSequence(parts);
+	wipeBytes(secret);
+	return out;
 }
 
 export function ecPrivateToSec1(key: EcPrivateData): uint8[] {
@@ -162,7 +168,12 @@ export function ecPrivateToSec1(key: EcPrivateData): uint8[] {
 
 export function ecPrivateToPkcs8(key: EcPrivateData): uint8[] {
 	const algorithm = derSequence([derOidOf(oidEcPublicKey()), derOidOf(key.curve.oid)]);
-	return derSequence([derSmallInteger(0), algorithm, derOctets(sec1Body(key, false))]);
+	const inner = sec1Body(key, false);
+	const octets = derOctets(inner);
+	const out = derSequence([derSmallInteger(0), algorithm, octets]);
+	wipeBytes(inner);
+	wipeBytes(octets);
+	return out;
 }
 
 /** DER writes an integer in its fewest bytes: a leading zero only before a byte with the top bit set. */
@@ -236,7 +247,25 @@ function sharedSecret(c: Readonly<Curve>, d: Readonly<uint8[]>, point: Readonly<
 	const shared = mulSecret(c.math, peer, d);
 	if (shared == null) return null;
 	const xy = affineBytes(c.math, shared);
-	return xy == null ? null : xy[0];
+	if (xy == null) return null;
+	wipeBytes(xy[1]);
+	return xy[0];
+}
+
+/** K = HMAC_K(parts joined), clearing the joined input and the old K. */
+function rekey(kind: int32, k: uint8[], parts: Readonly<uint8[]>[]): uint8[] {
+	const input = derJoin(parts);
+	const next = hmacOf(kind, k, input);
+	wipeBytes(input);
+	wipeBytes(k);
+	return next;
+}
+
+/** V = HMAC_K(V), clearing the old V. */
+function restep(kind: int32, k: Readonly<uint8[]>, v: uint8[]): uint8[] {
+	const next = hmacOf(kind, k, v);
+	wipeBytes(v);
+	return next;
 }
 
 /** The RFC 6979 nonce as `size` bytes, in [1, n). */
@@ -246,15 +275,15 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 	let v = new Array<uint8>(size);
 	v.fill(1);
 	let k = new Array<uint8>(size);
-	k = hmacOf(kind, k, derJoin([v, [0], seed]));
-	v = hmacOf(kind, k, v);
-	k = hmacOf(kind, k, derJoin([v, [1], seed]));
-	v = hmacOf(kind, k, v);
+	k = rekey(kind, k, [v, [0], seed]);
+	v = restep(kind, k, v);
+	k = rekey(kind, k, [v, [1], seed]);
+	v = restep(kind, k, v);
 	wipeBytes(seed);
 	while (true) {
 		const stream: uint8[] = [];
 		while (stream.length < c.size) {
-			v = hmacOf(kind, k, v);
+			v = restep(kind, k, v);
 			for (const b of v) stream.push(b);
 		}
 		const candidate = leftmost(c.size, stream);
@@ -265,8 +294,8 @@ function nonceFor(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest:
 			return candidate;
 		}
 		wipeBytes(candidate);
-		k = hmacOf(kind, k, derJoin([v, [0]]));
-		v = hmacOf(kind, k, v);
+		k = rekey(kind, k, [v, [0]]);
+		v = restep(kind, k, v);
 	}
 }
 
@@ -380,6 +409,7 @@ export function ecDrawScalar(c: Readonly<Curve>): uint8[] | null {
 		const bytes = drawBytes(c.size);
 		if (bytes == null) return null;
 		if (secretScalar(c, bytes) != null) return bytes;
+		wipeBytes(bytes);
 	}
 }
 
