@@ -26,7 +26,7 @@ when (c) {
 		RsaPublicKey as NativePublicKey,
 		signSync as nativeSign, verifySync as nativeVerify,
 		encryptSync as nativeEncrypt, decryptSync as nativeDecrypt,
-	} from "std/crypto/rsa";
+	} from "std/crypto/oracle/rsa";
 }
 
 function must<T>(sink result: Result<T, CryptoError>): T {
@@ -228,10 +228,10 @@ test "private RSA PKCS1 verify API checks all 776 pinned Wycheproof cases" {
 	assert valid == 24 && invalid == 749 && acceptable == 3;
 }
 
-test "private RSA key API preserves every native PEM format" {
+test "private RSA key API writes the PKCS#1 PEM the vendor writes, from either import format" {
 	for (const pem of [keyAPkcs8, keyAPkcs1]) {
 		const key = must(RsaPrivateKey.importPemSync(pem));
-		assert must(key.exportPemSync()) == keyAPkcs8;
+		assert must(key.exportPemSync()) == keyAPkcs1;
 		assert must(key.publicKey().exportPemSync()) == keyASpki;
 	}
 	for (const pem of [keyASpki, keyAPkcs1Public]) {
@@ -378,7 +378,7 @@ test "private RSA OAEP preserves binary inputs and enforces payload limit" {
 test "private RSA async surface matches sync for UTF8 and NUL bytes" {
 	const key = must(await RsaPrivateKey.importPem(keyAPkcs1));
 	const publicKey = must(await RsaPublicKey.importPem(keyAPkcs1Public));
-	assert must(await key.exportPem()) == keyAPkcs8;
+	assert must(await key.exportPem()) == keyAPkcs1;
 	assert must(await publicKey.exportPem()) == keyASpki;
 	const text = "hé\0😀";
 	const signature = must(await sign(key, text));

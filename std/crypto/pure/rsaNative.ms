@@ -7,7 +7,7 @@ import { rsaWipePrivate } from "./rsaKey";
 import {
 	RsaPublicData, RsaPrivateData,
 	rsaPublicFromPkcs1, rsaPublicFromSpki, rsaPublicToSpki,
-	rsaPrivateFromPkcs1, rsaPrivateFromPkcs8, rsaPrivateToPkcs8,
+	rsaPrivateFromPkcs1, rsaPrivateFromPkcs8, rsaPrivateToPkcs1,
 	rsaPublicOf, rsaGenerate, rsaSignPkcs1, rsaSignPss,
 	rsaVerifyPkcs1, rsaVerifyPss, rsaOaepEncrypt, rsaOaepDecrypt,
 } from "./rsa";
@@ -139,9 +139,9 @@ export class RsaPrivateKey {
 				"RsaPrivateKey.exportPem", "failed to export private key",
 			));
 		}
-		const der = rsaPrivateToPkcs8(data);
+		const der = rsaPrivateToPkcs1(data);
 		try {
-			return Result.ok(pemEncode("PRIVATE KEY", der));
+			return Result.ok(pemEncode("RSA PRIVATE KEY", der));
 		} finally {
 			wipeBytes(der);
 		}
