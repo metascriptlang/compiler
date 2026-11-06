@@ -12,7 +12,7 @@ import {
 	invert, pow, fromBytes, toBytes, toMontgomery, fromMontgomery,
 } from "./montgomery";
 import { declassify, valueBarrier } from "./secret";
-import { p256Windows, p384Windows } from "./pcurveBaseTable";
+import { p256Windows, p384Windows, p256Multiples, p384Multiples } from "./pcurveBaseTable";
 
 export struct CurveMath {
 	field: Modulus;
@@ -335,18 +335,6 @@ function precompute(cm: Readonly<CurveMath>, p: Point, count: int32): Point[16] 
 	return pc;
 }
 
-/** The native backend's base-point tables, built once; JavaScript computes on ./bigCurve and skips the start-up cost. */
-function baseTable(cm: Readonly<CurveMath>): Point[16] {
-	when (js) {
-		return precompute(cm, basePoint(cm), 1);
-	} else {
-		return precompute(cm, basePoint(cm), 15);
-	}
-}
-
-const p256Base: Point[16] = baseTable(p256Math);
-const p384Base: Point[16] = baseTable(p384Math);
-
 /** pc[slot] read by touching every entry, so the memory access does not depend on the slot. */
 function pcSelect(cm: Readonly<CurveMath>, pc: Readonly<Point[16]>, slot: uint32): Point {
 	let t = identity(cm);
@@ -374,13 +362,25 @@ export function mulSecret(cm: Readonly<CurveMath>, p: Point, k: Readonly<uint8[]
 	return mulTable(cm, precompute(cm, p, 15), k);
 }
 
-/** The base-point multiples 0·G to 15·G: a copy of the native table, or computed where JavaScript skipped it. */
+/** The base-point multiples 0·G to 15·G: read from the native literal table, or computed where JavaScript carries none. */
 function baseMultiples(cm: Readonly<CurveMath>): Point[16] {
 	when (js) {
 		return precompute(cm, basePoint(cm), 15);
 	} else {
-		if (cm.field.words == 12) return p384Base;
-		return p256Base;
+		const table = cm.field.words == 12 ? p384Multiples : p256Multiples;
+		const o = identity(cm);
+		let pc: Point[16] = [o, o, o, o, o, o, o, o, o, o, o, o, o, o, o, o];
+		for (let j = 1; j < 16; j++) {
+			let x = zeroLimbs();
+			let y = zeroLimbs();
+			const at = (j - 1) * 24;
+			for (let w = 0; w < 12; w++) {
+				x[w] = table[at + w];
+				y[w] = table[at + 12 + w];
+			}
+			pc[j] = { x, y, z: cm.field.one };
+		}
+		return pc;
 	}
 }
 

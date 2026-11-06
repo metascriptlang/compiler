@@ -2,3 +2,7 @@
 export const p256Windows: Readonly<uint32[]> = [];
 
 export const p384Windows: Readonly<uint32[]> = [];
+
+export const p256Multiples: Readonly<uint32[]> = [];
+
+export const p384Multiples: Readonly<uint32[]> = [];
