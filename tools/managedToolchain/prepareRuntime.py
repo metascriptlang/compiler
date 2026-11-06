@@ -956,7 +956,7 @@ def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries
              ("link", [clang] + config + [obj, "-o", binary]),
              ("library search", [clang] + config + [obj] + ["-l" + n for n in libraries]
               + ["-o", binary + ".search"]) if libraries else None,
-             ("macros", [clang] + config + ["-dM", "-E", "-x", "c", "/dev/null"])]
+             ("macros", [clang] + config + ["-dM", "-E", "-x", "c", os.devnull])]
     for name, command in filter(None, steps):
         done = run(command)
         if done.returncode != 0:

@@ -534,7 +534,7 @@ def checkControl(run, merged, control, work, variant):
         config = ["--no-default-config", "--config=" + os.path.join(root, spec["base"])]
         obj, out = os.path.join(scratch, "c.o"), os.path.join(scratch, "c.out")
         fixture = os.path.join(pr.FIXTURES, spec["c"])
-        listing = step(run, "C include list", [clang] + config + ["-E", "-v", "-x", "c", "/dev/null"], stderr=True).stderr
+        listing = step(run, "C include list", [clang] + config + ["-E", "-v", "-x", "c", os.devnull], stderr=True).stderr
         step(run, "C compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj])
         step(run, "C link", [clang] + config + (["-Wl,--no-insert-timestamp"] if variant["target"] in pw.TARGETS else [])
              + [obj, "-o", out])
@@ -566,7 +566,7 @@ def checkVariant(run, merged, work, variant, inspect):
     step(run, "C++ link with the caller's libraries and a written -lc++",
          [clangxx] + pair + [path("x.o")] + caller + ["-lc++", "-o", path("written" + suffix)])
     outputs = {"plain": path("plain" + suffix), "written": path("written" + suffix)}
-    listing = step(run, "include order", [clangxx] + pair + ["-E", "-v", "-x", "c++", "/dev/null"], stderr=True).stderr
+    listing = step(run, "include order", [clangxx] + pair + ["-E", "-v", "-x", "c++", os.devnull], stderr=True).stderr
     entries = searchList(listing, root)
     cxx = ["$ROOT/runtime/include/cxx/" + n for n in ("libcxx", "libcxxabi")]
     libc = [e for e in entries if "/include/libc/" in e or (darwin and e.endswith("/runtime/darwin/sysroot/usr/include"))]

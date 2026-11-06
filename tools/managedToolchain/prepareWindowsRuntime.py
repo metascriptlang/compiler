@@ -530,7 +530,7 @@ def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes, target=TA
             steps.append(("pdb", [clang] + config + [os.path.join(work, "exeDebug.o"),
                                                      "-Wl,--pdb=" + os.path.join(work, "exe.pdb"),
                                                      "-o", os.path.join(work, "exePdb.exe")]))
-        steps.append(("macros", [clang] + config + ["-dM", "-E", "-x", "c", "/dev/null"]))
+        steps.append(("macros", [clang] + config + ["-dM", "-E", "-x", "c", os.devnull]))
         for name, command in steps:
             done = run(command)
             if done.returncode != 0:
