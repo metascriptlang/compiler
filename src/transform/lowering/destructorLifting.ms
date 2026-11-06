@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isUnownedSlot, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
+import { isUnownedSlot, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
@@ -424,14 +424,14 @@ function takeOutThenDestroy(destroyName: string, wasMovedName: string, xf: Node,
 	genCall(destroyName, "destroy", old, clonePath(old, loc), buf, loc);
 }
 
-function dropEdge(owner: Symbol, xf: Node, buf: NodeBuf, loc: SourceLocation): void {
-	buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+function dropEdge(edgeFn: string, owner: Symbol, xf: Node, buf: NodeBuf, loc: SourceLocation): void {
+	buf.items.push(makeExprStmt(makeCall(runtimeRef(edgeFn, loc), [makeIdentResolved(owner, loc), xf], loc), loc));
 }
 
-function takeOutThenDropEdge(owner: Symbol, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function takeOutThenDropEdge(edgeFn: string, owner: Symbol, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const old = keepOld(xf, lctx, buf, loc);
 	genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
-	dropEdge(owner, old, buf, loc);
+	dropEdge(edgeFn, owner, old, buf, loc);
 }
 
 function isArrayCell(t: Type): boolean {
@@ -636,17 +636,19 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic
 function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Type, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : (isAwaitable(heldType) ? "msDecrefFuture" : "msDecref"));
-	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
+	const flavor = isReadonlyView(heldType) ? "Ro" : "";
+	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" + flavor : (isAwaitable(heldType) ? "msDecrefFuture" : "msDecref" + flavor));
+	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" + flavor : "msIncref" + flavor);
+	const edgeFn = "msDecrefCyclicEdge" + flavor;
 	match (hook) {
 		"destroy" => {
 			const owner = lctx.dropOwner;
 			const edge = owner != null && isCyclic && !atomic;
 			if (empties && !isArrayCell(heldType)) {
-				if (edge) takeOutThenDropEdge(owner as Symbol, xf, lctx, buf, loc);
+				if (edge) takeOutThenDropEdge(edgeFn, owner as Symbol, xf, lctx, buf, loc);
 				else takeOutThenDestroy(decrefFn, "msPtrWasMoved", xf, lctx, buf, loc);
 			} else {
-				if (edge) dropEdge(owner as Symbol, xf, buf, loc);
+				if (edge) dropEdge(edgeFn, owner as Symbol, xf, buf, loc);
 				else genCall(decrefFn, hook, xf, yf, buf, loc);
 				if (empties) genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
 			}
@@ -1809,7 +1811,7 @@ function generateFinalize(typeName: string, cName: string, objType: Type, subjec
 function dropEdgeCall(stmt: Node): Node | null {
 	if (stmt.kind != NodeKind.ExprStmt) return null;
 	const call = (stmt.data as ExprStmtData).expr;
-	return isRuntimeProcCall(call, "msDecrefCyclicEdge") ? call : null;
+	return isRuntimeProcCall(call, "msDecrefCyclicEdge") || isRuntimeProcCall(call, "msDecrefCyclicEdgeRo") ? call : null;
 }
 
 function leftNoRef(self: Symbol, held: Node, loc: SourceLocation): Node {

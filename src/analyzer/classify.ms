@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant } from "../checker/types";
+import { isUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant, isReadonlyView } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -134,6 +134,13 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 		sinkFn: sink != "" ? attachedOpSym(sink, AttachedOp.AttachedSink) : null,
 		dupFn: null,
 	};
+}
+
+function countedRefInfo(cyclic: boolean, readonlyView: boolean): RcInfo {
+	const flavor = readonlyView ? "Ro" : "";
+	return cyclic
+		? makeRcInfo(RcKind.Ref, "", "msDecrefCyclic" + flavor, "msIncrefCyclic" + flavor, "msPtrWasMoved", "", false)
+		: makeRcInfo(RcKind.Ref, "", "msDecref" + flavor, "msIncref" + flavor, "msPtrWasMoved", "", false);
 }
 
 function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean, requireOps: boolean): RcInfo {
@@ -435,10 +442,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// Reference atomicRefOp (liftdestructors.nim:725): cyclic ops — which unregister
 			// from the ORC rootset BEFORE the destructor (:748) — only for pointees that can
 			// be part of a cycle; plain RC otherwise.
-			if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
-				return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
-			}
-			return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
+			return countedRefInfo(canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache), isReadonlyView(t));
 		},
 		TypeKind.GenericInstance => {
 			// Awaitables (`Promise<T>`, plain or affine) are Ref-shaped heap allocs
@@ -505,10 +509,8 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor || refInner.kind == TypeKind.CString) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
-				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
-					return makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false);
-				}
-				return makeRcInfo(RcKind.Ref, "", isAwaitable(refInner) ? "msDecrefFuture" : "msDecref", "msIncref", "msPtrWasMoved", "", false);
+				if (isAwaitable(refInner) && !canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) return makeRcInfo(RcKind.Ref, "", "msDecrefFuture", "msIncref", "msPtrWasMoved", "", false);
+				return countedRefInfo(canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache), isReadonlyView(t) || isReadonlyView(refInner));
 			}
 			// Pure string-literal union — msString at runtime (genUnionType), so the
 			// String ops apply; the Named path would fabricate <Alias>{Destroy,Copy}
@@ -549,7 +551,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false, requireOps);
 		},
 		TypeKind.Set => setRepr(t) != null ? classifyType(setRepr(t), ctx, requireOps) : noRcInfo(),
-		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
+		TypeKind.Unknown => countedRefInfo(true, isReadonlyView(t)),
 		_ => noRcInfo(),
 	};
 }
