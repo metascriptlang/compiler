@@ -449,7 +449,9 @@ export function ed25519Sign(
 	clamp(scalar);
 	const prefix = az.slice(32, 64);
 	wipeBytes(az);
-	const nonce = scalarReduce64(sha512Of([prefix, message]));
+	const nonceHash = sha512Of([prefix, message]);
+	const nonce = scalarReduce64(nonceHash);
+	wipeBytes(nonceHash);
 	wipeBytes(prefix);
 	const r = mulBase(nonce);
 	const rBytes = r == null ? [] : toBytes(r);
@@ -475,7 +477,10 @@ export function ed25519SignWithSecretKey(
 	message: Readonly<uint8[]>,
 ): uint8[] {
 	if (secretKey.length != ed25519SecretKeyLength) return [];
-	return ed25519Sign(secretKey.slice(0, 32), secretKey.slice(32, 64), message);
+	const seed = secretKey.slice(0, 32);
+	const out = ed25519Sign(seed, secretKey.slice(32, 64), message);
+	wipeBytes(seed);
+	return out;
 }
 
 // The eight small-order points with the sign bit cleared, plus the
