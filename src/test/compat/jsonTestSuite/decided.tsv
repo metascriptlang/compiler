@@ -1,0 +1,2 @@
+test_transform/number_-9223372036854775808.json	[-9223372036854775808]	an integer past 2^53 keeps every digit in the Int carrier (decided 2026-11-05); node rounds it through float64
+test_transform/number_9223372036854775807.json	[9223372036854775807]	an integer past 2^53 keeps every digit in the Int carrier (decided 2026-11-05); node rounds it through float64
