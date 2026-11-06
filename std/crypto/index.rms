@@ -9,15 +9,14 @@
 // after a suspension, and these bodies never suspend.
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput, Bytes } from "std/core/buffer/bytes";
 import { encodeHex, encodeBase64 } from "../core/encoding";
 import { CryptoError, CryptoErrorKind, hashFailed } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 extern function msCryptoInit(): boolean from "msCryptoInit";
 extern function msCryptoCleanup(): void from "msCryptoCleanup";
-extern function digestOfText(algorithm: string, data: string): Buffer from "msCryptoDigest";
-extern function digestOfBytes(algorithm: string, data: Readonly<uint8[]>): Buffer from "msCryptoDigest";
+extern function digestOfBytes(algorithm: string, data: Readonly<Span<uint8>>): Buffer from "msCryptoDigest";
 
 export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
@@ -32,23 +31,25 @@ export function cleanup(): void {
 	msCryptoCleanup();
 }
 
-export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
-	const out = typeof data == "string" ? digestOfText(algorithm, data) : digestOfBytes(algorithm, data);
+export function digestSync<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Result<Buffer, CryptoError> {
+	const out = digestOfBytes(algorithm, typeof data == "string" ? data.asBytes() : data);
 	if (out.length == 0) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(out);
 }
 
+// Parked: compiler card 2026-11-07-raiser-returned-promise-resolve-of-a-result-reads-nil. The async family keeps
+// `Bytes` here until the Raiser runs index.cms's form, a generic `<D extends ByteInput>` returning `Promise.resolve`.
 export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
 	return digestSync(algorithm, data);
 }
 
-export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
-export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
-export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
-export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
-export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+export function sha256Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("md5", data); }
 
 export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha256", data); }
 export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha384", data); }
@@ -56,12 +57,10 @@ export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> 
 export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha1", data); }
 export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("md5", data); }
 
-export function toHex(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeHex();
-	return data.encodeHex();
+export function toHex<D extends ByteInput>(data: D): string {
+	return encodeHex(typeof data == "string" ? data.asBytes() : data);
 }
 
-export function toBase64(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeBase64();
-	return data.encodeBase64();
+export function toBase64<D extends ByteInput>(data: D): string {
+	return encodeBase64(typeof data == "string" ? data.asBytes() : data);
 }

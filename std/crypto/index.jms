@@ -12,14 +12,20 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "../core/encoding";
-import { bytesOf } from "./pure/bytes";
 import { HashState } from "./pure/state";
 import { hashKind, newHash, updateHash, finishHash, hashOf } from "./pure/hash";
 import { HmacState, newHmac, updateHmac, finishHmac, hmacOf, pbkdf2Of, hkdfOf } from "./pure/hmac";
 import { CryptoError, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidAlgorithm, invalidInput, invalidEncoding } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
+
+function ownedOf<D extends ByteInput>(data: D): Buffer {
+	if (typeof data == "string") return Buffer.fromString(data, "utf8");
+	const owned = new Array<uint8>(0);
+	for (const b of data) owned.push(b);
+	return owned as Buffer;
+}
 
 export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
@@ -112,46 +118,53 @@ export function cleanup(): void {}
 
 // ===== Hash Functions =====
 
-export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
+export function digestSync<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+	return Result.ok(hashOf(kind, ownedOf(data)) as Buffer);
 }
 
-export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function digest<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Promise<Result<Buffer, CryptoError>> {
+	return digestOwned(algorithm, ownedOf(data));
+}
+
+async function digestOwned(algorithm: HashAlgorithm, data: Buffer): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
 	if (name == "") return digestSync(algorithm, data);
-	const done = await wcDigest(name, bytesOf(data));
+	const done = await wcDigest(name, data);
 	if (done.error != "") return Result.err(hashFailed(algorithm, done.error));
 	return Result.ok(done.value);
 }
 
-export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
-export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
-export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
-export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
-export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+export function sha256Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("md5", data); }
 
-export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha256", data); }
-export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha384", data); }
-export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha512", data); }
-export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("sha1", data); }
-export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digest("md5", data); }
+export function sha256<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha256", data); }
+export function sha384<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha384", data); }
+export function sha512<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha512", data); }
+export function sha1<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha1", data); }
+export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("md5", data); }
 
 // ===== HMAC Functions =====
 
-export function hmacSync(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
+export function hmacSync<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer);
+	return Result.ok(hmacOf(kind, ownedOf(key), ownedOf(data)) as Buffer);
 }
 
-export async function hmac(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Promise<Result<Buffer, CryptoError>> {
+export function hmac<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Promise<Result<Buffer, CryptoError>> {
+	return hmacOwned(algorithm, ownedOf(key), ownedOf(data));
+}
+
+async function hmacOwned(algorithm: HashAlgorithm, key: Buffer, data: Buffer): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
-	const keyBytes = bytesOf(key);
 	// WebCrypto refuses an empty HMAC key, which HMAC itself allows.
-	if (name == "" || keyBytes.length == 0) return hmacSync(algorithm, key, data);
-	const done = await wcHmac(name, keyBytes, bytesOf(data));
+	if (name == "" || key.length == 0) return hmacSync(algorithm, key, data);
+	const done = await wcHmac(name, key, data);
 	if (done.error != "") return Result.err(hmacFailed(algorithm, done.error));
 	return Result.ok(done.value);
 }
@@ -212,9 +225,9 @@ export async function randomUUID(): Promise<Result<string, CryptoError>> {
 
 // ===== Timing-Safe Comparison =====
 
-export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
-	const x = bytesOf(a);
-	const y = bytesOf(b);
+export function timingSafeEqual<A extends ByteInput, B extends ByteInput>(a: A, b: B): boolean {
+	const x = ownedOf(a);
+	const y = ownedOf(b);
 	if (x.length != y.length) return false;
 	let diff: uint8 = 0;
 	for (let i = 0; i < x.length; i++) diff = diff | (x[i] ^ y[i]);
@@ -232,8 +245,8 @@ export class Hasher {
 		return { _state: newHash(kind) };
 	}
 
-	update(data: Bytes): Hasher {
-		if (!this._state.finished) updateHash(this._state, bytesOf(data));
+	update<D extends ByteInput>(data: D): Hasher {
+		if (!this._state.finished) updateHash(this._state, ownedOf(data));
 		return this;
 	}
 
@@ -249,14 +262,14 @@ export class Hmac {
 	_state: HmacState;
 	_done: boolean;
 
-	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
+	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 		const kind = hashKind(algorithm);
 		if (kind < 0) throw new Error(`createHmac: could not start "${algorithm}"`);
-		return { _state: newHmac(kind, bytesOf(key)), _done: false };
+		return { _state: newHmac(kind, ownedOf(key)), _done: false };
 	}
 
-	update(data: Bytes): Hmac {
-		if (!this._done) updateHmac(this._state, bytesOf(data));
+	update<D extends ByteInput>(data: D): Hmac {
+		if (!this._done) updateHmac(this._state, ownedOf(data));
 		return this;
 	}
 
@@ -273,7 +286,7 @@ export function createHash(algorithm: HashAlgorithm): Hasher {
 	return Hasher.create(algorithm);
 }
 
-export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
+export function createHmac<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 	return Hmac.create(algorithm, key);
 }
 
@@ -289,9 +302,8 @@ export function isHashSupported(algorithm: string): boolean {
 
 // ===== Encoding =====
 
-export function toHex(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeHex();
-	return data.encodeHex();
+export function toHex<D extends ByteInput>(data: D): string {
+	return encodeHex(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromHex(hex: string): Result<Buffer, CryptoError> {
@@ -301,9 +313,8 @@ export function fromHex(hex: string): Result<Buffer, CryptoError> {
 	return Result.ok(raw as Buffer);
 }
 
-export function toBase64(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeBase64();
-	return data.encodeBase64();
+export function toBase64<D extends ByteInput>(data: D): string {
+	return encodeBase64(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromBase64(b64: string): Result<Buffer, CryptoError> {
@@ -321,20 +332,24 @@ function pbkdf2Invalid(iterations: int32, keyLength: int32): CryptoError | null 
 	return null;
 }
 
-export function pbkdf2Sync(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
+export function pbkdf2Sync<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
 	const invalid = pbkdf2Invalid(iterations, keyLength);
 	if (invalid != null) return Result.err(invalid);
 	const kind = hashKind(digest);
 	if (kind < 0) return Result.err(invalidAlgorithm(digest));
-	return Result.ok(pbkdf2Of(kind, bytesOf(password), bytesOf(salt), iterations, keyLength) as Buffer);
+	return Result.ok(pbkdf2Of(kind, ownedOf(password), ownedOf(salt), iterations, keyLength) as Buffer);
 }
 
-export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
+export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
+	return pbkdf2Owned(ownedOf(password), ownedOf(salt), iterations, keyLength, digest);
+}
+
+async function pbkdf2Owned(password: Buffer, salt: Buffer, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(digest);
 	if (name == "") return pbkdf2Sync(password, salt, iterations, keyLength, digest);
 	const invalid = pbkdf2Invalid(iterations, keyLength);
 	if (invalid != null) return Result.err(invalid);
-	const done = await wcPbkdf2(name, bytesOf(password), bytesOf(salt), iterations, keyLength);
+	const done = await wcPbkdf2(name, password, salt, iterations, keyLength);
 	if (done.error != "") return Result.err(keyDerivationFailed("pbkdf2", done.error));
 	return Result.ok(done.value);
 }
@@ -348,20 +363,23 @@ function hkdfInvalid(algorithm: HashAlgorithm, length: int32): CryptoError | nul
 	return null;
 }
 
-export function hkdfSync(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
+export function hkdfSync<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Result<Buffer, CryptoError> {
 	const invalid = hkdfInvalid(algorithm, length);
 	if (invalid != null) return Result.err(invalid);
-	return Result.ok(hkdfOf(hashKind(algorithm), bytesOf(ikm), bytesOf(salt), bytesOf(info), length) as Buffer);
+	return Result.ok(hkdfOf(hashKind(algorithm), ownedOf(ikm), ownedOf(salt), ownedOf(info), length) as Buffer);
 }
 
-export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> {
+export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> {
+	return hkdfOwned(algorithm, ownedOf(ikm), ownedOf(salt), ownedOf(info), length);
+}
+
+async function hkdfOwned(algorithm: HashAlgorithm, ikm: Buffer, salt: Buffer, info: Buffer, length: int32): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
-	const ikmBytes = bytesOf(ikm);
 	// WebCrypto refuses empty HKDF input keying material, which RFC 5869 allows.
-	if (name == "" || ikmBytes.length == 0) return hkdfSync(algorithm, ikm, salt, info, length);
+	if (name == "" || ikm.length == 0) return hkdfSync(algorithm, ikm, salt, info, length);
 	const invalid = hkdfInvalid(algorithm, length);
 	if (invalid != null) return Result.err(invalid);
-	const done = await wcHkdf(name, ikmBytes, bytesOf(salt), bytesOf(info), length);
+	const done = await wcHkdf(name, ikm, salt, info, length);
 	if (done.error != "") return Result.err(keyDerivationFailed("hkdf", done.error));
 	return Result.ok(done.value);
 }

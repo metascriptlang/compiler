@@ -1,7 +1,7 @@
 @include("runtime/crypto/hash.h");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { newUninitOutputBuffer, outputBytes } from "./outputBuffer";
 // The Raiser host table and the websocket handshake call msCryptoHashString, which this import carries.
 import "./encodingNative";
@@ -65,17 +65,17 @@ extern function msCryptoRandomIntInto(min: number, max: number, ref out: int64):
 extern function msCryptoRandomUuid(): string;
 
 // Timing-safe comparison
-extern function msCryptoTimingSafeEqual(a: string, b: string): boolean;
+extern function msCryptoTimingSafeEqual(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean;
 
 // Streaming hash (int64 handle wrappers)
 extern function msCryptoHashInitHandle(algorithm: string): int64;
-extern function msCryptoHashUpdateHandle(ctx: int64, data: string): void;
+extern function msCryptoHashUpdateHandle(ctx: int64, data: Readonly<Span<uint8>>): void;
 extern function msCryptoHashFinalBufferHandle(ctx: int64): string;
 extern function msCryptoHashFreeHandle(ctx: int64): void;
 
 // Streaming HMAC (int64 handle wrappers)
-extern function msCryptoHmacInitHandle(algorithm: string, key: string): int64;
-extern function msCryptoHmacUpdateHandle(ctx: int64, data: string): void;
+extern function msCryptoHmacInitHandle(algorithm: string, key: Readonly<Span<uint8>>): int64;
+extern function msCryptoHmacUpdateHandle(ctx: int64, data: Readonly<Span<uint8>>): void;
 extern function msCryptoHmacFinalBufferHandle(ctx: int64): string;
 extern function msCryptoHmacFreeHandle(ctx: int64): void;
 
@@ -84,8 +84,8 @@ extern function msCryptoIsHashSupported(algorithm: string): boolean;
 extern function msCryptoHashSize(algorithm: string): number;
 
 // Key Derivation
-extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
-extern function msCryptoHkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): string;
+extern function msCryptoPbkdf2(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, iterations: int32, keyLength: int32, digest: string): string;
+extern function msCryptoHkdf(algorithm: string, ikm: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, info: Readonly<Span<uint8>>, length: int32): string;
 
 // ===== Types =====
 
@@ -109,44 +109,52 @@ export function cleanup(): void {
 
 // ===== Hash Functions =====
 
-export function digestSync(algorithm: HashAlgorithm, data: Bytes): Result<Buffer, CryptoError> {
+export function digestSync<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Result<Buffer, CryptoError> {
+	return digestSpan(algorithm, typeof data == "string" ? data.asBytes() : data);
+}
+
+function digestSpan(algorithm: HashAlgorithm, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const size = msCryptoHashSize(algorithm) as int64;
 	const out = newUninitOutputBuffer(size);
-	if (size == 0 || msCryptoHashSpanInto(algorithm, typeof data == "string" ? data.asBytes() : data, outputBytes(out), size) != size) {
+	if (size == 0 || msCryptoHashSpanInto(algorithm, data, outputBytes(out), size) != size) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}
 	return Result.ok(out);
 }
 
-export async function digest(algorithm: HashAlgorithm, data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync(algorithm, data);
+export function digest<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Promise<Result<Buffer, CryptoError>> {
+	return Promise.resolve(digestSync(algorithm, data));
 }
 
-export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
-export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
-export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
-export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
-export function md5Sync(data: Bytes): Result<Buffer, CryptoError> { return digestSync("md5", data); }
+export function sha256Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha256", data); }
+export function sha384Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha384", data); }
+export function sha512Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha512", data); }
+export function sha1Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("sha1", data); }
+export function md5Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> { return digestSync("md5", data); }
 
-export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha256", data); }
-export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha384", data); }
-export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha512", data); }
-export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("sha1", data); }
-export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> { return digestSync("md5", data); }
+export function sha256<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha256", data); }
+export function sha384<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha384", data); }
+export function sha512<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha512", data); }
+export function sha1<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha1", data); }
+export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("md5", data); }
 
 // ===== HMAC Functions =====
 
-export function hmacSync(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Result<Buffer, CryptoError> {
+export function hmacSync<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Result<Buffer, CryptoError> {
+	return hmacSpan(algorithm, typeof key == "string" ? key.asBytes() : key, typeof data == "string" ? data.asBytes() : data);
+}
+
+function hmacSpan(algorithm: HashAlgorithm, key: Readonly<Span<uint8>>, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const size = msCryptoHashSize(algorithm) as int64;
 	const out = newUninitOutputBuffer(size);
-	if (size == 0 || msCryptoHmacSpanInto(algorithm, typeof key == "string" ? key.asBytes() : key, typeof data == "string" ? data.asBytes() : data, outputBytes(out), size) != size) {
+	if (size == 0 || msCryptoHmacSpanInto(algorithm, key, data, outputBytes(out), size) != size) {
 		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
 	}
 	return Result.ok(out);
 }
 
-export async function hmac(algorithm: HashAlgorithm, key: Bytes, data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return hmacSync(algorithm, key, data);
+export function hmac<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Promise<Result<Buffer, CryptoError>> {
+	return Promise.resolve(hmacSync(algorithm, key, data));
 }
 
 // ===== Random Functions =====
@@ -199,8 +207,8 @@ export async function randomUUID(): Promise<Result<string, CryptoError>> {
 
 // ===== Timing-Safe Comparison =====
 
-export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
-	return msCryptoTimingSafeEqual(rawString(a), rawString(b));
+export function timingSafeEqual<A extends ByteInput, B extends ByteInput>(a: A, b: B): boolean {
+	return msCryptoTimingSafeEqual(typeof a == "string" ? a.asBytes() : a, typeof b == "string" ? b.asBytes() : b);
 }
 
 // ===== Streaming Hash =====
@@ -214,9 +222,9 @@ export class Hasher {
 		return { _ctx: ctx };
 	}
 
-	update(data: Bytes): Hasher {
+	update<D extends ByteInput>(data: D): Hasher {
 		if (this._ctx != 0) {
-			msCryptoHashUpdateHandle(this._ctx, rawString(data));
+			msCryptoHashUpdateHandle(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		}
 		return this;
 	}
@@ -243,15 +251,15 @@ export class Hasher {
 export class Hmac {
 	_ctx: int64;
 
-	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
-		const ctx = msCryptoHmacInitHandle(algorithm, rawString(key));
+	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
+		const ctx = msCryptoHmacInitHandle(algorithm, typeof key == "string" ? key.asBytes() : key);
 		if (ctx == 0) throw new Error(`createHmac: could not start "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
-	update(data: Bytes): Hmac {
+	update<D extends ByteInput>(data: D): Hmac {
 		if (this._ctx != 0) {
-			msCryptoHmacUpdateHandle(this._ctx, rawString(data));
+			msCryptoHmacUpdateHandle(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		}
 		return this;
 	}
@@ -279,7 +287,7 @@ export function createHash(algorithm: HashAlgorithm): Hasher {
 	return Hasher.create(algorithm);
 }
 
-export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
+export function createHmac<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 	return Hmac.create(algorithm, key);
 }
 
@@ -298,9 +306,8 @@ export function isHashSupported(algorithm: string): boolean {
 
 import { encodeHex, decodeHexString, encodeBase64, decodeBase64String } from "../core/encoding";
 
-export function toHex(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeHex();
-	return data.encodeHex();
+export function toHex<D extends ByteInput>(data: D): string {
+	return encodeHex(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromHex(hex: string): Result<Buffer, CryptoError> {
@@ -310,9 +317,8 @@ export function fromHex(hex: string): Result<Buffer, CryptoError> {
 	return Result.ok(rawBuffer(raw));
 }
 
-export function toBase64(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeBase64();
-	return data.encodeBase64();
+export function toBase64<D extends ByteInput>(data: D): string {
+	return encodeBase64(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromBase64(b64: string): Result<Buffer, CryptoError> {
@@ -324,23 +330,31 @@ export function fromBase64(b64: string): Result<Buffer, CryptoError> {
 
 // ===== Key Derivation =====
 
-export function pbkdf2Sync(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
+export function pbkdf2Sync<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
+	return pbkdf2Span(typeof password == "string" ? password.asBytes() : password, typeof salt == "string" ? salt.asBytes() : salt, iterations, keyLength, digest);
+}
+
+function pbkdf2Span(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, iterations: int32, keyLength: int32, digest: HashAlgorithm): Result<Buffer, CryptoError> {
 	if (iterations < 1) return Result.err(invalidInput("pbkdf2", "iterations must be at least 1"));
 	if (keyLength < 1 || keyLength > 1048576) return Result.err(invalidInput("pbkdf2", "keyLength must be between 1 and 1048576"));
-	const result = msCryptoPbkdf2(rawString(password), rawString(salt), iterations, keyLength, digest);
+	const result = msCryptoPbkdf2(password, salt, iterations, keyLength, digest);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
 }
 
-export async function pbkdf2(password: Bytes, salt: Bytes, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> { return pbkdf2Sync(password, salt, iterations, keyLength, digest); }
+export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(pbkdf2Sync(password, salt, iterations, keyLength, digest)); }
 
-export function hkdfSync(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Result<Buffer, CryptoError> {
+export function hkdfSync<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Result<Buffer, CryptoError> {
+	return hkdfSpan(algorithm, typeof ikm == "string" ? ikm.asBytes() : ikm, typeof salt == "string" ? salt.asBytes() : salt, typeof info == "string" ? info.asBytes() : info, length);
+}
+
+function hkdfSpan(algorithm: HashAlgorithm, ikm: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, info: Readonly<Span<uint8>>, length: int32): Result<Buffer, CryptoError> {
 	if (length < 1) return Result.err(invalidInput("hkdf", "length must be at least 1"));
 	const maxLength = 255 * msCryptoHashSize(algorithm);
 	if (length > maxLength) return Result.err(invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`));
-	const result = msCryptoHkdf(algorithm, rawString(ikm), rawString(salt), rawString(info), length);
+	const result = msCryptoHkdf(algorithm, ikm, salt, info, length);
 	if (result.byteLength == 0) return Result.err(keyDerivationFailed("hkdf", "key derivation failed"));
 	return Result.ok(rawBuffer(result));
 }
 
-export async function hkdf(algorithm: HashAlgorithm, ikm: Bytes, salt: Bytes, info: Bytes, length: int32): Promise<Result<Buffer, CryptoError>> { return hkdfSync(algorithm, ikm, salt, info, length); }
+export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(hkdfSync(algorithm, ikm, salt, info, length)); }

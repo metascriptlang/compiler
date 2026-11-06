@@ -65,7 +65,7 @@ msString msCryptoRandomUuid(void);
 /* ===== Timing-Safe Comparison ===== */
 
 /* Constant-time comparison of two strings. Returns 1 if equal, 0 if not. */
-double msCryptoTimingSafeEqual(msString a, msString b);
+double msCryptoTimingSafeEqual(const uint8_t* a, int64_t aLen, const uint8_t* b, int64_t bLen);
 
 /* ===== Streaming Hash Context ===== */
 
@@ -76,7 +76,7 @@ typedef struct msCryptoHashCtx msCryptoHashCtx;
 msCryptoHashCtx* msCryptoHashInit(msString algorithm);
 
 /* Feed data into streaming hash */
-void msCryptoHashUpdate(msCryptoHashCtx* ctx, msString data);
+void msCryptoHashUpdate(msCryptoHashCtx* ctx, const uint8_t* data, int64_t dataLen);
 
 /* Finalize and get raw hash bytes. Frees context. */
 msString msCryptoHashFinalBuffer(msCryptoHashCtx* ctx);
@@ -91,10 +91,10 @@ void msCryptoHashFree(msCryptoHashCtx* ctx);
 typedef struct msCryptoHmacCtx msCryptoHmacCtx;
 
 /* Create streaming HMAC context. Returns NULL on error. */
-msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key);
+msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, const uint8_t* key, int64_t keyLen);
 
 /* Feed data into streaming HMAC */
-void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, msString data);
+void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, const uint8_t* data, int64_t dataLen);
 
 /* Finalize and get raw HMAC bytes. Frees context. */
 msString msCryptoHmacFinalBuffer(msCryptoHmacCtx* ctx);
@@ -114,8 +114,8 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx);
 static inline int64_t msCryptoHashInitHandle(msString algorithm) {
     return HASH_CTX_TO_HANDLE(msCryptoHashInit(algorithm));
 }
-static inline void msCryptoHashUpdateHandle(int64_t ctx, msString data) {
-    msCryptoHashUpdate(HASH_CTX_FROM_HANDLE(ctx), data);
+static inline void msCryptoHashUpdateHandle(int64_t ctx, const uint8_t* data, int64_t dataLen) {
+    msCryptoHashUpdate(HASH_CTX_FROM_HANDLE(ctx), data, dataLen);
 }
 static inline msString msCryptoHashFinalBufferHandle(int64_t ctx) {
     return msCryptoHashFinalBuffer(HASH_CTX_FROM_HANDLE(ctx));
@@ -127,11 +127,11 @@ static inline void msCryptoHashFreeHandle(int64_t ctx) {
     msCryptoHashFree(HASH_CTX_FROM_HANDLE(ctx));
 }
 
-static inline int64_t msCryptoHmacInitHandle(msString algorithm, msString key) {
-    return HMAC_CTX_TO_HANDLE(msCryptoHmacInit(algorithm, key));
+static inline int64_t msCryptoHmacInitHandle(msString algorithm, const uint8_t* key, int64_t keyLen) {
+    return HMAC_CTX_TO_HANDLE(msCryptoHmacInit(algorithm, key, keyLen));
 }
-static inline void msCryptoHmacUpdateHandle(int64_t ctx, msString data) {
-    msCryptoHmacUpdate(HMAC_CTX_FROM_HANDLE(ctx), data);
+static inline void msCryptoHmacUpdateHandle(int64_t ctx, const uint8_t* data, int64_t dataLen) {
+    msCryptoHmacUpdate(HMAC_CTX_FROM_HANDLE(ctx), data, dataLen);
 }
 static inline msString msCryptoHmacFinalBufferHandle(int64_t ctx) {
     return msCryptoHmacFinalBuffer(HMAC_CTX_FROM_HANDLE(ctx));
@@ -159,9 +159,9 @@ msString msCryptoToBase64(msString data);
 
 /* An empty result means refused: iterations < 1, keyLength outside [1, cap], an unknown digest or an md failure. */
 #define MS_PBKDF2_MAX_KEY_LENGTH (1 << 20)
-msString msCryptoPbkdf2(msString password, msString salt,
+msString msCryptoPbkdf2(const uint8_t* password, int64_t passwordLen, const uint8_t* salt, int64_t saltLen,
                         int32_t iterations, int32_t keyLength, msString digest);
-msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,
-                      msString info, int32_t length);
+msString msCryptoHkdf(msString algorithm, const uint8_t* ikm, int64_t ikmLen, const uint8_t* salt, int64_t saltLen,
+                      const uint8_t* info, int64_t infoLen, int32_t length);
 
 #endif /* MS_CRYPTO_H */
