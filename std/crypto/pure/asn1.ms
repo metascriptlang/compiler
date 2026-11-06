@@ -1,5 +1,7 @@
 /** The slice of DER that key files use: definite lengths only, read strictly and written minimally. */
 
+import { wipeBytes } from "./secret";
+
 export const tagInteger: int32 = 0x02;
 export const tagBitString: int32 = 0x03;
 export const tagOctetString: int32 = 0x04;
@@ -146,7 +148,10 @@ export function derJoin(parts: Readonly<uint8[]>[]): uint8[] {
 }
 
 export function derSequence(parts: Readonly<uint8[]>[]): uint8[] {
-	return derTlv(tagSequence, derJoin(parts));
+	const body = derJoin(parts);
+	const out = derTlv(tagSequence, body);
+	wipeBytes(body);
+	return out;
 }
 
 export function derUnsignedInteger(value: Readonly<uint8[]>): uint8[] {
@@ -155,7 +160,9 @@ export function derUnsignedInteger(value: Readonly<uint8[]>): uint8[] {
 	const body: uint8[] = [];
 	if (value.length == 0 || (value[from] & 0x80) != 0) body.push(0);
 	for (let i = from; i < value.length; i++) body.push(value[i]);
-	return derTlv(tagInteger, body);
+	const out = derTlv(tagInteger, body);
+	wipeBytes(body);
+	return out;
 }
 
 export function derSmallInteger(value: int32): uint8[] {
