@@ -21,7 +21,7 @@ import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
 
 type Reduce = { acc: Node, op: string, term: Node };
-type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
+type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string, endLimit: int64 };
 
 export function versionReductions(program: Node, ctx: TransformContext): Node {
 	if (!ctx.rangeChecks || ctx.jsBackend || ctx.raiserBackend) return program;
@@ -59,6 +59,12 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 		fits = makeBinary(inRange, "&&", fits, loc);
 		fits.nodeType = booleanType();
 	}
+	if (r.endLimit > 0) {
+		const unmasked = makeBinary(endRef(), "<=", makeIntNumber(r.endLimit, loc), loc);
+		unmasked.nodeType = booleanType();
+		fits = makeBinary(unmasked, "&&", fits, loc);
+		fits.nodeType = booleanType();
+	}
 	const sum = makeCall(runtimeRef(`ms${kind}${r.op == "+=" ? "Add" : "Sub"}${r.widthTag}`, loc), args(), loc);
 	sum.nodeType = r.acc.nodeType;
 	const step = indexType.kind == TypeKind.Int64 ? endRef() : makeHiddenStdConv(endRef(), r.index.nodeType!, loc);
@@ -85,24 +91,60 @@ function matchReduction(loop: Node): Reduction | null {
 	return stmts[0].kind == NodeKind.BlockStmt ? matchElementLocal(stmts, index, cd.right) : matchIndexed(stmts, index, cd.right);
 }
 
-// The fused loop of an array iterator: `{ const x = xs[i]; { acc op= x } }` then the step of i, bounded by
-// `xs.length` read each step (through `as int64`).
+// The fused loop of an array iterator, then the step of i, bounded by `xs.length` read each step (through
+// `as int64`): values() reads `{ const x = xs[i]; { acc op= x } }`; keys() reads `{ const k = i & M; const key =
+// k as number; { acc op= xs[k] } }`, where k is i for every block that ends at or below M + 1.
 function matchElementLocal(stmts: Node[], index: Node, len: Node): Reduction | null {
 	if (!isIndexStep(stmts[1], index)) return null;
 	const inner = nestedStatements(stmts[0]);
-	if (inner.length != 2 || inner[0].kind != NodeKind.VariableDecl || inner[0].resolvedSym == null) return null;
+	if (inner.length < 2 || inner[0].kind != NodeKind.VariableDecl || inner[0].resolvedSym == null) return null;
 	const decl = inner[0];
-	const array = elementRead((decl.data as VariableDeclData).initializer, index);
-	const reduce = reduceStmt(inner[1]);
-	if (array == null || reduce == null) return null;
+	const init = (decl.data as VariableDeclData).initializer;
+	const limit = maskedIndexLimit(init, index);
+	for (let k = 1; k < inner.length - 1; k++) {
+		if (limit == 0 || !castOf(inner[k], decl)) return null;
+	}
+	const reduce = reduceStmt(inner[inner.length - 1]);
+	if (reduce == null || (limit == 0 && inner.length != 2)) return null;
 	const acc = reduce.acc;
 	const term = widened(reduce.term, acc);
-	if (term == null || term.kind != NodeKind.Identifier || term.resolvedSym != decl.resolvedSym) return null;
+	if (term == null) return null;
+	const array = limit > 0 ? keyedRead(term, decl) : elementRead(init, index);
+	if (array == null || (limit == 0 && (term.kind != NodeKind.Identifier || term.resolvedSym != decl.resolvedSym))) return null;
 	const bareLen = len.kind == NodeKind.TypeAssertion ? (len.data as TypeAssertionData).asExpr : len;
 	const bound = lengthOf(bareLen);
 	if (bound == null || !readsAnyOf(bound, [array]) || !distinctFrom(acc, [index, decl, array])) return null;
 	const tag = sumTag(acc, array);
-	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len: bareLen, widthTag: tag };
+	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len: bareLen, widthTag: tag, endLimit: limit };
+}
+
+// `xs[k]` for the key const k, read through the standard conversion an index gets.
+function keyedRead(n: Node, key: Node): Node | null {
+	if (n.kind != NodeKind.ArrayAccess) return null;
+	const d = n.data as ArrayAccessData;
+	const at = peelStdConv(d.index);
+	if (at.kind != NodeKind.Identifier || at.resolvedSym != key.resolvedSym) return null;
+	return rootSym(d.array) != null && signedKind(elementType(d.array)) != null ? d.array : null;
+}
+
+// M + 1 when `n` is `index & M` with 0 <= M < 2^53, else 0.
+function maskedIndexLimit(n: Node | null, index: Node): int64 {
+	if (n == null || n.kind != NodeKind.BinaryExpr) return 0;
+	const d = n.data as BinaryExprData;
+	if (d.operator != "&") return 0;
+	const mask = sameLocal(d.left, index) ? peelStdConv(d.right) : sameLocal(d.right, index) ? peelStdConv(d.left) : null;
+	if (mask == null || mask.kind != NodeKind.NumberLiteral) return 0;
+	const m = mask.data as NumberLiteralData;
+	return !m.isFloat && m.intVal >= 0 && m.intVal < 9007199254740992 ? m.intVal + 1 : 0;
+}
+
+// `const v = <cast of decl's local>`: a declaration with no effect the fast path may skip.
+function castOf(s: Node, decl: Node): boolean {
+	if (s.kind != NodeKind.VariableDecl) return false;
+	const init = (s.data as VariableDeclData).initializer;
+	if (init == null) return false;
+	const operand = init.kind == NodeKind.TypeAssertion ? (init.data as TypeAssertionData).asExpr : init.kind == NodeKind.HiddenStdConv ? (init.data as HiddenStdConvData).convExpr : null;
+	return operand != null && operand.kind == NodeKind.Identifier && operand.resolvedSym == decl.resolvedSym;
 }
 
 function nestedStatements(block: Node): Node[] {
@@ -128,7 +170,7 @@ function matchForOf(stmts: Node[], index: Node, len: Node): Reduction | null {
 	if (term == null || term.kind != NodeKind.Identifier || term.resolvedSym != decl.resolvedSym) return null;
 	if (!distinctFrom(acc, [index, len, decl])) return null;
 	const tag = sumTag(acc, array);
-	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len, widthTag: tag };
+	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len, widthTag: tag, endLimit: 0 };
 }
 
 function matchIndexed(stmts: Node[], index: Node, len: Node): Reduction | null {
@@ -157,7 +199,7 @@ function matchIndexed(stmts: Node[], index: Node, len: Node): Reduction | null {
 	}
 	if (tag == "" || !readsAnyOf(bound, arrays)) return null;
 	for (const a of arrays) if (!distinctFrom(acc, [a]) || rootSym(a) == index.resolvedSym) return null;
-	return { acc, op: reduce.op, arrays, index, len, widthTag: tag };
+	return { acc, op: reduce.op, arrays, index, len, widthTag: tag, endLimit: 0 };
 }
 
 function reduceStmt(stmt: Node): Reduce | null {
