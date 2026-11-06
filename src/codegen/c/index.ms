@@ -564,7 +564,7 @@ import "../../parser/statements/core";
 function cOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	const output = generateCModuleOutput(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
+	const output = generateCModuleOutput(pr.value, createContext(), "test/input", createAliveSet(), false, false);
 	const paths: string[] = ["test/input"];
 	const dispatcher = genProjectDispatcher(paths, "test/input", "", false, [output]);
 	return output.code + "\n" + dispatcher;
@@ -573,7 +573,7 @@ function cOutput(input: string): string {
 function cModuleOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), true, false);
+	return generateCModule(pr.value, createContext(), "test/input", createAliveSet(), true, false);
 }
 
 test "empty program has headers" {
@@ -585,13 +585,13 @@ test "module init metadata is isolated between emissions" {
 	const parsed = parseSource("");
 	assert parsed.ok;
 	if (!parsed.ok) return;
-	const first = generateCModuleOutput(parsed.value, null as unknown as CheckerContext, "test/first", createAliveSet(), false, false);
-	const second = generateCModuleOutput(parsed.value, null as unknown as CheckerContext, "test/second", createAliveSet(), false, false);
+	const first = generateCModuleOutput(parsed.value, createContext(), "test/first", createAliveSet(), false, false);
+	const second = generateCModuleOutput(parsed.value, createContext(), "test/second", createAliveSet(), false, false);
 	assert first.modulePath == "test/first";
 	assert second.modulePath == "test/second";
 	assert !first.hasDatInit && !first.hasInit;
 	assert !second.hasDatInit && !second.hasInit;
-	assert first.code == generateCModule(parsed.value, null as unknown as CheckerContext, "test/first", createAliveSet(), false, false);
+	assert first.code == generateCModule(parsed.value, createContext(), "test/first", createAliveSet(), false, false);
 }
 
 test "dispatcher follows dependency order regardless of result order" {
@@ -726,7 +726,7 @@ test "generic module emission preserves defining owner under permutations" {
 	node.resolvedSym.modulePath = "owner.ms";
 	node.resolvedSym.instantiatedFrom = makeSymbol("generic", SymbolKind.Function, fnType, false);
 	pd.programStmts.push(node);
-	const ctx = null as unknown as CheckerContext;
+	const ctx = createContext();
 	const alive = createAliveSet();
 	const facts = new CEmissionFacts();
 	const paths = ["user.ms", "owner.ms", "other.ms"];
