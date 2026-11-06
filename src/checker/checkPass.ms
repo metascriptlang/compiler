@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, stringType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, withoutUnowned, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, viewShown, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, classDeclaredParentOf, isOutParam, typedArrayElement, createSpan } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol, parentClassSymOf } from "./symbol";
-import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry, createLayeredExtensionRegistry, exportedExtensionLayer, extensionsOf, ExtensionRegistry, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, noteDefaultSource } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, CheckerError, startDispatchCapture, endDispatchCapture, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol, createExportRegistry, createLayeredExtensionRegistry, exportedExtensionLayer, extensionsOf, ExtensionRegistry, filterExtsByReceiverType, findAccessor, extDeclaresReceiver, noteDefaultSource } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -4785,11 +4785,26 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	checkMovesIn(ctx, program);
 	listMovePaths(ctx, program);
 	checkPointerEscapes(ctx, program);
+	ctx.errors = inSourceOrder(ctx.errors);
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,
 	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
 	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath) && !isCancelled(ctx.cancelCtx, ctx.cancelVersion)) registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
+}
+
+function inSourceOrder(errors: CheckerError[]): CheckerError[] {
+	let sorted = true;
+	for (let i = 1; i < errors.length && sorted; i += 1) sorted = !positionBefore(errors[i], errors[i - 1]);
+	if (sorted) return errors;
+	const order: int32[] = [];
+	for (let i = 0; i < errors.length; i += 1) order.push(i);
+	order.sort((a: int32, b: int32): number => positionBefore(errors[a], errors[b]) ? -1 : positionBefore(errors[b], errors[a]) ? 1 : a - b);
+	return order.map((i: int32): CheckerError => errors[i]);
+}
+
+function positionBefore(a: CheckerError, b: CheckerError): boolean {
+	return a.line < b.line || (a.line == b.line && a.column < b.column);
 }
 
 // ===== Public API =====

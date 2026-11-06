@@ -154,3 +154,14 @@ test "a constructor that calls a later function with an inferred return keeps it
 	const result = checkOnly(SRC_CONSTRUCTOR_CALLS_LATER);
 	assert result.errors.length == 0, "the constructor assigns every field: " + result.errors.join("\n");
 }
+
+test "errors come in source order when a declaration is checked before the statement above it" {
+	const result = checkOnly(`
+abstract class Shape { abstract area(): number; }
+abstract class Named { name: string = ""; }
+function later() { return n; }
+const s = new Shape();
+const n = new Named();
+`);
+	assert result.errors.length == 2 && result.errors[0] == "Cannot create an instance of the abstract class 'Shape'" && result.errors[1] == "Cannot create an instance of the abstract class 'Named'", result.errors.join("\n");
+}
