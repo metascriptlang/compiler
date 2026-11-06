@@ -869,7 +869,10 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 		for (let i = 0; i < values.length; i += 1) copyPackedExpr(s, packedIndex(s, s.layouts, result, i), values[i]);
 		return result;
 	}
-	return emitLegacyToPacked(s, s.layouts, { reg: compileExprRaw(s, node), valueType, shape: { words: 1, block: false } });
+	const value = compileExprRaw(s, node);
+	const result = emitLegacyToPacked(s, s.layouts, { reg: value, valueType, shape: { words: 1, block: false } });
+	if (makesFreshCell(s, node) && inRefFile(classOfReg(s, value))) emitInst(s, raiserABC(RaiserOpcode.RcDec, value, 0, 0));
+	return result;
 }
 
 function compileTypedExpr(s: RaiserCompState, node: Node): int32 {
@@ -2190,10 +2193,26 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 	return false;
 }
 
+function convertedFrom(node: Node): Node {
+	let inner = node;
+	while (true) {
+		if (inner.kind == NodeKind.TypeAssertion) inner = (inner.data as TypeAssertionData).asExpr;
+		else if (inner.kind == NodeKind.HiddenStdConv || inner.kind == NodeKind.HiddenSubConv) inner = (inner.data as HiddenStdConvData).convExpr;
+		else return inner;
+	}
+}
+
 function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
-	const frame = storedFramePlace(s, node, false);
+	const inner = convertedFrom(node);
+	const frame = storedFramePlace(s, inner, false);
 	if (frame != null) return vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block;
-	return rootsInPackedRvalue(s, node) && vmLayoutOf(s.layouts, node.nodeType!).kind == MemKind.Block;
+	return rootsInPackedRvalue(s, inner) && vmLayoutOf(s.layouts, inner.nodeType!).kind == MemKind.Block;
+}
+
+function makesFreshCell(s: RaiserCompState, node: Node): boolean {
+	const inner = convertedFrom(node);
+	if (inner.kind == NodeKind.CallExpr || inner.kind == NodeKind.NewExpr || inner.kind == NodeKind.ObjectLiteral || inner.kind == NodeKind.ArrayLiteral) return true;
+	return materializesFramePlace(s, inner) || packedRvalue(s, inner) && vmLayoutOf(s.layouts, inner.nodeType!).kind == MemKind.Block;
 }
 
 // A closure literal passed to a call is a temporary pair the call borrows, and so is the object a
