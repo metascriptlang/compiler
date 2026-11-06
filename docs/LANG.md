@@ -109,6 +109,13 @@ the API already proven for C holding an object's address:
 | `h.take()` | the +1 comes back as the caller's reference | end the hand-off |
 | `h.retain()` / `h.release()` | +1 / −1 | pair them with `defer` |
 
+`T` is bound to `object`, as the reference's `GC_ref` takes only a `ref`: a class, an interface, an
+array or a `Map` is counted, while a number, a boolean, an enum, a `string`, `Ptr<void>` or `B | null`
+is refused at the call, at `Handle.at<int32>` and at a `Handle<boolean>` annotation, on C and JS alike
+(measured 2026-11-07, wasmmix `refusedHandleNonObject`; before, C compiled `Handle.retain(1)` and
+panicked in `msFfiRetain`). A struct, a closure or a `Vec<T>` passes the bound and is refused by the
+std body with its own wording. Across the wasm boundary only a class crosses (`refusedHandleTarget`).
+
 A `Handle` is copied freely; a second `release` is a use-after-free and a missing one is a
 leak, both caught by the ledger and SAN lanes. On JS `h.ptr` is the object and the counts do
 nothing. The retained form is `Handle.retain(x)` and the read is `h.value()`, not
@@ -3377,6 +3384,10 @@ live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Rais
 | `s as Ptr<U>`, `U` not the type of `s` | `cast[ptr U](addr s)`: a struct `{ a: 258 }` reads `2 1` | refused at compile time | refused, traps |
 | `n as Ptr<T>` for an integer | the address `n` holds (`cast[ptr T](n)`), unchanged | refused at compile time | refused, traps |
 | `p as Ptr<U>` for a pointer `p` | a pointer cast; `Ptr<Ptr<T>>` is `T**` | same pointee only | same pointee only |
+| `x as Ptr<void>` for a float or a boolean | refused at compile time: only an integer holds an address | the same checker rule (not run) | the same checker rule (not run) |
+| `p as int64` / `p as uint64` for a pointer | the address as an integer (`null` reads 0) | refused (measured for `int32`) | not measured |
+| `p as int32` (or any narrower integer, a float, a boolean) | refused at compile time: the address does not fit; before 2026-11-07 a C compile error | refused | the same checker rule (not run) |
+| `b as Ptr<void>` for a `B \| null` | the pointer, `null` for null (before 2026-11-07 an internal error on C; corpus `nullableClassAddress`) | same | leaks the object when a function returns the cast: inbox `2026-11-07-raiser-returned-class-to-ptr-cast-leaks-object` |
 | a `const` binding or value-type parameter of a struct | `Readonly<Ptr<S>>`: reads compile, a write is refused | same | same |
 | a call or a literal of a struct (`mk() as Ptr<S>`) | refused: no address | refused | refused |
 | `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
