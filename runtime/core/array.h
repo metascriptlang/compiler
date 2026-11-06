@@ -24,6 +24,10 @@ typedef struct {
 	int64_t cap;
 } msArrayPayloadBase;
 
+static inline void msArrayPayloadFree(void* p) {
+	if ((((msArrayPayloadBase*)p)->cap & MS_STRLIT_FLAG) == 0) free(p);
+}
+
 typedef struct {
 	int64_t cap;
 	double data[];
@@ -278,13 +282,13 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 
 /* Destroy (free payload). */
 #define msGenericArrayDestroy(arr_ptr) do { \
-	if ((arr_ptr)->p != NULL) { msMemFree((arr_ptr)->p); (arr_ptr)->p = NULL; } \
+	if ((arr_ptr)->p != NULL) { msArrayPayloadFree((arr_ptr)->p); (arr_ptr)->p = NULL; } \
 	(arr_ptr)->len = 0; \
 } while(0)
 
 /* Capacity query. */
 #define msGenericArrayCapacity(arr_ptr) \
-	((arr_ptr)->p != NULL ? (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap : (int64_t)0)
+	((arr_ptr)->p != NULL ? (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK) : (int64_t)0)
 
 #define msGenericArrayRotate(arr_ptr, lo, mid, hi) do { \
 	int64_t _rlo = (lo), _rmid = (mid), _rhi = (hi); \

@@ -125,14 +125,14 @@ msNumberArray msNumberArrayFrom(int64_t count, ...) {
 
 void msNumberArrayDestroy(msNumberArray* arr) {
 	if (arr->p != NULL) {
-		msMemFree(arr->p);
+		msArrayPayloadFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
 }
 
 void msNumberArrayPush(msNumberArray* arr, double value) {
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msNumberPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(double));
 	}
 	arr->p->data[arr->len] = value;
@@ -284,7 +284,7 @@ void msNumberArrayShrink(msNumberArray* arr, int64_t newLen) {
 void msNumberArrayGrow(msNumberArray* arr, int64_t newLen, double value) {
 	if (newLen <= arr->len) return;
 	/* Ensure capacity */
-	if (arr->p == NULL || arr->p->cap < newLen) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < newLen) {
 		arr->p = (msNumberPayload*)msArrayPrepareAdd(arr->len, arr->p, newLen - arr->len, sizeof(double));
 	}
 	/* Fill new slots */
@@ -303,7 +303,7 @@ void msNumberArraySetLen(msNumberArray* arr, int64_t newLen) {
 }
 
 int64_t msNumberArrayCapacity(msNumberArray* arr) {
-	return arr->p ? arr->p->cap : 0;
+	return arr->p ? (arr->p->cap & MS_CAP_MASK) : 0;
 }
 
 /* ===== String Array ===== */
@@ -335,14 +335,14 @@ void msStringArrayDestroy(msStringArray* arr) {
 		for (int64_t i = 0; i < arr->len; i++) {
 			msStringDestroy(arr->p->data[i]);
 		}
-		msMemFree(arr->p);
+		msArrayPayloadFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
 }
 
 void msStringArrayPush(msStringArray* arr, msString value) {
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msString));
 	}
 	/* Sink semantics — take ownership of value. The analyzer marks the source
@@ -481,7 +481,7 @@ void msStringArrayShrink(msStringArray* arr, int64_t newLen) {
 
 void msStringArrayGrow(msStringArray* arr, int64_t newLen, msString value) {
 	if (newLen <= arr->len) return;
-	if (arr->p == NULL || arr->p->cap < newLen) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < newLen) {
 		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, newLen - arr->len, sizeof(msString));
 	}
 	for (int64_t i = arr->len; i < newLen; i++) {
@@ -499,14 +499,14 @@ void msStringArraySetLen(msStringArray* arr, int64_t newLen) {
 }
 
 int64_t msStringArrayCapacity(msStringArray* arr) {
-	return arr->p ? arr->p->cap : 0;
+	return arr->p ? (arr->p->cap & MS_CAP_MASK) : 0;
 }
 
 /* ===== Uint8 Array ===== */
 
 void msUint8ArrayDestroy(msUint8Array* arr) {
 	if (arr->p != NULL) {
-		msMemFree(arr->p);
+		msArrayPayloadFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
@@ -528,7 +528,7 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 
 static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {
 	(void)resume;
-	msMemFree(payload);
+	msArrayPayloadFree(payload);
 }
 
 void msRefArrayDestroy(msRefArray* arr) {
@@ -549,7 +549,7 @@ void msRefArrayDestroy(msRefArray* arr) {
 		msDropDefer(p, msRefPayloadFreeAfterDrop, 0);
 		return;
 	}
-	msMemFree(p);
+	msArrayPayloadFree(p);
 }
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
@@ -564,7 +564,7 @@ void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 
 void msRefArrayGrow(msRefArray* arr, int64_t newLen, void* value) {
 	if (newLen <= arr->len) return;
-	if (arr->p == NULL || arr->p->cap < newLen) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < newLen) {
 		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, newLen - arr->len, sizeof(void*));
 	}
 	for (int64_t i = arr->len; i < newLen; i++) {
@@ -610,7 +610,7 @@ void msAcyclicRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefAny(p->data[i]);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
@@ -687,7 +687,7 @@ void msNumberArraySplice3(msNumberArray* arr, int64_t start, int64_t deleteCount
 		}
 		arr->len -= deleteCount;
 	}
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msNumberPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(double));
 	}
 	if (start > arr->len) start = arr->len;
@@ -711,7 +711,7 @@ void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount
 		}
 		arr->len -= deleteCount;
 	}
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msString));
 	}
 	if (start > arr->len) start = arr->len;
@@ -733,7 +733,7 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 		}
 		arr->len -= deleteCount;
 	}
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msUint8Payload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(uint8_t));
 	}
 	if (start > arr->len) start = arr->len;
@@ -767,7 +767,7 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msAtomicDecref(p->data[i]);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
@@ -792,7 +792,7 @@ static void msRefArraySpliceThenRelease(msRefArray* arr, int64_t start, int64_t 
 		}
 		arr->len -= removedLen;
 	}
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
 	}
 	if (start > arr->len) start = arr->len;
@@ -907,12 +907,12 @@ void msClosureArrayDestroy(msClosureArray* arr) {
 				msDecrefCyclic(p->data[i].env);
 			}
 		}
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
 void msClosureArrayPush(msClosureArray* arr, msClosure value) {
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+	if (arr->p == NULL || (arr->p->cap & MS_CAP_MASK) < arr->len + 1) {
 		arr->p = (msClosurePayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msClosure));
 	}
 	/* Sink semantics: caller already incref'd env if needed; we take ownership. */
@@ -926,7 +926,7 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 	 * pattern (system.h). If we destroyed dest first and dest === src, the
 	 * snapshot would read freed memory. */
 	const int64_t len = src->len;
-	const int64_t cap = src->p != NULL ? src->p->cap : 0;
+	const int64_t cap = src->p != NULL ? (src->p->cap & MS_CAP_MASK) : 0;
 	msClosurePayload* newp = NULL;
 	if (src->p != NULL) {
 		const size_t sz = sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure);
