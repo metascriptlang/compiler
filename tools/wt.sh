@@ -52,7 +52,11 @@ inbox_tally() {
   [ "$n" -gt 0 ] || return 0
   printf '%s card(s) in %s:' "$n" "$dir"
   grep -h -m1 '^State:' "$dir"/*.md 2>/dev/null \
-    | awk -v n="$n" '{s=$2; sub(/[.,]$/, "", s); t[s]++; k++} END {for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d without a State line ·", n - k}' \
+    | awk -v n="$n" 'BEGIN {split("open claimed landed design", v); for (i in v) ok[v[i]] = 1}
+                     {s = tolower($2); gsub(/[^a-z]/, "", s); if (!(s in ok)) s = "off-format"; t[s]++; k++}
+                     END {for (i = 1; i <= 4; i++) if (t[v[i]]) printf " %d %s ·", t[v[i]], v[i]
+                          if (t["off-format"]) printf " %d off-format ·", t["off-format"]
+                          if (n > k) printf " %d without a State line ·", n - k}' \
     | sed 's/ ·$//'
   printf '\n'
   inbox_kinds "$dir" "$n"
@@ -89,8 +93,11 @@ inbox_pins() {
 inbox_kinds() {
   local dir=$1 n=$2 kinds new
   kinds=$(grep -h -m1 '^Kind:' "$dir"/*.md 2>/dev/null \
-    | awk -v n="$n" '{sub(/^Kind:[ \t]*/, ""); sub(/[ \t]+$/, ""); if (!NF) next; t[$0]++; k++}
-                     END {if (!k) exit; for (s in t) printf " %d %s ·", t[s], s; if (n > k) printf " %d unclassified ·", n - k}' \
+    | awk -v n="$n" 'BEGIN {split("type-identity inference narrowing resolution transform-lowering codegen-emit DRC/lifetime runtime-ABI std-API perf", v)}
+                     {sub(/^Kind:[ \t]*/, ""); gsub(/`/, ""); if (!NF) next; for (i = 1; i in v; i++) if (index($0, v[i]) == 1) break
+                      t[(i in v) ? v[i] : "other"]++; k++}
+                     END {if (!k) exit; for (i = 1; i in v; i++) if (t[v[i]]) printf " %d %s ·", t[v[i]], v[i]
+                          if (t["other"]) printf " %d other ·", t["other"]; if (n > k) printf " %d unclassified ·", n - k}' \
     | sed 's/ ·$//')
   [ -n "$kinds" ] || return 0
   new=$(grep -lE '^Mechanism:.*NEW MECHANISM' "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
