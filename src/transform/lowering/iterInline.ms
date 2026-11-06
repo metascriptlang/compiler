@@ -16,7 +16,7 @@ import { hasFlag, symbolKey } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
-import { isIterator, peelTransparentInstance } from "../../checker/types";
+import { isIterator, peelTransparentInstance, destrPositionalElemType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
@@ -1236,7 +1236,19 @@ function consumerFor(value: Node, d: ForOfStmtData, bindingSym: Symbol | null, o
 	const kind = boolToDeclKind(d.forOfIsConst);
 	const pattern = d.forOfPattern;
 	const patKind = pattern != null ? pattern.kind : NodeKind.Identifier;
-	if (patKind == NodeKind.ArrayPattern || patKind == NodeKind.ObjectPattern) {
+	const parts = patKind == NodeKind.ArrayPattern ? tupleParts(value, pattern) : null;
+	if (parts != null) {
+		const names = (pattern.data as ArrayPatternData).patternElements;
+		for (let i = 0; i < parts.length; i++) {
+			const old = names[i].resolvedSym!;
+			const fresh = freshLike(old, ctx, false);
+			renames.set(old, fresh);
+			const bound = makeVarDecl((names[i].data as IdentifierData).name, parts[i], kind, loc);
+			bound.resolvedSym = fresh;
+			bound.nodeType = parts[i].nodeType;
+			stmts.push(bound);
+		}
+	} else if (patKind == NodeKind.ArrayPattern || patKind == NodeKind.ObjectPattern) {
 		const elem = freshTempSym(ctx, "elem", value.nodeType);
 		const elemDecl = makeVarDecl(elem.name, value, DeclKind.Const, loc);
 		elemDecl.resolvedSym = elem;
@@ -1268,6 +1280,22 @@ function consumerFor(value: Node, d: ForOfStmtData, bindingSym: Symbol | null, o
 	const rest = extractBodyStmts(body);
 	stmts.push(plan.contUsed ? makeSwitchWrapper(rest, plan.contLabel, loc) : makeBlock(rest, loc));
 	return makeBlock(stmts, loc);
+}
+
+function tupleParts(value: Node, pattern: Node): Node[] | null {
+	const t = value.nodeType != null ? peelTransparentInstance(value.nodeType) : null;
+	if (value.kind != NodeKind.ArrayLiteral || t == null || t.kind != TypeKind.Tuple) return null;
+	const parts = (value.data as ArrayLiteralData).elements;
+	const p = pattern.data as ArrayPatternData;
+	if (p.hasRestElement || p.patternElements.length != parts.length) return null;
+	for (let i = 0; i < parts.length; i++) {
+		const name = p.patternElements[i];
+		if (name.kind != NodeKind.Identifier || name.resolvedSym == null || (name.data as IdentifierData).name == "_") return null;
+		if (i < p.patternDefaults.length && p.patternDefaults[i] != null) return null;
+		const field = destrPositionalElemType(value.nodeType, i as int32);
+		if (field == null || parts[i].nodeType == null || !sameType(parts[i].nodeType!, field)) return null;
+	}
+	return parts;
 }
 
 function isWrapper(node: Node): boolean {
