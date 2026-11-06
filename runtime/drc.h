@@ -210,24 +210,24 @@ static inline void* msMemAllocN0(size_t n, size_t size) { return msHeapCalloc(n,
 static inline void msMemFree(void* p) { msHeapFree(p); }
 #else
 static inline void* msMemAlloc(size_t size) {
-	void* p = msMemAlloc(size);
+	void* p = malloc(size);
 	if (p == NULL && size != 0) msRaiseOutOfMemory();
 	return p;
 }
 
 static inline void* msMemAlloc0(size_t size) {
-	void* p = msMemAllocN0(1, size);
+	void* p = calloc(1, size);
 	if (p == NULL && size != 0) msRaiseOutOfMemory();
 	return p;
 }
 
 static inline void* msMemAllocN0(size_t n, size_t size) {
-	void* p = msMemAllocN0(n, size);
+	void* p = calloc(n, size);
 	if (p == NULL && n != 0 && size != 0) msRaiseOutOfMemory();
 	return p;
 }
 
-static inline void msMemFree(void* p) { msMemFree(p); }
+static inline void msMemFree(void* p) { free(p); }
 #endif
 
 /* Slab primitive WITHOUT any zeroing — caller owns the memory state.
