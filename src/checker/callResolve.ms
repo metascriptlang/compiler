@@ -29,7 +29,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf, builtinKindName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow } from "./types";
+import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow, typedArrayElement } from "./types";
 import { receiverOf } from "./effects";
 import { locBefore, checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, refuseUnownedCrossing, isCurrentActorRef, refuseSuspendingLockCallback, refuseKeptView } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
@@ -3928,6 +3928,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			// e.g. `createComponent(For, props)`: arg0 (the unapplied generic fn)
 			// binds P to For's own T-containing param type, masking arg1's
 			// concrete object literal.
+			const retyped = literalTypedByConstraint(ctx, cd.arguments[i], calleeType.typeChildren[i], argTypes[i]);
+			if (retyped != null) argTypes[i] = retyped;
 			const ab = createUnifyBindings();
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
 			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral, candMapped);
@@ -4177,6 +4179,44 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const instRest = instCallee != null ? restTupleOf(instCallee) : null;
 	if (instRest != null) fitRestTupleArgs(ctx, node, instCallee!, instRest, callMinArity(instCallee!), argTypes.length);
 	return instSym.symbolType;
+}
+
+// A literal whose own type misses its type parameter's constraint takes the constraint as its contextual type, as the
+// apparent type of a type parameter is its constraint; a literal that already meets it keeps its own type.
+function literalTypedByConstraint(ctx: CheckerContext, arg: Node, formal: Type, argType: Type): Type | null {
+	if (formal.kind != TypeKind.GenericParam || formal.typeExtra == null || hasGenericParams(formal.typeExtra) || !isNumericLiteralShape(arg)) return null;
+	if (unmetConstraint(formal, argType, [], []) == null) return null;
+	clearCheckerState(arg);
+	callCheckExpr(ctx, arg, literalContextOf(arg, formal.typeExtra));
+	return arg.nodeType;
+}
+
+// The array members of a union constraint give an array literal its context when they agree on one element type.
+function literalContextOf(arg: Node, constraint: Type): Type {
+	if (arg.kind != NodeKind.ArrayLiteral || constraint.kind != TypeKind.Union) return constraint;
+	let element: Type | null = null;
+	for (const member of constraint.typeChildren) {
+		const held = skipModifier(member);
+		if (held == null) continue;
+		const viewed = typedArrayElement(held);
+		const memberElement = viewed != null ? viewed : isArrayShaped(held) || held.kind == TypeKind.Span ? held.typeReturn : null;
+		if (memberElement == null) continue;
+		const bare = withoutReadonlyView(memberElement);
+		if (element != null && !sameType(element, bare)) return constraint;
+		element = bare;
+	}
+	return element != null ? createArray(element) : constraint;
+}
+
+function isNumericLiteralShape(node: Node): boolean {
+	if (node.kind == NodeKind.NumberLiteral) return true;
+	if (node.kind == NodeKind.UnaryExpr) return (node.data as UnaryExprData).unaryOp == "-" && isNumericLiteralShape((node.data as UnaryExprData).operand);
+	if (node.kind != NodeKind.ArrayLiteral) return false;
+	const elements = (node.data as ArrayLiteralData).elements;
+	for (const element of elements) {
+		if (element == null || !isNumericLiteralShape(element)) return false;
+	}
+	return elements.length > 0;
 }
 
 function reportUnmetConstraints(ctx: CheckerContext, node: Node, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
