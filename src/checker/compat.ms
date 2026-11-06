@@ -1108,8 +1108,8 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		if (taken == null) return "";
 		const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
 		if (paramModeDiffers(taken, passed)) {
-			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassing(taken) + ", but the expected '"
-				+ signatureText(target) + "' passes it " + paramPassing(passed) + "; declare '" + name + "' the same way in both";
+			return " — '" + signatureText(source) + "' takes '" + name + "' " + paramPassingBeside(taken, passed) + ", but the expected '"
+				+ signatureText(target) + "' passes it " + paramPassingBeside(passed, taken) + "; declare '" + name + "' the same way in both";
 		}
 		if (fnSlotReprMismatch(taken, passed) && isAssignable(passed, taken)) {
 			return " — parameter '" + name + "' takes " + signatureText(taken) + ", but the expected function passes it " + signatureText(passed)
@@ -1146,6 +1146,11 @@ function paramModeWord(t: Type): string {
 function paramPassing(t: Type): string {
 	const word = paramModeWord(t);
 	return word == "" ? "by value" : word == "ref" ? "by reference" : "as '" + word + "'";
+}
+
+function paramPassingBeside(t: Type, other: Type): string {
+	if (paramModeWord(t) != "" || paramModeWord(other) != "" || takesOwnership(t) == takesOwnership(other)) return paramPassing(t);
+	return takesOwnership(t) ? "as its owner" : "lent";
 }
 
 function signatureText(t: Type): string {

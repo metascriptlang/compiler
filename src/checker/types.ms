@@ -5156,6 +5156,7 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			TypeKind.Function => {
 				const fn = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(fn, params, concretes, active);
+				lendOwnedToBareParams(fn, t, params);
 				fn.typeReturn = substituteAllParamsInner(t.typeReturn, params, concretes, active);
 				fn
 			},
@@ -5186,6 +5187,15 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			_ => t,
 		};
 	return isReadonlyView(t) ? createReadonlyView(result) : result;
+}
+
+function lendOwnedToBareParams(fn: Type, generic: Type, params: Type[]): void {
+	for (let ci = 0; ci < fn.typeChildren.length; ci += 1) {
+		const spelled = generic.typeChildren[ci];
+		if (spelled != null && spelled.kind == TypeKind.GenericParam && params.indexOf(withoutReadonlyView(spelled)) >= 0 && fn.typeChildren[ci] != null) {
+			fn.typeChildren[ci] = withoutOwned(fn.typeChildren[ci]);
+		}
+	}
 }
 
 function substitutedDistinct(t: Type, inner: Type): Type {

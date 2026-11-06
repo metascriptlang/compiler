@@ -3555,9 +3555,19 @@ export function refuseOwnedCast(ctx: CheckerContext, expr: Node, target: Type, e
 	return true;
 }
 
+function lentParamHint(ctx: CheckerContext, expr: Node): string {
+	const sym = expr.kind == NodeKind.Identifier ? expr.resolvedSym : null;
+	const generic = ctx.currentFunction != null && ctx.currentFunction.instantiatedFrom != null ? ctx.currentFunction.instantiatedFrom.symbolType : null;
+	if (sym == null || sym.symbolKind != SymbolKind.Parameter || generic == null || generic.kind != TypeKind.Function) return "";
+	const at = generic.typeNames.indexOf(sym.name);
+	const spelled = at >= 0 && at < generic.typeChildren.length ? generic.typeChildren[at] : null;
+	if (spelled == null || spelled.kind != TypeKind.GenericParam) return "";
+	return "; '" + sym.name + "' is written '" + typeDisplayName(spelled) + "', so it lends an Owned argument without its ownership — declare it 'sink " + sym.name + ": " + typeDisplayName(spelled) + "' to take the edge";
+}
+
 export function fitOwnership(ctx: CheckerContext, expr: Node, formal: Type, exprType: Type): Type | null {
 	if (refusesUnownedIntoOwned(expr, formal, exprType)) {
-		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — an owned slot takes the unique owning edge, so it accepts a fresh value (new, an object literal, null) or an Owned value", expr.location.line, expr.location.column);
+		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — an owned slot takes the unique owning edge, so it accepts a fresh value (new, an object literal, null) or an Owned value" + lentParamHint(ctx, expr), expr.location.line, expr.location.column);
 		return null;
 	}
 	if (isFreshConst(expr, exprType) && isOwnedRef(owningEdge(formal)) && !isOwnedRef(exprType)) {
