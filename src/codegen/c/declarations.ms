@@ -706,7 +706,8 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 		let leaves = "";
 		for (let i: int32 = 0; i < count; i += 1) {
 			const leaf = bakedLeaf(bakedArrayAt(carrier, i));
-			const text = leaf.kind == NodeKind.StringLiteral ? msStringPoolRef(internString(g.stringPool, (leaf.data as StringLiteralData).value), cStringByteLen((leaf.data as StringLiteralData).value))
+			const text = elemT.kind == TypeKind.SizedArray || elemT.kind == TypeKind.Struct ? readonlyDataBracedInit(g, leaf, elemT)
+				: leaf.kind == NodeKind.StringLiteral ? msStringPoolRef(internString(g.stringPool, (leaf.data as StringLiteralData).value), cStringByteLen((leaf.data as StringLiteralData).value))
 				: leaf.kind == NodeKind.BooleanLiteral ? cBoolLiteral((leaf.data as BooleanLiteralData).boolValue)
 				: formatCNumberLit(leaf.data as NumberLiteralData, elemT);
 			leaves = leaves.length == 0 ? text : leaves + ", " + text;

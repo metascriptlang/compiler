@@ -1,4 +1,4 @@
-import { compileToC } from "../helpers";
+import { compileToC, compileProjectToC } from "../helpers";
 
 test "a module const sized array of string literals is a braced initializer" {
 	const c = compileToC(`
@@ -67,4 +67,34 @@ console.log(NAMES[1]);
 `);
 	assert c.ok;
 	assert !c.value.contains("MS_STRLIT_FLAG | 2");
+}
+
+test "a module const array of sized-array literals is a flagged static payload with nested braces" {
+	const c = compileToC(`
+type Limb = uint32[3];
+const ROWS: Limb[] = [[1, 2, 3], [4, 5, 6]];
+console.log(ROWS[1][2]);
+`);
+	assert c.ok;
+	assert c.value.contains("_data_ = { MS_STRLIT_FLAG | 2, { { { 1U, 2U, 3U } }, { { 4U, 5U, 6U } } } };");
+	assert !c.value.contains("msArrayPayloadNew(");
+}
+
+test "a module const array of struct literals is a flagged static payload" {
+	const c = compileToC(`
+struct Pair { a: int32; b: int32; }
+const PAIRS: Pair[] = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+console.log(PAIRS[1].b);
+`);
+	assert c.ok;
+	assert c.value.contains("MS_STRLIT_FLAG | 2");
+	assert !c.value.contains("msArrayPayloadNew(");
+}
+
+test "an unread library const array of sized-array literals is dropped with its data" {
+	const lib = "export type Limb = uint32[3];\nexport const ROWS: Limb[] = [[1, 2, 3], [4, 5, 6]];\nexport const USED: int32 = 7;\n";
+	const main = "import { USED } from \"./rows\";\nconsole.log(USED);\n";
+	const c = compileProjectToC([{ entryPath: "src/rows.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: main }], "src/main.ms");
+	assert !c.contains("MS_STRLIT_FLAG | 2");
+	assert !c.contains("msArrayPayloadNew(");
 }

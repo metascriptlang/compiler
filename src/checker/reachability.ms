@@ -7,6 +7,7 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { readonlyDataTypeShape, readonlyDataInitializer } from "./constFold";
 import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
@@ -917,6 +918,9 @@ function bakeableLeaf(e: Readonly<Node>, elemT: Readonly<Type>): boolean {
 	if (elemT.kind == TypeKind.String) return e.kind == NodeKind.StringLiteral;
 	if (elemT.kind == TypeKind.Boolean) return leaf.kind == NodeKind.BooleanLiteral;
 	if (isIntegerType(elemT) || isFloatType(elemT) || elemT.kind == TypeKind.Number) return leaf.kind == NodeKind.NumberLiteral;
+	if (elemT.kind == TypeKind.SizedArray || elemT.kind == TypeKind.Struct) {
+		return readonlyDataTypeShape(elemT, 1) && readonlyDataInitializer(leaf, 1);
+	}
 	return false;
 }
 
