@@ -200,6 +200,8 @@ def runZig(zig, target, variant, work, cache):
     environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
                    "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
+    if sys.platform == "win32":
+        environment.update({"SystemRoot": os.environ["SystemRoot"], "TEMP": private, "TMP": private})
     command = [zig, "c++", "-target", spec.get("zigTarget", target), "-O2", CXX_STANDARD, "-v"] + spec["zigArgs"] + [
         os.path.join(pr.FIXTURES, spec["fixture"])] + spec["zigLibraries"] + ["-o", output]
     try:
