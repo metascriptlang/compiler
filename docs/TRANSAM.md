@@ -195,6 +195,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Highlight, completion, format caches | `highlight.zig`, `completion.zig`, `format.zig` | LSP-side concerns, outside the engine |
 | AST arena management | `transam.zig` | DRC owns the trees |
 | String interner | `intern.zig` | Query keys are sequential file ids; nothing reads an interned id |
+| Chain cutoff: an importer of `mid` stays green when `mid`'s interface text is unchanged but one of `mid`'s imports changed | Zig per-read dependees (`type_layout`, `nav_ty`); Rust per-item queries | Not built. The interface keys a foreign type by its symbol only, so an importer that reads `C` through `export { C } from "./a"` or through an inferred `{ value: C }` needs an edge to `a.ms` of its own; without one, `mid` counts as changed, as Nim IC's interface cookie mixes in its direct imports' cookies. Pins: `src/test/handoff/icTypeOrigins.ms` (warm diagnostics equal cold for both shapes, green on a candidate of 5c097359398's tree, rtx, 2026-11-07) and IC case `chainCutoff` (XFAIL). Rejected: one edge per module reached from `ctx.importSet` at bind time, because a namespace import resolves its members on demand outside `importSet` (`collectImport`), so the edge set would be incomplete and a reused check stale |
 
 ## 7. File cross-reference
 
