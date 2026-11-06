@@ -2,9 +2,10 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, ExportDeclData, DecoratedDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
+import { parseAsBuildOf } from "../../parser/context";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
@@ -193,6 +194,7 @@ interface ComptimeEngine {
 	funcMap: RaiserFuncMap;
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
+	sources: HashMap<string, Node>;
 	metaSeeds: NamedSymbol[] | null;
 	instanceCtxs: HashMap<Symbol, CheckerContext>;
 	lifted: LiftedOpsState;
@@ -223,7 +225,7 @@ function freshEngine(dispatchRegistry: DispatchRegistry): ComptimeEngine {
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
 	const instanceCtxs = new HashMap<Symbol, CheckerContext>();
-	return { image, funcMap, vm, bodyCtxs, metaSeeds: null, instanceCtxs, lifted: freshLiftedOps() };
+	return { image, funcMap, vm, bodyCtxs, sources: new HashMap<string, Node>(), metaSeeds: null, instanceCtxs, lifted: freshLiftedOps() };
 }
 
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
@@ -436,8 +438,6 @@ function raiserCounterpart(own: Symbol): Symbol {
 	return own;
 }
 
-function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
-	const counterpart = seed.sym.symbolKind == SymbolKind.Class ? raiserCounterpartClass(seed.sym) : raiserCounterpart(seed.sym);
 function isStdTierSym(sym: Symbol): boolean {
 	return (sym.modulePath.endsWith(".jms") || sym.modulePath.endsWith(".cms")) && stdModuleName(sym.modulePath) != "";
 }
@@ -454,6 +454,8 @@ function raiserCounterpartClass(own: Symbol): Symbol {
 	return own;
 }
 
+function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
+	const counterpart = seed.sym.symbolKind == SymbolKind.Class ? raiserCounterpartClass(seed.sym) : raiserCounterpart(seed.sym);
 	return counterpart == seed.sym ? seed : { name: seed.name, sym: counterpart };
 }
 
@@ -714,6 +716,33 @@ export function engineCompiledNames(): string[] {
 	return _engineBodyNames;
 }
 
+function topLevelFunction(stmt: Node): Node | null {
+	if (stmt.kind == NodeKind.ExportDecl) return topLevelFunction((stmt.data as ExportDeclData).exportedDecl);
+	if (stmt.kind == NodeKind.DecoratedDecl) return topLevelFunction((stmt.data as DecoratedDeclData).decoratedNode);
+	return stmt.kind == NodeKind.FunctionDecl ? stmt : null;
+}
+
+function sourceDeclOf(sym: Symbol): Node | null {
+	const decl = sym.declNode;
+	if (sym.instantiatedFrom != null || decl == null || decl.kind != NodeKind.FunctionDecl || sym.modulePath == "") return null;
+	let program = _engine.sources.get(sym.modulePath) ?? null;
+	if (program == null) {
+		const outer = getComptimeOuterCtx();
+		const mod = outer != null && outer.graph != null ? findModule(outer.graph, sym.modulePath) : null;
+		if (mod == null) return null;
+		const parsed = parseAsBuildOf("raiser", () => parseSource(mod.source));
+		if (!parsed.ok) return null;
+		program = parsed.value;
+		_engine.sources.set(sym.modulePath, program);
+	}
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const fn = topLevelFunction(stmt);
+		if (fn != null && (fn.data as FunctionDeclData).fnName == sym.name
+			&& fn.location.line == decl.location.line && fn.location.column == decl.location.column) return cloneNodeForCheck(fn);
+	}
+	return null;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
@@ -770,7 +799,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		}
 		exts = seedExtensionsOf(seedCtx, isClass ? sym : null);
 	}
-	const clone = cloneNodeForCheck(sym.declNode);
+	const clone = sourceDeclOf(sym) ?? cloneNodeForCheck(sym.declNode);
 	let engineName = name;
 	if (clone.kind == NodeKind.FunctionDecl) {
 		engineName = "$comptime:helper";
