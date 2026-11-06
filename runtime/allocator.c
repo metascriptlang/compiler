@@ -315,7 +315,7 @@ static msHeapBig* msHeapGetBig(size_t size) {
     }
     if (chunk->base.size >= size + MS_HEAP_PAGE_SIZE)
         msHeapInsertBig(msHeapSplit(chunk, size));
-    chunk->base.prevSize |= 1;
+    chunk->base.prevSize = 1;
     msHeapInclude((uintptr_t)chunk);
     return chunk;
 }
@@ -332,7 +332,7 @@ static void msHeapReleaseBig(msHeapBig* chunk) {
         uintptr_t address = (uintptr_t)chunk - prevSize;
         if (msHeapContains(address)) {
             msHeapBig* left = (msHeapBig*)address;
-            if (!(left->base.prevSize & 1) && left->base.size <= MS_HEAP_MAX_BIG) {
+            if (!(left->base.prevSize & 1) && left->base.size < MS_HEAP_MAX_BIG) {
                 msHeapRemoveBig(left);
                 left->base.size += chunk->base.size;
                 msHeapExclude((uintptr_t)chunk);
@@ -356,7 +356,6 @@ static void msHeapReleaseBig(msHeapBig* chunk) {
                 msHeapInsertBig(msHeapSplit(chunk, MS_HEAP_MAX_BIG));
         }
     }
-    msHeapUpdateNext(chunk);
     msHeapInsertBig(chunk);
 }
 

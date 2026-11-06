@@ -71,20 +71,35 @@ int32_t msAllocatorCoreChecks(void) {
 	for (size_t i = 0; i < 64; ++i) pages += used[i] != 0;
 	CHECK(pages == 17 && requests == 2);
 
-	phase = "two-sided coalescing";
+	phase = "right coalescing chain";
 	unsigned char* a = msHeapAlloc(12000);
 	unsigned char* b = msHeapAlloc(12000);
 	unsigned char* c = msHeapAlloc(12000);
 	size_t before = requests;
-	msHeapFree(a);
 	msHeapFree(c);
 	msHeapFree(b);
+	msHeapFree(a);
 	size_t mergedSize = 14 * 4096 - sizeof(msHeapBig);
 	unsigned char* merged = msHeapAlloc(mergedSize);
 	CHECK(merged == a && requests == before);
 	memset(merged, 0x33, mergedSize);
 	checkBytes(merged, mergedSize, 0x33);
 	msHeapFree(merged);
+
+	phase = "left coalescing after a split names the neighbour";
+	unsigned char* x = msHeapAlloc(2 * 4096 - sizeof(msHeapBig));
+	unsigned char* y = msHeapAlloc(2 * 4096 - sizeof(msHeapBig));
+	CHECK(x == a && y == a + 2 * 4096);
+	msHeapFree(x);
+	unsigned char* z = msHeapAlloc(4096 - sizeof(msHeapBig));
+	CHECK(z == a);
+	msHeapFree(y);
+	unsigned char* w = msHeapAlloc(mergedSize);
+	CHECK(w == a + 4096 && requests == before);
+	msHeapFree(w);
+	msHeapFree(z);
+	CHECK(msHeapAlloc(mergedSize) == a && requests == before);
+	msHeapFree(a);
 
 	phase = "class and page boundaries";
 	const size_t sizes[] = {0,1,15,16,17,31,32,33,63,64,65,127,128,129,255,256,257,511,512,513,1007,1008,1009,1023,1024,1025,2015,2016,2017,2031,2032,2033,4015,4016,4017,4031,4032,4033,4047,4048,4049,4095,4096,4097,8191,8192,8193,16335,16336,16337};
