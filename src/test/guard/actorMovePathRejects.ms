@@ -8,7 +8,8 @@
 //   that shares its buffer with a module const or a second struct crossed to the actor's thread
 //   with no error (measured 2026-11-06 on msc ad50eb00424), and `move Buffer.copy(p)` crossing
 //   while `const k = Buffer.copy(p); move k` was refused; and a destructured binding reported as
-//   "declared outside the enclosing function".
+//   "declared outside the enclosing function"; and an actor handle beside a shared Buffer making the
+//   whole value pass as isolated.
 //
 // RED MEANS: one of the shapes below compiles again.
 //
@@ -67,9 +68,24 @@ function resultOfAShared(keeper: Readonly<Keeper>): void {
 	keeper.state(move r.value); // GUARD-REFUSED
 }
 
+struct Linked { peer: Sink; data: Buffer; }
+
+actor Holder {
+	frame(l: Linked): void { console.log(`linked ${l.data.length}`); }
+}
+
+function relink(this l: Linked): Linked {
+	return { peer: l.peer, data: l.data };
+}
+
+function callSharingABufferBesideAnActor(h: Readonly<Holder>, l: Linked): void {
+	h.frame(move l.relink()); // GUARD-REFUSED
+}
+
 const s = new Sink();
 fieldOfAShared(s);
 fieldStoredTwice(s);
 callOfAParameter(s, Buffer.alloc(2));
 destructuredFromALiveLocal(s);
 resultOfAShared(new Keeper());
+callSharingABufferBesideAnActor(new Holder(), { peer: s, data: Buffer.alloc(3) });

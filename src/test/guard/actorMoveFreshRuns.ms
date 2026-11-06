@@ -2,13 +2,15 @@
 //
 // INVARIANT (ULTRALOCK V2, N5): a field moved out of a local bound from a fresh value and never
 //   aliased crosses to the actor; so does a binding destructured from a fresh value, and a spread
-//   of a T[] or a Buffer of value-only elements, which builds a fresh array.
+//   of a T[] or a Buffer of value-only elements, which builds a fresh array. An actor handle is
+//   an uncounted pid (A6), so a value that shares only actor handles and Locked cells is a copy.
 //
 // WHAT IT CATCHES: the path check refusing a sole owner's field, a destructured binding reported
 //   as declared outside its function, and `[...b] as Buffer` or `[...a]` refused as "not a fresh
 //   value" (no spelling of a fresh copy compiled on msc ad50eb00424); and a Result's value
 //   narrowed by `if (!r.ok)` refused as "not a fresh value" when its struct holds an array, because
-//   the narrowed read arrives wrapped in a conversion the path check did not peel (8e5d42d129b).
+//   the narrowed read arrives wrapped in a conversion the path check did not peel (8e5d42d129b);
+//   and `move hub.share()` of a struct holding an actor handle refused with E148 (msc 25b184cf867).
 //
 // RED MEANS: the build fails on one of the moves below, or the actor saw the wrong lengths.
 
@@ -29,6 +31,32 @@ struct State {
 
 function made(name: string): Result<State, string> {
 	return Result.ok({ name: name, items: [1, 2, 3] });
+}
+
+actor Inner {
+	n: int32 = 1;
+	get(): int32 { return this.n; }
+}
+
+struct Seat { actor: Inner; }
+
+struct Hub {
+	actor: Inner;
+	maybe: Inner | null;
+	seat: Seat;
+	peers: Vec<Inner>;
+	backlog: Locked<int32>;
+	tables: Vec<string>;
+}
+
+function share(this hub: Hub): Hub {
+	return { actor: hub.actor, maybe: hub.maybe, seat: hub.seat, peers: [...hub.peers], backlog: hub.backlog, tables: [...hub.tables] };
+}
+
+actor Tail {
+	hub: Hub;
+	constructor(sink hub: Hub) { this.hub = hub; }
+	count(): int32 { return this.hub.tables.length as int32 + (this.hub.maybe != null ? 1 : 0) + this.hub.peers.length as int32; }
 }
 
 actor Sink {
@@ -62,6 +90,10 @@ async function main(): Promise<int32> {
 		if (!inner.ok) return 1;
 		total = await sink.state(move inner.value);
 	}
+	const hub: Hub = { actor: new Inner(), maybe: new Inner(), seat: { actor: new Inner() }, peers: [new Inner()], backlog: new Locked<int32>(0), tables: ["a"] };
+	const tail = new Tail(move hub.share());
+	const seen = await tail.count();
+	if (seen != 3 || await hub.actor.get() + await hub.seat.actor.get() != 2) { throw "GUARD RED: hub " + seen; }
 	if (total != 1 + 3 + 5 + 7 + 2 + 3 + 3 || shared.length != 7 || src.length != 2) { throw "GUARD RED: total " + total; }
 	console.log("GUARD-OK");
 	return 0;
