@@ -2,9 +2,10 @@
 
 import { stopBuild, atomicWriteFile } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd, cmdExists } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, rename, changeStamp, changedTime, modifiedTime, writeFile, removeAll, symlink } from "std/fs";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir, rename, changeStamp, changedTime, modifiedTime, writeFile, removeAll, symlink, readFileBytes } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
 import { sha256, toHex } from "std/crypto/sha256";
+import { sha256Sync, toHex as cryptoHex } from "std/crypto";
 import { nowSeconds, markUsed } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -253,15 +254,11 @@ function bundleText(root: string, name: string): Result<string, string> {
 }
 
 function fileSha256(path: string): Result<string, string> {
-	const command = platform == "windows" ? "certutil" : platform == "darwin" ? "shasum" : "sha256sum";
-	const args = platform == "windows" ? ["-hashfile", path, "SHA256"] : platform == "darwin" ? ["-a", "256", path] : [path];
-	const hash = execFileCapture(command, args);
-	if (!hash.ok) return Result.err(`native toolchain: cannot hash ${path}: ${hash.error.message}`);
-	for (const line of hash.value.split("\n")) {
-		const digest = line.trim().slice(0, 64).toLowerCase();
-		if (isSha256(digest)) return Result.ok(digest);
-	}
-	return Result.err(`native toolchain: invalid SHA256 output for ${path}`);
+	const bytes = readFileBytes(path);
+	if (!bytes.ok) return Result.err(`native toolchain: cannot hash ${path}: ${bytes.error.message}`);
+	const digest = sha256Sync(bytes.value);
+	if (!digest.ok) return Result.err(`native toolchain: cannot hash ${path}: ${digest.error.message}`);
+	return Result.ok(cryptoHex(digest.value));
 }
 
 let containmentChecks = 0;
