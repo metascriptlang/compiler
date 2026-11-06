@@ -1,0 +1,12 @@
+// The pinned upstream dudect statistics for src/test/crypto/ct/dudectRun.ms. Test-only; on AArch64 the build passes
+// --passC=-isystem src/test/crypto/harness/dudect/armShim (tools/crypto/ctDudect.sh).
+
+@include("src/test/crypto/ct/dudectHost.h");
+@compile("src/test/crypto/ct/dudectHost.c", "-isystem src/test/crypto/harness/dudect");
+
+extern function msCtDudectRun(fixed: Ptr<uint8>, length: int64, measurements: int64, batches: int64, seed: uint64, nullRun: int32): int32;
+
+/** Runs dudect over `fixed` (class 0) against random inputs of its length; 0 no evidence, 20 leakage, 21 inconclusive. */
+export function dudectRun(fixed: Span<uint8>, measurements: int64, batches: int64, seed: uint64, nullRun: boolean): int32 {
+	return msCtDudectRun(fixed as Ptr<uint8>, fixed.length, measurements, batches, seed, nullRun ? 1 : 0);
+}
