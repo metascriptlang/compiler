@@ -680,7 +680,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// the name with a different LLVM definition; see the platform-tools README).
 	if (opts.targetOs == "solana") {
 		flags = appendFlag(flags, `-target ${SBF_TARGET}`);
-		flags = appendFlag(flags, "-fno-builtin");
+		flags = appendFlag(flags, "-ffreestanding -fno-builtin");
 		flags = appendFlag(flags, "-fPIC");
 		flags = appendFlag(flags, "-fvisibility=hidden");
 		// Per-symbol sections so the --gc-sections at link time can strip what
@@ -1881,6 +1881,14 @@ test "an SBF build with LTO compiles bitcode, and one without LTO native objects
 	resolveLto(plain);
 	assert plain.lto == "off";
 	assert cliCompileFlags(plain).indexOf("-flto", 0) < 0;
+}
+
+test "an SBF build is freestanding, so a C library header never resolves into the host's libc" {
+	const opts = newCliOptions();
+	assert applyArgs(opts, ["--os=solana"], 0).ok;
+	assert cliCompileFlags(opts).indexOf("-ffreestanding", 0) >= 0;
+	const host = newCliOptions();
+	assert cliCompileFlags(host).indexOf("-ffreestanding", 0) < 0;
 }
 
 test "an SBF build asks the code generator to keep a failing branch's constant on its edge, with and without LTO" {
