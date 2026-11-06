@@ -6,9 +6,11 @@ import { join } from "std/fs/path";
 import { readFile, writeFile, removeAll } from "std/fs";
 import { Symbol, Type, NodeKind } from "../../ast/node";
 import { pkDumpNode } from "../../ast/fieldspec";
-import { CheckerContext, extensionsOf } from "../../checker/context";
+import { CheckerContext, extensionsOf, createDispatchRegistry, dispatchEntryCount, dispatchOverridesFor, startDispatchCapture, endDispatchCapture, resetDispatchRegistry } from "../../checker/context";
 import { identName } from "../../checker/idents";
-import { checkPreludeFromSource } from "../../checker/checkPass";
+import { checkPreludeFromSource, checkProgram } from "../../checker/checkPass";
+import { lookupSymbol } from "../../checker/symbol";
+import { parseSource } from "../../parser/statements/validation";
 import { writePreludePack, tryLoadPreludePack, packRoot, emptyPreludeTables } from "../../checker/preludePack";
 import { resolveRuntimeDir } from "../../utils/path";
 
@@ -149,5 +151,49 @@ test "a pack read back holds the symbols, types, declaration trees and tables of
 		if (prevHome == "") env.delete("HOME");
 		else env.set("HOME", prevHome);
 		removeAll(home);
+	}
+}
+
+test "a prelude pack replays dispatch into independent compilation owners" {
+	const prevRoot = env.get("MSC_GLOBAL_CACHE_DIR");
+	const prevDisabled = env.get("MSC_NO_GLOBAL_CACHE");
+	const root = `out/test/dispatchOwnerPack.${performance.now()}`;
+	env.set("MSC_GLOBAL_CACHE_DIR", root);
+	env.delete("MSC_NO_GLOBAL_CACHE");
+	try {
+		assert packRoot() != "";
+		const parsed = parseSource(
+			"export class Base { value(): int32 { return 1; } }\n" +
+			"export class Child extends Base { override value(): int32 { return 2; } }");
+		assert parsed.ok;
+		const source = createDispatchRegistry();
+		const outer = startDispatchCapture(source);
+		const fresh = checkProgram(parsed.value, source);
+		const tables = emptyPreludeTables();
+		tables.dispatch = endDispatchCapture(source, outer);
+		assert fresh.errors.length == 0;
+		const count = dispatchEntryCount(source);
+		assert count >= 2;
+		writePreludePack(KEY + "-dispatch", STAMP, fresh, tables);
+		const owners = [createDispatchRegistry(), createDispatchRegistry()];
+		for (const owner of owners) {
+			const loaded = tryLoadPreludePack(KEY + "-dispatch", STAMP, owner);
+			assert loaded != null;
+			assert loaded.dispatchRegistry == owner;
+			assert dispatchEntryCount(owner) == count;
+			const base = lookupSymbol(loaded.table, "Base");
+			assert base != null;
+			assert dispatchOverridesFor(owner, base, "value").length == 1;
+		}
+		resetDispatchRegistry(owners[0]);
+		assert dispatchEntryCount(owners[0]) == 0;
+		assert dispatchEntryCount(owners[1]) == count;
+		assert dispatchEntryCount(source) == count;
+	} finally {
+		if (prevRoot == "") env.delete("MSC_GLOBAL_CACHE_DIR");
+		else env.set("MSC_GLOBAL_CACHE_DIR", prevRoot);
+		if (prevDisabled == "") env.delete("MSC_NO_GLOBAL_CACHE");
+		else env.set("MSC_NO_GLOBAL_CACHE", prevDisabled);
+		removeAll(root);
 	}
 }
