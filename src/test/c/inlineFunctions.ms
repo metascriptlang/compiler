@@ -27,23 +27,37 @@ export function \`+\`(this a: Span2, b: Span2): Span2 {
 export function width(this s: Span2): int32 {
 	return s.high - s.low;
 }
-`;
 
-const OTHER = `import { twice, Span2, width } from "./lib";
+export class Box {
+	n: int32;
 
-export function fromOther(n: int32): int32 {
-	const s: Span2 = { low: n, high: twice(n) };
-	return s.width();
+	@inline
+	constructor(n: int32) {
+		this.n = n;
+	}
+
+	@inline
+	static of(n: int32): Box {
+		return new Box(n * 2);
+	}
 }
 `;
 
-const MAIN = `import { twice, plain, Span2, width } from "./lib";
+const OTHER = `import { twice, Span2, width, Box } from "./lib";
+
+export function fromOther(n: int32): int32 {
+	const s: Span2 = { low: n, high: twice(n) };
+	return s.width() + new Box(n).n;
+}
+`;
+
+const MAIN = `import { twice, plain, Span2, width, Box } from "./lib";
 import { fromOther } from "./other";
 
 const n: int32 = 20;
 const a: Span2 = { low: 1, high: 5 };
 const b: Span2 = { low: 2, high: 9 };
-console.log(twice(n), plain(n), (a + b).width(), fromOther(n));
+console.log(twice(n), plain(n), (a + b).width(), fromOther(n), Box.of(n).n);
 `;
 
 function emitted(): string {
@@ -92,11 +106,32 @@ test "an @inline function is defined static inline in every module that calls it
 	assert definesStaticInline(other, "width");
 }
 
+function definesStaticInlineInit(unit: string, cls: string): boolean {
+	const lines = unit.split("\n");
+	for (const line of lines) {
+		if (line.startsWith("static inline void " + cls + "__") && line.contains("_init(") && line.endsWith(") {")) return true;
+	}
+	return false;
+}
+
+test "an @inline constructor and static method are defined static inline in every module that calls them" {
+	const cCode = emitted();
+	assert !cCode.startsWith("ERROR"), cCode;
+	const main = moduleC(cCode, "main");
+	const other = moduleC(cCode, "other");
+	assert definesStaticInlineInit(main, "Box");
+	assert definesStaticInlineInit(other, "Box");
+	assert definesStaticInline(main, "Box_of");
+	assert !definesStaticInline(other, "Box_of");
+}
+
 test "a module that declares an @inline function but never calls it has no copy" {
 	const lib = moduleC(emitted(), "lib");
 	assert lib != "";
 	assert !defines(lib, "twice");
 	assert !defines(lib, "width");
+	assert !defines(lib, "Box_of");
+	assert !definesStaticInlineInit(lib, "Box");
 	assert defines(lib, "plain");
 }
 
@@ -123,6 +158,12 @@ test "@inline is refused on anything but a module-level function" {
 		`@inline\nconst k: int32 = 4;\nconsole.log(k);\n`,
 	];
 	for (const row of rows) assert refusal(row).contains("@inline applies to a module-level function"), row;
+}
+
+test "@inline on a class member takes a static method or the constructor implementation of a non-generic class" {
+	assert refusal(`class G<T> {\n\tv: T;\n\t@inline\n\tconstructor(v: T) { this.v = v; }\n}\nconsole.log(new G<int32>(4).v);\n`).contains("@inline on a member of a generic class is not supported");
+	assert refusal(`class S {\n\tv: number = 0;\n\t@inline\n\tconstructor(v: number);\n\tconstructor(v: number | string) { this.v = 1; }\n}\nconsole.log(new S(4).v);\n`).contains("@inline goes on the constructor implementation");
+	assert refusal(`class K {\n\t@inline\n\tstatic f(n: int32): int32 { return n + 1; }\n}\nconsole.log(K.f(4));\n`) == "";
 }
 
 test "@inline needs a body, takes no arguments and exports no C symbol" {

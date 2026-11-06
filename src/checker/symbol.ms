@@ -95,6 +95,7 @@ export enum RoutineFlag {
 	Template,
 	Generic,
 	Override,
+	Inline,
 }
 
 const decodedRoutineFlags: HashMap<string, BitSet<RoutineFlag>> = new HashMap<string, BitSet<RoutineFlag>>();
@@ -166,6 +167,7 @@ export function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 			"extern_async" => { set = set.incl(RoutineFlag.Extern).incl(RoutineFlag.Async); }
 			"overload" => { set = set.incl(RoutineFlag.Overload); }
 			"override" => { set = set.incl(RoutineFlag.Override); }
+			"inline" => { set = set.incl(RoutineFlag.Inline); }
 			"template" => { set = set.incl(RoutineFlag.Template); }
 			"gen:" => { set = set.incl(RoutineFlag.Generic); }
 			"ext:" | "sext:" | "out:" | "ref:" | "sink:" => {}

@@ -3290,7 +3290,12 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	const defaults = cd.ctorDefaults != null ? cd.ctorDefaults : [];
 	if (member.flags.has(NodeFlag.Abstract)) addError(ctx, "'abstract' modifier can only appear on a class, method, or property declaration", member.location.line, member.location.column);
 	if (!isCtorSignature(member)) {
-		mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
+		const routine = mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, defaults);
+		if (routineFlagSet(cd.ctorFlags).has(RoutineFlag.Inline)) {
+			setFlag(routine, SymbolFlag.Inline);
+			routine.symbolType.callConv = CallingConvention.CcInline;
+			member.nodeType.callConv = CallingConvention.CcInline;
+		}
 		return;
 	}
 	const declaring = sym.declNode;
@@ -3428,6 +3433,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			if (methodSym != null && methodSym.symbolType != null && methodSym.symbolType.typeName != "") {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}
+			if (methodSym != null && hasFlag(methodSym, SymbolFlag.Inline)) fnType.callConv = CallingConvention.CcInline;
 			member.nodeType = fnType;
 			// Update the method symbol's type with resolved params/return
 			if (methodSym != null && methodSym.symbolType != null) {

@@ -41,6 +41,17 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Read
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, false) + ";");
 }
 
+export function declareClassInit(g: CGen, initName: string, routine: Readonly<Symbol | null>, initType: Readonly<Type>, mutBits: int32): void {
+	if (routine != null && copiesInline(g, routine)) {
+		requestInlineCopy(g, g.emissionFacts, initName, routine);
+		return;
+	}
+	const protoKey = "proto:" + initName;
+	if (nameSetHas(g.declaredProcs, protoKey)) return;
+	nameSetAdd(g.declaredProcs, protoKey);
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, initType, null, mutBits, false) + ";");
+}
+
 export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
 	if (sym.symbolType == null || sym.symbolType.callConv != CallingConvention.CcInline) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return false;

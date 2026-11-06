@@ -1,8 +1,8 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, PropertyDeclData, BuiltinKind } from "../ast/node";
 import { markUsedIn, CheckerContext, sgRecordSym, addError, findExportedSymbol } from "./context";
-import { lookupSymbol } from "./symbol";
+import { lookupSymbol, routineFlagSet, RoutineFlag } from "./symbol";
 import { findChar } from "../utils/string";
 
 export interface DecoratorInfo {
@@ -145,6 +145,22 @@ export function inlineDecorator(decorators: Node[]): Node | null {
 		if ((dec.data as MacroInvocationData).macroName == "inline") return dec;
 	}
 	return null;
+}
+
+export function inlineMemberMisuse(dec: Node, member: Node, ownerKind: SymbolKind, ownerGenerics: string): string {
+	if ((dec.data as MacroInvocationData).macroArgs.length > 0) return "@inline takes no arguments";
+	const ctor = member.kind == NodeKind.ConstructorDecl;
+	const staticMethod = member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic;
+	if ((!ctor && !staticMethod) || ownerKind != SymbolKind.Class) return "@inline applies to a module-level function, a static method or a constructor of a class";
+	if (ctor) {
+		const cd = member.data as ConstructorDeclData;
+		if (cd.ctorBody == null || routineFlagSet(cd.ctorFlags).has(RoutineFlag.Overload)) return "@inline goes on the constructor implementation, the one with a body";
+	} else {
+		const md = member.data as MethodDeclData;
+		if (md.methodBody == null || routineFlagSet(md.methodFlags).has(RoutineFlag.Extern)) return "@inline needs a function with a body";
+	}
+	if (ownerGenerics != "") return "@inline on a member of a generic class is not supported: the C backend copies only a non-generic class's constructor and static methods";
+	return "";
 }
 
 export function reloadHandlerDecorator(decorators: Node[]): Node | null {

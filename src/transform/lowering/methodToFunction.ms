@@ -101,6 +101,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 		const widenedNames: string[] = ["this"];
 		for (const n of ctorType.typeNames) { widenedNames.push(n); }
 		fnNode.nodeType = createFunction(widenedChildren, widenedNames, voidType());
+		fnNode.nodeType.callConv = ctorType.callConv;
 	} else {
 		fnNode.nodeType = createFunction([], newParams, voidType());
 	}

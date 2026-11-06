@@ -21,7 +21,7 @@ import { mangle, paramCName, classInitCName, mangledTypeName, mangleFieldName, m
 import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, borrowIsPointer, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensurePromiseFirstInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
-import { ensureCrossModuleProto, copiesInline } from "./forward";
+import { ensureCrossModuleProto, copiesInline, declareClassInit } from "./forward";
 import { createAliveSet, CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
 import { inferredCallRaises, statementCanRaise } from "../../checker/raises";
 import { GcMode, CheckerContext } from "../../checker/context";
@@ -52,6 +52,11 @@ function classHasInitFn(innerType: Readonly<Type>): boolean {
 	if (t == null || t.sym == null) return false;
 	const decl = t.sym.declNode;
 	return decl != null && decl.kind == NodeKind.ClassDecl;
+}
+
+function ctorImplementation(routine: Readonly<Symbol | null>, owner: Readonly<Symbol | null>): Readonly<Symbol | null> {
+	if (routine == null || !hasFlag(routine, SymbolFlag.OverloadSig)) return routine;
+	return owner != null ? owner.ctorRoutine : null;
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
@@ -1405,11 +1410,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			const initName = classInitCName(cName);
 			const routineType: Readonly<Type | null> = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
 			const initType = routineType != null && routineType.kind == TypeKind.Function ? routineType : null;
-			const ctorProtoKey = "proto:" + initName;
-			if (initType != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
-				nameSetAdd(g.declaredProcs, ctorProtoKey);
-				addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, initType, null, 0, false) + ";");
-			}
+			if (initType != null && node.nodeType != null) declareClassInit(g, initName, ctorImplementation(node.resolvedSym, d.newCallee.resolvedSym), initType, 0);
 			if (initType == null && d.newArguments.length > 0) {
 				addCGenError(g, `internal: the constructor of '${d.newCallee.resolvedSym.name}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
@@ -1520,11 +1521,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		const parentName = getTypeDesc(g, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn : parentThis);
 		if (parentName != "") {
 			const parentInitName = classInitCName(parentName);
-			const parentProtoKey = "proto:" + parentInitName;
-			if (!nameSetHas(g.declaredProcs, parentProtoKey)) {
-				nameSetAdd(g.declaredProcs, parentProtoKey);
-				addLine(sec(g, CSection.ProcHeaders), procHeader(g, parentInitName, parentType, null, parentCtor.mutatedParams, false) + ";");
-			}
+			declareClassInit(g, parentInitName, ctorImplementation(parentCtor, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn.sym : parentThis.sym), parentType, parentCtor.mutatedParams);
 			if (p.params.length == 0) {
 				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 				return;

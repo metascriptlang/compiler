@@ -1,6 +1,6 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
-import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
+import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator, inlineMemberMisuse } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { expandParamProperties, hasParamProperties, isParamProperty } from "./paramProperty";
 import { isBuiltinStubHeader } from "../utils/path";
@@ -350,6 +350,17 @@ function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
 	const dec = inlineDecorator(dd.decorators);
 	if (dec == null) return false;
 	const problem = inlineMisuse(dec.data as MacroInvocationData, dd);
+	if (problem == "") return true;
+	addError(ctx, problem, dec.location.line, dec.location.column);
+	return false;
+}
+
+function acceptsInlineMember(ctx: CheckerContext, dd: DecoratedDeclData, ownerKind: SymbolKind, ownerGenerics: string): boolean {
+	const dec = inlineDecorator(dd.decorators);
+	if (dec == null || dd.decoratedNode == null) return false;
+	let problem = inlineMemberMisuse(dec, dd.decoratedNode, ownerKind, ownerGenerics);
+	if (problem == "" && dd.decoratedNode.kind == NodeKind.MethodDecl && isGenericFn((dd.decoratedNode.data as MethodDeclData).methodFlags)) problem = "@inline on a generic static method is not supported: write it as a module-level @inline function";
+	if (exportNameDecorator(dd.decorators) != null) problem = "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
 	if (problem == "") return true;
 	addError(ctx, problem, dec.location.line, dec.location.column);
 	return false;
@@ -926,6 +937,12 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	let builtinKind = BuiltinKind.None;
 	let throws = false;
 	let methodNode: Node | null = null;
+	let inlined = false;
+	if (member.kind == NodeKind.DecoratedDecl) inlined = acceptsInlineMember(ctx, member.data as DecoratedDeclData, classSym.symbolKind, classGenerics);
+	if (inlined && classMemberDecl(member).kind == NodeKind.ConstructorDecl) {
+		const cd = classMemberDecl(member).data as ConstructorDeclData;
+		cd.ctorFlags = cd.ctorFlags == "" ? "inline" : cd.ctorFlags + "|inline";
+	}
 	if (member.kind == NodeKind.MethodDecl) {
 		methodNode = member;
 	} else if (member.kind == NodeKind.DecoratedDecl) {
@@ -936,7 +953,6 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			builtinKind = stdBuiltinKind(ctx, info.builtinName, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
-			acceptsInline(ctx, dd);
 		}
 	}
 	if (methodNode == null) return;
@@ -1015,6 +1031,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		methodSym.builtinKind = builtinKind;
 	}
 	if (throws) setFlag(methodSym, SymbolFlag.Throws);
+	if (inlined) setFlag(methodSym, SymbolFlag.Inline);
 	// Extern class methods → NativeMethod flag (don't set ExtCall, keep as native member call)
 	if (isExternClass) {
 		setFlag(methodSym, SymbolFlag.NativeMethod);
