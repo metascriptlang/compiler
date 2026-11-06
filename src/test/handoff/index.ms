@@ -165,6 +165,7 @@ import "./slotRelation";
 import "./brandArrayRelations";
 import "./storageMutability";
 import "./ownerInCheck";
+import "./readonlyNarrowing";
 import "./moduleConstShare";
 import "./symbolNotSpelling";
 import "./viewStructStorage";
