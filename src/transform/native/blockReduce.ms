@@ -23,7 +23,7 @@ import { isSignedKind, bitsOfKind } from "../numKinds";
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string, endLimit: int64, bounded: Bounded | null };
 type Bounded = { term: Node, lo: int64, hi: int64, tmax: int64 };
-type Shape = { consts: Symbol[], inits: Node[], hidden: Symbol[], elem: Symbol | null, array: Node | null, index: Node, acc: Node, limit: int64, loc: SourceLocation };
+type Shape = { consts: Symbol[], inits: Node[], hidden: Symbol[], elem: Symbol | null, array: Node | null, index: Node, acc: Node, limit: int64, reads: int32, loc: SourceLocation };
 type Span = { lo: int64, hi: int64, elems: int32, tmax: int64, type: Type | null };
 
 const INT64_MAX: int64 = 9223372036854775807;
@@ -188,7 +188,7 @@ function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | nu
 	const bareLen = len.kind == NodeKind.TypeAssertion ? (len.data as TypeAssertionData).asExpr : len;
 	const local = isSignedLocal(bareLen) && !sameLocal(bareLen, index);
 	if ((!local && lengthOf(bareLen) == null) || !distinctFrom(acc, local ? [index, bareLen] : [index])) return null;
-	const s: Shape = { consts: [], inits: [], hidden: [], elem: null, array: null, index, acc, limit: 0, loc: acc.location };
+	const s: Shape = { consts: [], inits: [], hidden: [], elem: null, array: null, index, acc, limit: 0, reads: 0, loc: acc.location };
 	for (let k = 0; k < inner.length - 1; k++) {
 		const decl = inner[k];
 		if (decl.kind != NodeKind.VariableDecl || decl.resolvedSym == null) return null;
@@ -198,7 +198,7 @@ function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | nu
 		if (read != null && s.elem == null) {
 			s.elem = decl.resolvedSym;
 			s.array = read;
-		} else if (cloneTerm(init, s) != null) {
+		} else if (cloneTerm(init, s, false) != null) {
 			s.consts.push(decl.resolvedSym!);
 			s.inits.push(init);
 		} else if (init.kind == NodeKind.TypeAssertion || init.kind == NodeKind.HiddenStdConv) {
@@ -207,8 +207,9 @@ function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | nu
 	}
 	const top = widened(reduce.term, acc);
 	const span = top == null ? null : spanOf(top, s);
-	const term = span == null ? null : cloneTerm(reduce.term, s);
-	if (span == null || term == null || span.elems > 1) return null;
+	s.reads = 0;
+	const term = span == null ? null : cloneTerm(reduce.term, s, true);
+	if (span == null || term == null || span.elems > 1 || s.reads > span.elems) return null;
 	const array = span.elems == 1 ? s.array : null;
 	if (array != null && !distinctFrom(acc, [array])) return null;
 	if (array == null && span.hi > span.tmax) return null;
@@ -258,20 +259,22 @@ function maskOf(n: Node): int64 {
 }
 
 // The term as the fast block runs it: each const replaced by its own term, `xs[i]` read without its bound check
-// (the guard holds 0 <= i and end <= xs.length), a checked add as a plain one (the guard holds every sum in range),
-// a narrowing check of a value read from i as a cast (the guard holds 0 <= i and end <= maximum + 1).
-function cloneTerm(n: Node, s: Shape): Node | null {
+// (the guard holds 0 <= i and end <= xs.length), a checked add as a plain one only where spanOf bounded it
+// (`proven`: not under a mask, whose operands may hold anything), a narrowing check of a value read from i as a
+// cast (the guard holds 0 <= i and end <= maximum + 1).
+function cloneTerm(n: Node, s: Shape, proven: boolean): Node | null {
 	const loc = s.loc;
 	if (n.kind == NodeKind.Identifier) {
 		const sym = n.resolvedSym;
 		if (sym == null || sym == s.acc.resolvedSym || s.hidden.indexOf(sym!) >= 0 || signedKind(n.nodeType) == null) return null;
 		if (sym == s.elem) {
+			s.reads++;
 			const read = makeCall(generatedRef("msArrayAccessUnchecked", loc), [arrayValue(s.array!, loc), ident(s.index, loc)], loc);
 			read.nodeType = n.nodeType;
 			return read;
 		}
 		const at = s.consts.indexOf(sym!);
-		return at < 0 ? cloneIdent(n, loc) : cloneTerm(s.inits[at], s);
+		return at < 0 ? cloneIdent(n, loc) : cloneTerm(s.inits[at], s, proven);
 	}
 	if (n.kind == NodeKind.NumberLiteral) {
 		const d = n.data as NumberLiteralData;
@@ -285,13 +288,14 @@ function cloneTerm(n: Node, s: Shape): Node | null {
 		const to = signedKind(d.convType);
 		const from = signedKind(d.convExpr.nodeType);
 		if (to == null || from == null || bitsOfKind(from) > bitsOfKind(to)) return null;
-		const inner = cloneTerm(d.convExpr, s);
+		const inner = cloneTerm(d.convExpr, s, proven);
 		return inner == null ? null : makeHiddenStdConv(inner, d.convType, loc);
 	}
 	if (isCheckedAdd(n)) {
+		if (!proven) return null;
 		const args = (n.data as CallExprData).arguments;
-		const left = cloneTerm(args[0], s);
-		const right = left == null ? null : cloneTerm(args[1], s);
+		const left = cloneTerm(args[0], s, true);
+		const right = left == null ? null : cloneTerm(args[1], s, true);
 		if (left == null || right == null) return null;
 		const sum = makeBinary(left, "+", right, loc);
 		sum.nodeType = n.nodeType;
@@ -302,8 +306,8 @@ function cloneTerm(n: Node, s: Shape): Node | null {
 	if (n.kind != NodeKind.BinaryExpr || signedKind(n.nodeType) == null) return null;
 	const d = n.data as BinaryExprData;
 	if (d.operator != "&" && d.operator != "|" && d.operator != "^") return null;
-	const left = cloneTerm(d.left, s);
-	const right = left == null ? null : cloneTerm(d.right, s);
+	const left = cloneTerm(d.left, s, false);
+	const right = left == null ? null : cloneTerm(d.right, s, false);
 	if (left == null || right == null) return null;
 	const out = makeBinary(left, d.operator, right, loc);
 	out.nodeType = n.nodeType;
@@ -314,7 +318,7 @@ function narrowedIndex(n: Node, s: Shape): Node | null {
 	if (!isRuntimeProcCall(n, "msCheckRangeI8") && !isRuntimeProcCall(n, "msCheckRangeI16") && !isRuntimeProcCall(n, "msCheckRangeI32")) return null;
 	const args = (n.data as CallExprData).arguments;
 	if (args.length != 3 || !readsIndex(args[0], s) || n.nodeType == null) return null;
-	const value = cloneTerm(args[0], s);
+	const value = cloneTerm(args[0], s, false);
 	if (value == null) return null;
 	const k = signedKind(n.nodeType);
 	if (k == null) return null;
