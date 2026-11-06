@@ -61,10 +61,17 @@ class TargetTest(unittest.TestCase):
 
 
 class ConfigureTest(unittest.TestCase):
+    def test_only_windows_runtimes_take_codeview_so_the_program_pdb_stays_the_only_debug_info(self):
+        linux = ps.cmakeArguments(ps.TARGETS["x86_64-linux-gnu.2.31"], "/s", "/e", "/r/c.cfg", "/b", "/n")
+        self.assertIn("-DCMAKE_C_FLAGS=--no-default-config --config=/r/c.cfg", linux)
+        windows = ps.cmakeArguments(ps.TARGETS["x86_64-windows-gnu"], "/s", "/e", "/r/c.cfg", "/b", "/n")
+        for language in ("C", "CXX", "ASM"):
+            self.assertIn("-DCMAKE_%s_FLAGS=--no-default-config --config=/r/c.cfg -gcodeview" % language, windows)
+
     def test_the_build_uses_the_engine_clang_through_the_config_and_builds_no_other_component(self):
         arguments = ps.cmakeArguments(ps.TARGETS["x86_64-windows-gnu"], "/s", "/e", "/r/c.cfg", "/b", "/n")
         self.assertIn("-DCMAKE_C_COMPILER=/e/bin/clang", arguments)
-        self.assertIn("-DCMAKE_C_FLAGS=--no-default-config --config=/r/c.cfg", arguments)
+        self.assertIn("-DCMAKE_C_FLAGS=--no-default-config --config=/r/c.cfg -gcodeview", arguments)
         self.assertIn("-DCMAKE_SYSTEM_NAME=Windows", arguments)
         self.assertIn("-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-w64-windows-gnu", arguments)
         for name in ps.DISABLED_COMPONENTS:

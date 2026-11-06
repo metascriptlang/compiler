@@ -116,7 +116,7 @@ def sourceVersion(source):
 def cmakeArguments(spec, source, engine, config, build, ninja):
     """The configure command of one target's compiler-rt build; the compiler is the engine's clang through the target's
     config, so no flag of the host reaches it."""
-    flags = "--no-default-config --config=" + config
+    flags = "--no-default-config --config=" + config + (" -gcodeview" if spec["windows"] else "")
     tool = lambda name: os.path.join(engine, "bin", name + (".exe" if sys.platform == "win32" else ""))
     arguments = [
         "-S", os.path.join(source, "runtimes"), "-B", build, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" + ninja,
@@ -168,6 +168,8 @@ def buildTarget(cmake, ninja, source, engine, runtime, target, work, jobs):
     for name, path in wanted.items():
         if not os.path.isfile(path):
             raise pe.EngineError("%s: the build made no %s" % (target, archiveName(name)))
+        if spec["windows"] and ".debug_info" in pe.run([os.path.join(engine, "bin", "llvm-readobj"), "--sections", path]):
+            raise pe.EngineError("%s: %s carries DWARF, which hides the program's PDB from debuggers" % (target, archiveName(name)))
     return wanted
 
 
