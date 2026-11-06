@@ -9,7 +9,7 @@ import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { decideInstanceTypeTests } from "./instanceTypeTest";
-import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
+import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot, isBrandDistinct } from "./types";
 import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -557,6 +557,7 @@ function sameInstanceTypeBody(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Union && (a.typeName != "" || b.typeName != "")) {
 		if (a.typeName != b.typeName || (a.sym != null ? a.sym.modulePath : "") != (b.sym != null ? b.sym.modulePath : "")) return false;
 	}
+	if (isBrandDistinct(a) && isBrandDistinct(b)) return a.typeName == b.typeName && sameInstanceType(a.typeReturn, b.typeReturn);
 	if (a.kind == TypeKind.Struct || a.kind == TypeKind.Enum || a.kind == TypeKind.Distinct) {
 		if (a.sym != null || b.sym != null) {
 			if (a.sym == null || a.sym != b.sym) return false;
