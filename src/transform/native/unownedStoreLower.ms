@@ -6,11 +6,11 @@
 // value again. Generated lifecycle ops keep their raw stores: destructorLifting already counts
 // their Unowned fields.
 
-import { Node, NodeKind, BinaryExprData, ObjectLiteralData, ArrayLiteralData, CallExprData, MemberExprData, HiddenDerefData } from "../../ast/node";
+import { Node, NodeKind, Type, BinaryExprData, ObjectLiteralData, ArrayLiteralData, CallExprData, MemberExprData, HiddenDerefData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
 import { makeCall, makeHiddenAddr, runtimeRef } from "../util";
-import { unownedSlotOf, isUnownedSlot, unownedElementOf, getProperty, voidType } from "../../checker/types";
+import { unownedSlotOf, isUnownedSlot, isReadonlyUnownedSlot, unownedElementOf, getProperty, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 function visit(node: Node): Node {
@@ -23,13 +23,17 @@ function visit(node: Node): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator != "=" || d.left == null || !unownedSlotOf(d.left)) return node;
-	const call = makeCall(runtimeRef("msUnownedAssign", node.location), [makeHiddenAddr(d.left, node.location), d.right], node.location);
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slotType(d.left)) ? "msUnownedAssignRo" : "msUnownedAssign", node.location), [makeHiddenAddr(d.left, node.location), d.right], node.location);
 	call.nodeType = voidType();
 	return call;
 }
 
-function take(value: Node): Node {
-	const call = makeCall(runtimeRef("msUnownedTake", value.location), [value], value.location);
+function slotType(place: Node): Type | null {
+	return place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType) ? place.resolvedSym.symbolType : place.nodeType;
+}
+
+function take(value: Node, slot: Type | null): Node {
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedTakeRo" : "msUnownedTake", value.location), [value], value.location);
 	call.nodeType = value.nodeType;
 	return call;
 }
@@ -38,18 +42,20 @@ function takeLiteralFields(node: Node): Node {
 	const d = node.data as ObjectLiteralData;
 	for (let i = 0; i < d.properties.length && i < d.keys.length; i += 1) {
 		const value = d.properties[i];
-		if (value.kind == NodeKind.ComputedProperty || !isUnownedSlot(getProperty(node.nodeType, d.keys[i]))) continue;
-		d.properties[i] = take(value);
+		const slot = getProperty(node.nodeType, d.keys[i]);
+		if (value.kind == NodeKind.ComputedProperty || !isUnownedSlot(slot)) continue;
+		d.properties[i] = take(value, slot);
 	}
 	return node;
 }
 
 function takeLiteralElements(node: Node): Node {
-	if (unownedElementOf(node.nodeType) == null) return node;
+	const elem = unownedElementOf(node.nodeType);
+	if (elem == null) return node;
 	const d = node.data as ArrayLiteralData;
 	for (let i = 0; i < d.elements.length; i += 1) {
 		if (d.elements[i].kind == NodeKind.SpreadExpr) throw new Error(`internal: a spread into an Unowned element array reached lowerUnownedStores unlowered`);
-		d.elements[i] = take(d.elements[i]);
+		d.elements[i] = take(d.elements[i], elem);
 	}
 	return node;
 }
@@ -66,14 +72,15 @@ function countElementCall(node: Node): Node {
 	const native = sym.nativeName.startsWith("&") ? sym.nativeName.slice(1) : sym.nativeName;
 	if (native != "msGenericArrayPush" && native != "msGenericArrayPop") return node;
 	const recv = receiverOf(node);
-	if (recv == null || unownedElementOf(recv.nodeType) == null) return node;
+	const elem = recv != null ? unownedElementOf(recv.nodeType) : null;
+	if (elem == null) return node;
 	if (native == "msGenericArrayPop") {
-		const give = makeCall(runtimeRef("msUnownedGive", node.location), [node], node.location);
+		const give = makeCall(runtimeRef(isReadonlyUnownedSlot(elem) ? "msUnownedGiveRo" : "msUnownedGive", node.location), [node], node.location);
 		give.nodeType = node.nodeType;
 		return give;
 	}
 	const args = (node.data as CallExprData).arguments;
-	args[args.length - 1] = take(args[args.length - 1]);
+	args[args.length - 1] = take(args[args.length - 1], elem);
 	return node;
 }
 
