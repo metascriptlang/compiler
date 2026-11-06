@@ -67,27 +67,28 @@ int msSelectorRegister(msSelector* sel, int fd, uint32_t events, void* userdata)
 }
 
 int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
-	/* kqueue: delete old filters, add new ones. Same eventlist guard as
-	 * msSelectorUnregister — NULL eventlist would abort kevent() on the
-	 * first ENOENT, leaving the other filter live and the subsequent
-	 * msSelectorRegister adding on top of stale state. */
-	struct kevent deletes[2];
+	struct kevent changes[2];
 	struct kevent errs[2];
-	EV_SET(&deletes[0], fd, EVFILT_READ,  EV_DELETE | EV_RECEIPT, 0, 0, NULL);
-	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
-	int n = kevent(sel->kqfd, deletes, 2, errs, 2, NULL);
-	if (n > 0) {
-		for (int i = 0; i < n; i++) {
-			if ((errs[i].flags & EV_ERROR) == 0) continue;
-			if (errs[i].data == 0 || errs[i].data == ENOENT) continue;
-			fprintf(stderr,
-				"FATAL: kevent EV_DELETE (update) failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
-				(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
-			abort();
-		}
+	EV_SET(&changes[0], fd, EVFILT_READ,
+		(events & MS_EVENT_READ) ? EV_ADD | EV_ENABLE | EV_RECEIPT : EV_DELETE | EV_RECEIPT, 0, 0,
+		(events & MS_EVENT_READ) ? userdata : NULL);
+	EV_SET(&changes[1], fd, EVFILT_WRITE,
+		(events & MS_EVENT_WRITE) ? EV_ADD | EV_ENABLE | EV_RECEIPT : EV_DELETE | EV_RECEIPT, 0, 0,
+		(events & MS_EVENT_WRITE) ? userdata : NULL);
+	int n = kevent(sel->kqfd, changes, 2, errs, 2, NULL);
+	if (n < 0) return -1;
+	int failed = 0;
+	for (int i = 0; i < n; i++) {
+		if ((errs[i].flags & EV_ERROR) == 0 || errs[i].data == 0) continue;
+		int wanted = errs[i].filter == EVFILT_READ ? (events & MS_EVENT_READ) != 0 : (events & MS_EVENT_WRITE) != 0;
+		if (wanted) { failed = 1; continue; }
+		if (errs[i].data == ENOENT) continue;
+		fprintf(stderr,
+			"FATAL: kevent EV_DELETE (update) failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
+			(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
+		abort();
 	}
-
-	return msSelectorRegister(sel, fd, events, userdata);
+	return failed || (events & (MS_EVENT_READ | MS_EVENT_WRITE)) == 0 ? -1 : 0;
 }
 
 int msSelectorUnregister(msSelector* sel, int fd) {
