@@ -257,7 +257,7 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 		}
 	}
 	for (const m of extensionsOf(mc.extensionRegistry)) {
-		if (m.sym == null || m.sym == skip || fromPrelude.has(m.sym)) continue;
+		if (m.sym == null || m.sym == skip || fromPrelude.has(m.sym) || isStdTierSym(m.sym)) continue;
 		out.push(m);
 	}
 	return out;
@@ -437,7 +437,23 @@ function raiserCounterpart(own: Symbol): Symbol {
 }
 
 function raiserCounterpartSeed(seed: NamedSymbol): NamedSymbol {
-	const counterpart = raiserCounterpart(seed.sym);
+	const counterpart = seed.sym.symbolKind == SymbolKind.Class ? raiserCounterpartClass(seed.sym) : raiserCounterpart(seed.sym);
+function isStdTierSym(sym: Symbol): boolean {
+	return (sym.modulePath.endsWith(".jms") || sym.modulePath.endsWith(".cms")) && stdModuleName(sym.modulePath) != "";
+}
+
+function raiserCounterpartClass(own: Symbol): Symbol {
+	if (_raiserPreludeBuilding || own.symbolKind != SymbolKind.Class || !isStdTierSym(own)) return own;
+	const stem = own.modulePath.slice(0, own.modulePath.byteLength - 4);
+	const scopes = raiserPreludeCtx().preludeModuleScopes;
+	const scope = scopes.get(stem + ".rms") ?? scopes.get(stem + ".ms");
+	if (scope == null) return own;
+	for (const held of scope) {
+		if (held.name == own.name && held.symbolKind == SymbolKind.Class) return held;
+	}
+	return own;
+}
+
 	return counterpart == seed.sym ? seed : { name: seed.name, sym: counterpart };
 }
 
