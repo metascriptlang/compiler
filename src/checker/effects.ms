@@ -128,7 +128,7 @@ function judgeReadonlyModuleConsts(modulePath: string): void {
 		if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
 		if (n != null && n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
 		if (n == null || n.kind != NodeKind.VariableDecl || n.resolvedSym == null) continue;
-		if (isReadonlyView(n.resolvedSym.symbolType)) isImmutableModuleConst(n.resolvedSym);
+		if (isReadonlyView(n.resolvedSym.symbolType) || isSendableFunction(n.resolvedSym.symbolType)) isImmutableModuleConst(n.resolvedSym);
 	}
 }
 

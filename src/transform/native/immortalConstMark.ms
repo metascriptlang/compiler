@@ -5,7 +5,7 @@
 // would read a transformed initializer.
 
 import { Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, SourceLocation } from "../../ast/node";
-import { isReadonlyView, isAtomicRef, unwrapRefNullUnion } from "../../checker/types";
+import { isReadonlyView, isSendableFunction, isAtomicRef, unwrapRefNullUnion } from "../../checker/types";
 import { hasFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
 import { isReadonlyStructView, valueReachOp } from "../../codegen/c/types";
@@ -38,12 +38,13 @@ function moduleVarDecl(stmt: Node | null): Node | null {
 
 function judgedImmutable(sym: Symbol): boolean {
 	const t = sym.symbolType;
-	return t != null && isReadonlyView(t) && hasFlag(sym, SymbolFlag.ImmutableModuleConst);
+	return t != null && (isReadonlyView(t) || isSendableFunction(t)) && hasFlag(sym, SymbolFlag.ImmutableModuleConst);
 }
 
 function immortalizeCalls(sym: Symbol, loc: SourceLocation): Node[] {
 	const t = sym.symbolType as Type;
 	if (isCountedCell(t) || isCountedCell(unwrapRefNullUnion(t))) return [makeCall(runtimeRef("msImmortalize", loc), [makeIdentResolved(sym, loc)], loc)];
+	if (isSendableFunction(t)) return [makeCall(runtimeRef("msImmortalizeClosure", loc), [makeIdentResolved(sym, loc)], loc)];
 	const reach = isReadonlyStructView(t) ? valueReachOp(t) : null;
 	if (reach == null) return [];
 	const walk = makeCall(makeTypedIdentResolved(reach, null, loc), [makeHiddenAddr(makeIdentResolved(sym, loc), loc), makeCall(runtimeRef("msImmortalBegin", loc), [], loc)], loc);

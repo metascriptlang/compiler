@@ -238,7 +238,7 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	output.hasDatInit = datContent.length > 0;
 	output.hasInit = initContent.length > 0;
 	output.hasDeinit = deinitContent.length > 0;
-	output.immortalizes = initContent.contains("msImmortalize(") || initContent.contains("msImmortalEnd(");
+	output.immortalizes = initContent.contains("msImmortalize(") || initContent.contains("msImmortalEnd(") || initContent.contains("msImmortalizeClosure(");
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
