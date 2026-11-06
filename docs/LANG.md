@@ -2891,7 +2891,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
 | `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
-| `@inline` | module-level function, extension, operator | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05) |
+| `@inline` | module-level function, extension, operator, constructor or static method of a non-generic class | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05; constructor and static method 2026-11-06) |
 | `@noinline` | function | Keep the function out of line on the C backend (`__attribute__((noinline))` on its prototype and definition); the JS backend emits it unchanged; anything but a function is an error ("@noinline applies to a function, not to 'x'"), and so is a function marked both `@inline` and `@noinline` | Verified on C and JS (2026-10-05) |
 
 ##### Which of the three a declaration wants
@@ -2930,7 +2930,15 @@ corpus `inlineAcrossModules` prints the same on C (DRC, ORC, `--danger`), JS, ES
 passes SAN; on SBF `--release` without LTO (platform-tools v1.57, LiteSVM), an int32 `a / 4` through
 `std/solana/arithmetic` costs 0.6 CU per operation instead of 25.6, and `a / b` 19.7 instead of 29.6.
 
-Refused at compile time: the mark on a method, a nested function or a non-function; an `extern`
+A constructor implementation or a static method of a non-generic class takes the mark too, and `new`,
+`super(...)` and the static call each copy it into the calling module. Measured 2026-11-06
+(`wt/std-ms-string`): corpus `inlineConstructorAcrossModules` (overload signatures over one union
+implementation, an `@inline` parent constructor reached through `super`, a raise in the constructor)
+prints the same on C, `--danger`, JS, ESM and the Raiser and passes SAN; 2M `new View(n)` across a
+module boundary on rtx, `--release` with thin LTO, took 27 ms instead of 33.
+
+Refused at compile time: the mark on an instance method, a member of a generic class or actor, a
+constructor overload signature, a nested function or a non-function; an `extern`
 or body-less routine; an argument; `@exportName` or a reload handler next to it (there is no single
 C symbol); a `static` slot inside it; and the routine as a value, a callback included — call it from a
 lambda (`(n) => addOne(n)`). Under `--hcr`, a routine of a reloadable module is an ordinary routine,
