@@ -20,3 +20,16 @@ export function flipThrough(cb: (bs: Span<boolean>) => void): int32 {
 	for (const b of bs) if (b) on += 1;
 	return on;
 }
+
+@wasm
+export function editReals(
+	n: int32,
+	cb: (xs: Span<float32>) => void,
+): float32 {
+	let xs: Vec<float32> = [];
+	for (let i = 0; i < n; i += 1) xs.push((i as float32) + 0.5);
+	cb(xs);
+	let total: float32 = 0;
+	for (const x of xs) total += x;
+	return total;
+}
