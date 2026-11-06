@@ -434,7 +434,8 @@ function dependencyToken(raw: string, escaped: boolean): string {
 	let from = 0;
 	let i = 0;
 	while (i < raw.byteLength) {
-		if (raw.byteAt(i) == "\\".code && i + 1 < raw.byteLength) {
+		const next = i + 1 < raw.byteLength ? raw.byteAt(i + 1) : 0;
+		if (raw.byteAt(i) == "\\".code && (next == " ".code || next == "#".code || next == "\\".code)) {
 			out = out + raw.byteSlice(from, i);
 			from = i + 1;
 			i = i + 2;
@@ -2499,6 +2500,14 @@ test "a dependency file reads escaped spaces, line continuations and CRLF as cla
 	assert parseDependencyFile(path).join("|") == "C:/a.h|C:/my dir/b.h|c\\d.h|e.h";
 	writeFile(path, "native:\n");
 	assert parseDependencyFile(path).length == 0;
+	remove(path);
+}
+
+test "a dependency file keeps the backslashes of Windows paths that clang writes unescaped" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-windows-${performance.now()}.d`;
+	writeFile(path, "native: C:\\w\\runtime\\core\\system.c \\\r\n  C:\\b\\runtime\\windows\\..\\..\\lib\\clang\\23\\include\\stdint.h \\\n  C:\\my\\ dir\\x\\#y.h\r\n");
+	assert parseDependencyFile(path).join("|") == "C:\\w\\runtime\\core\\system.c|C:\\b\\runtime\\windows\\..\\..\\lib\\clang\\23\\include\\stdint.h|C:\\my dir\\x#y.h";
 	remove(path);
 }
 
