@@ -114,6 +114,7 @@ export class Int8Array extends TypedArray<int8> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<int8[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -167,6 +168,7 @@ export class Uint8Array extends TypedArray<uint8> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<uint8[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -220,6 +222,7 @@ export class Uint8ClampedArray extends TypedArray<uint8> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<number[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -275,6 +278,7 @@ export class Int16Array extends TypedArray<int16> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<int16[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -328,6 +332,7 @@ export class Uint16Array extends TypedArray<uint16> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<uint16[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -381,6 +386,7 @@ export class Int32Array extends TypedArray<int32> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<int32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -434,6 +440,7 @@ export class Uint32Array extends TypedArray<uint32> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<uint32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -487,6 +494,7 @@ export class Float32Array extends TypedArray<float32> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<float32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
@@ -540,6 +548,7 @@ export class Float64Array extends TypedArray<float64> {
 	constructor(buffer: ArrayBuffer);
 	constructor(buffer: ArrayBuffer, byteOffset: number);
 	constructor(buffer: ArrayBuffer, byteOffset: number, length: number);
+	@inline
 	constructor(source: number | Readonly<float64[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
