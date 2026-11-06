@@ -3,6 +3,8 @@ import { wellFormedString } from "../string/bytes";
 
 export type Bytes = string | uint8[];
 
+export type ByteInput = string | Uint8Array | Readonly<Span<uint8>>;
+
 export function rawString(data: Bytes): string {
 	if (typeof data == "string") return data;
 	return wellFormedString(data);
