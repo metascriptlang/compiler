@@ -63,7 +63,11 @@ function productIsOneMod(
 	b: Readonly<uint32[]>,
 	m: Readonly<uint32[]>,
 ): boolean {
-	return uintIsOne(uintDivRem(uintMul(a, b), m).remainder);
+	const product = uintMul(a, b);
+	const divided = uintDivRem(product, m);
+	const one = uintIsOne(divided.remainder);
+	for (const scratch of [product, divided.quotient, divided.remainder]) wipeWords(scratch);
+	return one;
 }
 
 function minusOne(value: Readonly<uint32[]>): uint32[] {
@@ -72,24 +76,40 @@ function minusOne(value: Readonly<uint32[]>): uint32[] {
 	return out;
 }
 
+function productIs(
+	p: Readonly<uint32[]>,
+	q: Readonly<uint32[]>,
+	n: Readonly<uint32[]>,
+): boolean {
+	const width = n.length;
+	if (p.length > width || q.length > width) return false;
+	const product = new Array<uint32>(width);
+	const wp = uintWiden(p, width);
+	const wq = uintWiden(q, width);
+	const equal = uintMulAdd(product, wp, wq) == 0 && uintCompare(product, n) == 0;
+	for (const scratch of [product, wp, wq]) wipeWords(scratch);
+	return equal;
+}
+
 /** p * q == n, e * dp == 1 mod (p - 1), e * dq == 1 mod (q - 1) and qi * q == 1 mod p. */
 export function rsaKeyConsistent(key: RsaPrivateData): boolean {
 	const n = uintOf(key.n);
 	const p = uintOf(key.p);
 	const q = uintOf(key.q);
-	const width = n.length;
-	if (p.length > width || q.length > width) return false;
-	const product = new Array<uint32>(width);
-	if (
-		uintMulAdd(product, uintWiden(p, width), uintWiden(q, width)) != 0 ||
-		uintCompare(product, n) != 0
-	) return false;
 	const e = uintOf(key.e);
-	if (
-		!productIsOneMod(e, uintOf(key.dp), minusOne(p)) ||
-		!productIsOneMod(e, uintOf(key.dq), minusOne(q))
-	) return false;
-	return productIsOneMod(uintOf(key.qi), q, p);
+	const dp = uintOf(key.dp);
+	const dq = uintOf(key.dq);
+	const qi = uintOf(key.qi);
+	const pMinusOne = minusOne(p);
+	const qMinusOne = minusOne(q);
+	try {
+		return productIs(p, q, n) &&
+			productIsOneMod(e, dp, pMinusOne) &&
+			productIsOneMod(e, dq, qMinusOne) &&
+			productIsOneMod(qi, q, p);
+	} finally {
+		for (const scratch of [n, p, q, e, dp, dq, qi, pMinusOne, qMinusOne]) wipeWords(scratch);
+	}
 }
 
 // `input^e mod n` as modulus-size bytes; null when the input is not below n.
