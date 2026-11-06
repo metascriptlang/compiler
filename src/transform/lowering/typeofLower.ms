@@ -51,6 +51,8 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 		NodeKind.BinaryExpr => {
 			const test = lowerKindTest(node, ctx);
 			if (test != null) return test;
+			const tagTest = lowerTagTest(node, ctx);
+			if (tagTest != null) return tagTest;
 			const instance = lowerGenericInstanceof(node, ctx);
 			if (instance != null) return instance;
 			const named = lowerInKeyword(node, ctx);
@@ -123,6 +125,8 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	const tag = tagOfKind(members, name);
 	if (tag == null) return makeBool(negated, node.location);
 	if (tagIsUnique(members, tag)) {
+		const held = heldTagTest(operand, tag, negated, ctx, node.location);
+		if (held != null) return held;
 		const tagRead = makeUnary("typeof", operand, node.location);
 		tagRead.nodeType = stringType();
 		return makeBinary(lowerTagRead(tagRead, ctx), op2, makeString(tag, node.location), node.location);
@@ -130,6 +134,44 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	const source: Type = t;
 	const kindRead = routineCall("msTypeofKind_", operand, ctx, node.location, (x: Symbol): Node[] => memberCases(source, x, kindNameOf, ctx, node.location));
 	return makeBinary(kindRead, op2, makeString(name, node.location), node.location);
+}
+
+// `typeof x === "number"` over a union variable on C: the value carries its member's tag, so the test reads
+// the tags of the members with that TS tag where the kind's name would be built as a string and compared.
+function lowerTagTest(node: Node, ctx: TransformContext): Node | null {
+	const d = node.data as BinaryExprData;
+	const op = d.operator;
+	if (op != "===" && op != "==" && op != "!==" && op != "!=") return null;
+	let typeofSide = d.left;
+	let tagSide = d.right;
+	if (!isTypeofExpr(typeofSide)) {
+		typeofSide = d.right;
+		tagSide = d.left;
+	}
+	if (!isTypeofExpr(typeofSide) || tagSide.kind != NodeKind.StringLiteral) return null;
+	return heldTagTest(operandOf(typeofSide), (tagSide.data as StringLiteralData).value, op == "!==" || op == "!=", ctx, node.location);
+}
+
+function heldTagTest(operand: Node, tag: string, negated: boolean, ctx: TransformContext, loc: SourceLocation): Node | null {
+	if (ctx.jsBackend || ctx.raiserBackend || operand.kind != NodeKind.Identifier || operand.resolvedSym == null || operand.nodeType == null) return null;
+	const u = peelTransparentInstance(operand.nodeType);
+	if (shapeOf(u) != Shape.Union) return null;
+	let test: Node | null = null;
+	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
+		if (typeofTagOf(u.typeChildren[vi]) != tag) continue;
+		const held = holdsMember(u, operand.resolvedSym, vi as int32, ctx, loc);
+		if (test == null) {
+			test = held;
+		} else {
+			test = makeBinary(test, "||", held, loc);
+			test.nodeType = booleanType();
+		}
+	}
+	const found = test != null ? test : makeBool(false, loc);
+	if (!negated) return found;
+	const not = makeUnary("!", found, loc);
+	not.nodeType = booleanType();
+	return not;
 }
 
 function lowerHoldsArray(node: Node, ctx: TransformContext): Node | null {
