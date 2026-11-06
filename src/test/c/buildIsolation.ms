@@ -4,7 +4,7 @@ import { join } from "std/fs/path";
 import { compileToC } from "../helpers";
 import { resetBuildState } from "../../compiler/buildSession";
 import { buildPreludeContext, preludeContextFor, checkProgramWithRegistry } from "../../checker/checkPass";
-import { dispatchEntryCount, CheckerContext, ExportRegistry, errorCount } from "../../checker/context";
+import { dispatchEntryCount, CheckerContext, ExportRegistry, createContext, errorCount } from "../../checker/context";
 import { duVariantRegistry, TargetInfo } from "../../checker/types";
 import { preludePackStats } from "../../checker/preludePack";
 import { parseSource } from "../../parser/statements/validation";
@@ -17,8 +17,17 @@ const DU_SRC = "type Shape = { kind: \"c\", r: float64 } | { kind: \"s\", w: flo
 
 const VIEW_SRC = "class Sym { name: string = \"\"; }\nfunction placedOf(m: Readonly<HashMap<Sym, Sym>>, s: Readonly<Sym>): Readonly<Sym> { return m.readonlyGet(s) ?? s; }\nconsole.log(placedOf(new HashMap<Sym, Sym>(), new Sym()).name);\n";
 
-function perBuildTables(): string {
-	return `${duVariantRegistry().length}|${dispatchEntryCount()}`;
+function perBuildTables(ctx: CheckerContext): string {
+	return `${duVariantRegistry().length}|${dispatchEntryCount(ctx.dispatchRegistry)}`;
+}
+
+function preludeWithoutPack(): CheckerContext {
+	env.set("MSC_NO_PRELUDE_PACK", "1");
+	try {
+		return buildPreludeContext("", ".cms");
+	} finally {
+		env.delete("MSC_NO_PRELUDE_PACK");
+	}
 }
 
 function sameC(a: Result<string, string>, b: Result<string, string>): boolean {
@@ -40,19 +49,13 @@ test "a compile emits the same C whatever the compiles before it built" {
 test "a view of the shared prelude brings what loading that prelude puts in the per-build tables" {
 	compileToC("const x: int32 = 1;\n");
 	resetBuildState();
-	const empty = perBuildTables();
-	env.set("MSC_NO_PRELUDE_PACK", "1");
-	try {
-		buildPreludeContext("", ".cms");
-	} finally {
-		env.delete("MSC_NO_PRELUDE_PACK");
-	}
-	const loaded = perBuildTables();
+	const empty = perBuildTables(createContext());
+	const loaded = perBuildTables(preludeWithoutPack());
 	resetBuildState();
-	assert perBuildTables() == empty;
-	preludeContextFor("", ".cms");
+	assert perBuildTables(createContext()) == empty;
+	const view = preludeContextFor("", ".cms");
 	assert loaded != empty;
-	assert perBuildTables() == loaded;
+	assert perBuildTables(view) == loaded;
 }
 
 const PACK_ENV = ["HOME", "MSC_NO_GLOBAL_CACHE", "MSC_NO_PRELUDE_PACK"];
@@ -89,20 +92,19 @@ function checkedAgainst(prelude: CheckerContext): string {
 		const pr = parseSource(src);
 		if (!pr.ok) return pr.error;
 		const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-		shapes.push(`${errorCount(ctx)}:${perBuildTables()}`);
+		shapes.push(`${errorCount(ctx)}:${perBuildTables(ctx)}`);
 	}
 	return shapes.join(" ");
 }
 
 test "a prelude served from a warm pack brings the per-build tables the prelude checked from source brings" {
 	withPrivatePackCache((std: string): void => {
-		freshPrelude(std);
+		const checked = perBuildTables(freshPrelude(std));
 		assert !servedFromPack();
-		const checked = perBuildTables();
-		freshPrelude(std);
+		const packed = perBuildTables(freshPrelude(std));
 		assert servedFromPack();
 		assert checked != "0|0";
-		assert perBuildTables() == checked;
+		assert packed == checked;
 	});
 }
 
