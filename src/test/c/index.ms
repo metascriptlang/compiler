@@ -108,6 +108,7 @@ import "./acyclicDecorator";
 import "./ownedEdge";
 import "./unownedEdge";
 import "./openSlotCycleClassification";
+import "./readonlyRcFlavor";
 import "./spawnViewCursor";
 import "./spawnCaptureCursor";
 import "./genericHolderSlots";
