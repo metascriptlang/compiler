@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, ExportDeclData, F
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
 import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
-import { CheckerContext, GcMode, dispatchEntryFor, nextDisamb } from "../checker/context";
+import { CheckerContext, GcMode, createDispatchRegistry, dispatchEntryFor, nextDisamb } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope } from "./scope";
 import { injectProgram, isGeneratorBody } from "./inject";
@@ -51,7 +51,7 @@ function callbackReader(w: WriteEffects, stmt: Node): Node | null {
 	const d = decl.data as FunctionDeclData;
 	if (sym == null || sym.symbolKind != SymbolKind.Function || sym.modulePath != w.unit) return null;
 	if (d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt || routineFlagSet(d.fnFlags).has(RoutineFlag.Generic) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern)) return null;
-	if (sym.overloads.length > 0 || sym.overloadIdx != 0 || sym.exportName != "" || sym.nativeName != "" || dispatchEntryFor(sym) != null) return null;
+	if (sym.overloads.length > 0 || sym.overloadIdx != 0 || sym.exportName != "" || sym.nativeName != "" || dispatchEntryFor(w.tables.dispatchRegistry, sym) != null) return null;
 	if (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow) || hasFlag(sym, SymbolFlag.CompileTime)) return null;
 	if (sym.symbolType == null || isGeneratorBody(d.fnBody)) return null;
 	return decl;
@@ -201,7 +201,7 @@ function analyzePipeline(input: string): Node {
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const transformed = transformProgram(program, checkerCtx, false);
-	return analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
+	return analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), [], checkerCtx.dispatchRegistry));
 }
 
 function getStmtCount(program: Node): number {
@@ -225,7 +225,7 @@ test "null checker skips analysis" {
 		return;
 	}
 	const program = parseResult.value;
-	const result = analyzeProgram(program, null as unknown as CheckerContext, createWriteSummaries(createRoutineDecls(), []));
+	const result = analyzeProgram(program, null as unknown as CheckerContext, createWriteSummaries(createRoutineDecls(), [], createDispatchRegistry()));
 	assert result != null;
 	// Should return program unchanged
 	assert getStmtCount(result) == 1;

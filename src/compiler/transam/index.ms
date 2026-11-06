@@ -31,7 +31,7 @@ import {
 import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
 import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
 import { TaDispatchStore, createDispatchStore, prepareDispatch, trackDispatchReads } from "./dispatch";
-import { installDispatchReadSink } from "../../checker/context";
+import { DispatchRegistry, createDispatchRegistry, installDispatchReadSink } from "../../checker/context";
 import {
 	TaFileInputStore, createFileInputStore,
 	setFileText, getFileText, getFileId, getInputId, getFilePath, hasFile,
@@ -106,6 +106,7 @@ export function dbSetResolverConfig(db: TransAmDb, config: ResolverConfig): void
 
 export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 	db.graph = graph;
+	graph.dispatchRegistry = db.dispatchRegistry;
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod != null && (mod.source != "" || mod.program != null)) dbSetFileText(db, path, mod.rawSource);
@@ -130,7 +131,7 @@ export function dbEnsurePrelude(db: TransAmDb): void {
 function dbPrelude(db: TransAmDb): CheckerContext {
 	const held = db.preludeCtx;
 	if (held != null) return held;
-	const made = preludeContextFor(db.stdPath, ".cms");
+	const made = preludeContextFor(db.stdPath, ".cms", db.dispatchRegistry);
 	db.preludeCtx = made;
 	return made;
 }
@@ -147,6 +148,7 @@ export class TransAmDb {
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: CancelCtx;
 	exportRegistry: ExportRegistry;
+	dispatchRegistry: DispatchRegistry;
 	exportStore: TaExportStore;                // the exports a written module held, and what says whether a module's registered exports are current
 	ensuring: HashSet<string>;                 // modules whose imports dbEnsureExportsRegistered is walking
 	backEdges: int32;                          // imports of a module in `ensuring`, counted as the walk meets them
@@ -206,16 +208,18 @@ function dbContext(db: TransAmDb, key: int32): CheckerContext | null {
 }
 
 export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): TransAmDb {
+	const dispatchRegistry = createDispatchRegistry();
 	return {
 		revision: createRevision(),
 		fileInput: createFileInputStore(),
 		depStack: createDependencyStack(),
 		cache: createCacheStore(cacheCapacity),
 		outputs: createOutputStore(),
-		dispatch: createDispatchStore(),
+		dispatch: createDispatchStore(dispatchRegistry),
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
 		exportRegistry: createExportRegistry(),
+		dispatchRegistry,
 		exportStore: createExportStore(),
 		ensuring: new HashSet<string>(),
 		backEdges: 0,
@@ -227,7 +231,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		checkInProgress: new HashSet<string>(),
 		verifying: new HashSet<string>(),
 		graph: null,
-		editGraph: createModuleGraph(),
+		editGraph: createModuleGraph(dispatchRegistry),
 		parses: new HashMap<int32, ParsedModule>(),
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
@@ -878,7 +882,7 @@ function sameDeclaration(a: Symbol, b: Symbol): boolean {
 // Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
 function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerContext {
 	const prelude = dbPrelude(db);
-	const ctx = createContext();
+	const ctx = createContext(db.dispatchRegistry);
 	ctx.modulePath = modulePath;
 	for (const kind of intrinsicBuiltins) {
 		const name = builtinKindName(kind);
@@ -939,14 +943,14 @@ function earlyAdoptions(db: TransAmDb, filePath: string): Adoption {
 	const fileId = getFileId(db.fileInput, filePath);
 	const checked = dbTree(db, checkNodeKey(fileId));
 	const checkedCtx = db.contexts.get(checkCtxKey(fileId));
-	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), filePath);
+	if (checked != null && checkedCtx != null) return adoptDecls(checked, moduleSymbols(checkedCtx.table, filePath), filePath, db.dispatchRegistry);
 	const entry = findModuleExports(db.exportRegistry, filePath);
 	const held = entry != null ? entry.symbols : previousExports(db.exportStore, filePath);
 	const parsed = dbTree(db, exportNodeKey(fileId));
-	if (held == null || parsed == null) return new Adoption();
+	if (held == null || parsed == null) return new Adoption(db.dispatchRegistry);
 	const exported: Symbol[] = [];
 	for (const info of held) exported.push(info.sym);
-	return adoptDecls(parsed, exported, filePath);
+	return adoptDecls(parsed, exported, filePath, db.dispatchRegistry);
 }
 
 function exportsMacro(db: TransAmDb, modulePath: string): boolean {
@@ -1401,7 +1405,7 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 		popFrame(db.depStack);
 		throw e;
 	} finally {
-		installDispatchReadSink(outerDispatch);
+		installDispatchReadSink(db.dispatchRegistry, outerDispatch);
 		installBodyReadSink(outerSink);
 		ctx.disambTable = checkTable;
 	}
@@ -1466,7 +1470,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node | null {
 	recordSourceAndImplClosure(db, fileId);
 
 	const transformed = transformProgram(program, checkerCtx, false);
-	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(db.routineDecls, []));
+	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(db.routineDecls, [], db.dispatchRegistry));
 	db.trees.set(analyzeNodeKey(fileId), analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
 	return analyzed;

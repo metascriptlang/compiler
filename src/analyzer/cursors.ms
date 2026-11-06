@@ -350,7 +350,7 @@ function potentialMutationViaArg(p: Partitions, arg: Node): void {
 // If dest owns → marked ownsData → cannot be cursor.
 // If dest borrows → connected via union-find → cursor candidate.
 
-function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
+function destMightOwn(w: WriteEffects, p: Partitions, destIdx: int32, src: Node): void {
 	if (src == null) return;
 
 	match (src.kind) {
@@ -359,20 +359,20 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral => {},
 
 		// Conversions
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => convMightOwn(p, destIdx, src, (src.data as HiddenStdConvData).convExpr),
-		NodeKind.TypeAssertion => convMightOwn(p, destIdx, src, (src.data as TypeAssertionData).asExpr),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => convMightOwn(w, p, destIdx, src, (src.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => convMightOwn(w, p, destIdx, src, (src.data as TypeAssertionData).asExpr),
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
 			const lent = lentTempInit(p, src.resolvedSym);
 			if (lent != null) {
-				destMightOwn(p, destIdx, lent);
+				destMightOwn(w, p, destIdx, lent);
 				return;
 			}
 			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
-				if ((src.resolvedSym == null || !isImmutableModuleConst(src.resolvedSym)) && !lentOwnedElement(p.vars[destIdx].sym!)) p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+				if ((src.resolvedSym == null || !isImmutableModuleConst(w.tables.dispatchRegistry, src.resolvedSym)) && !lentOwnedElement(p.vars[destIdx].sym!)) p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 			} else {
 				ufConnect(p, p.vars[destIdx].sym, p.vars[srcId].sym);
 				// [x] or {field: x} context — container owns a copy
@@ -383,17 +383,17 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		},
 
 		// Field/array/deref access: recurse into base (borrowing)
-		NodeKind.MemberExpr => destMightOwn(p, destIdx, (src.data as MemberExprData).object),
-		NodeKind.ArrayAccess => destMightOwn(p, destIdx, (src.data as ArrayAccessData).array),
-		NodeKind.HiddenDeref => destMightOwn(p, destIdx, (src.data as { expr: Node }).expr),
-		NodeKind.HiddenAddr => destMightOwn(p, destIdx, (src.data as { expr: Node }).expr),
+		NodeKind.MemberExpr => destMightOwn(w, p, destIdx, (src.data as MemberExprData).object),
+		NodeKind.ArrayAccess => destMightOwn(w, p, destIdx, (src.data as ArrayAccessData).array),
+		NodeKind.HiddenDeref => destMightOwn(w, p, destIdx, (src.data as { expr: Node }).expr),
+		NodeKind.HiddenAddr => destMightOwn(w, p, destIdx, (src.data as { expr: Node }).expr),
 
 		// Conditional branches: recurse with inConditional flag
 		NodeKind.ConditionalExpr => {
 			const d = src.data as ConditionalExprData;
 			p.inConditional += 1;
-			destMightOwn(p, destIdx, d.ternaryConsequent);
-			destMightOwn(p, destIdx, d.ternaryAlternate);
+			destMightOwn(w, p, destIdx, d.ternaryConsequent);
+			destMightOwn(w, p, destIdx, d.ternaryAlternate);
 			p.inConditional -= 1;
 		},
 
@@ -401,14 +401,14 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		NodeKind.ObjectLiteral => {
 			const d = src.data as ObjectLiteralData;
 			p.inConstructor += 1;
-			for (const prop of d.properties) { destMightOwn(p, destIdx, prop); }
+			for (const prop of d.properties) { destMightOwn(w, p, destIdx, prop); }
 			p.inConstructor -= 1;
 			p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		},
 		NodeKind.ArrayLiteral => {
 			const d = src.data as ArrayLiteralData;
 			p.inConstructor += 1;
-			for (const elem of d.elements) { destMightOwn(p, destIdx, elem); }
+			for (const elem of d.elements) { destMightOwn(w, p, destIdx, elem); }
 			p.inConstructor -= 1;
 			p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		},
@@ -421,7 +421,7 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 		// Calls: return value is constructed → dest owns data
 		NodeKind.CallExpr | NodeKind.NewExpr => {
 			if (isViewCall(src)) {
-				for (const a of lentSources(src)) { destMightOwn(p, destIdx, a); }
+				for (const a of lentSources(src)) { destMightOwn(w, p, destIdx, a); }
 			} else {
 				p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 			}
@@ -461,13 +461,13 @@ function isClassRef(t: Type | null): boolean {
 	return t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null;
 }
 
-function convMightOwn(p: Partitions, destIdx: int32, conv: Node, operand: Node): void {
+function convMightOwn(w: WriteEffects, p: Partitions, destIdx: int32, conv: Node, operand: Node): void {
 	const made = destroyHookOf(conv.nodeType);
 	if (made != null && !isClassRef(conv.nodeType) && made != destroyHookOf(operand != null ? operand.nodeType : null)) {
 		p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		return;
 	}
-	destMightOwn(p, destIdx, operand);
+	destMightOwn(w, p, destIdx, operand);
 }
 
 function markReassigned(p: Partitions, vid: int32): void {
@@ -863,7 +863,7 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 	if (src == null) return;
 
 	// Classify: does dest own data or borrow?
-	destMightOwn(p, destId, src);
+	destMightOwn(w, p, destId, src);
 	sourceSlots(w, p, src, borrowedSlots[destId]);
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
@@ -872,7 +872,7 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
-			if (!isImmutableModuleConst(srcSym) && !lentOwnedElement(dest!)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
+			if (!isImmutableModuleConst(w.tables.dispatchRegistry, srcSym) && !lentOwnedElement(dest!)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			continue;
 		}
 		const srcId = variableId(p, srcSym);
@@ -1276,7 +1276,7 @@ function inferredIn(input: string, pick: (stmts: Node[]) => Node): Node {
 	const prog = result.value;
 	const checker = checkProgram(prog);
 	const ctx = makeCtx();
-	const writes: WriteEffects = { tables: createWriteSummaries(createRoutineDecls(), []), checker, unit: "", rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
+	const writes: WriteEffects = { tables: createWriteSummaries(createRoutineDecls(), [], checker.dispatchRegistry), checker, unit: "", rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
 	const body = pick((prog.data as ProgramData).programStmts);
 	inferCursors(writes, body);
 	return body;

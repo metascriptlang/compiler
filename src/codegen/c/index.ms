@@ -11,7 +11,7 @@ import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, Ob
 import { declaredFieldType, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { markErrorBlindFinallies } from "../../checker/raises";
-import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext, dispatchOverrideTable } from "../../checker/context";
+import { CheckerContext, DispatchRegistry, CheckerError, GcMode, findExportedSymbol, createContext, dispatchOverrideTable } from "../../checker/context";
 import {
 	CGen, CSection, AliveSet, CEmissionFacts, TypeInfoKind, Builder,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
@@ -77,21 +77,21 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 	const g = createCGen(ctx, modulePath, aliveSet, facts);
 	g.preparationFacts = facts;
 	g.preparingDeclarations = true;
-	bindRegistryFacts(facts);
+	bindRegistryFacts(facts, ctx.dispatchRegistry);
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) registerDeclCName(g, stmt);
 	for (const stmt of pd.programStmts) genDecl(g, stmt, false);
 	registerTypeInfoDemands(aliveSet, facts);
 }
 
-export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts, writes: string[]): void {
+export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts, writes: string[], ctx: CheckerContext): void {
 	replayFactWrites(facts, writes);
-	bindRegistryFacts(facts);
+	bindRegistryFacts(facts, ctx.dispatchRegistry);
 	registerTypeInfoDemands(aliveSet, facts);
 }
 
-function bindRegistryFacts(facts: CEmissionFacts): void {
-	if (facts.dispatchOverrides == null) facts.dispatchOverrides = dispatchOverrideTable();
+function bindRegistryFacts(facts: CEmissionFacts, dispatchRegistry: DispatchRegistry): void {
+	if (facts.dispatchOverrides == null) facts.dispatchOverrides = dispatchOverrideTable(dispatchRegistry);
 	if (facts.moduleNameRoots == null) facts.moduleNameRoots = buildModuleNameRoots();
 	if (facts.hookOps == null) facts.hookOps = hookOps();
 	if (facts.placedInstances == null) facts.placedInstances = placedInstances();
@@ -123,7 +123,7 @@ export function generateCModuleOutput(program: Node, ctx: CheckerContext, module
 		const localFacts = new CEmissionFacts();
 		if (program != null && program.kind == NodeKind.Program) factInlineDecls(localFacts, program);
 		prepareCModuleEmission(program, ctx, modulePath, aliveSet, localFacts);
-		if (program != null && program.kind == NodeKind.Program) registerTypeInfoDemands(collectModuleTypeInfoDemands(program, modulePath), localFacts);
+		if (program != null && program.kind == NodeKind.Program) registerTypeInfoDemands(collectModuleTypeInfoDemands(ctx.dispatchRegistry, program, modulePath), localFacts);
 		preparedFacts = localFacts;
 	}
 	return generatePreparedCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr, preparedFacts);

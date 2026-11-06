@@ -44,7 +44,7 @@ import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destruct
 import { enterCompilerFuncs, leaveCompilerFuncs } from "../../transform/util";
 import { analyzeProgram } from "../../analyzer/index";
 import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../../analyzer/writeEffects";
-import { CheckerContext, GcMode, ExportedSymInfo } from "../../checker/context";
+import { CheckerContext, GcMode, ExportedSymInfo, DispatchRegistry, createDispatchRegistry } from "../../checker/context";
 import { unboxFloat } from "../../raiser/marshal";
 
 registerCoreParsers();
@@ -99,7 +99,7 @@ export function underLiftedOps<T>(lifted: LiftedOpsState | null, body: () => T):
 }
 
 export function lowerForRaiser(program: Node, ctx: CheckerContext, lifted: LiftedOpsState | null = null, inlining: CallInlining = new CallInlining([])): Node {
-	const lowered = underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false, null, true, inlining), ctx, createWriteSummaries(createRoutineDecls(), [])));
+	const lowered = underLiftedOps(lifted, (): Node => analyzeForRaiser(transformForRaiser(program, ctx, true, false, null, true, inlining), ctx, createWriteSummaries(createRoutineDecls(), [], ctx.dispatchRegistry)));
 	keepLiftedOpBodies(lowered);
 	return lowered;
 }
@@ -112,11 +112,11 @@ function keepLiftedOpBodies(program: Node): void {
 	}
 }
 
-export function generateRaiser(program: Node): RaiserModule {
+export function generateRaiser(program: Node, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): RaiserModule {
 	const input: RaiserModuleInput = { modulePath: "main", program: program };
 	const modules: RaiserModuleInput[] = [];
 	modules.push(input);
-	return generateRaiserProject(modules);
+	return generateRaiserProject(modules, dispatchRegistry);
 }
 
 // --- Expression-body detection ---
@@ -425,7 +425,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegistry: DispatchRegistry, plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -434,7 +434,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	}
 
 	// --- Pass 1: Global declaration collection ---
-	const globalFuncMap = createFuncMap();
+	const globalFuncMap = createFuncMap(dispatchRegistry);
 	let funcIdx = 0;
 	const projectDecls: RaiserProjectDecl[] = [];
 	const exports: RaiserExport[] = [];
@@ -657,8 +657,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 const ACTOR_EXIT_STOP = "msActorStopLive";
 const ACTOR_RUNTIME_MODULE = "std/core/promise/index.rms";
 
-function runProgram(program: Node): RaiserContext {
-	const mod = generateRaiser(program);
+function runProgram(program: Node, dispatchRegistry: DispatchRegistry): RaiserContext {
+	const mod = generateRaiser(program, dispatchRegistry);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);
@@ -673,7 +673,8 @@ function evalRaiser(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	return runProgram(lowerForRaiser(parseResult.value, checkProgram(parseResult.value)));
+	const checkerCtx = checkProgram(parseResult.value);
+	return runProgram(lowerForRaiser(parseResult.value, checkerCtx), checkerCtx.dispatchRegistry);
 }
 
 function evalLowered(code: string): RaiserContext {
@@ -683,7 +684,8 @@ function evalLowered(code: string): RaiserContext {
 		return createContext();
 	}
 	const program = parseResult.value;
-	return runProgram(lowerForRaiser(program, checkProgram(program)));
+	const checkerCtx = checkProgram(program);
+	return runProgram(lowerForRaiser(program, checkerCtx), checkerCtx.dispatchRegistry);
 }
 
 // --- Tests ---
@@ -1795,8 +1797,8 @@ function directCallReturnMismatches(code: string): int32 {
 		unreachable;
 		return -1;
 	}
-	checkProgram(parseResult.value);
-	const mod = generateRaiser(parseResult.value);
+	const checkerCtx = checkProgram(parseResult.value);
+	const mod = generateRaiser(parseResult.value, checkerCtx.dispatchRegistry);
 	let mismatches: int32 = 0;
 	for (const func of mod.functions) {
 		for (const call of func.code) {

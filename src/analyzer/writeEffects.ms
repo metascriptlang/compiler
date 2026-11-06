@@ -7,7 +7,7 @@
 import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, FunctionDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet, setFlag } from "../checker/symbol";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
+import { CheckerContext, DispatchRegistry, createDispatchRegistry, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
 import { calledRoutine, isViewCall, routineBody as declaredBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
@@ -75,6 +75,7 @@ export function createRoutineDecls(): RoutineDecls {
 }
 
 export interface WriteSummaries {
+	dispatchRegistry: DispatchRegistry;
 	routineDecls: RoutineDecls;
 	reloadableUnits: string[];
 	routineSummaries: HashMap<Symbol, WriteSummary>;
@@ -104,9 +105,9 @@ export interface WriteSummaries {
 	valueCells: boolean;
 }
 
-export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
+export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[], dispatchRegistry: DispatchRegistry): WriteSummaries {
 	return {
-		routineDecls, reloadableUnits,
+		routineDecls, reloadableUnits, dispatchRegistry,
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
@@ -676,10 +677,10 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 	const out: WriteSummary[] = [];
 	if (runsNativeOnC(w, sym!)) nativeEffect(w, s, call, sym!, stores, own != null);
 	else out.push(routineSummary(w, sym!));
-	const entry = dispatchEntryFor(sym!);
+	const entry = dispatchEntryFor(w.tables.dispatchRegistry, sym!);
 	if (entry != null) {
 		if (entry.overloaded) markUnknown(s);
-		else for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) {
+		else for (const o of dispatchOverridesFor(w.tables.dispatchRegistry, entry.classSym, entry.methodName)) {
 			if (outsideClosure(w, s, o.sym)) markUnknown(s);
 			else out.push(routineSummary(w, o.sym));
 		}
@@ -976,7 +977,7 @@ function collectDefs(w: WriteEffects, d: LocalDefs, n: Node, nested: boolean): v
 
 function returnsNewObject(w: WriteEffects, s: WriteSummary, call: Node): boolean {
 	const sym = call.resolvedSym;
-	if (!isRoutineSym(sym) || runsNativeOnC(w, sym!) || dispatchEntryFor(sym!) != null) return false;
+	if (!isRoutineSym(sym) || runsNativeOnC(w, sym!) || dispatchEntryFor(w.tables.dispatchRegistry, sym!) != null) return false;
 	const callee = w.tables.routineSummaries.get(sym!);
 	if (callee != null) readBodies(w, callee);
 	return callee != null && callee.done && callee.returnsFresh && !reloadsApart(w, s, callee);
@@ -1266,7 +1267,7 @@ export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 }
 
 export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
-	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null || suspendsAcrossLowering(w, sym)) return true;
+	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(w.tables.dispatchRegistry, sym) != null || suspendsAcrossLowering(w, sym)) return true;
 	const known = w.tables.retainedParams.get(sym);
 	readBodyOf(w, bodyUnit(w, sym));
 	if (known != null) return (known & (1 << i)) != 0;
@@ -1323,7 +1324,7 @@ function retainedParams(w: WriteEffects, body: Node, params: Symbol[]): int32 {
 // is unknown, so the caller keeps treating the result as reachable from any heap slot.
 export function viewReturnSlots(w: WriteEffects, call: Node): string[] | null {
 	const sym = calledRoutine(call);
-	if (sym == null || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null) return null;
+	if (sym == null || runsNativeOnC(w, sym) || dispatchEntryFor(w.tables.dispatchRegistry, sym) != null) return null;
 	return routineReturnSlots(w, sym);
 }
 
@@ -1797,7 +1798,7 @@ export function restoreContracts(tables: WriteSummaries, claims: ContractClaim[]
 }
 
 function writeProbe(): WriteEffects {
-	return { tables: createWriteSummaries(createRoutineDecls(), []), checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo(), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
+	return { tables: createWriteSummaries(createRoutineDecls(), [], createDispatchRegistry()), checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo(), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
 }
 
 function localOf(name: string, t: Type, loc: SourceLocation): Node {

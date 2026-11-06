@@ -9,7 +9,7 @@ import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, CLOSURE
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, InlineFrame } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { RaiserInlineSite } from "../../raiser/module";
-import { CheckerError, Severity } from "../../checker/context";
+import { CheckerError, Severity, DispatchRegistry, createDispatchRegistry } from "../../checker/context";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { raiserRefusal, stdModuleName, tiersDeclaring } from "../../module/tiers";
 
@@ -94,13 +94,14 @@ export interface RaiserLoopStack {
 // --- Function map ---
 
 export interface RaiserFuncMap {
+	dispatchRegistry: DispatchRegistry;
 	symbolIndices: HashMap<Symbol, int32>;
 	ctorIndices: HashMap<Symbol, int32>;
 	initIndices: HashMap<Symbol, int32>;
 }
 
-export function createFuncMap(): RaiserFuncMap {
-	return { symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>() };
+export function createFuncMap(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): RaiserFuncMap {
+	return { dispatchRegistry, symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>() };
 }
 
 export interface RaiserGlobalEntry {

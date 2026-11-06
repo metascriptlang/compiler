@@ -196,7 +196,7 @@ function listCall(u: Unit, call: Node): void {
 			}
 		}
 		if (!refused && !hidden && crossesShared(rp)) {
-			say(u, "2b", calleeMayWrite(call) ? "rule-a" : "rule-a-filtered", call, ref);
+			say(u, "2b", calleeMayWrite(u.ctx.dispatchRegistry, call) ? "rule-a" : "rule-a-filtered", call, ref);
 		}
 	}
 }
@@ -211,7 +211,7 @@ function nestedChange(u: Unit, rp: Place, node: Node): string {
 			if (p != null && structuralOverlap(rp, p, false) != Overlap.Disjoint) found = `${n.kind == NodeKind.MoveExpr ? "move" : "out"} ${placeText(p)}`;
 		}
 		if (found == "" && n.kind == NodeKind.CallExpr) {
-			const writes = calleeMayWrite(n);
+			const writes = calleeMayWrite(u.ctx.dispatchRegistry, n);
 			for (const q of passedOf(n)) {
 				if (!isRefFormal(q.formal) && !(writes && carriesPointer(q.node.nodeType))) continue;
 				for (const s of sourcesOf(u.scope, q.node)) {

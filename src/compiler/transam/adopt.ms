@@ -27,6 +27,7 @@ import {
 } from "../../checker/symbol";
 import {
 	CheckerContext,
+	DispatchRegistry,
 	createContext,
 	forgetDispatchOfModule,
 	placeDispatchOfModule,
@@ -52,6 +53,10 @@ export class AdoptedPair {
 }
 
 export class Adoption {
+	dispatchRegistry: DispatchRegistry;
+	constructor(dispatchRegistry: DispatchRegistry) {
+		this.dispatchRegistry = dispatchRegistry;
+	}
 	decls: HashMap<Node, Symbol> = new HashMap<Node, Symbol>();
 	pairs: AdoptedPair[] = [];
 	visited: HashSet<Node> = new HashSet<Node>();
@@ -205,8 +210,9 @@ export function adoptDecls(
 	oldProgram: Node,
 	oldSymbols: Symbol[],
 	modulePath: string,
+	dispatchRegistry: DispatchRegistry,
 ): Adoption {
-	const out = new Adoption();
+	const out = new Adoption(dispatchRegistry);
 	out.old.modulePath = modulePath;
 	for (const sym of oldSymbols) {
 		if (sym.declNode != null) {
@@ -234,7 +240,7 @@ export function adoptStmt(out: Adoption, stmt: Node): void {
 	out.visited.add(decl);
 	if (!out.dispatchForgotten && out.old.modulePath != "") {
 		out.dispatchForgotten = true;
-		out.dispatchAt = forgetDispatchOfModule(out.old.modulePath);
+		out.dispatchAt = forgetDispatchOfModule(out.dispatchRegistry, out.old.modulePath);
 	}
 	const now: Declared = {
 		key: decl,
@@ -282,7 +288,7 @@ export function moduleSymbols(
 }
 
 export function verifyAdoption(adoption: Adoption): void {
-	placeDispatchOfModule(adoption.old.modulePath, adoption.dispatchAt);
+	placeDispatchOfModule(adoption.dispatchRegistry, adoption.old.modulePath, adoption.dispatchAt);
 	for (const p of adoption.pairs) {
 		const now = memberKey(p.owner, p.name, p.sym);
 		if (now != p.before) {
@@ -306,7 +312,7 @@ function collectText(text: string, previous: Collected | null): Collected {
 	if (!parsed.ok) {
 		throw new Error(`test source does not parse: ${text}`);
 	}
-	const ctx = createContext();
+	const ctx = previous != null ? createContext(previous.ctx.dispatchRegistry) : createContext();
 	ctx.modulePath = testPath;
 	openScope(ctx.table, ScopeKind.Module);
 	let adoption: Adoption | null = null;
@@ -315,6 +321,7 @@ function collectText(text: string, previous: Collected | null): Collected {
 			previous.program,
 			moduleSymbols(previous.ctx.table, testPath),
 			testPath,
+			ctx.dispatchRegistry,
 		);
 		adoption = taken;
 		ctx.adoptedDecls = taken.decls;
@@ -434,6 +441,7 @@ test "a kind change is not paired, and a Symbol forced onto another kind refuses
 		first.program,
 		moduleSymbols(first.ctx.table, testPath),
 		testPath,
+		first.ctx.dispatchRegistry,
 	);
 	adoptStmt(adoption, (classed.value.data as ProgramData).programStmts[0]);
 	assert adoption.decls.size == 0;

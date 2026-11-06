@@ -4,7 +4,6 @@ import {
 	CheckerError,
 	dispatchOverridesFor,
 	dispatchEntryCount,
-	resetDispatchRegistry,
 	lifecycleHookOp,
 	findModuleExports,
 } from "../../checker/context";
@@ -52,7 +51,6 @@ function exported(db: TransAmDb, path: string, name: string): Symbol {
 
 function newDb(project: Project): TransAmDb {
 	resetInstantiationState();
-	resetDispatchRegistry();
 	const db = createTransAmDb(100);
 	dbSetStdPath(db, resolveRuntimeDir() + "/std");
 	for (const path of project.order) {
@@ -120,12 +118,12 @@ function snapshot(db: TransAmDb, project: Project): string {
 		lines.push(`${inst[1]} hooks ${hooks.join(",")}`);
 	}
 	for (const m of project.methods) {
-		const overrides = dispatchOverridesFor(exported(db, m[0], m[1]), m[2]).map(
+		const overrides = dispatchOverridesFor(db.dispatchRegistry, exported(db, m[0], m[1]), m[2]).map(
 			(e): string => `${e.classSym.name}.${e.methodName}`,
 		);
 		lines.push(`${m[1]}.${m[2]} overridden by ${overrides.join(",")}`);
 	}
-	lines.push(`dispatch entries ${dispatchEntryCount()}`);
+	lines.push(`dispatch entries ${dispatchEntryCount(db.dispatchRegistry)}`);
 	return lines.join("\n");
 }
 

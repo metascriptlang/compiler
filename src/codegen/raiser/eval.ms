@@ -6,7 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, No
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
+import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
 import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
 import { layoutOf, slotKindsOf } from "./valueCopy";
@@ -88,7 +88,7 @@ let _pendingHelperErrors: CheckerError[] = [];
 // Check + lower over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
 // pass a Program whose real-module decls are CLONED (never the canonical nodes).
-function transformForEngine(program: Node, lifted: LiftedOpsState): Node {
+function transformForEngine(program: Node, lifted: LiftedOpsState, dispatchRegistry: DispatchRegistry): Node {
 	// Macro bodies dispatch string/array builtins through CallHost — the host
 	// registry must be populated first (same as @comptime via evalComptimeBlock).
 	ensureHostTableLoaded();
@@ -107,7 +107,8 @@ function transformForEngine(program: Node, lifted: LiftedOpsState): Node {
 	try {
 		const checkerCtx = hasFullOuterCtx
 			? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
-			: checkProgram(program);
+			: checkProgram(program, dispatchRegistry);
+		if (checkerCtx.dispatchRegistry != dispatchRegistry) throw new Error("internal: engine checker and emitter have different dispatch owners");
 		_lastEngineCheckErrors = checkerCtx.errors;
 		keepEngineInstances(checkerCtx);
 		transformed = lowerForRaiser(program, checkerCtx, lifted);
@@ -153,21 +154,29 @@ function compileLiftedOpIntoEngine(sym: Symbol): int32 {
 	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, program, sym.name, sym));
 }
 
+function engineDispatchRegistry(): DispatchRegistry {
+	const outer = getComptimeOuterCtx();
+	if (outer != null && outer.graph != null) return outer.graph.dispatchRegistry;
+	return _engine != null ? _engine.funcMap.dispatchRegistry : createDispatchRegistry();
+}
+
 export function evalASTCompile(program: Node): RaiserModule {
 	const lifted = _engine != null ? _engine.lifted : freshLiftedOps();
-	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformForEngine(program, lifted)));
+	const dispatchRegistry = engineDispatchRegistry();
+	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformForEngine(program, lifted, dispatchRegistry), dispatchRegistry));
 }
 
 export function evalASTFull(program: Node): RaiserContext {
 	const lifted = _engine != null ? _engine.lifted : freshLiftedOps();
-	const transformed = transformForEngine(program, lifted);
+	const dispatchRegistry = engineDispatchRegistry();
+	const transformed = transformForEngine(program, lifted, dispatchRegistry);
 	const ctx = createContext();
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		ctx.lastError = e.message;
 		return ctx;
 	}
-	load(ctx, underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformed)));
+	load(ctx, underLiftedOps(lifted, (): RaiserModule => generateRaiser(transformed, dispatchRegistry)));
 	execute(ctx);
 	return ctx;
 }
@@ -200,7 +209,7 @@ function inEngineCompilation(token: CheckerContext): boolean {
 	return _engineGraph == null && token == _engineToken;
 }
 
-function freshEngine(): ComptimeEngine {
+function freshEngine(dispatchRegistry: DispatchRegistry): ComptimeEngine {
 	// Seed with a never-called Halt entry so createVM has a valid entry frame;
 	// macro functions append at index 1+.
 	const entryCode: RaiserInstruction[] = [raiserABC(RaiserOpcode.Halt, 0, 0, 0)];
@@ -208,7 +217,7 @@ function freshEngine(): ComptimeEngine {
 	const entryFn = createRaiserFunction("__engineEntry", entryCode, entryConsts, 0, 0, 2);
 	const functions: RaiserFunction[] = [entryFn];
 	const image = createRaiserModule("comptime-engine", functions, 0);
-	const funcMap = createFuncMap();
+	const funcMap = createFuncMap(dispatchRegistry);
 	const vm = createVM(image, true);
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
@@ -343,7 +352,7 @@ function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: Ext
 	enterEngineCompile();
 	defer leaveEngineCompile();
 	registerSeedSymbols(withMetaSeeds(seeds), exts);
-	const transformed = transformForEngine(program, _engine.lifted);
+	const transformed = transformForEngine(program, _engine.lifted, _engine.funcMap.dispatchRegistry);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
@@ -377,7 +386,7 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	const nested = engineCompiling();
 	if (!nested) {
 		if (!inEngineCompilation(token)) {
-			_engine = freshEngine();
+			_engine = freshEngine(token.dispatchRegistry);
 			_engineGraph = token.moduleGraph;
 		}
 		_engineToken = token;
@@ -771,7 +780,7 @@ function compileLowered(code: string): RaiserModule {
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const lifted = freshLiftedOps();
-	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(lowerForRaiser(program, checkerCtx, lifted)));
+	return underLiftedOps(lifted, (): RaiserModule => generateRaiser(lowerForRaiser(program, checkerCtx, lifted), checkerCtx.dispatchRegistry));
 }
 
 // Full pipeline — returns the VM so heap state is inspectable.
@@ -2069,8 +2078,8 @@ function evalRaiserDirect(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	checkProgram(parseResult.value);
-	const mod = generateRaiser(parseResult.value);
+	const checkerCtx = checkProgram(parseResult.value);
+	const mod = generateRaiser(parseResult.value, checkerCtx.dispatchRegistry);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);

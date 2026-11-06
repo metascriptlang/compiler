@@ -3,7 +3,7 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
+import { CheckerContext, DispatchRegistry, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
 import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
@@ -158,7 +158,7 @@ function checkHookEffects(ctx: CheckerContext): void {
 	for (const hook of LIFECYCLE_HOOK_NAMES) {
 		for (const m of findAllExtensionsByName(registry, hook)) {
 			if (m.isStatic || m.sym == null || m.sym!.modulePath != ctx.modulePath || isUncheckedGeneric(m.sym!)) continue;
-			const c = routineEffect(m.sym!, Effect.Suspends);
+			const c = routineEffect(ctx.dispatchRegistry, m.sym!, Effect.Suspends);
 			if (c == null) continue;
 			const owner = extReceiverSym(m);
 			const of = owner != null ? " of '" + owner.name + "'" : "";
@@ -170,7 +170,7 @@ function checkHookEffects(ctx: CheckerContext): void {
 
 export function checkActorHookEffects(hook: Node, hookName: string, actorName: string): void {
 	deferEffectCheck(hook, "actorHook", (ctx: CheckerContext): void => {
-		const c = walkRoutine(hook, Effect.Suspends);
+		const c = walkRoutine(ctx.dispatchRegistry, hook, Effect.Suspends);
 		if (c == null) return;
 		addError(ctx, "lifecycle hook '" + hookName + "' of '" + actorName + "' must not spawn, await or call a function value, but it " + c.text, hook.location.line, hook.location.column);
 	});
@@ -201,15 +201,15 @@ function routineResult(decl: Node): Type | null {
 	return t != null && t.kind == TypeKind.Function ? t.typeReturn : null;
 }
 
-function expressionResultStore(decl: Node): EffectCause | null {
+function expressionResultStore(dispatchRegistry: DispatchRegistry, decl: Node): EffectCause | null {
 	if (decl.kind != NodeKind.ArrowFunction) return null;
 	const body = (decl.data as ArrowFunctionData).arrowBody;
-	return body.kind == NodeKind.BlockStmt ? null : resultStoreOf(body);
+	return body.kind == NodeKind.BlockStmt ? null : resultStoreOf(dispatchRegistry, body);
 }
 
-function resultStoreOf(value: Node | null): EffectCause | null {
+function resultStoreOf(dispatchRegistry: DispatchRegistry, value: Node | null): EffectCause | null {
 	if (value == null || ownResult == null || returnsView(ownResult) || holdsNoCount(ownResult) || ownResult!.kind == TypeKind.Lent) return null;
-	const what = borrowedOf(value);
+	const what = borrowedOf(dispatchRegistry, value);
 	return what != null && what.kind == BorrowKind.ModuleConst ? storeCause(value, what, "into the owned result it returns") : null;
 }
 
@@ -229,7 +229,7 @@ function isRoutineNode(n: Node): boolean {
 		|| n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
 }
 
-function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): EffectCause | null {
+function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: Effect, views: string[] = []): EffectCause | null {
 	if (decl == null) return null;
 	const outer = ownParams;
 	const outerAsync = inAsync;
@@ -242,7 +242,7 @@ function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): Effect
 	viewSyms = [];
 	viewParams = views;
 	if (e == Effect.StoresBorrowed) scanFlows(routineBody(decl));
-	const c = (e == Effect.StoresBorrowed ? expressionResultStore(decl) : null) ?? walkEffect(routineBody(decl), e);
+	const c = (e == Effect.StoresBorrowed ? expressionResultStore(dispatchRegistry, decl) : null) ?? walkEffect(dispatchRegistry, routineBody(decl), e);
 	ownParams = outer;
 	ownResult = outerResult;
 	inAsync = outerAsync;
@@ -251,19 +251,19 @@ function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): Effect
 	return c;
 }
 
-export function walkWithViews(node: Node, e: Effect, views: Symbol[]): EffectCause | null {
+export function walkWithViews(dispatchRegistry: DispatchRegistry, node: Node, e: Effect, views: Symbol[]): EffectCause | null {
 	const outerSyms = viewSyms;
 	const outerParams = viewParams;
 	viewSyms = views;
 	viewParams = [];
 	if (e == Effect.StoresBorrowed) scanFlows(node);
-	const c = walkEffect(node, e);
+	const c = walkEffect(dispatchRegistry, node, e);
 	viewSyms = outerSyms;
 	viewParams = outerParams;
 	return c;
 }
 
-function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
+function walkNestedRoutine(dispatchRegistry: DispatchRegistry, decl: Node, e: Effect): EffectCause | null {
 	const outer = ownParams;
 	const outerAsync = inAsync;
 	const outerParams = viewParams;
@@ -272,7 +272,7 @@ function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
 	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewParams = viewParams.filter((p: string): boolean => !ownParams.includes(p));
-	const c = (e == Effect.StoresBorrowed ? expressionResultStore(decl) : null) ?? walkChildren(decl, e);
+	const c = (e == Effect.StoresBorrowed ? expressionResultStore(dispatchRegistry, decl) : null) ?? walkChildren(dispatchRegistry, decl, e);
 	ownParams = outer;
 	ownResult = outerResult;
 	inAsync = outerAsync;
@@ -320,18 +320,18 @@ export function boundRoutine(sym: Symbol | null): Node | null {
 	return bound != null && isRoutineNode(peelConv(bound)) ? peelConv(bound) : null;
 }
 
-function boundRoutineEffect(sym: Symbol, e: Effect): EffectCause | null {
-	return memo(sym, e, (): EffectCause | null => walkEffect(boundRoutine(sym), e));
+function boundRoutineEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, e: Effect): EffectCause | null {
+	return memo(sym, e, (): EffectCause | null => walkEffect(dispatchRegistry, boundRoutine(sym), e));
 }
 
-function argumentEffect(arg: Node, e: Effect): EffectCause | null {
+function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect): EffectCause | null {
 	if (functionSlotOf(arg.nodeType) == null) return null;
 	if (reachesModuleState(e) && isSendableFunction(arg.nodeType)) return null;
 	const a = peelConv(arg);
 	if (isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
 	if (a.kind == NodeKind.Identifier && a.resolvedSym != null) {
 		if (isRoutine(a.resolvedSym)) return null;
-		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
+		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(dispatchRegistry, a.resolvedSym!, e);
 	}
 	return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(arg, "passes a function value");
 }
@@ -413,16 +413,16 @@ function isModuleState(sym: Symbol): boolean {
 // A module const that is deep Readonly and built in its own initializer, or whose type the const
 // rule keeps unwritable through every path, is never written and lives as long as the program, so a
 // borrow of it cannot outlive or race a write.
-export function isImmutableModuleConst(sym: Symbol): boolean {
+export function isImmutableModuleConst(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 	if (!hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
 	const t = sym.symbolType;
-	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && immutableConstValue(sym, t);
+	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && immutableConstValue(dispatchRegistry, sym, t);
 }
 
-function immutableConstValue(sym: Symbol, t: Type): boolean {
+function immutableConstValue(dispatchRegistry: DispatchRegistry, sym: Symbol, t: Type): boolean {
 	if (hasFlag(sym, SymbolFlag.ImmutableModuleConst)) return true;
-	const immutable = isReadonlyView(t) ? builtFresh(sym)
-		: sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable) && isFrozenByConst(t) && noTaskStartsBefore(sym, Effect.StartsTask);
+	const immutable = isReadonlyView(t) ? builtFresh(dispatchRegistry, sym)
+		: sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable) && isFrozenByConst(t) && noTaskStartsBefore(dispatchRegistry, sym, Effect.StartsTask);
 	if (immutable) setFlag(sym, SymbolFlag.ImmutableModuleConst);
 	return immutable;
 }
@@ -438,12 +438,12 @@ function isReadonlyStatic(sym: Symbol): boolean {
 	return d.propIsStatic && d.propIsReadonly;
 }
 
-function isConstantValue(sym: Symbol, e: Effect): boolean {
+function isConstantValue(dispatchRegistry: DispatchRegistry, sym: Symbol, e: Effect): boolean {
 	const t = sym.symbolType;
 	if (hasFlag(sym, SymbolFlag.Mutable) && !isReadonlyStatic(sym)) return false;
 	if (typeCarriesRef(t)) {
-		if (t != null && t.kind == TypeKind.Ptr) return pointsAtConstantState(sym, e);
-		return reachesModuleState(e) && immutableConstValue(sym, t);
+		if (t != null && t.kind == TypeKind.Ptr) return pointsAtConstantState(dispatchRegistry, sym, e);
+		return reachesModuleState(e) && immutableConstValue(dispatchRegistry, sym, t);
 	}
 	return reachesModuleState(e) || !isAtomicRef(t);
 }
@@ -455,23 +455,23 @@ function holdsOnlyPids(t: Type | null): boolean {
 	return u.sym != null && u.sym.symbolKind == SymbolKind.Actor;
 }
 
-function isPidConst(sym: Symbol): boolean {
+function isPidConst(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 	if (sym.symbolKind != SymbolKind.Variable || !hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
 	if (!holdsOnlyPids(sym.symbolType)) return false;
 	const known = pidConsts.get(sym);
 	if (known != null) return known;
 	const init = constBindingInitializer(sym);
-	const ok = init != null && isFreshValue(init, CONST_INIT_SCOPE) && noTaskStartsBefore(sym, Effect.RunsElsewhere);
+	const ok = init != null && isFreshValue(init, constInitScope(dispatchRegistry)) && noTaskStartsBefore(dispatchRegistry, sym, Effect.RunsElsewhere);
 	pidConsts.set(sym, ok);
 	return ok;
 }
 
-function builtFresh(sym: Symbol): boolean {
+function builtFresh(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 	const known = freshConsts.get(sym);
 	if (known != null) return known;
 	const init = constBindingInitializer(sym);
 	const values = init != null ? [init] : staticReadonlyValues(sym);
-	const fresh = values != null && values.length > 0 && allFresh(values, CONST_INIT_SCOPE) && noTaskStartsBefore(sym, Effect.StartsTask);
+	const fresh = values != null && values.length > 0 && allFresh(values, constInitScope(dispatchRegistry)) && noTaskStartsBefore(dispatchRegistry, sym, Effect.StartsTask);
 	freshConsts.set(sym, fresh);
 	return fresh;
 }
@@ -523,13 +523,13 @@ function declaringClass(sym: Symbol, decl: Node): Node | null {
 	return null;
 }
 
-function noTaskStartsBefore(sym: Symbol, starts: Effect): boolean {
+function noTaskStartsBefore(dispatchRegistry: DispatchRegistry, sym: Symbol, starts: Effect): boolean {
 	const stmts = moduleStatements(sym.modulePath);
 	const decl = sym.declNode;
 	if (stmts == null || decl == null || !checkedModules.has(sym.modulePath)) return false;
 	for (const stmt of stmts) {
-		if (topLevelHas(stmt, starts)) return false;
-		if (declares(stmt, decl)) return cycleStartsNoTask(sym.modulePath);
+		if (topLevelHas(dispatchRegistry, stmt, starts)) return false;
+		if (declares(stmt, decl)) return cycleStartsNoTask(dispatchRegistry, sym.modulePath);
 	}
 	return false;
 }
@@ -545,26 +545,26 @@ function declares(stmt: Node, decl: Node): boolean {
 	return false;
 }
 
-function topLevelStartsTask(stmt: Node): boolean {
-	return topLevelHas(stmt, Effect.StartsTask);
+function topLevelStartsTask(dispatchRegistry: DispatchRegistry, stmt: Node): boolean {
+	return topLevelHas(dispatchRegistry, stmt, Effect.StartsTask);
 }
 
-function topLevelHas(stmt: Node, e: Effect): boolean {
+function topLevelHas(dispatchRegistry: DispatchRegistry, stmt: Node, e: Effect): boolean {
 	const s = unpackDecl(stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt);
 	if (s == null || isRoutineNode(s) || s.kind == NodeKind.TestDecl) return false;
 	const members = s.kind == NodeKind.ClassDecl ? (s.data as ClassDeclData).classBody
 		: s.kind == NodeKind.ActorDecl ? (s.data as ActorDeclData).actorBody : null;
-	if (members == null) return walkEffect(s, e) != null;
+	if (members == null) return walkEffect(dispatchRegistry, s, e) != null;
 	for (const m of members) {
 		const member = unpackDecl(m);
 		if (member == null || isRoutineNode(member)) continue;
 		if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) continue;
-		if (walkEffect(member, e) != null) return true;
+		if (walkEffect(dispatchRegistry, member, e) != null) return true;
 	}
 	return false;
 }
 
-function cycleStartsNoTask(path: string): boolean {
+function cycleStartsNoTask(dispatchRegistry: DispatchRegistry, path: string): boolean {
 	if (moduleGraph == null) return false;
 	for (const member of importCycleOf(moduleGraph!, path)) {
 		if (member == path) continue;
@@ -578,7 +578,7 @@ function cycleStartsNoTask(path: string): boolean {
 		if (program == null || !checkedModules.has(member)) return false;
 		let starts = false;
 		for (const stmt of (program.data as ProgramData).programStmts) {
-			if (topLevelStartsTask(stmt)) {
+			if (topLevelStartsTask(dispatchRegistry, stmt)) {
 				starts = true;
 				break;
 			}
@@ -616,11 +616,13 @@ function reachableFrom(graph: ModuleGraph, start: string, reverse: boolean): str
 	return seen;
 }
 
-const CONST_INIT_SCOPE: FreshScope = {
-	moveNames: [],
-	table: null,
-	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
-};
+function constInitScope(dispatchRegistry: DispatchRegistry): FreshScope {
+	return {
+		moveNames: [],
+		table: null,
+		buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(dispatchRegistry, site, Effect.SideEffect) : callEffect(dispatchRegistry, site, Effect.SideEffect)) == null,
+	};
+}
 
 export interface FreshScope {
 	moveNames: string[];
@@ -708,12 +710,12 @@ function allFresh(nodes: Node[], s: FreshScope): boolean {
 	return true;
 }
 
-function pointsAtConstantState(sym: Symbol, e: Effect): boolean {
+function pointsAtConstantState(dispatchRegistry: DispatchRegistry, sym: Symbol, e: Effect): boolean {
 	const init = constBindingInitializer(sym);
 	if (init == null || init.kind != NodeKind.TypeAssertion) return false;
 	const target = peelConv((init.data as TypeAssertionData).asExpr);
 	const pointee = target.kind == NodeKind.Identifier ? target.resolvedSym : null;
-	return pointee != null && pointee != sym && isModuleState(pointee) && isConstantValue(pointee, e);
+	return pointee != null && pointee != sym && isModuleState(pointee) && isConstantValue(dispatchRegistry, pointee, e);
 }
 
 function stateName(sym: Symbol): string {
@@ -769,12 +771,12 @@ function settleOpenRegion(t: EffectTable, pure: boolean): void {
 	t.pureIfOpenArePure = new HashMap<Symbol, boolean>();
 }
 
-export function routineEffect(sym: Symbol, e: Effect): EffectCause | null {
+export function routineEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, e: Effect): EffectCause | null {
 	recordBodyRead(sym.modulePath);
-	return memo(sym, e, (): EffectCause | null => walkRoutine(unpackDecl(sym.declNode), e));
+	return memo(sym, e, (): EffectCause | null => walkRoutine(dispatchRegistry, unpackDecl(sym.declNode), e));
 }
 
-export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | null {
+export function constructionEffect(dispatchRegistry: DispatchRegistry, classSym: Symbol, e: Effect): EffectCause | null {
 	recordBodyRead(classSym.modulePath);
 	return memo(classSym, e, (): EffectCause | null => {
 		const decl = unpackDecl(classSym.declNode);
@@ -785,24 +787,24 @@ export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | n
 			if (member == null) continue;
 			let c: EffectCause | null = null;
 			if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) {
-				c = walkEffect((member.data as PropertyDeclData).propInitializer, e);
+				c = walkEffect(dispatchRegistry, (member.data as PropertyDeclData).propInitializer, e);
 			} else if (member.kind == NodeKind.ConstructorDecl) {
-				c = walkRoutine(member, e);
+				c = walkRoutine(dispatchRegistry, member, e);
 			}
 			if (c != null) return c;
 		}
 		const parent = decl.kind == NodeKind.ClassDecl ? parentClassSymOf(classSym) : null;
 		if (parent == null) return null;
-		return through(decl, "extends '" + parent.name + "'", constructionEffect(parent, e));
+		return through(decl, "extends '" + parent.name + "'", constructionEffect(dispatchRegistry, parent, e));
 	});
 }
 
-function dispatchedEffect(call: Node, sym: Symbol, e: Effect): EffectCause | null {
-	const entry = dispatchEntryFor(sym);
+function dispatchedEffect(dispatchRegistry: DispatchRegistry, call: Node, sym: Symbol, e: Effect): EffectCause | null {
+	const entry = dispatchEntryFor(dispatchRegistry, sym);
 	if (entry == null || entry.overloaded) return null;
-	for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) {
+	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
 		const what = "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'";
-		const c = through(call, what, routineEffect(o.sym, e));
+		const c = through(call, what, routineEffect(dispatchRegistry, o.sym, e));
 		if (c != null) return c;
 	}
 	return null;
@@ -812,7 +814,7 @@ function isSuperCall(callee: Node | null): boolean {
 	return callee != null && callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super";
 }
 
-export function callEffect(call: Node, e: Effect): EffectCause | null {
+export function callEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Effect): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	if (isSuperCall(callee)) return null;
 	if ((e == Effect.Suspends || e == Effect.StartsTask || e == Effect.RunsElsewhere) && isSpawnCall(call)) return cause(call, "spawns");
@@ -829,7 +831,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (reachesModuleState(e) && isSendableFunction(valueType)) return null;
 		if (callee != null && callee.kind == NodeKind.Identifier && boundRoutine(callee.resolvedSym) != null) {
-			return through(call, "calls '" + (callee.data as IdentifierData).name + "'", boundRoutineEffect(callee.resolvedSym!, e));
+			return through(call, "calls '" + (callee.data as IdentifierData).name + "'", boundRoutineEffect(dispatchRegistry, callee.resolvedSym!, e));
 		}
 		return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(call, "calls a function value");
 	}
@@ -842,13 +844,13 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
 		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
 	for (const arg of (call.data as CallExprData).arguments) {
-		const passed = argumentEffect(arg, e);
+		const passed = argumentEffect(dispatchRegistry, arg, e);
 		if (passed != null) return through(call, "calls '" + name + "'", passed);
 	}
-	const own = through(call, "calls '" + name + "'", routineEffect(sym!, e));
+	const own = through(call, "calls '" + name + "'", routineEffect(dispatchRegistry, sym!, e));
 	if (own != null) return own;
-	const dispatched = dispatchedEffect(call, sym!, e);
-	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
+	const dispatched = dispatchedEffect(dispatchRegistry, call, sym!, e);
+	return dispatched != null ? dispatched : ownedValueHookEffect(dispatchRegistry, call, e);
 }
 
 function isMessageToAnotherActor(call: Node): boolean {
@@ -858,22 +860,22 @@ function isMessageToAnotherActor(call: Node): boolean {
 	return t != null && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
 }
 
-function receiverEffect(recv: Node | null, e: Effect): EffectCause | null {
-	if (recv == null || !reachesModuleState(e)) return walkEffect(recv, e);
+function receiverEffect(dispatchRegistry: DispatchRegistry, recv: Node | null, e: Effect): EffectCause | null {
+	if (recv == null || !reachesModuleState(e)) return walkEffect(dispatchRegistry, recv, e);
 	const p = peelView(recv);
 	if (p.kind == NodeKind.ArrayAccess) {
 		const d = p.data as ArrayAccessData;
-		return walkEffect(d.index, e) ?? receiverEffect(d.array, e);
+		return walkEffect(dispatchRegistry, d.index, e) ?? receiverEffect(dispatchRegistry, d.array, e);
 	}
-	if (p.kind == NodeKind.Identifier && p.resolvedSym != null && isPidConst(p.resolvedSym!)) return null;
-	return walkEffect(recv, e);
+	if (p.kind == NodeKind.Identifier && p.resolvedSym != null && isPidConst(dispatchRegistry, p.resolvedSym!)) return null;
+	return walkEffect(dispatchRegistry, recv, e);
 }
 
-function messageOperandsEffect(call: Node, e: Effect): EffectCause | null {
-	const c = receiverEffect(receiverOf(call), e);
+function messageOperandsEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Effect): EffectCause | null {
+	const c = receiverEffect(dispatchRegistry, receiverOf(call), e);
 	if (c != null) return c;
 	for (const arg of (call.data as CallExprData).arguments) {
-		const a = walkEffect(arg, e);
+		const a = walkEffect(dispatchRegistry, arg, e);
 		if (a != null) return a;
 	}
 	return null;
@@ -888,37 +890,37 @@ function isScalarToString(call: Node, sym: Symbol): boolean {
 	return sym.builtinKind == BuiltinKind.ToString && args.length == 1 && isScalarPrimitive(args[0].nodeType);
 }
 
-export function newEffect(newNode: Node, e: Effect): EffectCause | null {
+export function newEffect(dispatchRegistry: DispatchRegistry, newNode: Node, e: Effect): EffectCause | null {
 	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
 	if (e == Effect.StartsTask && classSym != null && classSym.symbolKind == SymbolKind.Actor) return cause(newNode, "starts the actor '" + classSym.name + "'");
 	if (classSym != null && classSym.symbolKind == SymbolKind.Actor && (reachesModuleState(e) || e == Effect.RunsElsewhere)) {
-		return through(newNode, "constructs the actor '" + classSym.name + "'", constructionEffect(classSym, e));
+		return through(newNode, "constructs the actor '" + classSym.name + "'", constructionEffect(dispatchRegistry, classSym, e));
 	}
 	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return null;
-	const built = through(newNode, "constructs '" + classSym.name + "'", constructionEffect(classSym, e));
-	return built != null ? built : ownedValueHookEffect(newNode, e);
+	const built = through(newNode, "constructs '" + classSym.name + "'", constructionEffect(dispatchRegistry, classSym, e));
+	return built != null ? built : ownedValueHookEffect(dispatchRegistry, newNode, e);
 }
 
-function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
+function ownedValueHookEffect(dispatchRegistry: DispatchRegistry, site: Node, e: Effect): EffectCause | null {
 	if (!reachesModuleState(e) || hookRegistry == null || site.nodeType == null) return null;
 	const typeSym = nominalTypeSym(site.nodeType!);
 	if (typeSym == null) return null;
 	for (const name of TASK_DROP_HOOKS) {
 		for (const m of findAllExtensionsByName(hookRegistry!, name)) {
 			if (m.isStatic || m.sym == null || extReceiverSym(m) != typeSym) continue;
-			const c = through(site, "owns a '" + typeSym.name + "' whose '" + name + "' runs here", routineEffect(m.sym!, e));
+			const c = through(site, "owns a '" + typeSym.name + "' whose '" + name + "' runs here", routineEffect(dispatchRegistry, m.sym!, e));
 			if (c != null) return c;
 		}
 	}
 	return null;
 }
 
-function useEffect(node: Node, e: Effect): EffectCause | null {
+function useEffect(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
 	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.RunsElsewhere) && sym.symbolKind != SymbolKind.Function) return null;
-	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
-	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
+	if (isModuleState(sym)) return isConstantValue(dispatchRegistry, sym, e) ? null : cause(node, "uses " + stateName(sym));
+	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(dispatchRegistry, sym, e));
 	return null;
 }
 
@@ -926,56 +928,56 @@ function isExternalRoutine(sym: Symbol): boolean {
 	return hasFlag(sym, SymbolFlag.ImportC) || routineBody(unpackDecl(sym.declNode)) == null;
 }
 
-function userOperatorEffect(node: Node, e: Effect): EffectCause | null {
+function userOperatorEffect(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (e == Effect.StoresBorrowed || !node.flags.has(NodeFlag.UserOp) || !isRoutine(sym)) return null;
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!)) return null;
 	if (isExternalRoutine(sym!)) return null;
-	return through(node, "calls the operator '" + sym!.name + "'", routineEffect(sym!, e));
+	return through(node, "calls the operator '" + sym!.name + "'", routineEffect(dispatchRegistry, sym!, e));
 }
 
-export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
+export function walkEffect(dispatchRegistry: DispatchRegistry, node: Node | null, e: Effect): EffectCause | null {
 	if (node == null) return null;
-	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
+	if (isRoutineNode(node)) return walkNestedRoutine(dispatchRegistry, node, e);
 	if (e == Effect.RunsElsewhere && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return cause(node, "messages an actor");
-	if ((e == Effect.Suspends || reachesModuleState(e)) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(node, e);
+	if ((e == Effect.Suspends || reachesModuleState(e)) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(dispatchRegistry, node, e);
 	const here: EffectCause | null = match (node.kind) {
-		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
-		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e) : callEffect(node, e),
-		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(node) ?? newEffect(node, e) : newEffect(node, e),
+		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(dispatchRegistry, node, e),
+		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(dispatchRegistry, node) ?? viewArgEffect(dispatchRegistry, node) ?? callEffect(dispatchRegistry, node, e) : callEffect(dispatchRegistry, node, e),
+		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(dispatchRegistry, node) ?? newEffect(dispatchRegistry, node, e) : newEffect(dispatchRegistry, node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
-		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
-		NodeKind.ReturnStmt => e == Effect.StoresBorrowed ? resultStoreOf((node.data as ReturnStmtData).argument) : null,
+		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(dispatchRegistry, node) : null,
+		NodeKind.ReturnStmt => e == Effect.StoresBorrowed ? resultStoreOf(dispatchRegistry, (node.data as ReturnStmtData).argument) : null,
 		_ => null,
 	};
 	if (here != null) return here;
-	const op = userOperatorEffect(node, e);
+	const op = userOperatorEffect(dispatchRegistry, node, e);
 	if (op != null) return op;
 	if ((e == Effect.StoresBorrowed || reachesModuleState(e)) && node.kind == NodeKind.ForOfStmt && node.resolvedSym != null) forOfSources.set(node.resolvedSym!, (node.data as ForOfStmtData).forOfIterable);
-	return walkChildren(node, e);
+	return walkChildren(dispatchRegistry, node, e);
 }
 
 // What a stored value borrows, seen through conversions, both arms of a choice, field and element
 // reads, a view call's sources and a local const or for-of binding: a module const every thread
 // shares, or a view of what the task borrows. Storing it into an owning slot takes a count on it.
-function borrowedOf(value: Node | null): BorrowSource | null {
+function borrowedOf(dispatchRegistry: DispatchRegistry, value: Node | null): BorrowSource | null {
 	if (value == null) return null;
 	const n = peelConv(value);
 	if (!typeCarriesRef(n.nodeType) || isAtomicRef(n.nodeType)) return null;
 	return match (n.kind) {
-		NodeKind.ConditionalExpr => borrowedOf((n.data as ConditionalExprData).ternaryConsequent) ?? borrowedOf((n.data as ConditionalExprData).ternaryAlternate),
-		NodeKind.BinaryExpr => binaryBorrow(n),
-		NodeKind.TypeAssertion => borrowedOf((n.data as TypeAssertionData).asExpr),
-		NodeKind.HiddenSubConv => borrowedOf((n.data as HiddenStdConvData).convExpr),
-		NodeKind.HiddenAddr => borrowedOf((n.data as HiddenDerefData).expr),
-		NodeKind.MoveExpr => borrowedOf((n.data as MoveExprData).moveArg),
-		NodeKind.TryExpr => borrowedOf((n.data as TryExprData).tryArg),
-		NodeKind.MatchExpr => matchBorrow(n),
-		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object) ?? heldBorrow((n.data as MemberExprData).object),
-		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array) ?? heldBorrow((n.data as ArrayAccessData).array),
-		NodeKind.SpreadExpr => spreadBorrow(n),
-		NodeKind.CallExpr => callBorrow(n),
-		NodeKind.Identifier => bindingBorrow(n, value),
+		NodeKind.ConditionalExpr => borrowedOf(dispatchRegistry, (n.data as ConditionalExprData).ternaryConsequent) ?? borrowedOf(dispatchRegistry, (n.data as ConditionalExprData).ternaryAlternate),
+		NodeKind.BinaryExpr => binaryBorrow(dispatchRegistry, n),
+		NodeKind.TypeAssertion => borrowedOf(dispatchRegistry, (n.data as TypeAssertionData).asExpr),
+		NodeKind.HiddenSubConv => borrowedOf(dispatchRegistry, (n.data as HiddenStdConvData).convExpr),
+		NodeKind.HiddenAddr => borrowedOf(dispatchRegistry, (n.data as HiddenDerefData).expr),
+		NodeKind.MoveExpr => borrowedOf(dispatchRegistry, (n.data as MoveExprData).moveArg),
+		NodeKind.TryExpr => borrowedOf(dispatchRegistry, (n.data as TryExprData).tryArg),
+		NodeKind.MatchExpr => matchBorrow(dispatchRegistry, n),
+		NodeKind.MemberExpr => borrowedOf(dispatchRegistry, (n.data as MemberExprData).object) ?? heldBorrow(dispatchRegistry, (n.data as MemberExprData).object),
+		NodeKind.ArrayAccess => borrowedOf(dispatchRegistry, (n.data as ArrayAccessData).array) ?? heldBorrow(dispatchRegistry, (n.data as ArrayAccessData).array),
+		NodeKind.SpreadExpr => spreadBorrow(dispatchRegistry, n),
+		NodeKind.CallExpr => callBorrow(dispatchRegistry, n),
+		NodeKind.Identifier => bindingBorrow(dispatchRegistry, n, value),
 		NodeKind.ArrowFunction | NodeKind.FunctionExpr => capturedBorrow(n),
 		NodeKind.NewExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral | NodeKind.AwaitExpr | NodeKind.StringLiteral | NodeKind.NullLiteral
 			| NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.SizeofExpr => null,
@@ -983,11 +985,11 @@ function borrowedOf(value: Node | null): BorrowSource | null {
 	};
 }
 
-function spreadBorrow(n: Node): BorrowSource | null {
+function spreadBorrow(dispatchRegistry: DispatchRegistry, n: Node): BorrowSource | null {
 	const arg = (n.data as SpreadExprData).spreadArg;
 	let t = arg.nodeType;
 	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
-	return t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn) ? null : borrowedOf(arg);
+	return t != null && t.kind == TypeKind.Array && !typeCarriesRef(t.typeReturn) ? null : borrowedOf(dispatchRegistry, arg);
 }
 
 function viewsInScope(): boolean {
@@ -998,15 +1000,15 @@ function unfollowed(): BorrowSource | null {
 	return viewsInScope() ? { kind: BorrowKind.Unfollowed, sym: null } : null;
 }
 
-function binaryBorrow(n: Node): BorrowSource | null {
+function binaryBorrow(dispatchRegistry: DispatchRegistry, n: Node): BorrowSource | null {
 	const d = n.data as BinaryExprData;
-	if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return borrowedOf(d.left) ?? borrowedOf(d.right);
-	return d.operator == "=" ? borrowedOf(d.right) : unfollowed();
+	if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return borrowedOf(dispatchRegistry, d.left) ?? borrowedOf(dispatchRegistry, d.right);
+	return d.operator == "=" ? borrowedOf(dispatchRegistry, d.right) : unfollowed();
 }
 
-function matchBorrow(n: Node): BorrowSource | null {
+function matchBorrow(dispatchRegistry: DispatchRegistry, n: Node): BorrowSource | null {
 	for (const c of (n.data as MatchExprData).matchCases) {
-		const b = borrowedOf((c.data as MatchCaseData).caseBody);
+		const b = borrowedOf(dispatchRegistry, (c.data as MatchCaseData).caseBody);
 		if (b != null) return b;
 	}
 	return null;
@@ -1015,16 +1017,16 @@ function matchBorrow(n: Node): BorrowSource | null {
 // A call returns what the task borrows when it is a view call over a borrowed source, or when its
 // result does not own and a receiver, a local container it reads or an argument is borrowed; an
 // owning result is a fresh value whatever the call reads.
-function callBorrow(call: Node): BorrowSource | null {
+function callBorrow(dispatchRegistry: DispatchRegistry, call: Node): BorrowSource | null {
 	if (isViewCall(call)) {
 		const sources: Node[] = [];
 		viewCallSources(call, sources);
-		return firstBorrow(sources);
+		return firstBorrow(dispatchRegistry, sources);
 	}
 	if (!isReadonlyView(call.nodeType) && !holdsNoCountResult(call.nodeType)) return null;
 	const recv = receiverOf(call);
-	const viewed = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
-	return viewed ?? firstBorrow((call.data as CallExprData).arguments);
+	const viewed = recv != null ? borrowedOf(dispatchRegistry, recv) ?? heldBorrow(dispatchRegistry, recv) : null;
+	return viewed ?? firstBorrow(dispatchRegistry, (call.data as CallExprData).arguments);
 }
 
 function holdsNoCountResult(t: Type | null): boolean {
@@ -1056,47 +1058,47 @@ function isLocalBinding(sym: Symbol | null): boolean {
 	return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter) && !hasFlag(sym, SymbolFlag.Global);
 }
 
-function bindingBorrow(n: Node, value: Node): BorrowSource | null {
+function bindingBorrow(dispatchRegistry: DispatchRegistry, n: Node, value: Node): BorrowSource | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
-	if (isImmutableModuleConst(sym)) return { kind: BorrowKind.ModuleConst, sym };
+	if (isImmutableModuleConst(dispatchRegistry, sym)) return { kind: BorrowKind.ModuleConst, sym };
 	if (isViewRoot(sym)) return { kind: BorrowKind.View, sym };
 	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
 	resolving.push(sym);
-	const b = localBorrow(sym, value);
+	const b = localBorrow(dispatchRegistry, sym, value);
 	resolving.pop();
 	return b;
 }
 
-function localBorrow(sym: Symbol, value: Node): BorrowSource | null {
+function localBorrow(dispatchRegistry: DispatchRegistry, sym: Symbol, value: Node): BorrowSource | null {
 	const iterated = forOfSources.get(sym);
 	if (iterated != null) {
-		const b = borrowedOf(iterated) ?? heldBorrow(iterated);
+		const b = borrowedOf(dispatchRegistry, iterated) ?? heldBorrow(dispatchRegistry, iterated);
 		if (b != null) return b;
 	}
 	const decl = sym.declNode;
 	const bound = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
 	if (bound != null && bound != value) {
-		const b = borrowedOf(bound);
+		const b = borrowedOf(dispatchRegistry, bound);
 		if (b != null) return b;
 	}
-	return firstBorrow(assignedSources.get(sym));
+	return firstBorrow(dispatchRegistry, assignedSources.get(sym));
 }
 
 // What a local container holds: every element store and every argument of a call on it.
-function heldBorrow(container: Node | null): BorrowSource | null {
+function heldBorrow(dispatchRegistry: DispatchRegistry, container: Node | null): BorrowSource | null {
 	const root = container != null ? pathRoot(container) : null;
 	if (root == null || !isLocalBinding(root) || resolving.includes(root)) return null;
 	resolving.push(root);
-	const b = firstBorrow(heldSources.get(root));
+	const b = firstBorrow(dispatchRegistry, heldSources.get(root));
 	resolving.pop();
 	return b;
 }
 
-function firstBorrow(sources: Node[] | null): BorrowSource | null {
+function firstBorrow(dispatchRegistry: DispatchRegistry, sources: Node[] | null): BorrowSource | null {
 	if (sources == null) return null;
 	for (const v of sources) {
-		const b = borrowedOf(v);
+		const b = borrowedOf(dispatchRegistry, v);
 		if (b != null) return b;
 	}
 	return null;
@@ -1177,11 +1179,11 @@ function elementHoldsNoCount(container: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Array && holdsNoCount(t.typeReturn);
 }
 
-function slotStoreOf(node: Node): EffectCause | null {
+function slotStoreOf(dispatchRegistry: DispatchRegistry, node: Node): EffectCause | null {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator != "=" || d.left == null || d.left.kind == NodeKind.Identifier || holdsNoCount(d.left.nodeType)) return null;
-		const what = borrowedOf(d.right);
+		const what = borrowedOf(dispatchRegistry, d.right);
 		return what != null ? storeCause(node, what, d.left.kind == NodeKind.ArrayAccess ? "into an array element" : "into a field") : null;
 	}
 	if (node.kind == NodeKind.ArrayLiteral && elementHoldsNoCount(node.nodeType)) return null;
@@ -1189,7 +1191,7 @@ function slotStoreOf(node: Node): EffectCause | null {
 	for (let i = 0; i < items.length; i += 1) {
 		const keys = node.kind == NodeKind.ObjectLiteral ? (node.data as ObjectLiteralData).keys : [];
 		if (i < keys.length && keys[i] != "" && isCursorToReference(declaredFieldType(node.nodeType, keys[i]))) continue;
-		const what = borrowedOf(items[i]);
+		const what = borrowedOf(dispatchRegistry, items[i]);
 		if (what == null) continue;
 		const into = node.kind == NodeKind.ArrayLiteral ? "into an array literal" : i < keys.length && keys[i] != "" ? "into the field '" + keys[i] + "' of an object literal" : "into an object literal";
 		return storeCause(items[i], what, into);
@@ -1197,14 +1199,14 @@ function slotStoreOf(node: Node): EffectCause | null {
 	return null;
 }
 
-function sinkStoreOf(call: Node): EffectCause | null {
+function sinkStoreOf(dispatchRegistry: DispatchRegistry, call: Node): EffectCause | null {
 	const sig = calledRoutineType(call);
 	if (sig == null) return null;
 	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 	const args = (call.data as CallExprData).arguments;
 	const receiver = shift == 1 ? receiverOf(call) : null;
 	if (receiver != null && sig.typeChildren.length > 0 && sig.typeChildren[0] != null && sig.typeChildren[0].kind == TypeKind.Sink) {
-		const what = borrowedOf(receiver);
+		const what = borrowedOf(dispatchRegistry, receiver);
 		if (what != null) return storeCause(receiver, what, "into a sink parameter");
 	}
 	const into = receiver != null ? receiver : receiverOf(call);
@@ -1212,7 +1214,7 @@ function sinkStoreOf(call: Node): EffectCause | null {
 	for (let i = 0; i < args.length; i += 1) {
 		const f = i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
 		if (f == null || f.kind != TypeKind.Sink || holdsNoCount(f.typeReturn)) continue;
-		const what = borrowedOf(args[i]);
+		const what = borrowedOf(dispatchRegistry, args[i]);
 		if (what != null) return storeCause(args[i], what, "into a sink parameter");
 	}
 	return null;
@@ -1220,7 +1222,7 @@ function sinkStoreOf(call: Node): EffectCause | null {
 
 // A callee reached with a borrowed argument stores it when its body, or the body of an override
 // the call may dispatch to, stores that parameter, as the task would store the argument itself.
-function viewArgEffect(call: Node): EffectCause | null {
+function viewArgEffect(dispatchRegistry: DispatchRegistry, call: Node): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	const sym = isSuperCall(callee) ? callee!.resolvedSym : call.resolvedSym;
 	if (!isRoutine(sym)) return null;
@@ -1231,18 +1233,18 @@ function viewArgEffect(call: Node): EffectCause | null {
 	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : isSuperCall(callee) ? "super" : sym!.name;
 	if (shift == 0 && !actorPidNotView && isExternalRoutine(sym!) && unpackDecl(sym!.declNode) != null && unpackDecl(sym!.declNode)!.kind == NodeKind.MethodDecl) {
 		const recv = receiverOf(call);
-		const what = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
+		const what = recv != null ? borrowedOf(dispatchRegistry, recv) ?? heldBorrow(dispatchRegistry, recv) : null;
 		if (what != null) return lentToForeign(call, what, name, "as its receiver");
 	}
 	const targets: Symbol[] = [sym!];
-	const entry = dispatchEntryFor(sym!);
+	const entry = dispatchEntryFor(dispatchRegistry, sym!);
 	if (entry != null && !entry.overloaded) {
-		for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) targets.push(o.sym);
+		for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) targets.push(o.sym);
 	}
-	return passedViewEffect(call, passed, targets, name);
+	return passedViewEffect(dispatchRegistry, call, passed, targets, name);
 }
 
-function newViewArgEffect(newNode: Node): EffectCause | null {
+function newViewArgEffect(dispatchRegistry: DispatchRegistry, newNode: Node): EffectCause | null {
 	const d = newNode.data as NewExprData;
 	const classSym = d.newCallee.resolvedSym;
 	const ctor = ctorRoutineOf(classSym);
@@ -1250,13 +1252,13 @@ function newViewArgEffect(newNode: Node): EffectCause | null {
 	const passed: (Node | null)[] = [];
 	for (const a of d.newArguments) passed.push(a);
 	const written = d.newCallee.kind == NodeKind.Identifier ? (d.newCallee.data as IdentifierData).name : classSym!.name;
-	return passedViewEffect(newNode, passed, [ctor], "new " + written);
+	return passedViewEffect(dispatchRegistry, newNode, passed, [ctor], "new " + written);
 }
 
-function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[], name: string): EffectCause | null {
+function passedViewEffect(dispatchRegistry: DispatchRegistry, call: Node, passed: (Node | null)[], targets: Symbol[], name: string): EffectCause | null {
 	for (let i = 0; i < passed.length; i += 1) {
-		const what = borrowedOf(passed[i]);
-		const lent = what ?? castBorrow(passed[i]);
+		const what = borrowedOf(dispatchRegistry, passed[i]);
+		const lent = what ?? castBorrow(dispatchRegistry, passed[i]);
 		if (lent == null) continue;
 		for (const t of targets) {
 			if (isExternalRoutine(t)) {
@@ -1269,21 +1271,21 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 			if (what == null) continue;
 			const decl = unpackDecl(t.declNode);
 			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
-			const c = i < params.length ? paramStoreEffect(t, decl!, i, params[i]) : null;
+			const c = i < params.length ? paramStoreEffect(dispatchRegistry, t, decl!, i, params[i]) : null;
 			if (c != null) return through(call, "passes " + borrowText(what) + " to '" + name + "'", c);
 		}
 	}
 	return null;
 }
 
-function castBorrow(arg: Node | null): BorrowSource | null {
+function castBorrow(dispatchRegistry: DispatchRegistry, arg: Node | null): BorrowSource | null {
 	if (arg == null) return null;
 	let cur = peelConv(arg);
 	if (cur.kind != NodeKind.TypeAssertion && cur.kind != NodeKind.HiddenAddr) return null;
 	while (cur.kind == NodeKind.TypeAssertion || cur.kind == NodeKind.HiddenAddr) {
 		cur = peelConv(cur.kind == NodeKind.TypeAssertion ? (cur.data as TypeAssertionData).asExpr : (cur.data as HiddenDerefData).expr);
 	}
-	return borrowedOf(cur);
+	return borrowedOf(dispatchRegistry, cur);
 }
 
 const FOREIGN_ADVICE = "C may count or write what it receives there while another thread reads the same value, so pass an explicit copy (clone or spread), or declare that parameter Readonly over value-only data when C only reads it";
@@ -1309,16 +1311,16 @@ function elementsValueOnly(formal: Type, actual: Type | null): boolean {
 	return elem != null && elem.kind != TypeKind.Void && isValueOnlyType(elem);
 }
 
-function paramStoreEffect(sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
+function paramStoreEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
 	recordBodyRead(sym.modulePath);
 	while (paramStoreTables.length <= index) paramStoreTables.push(emptyTable());
-	return memoIn(paramStoreTables[index], sym, (): EffectCause | null => walkRoutine(decl, Effect.StoresBorrowed, [name]));
+	return memoIn(paramStoreTables[index], sym, (): EffectCause | null => walkRoutine(dispatchRegistry, decl, Effect.StoresBorrowed, [name]));
 }
 
-function walkChildren(node: Node, e: Effect): EffectCause | null {
+function walkChildren(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): EffectCause | null {
 	const found: (EffectCause | null)[] = [null];
 	forEachChild(node, (child: Node): void => {
-		if (found[0] == null) found[0] = walkEffect(child, e);
+		if (found[0] == null) found[0] = walkEffect(dispatchRegistry, child, e);
 	});
 	return found[0];
 }

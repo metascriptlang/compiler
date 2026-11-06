@@ -2298,7 +2298,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			const closures = reserveClosureArgs(s, node, runtimeArgs);
 			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null);
 			for (let i = 0; i < runtimeArgs.length; i = i + 1) compileClosureArg(s, runtimeArgs[i], dest + 1 + i, closures.held[i]);
-			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym), runtimeArgs.length) : [];
+			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(s, calleeSym), runtimeArgs.length) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, runtimeArgs.length));
 			patchJumpsTo(s, pastBase, codeLen(s));
 			releaseClosureArgs(s, closures);
@@ -2348,10 +2348,10 @@ function routineIndex(s: RaiserCompState, sym: Symbol | null): int32 {
 	return funcIdx < 0 && sym != null ? callRaiserOnDemand(sym) : funcIdx;
 }
 
-function dispatchOverrides(sym: Symbol | null): Symbol[] {
-	const entry = sym != null ? dispatchEntryFor(sym) : null;
+function dispatchOverrides(s: RaiserCompState, sym: Symbol | null): Symbol[] {
+	const entry = sym != null ? dispatchEntryFor(s.funcMap.dispatchRegistry, sym) : null;
 	if (entry == null || entry.overloaded) return [];
-	return dispatchOverridesFor(entry.classSym, entry.methodName).map((e) => e.sym);
+	return dispatchOverridesFor(s.funcMap.dispatchRegistry, entry.classSym, entry.methodName).map((e) => e.sym);
 }
 
 // The receiver's class picks the override, deepest class first, as the C

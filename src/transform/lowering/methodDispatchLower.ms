@@ -22,11 +22,11 @@ export function lowerMethodDispatch(program: Node, ctx: TransformContext): Node 
 		if (node.kind != NodeKind.Identifier || node.flags.has(NodeFlag.NoDispatch)) return node;
 		const sym = node.resolvedSym;
 		if (sym == null || sym.symbolKind != SymbolKind.Function || sym.nativeName != "") return node;
-		const entry = dispatchEntryFor(sym);
+		const entry = dispatchEntryFor(ctx.checkerCtx.dispatchRegistry, sym);
 		if (entry == null || entry.overloaded) return node;
 		let dispatcher = dispatchers.get(sym) ?? null;
 		if (dispatcher == null) {
-			const overrides = dispatchOverridesFor(entry.classSym, entry.methodName);
+			const overrides = dispatchOverridesFor(ctx.checkerCtx.dispatchRegistry, entry.classSym, entry.methodName);
 			if (overrides.length == 0 || sym.symbolType == null || sym.symbolType.typeChildren.length == 0) return node;
 			dispatcher = buildDispatcher(ctx, sym, overrides, decls, node.location);
 			dispatchers.set(sym, dispatcher);

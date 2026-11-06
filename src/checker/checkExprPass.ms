@@ -5342,7 +5342,7 @@ function objectViewOf(ctx: CheckerContext, operand: Node, srcType: Type, targetT
 	if (at < 0 && isNodeGraphType(srcType)) return null;
 	const cls = runtimeClassSym(source);
 	const held = at >= 0 && at < source.typeChildren.length ? "its field '" + field + "' is " + typeDisplayName(source.typeChildren[at])
-		: cls != null && dispatchMethodOf(cls, field) != null ? "its '" + field + "' is a method, not a field" : "it has no field '" + field + "'";
+		: cls != null && dispatchMethodOf(ctx.dispatchRegistry, cls, field) != null ? "its '" + field + "' is a method, not a field" : "it has no field '" + field + "'";
 	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": " + held + ", and an object type cast reads the object's own fields", line, column);
 	return null;
 }

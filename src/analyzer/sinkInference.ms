@@ -20,14 +20,14 @@ function routineDecl(stmt: Node): Node | null {
 	return stmt.kind == NodeKind.FunctionDecl ? stmt : null;
 }
 
-function inferable(decl: Node, overriding: HashSet<Symbol>): boolean {
+function inferable(decl: Node, overriding: HashSet<Symbol>, ctx: TransformContext): boolean {
 	const d = decl.data as FunctionDeclData;
 	const sym = decl.resolvedSym;
 	if (sym == null || sym.symbolKind != SymbolKind.Function || d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt) return false;
 	const flags = routineFlagSet(d.fnFlags);
 	if (flags.has(RoutineFlag.Generic) || flags.has(RoutineFlag.Extern)) return false;
 	if (sym.overloads.length > 0 || sym.overloadIdx != 0 || sym.exportName != "" || sym.nativeName != "" || overriding.has(sym)) return false;
-	const entry = dispatchEntryFor(sym);
+	const entry = dispatchEntryFor(ctx.checkerCtx.dispatchRegistry, sym);
 	if (entry != null && entry.overloaded) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow) || hasFlag(sym, SymbolFlag.CompileTime)) return false;
 	if (sym.instantiatedFrom != null) return false;
@@ -125,8 +125,14 @@ function movable(t: Type, ctx: TransformContext): boolean {
 }
 
 export function inferSinkParams(trees: Node[], ctxs: TransformContext[]): void {
+	if (trees.length != ctxs.length) throw new Error("internal: sink inference tree/context count mismatch");
+	if (ctxs.length == 0) return;
+	const registry = ctxs[0].checkerCtx.dispatchRegistry;
+	for (const ctx of ctxs) {
+		if (ctx.checkerCtx.dispatchRegistry != registry) throw new Error("internal: sink inference mixes compilation owners");
+	}
 	const overriding = new HashSet<Symbol>();
-	dispatchOverrideTable().forEach((overrides: Symbol[], base: Symbol): void => {
+	dispatchOverrideTable(registry).forEach((overrides: Symbol[], base: Symbol): void => {
 		overriding.add(base);
 		for (const o of overrides) overriding.add(o);
 	});
@@ -135,7 +141,7 @@ export function inferSinkParams(trees: Node[], ctxs: TransformContext[]): void {
 	for (let i = 0; i < trees.length; i += 1) {
 		for (const stmt of (trees[i].data as ProgramData).programStmts) {
 			const decl = routineDecl(stmt);
-			if (decl == null || !inferable(decl, overriding)) continue;
+			if (decl == null || !inferable(decl, overriding, ctxs[i])) continue;
 			routines.push({ decl, sym: decl.resolvedSym!, ctx: ctxs[i] });
 			candidates.add(decl.resolvedSym!);
 		}

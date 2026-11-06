@@ -142,10 +142,12 @@ function keptPrelude(db: TransAmDb): CheckerContext {
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
+	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null);
+	graph.dispatchRegistry = db.dispatchRegistry;
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
 	const holdsPrelude = graphHoldsPrelude(graph);
-	const baseCtx = kept != null ? keptPrelude(kept) : holdsPrelude ? createGraphPreludeContext() : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt) : preludeContextFor(stdPath, backendExt);
+	const baseCtx = kept != null ? keptPrelude(kept) : holdsPrelude ? createGraphPreludeContext(db.dispatchRegistry) : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt, db.dispatchRegistry) : preludeContextFor(stdPath, backendExt, db.dispatchRegistry);
 	const preludeOwned = holdsPrelude ? new HashSet<string>() : preludeClosure(graph, resolverConfig);
 	const tPrelude = performance.now() - _tpre0;
 	baseCtx.targetOs = targetOs;
@@ -157,7 +159,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	lastPreludeCtx = baseCtx;
 
 	const _tb0 = performance.now();
-	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null);
 	if (kept == null) {
 		dbSetResolverConfig(db, resolverConfig);
 		db.preludeCtx = baseCtx;

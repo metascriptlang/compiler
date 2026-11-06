@@ -356,7 +356,7 @@ export function symListAdd(list: Symbol[], sym: Symbol): void {
 
 function testDrcCtx(): DrcContext {
 	const ctx = makeCtx();
-	return createDrcContext(ctx, createWriteSummaries(createRoutineDecls(), []));
+	return createDrcContext(ctx, createWriteSummaries(createRoutineDecls(), [], ctx.checkerCtx.dispatchRegistry));
 }
 
 export function testStringRc(): RcInfo {

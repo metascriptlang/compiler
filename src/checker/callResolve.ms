@@ -2271,7 +2271,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Extension resolution for method calls.
 		const methodSym = node.resolvedSym;
 		const methodOrigin = methodSym != null && methodSym.instantiatedFrom != null ? methodSym.instantiatedFrom : methodSym;
-		const methodEntry = methodOrigin != null && soleMethodCandidate(ctx, methodOrigin, d.callee.data as MemberExprData) ? dispatchEntryFor(methodOrigin) : null;
+		const methodEntry = methodOrigin != null && soleMethodCandidate(ctx, methodOrigin, d.callee.data as MemberExprData) ? dispatchEntryFor(ctx.dispatchRegistry, methodOrigin) : null;
 		if (methodEntry != null && methodSym != null && methodSym.symbolType != null) {
 			node.flags = node.flags.incl(NodeFlag.ExtCall);
 			extPreResolved = true;
@@ -6553,7 +6553,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
 	if (resolvedObjType.typeName != "") {
-		const declaredMethod = fieldOwnerSym != null ? dispatchMethodOf(fieldOwnerSym, d.property) : null;
+		const declaredMethod = fieldOwnerSym != null ? dispatchMethodOf(ctx.dispatchRegistry, fieldOwnerSym, d.property) : null;
 		let classMethSym: Symbol | null = declaredMethod != null ? declaredMethod.sym : null;
 		// Filter: instance methods have "this" as first param, static methods don't.
 		// If the found symbol doesn't match the access type, check overloads for one that does.

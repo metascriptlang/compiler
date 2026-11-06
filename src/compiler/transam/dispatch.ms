@@ -1,6 +1,8 @@
 import { Symbol, SymbolKind } from "../../ast/node";
 import {
-	DispMethodEntry, DispatchReadSink, dispatchRegistryEntries,
+	DispMethodEntry, DispatchReadSink, DispatchRegistry, DispatchRecords, createDispatchRegistry,
+	replayDispatchRecords,
+	dispatchRegistryEntries,
 	dispatchRegistryVersion, dispatchOverrideTable, installDispatchReadSink,
 	resetDispatchRegistry, dispatchRecordMethod, dispatchOverridesFor,
 } from "../../checker/context";
@@ -29,6 +31,7 @@ class TaDispatchRow {
 }
 
 export class TaDispatchStore {
+	registry: DispatchRegistry;
 	revision: int32;
 	version: int32;
 	facts: HashMap<DispMethodEntry, TaDispatchRow>;
@@ -37,8 +40,9 @@ export class TaDispatchStore {
 	outputs: HashMap<string, string>;
 }
 
-export function createDispatchStore(): TaDispatchStore {
+export function createDispatchStore(registry: DispatchRegistry = createDispatchRegistry()): TaDispatchStore {
 	return {
+		registry,
 		revision: -1,
 		version: -1,
 		facts: new HashMap<DispMethodEntry, TaDispatchRow>(),
@@ -93,11 +97,11 @@ export function prepareDispatch(
 	stack: TaDependencyStack,
 	revision: int32,
 ): void {
-	const version = dispatchRegistryVersion();
+	const version = dispatchRegistryVersion(store.registry);
 	if (store.revision == revision && store.version == version) return;
 	const facts = new HashMap<DispMethodEntry, TaDispatchRow>();
 	const bySym = new HashMap<Symbol, TaDispatchRow>();
-	const entries = dispatchRegistryEntries();
+	const entries = dispatchRegistryEntries(store.registry);
 	for (const entry of entries) {
 		const known = store.facts.get(entry);
 		const row: TaDispatchRow = known != null &&
@@ -111,7 +115,7 @@ export function prepareDispatch(
 	}
 	store.facts = facts;
 	store.families = new HashMap<string, TaDispatchRow>();
-	const overrides = dispatchOverrideTable();
+	const overrides = dispatchOverrideTable(store.registry);
 	for (const entry of entries) {
 		const own = facts.get(entry)!;
 		let output = `${own.output.length}:${own.output}`;
@@ -150,8 +154,8 @@ export function trackDispatchReads(
 	stack: TaDependencyStack,
 ): DispatchReadSink | null {
 	const read = new HashSet<string>();
-	return installDispatchReadSink((owner: Symbol, method: string): void => {
-		if (store.version != dispatchRegistryVersion()) {
+	return installDispatchReadSink(store.registry, (owner: Symbol, method: string): void => {
+		if (store.version != dispatchRegistryVersion(store.registry)) {
 			throw new Error("internal: dispatch changed during a cached query");
 		}
 		const name = familyKey(owner, method);
@@ -170,8 +174,39 @@ export function trackDispatchReads(
 	});
 }
 
+test "a refused dispatch replay remains retryable" {
+	for (const count of [1, 2]) {
+		const registry = createDispatchRegistry();
+		const body = createStruct("Base", [], [], true);
+		const base = makeSymbol("Base", SymbolKind.Class, createRef(body), false);
+		base.modulePath = "/dispatch/base.ms";
+		body.sym = base;
+		const records: DispatchRecords = { classSyms: [], methodNames: [], methodSyms: [] };
+		for (let i = 0; i < count; i += 1) {
+			const name = `method${i}`;
+			const method = makeSymbol(name, SymbolKind.Function, createFunction([], [], stringType()), false);
+			method.modulePath = base.modulePath;
+			records.classSyms.push(base);
+			records.methodNames.push(name);
+			records.methodSyms.push(method);
+		}
+		const outer = installDispatchReadSink(registry, (_owner: Symbol, _method: string): void => {});
+		let message = "";
+		try {
+			replayDispatchRecords(registry, records);
+		} catch (e) {
+			message = (e as Error).message;
+		} finally {
+			installDispatchReadSink(registry, outer);
+		}
+		assert message == "internal: dispatch changed during a cached query";
+		assert !registry.seeded.has(records);
+		replayDispatchRecords(registry, records);
+		assert dispatchRegistryEntries(registry).length == count;
+	}
+}
+
 test "a dispatch read records even an empty override set" {
-	resetDispatchRegistry();
 	const store = createDispatchStore();
 	const cache = createCacheStore(20);
 	const inputs = createFileInputStore();
@@ -185,9 +220,9 @@ test "a dispatch read records even an empty override set" {
 	const lower = createQueryKey(TaQueryKind.Lower, 0);
 	pushFrame(stack, lower);
 	const outer = trackDispatchReads(store, cache, inputs, stack);
-	assert dispatchOverridesFor(base, "name").length == 0;
-	assert dispatchOverridesFor(base, "name").length == 0;
-	installDispatchReadSink(outer);
+	assert dispatchOverridesFor(store.registry, base, "name").length == 0;
+	assert dispatchOverridesFor(store.registry, base, "name").length == 0;
+	installDispatchReadSink(store.registry, outer);
 	const frame = popFrame(stack);
 	assert frame.deps.length == 1;
 	const query = frame.deps[0];
@@ -195,20 +230,19 @@ test "a dispatch read records even an empty override set" {
 	const method = makeSymbol("Base_name", SymbolKind.Function,
 		createFunction([base.symbolType!], ["this"], stringType()), false);
 	method.modulePath = base.modulePath;
-	dispatchRecordMethod(base, "name", method);
+	dispatchRecordMethod(store.registry, base, "name", method);
 	prepareDispatch(store, cache, inputs, stack, 2);
 	assert cacheGet(cache, query)!.changedAt == 2;
-	dispatchRecordMethod(base, "name", method);
+	dispatchRecordMethod(store.registry, base, "name", method);
 	prepareDispatch(store, cache, inputs, stack, 3);
 	assert cacheGet(cache, query)!.changedAt == 2;
-	resetDispatchRegistry();
+	resetDispatchRegistry(store.registry);
 	prepareDispatch(store, cache, inputs, stack, 4);
 	assert cacheGet(cache, query)!.changedAt == 4;
 	assert stack.frames.length == 0;
 }
 
 test "another method family leaves a checked snapshot unchanged" {
-	resetDispatchRegistry();
 	const store = createDispatchStore();
 	const cache = createCacheStore(20);
 	const inputs = createFileInputStore();
@@ -220,12 +254,12 @@ test "another method family leaves a checked snapshot unchanged" {
 	const method = makeSymbol("Base_name", SymbolKind.Function,
 		createFunction([base.symbolType!], ["this"], stringType()), false);
 	method.modulePath = base.modulePath;
-	dispatchRecordMethod(base, "name", method);
+	dispatchRecordMethod(store.registry, base, "name", method);
 	prepareDispatch(store, cache, inputs, stack, 1);
 	pushFrame(stack, createQueryKey(TaQueryKind.Lower, 0));
 	const outer = trackDispatchReads(store, cache, inputs, stack);
-	dispatchOverridesFor(base, "name");
-	installDispatchReadSink(outer);
+	dispatchOverridesFor(store.registry, base, "name");
+	installDispatchReadSink(store.registry, outer);
 	const key = popFrame(stack).deps[0];
 	const before = cacheGet(cache, key)!.changedAt;
 	method.mutatedParams = 7;
@@ -237,16 +271,15 @@ test "another method family leaves a checked snapshot unchanged" {
 	const otherMethod = makeSymbol("Other_name", SymbolKind.Function,
 		createFunction([other.symbolType!], ["this"], stringType()), false);
 	otherMethod.modulePath = other.modulePath;
-	dispatchRecordMethod(other, "name", otherMethod);
+	dispatchRecordMethod(store.registry, other, "name", otherMethod);
 	prepareDispatch(store, cache, inputs, stack, 2);
 	assert cacheGet(cache, key)!.changedAt == before;
 	assert cacheGet(cache, key)!.verifiedAt == 2;
-	resetDispatchRegistry();
+	resetDispatchRegistry(store.registry);
 }
 
 test "dispatch mutation and untracked snapshots in a query fail loud" {
 	for (const snapshot of [false, true]) {
-		resetDispatchRegistry();
 		const store = createDispatchStore();
 		const cache = createCacheStore(20);
 		const inputs = createFileInputStore();
@@ -256,12 +289,12 @@ test "dispatch mutation and untracked snapshots in a query fail loud" {
 		const outer = trackDispatchReads(store, cache, inputs, stack);
 		let message = "";
 		try {
-			if (snapshot) dispatchRegistryEntries();
-			else resetDispatchRegistry();
+			if (snapshot) dispatchRegistryEntries(store.registry);
+			else resetDispatchRegistry(store.registry);
 		} catch (e) {
 			message = (e as Error).message;
 		} finally {
-			installDispatchReadSink(outer);
+			installDispatchReadSink(store.registry, outer);
 			popFrame(stack);
 		}
 		assert message == (snapshot

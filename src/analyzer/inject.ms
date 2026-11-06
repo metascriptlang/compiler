@@ -3083,7 +3083,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 function testDrcContext(input: string): DrcContext {
 	const ctx = checkSource(input);
 	const tctx = checkedCtx(ctx);
-	return createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), []));
+	return createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), [], tctx.checkerCtx.dispatchRegistry));
 }
 
 export function testLoc(): SourceLocation {
@@ -3433,7 +3433,7 @@ test "finally-protected root blocks field move in isLastReadFieldSafe" {
 	assert parsed.ok;
 	const tctx = checkedCtx(checkProgram(parsed.value));
 	liftDestructors(parsed.value, tctx, true);
-	const dctx = createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), []));
+	const dctx = createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), [], tctx.checkerCtx.dispatchRegistry));
 	const exemplar = lookupSymbol(dctx.ctx.checkerCtx.table, "exemplar");
 	assert exemplar != null;
 	assert exemplar.symbolType != null;

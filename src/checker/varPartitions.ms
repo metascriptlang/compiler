@@ -11,7 +11,7 @@ import { forEachChild } from "../ast/visitor";
 import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
-import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { sameUpToDistinct } from "./checkExprPass";
@@ -446,10 +446,10 @@ function effectKeys(available: HandleKey[], s: ResizeSummary): HandleKey[] {
 	return out;
 }
 
-function isDispatched(sym: Symbol): boolean {
-	const entry = dispatchEntryFor(sym);
+function isDispatched(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
+	const entry = dispatchEntryFor(dispatchRegistry, sym);
 	if (entry == null) return false;
-	return !entry.overloaded && dispatchOverridesFor(entry.classSym, entry.methodName).length > 0;
+	return !entry.overloaded && dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName).length > 0;
 }
 
 function reachesNonText(t: Type | null): boolean {
@@ -468,21 +468,21 @@ function externSummary(sym: Symbol): ResizeSummary {
 	return noResize();
 }
 
-function calleeSummary(call: Node): ResizeSummary {
+function calleeSummary(dispatchRegistry: DispatchRegistry, call: Node): ResizeSummary {
 	const sym = call.resolvedSym;
 	if (sym == null) return anyResize();
 	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) return anyResize();
 	if (hasFlag(sym, SymbolFlag.GeneratedOp)) return noResize();
-	if (isDispatched(sym)) return anyResize();
+	if (isDispatched(dispatchRegistry, sym)) return anyResize();
 	if (routineBody(sym.declNode) == null) {
 		if (receiverOf(call) != null && !hasFlag(sym, SymbolFlag.ImportC)) return noResize();
 		return externSummary(sym);
 	}
-	return summaryOf(sym);
+	return summaryOf(dispatchRegistry, sym);
 }
 
-export function calleeMayWrite(call: Node): boolean {
-	const s = calleeSummary(call);
+export function calleeMayWrite(dispatchRegistry: DispatchRegistry, call: Node): boolean {
+	const s = calleeSummary(dispatchRegistry, call);
 	return s.unknown || s.writes || s.keys.length > 0;
 }
 
@@ -495,7 +495,7 @@ function constructorOf(newNode: Node): Node | null {
 	return null;
 }
 
-function newSummary(node: Node): ResizeSummary {
+function newSummary(dispatchRegistry: DispatchRegistry, node: Node): ResizeSummary {
 	const ctor = constructorOf(node);
 	if (ctor != null) {
 		recordBodyRead(node.resolvedSym!.modulePath);
@@ -504,7 +504,7 @@ function newSummary(node: Node): ResizeSummary {
 		const fresh: Symbol[] = [];
 		if (node.resolvedSym != null) fresh.push(node.resolvedSym);
 		freshLocals(body, fresh);
-		scanResizes(body, s, fresh);
+		scanResizes(dispatchRegistry, body, s, fresh);
 		return s;
 	}
 	for (const a of (node.data as NewExprData).newArguments) {
@@ -546,7 +546,7 @@ function spawnsInlineThunk(call: Node): boolean {
 	return thunk != null && (thunk.kind == NodeKind.ArrowFunction || thunk.kind == NodeKind.FunctionExpr);
 }
 
-function scanResizes(node: Node | null, s: ResizeSummary, fresh: Symbol[]): void {
+function scanResizes(dispatchRegistry: DispatchRegistry, node: Node | null, s: ResizeSummary, fresh: Symbol[]): void {
 	if (node == null || s.unknown) return;
 	match (node.kind) {
 		NodeKind.CallExpr => {
@@ -558,10 +558,10 @@ function scanResizes(node: Node | null, s: ResizeSummary, fresh: Symbol[]): void
 				const held = t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
 				addKey(s.keys, held != null && held.kind == TypeKind.Array ? arrayKey(held.typeReturn) : textKey());
 			} else if (!spawnsInlineThunk(node)) {
-				joinSummary(s, calleeSummary(node));
+				joinSummary(s, calleeSummary(dispatchRegistry, node));
 			}
 		},
-		NodeKind.NewExpr => joinSummary(s, newSummary(node)),
+		NodeKind.NewExpr => joinSummary(s, newSummary(dispatchRegistry, node)),
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (isAssignOp(d.operator)) {
@@ -577,7 +577,7 @@ function scanResizes(node: Node | null, s: ResizeSummary, fresh: Symbol[]): void
 		_ => {},
 	};
 	if (s.unknown) return;
-	forEachChild(node, (child: Node): void => { scanResizes(child, s, fresh); });
+	forEachChild(node, (child: Node): void => { scanResizes(dispatchRegistry, child, s, fresh); });
 }
 
 function replacedKeys(target: Node | null, s: ResizeSummary): void {
@@ -596,19 +596,19 @@ function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
 	return true;
 }
 
-function scanRoutine(sym: Symbol): ResizeSummary {
+function scanRoutine(dispatchRegistry: DispatchRegistry, sym: Symbol): ResizeSummary {
 	recordBodyRead(sym.modulePath);
 	const s = noResize();
 	resizeStack.push(sym);
 	const body = routineBody(sym.declNode);
 	const fresh: Symbol[] = [];
 	freshLocals(body, fresh);
-	scanResizes(body, s, fresh);
+	scanResizes(dispatchRegistry, body, s, fresh);
 	resizeStack.pop();
 	return s;
 }
 
-function summaryOf(sym: Symbol): ResizeSummary {
+function summaryOf(dispatchRegistry: DispatchRegistry, sym: Symbol): ResizeSummary {
 	const done = resizeDone.get(sym);
 	if (done != null) return done;
 	if (resizeStack.includes(sym)) {
@@ -618,7 +618,7 @@ function summaryOf(sym: Symbol): ResizeSummary {
 	}
 	const seen = resizeOpen.get(sym);
 	if (seen != null) return seen;
-	const s = scanRoutine(sym);
+	const s = scanRoutine(dispatchRegistry, sym);
 	resizeOpen.set(sym, s);
 	if (resizeStack.length > 0) return s;
 	let changed = resizeCyclic;
@@ -627,7 +627,7 @@ function summaryOf(sym: Symbol): ResizeSummary {
 		const pending: Symbol[] = [];
 		for (const k of resizeOpen.keys()) { pending.push(k); }
 		for (const k of pending) {
-			const next = scanRoutine(k);
+			const next = scanRoutine(dispatchRegistry, k);
 			if (!sameSummary(next, resizeOpen.get(k)!)) {
 				resizeOpen.set(k, next);
 				changed = true;
@@ -669,7 +669,7 @@ function isAsyncRoutine(decl: Node): boolean {
 	return flags.has(RoutineFlag.Async) && !flags.has(RoutineFlag.Generator);
 }
 
-function pendingLends(decl: Node): PendingLend[] {
+function pendingLends(dispatchRegistry: DispatchRegistry, decl: Node): PendingLend[] {
 	const done = pendingDone.get(decl);
 	if (done != null) return done;
 	if (pendingStack.includes(decl)) {
@@ -679,7 +679,7 @@ function pendingLends(decl: Node): PendingLend[] {
 	}
 	const seen = pendingOpen.get(decl);
 	if (seen != null) return seen;
-	const s = scanPending(decl);
+	const s = scanPending(dispatchRegistry, decl);
 	pendingOpen.set(decl, s);
 	if (pendingStack.length > 0) return s;
 	let changed = pendingCyclic;
@@ -688,7 +688,7 @@ function pendingLends(decl: Node): PendingLend[] {
 		const keys: Node[] = [];
 		for (const k of pendingOpen.keys()) { keys.push(k); }
 		for (const k of keys) {
-			const next = scanPending(k);
+			const next = scanPending(dispatchRegistry, k);
 			if (next.length != pendingOpen.get(k)!.length) {
 				pendingOpen.set(k, next);
 				changed = true;
@@ -779,7 +779,7 @@ function lendInput(s: PendingScan, root: Symbol, task: Node, seen: Symbol[]): vo
 	}
 }
 
-function scanPendingBody(s: PendingScan, node: Node | null): void {
+function scanPendingBody(dispatchRegistry: DispatchRegistry, s: PendingScan, node: Node | null): void {
 	if (node == null || isNestedRoutineNode(node)) return;
 	if (node.kind == NodeKind.CallExpr) {
 		const args = (node.data as CallExprData).arguments;
@@ -794,14 +794,14 @@ function scanPendingBody(s: PendingScan, node: Node | null): void {
 		} else {
 			const roots: Symbol[] = [];
 			const tasks: Node[] = [];
-			callLentRoots(node, roots, tasks);
+			callLentRoots(dispatchRegistry, node, roots, tasks);
 			for (let i = 0; i < roots.length; i += 1) { lendInput(s, roots[i], tasks[i], []); }
 		}
 	}
-	forEachChild(node, (child: Node): void => { scanPendingBody(s, child); });
+	forEachChild(node, (child: Node): void => { scanPendingBody(dispatchRegistry, s, child); });
 }
 
-function scanPending(decl: Node): PendingLend[] {
+function scanPending(dispatchRegistry: DispatchRegistry, decl: Node): PendingLend[] {
 	const out: PendingLend[] = [];
 	const body = routineBody(decl);
 	if (body == null || !isAsyncRoutine(decl)) return out;
@@ -810,7 +810,7 @@ function scanPending(decl: Node): PendingLend[] {
 	declaredIn(body, declared);
 	const s: PendingScan = { decl, params: decl.paramSyms ?? [], declared, from: [], to: [], out };
 	aliasEdges(body, s.from, s.to);
-	scanPendingBody(s, body);
+	scanPendingBody(dispatchRegistry, s, body);
 	pendingStack.pop();
 	return out;
 }
@@ -819,28 +819,28 @@ function isMessageSend(call: Node): boolean {
 	return isActorMessageCall(call);
 }
 
-function pendingOfCall(call: Node): PendingLend[] {
+function pendingOfCall(dispatchRegistry: DispatchRegistry, call: Node): PendingLend[] {
 	if (isSpawnCall(call)) return [];
 	if (isMessageSend(call)) return actorCallBorrows(call).map((i: int32): PendingLend => ({ input: i, capture: null, task: call }));
 	const callee = peelConv((call.data as CallExprData).callee);
-	if (callee != null && (callee.kind == NodeKind.ArrowFunction || callee.kind == NodeKind.FunctionExpr)) return pendingLends(callee);
-	return call.resolvedSym != null ? pendingOfRoutine(call.resolvedSym) : [];
+	if (callee != null && (callee.kind == NodeKind.ArrowFunction || callee.kind == NodeKind.FunctionExpr)) return pendingLends(dispatchRegistry, callee);
+	return call.resolvedSym != null ? pendingOfRoutine(dispatchRegistry, call.resolvedSym) : [];
 }
 
-function pendingOfRoutine(sym: Symbol): PendingLend[] {
+function pendingOfRoutine(dispatchRegistry: DispatchRegistry, sym: Symbol): PendingLend[] {
 	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) return [];
 	const all: PendingLend[] = [];
-	pendingOfBody(sym, all);
-	const entry = dispatchEntryFor(sym);
+	pendingOfBody(dispatchRegistry, sym, all);
+	const entry = dispatchEntryFor(dispatchRegistry, sym);
 	if (entry == null || entry.overloaded) return all;
-	for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) { pendingOfBody(o.sym, all); }
+	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) { pendingOfBody(dispatchRegistry, o.sym, all); }
 	return all;
 }
 
-function pendingOfBody(sym: Symbol, out: PendingLend[]): void {
+function pendingOfBody(dispatchRegistry: DispatchRegistry, sym: Symbol, out: PendingLend[]): void {
 	if (sym.declNode == null || !isAsyncRoutine(sym.declNode)) return;
 	recordBodyRead(sym.modulePath);
-	for (const l of pendingLends(sym.declNode)) { out.push(l); }
+	for (const l of pendingLends(dispatchRegistry, sym.declNode)) { out.push(l); }
 }
 
 function lentArgument(call: Node, input: int32): Node | null {
@@ -850,8 +850,8 @@ function lentArgument(call: Node, input: int32): Node | null {
 	return input < args.length ? args[input] : null;
 }
 
-function callLentRoots(call: Node, roots: Symbol[], tasks: Node[]): void {
-	for (const l of pendingOfCall(call)) {
+function callLentRoots(dispatchRegistry: DispatchRegistry, call: Node, roots: Symbol[], tasks: Node[]): void {
+	for (const l of pendingOfCall(dispatchRegistry, call)) {
 		const found: Symbol[] = [];
 		if (l.input == CAPTURE_INPUT) {
 			found.push(l.capture!);
@@ -867,25 +867,25 @@ function callLentRoots(call: Node, roots: Symbol[], tasks: Node[]): void {
 	}
 }
 
-function lendsPastCall(call: Node, atModule: boolean): boolean {
+function lendsPastCall(dispatchRegistry: DispatchRegistry, call: Node, atModule: boolean): boolean {
 	if (isMessageSend(call)) return false;
 	const roots: Symbol[] = [];
-	callLentRoots(call, roots, []);
+	callLentRoots(dispatchRegistry, call, roots, []);
 	for (const r of roots) {
 		if (atModule || !hasFlag(r, SymbolFlag.Global)) return true;
 	}
 	return false;
 }
 
-function isActorLend(call: Node): boolean {
+function isActorLend(dispatchRegistry: DispatchRegistry, call: Node): boolean {
 	if (call.kind != NodeKind.CallExpr || !isMessageSend(call)) return false;
 	const roots: Symbol[] = [];
-	callLentRoots(call, roots, []);
+	callLentRoots(dispatchRegistry, call, roots, []);
 	return roots.length > 0;
 }
 
-function opensCallLend(call: Node): boolean {
-	return call.flags.has(NodeFlag.LendsPastCall) || isActorLend(call);
+function opensCallLend(dispatchRegistry: DispatchRegistry, call: Node): boolean {
+	return call.flags.has(NodeFlag.LendsPastCall) || isActorLend(dispatchRegistry, call);
 }
 
 interface BorrowUnit {
@@ -1608,7 +1608,7 @@ function callEffects(u: BorrowUnit, node: Node): void {
 		? sym.symbolType
 		: (d.callee != null ? d.callee.nodeType : null);
 	const recv = receiverOf(node);
-	const summary = calleeSummary(node);
+	const summary = calleeSummary(u.ctx.dispatchRegistry, node);
 	let offset: int32 = 0;
 	if (recv != null) {
 		const resizes = resizesReceiver(node, recv);
@@ -1683,7 +1683,7 @@ function recordClosure(u: BorrowUnit, node: Node): void {
 	const s = noResize();
 	const fresh: Symbol[] = [];
 	freshLocals(body, fresh);
-	scanResizes(body, s, fresh);
+	scanResizes(u.ctx.dispatchRegistry, body, s, fresh);
 	if (!s.unknown) capturedWrites(u, body, s);
 	const captured: Symbol[] = [];
 	capturedBy(u, body, captured);
@@ -1907,7 +1907,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 2 && isSpawnCall(node) && d.arguments.length > 0) u.thunks.push(thunkOf(d.arguments[0]));
 			for (const a of d.arguments) { walk(u, a); }
 			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
-			if (u.pass == 1 && opensCallLend(node)) openCallLend(u, node);
+			if (u.pass == 1 && opensCallLend(u.ctx.dispatchRegistry, node)) openCallLend(u, node);
 			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
 		},
 		NodeKind.NewExpr => {
@@ -1915,7 +1915,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			walk(u, d.newCallee);
 			for (const a of d.newArguments) { walk(u, a); }
 			if (u.pass == 2) {
-				const summary = newSummary(node);
+				const summary = newSummary(u.ctx.dispatchRegistry, node);
 				for (const a of d.newArguments) { argEffect(u, a, null, false, summary); }
 				if (summary.writes) noteCallWrite(u, node, d.newArguments, null, 0, false);
 			}
@@ -1996,7 +1996,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			u.p.abstractTime -= 1;
-			if (u.pass == 1 && lendsCapturesToActors(node)) openCaptureLend(u, node);
+			if (u.pass == 1 && lendsCapturesToActors(u.ctx.dispatchRegistry, node)) openCaptureLend(u, node);
 			if (u.pass == 2) recordClosure(u, node);
 		},
 		NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.TestDecl => {
@@ -2145,7 +2145,7 @@ function findJoin(u: BorrowUnit, stmt: Node): void {
 
 function markJoins(u: BorrowUnit, node: Node): void {
 	for (const op of joinedBy(node)) {
-		if (isSpawnCall(op) || opensCallLend(op)) {
+		if (isSpawnCall(op) || opensCallLend(u.ctx.dispatchRegistry, op)) {
 			u.closerSites.push(op);
 			u.closerAwaits.push(node);
 		}
@@ -2192,7 +2192,7 @@ function openCallLend(u: BorrowUnit, site: Node): void {
 	if (reopenLend(u, site)) return;
 	const found: Symbol[] = [];
 	const tasks: Node[] = [];
-	callLentRoots(site, found, tasks);
+	callLentRoots(u.ctx.dispatchRegistry, site, found, tasks);
 	const roots: Symbol[] = [];
 	const kept: Node[] = [];
 	for (let i = 0; i < found.length; i += 1) {
@@ -2210,13 +2210,13 @@ function onlyActorCaptureLends(pending: PendingLend[]): boolean {
 	return pending.length > 0 && pending.every((l: PendingLend): boolean => l.input == CAPTURE_INPUT && isMessageSend(l.task));
 }
 
-function lendsCapturesToActors(node: Node): boolean {
-	return (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) && onlyActorCaptureLends(pendingLends(node));
+function lendsCapturesToActors(dispatchRegistry: DispatchRegistry, node: Node): boolean {
+	return (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) && onlyActorCaptureLends(pendingLends(dispatchRegistry, node));
 }
 
 function openCaptureLend(u: BorrowUnit, fn: Node): void {
 	if (reopenLend(u, fn)) return;
-	const pending = pendingLends(fn);
+	const pending = pendingLends(u.ctx.dispatchRegistry, fn);
 	pushLend(u, fn, pending.map((l: PendingLend): Symbol => l.capture!), [], pending.map((l: PendingLend): Node => l.task), "");
 }
 
@@ -2308,13 +2308,13 @@ interface UnitScan {
 	module: boolean;
 }
 
-function scanUnitBody(node: Node | null, scan: UnitScan): void {
+function scanUnitBody(dispatchRegistry: DispatchRegistry, node: Node | null, scan: UnitScan): void {
 	if (node == null) return;
-	if (lendsCapturesToActors(node)) scan.spawn = true;
+	if (lendsCapturesToActors(dispatchRegistry, node)) scan.spawn = true;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
-	if (!scan.spawn && (isSpawnCall(node) || isActorLend(node))) scan.spawn = true;
-	if (node.kind == NodeKind.CallExpr && lendsPastCall(node, scan.module)) {
+	if (!scan.spawn && (isSpawnCall(node) || isActorLend(dispatchRegistry, node))) scan.spawn = true;
+	if (node.kind == NodeKind.CallExpr && lendsPastCall(dispatchRegistry, node, scan.module)) {
 		node.flags = node.flags.incl(NodeFlag.LendsPastCall);
 		scan.spawn = true;
 	}
@@ -2330,7 +2330,7 @@ function scanUnitBody(node: Node | null, scan: UnitScan): void {
 			scan.pointers.push(d.left.resolvedSym);
 		}
 	}
-	forEachChild(node, (child: Node): void => { scanUnitBody(child, scan); });
+	forEachChild(node, (child: Node): void => { scanUnitBody(dispatchRegistry, child, scan); });
 }
 
 function bindsView(pattern: Node, clear: TypeVisitSet): boolean {
@@ -2409,7 +2409,7 @@ function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
 	}
 	const pointers: Symbol[] = [];
 	const scan: UnitScan = { pointers, view: true, spawn: true, clear: new TypeVisitSet(), module: false };
-	for (const b of bodies) { scanUnitBody(b, scan); }
+	for (const b of bodies) { scanUnitBody(parent.ctx.dispatchRegistry, b, scan); }
 	const u = newUnit(parent.ctx, pointers, true);
 	for (let pass = 1; pass <= 2; pass += 1) {
 		for (const b of bodies) { runPass(u, b, pass); }
@@ -2490,20 +2490,20 @@ function refuseLeavingLends(ctx: CheckerContext, node: Node | null, up: Node[]):
 	const parent = up.length > 0 ? up[up.length - 1] : null;
 	const asCallee = parent != null && parent.kind == NodeKind.CallExpr && peelConv((parent.data as CallExprData).callee) == node;
 	if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
-		const pending = asCallee ? [] : pendingLends(node);
+		const pending = asCallee ? [] : pendingLends(ctx.dispatchRegistry, node);
 		if (pending.length > 0 && !onlyActorCaptureLends(pending)) refuseLendingValue(ctx, node, "this async function value cannot be made", node, pending);
 		return;
 	}
 	if (isNestedRoutineNode(node)) return;
 	if ((node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr) && !asCallee && node.resolvedSym != null) {
 		const sym = node.resolvedSym;
-		const pending = pendingOfRoutine(sym);
+		const pending = pendingOfRoutine(ctx.dispatchRegistry, sym);
 		if (pending.length > 0) refuseLendingValue(ctx, node, `'${sym.name}' cannot become a function value`, sym.declNode!, pending);
 	}
 	if (node.kind == NodeKind.CallExpr && node.flags.has(NodeFlag.LendsPastCall) && parent != null) {
 		const roots: Symbol[] = [];
 		const tasks: Node[] = [];
-		callLentRoots(node, roots, tasks);
+		callLentRoots(ctx.dispatchRegistry, node, roots, tasks);
 		const lent = roots.length > 0 ? `'${roots[0].name}'` : "what it is passed";
 		const spawnAt = tasks.length > 0 ? `${tasks[0].location.line}:${tasks[0].location.column}` : "?";
 		if (parent.kind == NodeKind.ExprStmt) {
@@ -2521,7 +2521,7 @@ function refuseLeavingLends(ctx: CheckerContext, node: Node | null, up: Node[]):
 function checkUnit(ctx: CheckerContext, body: Node | null, routine: Node | null = null, name: string = ""): void {
 	if (body == null) return;
 	const scan: UnitScan = { pointers: [], view: false, spawn: false, clear: new TypeVisitSet(), module: body.kind == NodeKind.Program };
-	scanUnitBody(body, scan);
+	scanUnitBody(ctx.dispatchRegistry, body, scan);
 	refuseLeavingLends(ctx, body, []);
 	if (scan.spawn) refuseBorrowingHandleEscapes(ctx, body);
 	const viewChannel = viewStructResult(routine) != null || hasViewRefParam(routine);

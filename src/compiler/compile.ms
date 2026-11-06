@@ -3571,8 +3571,8 @@ resetLiftedOps();
 		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
-	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
-	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths);
+	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths, graph.dispatchRegistry);
+	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths, graph.dispatchRegistry);
 	liftTables.unloweredWritesAnything = true;
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
@@ -3858,8 +3858,8 @@ resetLiftedOps();
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const fRaises = flowStart();
-	if (opts.isHcr) markEveryBodyMayRaise(transformedPrograms);
-	else inferRaises(transformedPrograms);
+	if (opts.isHcr) markEveryBodyMayRaise(transformedPrograms, graph.dispatchRegistry);
+	else inferRaises(transformedPrograms, graph.dispatchRegistry);
 	flowStop("b.raises", fRaises);
 	const fAlive = flowStart();
 	const exportRootModules: string[] = [];
@@ -3957,7 +3957,7 @@ resetLiftedOps();
 			if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
 			const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
 			if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
-				replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
+				replayCModuleEmission(aliveSet, emissionFacts, prepared.writes, p.ctx);
 			} else {
 				const before = emissionFacts.trace;
 				emissionFacts.writes = [];
@@ -4478,8 +4478,8 @@ resetLiftedOps();
 	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods), false, true);
 
 	// Phase A2 — mono → transform every module, then analyze → lower every module, so a callee is lowered before any caller is analyzed (instances now placed).
-	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
-	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : [], graph.dispatchRegistry);
+	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : [], graph.dispatchRegistry);
 	liftTables.unloweredWritesAnything = true;
 	const stagedTests: { cm: { program: Node, ctx: CheckerContext, modPath: string, source: string }, nativeCtx: TransformContext, tree: Node }[] = [];
 	for (const cm of checkedMods) {
@@ -4541,7 +4541,7 @@ resetLiftedOps();
 	const fB = flowStart();
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	inferRaises(transformedPrograms);
+	inferRaises(transformedPrograms, graph.dispatchRegistry);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph, [], [], [], false, false,
 		compileTimeModules(transformedPaths, config.stdPath));
 	refuseRuntimeCompileTimeReach(aliveSet);
@@ -5410,8 +5410,8 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	} else {
 		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	}
-	const writeTables = createWriteSummaries(createRoutineDecls(), []);
-	const liftTables = createWriteSummaries(createRoutineDecls(), []);
+	const writeTables = createWriteSummaries(createRoutineDecls(), [], graph.dispatchRegistry);
+	const liftTables = createWriteSummaries(createRoutineDecls(), [], graph.dispatchRegistry);
 	liftTables.unloweredWritesAnything = true;
 	ensureHostTableLoaded();
 	const inlining = new CallInlining(opts.isHcr ? hcrReloadablePaths(graph, entryCanonical, opts, config.stdPath) : []);
@@ -5444,7 +5444,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
 	collectNativeDemands(buildNative);
-	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
+	const raiserMod = generateRaiserProject(modules, graph.dispatchRegistry, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
 	collectNativeDemands(false);
 	const demands = takeNativeDemands();
 	// Only a call the Raiser cannot run stops the build: other queued errors stay

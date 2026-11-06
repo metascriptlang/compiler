@@ -29,7 +29,7 @@ function sharedAfterAnalyzer(source: string): int32 {
 	if (!pr.ok) throw new Error("internal: test source does not parse");
 	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
 	const native = transformForNative(transformProgram(pr.value, ctx, false), createTransformContextWithChecker(ctx));
-	return countSharedNodes(analyzeProgram(native, ctx, createWriteSummaries(createRoutineDecls(), []))).shared;
+	return countSharedNodes(analyzeProgram(native, ctx, createWriteSummaries(createRoutineDecls(), [], ctx.dispatchRegistry))).shared;
 }
 
 test "the lifted hooks of a struct with string fields reach no node from two parents" {

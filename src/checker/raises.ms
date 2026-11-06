@@ -1,7 +1,7 @@
 import { AttachedOp, Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, NewExprData, TryCatchStmtData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { DispatchRegistry, createDispatchRegistry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { getOpByKeyIn, hookOps } from "../codegen/c/types";
 import { buildModuleNameRoots, ModuleNameRoots } from "../codegen/c/names";
 
@@ -15,6 +15,7 @@ interface RoutineInfo {
 }
 
 interface RaiseTables {
+	dispatchRegistry: DispatchRegistry;
 	raisesNothing: HashSet<Symbol>;
 	closureTargets: HashMap<Symbol, Cursor<Readonly<Symbol>>>;
 	tempWrites: HashMap<Symbol, int32>;
@@ -23,8 +24,9 @@ interface RaiseTables {
 	roots: ModuleNameRoots;
 }
 
-function freshRaiseTables(ops: HashMap<string, Symbol>, roots: ModuleNameRoots): RaiseTables {
+function freshRaiseTables(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): RaiseTables {
 	return {
+		dispatchRegistry,
 		raisesNothing: new HashSet<Symbol>(),
 		closureTargets: new HashMap<Symbol, Cursor<Readonly<Symbol>>>(),
 		tempWrites: new HashMap<Symbol, int32>(),
@@ -51,8 +53,8 @@ let _walkCaught = false;
 let _holdFound = false;
 let _blindBroken = false;
 
-export function resetRaises(): void {
-	_tables = freshRaiseTables(hookOps(), buildModuleNameRoots());
+export function resetRaises(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): void {
+	_tables = freshRaiseTables(hookOps(), buildModuleNameRoots(), dispatchRegistry);
 }
 
 function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null> {
@@ -130,9 +132,9 @@ function passesRoutine(args: Readonly<Node[]>): boolean {
 }
 
 function isDispatched(sym: Readonly<Symbol>): boolean {
-	const entry = dispatchEntryFor(sym);
+	const entry = dispatchEntryFor(_tables.dispatchRegistry, sym);
 	if (entry == null) return false;
-	return !entry.overloaded && dispatchOverridesFor(entry.classSym, entry.methodName).length > 0;
+	return !entry.overloaded && dispatchOverridesFor(_tables.dispatchRegistry, entry.classSym, entry.methodName).length > 0;
 }
 
 // A destroy raises as the routine it runs: a lifted or user destroy by its own body, a runtime
@@ -335,8 +337,8 @@ function markWalkedCalls(): void {
 	}
 }
 
-export function markEveryBodyMayRaise(programs: Node[]): void {
-	resetRaises();
+export function markEveryBodyMayRaise(programs: Node[], dispatchRegistry: DispatchRegistry): void {
+	resetRaises(dispatchRegistry);
 	resetWalk();
 	for (const program of programs) collectMarkSites(program);
 	for (const call of _calls) markCall(call);
@@ -352,8 +354,8 @@ function collectMarkSites(node: Node): void {
 	forEachChild(node, collectMarkSites);
 }
 
-export function inferRaises(programs: Node[]): void {
-	resetRaises();
+export function inferRaises(programs: Node[], dispatchRegistry: DispatchRegistry): void {
+	resetRaises(dispatchRegistry);
 	resetWalk();
 	for (const program of programs) {
 		if (program == null) continue;

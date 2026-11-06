@@ -130,7 +130,7 @@ export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): Check
 	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
 	const members = prelude.preludeModuleScopes.get(modulePath);
 	if (members == null) return null;
-	const view = createContext();
+	const view = createContext(ctx.dispatchRegistry);
 	view.table.identCache = prelude.table.identCache;
 	view.table.current = globalScope(prelude.table);
 	openScope(view.table, ScopeKind.Module);
@@ -152,7 +152,7 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 	}
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining != null && !preludeModuleDeclares(ctx.preludeCtx != null ? ctx.preludeCtx! : ctx, definingModulePath, owner)) return defining;
-	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx.preludeCtx, definingModulePath);
+	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx, definingModulePath);
 	if (ctx.preludeModuleScopes.has(definingModulePath)) return preludeBodyCtx(ctx, definingModulePath);
 	return ctx;
 }
@@ -169,15 +169,16 @@ function preludeModuleDeclares(prelude: CheckerContext, modulePath: string, owne
 
 const _preludeBodyCtxs = new HashMap<CheckerContext, HashMap<string, CheckerContext>>();
 
-export function preludeBodyCtx(prelude: CheckerContext, modulePath: string): CheckerContext {
-	let views = _preludeBodyCtxs.get(prelude);
+export function preludeBodyCtx(ctx: CheckerContext, modulePath: string): CheckerContext {
+	let views = _preludeBodyCtxs.get(ctx);
 	if (views == null) {
 		views = new HashMap<string, CheckerContext>();
-		_preludeBodyCtxs.set(prelude, views);
+		_preludeBodyCtxs.set(ctx, views);
 	}
 	const known = views.get(modulePath);
 	if (known != null) return known;
-	const own = preludeModuleCtx(prelude, modulePath) ?? prelude;
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	const own = preludeModuleCtx(ctx, modulePath) ?? prelude;
 	views.set(modulePath, own);
 	return own;
 }

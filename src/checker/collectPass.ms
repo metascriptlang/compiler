@@ -1061,7 +1061,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	if (md.methodIsStatic) methodSym.staticOwner = classSym;
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", md.methodIsStatic, methodSym, 1));
 	if (!md.methodIsStatic && !isExternClass && builtinKind == BuiltinKind.None) {
-		dispatchRecordMethod(classSym, md.methodName, methodSym);
+		dispatchRecordMethod(ctx.dispatchRegistry, classSym, md.methodName, methodSym);
 	}
 }
 

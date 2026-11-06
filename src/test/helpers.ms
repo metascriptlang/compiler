@@ -147,10 +147,10 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), [], checkerCtx.dispatchRegistry));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
-	inferRaises([lowered]);
+	inferRaises([lowered], checkerCtx.dispatchRegistry);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(lowered, checkerCtx, modPath, aliveSet));
@@ -225,9 +225,9 @@ export function compileToCWithStd(source: string): CompileResult {
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), [], checkerCtx.dispatchRegistry));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
-	inferRaises([analyzed]);
+	inferRaises([analyzed], checkerCtx.dispatchRegistry);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false, entryOnlyFacts(analyzed, checkerCtx, modPath, aliveSet));
@@ -487,7 +487,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
-	const writeTables = createWriteSummaries(createRoutineDecls(), []);
+	const writeTables = createWriteSummaries(createRoutineDecls(), [], graph.dispatchRegistry);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -505,7 +505,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
-	inferRaises(emissionPrograms);
+	inferRaises(emissionPrograms, graph.dispatchRegistry);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);
@@ -649,7 +649,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
-	const writeTables = createWriteSummaries(createRoutineDecls(), []);
+	const writeTables = createWriteSummaries(createRoutineDecls(), [], graph.dispatchRegistry);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -667,7 +667,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
-	inferRaises(emissionPrograms);
+	inferRaises(emissionPrograms, graph.dispatchRegistry);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (const p of emissionPrograms) factInlineDecls(emissionFacts, p);

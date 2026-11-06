@@ -23,6 +23,7 @@
 
 import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BuiltinKind } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
+import { DispatchRegistry, createDispatchRegistry } from "./dispatchRegistry";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords, extensionsOf } from "./context";
 import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
@@ -509,10 +510,10 @@ export function emptyPreludeTables(): PreludeTables {
 	return { duVariants: [], ctorRoutines: [], dispatch: { classSyms: [], methodNames: [], methodSyms: [] } };
 }
 
-export function replayPreludeTables(tables: PreludeTables): void {
+export function replayPreludeTables(tables: PreludeTables, dispatchRegistry: DispatchRegistry): void {
 	replayDuVariants(tables.duVariants);
 	replayCtorRoutines(tables.ctorRoutines);
-	replayDispatchRecords(tables.dispatch);
+	replayDispatchRecords(dispatchRegistry, tables.dispatch);
 }
 
 // ===== Writer =====
@@ -1047,7 +1048,7 @@ function ints(this r: PackReader): int32[] {
 	return out;
 }
 
-export function tryLoadPreludePack(key: string, stamp: string): CheckerContext | null {
+export function tryLoadPreludePack(key: string, stamp: string, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext | null {
 	if (packDisabled()) return null;
 	const _l0 = performance.now();
 	const root = packRoot();
@@ -1058,7 +1059,7 @@ export function tryLoadPreludePack(key: string, stamp: string): CheckerContext |
 		_lastHit = false;
 		return null;
 	}
-	const loaded = tryLoadPreludePackBody(body);
+	const loaded = tryLoadPreludePackBody(body, dispatchRegistry);
 	if (loaded != null) markUsed(`${root}/${key}.pk`, nowSeconds());
 	_loadMs = _loadMs + (performance.now() - _l0);
 	_lastHit = loaded != null;
@@ -1274,7 +1275,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	return { nullPlaceholder: true } as NodeData;
 }
 
-function tryLoadPreludePackBody(body: string): CheckerContext | null {
+function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry): CheckerContext | null {
 	const packDebug = env.get("MSC_PACK_DEBUG") != "";
 	const _r0 = performance.now();
 	const rd = new PackReader(body);
@@ -1574,7 +1575,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	if (packDebug) console.log(`[pack:r] N linked ms=${performance.now() - _r0}`);
 
 	const cache = createIdentCache();
-	const ctx = createContextWithCache(cache);
+	const ctx = createContextWithCache(cache, dispatchRegistry);
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (let i = 0; i < syms.length; i += 1) {
 		const s = syms[i];
@@ -1655,7 +1656,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		if (oi < 0 || oi >= syms.length || ri < 0 || ri >= syms.length) return null;
 		tables.ctorRoutines.push({ owner: syms[oi], routine: syms[ri] });
 	}
-	replayPreludeTables(tables);
+	ctx.preludeDispatchRecords = tables.dispatch;
+	replayPreludeTables(tables, dispatchRegistry);
 
 	if (packDebug) console.log(`[pack:r] done ms=${performance.now() - _r0}`);
 	return ctx;

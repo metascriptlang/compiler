@@ -47,6 +47,8 @@ import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { widenArrayBrand, isFreshOwnable, convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion, readInStoredLayout } from "./fit";
 import { checkActorMethodModuleState, checkActorNonisolatedField, checkActorStoredClosures, checkActorReplies, checkActorStaticField } from "./sendable";
+import { DispatchRegistry, createDispatchRegistry, copyDispatchRegistry } from "./dispatchRegistry";
+import { replayDispatchRecords } from "./context";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack, PreludeTables, replayPreludeTables } from "./preludePack";
 import { boundModuleCtx, callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerDemandField, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -1903,13 +1905,13 @@ function refuseOrphanOverride(ctx: CheckerContext, d: MethodDeclData, className:
 		addError(ctx, `This member cannot have an 'override' modifier because its containing class '${className}' does not extend another class`, d.nameLocation.line, d.nameLocation.column);
 		return;
 	}
-	if (d.methodIsStatic ? declaresStaticMember(classType.sym, d.methodName) : dispatchOverriddenEntry(classType.sym, d.methodName) != null) return;
+	if (d.methodIsStatic ? declaresStaticMember(classType.sym, d.methodName) : dispatchOverriddenEntry(ctx.dispatchRegistry, classType.sym, d.methodName) != null) return;
 	addError(ctx, `This member cannot have an 'override' modifier because it is not declared in the base class '${typeDisplayName(parent)}'`, d.nameLocation.line, d.nameLocation.column);
 }
 
 function checkOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): DispMethodEntry | null {
 	if (classType == null || classType.sym == null) return null;
-	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
+	const base = dispatchOverriddenEntry(ctx.dispatchRegistry, classType.sym, d.methodName);
 	if (base == null) return null;
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
@@ -1925,7 +1927,7 @@ function checkOverride(ctx: CheckerContext, d: MethodDeclData, className: string
 		return null;
 	}
 	if (baseDecl == null || baseDecl.kind != NodeKind.MethodDecl) return null;
-	const own = dispatchDeclaredEntry(classType.sym, d.methodName);
+	const own = dispatchDeclaredEntry(ctx.dispatchRegistry, classType.sym, d.methodName);
 	if (base.overloaded || own == null || own.overloaded) return null;
 	return base;
 }
@@ -1969,7 +1971,7 @@ function overrideSignature(owner: string, name: string, params: string[], fn: Ty
 
 function checkOverrideSinkMode(ctx: CheckerContext, d: MethodDeclData, sym: Symbol, className: string, classType: Type): void {
 	if (classType == null || classType.sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return;
-	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
+	const base = dispatchOverriddenEntry(ctx.dispatchRegistry, classType.sym, d.methodName);
 	if (base == null || base.overloaded || base.sym.symbolType == null || base.sym.symbolType.kind != TypeKind.Function) return;
 	const own = sym.symbolType.typeChildren;
 	const inherited = base.sym.symbolType.typeChildren;
@@ -4195,7 +4197,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		loadPreludeSubModules(ctx, subPr.value, subResolved, stdPath, backendExt);
 
 		// Compile sub-module in a temporary context (separate scope, shared cache)
-		const subCtx = createContextWithCache(ctx.table.identCache);
+		const subCtx = createContextWithCache(ctx.table.identCache, ctx.dispatchRegistry);
 		subCtx.extensionRegistry = createExtensionRegistry();
 		subCtx.exportRegistry = ctx.exportRegistry;
 		subCtx.compilerFuncs = ctx.compilerFuncs;
@@ -4248,8 +4250,8 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 //
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
-export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
-	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt)).ctx;
+export function buildPreludeContext(stdPath: string, backendExt: string = ".cms", dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
+	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt, dispatchRegistry)).ctx;
 }
 
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
@@ -4260,37 +4262,48 @@ function asPreludeBuild<T>(backendExt: string, check: () => T): T {
 	return parseAsBuildOf(backendName(backendOfExtension(backendExt)), check);
 }
 
-function buildPreludeUnderDefines(stdPath: string, backendExt: string): SharedPrelude {
+function buildPreludeUnderDefines(stdPath: string, backendExt: string, dispatchRegistry: DispatchRegistry): SharedPrelude {
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packStamp = preludePackStamp(stdPath);
 	const duMark = duVariantMark();
 	const outerCtors = startCtorCapture();
-	const outerDispatch = startDispatchCapture();
-	const packed = tryLoadPreludePack(packKey, packStamp);
-	const ctx = packed ?? checkPreludeSource(stdPath, backendExt);
+	const outerDispatch = startDispatchCapture(dispatchRegistry);
 	const tables: PreludeTables = {
-		duVariants: duVariantsFrom(duMark),
-		ctorRoutines: endCtorCapture(outerCtors),
-		dispatch: endDispatchCapture(outerDispatch),
+		duVariants: [],
+		ctorRoutines: [],
+		dispatch: { classSyms: [], methodNames: [], methodSyms: [] },
 	};
+	let ctx: CheckerContext | null = null;
+	let packed = false;
+	try {
+		const loaded = tryLoadPreludePack(packKey, packStamp, dispatchRegistry);
+		packed = loaded != null;
+		ctx = loaded ?? checkPreludeSource(stdPath, backendExt, dispatchRegistry);
+	} finally {
+		tables.dispatch = endDispatchCapture(dispatchRegistry, outerDispatch);
+		tables.ctorRoutines = endCtorCapture(outerCtors);
+		tables.duVariants = duVariantsFrom(duMark);
+	}
+	if (ctx == null) throw new Error("internal: prelude build produced no context");
 	// Always write (best-effort): the pack captures whatever scope the fresh
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
-	if (packed == null) writePreludePack(packKey, packStamp, ctx, tables);
+	if (!packed) writePreludePack(packKey, packStamp, ctx, tables);
+	ctx.preludeDispatchRecords = tables.dispatch;
 	return { ctx, tables, owned: null };
 }
 
-export function createGraphPreludeContext(): CheckerContext {
-	const ctx = createContextWithCache(createIdentCache());
+export function createGraphPreludeContext(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
+	const ctx = createContextWithCache(createIdentCache(), dispatchRegistry);
 	ctx.extensionRegistry = createExtensionRegistry();
 	return ctx;
 }
 
-function checkPreludeSource(stdPath: string, backendExt: string): CheckerContext {
+function checkPreludeSource(stdPath: string, backendExt: string, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
 	const imps = defaultGlobalImports();
 	const outerGensym = beginGensymUnit();
-	const ctx = createContextWithCache(createIdentCache());
+	const ctx = createContextWithCache(createIdentCache(), dispatchRegistry);
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
 	ctx.stdRoot = stdRoot;
@@ -4378,7 +4391,8 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 }
 
 export function buildGlobalImportsLayer(identCache: IdentCache, checked: CheckerContext[]): CheckerContext {
-	const layer = createContextWithCache(identCache);
+	const layer = createContextWithCache(identCache,
+		checked.length > 0 ? checked[0].dispatchRegistry : createDispatchRegistry());
 	layer.extensionRegistry = createExtensionRegistry();
 	for (const ctx of checked) promoteModuleIntoPrelude(layer, ctx);
 	return layer;
@@ -4467,8 +4481,9 @@ function checkProgramCore(
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean = false,
+	dispatchRegistry: DispatchRegistry | null = null,
 ): CheckerContext {
-	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, null, applyModulePasses));
+	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, null, applyModulePasses, null, dispatchRegistry));
 }
 
 export interface BoundModule {
@@ -4498,10 +4513,22 @@ export function bindModuleForCheck(
 	adoptStmt: ((stmt: Node) => void) | null,
 	applyModulePasses: boolean,
 	globalImports: CheckerContext | null = null,
+	dispatchRegistry: DispatchRegistry | null = null,
 ): BoundModule {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
-	const ctx = graph != null && mod != null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
+	const ctx = graph != null && mod != null
+		? createModuleContextWithCache(graph, mod, sharedCache)
+		: createContextWithCache(sharedCache, dispatchRegistry ?? copyDispatchRegistry(preludeCtx.dispatchRegistry));
+	if (dispatchRegistry != null && ctx.dispatchRegistry != dispatchRegistry) throw new Error("internal: module graph and checker have different dispatch owners");
+	if ((graph != null && mod != null) || dispatchRegistry != null) {
+		const records = preludeCtx.preludeDispatchRecords;
+		if (records != null) replayDispatchRecords(ctx.dispatchRegistry, records);
+		else if (ctx.dispatchRegistry != preludeCtx.dispatchRegistry &&
+			preludeCtx.dispatchRegistry.entries.length > 0) {
+			throw new Error("internal: prelude dispatch has no compilation seed");
+		}
+	}
 	ctx.extensionRegistry = importedExtensionRegistry(preludeCtx, globalImports);
 	if (registry != null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
@@ -4567,16 +4594,16 @@ interface SharedPrelude {
 
 let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
 
-export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
+export function preludeContextFor(stdPath: string, backendExt: string, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
 	const key = backendExt + "|" + stdPath;
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
-		const built = asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt));
+		const built = asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt, createDispatchRegistry()));
 		_preludeCtxByKey.set(key, built);
 		shared = built;
 	}
-	replayPreludeTables(shared.tables);
-	const view = packContentView(shared.ctx);
+	replayPreludeTables(shared.tables, dispatchRegistry);
+	const view = packContentView(shared.ctx, dispatchRegistry);
 	view.stdRoot = stdPath;
 	return view;
 }
@@ -4614,8 +4641,9 @@ export function isSharedPrelude(ctx: CheckerContext): boolean {
 	return false;
 }
 
-function packContentView(shared: CheckerContext): CheckerContext {
-	const view = createContextWithCache(shared.table.identCache);
+function packContentView(shared: CheckerContext, dispatchRegistry: DispatchRegistry): CheckerContext {
+	const view = createContextWithCache(shared.table.identCache, dispatchRegistry);
+	view.preludeDispatchRecords = shared.preludeDispatchRecords;
 	view.table = shared.table;
 	view.extensionRegistry = shared.extensionRegistry;
 	view.compilerFuncs = shared.compilerFuncs;
@@ -4644,11 +4672,11 @@ export function standalonePreludeCtx(backendExt: string = ".cms"): CheckerContex
 
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools
 // that don't need cross-module resolution.
-export function checkProgram(program: Node): CheckerContext {
+export function checkProgram(program: Node, dispatchRegistry: DispatchRegistry | null = null): CheckerContext {
 	// Phase 8a POC: expose outer Program to @comptime evaluator so it can
 	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
 	setOuterProgramForComptime(program);
-	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0, null);
+	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0, null, false, dispatchRegistry);
 }
 
 export function checkProgramJs(program: Node): CheckerContext {

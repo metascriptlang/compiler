@@ -233,7 +233,7 @@ export function createLiftState(ctx: TransformContext): LiftState {
 
 export function liftWrites(ctx: TransformContext): WriteEffects {
 	return {
-		tables: ctx.liftTables ?? createWriteSummaries(createRoutineDecls(), []),
+		tables: ctx.liftTables ?? createWriteSummaries(createRoutineDecls(), [], ctx.checkerCtx.dispatchRegistry),
 		checker: ctx.checkerCtx,
 		unit: ctx.checkerCtx != null ? ctx.checkerCtx.modulePath : "",
 		rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false),

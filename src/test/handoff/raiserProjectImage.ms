@@ -38,7 +38,7 @@ function projectImage(codes: string[], reloadable: string[]): RaiserModule {
 		if (program == null || modCtx == null || hasErrors(modCtx)) throw new Error(`module ${path} did not check`);
 		modules.push({ modulePath: path, program: lowerForRaiser(program, modCtx, null, inlining) });
 	}
-	return generateRaiserProject(modules);
+	return generateRaiserProject(modules, graph.dispatchRegistry);
 }
 
 function callsIn(mod: RaiserModule, name: string): int32 {

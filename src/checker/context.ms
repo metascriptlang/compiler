@@ -1,4 +1,6 @@
 import { platform } from "std/process";
+import { DispatchRegistry, DispatchRecords, DispatchReadSink, DispMethodEntry, createDispatchRegistry } from "./dispatchRegistry";
+export { DispatchRegistry, DispatchRecords, DispatchReadSink, DispMethodEntry, createDispatchRegistry } from "./dispatchRegistry";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { isMetaBuiltin, Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
@@ -912,136 +914,118 @@ function baseStructOf(parent: Type | null): Type | null {
 // msDisp_* if-chain dispatcher. A name declared twice on one class (overload)
 // disables dispatch for that method name — conservative direct call.
 
-export interface DispMethodEntry {
-	classSym: Symbol;
-	methodName: string;
-	sym: Symbol;
-	overloaded: boolean;
-	version: int32;
-}
-
-let _dispEntries: DispMethodEntry[] = [];
-let _dispByClass: HashMap<Symbol, DispMethodEntry[]> = new HashMap<Symbol, DispMethodEntry[]>();
-let _dispBySym: HashMap<Symbol, DispMethodEntry> = new HashMap<Symbol, DispMethodEntry>();
-
-export interface DispatchRecords {
-	classSyms: Symbol[];
-	methodNames: string[];
-	methodSyms: Symbol[];
-}
-let _dispCapture: DispatchRecords | null = null;
-let _dispVersion: int32 = 0;
-export type DispatchReadSink = (classSym: Symbol, methodName: string) => void;
-let _dispRead: DispatchReadSink | null = null;
-
-export function installDispatchReadSink(sink: DispatchReadSink | null): DispatchReadSink | null {
-	const outer = _dispRead;
-	_dispRead = sink;
+export function installDispatchReadSink(registry: DispatchRegistry, sink: DispatchReadSink | null): DispatchReadSink | null {
+	const outer = registry.readSink;
+	registry.readSink = sink;
 	return outer;
 }
 
-function recordDispatchRead(classSym: Symbol, methodName: string): void {
-	if (_dispRead != null) _dispRead(classSym, methodName);
+function recordDispatchRead(registry: DispatchRegistry, classSym: Symbol, methodName: string): void {
+	if (registry.readSink != null) registry.readSink(classSym, methodName);
 }
 
-function changeDispatchRegistry(): void {
-	if (_dispRead != null) {
+function changeDispatchRegistry(registry: DispatchRegistry): void {
+	if (registry.readSink != null) {
 		throw new Error("internal: dispatch changed during a cached query");
 	}
-	_dispVersion += 1;
+	registry.version += 1;
 }
 
-export function dispatchRegistryVersion(): int32 {
-	return _dispVersion;
+export function dispatchRegistryVersion(registry: DispatchRegistry): int32 {
+	return registry.version;
 }
 
-export function dispatchRegistryEntries(): DispMethodEntry[] {
-	if (_dispRead != null) {
+export function dispatchRegistryEntries(registry: DispatchRegistry): DispMethodEntry[] {
+	if (registry.readSink != null) {
 		throw new Error("internal: untracked dispatch snapshot during a cached query");
 	}
-	return _dispEntries;
+	return registry.entries;
 }
 
-export function startDispatchCapture(): DispatchRecords | null {
-	const outer = _dispCapture;
-	_dispCapture = { classSyms: [], methodNames: [], methodSyms: [] };
+export function startDispatchCapture(registry: DispatchRegistry): DispatchRecords | null {
+	const outer = registry.capture;
+	registry.capture = { classSyms: [], methodNames: [], methodSyms: [] };
 	return outer;
 }
 
-export function endDispatchCapture(outer: DispatchRecords | null): DispatchRecords {
-	const captured = _dispCapture;
-	_dispCapture = outer;
+export function endDispatchCapture(registry: DispatchRegistry, outer: DispatchRecords | null): DispatchRecords {
+	const captured = registry.capture;
+	registry.capture = outer;
 	return captured!;
 }
 
-export function replayDispatchRecords(records: DispatchRecords): void {
-	for (let i = 0; i < records.methodSyms.length; i += 1) dispatchRecordMethod(records.classSyms[i], records.methodNames[i], records.methodSyms[i]);
+export function replayDispatchRecords(registry: DispatchRegistry, records: DispatchRecords): void {
+	if (registry.seeded.has(records)) return;
+	for (let i = 0; i < records.methodSyms.length; i += 1) {
+		dispatchRecordMethod(registry, records.classSyms[i], records.methodNames[i], records.methodSyms[i]);
+	}
+	registry.seeded.add(records);
 }
 
-export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: Symbol): void {
-	changeDispatchRegistry();
-	if (_dispCapture != null) {
-		_dispCapture.classSyms.push(classSym);
-		_dispCapture.methodNames.push(methodName);
-		_dispCapture.methodSyms.push(sym);
+export function dispatchRecordMethod(registry: DispatchRegistry, classSym: Symbol, methodName: string, sym: Symbol): void {
+	changeDispatchRegistry(registry);
+	if (registry.capture != null) {
+		registry.capture.classSyms.push(classSym);
+		registry.capture.methodNames.push(methodName);
+		registry.capture.methodSyms.push(sym);
 	}
-	const ofClass = _dispByClass.get(classSym);
+	const ofClass = registry.byClass.get(classSym);
 	if (ofClass != null) {
 		for (const prev of ofClass) {
 			if (prev.methodName != methodName) continue;
 			const samePlace = prev.sym.modulePath == sym.modulePath
 				&& prev.sym.location.line == sym.location.line
 				&& prev.sym.location.column == sym.location.column;
-			prev.version = _dispVersion;
+			prev.version = registry.version;
 			if (samePlace) {
 				prev.sym = sym;
-				_dispBySym.set(sym, prev);
+				registry.bySym.set(sym, prev);
 			} else {
 				prev.overloaded = true;
 			}
 			return;
 		}
 	}
-	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false, version: _dispVersion };
-	_dispEntries.push(e);
+	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false, version: registry.version };
+	registry.entries.push(e);
 	if (ofClass != null) ofClass.push(e);
-	else _dispByClass.set(classSym, [e]);
-	_dispBySym.set(sym, e);
+	else registry.byClass.set(classSym, [e]);
+	registry.bySym.set(sym, e);
 }
 
 // Drops every entry of the classes a module declares and returns where the first sat in the registry's order, -1 when
 // it had none, so the module's re-collection can be put back there by placeDispatchOfModule.
-export function forgetDispatchOfModule(modulePath: string): int32 {
-	changeDispatchRegistry();
+export function forgetDispatchOfModule(registry: DispatchRegistry, modulePath: string): int32 {
+	changeDispatchRegistry(registry);
 	let first = -1;
 	const kept: DispMethodEntry[] = [];
 	const gone = new HashSet<DispMethodEntry>();
-	for (const e of _dispEntries) {
+	for (const e of registry.entries) {
 		if (e.classSym.modulePath != modulePath) {
 			kept.push(e);
 			continue;
 		}
 		if (first < 0) first = kept.length;
 		gone.add(e);
-		_dispByClass.delete(e.classSym);
+		registry.byClass.delete(e.classSym);
 	}
-	_dispEntries = kept;
+	registry.entries = kept;
 	const stale: Symbol[] = [];
-	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+	registry.bySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
 		if (gone.has(e)) stale.push(sym);
 	});
-	for (const sym of stale) _dispBySym.delete(sym);
+	for (const sym of stale) registry.bySym.delete(sym);
 	return first;
 }
 
 // Moves the entries a module recorded since forgetDispatchOfModule to `at`, keeping their order, the place a first
 // collection of the modules in load order gives them.
-export function placeDispatchOfModule(modulePath: string, at: int32): void {
+export function placeDispatchOfModule(registry: DispatchRegistry, modulePath: string, at: int32): void {
 	if (at < 0) return;
-	changeDispatchRegistry();
+	changeDispatchRegistry(registry);
 	const mine: DispMethodEntry[] = [];
 	const rest: DispMethodEntry[] = [];
-	for (const e of _dispEntries) {
+	for (const e of registry.entries) {
 		if (e.classSym.modulePath == modulePath) mine.push(e);
 		else rest.push(e);
 	}
@@ -1051,29 +1035,30 @@ export function placeDispatchOfModule(modulePath: string, at: int32): void {
 		placed.push(rest[i]);
 	}
 	if (at >= rest.length) for (const e of mine) placed.push(e);
-	_dispEntries = placed;
+	registry.entries = placed;
 }
 
-export function dispatchEntryCount(): int32 {
-	return _dispEntries.length;
+export function dispatchEntryCount(registry: DispatchRegistry): int32 {
+	return registry.entries.length;
 }
 
-export function resetDispatchRegistry(): void {
-	changeDispatchRegistry();
-	_dispEntries = [];
-	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
-	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
+export function resetDispatchRegistry(registry: DispatchRegistry): void {
+	changeDispatchRegistry(registry);
+	registry.entries = [];
+	registry.byClass = new HashMap<Symbol, DispMethodEntry[]>();
+	registry.bySym = new HashMap<Symbol, DispMethodEntry>();
+	registry.seeded = new HashSet<DispatchRecords>();
 }
 
-export function dispatchEntryFor(sym: Readonly<Symbol>): DispMethodEntry | null {
-	const entry = _dispBySym.get(sym) ?? null;
-	if (entry != null) recordDispatchRead(entry.classSym, entry.methodName);
+export function dispatchEntryFor(registry: DispatchRegistry, sym: Readonly<Symbol>): DispMethodEntry | null {
+	const entry = registry.bySym.get(sym) ?? null;
+	if (entry != null) recordDispatchRead(registry, entry.classSym, entry.methodName);
 	return entry;
 }
 
-export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
-	recordDispatchRead(classSym, methodName);
-	const entries = _dispByClass.get(classSym);
+export function dispatchDeclaredEntry(registry: DispatchRegistry, classSym: Symbol, methodName: string): DispMethodEntry | null {
+	recordDispatchRead(registry, classSym, methodName);
+	const entries = registry.byClass.get(classSym);
 	if (entries == null) return null;
 	for (const entry of entries) {
 		if (entry.methodName == methodName) return entry;
@@ -1081,12 +1066,12 @@ export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): Dis
 	return null;
 }
 
-export function dispatchMethodOf(classSym: Symbol, methodName: string): DispMethodEntry | null {
+export function dispatchMethodOf(registry: DispatchRegistry, classSym: Symbol, methodName: string): DispMethodEntry | null {
 	let cur: Type | null = classSym.symbolType;
 	let d = 0;
 	while (cur != null && d < 64) {
 		const own = classOwnSym(cur);
-		const entry = own != null ? dispatchDeclaredEntry(own, methodName) : null;
+		const entry = own != null ? dispatchDeclaredEntry(registry, own, methodName) : null;
 		if (entry != null) return entry;
 		cur = classBaseOwner(cur);
 		d += 1;
@@ -1111,13 +1096,13 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	return -1;
 }
 
-export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
-	recordDispatchRead(classSym, methodName);
+export function dispatchOverriddenEntry(registry: DispatchRegistry, classSym: Symbol, methodName: string): DispMethodEntry | null {
+	recordDispatchRead(registry, classSym, methodName);
 	let cur = classSym.symbolType != null ? classBaseOwner(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
 		const baseSym = classOwnSym(cur);
-		const ofBase = baseSym != null ? _dispByClass.get(baseSym) : null;
+		const ofBase = baseSym != null ? registry.byClass.get(baseSym) : null;
 		if (ofBase != null) {
 			for (const e of ofBase) {
 				if (e.methodName == methodName) return e;
@@ -1129,22 +1114,22 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 	return null;
 }
 
-export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
-	recordDispatchRead(classSym, methodName);
-	return overridesAmong(_dispEntries, classSym, methodName);
+export function dispatchOverridesFor(registry: DispatchRegistry, classSym: Symbol, methodName: string): DispMethodEntry[] {
+	recordDispatchRead(registry, classSym, methodName);
+	return overridesAmong(registry.entries, classSym, methodName);
 }
 
 // Every dispatched method with the overrides its dispatcher tries, deepest first, read once before emission.
-export function dispatchOverrideTable(): HashMap<Symbol, Symbol[]> {
-	for (const e of _dispEntries) recordDispatchRead(e.classSym, e.methodName);
+export function dispatchOverrideTable(registry: DispatchRegistry): HashMap<Symbol, Symbol[]> {
+	for (const e of registry.entries) recordDispatchRead(registry, e.classSym, e.methodName);
 	const byName = new HashMap<string, DispMethodEntry[]>();
-	for (const e of _dispEntries) {
+	for (const e of registry.entries) {
 		const named = byName.get(e.methodName);
 		if (named != null) named.push(e);
 		else byName.set(e.methodName, [e]);
 	}
 	const table = new HashMap<Symbol, Symbol[]>();
-	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+	registry.bySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
 		if (e.overloaded) return;
 		const overrides = overridesAmong(byName.get(e.methodName)!, e.classSym, e.methodName);
 		if (overrides.length == 0) return;
@@ -1654,6 +1639,8 @@ export class CheckerContext {
 	currentModule: Module;
 	topProgram: Node | null;   // the module body being checked: the owner walk of a move in top-level code
 	exportRegistry: ExportRegistry;
+	dispatchRegistry: DispatchRegistry;
+	preludeDispatchRecords: DispatchRecords | null;
 	adoptedDecls: HashMap<Node, Symbol>;
 	adoptStmt: ((stmt: Node) => void) | null;
 	adoptedParams: HashMap<Node, Symbol[]>;
@@ -1728,7 +1715,7 @@ export class CheckerContext {
 
 // ===== Constructors =====
 
-export function createContext(): CheckerContext {
+export function createContext(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
 	const table = createSymbolTable();
 	return {
 		table,
@@ -1764,6 +1751,8 @@ export function createContext(): CheckerContext {
 		currentModule: null as unknown as Module,
 		topProgram: null,
 		exportRegistry: createExportRegistry(),
+		dispatchRegistry,
+		preludeDispatchRecords: null,
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		adoptStmt: null,
 		adoptedParams: new HashMap<Node, Symbol[]>(),
@@ -1838,7 +1827,7 @@ export function createContext(): CheckerContext {
 }
 
 export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerContext {
-	const ctx = createContext();
+	const ctx = createContext(graph.dispatchRegistry);
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
@@ -1929,8 +1918,8 @@ export function isOutsideResolvedStd(ctx: CheckerContext, path: string): boolean
 
 // Create context with a shared IdentCache (one cache per compilation).
 // Eliminates cross-context nameId mismatch during generic instantiation.
-export function createContextWithCache(cache: IdentCache): CheckerContext {
-	const ctx = createContext();
+export function createContextWithCache(cache: IdentCache, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
+	const ctx = createContext(dispatchRegistry);
 	ctx.table.identCache = cache;
 	return ctx;
 }

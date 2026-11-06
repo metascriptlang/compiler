@@ -3,6 +3,7 @@
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
 import { Node } from "../ast/node";
+import { DispatchRegistry, createDispatchRegistry } from "../checker/dispatchRegistry";
 
 // ===== Module State Machine =====
 
@@ -83,6 +84,7 @@ export class CircularDep {
 // ===== Module Graph =====
 
 export class ModuleGraph {
+	dispatchRegistry: DispatchRegistry;
 	modules: Module[];         // all loaded modules
 	modulePaths: string[];     // parallel: absolute paths (for lookup)
 	moduleIndex: HashMap<string, int32>;
@@ -95,8 +97,9 @@ export class ModuleGraph {
 
 // ===== Constructors =====
 
-export function createModuleGraph(): ModuleGraph {
+export function createModuleGraph(dispatchRegistry: DispatchRegistry = createDispatchRegistry()): ModuleGraph {
 	return {
+		dispatchRegistry,
 		modules: [],
 		modulePaths: [],
 		moduleIndex: new HashMap<string, int32>(),

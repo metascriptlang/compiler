@@ -3,7 +3,6 @@ import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
 import { resetInstantiationState, instanceArgsOf } from "../checker/instantiate";
-import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
 import { resetResizeSummaries } from "../checker/varPartitions";
 import { resetCapturedAssignments } from "../checker/flow";
@@ -125,7 +124,6 @@ export function createBuildSession(keep: boolean): BuildSession {
 
 export function resetBuildState(): void {
 	resetInstantiationState();
-	resetDispatchRegistry();
 	resetRaises();
 	resetResizeSummaries();
 	resetCapturedAssignments();

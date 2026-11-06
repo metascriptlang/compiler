@@ -151,11 +151,13 @@ function crossesAsReply(t: Type | null): boolean {
 	return true;
 }
 
-const REPLY_SCOPE: FreshScope = {
-	moveNames: [],
-	table: null,
-	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
-};
+function replyScope(ctx: CheckerContext): FreshScope {
+	return {
+		moveNames: [],
+		table: null,
+		buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(ctx.dispatchRegistry, site, Effect.SideEffect) : callEffect(ctx.dispatchRegistry, site, Effect.SideEffect)) == null,
+	};
+}
 
 function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, method: string): Node | null {
 	if (n == null) return null;
@@ -181,7 +183,7 @@ function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node, meth
 		},
 		NodeKind.CallExpr when (p.resolvedSym != null && (p.resolvedSym!.builtinKind == BuiltinKind.ResultOk || p.resolvedSym!.builtinKind == BuiltinKind.ResultErr)) =>
 			firstSharedReplyPart(ctx, (p.data as CallExprData).arguments, result, method),
-		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
+		_ => isFreshValue(p, replyScope(ctx)) ? null : p,
 	};
 }
 
@@ -320,7 +322,7 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 			if (root.resolvedSym != null) checkMoveSoleOwner(ctx, root.resolvedSym!, [root.resolvedSym!.name], mv, mv.location, describeExpr(arg));
 			return;
 		}
-		if (!isFreshValue(arg, REPLY_SCOPE)) {
+		if (!isFreshValue(arg, replyScope(ctx))) {
 			addError(ctx, "cannot move this value: it is not the sole owner — it is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh); only a value nothing else can reach may cross to the actor" + SOLE_OWNER_TAG, mv.location.line, mv.location.column);
 		}
 		return;
@@ -1202,13 +1204,13 @@ function checkHandleArguments(f: HandleFrame, call: Node): void {
 	for (const a of d.arguments) checkHandleCallback(f, a);
 }
 
-function lendTargets(call: Node): Symbol[] {
+function lendTargets(ctx: CheckerContext, call: Node): Symbol[] {
 	const sym = call.resolvedSym ?? peelView((call.data as CallExprData).callee).resolvedSym;
 	if (sym == null) return [];
 	const targets: Symbol[] = [sym!];
-	const entry = dispatchEntryFor(sym!);
+	const entry = dispatchEntryFor(ctx.dispatchRegistry, sym!);
 	if (entry != null && !entry.overloaded) {
-		for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) targets.push(o.sym);
+		for (const o of dispatchOverridesFor(ctx.dispatchRegistry, entry.classSym, entry.methodName)) targets.push(o.sym);
 	}
 	return targets;
 }
@@ -1216,7 +1218,7 @@ function lendTargets(call: Node): Symbol[] {
 function lendRefusal(f: HandleFrame, call: Node, i: int32): string | null {
 	const routines: Node[] = [];
 	const external: boolean[] = [];
-	for (const t of lendTargets(call)) {
+	for (const t of lendTargets(f.ctx, call)) {
 		const r = routineParts(t);
 		if (r == null || r.paramSyms == null) return "";
 		routines.push(r);
@@ -1451,16 +1453,16 @@ function borrowedCapture(ctx: CheckerContext, node: Node): Node | null {
 	return hit[0];
 }
 
-function spawnEffectOf(fn: Node, e: Effect, views: Symbol[] = []): EffectCause | null {
-	if (fn.kind != NodeKind.Identifier) return walkWithViews(fn, e, views);
+function spawnEffectOf(ctx: CheckerContext, fn: Node, e: Effect, views: Symbol[] = []): EffectCause | null {
+	if (fn.kind != NodeKind.Identifier) return walkWithViews(ctx.dispatchRegistry, fn, e, views);
 	const sym = aliasTarget(fn.resolvedSym);
 	if (sym == null) return null;
-	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, e);
+	if (sym.symbolKind == SymbolKind.Function) return routineEffect(ctx.dispatchRegistry, sym, e);
 	const bound = constBindingInitializer(sym);
 	if (bound == null) return null;
 	const declared = peelHidden(bound);
 	const isRoutine = declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr;
-	return isRoutine ? walkWithViews(declared, e, views) : null;
+	return isRoutine ? walkWithViews(ctx.dispatchRegistry, declared, e, views) : null;
 }
 
 function spawnedClosure(fn: Node): Node {
@@ -1475,9 +1477,9 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 	collectBorrowCaptures(ctx, spawnedClosure(peelHidden(fn)), views, moved);
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v));
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
-		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresBorrowed, borrowed);
+		const stored = spawnEffectOf(ctx, peelHidden(fn), Effect.StoresBorrowed, borrowed);
 		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + (stored.advice ?? storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements"), at.location.line, at.location.column);
-		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
+		const c = spawnEffectOf(ctx, peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
 		addError(ctx, runs + ", but it " + c.text + MODULE_STATE_RULE, at.location.line, at.location.column);
 	});
@@ -1515,7 +1517,7 @@ function refuseStoredClosureReach(actorName: string, field: string, value: Node)
 		: v.kind == NodeKind.Identifier ? boundRoutine(v.resolvedSym) : null;
 	if (closure == null) return;
 	deferEffectCheck(closure, "actorModuleState", (ctx: CheckerContext): void => {
-		const c = walkEffect(closure, Effect.ActorReach);
+		const c = walkEffect(ctx.dispatchRegistry, closure, Effect.ActorReach);
 		if (c == null) return;
 		addError(ctx, "actor '" + actorName + "' runs the closure stored in '" + field + "' on whichever thread takes its message, but it " + c.text + MODULE_STATE_RULE, closure.location.line, closure.location.column);
 	});
@@ -1528,9 +1530,9 @@ export function checkActorMethodModuleState(actorName: string, raw: Node): void 
 	if (md.methodIsStatic) return;
 	deferEffectCheck(method, "actorModuleState", (ctx: CheckerContext): void => {
 		const runs = "actor '" + actorName + "' runs '" + md.methodName + "' on whichever thread takes its message, but it ";
-		const stored = walkWithViews(method, Effect.StoresBorrowed, []);
+		const stored = walkWithViews(ctx.dispatchRegistry, method, Effect.StoresBorrowed, []);
 		if (stored != null) addError(ctx, runs + stored.text + "; " + (stored.advice ?? "a module const is shared by every thread and a read of it takes no count, so store an explicit copy of it (clone or spread)"), method.location.line, method.location.column);
-		const c = walkEffect(method, Effect.ActorReach);
+		const c = walkEffect(ctx.dispatchRegistry, method, Effect.ActorReach);
 		if (c == null) return;
 		addError(ctx, runs + c.text + MODULE_STATE_RULE, method.location.line, method.location.column);
 	});
@@ -1560,14 +1562,14 @@ function isLockedSection(ctx: CheckerContext, sym: Symbol | null): boolean {
 		&& !isOutsideResolvedStd(ctx, origin.modulePath);
 }
 
-function lockCallbackEffect(fn: Node): EffectCause | null {
-	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return walkEffect(fn, Effect.Suspends);
+function lockCallbackEffect(ctx: CheckerContext, fn: Node): EffectCause | null {
+	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return walkEffect(ctx.dispatchRegistry, fn, Effect.Suspends);
 	const sym = fn.kind == NodeKind.Identifier ? aliasTarget(fn.resolvedSym) : null;
-	if (sym != null && sym.symbolKind == SymbolKind.Function) return routineEffect(sym, Effect.Suspends);
+	if (sym != null && sym.symbolKind == SymbolKind.Function) return routineEffect(ctx.dispatchRegistry, sym, Effect.Suspends);
 	const bound = sym != null ? constBindingInitializer(sym) : null;
 	if (bound != null) {
 		const declared = peelHidden(bound);
-		if (declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr) return walkEffect(declared, Effect.Suspends);
+		if (declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr) return walkEffect(ctx.dispatchRegistry, declared, Effect.Suspends);
 	}
 	return { site: fn, text: "is a function value at " + fn.location.line + ":" + fn.location.column };
 }
@@ -1578,7 +1580,7 @@ export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): v
 	if (args.length != 2) return;
 	const name = call.resolvedSym!.instantiatedFrom != null ? call.resolvedSym!.instantiatedFrom!.name : call.resolvedSym!.name;
 	deferEffectCheck(call, "lockCallback", (ctx: CheckerContext): void => {
-		const c = lockCallbackEffect(peelHidden(args[1]));
+		const c = lockCallbackEffect(ctx, peelHidden(args[1]));
 		if (c == null) return;
 		addError(ctx, "the callback of '" + name + "' runs while the Locked cell is held and must not spawn, await or call a function value, but it " + c.text, call.location.line, call.location.column);
 	});
@@ -2012,7 +2014,7 @@ function requireFreshBinding(init: Node | null, w: OwnerWalk): void {
 function requireNoSideEffect(site: Node, w: OwnerWalk): void {
 	deferEffectCheck(site, "noSideEffect", (ctx: CheckerContext): void => {
 		if (w.reported) return;
-		const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
+		const c = site.kind == NodeKind.NewExpr ? newEffect(ctx.dispatchRegistry, site, Effect.SideEffect) : callEffect(ctx.dispatchRegistry, site, Effect.SideEffect);
 		if (c != null) reportNotSoleOwner(w, "a call with side effects may keep an alias of it: " + c.text);
 	});
 }

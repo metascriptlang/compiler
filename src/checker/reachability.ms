@@ -18,7 +18,7 @@ import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerL
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
-import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { DispatchRegistry, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { instanceArgsOf, sameInstanceArgs } from "./instantiate";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
@@ -108,13 +108,13 @@ let _walkStack: string[] = [];
 // ===== Core Walker =====
 
 // Walk a node recursively, marking any referenced declarations alive.
-function walkBody(node: Node, modulePath: string): void {
+function walkBody(dispatchRegistry: DispatchRegistry, node: Node, modulePath: string): void {
 	if (node == null) return;
 	if (node.nodeType != null) {
 		let ut = node.nodeType;
 		if ((ut.kind == TypeKind.Ref || ut.kind == TypeKind.Ptr) && ut.typeReturn != null) ut = ut.typeReturn;
 		if (ut.kind == TypeKind.Union) {
-			markUnionHookEdges(ut);
+			markUnionHookEdges(dispatchRegistry, ut);
 		}
 	}
 	const k = node.kind;
@@ -122,7 +122,7 @@ function walkBody(node: Node, modulePath: string): void {
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		if (sym != null) markReferenced(sym, modulePath);
+		if (sym != null) markReferenced(dispatchRegistry, sym, modulePath);
 		return;
 	}
 
@@ -131,111 +131,111 @@ function walkBody(node: Node, modulePath: string): void {
 		const cd = node.data as CallExprData;
 		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : BuiltinKind.None;
 		if (magic == BuiltinKind.BoxRefArray && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
-			markRefArrayCell(cd.arguments[0].nodeType, modulePath);
+			markRefArrayCell(dispatchRegistry, cd.arguments[0].nodeType, modulePath);
 		} else if (magic == BuiltinKind.BoxArc && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
-			markArcCell(cd.arguments[0].nodeType, modulePath);
+			markArcCell(dispatchRegistry, cd.arguments[0].nodeType, modulePath);
 		} else if (magic == BuiltinKind.BoxLocked && node.nodeType != null && node.nodeType.typeReturn != null) {
-			markArcCell(node.nodeType.typeReturn, modulePath);
+			markArcCell(dispatchRegistry, node.nodeType.typeReturn, modulePath);
 		} else if (magic == BuiltinKind.PromiseAllFor && node.nodeType != null) {
-			markPromiseAllResult(node.nodeType, modulePath);
+			markPromiseAllResult(dispatchRegistry, node.nodeType, modulePath);
 		} else if (magic == BuiltinKind.OrcDisownValue && cd.arguments.length > 0) {
 			const custody = valueCustodyOp(cd.arguments[0].nodeType);
-			if (custody != null) markReferenced(custody, modulePath);
+			if (custody != null) markReferenced(dispatchRegistry, custody, modulePath);
 		}
-		walkBody(cd.callee, modulePath);
+		walkBody(dispatchRegistry, cd.callee, modulePath);
 		for (const arg of cd.arguments) {
-			walkBody(arg, modulePath);
+			walkBody(dispatchRegistry, arg, modulePath);
 		}
 		return;
 	}
 
 	if (k == NodeKind.NewExpr) {
 		const nd = node.data as NewExprData;
-		walkBody(nd.newCallee, modulePath);
+		walkBody(dispatchRegistry, nd.newCallee, modulePath);
 		for (const arg of nd.newArguments) {
-			walkBody(arg, modulePath);
+			walkBody(dispatchRegistry, arg, modulePath);
 		}
-		markAllocationInfo(node.nodeType, modulePath);
+		markAllocationInfo(dispatchRegistry, node.nodeType, modulePath);
 		return;
 	}
 
 	if (k == NodeKind.ObjectLiteral) {
-		markAllocationInfo(node.nodeType, modulePath);
-		walkChildrenGeneric(node, modulePath);
+		markAllocationInfo(dispatchRegistry, node.nodeType, modulePath);
+		walkChildrenGeneric(dispatchRegistry, node, modulePath);
 		return;
 	}
 
 	if (k == NodeKind.VariableDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Ref
 			&& node.nodeType.typeReturn != null && node.nodeType.typeReturn.kind == TypeKind.Array
 			&& isBakeableAggregateConst(node)) {
-		markRefArrayCell(node.nodeType.typeReturn, modulePath);
+		markRefArrayCell(dispatchRegistry, node.nodeType.typeReturn, modulePath);
 	}
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
-		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType, modulePath);
-		walkChildrenGeneric(node, modulePath);
+		markRematerializedMemberTypeInfo(dispatchRegistry, (node.data as HiddenStdConvData).convType, modulePath);
+		walkChildrenGeneric(dispatchRegistry, node, modulePath);
 		return;
 	}
 	if (k == NodeKind.TypeAssertion && node.flags.has(NodeFlag.ObjCheck)) {
-		markObjectTypeInfo(node.nodeType, modulePath);
-		walkChildrenGeneric(node, modulePath);
+		markObjectTypeInfo(dispatchRegistry, node.nodeType, modulePath);
+		walkChildrenGeneric(dispatchRegistry, node, modulePath);
 		return;
 	}
 
 	if (k == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") {
 		const rhs = (node.data as BinaryExprData).right;
-		markObjectTypeInfo(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
-		walkChildrenGeneric(node, modulePath);
+		markObjectTypeInfo(dispatchRegistry, rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
+		walkChildrenGeneric(dispatchRegistry, node, modulePath);
 		return;
 	}
 
 	// MemberExpr — walk object + mark resolved extension/class method
 	if (k == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		walkBody(md.object, modulePath);
-		if (node.resolvedSym != null) markReferenced(node.resolvedSym, modulePath);
+		walkBody(dispatchRegistry, md.object, modulePath);
+		if (node.resolvedSym != null) markReferenced(dispatchRegistry, node.resolvedSym, modulePath);
 		return;
 	}
 
 	// For all other nodes: walk children generically via forEachChild
 	// NOTE: forEachChild uses a callback — we pass module-level state
 	// instead of closure-captured value-type arrays to avoid use-after-free
-	walkChildrenGeneric(node, modulePath);
+	walkChildrenGeneric(dispatchRegistry, node, modulePath);
 }
 
-function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
+function moveTypeInfoOwnerIntoCore(dispatchRegistry: DispatchRegistry, key: string, demander: string): void {
 	if (_imageModules.size == 0 || _imageModules.has(demander)) return;
 	for (const demand of _aliveSet.typeInfos) {
 		if (demand.key != key) continue;
 		if (!_imageModules.has(demand.owner)) return;
 		demand.owner = demander;
 		aliveSetAddModule(_aliveSet, demander);
-		if (demand.destroy != null) markReferenced(demand.destroy, demander);
-		if (demand.trace != null) markReferenced(demand.trace, demander);
-		if (demand.custody != null) markReferenced(demand.custody, demander);
-		if (demand.finalize != null) markReferenced(demand.finalize, demander);
-		if (demand.release != null) markReferenced(demand.release, demander);
+		if (demand.destroy != null) markReferenced(dispatchRegistry, demand.destroy, demander);
+		if (demand.trace != null) markReferenced(dispatchRegistry, demand.trace, demander);
+		if (demand.custody != null) markReferenced(dispatchRegistry, demand.custody, demander);
+		if (demand.finalize != null) markReferenced(dispatchRegistry, demand.finalize, demander);
+		if (demand.release != null) markReferenced(dispatchRegistry, demand.release, demander);
 		return;
 	}
 }
 
-function markCellDemander(demand: CTypeInfoDemand, modulePath: string): void {
+function markCellDemander(dispatchRegistry: DispatchRegistry, demand: CTypeInfoDemand, modulePath: string): void {
 	const demander = _singleModule != "" ? _singleModule : modulePath;
 	const site = demand.key + "\t" + demander;
 	if (_cellDemanders.has(site)) return;
 	_cellDemanders.add(site);
 	aliveSetAddModule(_aliveSet, demander);
-	if (demand.destroy != null) markReferenced(demand.destroy, demander);
-	if (demand.trace != null) markReferenced(demand.trace, demander);
-	if (demand.custody != null) markReferenced(demand.custody, demander);
+	if (demand.destroy != null) markReferenced(dispatchRegistry, demand.destroy, demander);
+	if (demand.trace != null) markReferenced(dispatchRegistry, demand.trace, demander);
+	if (demand.custody != null) markReferenced(dispatchRegistry, demand.custody, demander);
 }
 
-function markRefArrayCell(arrT: Type, modulePath: string): void {
+function markRefArrayCell(dispatchRegistry: DispatchRegistry, arrT: Type, modulePath: string): void {
 	if (_sourceDependenciesOnly) return;
 	const key = refArrayCellKey(arrT);
 	const known = _cellInfos.get(key);
 	if (known != null) {
-		markCellDemander(known, modulePath);
+		markCellDemander(dispatchRegistry, known, modulePath);
 		return;
 	}
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
@@ -243,40 +243,40 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
 	const custody = refArrayCellOp(arrT, AttachedOp.AttachedCustody);
 	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner: "", cName: "", destroy, trace, baseKey: "", custody };
-	addCellDemand(demand, modulePath);
+	addCellDemand(dispatchRegistry, demand, modulePath);
 }
 
-function markArcCell(pointee: Type, modulePath: string): void {
+function markArcCell(dispatchRegistry: DispatchRegistry, pointee: Type, modulePath: string): void {
 	const key = arcCellKey(pointee);
 	const known = _cellInfos.get(key);
 	if (known != null) {
-		markCellDemander(known, modulePath);
+		markCellDemander(dispatchRegistry, known, modulePath);
 		return;
 	}
 	const destroy = arrayElementNeedsCleanup(pointee) ? getOpByKey(pointee, AttachedOp.AttachedDestructor) : null;
 	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner: "", cName: "", destroy, trace: null, baseKey: "" };
-	addCellDemand(demand, modulePath);
+	addCellDemand(dispatchRegistry, demand, modulePath);
 }
 
-function addCellDemand(demand: CTypeInfoDemand, modulePath: string): void {
+function addCellDemand(dispatchRegistry: DispatchRegistry, demand: CTypeInfoDemand, modulePath: string): void {
 	if (_aliveSet.typeInfoKeys.has(demand.key)) throw new Error(`internal: cell TypeInfo key ${demand.key} is already demanded as another kind`);
 	_aliveSet.typeInfoKeys.add(demand.key);
 	_aliveSet.typeInfos.push(demand);
 	_cellInfos.set(demand.key, demand);
-	markCellDemander(demand, modulePath);
+	markCellDemander(dispatchRegistry, demand, modulePath);
 }
 
-function markPromiseAllResult(resultType: Type, modulePath: string): void {
+function markPromiseAllResult(dispatchRegistry: DispatchRegistry, resultType: Type, modulePath: string): void {
 	if (_sourceDependenciesOnly) return;
 	let collected = awaitedType(resultType);
 	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
 	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
 	if (promiseAllShape(collected.typeReturn) == PromiseAllShape.None) return;
-	markRefArrayCell(createArray(collected.typeReturn), modulePath);
+	markRefArrayCell(dispatchRegistry, createArray(collected.typeReturn), modulePath);
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
-function markUnionHookEdges(t: Type): void {
+function markUnionHookEdges(dispatchRegistry: DispatchRegistry, t: Type): void {
 	if (_sourceDependenciesOnly) return;
 	if (_markedUnions.has(t)) return;
 	_markedUnions.add(t);
@@ -284,25 +284,25 @@ function markUnionHookEdges(t: Type): void {
 		if (vt == null) continue;
 		let vbase = vt;
 		if ((vt.kind == TypeKind.Ref || vt.kind == TypeKind.Ptr) && vt.typeReturn != null) vbase = vt.typeReturn;
-		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedAsgn));
-		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedDestructor));
-		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedTrace));
+		markOpEdge(dispatchRegistry, getOpByKey(vbase, AttachedOp.AttachedAsgn));
+		markOpEdge(dispatchRegistry, getOpByKey(vbase, AttachedOp.AttachedDestructor));
+		markOpEdge(dispatchRegistry, getOpByKey(vbase, AttachedOp.AttachedTrace));
 	}
 	if (t.typeName.length > 0) {
-		markOpEdge(getOpByKey(t, AttachedOp.AttachedAsgn));
-		markOpEdge(getOpByKey(t, AttachedOp.AttachedSink));
-		markOpEdge(getOpByKey(t, AttachedOp.AttachedWasMoved));
+		markOpEdge(dispatchRegistry, getOpByKey(t, AttachedOp.AttachedAsgn));
+		markOpEdge(dispatchRegistry, getOpByKey(t, AttachedOp.AttachedSink));
+		markOpEdge(dispatchRegistry, getOpByKey(t, AttachedOp.AttachedWasMoved));
 	}
 }
 
-function markOpEdge(op: Symbol | null): void {
-	if (op != null) markSymAndWalk(op, "");
+function markOpEdge(dispatchRegistry: DispatchRegistry, op: Symbol | null): void {
+	if (op != null) markSymAndWalk(dispatchRegistry, op, "");
 }
 
-function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string): void {
+function markRematerializedMemberTypeInfo(dispatchRegistry: DispatchRegistry, conv: Type | null, modulePath: string): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
-	if (member != null && member != conv && member.kind == TypeKind.Struct) markObjectTypeInfo(member, modulePath);
+	if (member != null && member != conv && member.kind == TypeKind.Struct) markObjectTypeInfo(dispatchRegistry, member, modulePath);
 }
 
 function opOwner(op: Symbol | null, fallback: string): string {
@@ -311,22 +311,22 @@ function opOwner(op: Symbol | null, fallback: string): string {
 	return home != "" ? home : fallback;
 }
 
-function markAllocationInfo(allocated: Type | null, modulePath: string): void {
+function markAllocationInfo(dispatchRegistry: DispatchRegistry, allocated: Type | null, modulePath: string): void {
 	if (allocated == null) return;
 	let t = peelTransparentInstance(allocated);
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
-	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) markObjectTypeInfo(t, modulePath);
+	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) markObjectTypeInfo(dispatchRegistry, t, modulePath);
 }
 
-function markObjectTypeInfo(type: Type | null, modulePath: string): void {
+function markObjectTypeInfo(dispatchRegistry: DispatchRegistry, type: Type | null, modulePath: string): void {
 	if (_sourceDependenciesOnly) return;
 	const subject = typeInfoSubject(type);
 	if (subject == null) return;
 	if (subject.sym != null && hasFlag(subject.sym, SymbolFlag.ImportC)) return;
 	const key = objectTypeInfoKey(subject);
 	if (_aliveSet.typeInfoKeys.has(key)) {
-		moveTypeInfoOwnerIntoCore(key, modulePath);
+		moveTypeInfoOwnerIntoCore(dispatchRegistry, key, modulePath);
 		return;
 	}
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
@@ -344,17 +344,17 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	let baseKey = "";
 	const base = classBaseOf(subject);
 	if (base != null) {
-		markObjectTypeInfo(base, modulePath);
+		markObjectTypeInfo(dispatchRegistry, base, modulePath);
 		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
 	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody, finalize, release };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
-	if (destroy != null) markReferenced(destroy, owner);
-	if (trace != null) markReferenced(trace, owner);
-	if (custody != null) markReferenced(custody, owner);
-	if (finalize != null) markReferenced(finalize, owner);
-	if (release != null) markReferenced(release, owner);
+	if (destroy != null) markReferenced(dispatchRegistry, destroy, owner);
+	if (trace != null) markReferenced(dispatchRegistry, trace, owner);
+	if (custody != null) markReferenced(dispatchRegistry, custody, owner);
+	if (finalize != null) markReferenced(dispatchRegistry, finalize, owner);
+	if (release != null) markReferenced(dispatchRegistry, release, owner);
 }
 
 function classBaseOf(subject: Type): Type | null {
@@ -369,19 +369,19 @@ function classBaseOf(subject: Type): Type | null {
 }
 
 // Walk all children of a node generically via shared forEachChild
-function walkChildrenGeneric(node: Node, modulePath: string): void {
+function walkChildrenGeneric(dispatchRegistry: DispatchRegistry, node: Node, modulePath: string): void {
 	forEachChild(node, (child: Node): void => {
-		walkBody(child, modulePath);
+		walkBody(dispatchRegistry, child, modulePath);
 	});
 }
 
-function walkNamedDecls(modulePath: string, name: string): void {
+function walkNamedDecls(dispatchRegistry: DispatchRegistry, modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;
 	visitedAdd(key);
 	let di = _declHead.get(key) ?? -1;
 	while (di >= 0) {
-		walkDecl(di);
+		walkDecl(dispatchRegistry, di);
 		di = _declNext[di];
 	}
 }
@@ -389,11 +389,11 @@ function walkNamedDecls(modulePath: string, name: string): void {
 // Dispatch bucket edge (Nim cgmeth: a reachable base method makes every
 // override + its class TypeInfo reachable — the msDisp_* if-chain
 // references them all regardless of static call sites).
-function markDispatchOverrides(dde: DispMethodEntry | null): void {
+function markDispatchOverrides(dispatchRegistry: DispatchRegistry, dde: DispMethodEntry | null): void {
 	if (dde == null || dde.overloaded) return;
-	for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
-		markSymAndWalk(ov.sym, ov.sym.modulePath);
-		markObjectTypeInfo(ov.classSym.symbolType, ov.classSym.modulePath);
+	for (const ov of dispatchOverridesFor(dispatchRegistry, dde.classSym, dde.methodName)) {
+		markSymAndWalk(dispatchRegistry, ov.sym, ov.sym.modulePath);
+		markObjectTypeInfo(dispatchRegistry, ov.classSym.symbolType, ov.classSym.modulePath);
 	}
 }
 
@@ -418,66 +418,66 @@ function noteOpUse(sym: Symbol, user: string): void {
 	else if (!users.includes(user)) users.push(user);
 }
 
-function markReferenced(sym: Symbol, modulePath: string): void {
+function markReferenced(dispatchRegistry: DispatchRegistry, sym: Symbol, modulePath: string): void {
 	if (isCompileTimeExtern(sym)) {
 		noteCompileTimeReach(sym);
 		return;
 	}
 	noteOpUse(sym, modulePath);
-	markSymAndWalk(sym, modulePath);
-	for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
+	markSymAndWalk(dispatchRegistry, sym, modulePath);
+	for (const overload of sym.overloads) markSymAndWalk(dispatchRegistry, overload, modulePath);
 }
 
-function markSymAndWalk(sym: Symbol, modulePath: string): void {
+function markSymAndWalk(dispatchRegistry: DispatchRegistry, sym: Symbol, modulePath: string): void {
 	if (_visitedSyms.has(sym)) return;
 	_visitedSyms.add(sym);
 	aliveSetAddSym(_aliveSet, sym);
 	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
 	if (home != "") aliveSetAddModule(_aliveSet, home);
-	markDispatchOverrides(dispatchEntryFor(sym));
+	markDispatchOverrides(dispatchRegistry, dispatchEntryFor(dispatchRegistry, sym));
 	let di = _symDeclHead.get(sym) ?? -1;
 	if (di < 0 && sym.instantiatedFrom != null) {
-		markInstanceCopy(sym);
+		markInstanceCopy(dispatchRegistry, sym);
 		return;
 	}
 	while (di >= 0) {
-		walkDecl(di);
+		walkDecl(dispatchRegistry, di);
 		di = _symDeclNext[di];
 	}
 }
 
-function markInstanceCopy(sym: Symbol): void {
+function markInstanceCopy(dispatchRegistry: DispatchRegistry, sym: Symbol): void {
 	const checked = instanceArgsOf(sym);
 	let di = _instDeclHead.get(sym.instantiatedFrom!) ?? -1;
 	while (di >= 0) {
 		const copy = _declNodes[di].resolvedSym!;
 		if (sameInstanceArgs(instanceArgsOf(copy), checked)) {
 			aliveSetAddSym(_aliveSet, copy);
-			walkDecl(di);
+			walkDecl(dispatchRegistry, di);
 		}
 		di = _instDeclNext[di];
 	}
 }
 
-function markClassInit(classDecl: Node, modulePath: string): void {
+function markClassInit(dispatchRegistry: DispatchRegistry, classDecl: Node, modulePath: string): void {
 	const routine = classDecl.resolvedSym != null ? ctorRoutineOf(classDecl.resolvedSym) : null;
-	if (routine != null) markSymAndWalk(routine, modulePath);
+	if (routine != null) markSymAndWalk(dispatchRegistry, routine, modulePath);
 }
 
-function markRootDecl(decl: Node, modulePath: string): void {
+function markRootDecl(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string): void {
 	if (decl.resolvedSym == null) throw new Error(`internal: root declaration '${topDeclName(decl)}' of ${modulePath} has no symbol`);
-	markSymAndWalk(decl.resolvedSym, modulePath);
+	markSymAndWalk(dispatchRegistry, decl.resolvedSym, modulePath);
 }
 
 // A complete HCR core keeps what an image may demand on its first use: a class's TypeInfo and
 // hooks otherwise appear only with an allocation site.
-function markCompleteClassHooks(decl: Node, modulePath: string): void {
+function markCompleteClassHooks(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string): void {
 	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
 	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return;
-	markObjectTypeInfo(decl.resolvedSym.symbolType, modulePath);
+	markObjectTypeInfo(dispatchRegistry, decl.resolvedSym.symbolType, modulePath);
 }
 
-function walkDecl(di: int32): void {
+function walkDecl(dispatchRegistry: DispatchRegistry, di: int32): void {
 	if (_declWalked[di]) return;
 	_declWalked[di] = true;
 	const found = _declNodes[di];
@@ -485,18 +485,18 @@ function walkDecl(di: int32): void {
 	const name = topDeclName(found);
 	if (found.resolvedSym != null) {
 		aliveSetAddSym(_aliveSet, found.resolvedSym);
-		markDispatchOverrides(dispatchEntryFor(found.resolvedSym));
+		markDispatchOverrides(dispatchRegistry, dispatchEntryFor(dispatchRegistry, found.resolvedSym));
 	} else {
 		throw new Error(`internal: declaration '${name}' of ${modulePath} reached reachability without a symbol`);
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
 	_walkStack.push(name);
-	walkBody(found, modulePath);
+	walkBody(dispatchRegistry, found, modulePath);
 	_walkStack.pop();
 	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
 	// edge, so a live class keeps its init alive, as `new C(...)` needs.
-	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath);
+	if (found.kind == NodeKind.ClassDecl) markClassInit(dispatchRegistry, found, modulePath);
 	// Actors: actorLower erased the NewExpr before this walk runs, so
 	// no allocation-site edge fires — but a spawned actor's TypeInfo
 	// is always demanded.
@@ -504,7 +504,7 @@ function walkDecl(di: int32): void {
 		|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
 			&& found.resolvedSym.symbolKind == SymbolKind.Actor);
 	if (isActorOrigin) {
-		markObjectTypeInfo(found.resolvedSym.symbolType, modulePath);
+		markObjectTypeInfo(dispatchRegistry, found.resolvedSym.symbolType, modulePath);
 	}
 }
 
@@ -710,7 +710,7 @@ export function computeAliveSet(
 
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					if (!hasFlag(bare.resolvedSym, SymbolFlag.CompileTime)) markSymAndWalk(bare.resolvedSym, modulePath);
+					if (!hasFlag(bare.resolvedSym, SymbolFlag.CompileTime)) markSymAndWalk(graph.dispatchRegistry, bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -718,7 +718,7 @@ export function computeAliveSet(
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
 			// Entry module test blocks are wrapped in main() by codegen, so they're always roots.
 			if (bare.kind == NodeKind.TestDecl && (isTest || modulePath == entryPath)) {
-				walkBody(bare, modulePath);
+				walkBody(graph.dispatchRegistry, bare, modulePath);
 				continue;
 			}
 
@@ -735,13 +735,13 @@ export function computeAliveSet(
 				continue;
 			}
 			if (isTopLevelStatement(initStmt)) {
-				walkBody(bare, modulePath);
+				walkBody(graph.dispatchRegistry, bare, modulePath);
 				if (!isBuiltinDirectiveStmt(initStmt)) initModules.add(modulePath);
 				continue;
 			}
 
 			if (exportsCSymbol(bare)) {
-				markRootDecl(topDecl(bare)!, modulePath);
+				markRootDecl(graph.dispatchRegistry, topDecl(bare)!, modulePath);
 				continue;
 			}
 
@@ -749,11 +749,11 @@ export function computeAliveSet(
 				const decl = topDecl(bare);
 				if (decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.CompileTime)) continue;
 				if (decl != null) {
-					markRootDecl(decl, modulePath);
-					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(decl, modulePath);
+					markRootDecl(graph.dispatchRegistry, decl, modulePath);
+					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(graph.dispatchRegistry, decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
-					if (name != "") walkNamedDecls(modulePath, name);
+					if (name != "") walkNamedDecls(graph.dispatchRegistry, modulePath, name);
 				}
 			}
 		}
@@ -761,7 +761,7 @@ export function computeAliveSet(
 
 	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
-	while (markAliveGlobalDestroys(globalDestroys)) markImportedModulesAlive(graph);
+	while (markAliveGlobalDestroys(graph.dispatchRegistry, globalDestroys)) markImportedModulesAlive(graph);
 	return takeReachability();
 }
 
@@ -773,12 +773,12 @@ interface GlobalDestroysBlock {
 
 // A module's global destroys are no root: they run only in a module that is alive for another
 // reason, so a module holding nothing but globals stays dead.
-function markAliveGlobalDestroys(pending: GlobalDestroysBlock[]): boolean {
+function markAliveGlobalDestroys(dispatchRegistry: DispatchRegistry, pending: GlobalDestroysBlock[]): boolean {
 	let walked = false;
 	for (const entry of pending) {
 		if (entry.walked || !aliveSetHasModule(_aliveSet, entry.modulePath)) continue;
 		entry.walked = true;
-		walkBody(entry.block, entry.modulePath);
+		walkBody(dispatchRegistry, entry.block, entry.modulePath);
 		walked = true;
 	}
 	return walked;
@@ -807,7 +807,7 @@ function takeReachability(): AliveSet {
 	return result;
 }
 
-export function collectModuleTypeInfoDemands(program: Node, modulePath: string): AliveSet {
+export function collectModuleTypeInfoDemands(dispatchRegistry: DispatchRegistry, program: Node, modulePath: string): AliveSet {
 	_sourceDependenciesOnly = false;
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
@@ -820,7 +820,7 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		const decl = topDecl(stmt);
 		if (decl != null && decl.nodeType != null && hasGenericParams(decl.nodeType)) continue;
-		walkBody(stmt, modulePath);
+		walkBody(dispatchRegistry, stmt, modulePath);
 	}
 	const walked = takeReachability();
 	const demands = createAliveSet();

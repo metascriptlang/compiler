@@ -104,7 +104,7 @@ export function cmdPipeline(filePath: string): void {
 
 	// Phase 4: Analyze (DRC)
 	console.log("\n" + cyan("[4/5]") + " Analyze " + dim("(DRC injection)") + "...");
-	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
+	const analyzed = analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), [], checkerCtx.dispatchRegistry));
 	console.log("  " + green("OK"));
 
 	// Phase 5: Codegen
