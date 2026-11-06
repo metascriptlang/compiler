@@ -240,7 +240,7 @@ function entryOnlyFacts(entry: Node, ctx: CheckerContext, modPath: string, alive
 	facts.preludeUnlowered = true;
 	factInlineDecls(facts, entry);
 	prepareCModuleEmission(entry, ctx, modPath, aliveSet, facts);
-	registerTypeInfoDemands(collectModuleTypeInfoDemands(entry, modPath), facts);
+	registerTypeInfoDemands(collectModuleTypeInfoDemands(ctx.dispatchRegistry, entry, modPath), facts);
 	return facts;
 }
 
