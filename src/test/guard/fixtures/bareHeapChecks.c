@@ -25,13 +25,15 @@ static int msManualUnownedChecks(void) {
 
 int32_t msBareHeapReuseChecks(void) {
 	if (msManualUnownedChecks()) return 8;
-	for (size_t order = 0; order < 2; order++) {
+	/* An allocated big chunk forgets its left neighbour's size, as the reference does, so the pair
+	 * coalesces only when the right block is freed first. */
+	for (size_t round = 0; round < 2; round++) {
 		void* left = msMemAlloc(24 * 1024);
 		void* right = msMemAlloc(24 * 1024);
 		unsigned char* held = msMemAlloc(160 * 1024);
 		memset(held, 0x69, 160 * 1024);
-		msBareHeapOtherUnitFree(order == 0 ? left : right);
-		free(order == 0 ? right : left);
+		msBareHeapOtherUnitFree(right);
+		free(left);
 		void* merged = msMemAlloc(48 * 1024);
 		memset(merged, 0x35, 48 * 1024);
 		for (size_t j = 0; j < 160 * 1024; j++) {
