@@ -2081,17 +2081,17 @@ export function copyTypeShallow(t: Type): Type {
 	return c;
 }
 
-function isPodFieldType(t: Readonly<Type | null>, depth: int32): boolean {
+function isPodFieldType(t: Readonly<Type | null>, depth: int32, pidIsValue: boolean = false): boolean {
 	if (t == null) return true;
 	if (isNumeric(t)) return true;
 	return match (t.kind) {
 		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.Char
 			| TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
-		TypeKind.Distinct | TypeKind.SizedArray | TypeKind.Set | TypeKind.Alias => isPodFieldType(t.typeReturn, depth + 1),
-		TypeKind.Ref => isAtomicRef(t),
-		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
-		TypeKind.GenericInstance => valueStructBodyOrPhantomDecl(t) != null && isPodFieldType(valueStructBodyOrPhantomDecl(t), depth + 1),
+		TypeKind.Distinct | TypeKind.SizedArray | TypeKind.Set | TypeKind.Alias => isPodFieldType(t.typeReturn, depth + 1, pidIsValue),
+		TypeKind.Ref => isAtomicRef(t) || (pidIsValue && t.sym != null && t.sym.symbolKind == SymbolKind.Actor),
+		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1, pidIsValue),
+		TypeKind.GenericInstance => valueStructBodyOrPhantomDecl(t) != null && isPodFieldType(valueStructBodyOrPhantomDecl(t), depth + 1, pidIsValue),
 		_ => false,
 	};
 }
@@ -2103,10 +2103,10 @@ function valueStructBodyOrPhantomDecl(t: Readonly<Type>): Readonly<Type | null> 
 	return body != t && body.kind == TypeKind.Struct ? body : null;
 }
 
-function structCarriesRef(t: Readonly<Type>, depth: int32): boolean {
+function structCarriesRef(t: Readonly<Type>, depth: int32, pidIsValue: boolean = false): boolean {
 	if (depth > 8 || t.typeChildren == null) return false;
 	for (const ft of t.typeChildren) {
-		if (!isPodFieldType(ft, depth)) return true;
+		if (!isPodFieldType(ft, depth, pidIsValue)) return true;
 	}
 	return false;
 }
@@ -2117,19 +2117,20 @@ export function typeCarriesRef(t: Readonly<Type | null>): boolean {
 
 // Array and struct storage is copied on every store, so a value built only of numbers, strings,
 // enums and such arrays and structs has no alias to hand out: reading it yields an independent copy.
-export function isValueOnlyType(t: Readonly<Type | null>): boolean {
-	return isValueOnlyAt(t, 0);
+// pidIsValue: an actor handle is an uncounted pid (ULTRALOCK A6), so its copy is independent too.
+export function isValueOnlyType(t: Readonly<Type | null>, pidIsValue: boolean = false): boolean {
+	return isValueOnlyAt(t, 0, pidIsValue);
 }
 
-function isValueOnlyAt(t: Readonly<Type | null>, depth: int32): boolean {
-	if (t == null || isPodFieldType(t, 0)) return true;
+function isValueOnlyAt(t: Readonly<Type | null>, depth: int32, pidIsValue: boolean): boolean {
+	if (t == null || isPodFieldType(t, 0, pidIsValue)) return true;
 	if (depth > 8 || isReadonlyView(t)) return false;
 	return match (t.kind) {
-		TypeKind.Array => isValueOnlyAt(t.typeReturn, depth + 1),
-		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct => isValueOnlyAt(t.typeReturn, depth + 1),
+		TypeKind.Array => isValueOnlyAt(t.typeReturn, depth + 1, pidIsValue),
+		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct => isValueOnlyAt(t.typeReturn, depth + 1, pidIsValue),
 		TypeKind.Struct => {
 			for (const ft of t.typeChildren) {
-				if (!isValueOnlyAt(ft, depth + 1)) return false;
+				if (!isValueOnlyAt(ft, depth + 1, pidIsValue)) return false;
 			}
 			return true;
 		},

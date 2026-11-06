@@ -314,7 +314,7 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	const arg = peelOperand((mv.data as MoveExprData).moveArg);
 	if (arg.kind != NodeKind.Identifier) {
-		if (arg.nodeType == null || !typeCarriesRef(arg.nodeType)) return;
+		if (arg.nodeType == null || !typeCarriesRef(arg.nodeType) || isValueOnlyType(arg.nodeType, true)) return;
 		const root = pathRoot(arg);
 		if (root != null) {
 			if (root.resolvedSym != null) checkMoveSoleOwner(ctx, root.resolvedSym!, [root.resolvedSym!.name], mv, mv.location, describeExpr(arg));
