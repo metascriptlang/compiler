@@ -171,6 +171,7 @@ test "a tampered certificate fails its signature" {
 test "host names match exactly or through one leftmost wildcard label" {
 	assert hostNameMatches("ziglang.org", "ziglang.org");
 	assert hostNameMatches("ziglang.org", "Ziglang.org");
+	assert !hostNameMatches("\u00e4.example", "\u00c4.example");
 	assert hostNameMatches("ZIGLANG.ORG", "ziglang.org");
 	assert hostNameMatches("bar.ziglang.org", "*.ziglang.org");
 	assert hostNameMatches("BAR.ziglang.org", "*.Ziglang.ORG");

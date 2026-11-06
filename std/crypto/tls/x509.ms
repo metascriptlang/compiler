@@ -627,20 +627,17 @@ export function verifyIssuedBy(
 	return Result.ok(null);
 }
 
-function equalIgnoreCase(a: string, b: string): boolean {
-	return a.length == b.length && a.toLowerCase() == b.toLowerCase();
-}
 
 /** RFC 6125 section 6.4: exact match ignoring ASCII case, or a `*.` wildcard standing for one whole leftmost label. */
 export function hostNameMatches(hostName: string, dnsName: string): boolean {
 	if (hostName.length == 0 || dnsName.length == 0) return false;
-	if (equalIgnoreCase(dnsName, hostName)) return true;
+	if (dnsName.equalsIgnoreCase(hostName)) return true;
 	if (dnsName.length >= 3 && dnsName.startsWith("*.")) {
 		const wildcardSuffix = dnsName.slice(2, dnsName.length);
 		if (wildcardSuffix.indexOf("*") >= 0) return false;
 		const dot = hostName.indexOf(".");
 		if (dot <= 0) return false;
-		return equalIgnoreCase(wildcardSuffix, hostName.slice(dot + 1, hostName.length));
+		return wildcardSuffix.equalsIgnoreCase(hostName.slice(dot + 1, hostName.length));
 	}
 	return false;
 }
