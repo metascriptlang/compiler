@@ -352,3 +352,25 @@ test "a holder returned with a field still moved out is refused" {
 	const message = refused(BIN + "function f(b: Owned<Bin>): Owned<Bin> { const l = move b.left; return move b; }\nf(mk());\n");
 	assert message.contains("cannot use 'b': 'b.left' was moved out"), message;
 }
+
+const KIDS = "class K { v: int32 = 0; constructor(v: int32) { this.v = v; } }\nfunction mk(v: int32): Owned<K> { return new K(v); }\nconst kids: Vec<Owned<K>> = [mk(1), mk(2)];\n";
+
+test "a bare type parameter lends an owned element to a callback" {
+	const r = compileToC(KIDS + "console.log(kids.some((k) => k.v > 1), kids.every((k: K): boolean => k.v > 0), kids.findIndex((k) => k.v == 2));\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "a callback that owns its element is refused where a bare type parameter lends it" {
+	const message = refused(KIDS + "console.log(kids.some((k: Owned<K>): boolean => k.v > 1));\n");
+	assert message.contains("takes 'k' as its owner, but the expected '(x: K, i: number) => boolean' passes it lent"), message;
+}
+
+test "a generic body that stores a lent parameter is refused per instance" {
+	const message = refused(KIDS + "function hold<T>(ref xs: Vec<T>, x: T): void { xs.push(x); }\nlet more: Vec<Owned<K>> = [];\nhold(more, mk(3));\n");
+	assert message.contains("'x' is written 'T', so it lends an Owned argument without its ownership — declare it 'sink x: T'"), message;
+}
+
+test "a sink type parameter takes an owned argument" {
+	const r = compileToC(KIDS + "function hold<T>(ref xs: Vec<T>, sink x: T): void { xs.push(move x); }\nlet more: Vec<Owned<K>> = [];\nhold(more, mk(3));\nconsole.log(more.length);\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
