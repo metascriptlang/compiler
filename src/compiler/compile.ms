@@ -43,7 +43,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises, markEveryBodyMayRaise } from "../checker/raises";
-import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, refusesAsync, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
@@ -815,7 +815,7 @@ function transformHeadA2(checked: Node, ctx: CheckerContext, job: A2Job): void {
 	const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 	job.timers.macro = job.timers.macro + (performance.now() - _tmc0);
 	flowStop("a2.macro", _fmc0);
-	if (opts.gcMode == "manual" && !(job.stdPath != "" && modPath.startsWith(job.stdPath))) {
+	if (refusesAsync(opts.targetOs, opts.gcMode) && !(job.stdPath != "" && modPath.startsWith(job.stdPath))) {
 		for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
 			const hitLoc = freestandingAsyncLoc(hitNode);
 			job.fsAsyncHits.push({ modPath, source: job.source, line: hitLoc.line, column: hitLoc.column });

@@ -55,6 +55,7 @@ import {
 } from "../../buildConfig";
 import {
 	collectFreestandingAsync,
+	refusesAsync,
 	freestandingAsyncLoc,
 	FREESTANDING_ASYNC_MSG,
 } from "../../../checker/freestanding";
@@ -262,12 +263,12 @@ export function buildDiagnosticsJson(
 	}
 
 	// FREESTANDING E01 (LSP side): when build.ms declares a freestanding target
-	// (effective gc = manual), async/await/spawn surface is a WARNING, not an
+	// (bare, solana or manual memory), async/await/spawn surface is a WARNING, not an
 	// error — the editor cannot know if the user will build with a different
-	// target. Silent unless the lsp section opts in (host default never manual).
+	// target. Silent unless the lsp section opts in (the host default refuses nothing).
 	const lspTarget = getLspTarget(path);
 	if (
-		lspTarget.mm == "manual" &&
+		refusesAsync(lspTarget.os, lspTarget.mm) &&
 		!(db.stdPath != "" && path.startsWith(db.stdPath))
 	) {
 		const fsProgram = dbGetCheckedProgram(db, path);

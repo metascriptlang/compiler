@@ -1,7 +1,7 @@
 // Freestanding-runtime diagnostics — FREESTANDING E01/E02.
 //
-// The freestanding runtime (`--mm=manual`, forced by `--os=bare` and
-// `--os=solana`) has no dispatcher, no thread pool and no await slots:
+// The freestanding runtime (`--os=bare`, `--os=solana` or `--mm=manual`)
+// has no dispatcher, no thread pool and no await slots:
 // runtime/manual.h REPLACES runtime/core/system.h (it reuses its include
 // guard) and stubs the future machinery, so an emitted `await` / `spawn`
 // reaches clang as a wall of undeclared symbols — msAwaitSlotCreate,
@@ -23,9 +23,21 @@ import { makeSymbol, hasFlag, setFlag, SymbolFlag, RoutineFlag, routineFlagSet }
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
-export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher, no thread pool, no await slots (FREESTANDING E01)";
+export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under the freestanding runtime: no dispatcher, no thread pool, no await slots (FREESTANDING E01)";
 export const WRITABLE_MODULE_LET_MSG: string = "a module-level 'let' needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata. Keep the state in an account, or make it a 'const' with a compile-time initializer (FREESTANDING E02)";
 export const WRITABLE_MODULE_CONST_MSG: string = "the initializer of this module-level 'const' is not a compile-time constant, so the binding needs writable static storage, and a Solana program has none: the SBF link keeps only .text and .rodata (FREESTANDING E02)";
+
+// A bare or Solana build has no dispatcher whatever its memory mode, and manual memory has none on any target.
+export function refusesAsync(os: string, mm: string): boolean {
+	return mm == "manual" || os == "bare" || os == "solana";
+}
+
+test "freestanding: bare refuses async under drc, a host only under manual" {
+	assert refusesAsync("bare", "drc");
+	assert refusesAsync("solana", "manual");
+	assert refusesAsync("linux", "manual");
+	assert !refusesAsync("linux", "drc");
+}
 
 // Function-like nodes own a scope for the one-diagnostic-per-body rule.
 export function isFunctionLike(node: Node): boolean {
