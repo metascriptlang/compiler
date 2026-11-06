@@ -18,7 +18,7 @@
 // in the same file (Raiser VM constraint, see project_macro_preprocess_walker
 // memory). The macro body stays monolithic; AST construction is inlined.
 
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, typeKind } from "std/meta";
 import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, unwrapType, implementationOf } from "../discDetect";
 import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64,
 	cborToStringArray, cborToBooleanArray, cborToNumberArray, cborToFloat32Array,
@@ -50,6 +50,17 @@ export function _cborToIntArray<T>(cv: CborValue, witness: T | null): T[] {
 
 export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
 	const out: T[] = [];
+	if (cv == null || cv.kind != CborKind.Array) return out;
+	let i = 0;
+	while (i < cv.items.length) {
+		out.push(cborValueToStruct(cv.items[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _cborToVecOfValues<T>(cv: CborValue, witness: T | null): Vec<T> {
+	let out: Vec<T> = [];
 	if (cv == null || cv.kind != CborKind.Array) return out;
 	let i = 0;
 	while (i < cv.items.length) {
@@ -212,12 +223,15 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		};
 	}
 
-	if (tt.kind != NodeKind.TypeObject) {
+	// An array or atomic target is one read of `cv` itself: the array helpers
+	// (`_cborToStructArray<T>`, `_cborToVecOfValues<T>`) re-enter here per element.
+	const rootValue: boolean = tt.kind == NodeKind.TypeArray || (tt.kind == NodeKind.Identifier && !namesStruct(tt));
+	if (!rootValue && tt.kind != NodeKind.TypeObject) {
 		error("cborValueToStruct: target type must be a struct/interface; atomic types not supported", witness);
 	}
 
-	const fields: string[] = tt.typExprFieldNames;
-	const fieldTypes: Node[] = tt.typExprFieldTypes;
+	const fields: string[] = rootValue ? [""] : tt.typExprFieldNames;
+	const fieldTypes: Node[] = rootValue ? [tt] : tt.typExprFieldTypes;
 	const keyNodes: string[] = [];
 	const valueNodes: Node[] = [];
 	let i = 0;
@@ -277,12 +291,11 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			continue;
 		}
 
-		// Array field — V2: atomic-builtin + enum/alias + struct/interface elements.
+		// Array field — V2: atomic-builtin + enum/alias + struct/interface + array elements.
 		// Builtin → per-type fast helper (cborToXArray).
-		// Struct/interface → `_cborToStructArray<T>` generic.
+		// Struct/interface or array → `_cborToStructArray<T>` generic.
 		// Bare `null` witness — T binds via Pass 3 contextual return-type
-		// binding (Nim parity inheritBindings, semcall.nim:777-859). See
-		// bug024 + std/serialize/json/decode.ms array branch for rationale.
+		// binding. See bug024 + std/serialize/json/decode.ms array branch for rationale.
 		let arrCore: Node = ftype;
 		if (arrCore.kind == NodeKind.TypeGeneric && arrCore.typExprArgs.length == 1 && arrCore.typExprArgs[0].kind == NodeKind.TypeArray) {
 			arrCore = arrCore.typExprArgs[0];
@@ -291,7 +304,15 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			const elemType: Node = implementationOf(arrCore.typExprElement);
 			let en: string = "";
 			let elemIsStruct: boolean = false;
+			const elemIsArray: boolean = elemType.kind == NodeKind.TypeArray;
+			const toVec: boolean = typeKind(fieldTypes[i]) == TypeKind.Array;
+			const getCall: Node = rootValue ? cv : {
+				kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+				callee: bindSym("getDynamicField"),
+				arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }],
+			};
 			if (elemType.kind == NodeKind.EnumDecl) {
+				if (toVec) error("cborValueToStruct: field '" + fname + "' is a Vec of the enum " + elemType.enumName + "; declare it " + elemType.enumName + "[]", witness);
 				const ords: Node[] = [];
 				const names: Node[] = [];
 				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
@@ -304,7 +325,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
 					callee: bindSym("_cborToEnumArray"),
 					arguments: [
-						{ kind: NodeKind.CallExpr, line: cv.line, column: cv.column, callee: bindSym("getDynamicField"), arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }] },
+						getCall,
 						{ kind: NodeKind.NullLiteral, line: cv.line, column: cv.column, nullPlaceholder: true },
 						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: ords },
 						{ kind: NodeKind.ArrayLiteral, line: cv.line, column: cv.column, elements: names },
@@ -313,7 +334,8 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				i = i + 1;
 				continue;
 			}
-			if (elemType.kind == NodeKind.Identifier) {
+			if (elemIsArray) {
+			} else if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
 				elemIsStruct = namesStruct(elemType);
 			} else if (elemType.kind == NodeKind.TypeObject) {
@@ -345,25 +367,24 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
 				|| en == "uint8" || en == "uint16" || en == "uint32";
 
-			// struct/interface → _cborToStructArray<T>. Witness is bare
+			// A Vec destination takes a Vec<T>: its elements re-enter this macro.
+			if (toVec) {
+				if (!elemIsArray && !elemIsStruct && !isBuiltin) {
+					error("cborValueToStruct: field '" + fname + "' is a Vec of " + en + "; a Vec element is a string, boolean, number, sized integer, struct or array", witness);
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
+					callee: bindSym("_cborToVecOfValues"),
+					arguments: [getCall, { kind: NodeKind.NullLiteral, line: cv.line, column: cv.column, nullPlaceholder: true }],
+				});
+				i = i + 1;
+				continue;
+			}
+			// struct/interface or array → _cborToStructArray<T>. Witness is bare
 			// `null` — Pass 3 contextual binding + post-mono reconciliation
 			// (bug024) bind T from caller-side `: Color[]` / `: Item[]` ctx.
-			if (elemIsStruct || !isBuiltin) {
-				const getCall: Node = {
-					kind: NodeKind.CallExpr,
-					line: cv.line,
-					column: cv.column,
-					callee: bindSym("getDynamicField"),
-					arguments: [
-						cv,
-						{
-							kind: NodeKind.StringLiteral,
-							line: cv.line,
-							column: cv.column,
-							value: fname,
-						},
-					],
-				};
+			if (elemIsArray || elemIsStruct || !isBuiltin) {
 				const witnessNode: Node = {
 					kind: NodeKind.NullLiteral,
 					line: cv.line,
@@ -374,7 +395,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					kind: NodeKind.CallExpr,
 					line: cv.line,
 					column: cv.column,
-					callee: elemIsStruct ? bindSym("_cborToStructArray") : bindSym("_cborToIntArray"),
+					callee: elemIsArray || elemIsStruct ? bindSym("_cborToStructArray") : bindSym("_cborToIntArray"),
 					arguments: [getCall, witnessNode],
 				};
 				keyNodes.push(fname);
@@ -400,23 +421,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				line: cv.line,
 				column: cv.column,
 				callee: arrHelper,
-				arguments: [
-					{
-						kind: NodeKind.CallExpr,
-						line: cv.line,
-						column: cv.column,
-						callee: bindSym("getDynamicField"),
-						arguments: [
-							cv,
-							{
-								kind: NodeKind.StringLiteral,
-								line: cv.line,
-								column: cv.column,
-								value: fname,
-							},
-						],
-					},
-				],
+				arguments: [getCall],
 			};
 			keyNodes.push(fname);
 			valueNodes.push(arrFieldAccess);
@@ -481,7 +486,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			callee: a.methodName == "asString" ? bindSym("asString")
 				: (a.methodName == "asBoolean" ? bindSym("asBoolean")
 				: (a.methodName == "asNumber" ? bindSym("asNumber") : bindSym("asInt64"))),
-			arguments: [{
+			arguments: [rootValue ? cv : {
 				kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
 				callee: bindSym("getDynamicField"),
 				arguments: [
@@ -498,6 +503,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		i = i + 1;
 	}
 
+	if (rootValue) return valueNodes[0];
 	return {
 		kind: NodeKind.ObjectLiteral,
 		line: cv.line,

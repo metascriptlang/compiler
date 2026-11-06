@@ -40,7 +40,7 @@ import { cborBool, cborText, cborTextMap, cborInt, cborFloat, cborArray, _cborEn
 import { encode } from "./encoder";
 import { CborValue } from "./types";
 
-export function _cborArrayOfInts<T>(arr: T[]): CborValue {
+export function _cborArrayOfInts<T>(arr: Readonly<Span<T>>): CborValue {
 	const items: CborValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -50,7 +50,7 @@ export function _cborArrayOfInts<T>(arr: T[]): CborValue {
 	return cborArray(items);
 }
 
-export function _cborArrayOfEnums<T>(arr: T[], ords: int32[], names: string[]): CborValue {
+export function _cborArrayOfEnums<T>(arr: Readonly<Span<T>>, ords: int32[], names: string[]): CborValue {
 	const items: CborValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -60,7 +60,7 @@ export function _cborArrayOfEnums<T>(arr: T[], ords: int32[], names: string[]): 
 	return cborArray(items);
 }
 
-export function _cborArrayOfStructs<T>(arr: T[]): CborValue {
+export function _cborArrayOfStructs<T>(arr: Readonly<Span<T>>): CborValue {
 	const items: CborValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -84,6 +84,7 @@ export macro cborValueOf(t: Node): Node {
 		const elemType: Node = implementationOf(tt.typExprElement);
 		let en: string = "";
 		let elemIsStruct: boolean = false;
+		const elemIsArray: boolean = elemType.kind == NodeKind.TypeArray;
 		if (elemType.kind == NodeKind.EnumDecl) {
 			const ords: Node[] = [];
 			const names: Node[] = [];
@@ -103,7 +104,8 @@ export macro cborValueOf(t: Node): Node {
 		if (elemType.kind == NodeKind.MemberExpr) {
 			error("cborValueOf: an array of the enum-literal type " + elemType.object.name + "." + elemType.property + " is unsupported; type the array by its enum", t);
 		}
-		if (elemType.kind == NodeKind.Identifier) {
+		if (elemIsArray) {
+		} else if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
 			elemIsStruct = namesStruct(elemType);
 		} else if (elemType.kind == NodeKind.TypeObject) {
@@ -136,8 +138,8 @@ export macro cborValueOf(t: Node): Node {
 			|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
 			|| en == "uint8" || en == "uint16" || en == "uint32";
 
-		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
-		if (elemIsStruct) {
+		// Struct/interface or array element → generic helper (recursive macro re-expansion at mono-time).
+		if (elemIsArray || elemIsStruct) {
 			return {
 				kind: NodeKind.CallExpr,
 				line: t.line,

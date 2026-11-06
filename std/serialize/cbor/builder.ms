@@ -102,67 +102,67 @@ export function cborSimple(n: number): CborValue {
 // type variants — same rationale as JSON. Atomic-element coverage only;
 // struct-element arrays deferred to V2.
 
-export function cborArrayOfStrings(arr: string[]): CborValue {
+export function cborArrayOfStrings(arr: Readonly<Span<string>>): CborValue {
 	const items: CborValue[] = [];
 	for (const s of arr) items.push(cborText(s));
 	return cborArray(items);
 }
 
-export function cborArrayOfBooleans(arr: boolean[]): CborValue {
+export function cborArrayOfBooleans(arr: Readonly<Span<boolean>>): CborValue {
 	const items: CborValue[] = [];
 	for (const b of arr) items.push(cborBool(b));
 	return cborArray(items);
 }
 
-export function cborArrayOfNumbers(arr: number[]): CborValue {
+export function cborArrayOfNumbers(arr: Readonly<Span<number>>): CborValue {
 	const items: CborValue[] = [];
 	for (const n of arr) items.push(cborFloat(n));
 	return cborArray(items);
 }
 
-export function cborArrayOfFloat32(arr: float32[]): CborValue {
+export function cborArrayOfFloat32(arr: Readonly<Span<float32>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborFloat(x as float64));
 	return cborArray(items);
 }
 
-export function cborArrayOfInt8(arr: int8[]): CborValue {
+export function cborArrayOfInt8(arr: Readonly<Span<int8>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
-export function cborArrayOfInt16(arr: int16[]): CborValue {
+export function cborArrayOfInt16(arr: Readonly<Span<int16>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
-export function cborArrayOfInt32(arr: int32[]): CborValue {
+export function cborArrayOfInt32(arr: Readonly<Span<int32>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
-export function cborArrayOfInt64(arr: int64[]): CborValue {
+export function cborArrayOfInt64(arr: Readonly<Span<int64>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x));
 	return cborArray(items);
 }
 
-export function cborArrayOfUint8(arr: uint8[]): CborValue {
+export function cborArrayOfUint8(arr: Readonly<Span<uint8>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
-export function cborArrayOfUint16(arr: uint16[]): CborValue {
+export function cborArrayOfUint16(arr: Readonly<Span<uint16>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);
 }
 
-export function cborArrayOfUint32(arr: uint32[]): CborValue {
+export function cborArrayOfUint32(arr: Readonly<Span<uint32>>): CborValue {
 	const items: CborValue[] = [];
 	for (const x of arr) items.push(cborInt(x as int64));
 	return cborArray(items);

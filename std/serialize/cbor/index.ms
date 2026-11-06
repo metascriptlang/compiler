@@ -25,7 +25,7 @@ export {
 	cborToUint8Array, cborToUint16Array, cborToUint32Array,
 } from "./accessors";
 export { cborValueOf, cborEncode, _cborArrayOfInts, _cborArrayOfEnums, _cborArrayOfStructs } from "./encode";
-export { cborValueToStruct, _cborToEnumArray, _cborToIntArray, _cborToStructArray } from "./decode";
+export { cborValueToStruct, _cborToEnumArray, _cborToIntArray, _cborToStructArray, _cborToVecOfValues } from "./decode";
 
 import { CborValue } from "./types";
 import { decodeAll } from "./decoder";
