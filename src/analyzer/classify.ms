@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant, isReadonlyView } from "../checker/types";
+import { isUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant, isReadonlyView, isSendableFunction } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -484,7 +484,11 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
 		},
-		TypeKind.Function => t.callConv != CallingConvention.CcClosure ? noRcInfo() : makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
+		TypeKind.Function => {
+			if (t.callConv != CallingConvention.CcClosure) return noRcInfo();
+			const flavor = isSendableFunction(t) ? "Ro" : "";
+			return makeRcInfo(RcKind.Closure, "", "msClosureDestroy" + flavor, "msClosureCopy" + flavor, "msClosureWasMoved", "msClosureSink" + flavor, true);
+		},
 		TypeKind.Struct => classifyObject(t, ctx, requireOps),
 		TypeKind.TypeReference => noRcInfo(),
 		TypeKind.Distinct => classifyDistinct(t, ctx, requireOps),
