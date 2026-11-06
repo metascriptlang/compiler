@@ -9,7 +9,7 @@ if (!ensureDir(dir).ok) throw new Error(`cannot create ${dir}`);
 const binary = `${dir}/reuse.wasm`;
 const built = execFileResult(compiler, [
 	"build", `${root}/src/test/guard/fixtures/bareWasmReuse.ms`,
-	"--os=bare", "--cpu=wasm32", "--app=lib", "--release",
+	"--os=bare", "--cpu=wasm32", "--mm=manual", "--app=lib", "--release",
 	`--output=${binary}`,
 	"--passL=-Wl,--export=MsMain,--max-memory=1048576,--initial-memory=262144 -Wl,-z,stack-size=65536",
 ], root);
@@ -22,7 +22,7 @@ if (!built.started || !built.pipeOk || built.exitCode != 0 ||
 }
 const rejected = execFileResult(compiler, [
 	"build", `${root}/src/test/guard/fixtures/bareWasmReuse.ms`,
-	"--os=bare", "--cpu=wasm32", "--app=lib", "--release",
+	"--os=bare", "--cpu=wasm32", "--mm=manual", "--app=lib", "--release",
 	`--output=${dir}/recursive.wasm`, "--passC=-DMS_HEAP_USE_MALLOC=1",
 ], root);
 const rejection = rejected.output + rejected.errorOutput;

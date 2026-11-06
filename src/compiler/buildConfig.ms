@@ -89,7 +89,7 @@ export function defaultLspSection(): LspSection {
 export function targetMemoryMode(os: string, requested: string): string {
 	if (os == "solana") return requested == "none" ? "none" : "manual";
 	if (requested != "") return requested;
-	return os == "bare" ? "manual" : "drc";
+	return "drc";
 }
 
 export interface CcTargetSection {
@@ -856,12 +856,12 @@ test "validateBuildConfig accepts valid lsp values" {
 	assert warnings.length == 0;
 }
 
-test "targetMemoryMode: solana is manual, bare is manual unless asked, the rest drc unless asked" {
+test "targetMemoryMode: solana is manual, every other target drc unless asked" {
 	assert targetMemoryMode("solana", "") == "manual";
 	assert targetMemoryMode("solana", "drc") == "manual";
 	assert targetMemoryMode("solana", "none") == "none";
-	assert targetMemoryMode("bare", "") == "manual";
-	assert targetMemoryMode("bare", "drc") == "drc";
+	assert targetMemoryMode("bare", "") == "drc";
+	assert targetMemoryMode("bare", "manual") == "manual";
 	assert targetMemoryMode("linux", "") == "drc";
 	assert targetMemoryMode("macos", "manual") == "manual";
 }

@@ -1,4 +1,4 @@
-// GUARD-OS bare
+// GUARD-OS bare --mm=manual
 // GUARD-ASAN
 @compile("./fixtures/bareHeapChecks.c");
 @compile("./fixtures/bareHeapOtherUnit.c");

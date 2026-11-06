@@ -56,7 +56,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--cc") + "=<clang|gcc|zig|bundle|path> C compiler " +
 		dim("(default: managed Zig; bundle: opt-in prepared LLVM toolchain)"));
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(--os=solana always strips the program; --strip also drops its .debug copy)"));
-	console.log("  " + cyan("--mm") + "=<mode>           Memory management " + dim("(drc|manual|none; bare and solana default to manual)"));
+	console.log("  " + cyan("--mm") + "=<mode>           Memory management " + dim("(drc|manual|none; solana defaults to manual)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
 	console.log("  " + cyan("--passC") + "=<flags>      Extra C compiler flags");
 	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");

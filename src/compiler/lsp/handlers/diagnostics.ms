@@ -507,7 +507,7 @@ function lspProbeTmpDir(): string {
 	return "/tmp";
 }
 
-test "getLspTarget infers manual for bare os" {
+test "getLspTarget infers drc for bare os" {
 	const dir = lspProbeTmpDir() + "/msc-lspprobe-bare";
 	mkdir(dir);
 	writeFile(
@@ -517,7 +517,7 @@ test "getLspTarget infers manual for bare os" {
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == "bare";
-	assert t.mm == "manual";
+	assert t.mm == "drc";
 }
 
 test "getLspTarget keeps explicit mm over inference" {
@@ -525,12 +525,12 @@ test "getLspTarget keeps explicit mm over inference" {
 	mkdir(dir);
 	writeFile(
 		dir + "/build.ms",
-		"const config = { lsp: { os: \"bare\", mm: \"drc\" } };\n\nexport default config;\n",
+		"const config = { lsp: { os: \"bare\", mm: \"manual\" } };\n\nexport default config;\n",
 	);
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == "bare";
-	assert t.mm == "drc";
+	assert t.mm == "manual";
 }
 
 test "getLspTarget defaults to host + drc without section" {
