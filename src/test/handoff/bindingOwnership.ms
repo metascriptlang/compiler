@@ -236,6 +236,27 @@ test "bindingOwnership: an explicit move out of a path a dead local owns by valu
 	}
 }
 
+test "bindingOwnership: a local holding a counted reference read out of a moved place keeps the moved value, and a local naming its holder still sees the empty slot" {
+	const shapes = "class Ty { name: string = \"t\"; }\nclass N { v: int32 = 1; t: Ty = new Ty(); }\nclass H { k: Owned<N> = new N(); kids: Owned<N>[] = [new N()]; }\nfunction take(n: Owned<N>, t: Ty): Owned<N> { return n; }\nfunction keep(n: Owned<N>, k: N): Owned<N> { return n; }\nfunction peek(n: Owned<N>, ks: Owned<N>[]): Owned<N> { return n; }\n";
+	const kept = [
+		{ name: "a field read before an element refill", body: "function r(ref a: Owned<N>[]): void { const t = a[0].t; a[0] = take(move a[0], t); }\nexport function run(): int32 { let xs: Owned<N>[] = [new N()]; r(xs); return xs[0].v; }" },
+		{ name: "the moved element itself", body: "function r(ref a: Owned<N>[]): void { const k: N = a[0]; a[0] = keep(move a[0], k); }\nexport function run(): int32 { let xs: Owned<N>[] = [new N()]; r(xs); return xs[0].v; }" },
+		{ name: "a field read before a field move out of a dying holder", body: "export function run(): int32 { const h = new H(); const t = h.k.t; const g = take(move h.k, t); return g.v; }" },
+	];
+	for (const item of kept) {
+		const result = compileToC(shapes + item.body);
+		assert result.ok, item.name + (result.ok ? "" : ": " + result.error);
+	}
+	const refused = [
+		{ name: "the slot read in the refilling call", body: "function r(ref a: Owned<N>[]): void { a[0] = take(move a[0], a[0].t); }\nexport function run(): int32 { let xs: Owned<N>[] = [new N()]; r(xs); return xs[0].v; }", refusal: "cannot move 'a[…]': type 'Owned<N>' has no default value" },
+		{ name: "a local naming the holder", body: "export function run(): int32 { const h = new H(); const kids = h.kids; h.kids[0] = peek(move h.kids[0], kids); return h.kids[0].v; }", refusal: "cannot move 'h.kids[…]': type 'Owned<N>' has no default value" },
+	];
+	for (const item of refused) {
+		const result = compileToC(shapes + item.body);
+		assert !result.ok && result.error.contains(item.refusal), item.name + (result.ok ? " compiled" : ": " + result.error);
+	}
+}
+
 test "bindingOwnership: an explicit move of a variable a closure captures is refused, naming the variable" {
 	const shapes = "class Box { n: string = \"\"; }\n";
 	const refused = [

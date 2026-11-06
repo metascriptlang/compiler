@@ -8,7 +8,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { isAssignOp } from "../ast/operators";
 import { CheckerContext, LockedMove, addError } from "./context";
-import { Overlap, Place, PlaceScope, StepKind, overlap, placeOf, placeScope } from "./places";
+import { Overlap, Place, PlaceScope, StepKind, overlap, placeOf, placeScope, readsMovedValueThroughOwnCount } from "./places";
 import { routineBody } from "./effects";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { ownedEdgeOf, isSinkTypeForParam, typeDisplayName } from "./types";
@@ -480,7 +480,7 @@ function walkLockReads(w: LockWalk, node: Node | null, outer: Node | null): void
 		if (sym == null || !w.syms.has(sym)) return;
 		const at = outer ?? node;
 		const place = placeOf(w.scope, at) ?? placeOf(w.scope, node);
-		if (place != null && place.root == w.moved.root) w.reads.push({ ident: node, at, place });
+		if (place != null && place.root == w.moved.root && !readsMovedValueThroughOwnCount(sym, place, w.moved)) w.reads.push({ ident: node, at, place });
 		return;
 	}
 	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "=" && refillAt(w, node)) {

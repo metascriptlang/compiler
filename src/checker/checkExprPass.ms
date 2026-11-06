@@ -27,7 +27,7 @@ import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, reviveConsumedName, symbolConsumeKey, MOVED_PREFIX } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
-import { Overlap, Place, PlaceScope, RootKind, StepKind, overlap, placeOf, placeScope } from "./places";
+import { Overlap, Place, PlaceScope, RootKind, StepKind, overlap, placeOf, placeScope, readsMovedValueThroughOwnCount } from "./places";
 import { calledRoutineType, routineBody } from "./effects";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
@@ -1478,7 +1478,7 @@ function touchedBeforeRefill(scope: PlaceScope, value: Node, move: Node, moved: 
 		if (n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr) { touched = true; return; }
 		if (n.kind == NodeKind.Identifier && n.resolvedSym != null) {
 			const named = placeOf(scope, n);
-			if (n.resolvedSym == moved.root || (named != null && named.root == moved.root)) { touched = true; return; }
+			if (n.resolvedSym == moved.root || (named != null && named.root == moved.root && !readsMovedValueThroughOwnCount(n.resolvedSym, named, moved))) { touched = true; return; }
 		}
 		const written = n.kind == NodeKind.UpdateExpr ? (n.data as UpdateExprData).updateArg
 			: n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) ? (n.data as BinaryExprData).left : null;

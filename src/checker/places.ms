@@ -8,7 +8,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { receiverOf, routineBody } from "./effects";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { isOwnedRef, isReadonlyView, isViewType, isOutParam, TypeVisitSet, typeVisitAdd, skipModifier } from "./types";
+import { isCountedRef, isOwnedRef, isReadonlyView, isViewType, isOutParam, TypeVisitSet, typeVisitAdd, skipModifier } from "./types";
 import { sameUpToDistinct } from "./checkExprPass";
 import { carriesPointer, pathOf } from "./varPartitions";
 import { isAddressTaking } from "./pointerAddress";
@@ -511,6 +511,13 @@ function reachOverlap(a: Place, b: Place, diverged: int32): boolean {
 function sameIndex(a: PlaceStep, b: PlaceStep): boolean {
 	if (a.index == IndexKind.Constant && b.index == IndexKind.Constant) return a.constant == b.constant;
 	return a.index == IndexKind.Local && b.index == IndexKind.Local && a.indexSym == b.indexSym;
+}
+
+export function readsMovedValueThroughOwnCount(local: Symbol, read: Place, moved: Place): boolean {
+	if (read.aliasSteps == 0 || read.root == local || !isCountedRef(local.symbolType)) return false;
+	const base: Place = { root: read.root, rootKind: read.rootKind, steps: read.steps.slice(0, read.aliasSteps), aliasSteps: 0, written: read.written };
+	const at = structuralOverlap(moved, base, false);
+	return at == Overlap.Same || at == Overlap.Contains;
 }
 
 export function overlap(a: Place, b: Place, lockBias: boolean): Overlap {
