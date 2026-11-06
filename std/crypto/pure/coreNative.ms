@@ -18,7 +18,7 @@ import {
 import {
 	Sha3State, newSha3, updateSha3, finishSha3, sha3Of,
 } from "./sha3";
-import { wipeBytes, wipeWords } from "./secret";
+import { wipeBytes } from "./secret";
 import {
 	CryptoError, randomFailed, invalidAlgorithm,
 	invalidInput, invalidEncoding,
@@ -215,11 +215,30 @@ function isExtAlg(algorithm: string): boolean {
 	return algorithm == "ripemd160" || sha3BitsOf(algorithm) >= 0;
 }
 
+test "RIPEMD finalization clears empty and long-key chaining states" {
+	for (const length of [200, 0]) {
+		const key = new Array<uint8>(length);
+		for (let index = 0; index < length; index++) {
+			key[index] = (index & 255) as uint8;
+		}
+		const expected = ripemd160Of(key).encodeHex();
+		const state = newRipemd160();
+		updateRipemd160(state, key);
+		const digest = finishRipemd160(state);
+		assert digest.encodeHex() == expected;
+		for (const word of state.h) assert word == 0;
+	}
+}
+
 function extOneShot(
 	algorithm: string,
 	data: Readonly<uint8[]>,
 ): uint8[] {
-	if (algorithm == "ripemd160") return ripemd160Of(data);
+	if (algorithm == "ripemd160") {
+		const state = newRipemd160();
+		updateRipemd160(state, data);
+		return finishRipemd160(state);
+	}
 	const bits = sha3BitsOf(algorithm);
 	if (bits < 0) throw new Error("bad ext algorithm: " + algorithm);
 	return sha3Of(bits, data);
@@ -286,12 +305,10 @@ function finishExtHmac(ctx: ExtHmacCtx): uint8[] {
 	let result: uint8[];
 	if (inner instanceof Ripemd160State) {
 		const id = finishRipemd160(inner);
-		wipeWords(inner.h);
 		const outer = newRipemd160();
 		updateRipemd160(outer, ctx._opad);
 		updateRipemd160(outer, id);
 		result = finishRipemd160(outer);
-		wipeWords(outer.h);
 		wipeBytes(id);
 	} else {
 		const id = finishSha3(inner);

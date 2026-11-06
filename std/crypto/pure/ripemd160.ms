@@ -4,7 +4,7 @@
 // Licence: std/crypto/pure/LICENSE.ripemd160
 
 import { encodeHex } from "../../core/encoding";
-import { wipeBytes } from "./secret";
+import { wipeBytes, wipeWords } from "./secret";
 
 // On C the pending block lives inside the state, so a digest allocates only the state and its output.
 when (!js) {
@@ -941,6 +941,7 @@ export function finishRipemd160(s: Ripemd160State): uint8[] {
 		out[4 * i + 2] = ((word >> 16) & 255) as uint8;
 		out[4 * i + 3] = ((word >> 24) & 255) as uint8;
 	}
+	wipeWords(s.h);
 	return out;
 }
 
@@ -1001,11 +1002,17 @@ test "ripemd160 update after finish throws" {
 	assert threw;
 }
 
-test "ripemd160 finish wipes the buffered tail" {
-	const s = newRipemd160();
-	updateRipemd160(s, "secret".asBytes().slice(0));
-	finishRipemd160(s);
-	for (const b of s.block) assert b == 0;
+test "ripemd160 finish wipes the buffered tail and the chaining state" {
+	for (const length of [6, 200, 0]) {
+		const data = new Array<uint8>(length);
+		for (let i = 0; i < length; i++) data[i] = (i & 255) as uint8;
+		const expected = ripemd160Of(data).encodeHex();
+		const s = newRipemd160();
+		updateRipemd160(s, data);
+		assert finishRipemd160(s).encodeHex() == expected;
+		for (const b of s.block) assert b == 0;
+		for (const word of s.h) assert word == 0;
+	}
 }
 
 test "ripemd160 finish after finish throws" {
