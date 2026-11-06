@@ -209,7 +209,7 @@ export function rsaPrivateFromPkcs8(
 }
 
 export function rsaPrivateToPkcs1(key: RsaPrivateData): uint8[] {
-	return derSequence([
+	const parts = [
 		derSmallInteger(0),
 		derUnsignedInteger(key.n),
 		derUnsignedInteger(key.e),
@@ -219,15 +219,19 @@ export function rsaPrivateToPkcs1(key: RsaPrivateData): uint8[] {
 		derUnsignedInteger(key.dp),
 		derUnsignedInteger(key.dq),
 		derUnsignedInteger(key.qi),
-	]);
+	];
+	const out = derSequence(parts);
+	for (const part of parts) wipeBytes(part);
+	return out;
 }
 
 export function rsaPrivateToPkcs8(key: RsaPrivateData): uint8[] {
-	return derSequence([
-		derSmallInteger(0),
-		rsaAlgorithm(),
-		derOctets(rsaPrivateToPkcs1(key)),
-	]);
+	const inner = rsaPrivateToPkcs1(key);
+	const octets = derOctets(inner);
+	const out = derSequence([derSmallInteger(0), rsaAlgorithm(), octets]);
+	wipeBytes(inner);
+	wipeBytes(octets);
+	return out;
 }
 
 export function rsaPublicOf(key: RsaPrivateData): RsaPublicData {
@@ -332,21 +336,21 @@ function mgf1(kind: int32, seed: Readonly<uint8[]>, length: int32): uint8[] {
 	const out: uint8[] = [];
 	let counter = 0;
 	while (out.length < length) {
-		const block = hashOf(
-			kind,
-			derJoin([
-				seed,
-				[
-					((counter >> 24) & 255) as uint8,
-					((counter >> 16) & 255) as uint8,
-					((counter >> 8) & 255) as uint8,
-					(counter & 255) as uint8,
-				],
-			]),
-		);
+		const input = derJoin([
+			seed,
+			[
+				((counter >> 24) & 255) as uint8,
+				((counter >> 16) & 255) as uint8,
+				((counter >> 8) & 255) as uint8,
+				(counter & 255) as uint8,
+			],
+		]);
+		const block = hashOf(kind, input);
 		for (let i = 0; i < block.length && out.length < length; i++) out.push(
 			block[i],
 		);
+		wipeBytes(input);
+		wipeBytes(block);
 		counter += 1;
 	}
 	return out;
@@ -467,11 +471,14 @@ export function rsaOaepEncrypt(
 		[1] as uint8[],
 		message,
 	]);
-	xorInto(block, mgf1(kindSha256, seed, size - 33));
-	const maskedSeed = seed;
-	xorInto(maskedSeed, mgf1(kindSha256, block, 32));
-	const encoded = derJoin([[0] as uint8[], maskedSeed, block]);
-	return rsaPublicOperation(key, encoded);
+	const blockMask = mgf1(kindSha256, seed, size - 33);
+	xorInto(block, blockMask);
+	const seedMask = mgf1(kindSha256, block, 32);
+	xorInto(seed, seedMask);
+	const encoded = derJoin([[0] as uint8[], seed, block]);
+	const out = rsaPublicOperation(key, encoded);
+	for (const scratch of [seed, block, blockMask, seedMask, encoded]) wipeBytes(scratch);
+	return out;
 }
 
 export function rsaOaepDecrypt(
@@ -484,8 +491,10 @@ export function rsaOaepDecrypt(
 	if (encoded == null) return null;
 	const seed = encoded.slice(1, 33);
 	const block = encoded.slice(33);
-	xorInto(seed, mgf1(kindSha256, block, 32));
-	xorInto(block, mgf1(kindSha256, seed, size - 33));
+	const seedMask = mgf1(kindSha256, block, 32);
+	xorInto(seed, seedMask);
+	const blockMask = mgf1(kindSha256, seed, size - 33);
+	xorInto(block, blockMask);
 	const labelHash = hashOf(kindSha256, []);
 	let bad = encoded[0] as int32;
 	for (let i = 0; i < 32; i++) bad |= (block[i] ^ labelHash[i]) as int32;
@@ -498,7 +507,7 @@ export function rsaOaepDecrypt(
 	const at = 32 + padding;
 	bad |= (block[at] ^ 1) as int32;
 	const message = bad == 0 ? block.slice(at + 1) : null;
-	for (const scratch of [encoded, seed, block]) wipeBytes(scratch);
+	for (const scratch of [encoded, seed, block, seedMask, blockMask]) wipeBytes(scratch);
 	return message;
 }
 
