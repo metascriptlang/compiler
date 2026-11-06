@@ -56,6 +56,7 @@ import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
 import "./narrowedReadStoredAsDeclared";
 import "./sizedArrayLiteral";
+import "./staticConstLiteralData";
 import "./arraySpreadBlock";
 import "./sizedArrayResultSlot";
 import "./objectLiteralDestination";
