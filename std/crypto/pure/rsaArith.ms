@@ -8,6 +8,7 @@ import {
 	Modulus,
 	modulusFromUint,
 	modulusFromOwnedUint,
+	wipeModulus,
 	uintFromBytes,
 	uintToBytes,
 	uintToMinimalBytes,
@@ -260,9 +261,10 @@ const smallPrimes: Readonly<int32[]> = oddPrimesBelow1000();
 function checkSmallFactors(x: Readonly<uint32[]>): int32 {
 	if ((x[0] & 1) == 0) return -1;
 	for (const prime of smallPrimes) {
-		if (
-			uintDivRemPublic(uintWiden(x, x.length), prime) == 0
-		) return uintBitLenPublic(x) <= 10 && x[0] == (prime as uint32) ? 1 : -1;
+		const copy = uintWiden(x, x.length);
+		const remainder = uintDivRemPublic(copy, prime);
+		wipeWords(copy);
+		if (remainder == 0) return uintBitLenPublic(x) <= 10 && x[0] == (prime as uint32) ? 1 : -1;
 	}
 	return 0;
 }
@@ -281,40 +283,62 @@ function keepLowBits(x: uint32[], bits: int32): void {
 function millerRabin(x: Readonly<uint32[]>, rounds: int32): boolean {
 	const m = modulusFromUint(x);
 	if (m == null) return false;
-	const w = minusOne(m.v);
-	const s = uintTrailingZeroBitsPublic(w);
-	const r = uintWiden(w, w.length);
-	uintShiftRightPublic(r, s);
-	const exponent = uintToMinimalBytes(r);
-	const size = (uintBitLenPublic(m.v) + 7) >> 3;
-	const k = uintBitLenPublic(w);
-	for (let round = 0; round < rounds; round++) {
-		let a = m.v;
-		let count = 0;
-		while (true) {
-			const drawn = uintFromBytes(randomOctets(size), m.v.length);
-			if (drawn == null) throw new Error(
-				"rsa: a Miller-Rabin base does not fit its modulus",
-			);
-			a = drawn;
-			if (uintBitLenPublic(a) > k) keepLowBits(a, k - 1);
-			if (count > 30) return false;
-			count += 1;
-			if (uintCompare(a, w) < 0 && uintBitLenPublic(a) > 1) break;
+	const words: uint32[][] = [];
+	const bytes: uint8[][] = [];
+	try {
+		const w = minusOne(m.v);
+		words.push(w);
+		const s = uintTrailingZeroBitsPublic(w);
+		const r = uintWiden(w, w.length);
+		words.push(r);
+		uintShiftRightPublic(r, s);
+		const exponent = uintToMinimalBytes(r);
+		bytes.push(exponent);
+		const size = (uintBitLenPublic(m.v) + 7) >> 3;
+		const k = uintBitLenPublic(w);
+		for (let round = 0; round < rounds; round++) {
+			let a: uint32[] = [];
+			let count = 0;
+			while (true) {
+				const octets = randomOctets(size);
+				const drawn = uintFromBytes(octets, m.v.length);
+				wipeBytes(octets);
+				if (drawn == null) throw new Error(
+					"rsa: a Miller-Rabin base does not fit its modulus",
+				);
+				if (uintBitLenPublic(drawn) > k) keepLowBits(drawn, k - 1);
+				if (count > 30) {
+					wipeWords(drawn);
+					return false;
+				}
+				count += 1;
+				if (uintCompare(drawn, w) < 0 && uintBitLenPublic(drawn) > 1) {
+					a = drawn;
+					break;
+				}
+				wipeWords(drawn);
+			}
+			words.push(a);
+			const power = m.pow(a, exponent);
+			if (power == null) return false;
+			words.push(power);
+			let y: uint32[] = power;
+			if (m.isMinusOne(y) || uintIsOne(y)) continue;
+			let j = 1;
+			while (j < s && !m.isMinusOne(y)) {
+				y = m.sq(y);
+				words.push(y);
+				if (uintIsOne(y)) break;
+				j += 1;
+			}
+			if (!m.isMinusOne(y) || uintIsOne(y)) return false;
 		}
-		const power = m.pow(a, exponent);
-		if (power == null) return false;
-		let y: uint32[] = power;
-		if (m.isMinusOne(y) || uintIsOne(y)) continue;
-		let j = 1;
-		while (j < s && !m.isMinusOne(y)) {
-			y = m.sq(y);
-			if (uintIsOne(y)) break;
-			j += 1;
-		}
-		if (!m.isMinusOne(y) || uintIsOne(y)) return false;
+		return true;
+	} finally {
+		for (const scratch of words) wipeWords(scratch);
+		for (const scratch of bytes) wipeBytes(scratch);
+		wipeModulus(m);
 	}
-	return true;
 }
 
 function primeRounds(bits: int32): int32 {
@@ -339,13 +363,18 @@ function generatePrime(bits: int32): uint32[] {
 			((bytes[1] as uint32) << 16) |
 			((bytes[2] as uint32) << 8) |
 			(bytes[3] as uint32);
-		if (top < 0xb504f334) continue;
+		if (top < 0xb504f334) {
+			wipeBytes(bytes);
+			continue;
+		}
 		const x = uintOf(bytes);
+		wipeBytes(bytes);
 		if (size * 8 > bits) uintShiftRightPublic(x, size * 8 - bits);
 		x[0] = x[0] | 1;
 		const small = checkSmallFactors(x);
 		if (small > 0) return x;
 		if (small == 0 && millerRabin(x, primeRounds(bits))) return x;
+		wipeWords(x);
 	}
 }
 
@@ -354,14 +383,19 @@ function inverseModEven(
 	a: Readonly<uint32[]>,
 	n: Readonly<uint32[]>,
 ): uint32[] | null {
-	const found = uintGcdModinvOdd(uintDivRem(n, a).remainder, a);
-	if (!uintIsOne(found.gcd)) return null;
+	const reduced = uintDivRem(n, a);
+	const found = uintGcdModinvOdd(reduced.remainder, a);
+	for (const scratch of [reduced.quotient, reduced.remainder]) wipeWords(scratch);
+	if (!uintIsOne(found.gcd)) {
+		for (const scratch of [found.gcd, found.inverse]) wipeWords(scratch);
+		return null;
+	}
 	const t = uintMul(found.inverse, n);
 	uintSub(t, [1]);
-	const k = uintDivRem(t, a).quotient;
+	const divided = uintDivRem(t, a);
 	const out = uintWiden(n, n.length);
-	uintSub(out, k);
-	for (const scratch of [found.inverse, t, k]) wipeWords(scratch);
+	uintSub(out, divided.quotient);
+	for (const scratch of [found.gcd, found.inverse, t, divided.quotient, divided.remainder]) wipeWords(scratch);
 	return out;
 }
 
@@ -370,8 +404,13 @@ function inverseModOdd(
 	a: Readonly<uint32[]>,
 	n: Readonly<uint32[]>,
 ): uint32[] | null {
-	const found = uintGcdModinvOdd(uintDivRem(a, n).remainder, n);
-	return uintIsOne(found.gcd) ? found.inverse : null;
+	const reduced = uintDivRem(a, n);
+	const found = uintGcdModinvOdd(reduced.remainder, n);
+	const invertible = uintIsOne(found.gcd);
+	for (const scratch of [reduced.quotient, reduced.remainder, found.gcd]) wipeWords(scratch);
+	if (invertible) return found.inverse;
+	wipeWords(found.inverse);
+	return null;
 }
 
 // `e^-1 mod lcm(p - 1, q - 1)`, as `mbedtls_rsa_deduce_private_exponent`.
@@ -383,10 +422,14 @@ function privateExponent(
 	const k = minusOne(p);
 	const l = minusOne(q);
 	const g = uintGcd(k, l);
-	if (g == null) return null;
-	const lcm = uintDivRem(uintMul(k, l), g).quotient;
-	const d = inverseModEven(e, lcm);
-	for (const scratch of [k, l, g, lcm]) wipeWords(scratch);
+	if (g == null) {
+		for (const scratch of [k, l]) wipeWords(scratch);
+		return null;
+	}
+	const product = uintMul(k, l);
+	const divided = uintDivRem(product, g);
+	const d = inverseModEven(e, divided.quotient);
+	for (const scratch of [k, l, g, product, divided.quotient, divided.remainder]) wipeWords(scratch);
 	return d;
 }
 
@@ -403,7 +446,12 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		const order = uintCompare(p, q);
 		const difference = uintWiden(order >= 0 ? p : q, p.length);
 		uintSub(difference, order >= 0 ? q : p);
-		if (uintBitLenPublic(difference) <= (bits >> 1) - 99) continue;
+		const farApart = uintBitLenPublic(difference) > (bits >> 1) - 99;
+		wipeWords(difference);
+		if (!farApart) {
+			for (const scratch of [p, q]) wipeWords(scratch);
+			continue;
+		}
 		if (order < 0) {
 			const t = p;
 			p = q;
@@ -420,8 +468,12 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		if (qi == null || uintBitLenPublic(n) != bits) throw new Error(
 			"rsaGenerate: the generated primes do not form a key",
 		);
-		const dp = uintDivRem(d, minusOne(p)).remainder;
-		const dq = uintDivRem(d, minusOne(q)).remainder;
+		const pMinusOne = minusOne(p);
+		const qMinusOne = minusOne(q);
+		const dpDivided = uintDivRem(d, pMinusOne);
+		const dqDivided = uintDivRem(d, qMinusOne);
+		const dp = dpDivided.remainder;
+		const dq = dqDivided.remainder;
 		const key: RsaPrivateData = {
 			n: uintToMinimalBytes(n),
 			e: eBytes,
@@ -435,7 +487,30 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 			pModulus: modulusFromUint(p),
 			qModulus: modulusFromUint(q),
 		};
-		for (const scratch of [p, q, d, dp, dq, qi]) wipeWords(scratch);
+		for (const scratch of [
+			p,
+			q,
+			d,
+			dp,
+			dq,
+			qi,
+			pMinusOne,
+			qMinusOne,
+			dpDivided.quotient,
+			dqDivided.quotient,
+		]) wipeWords(scratch);
 		return key;
 	}
+}
+
+test "a generated 1024-bit key is consistent and inverts its public operation" {
+	const key = rsaGenerateKey(1024);
+	assert rsaKeyConsistent(key);
+	const input = new Array<uint8>(rsaModulusBytes(key.n));
+	for (let i = 1; i < input.length; i++) input[i] = i as uint8;
+	const opened = rsaPrivateOperation(key, input);
+	if (opened == null) throw new Error("private operation refused a generated key");
+	const back = rsaPublicOperation({ n: key.n, e: key.e, nModulus: key.nModulus }, opened);
+	if (back == null) throw new Error("public operation refused its own output");
+	for (let i = 0; i < input.length; i++) assert back[i] == input[i];
 }
