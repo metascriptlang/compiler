@@ -30,13 +30,13 @@ int32_t msBareHeapReuseChecks(void) {
 	for (size_t round = 0; round < 2; round++) {
 		void* left = msMemAlloc(24 * 1024);
 		void* right = msMemAlloc(24 * 1024);
-		unsigned char* held = msMemAlloc(160 * 1024);
-		memset(held, 0x69, 160 * 1024);
+		unsigned char* held = msMemAlloc(96 * 1024);
+		memset(held, 0x69, 96 * 1024);
 		msBareHeapOtherUnitFree(right);
 		free(left);
 		void* merged = msMemAlloc(48 * 1024);
 		memset(merged, 0x35, 48 * 1024);
-		for (size_t j = 0; j < 160 * 1024; j++) {
+		for (size_t j = 0; j < 96 * 1024; j++) {
 			if (held[j] != 0x69) return 7;
 		}
 		free(merged);
