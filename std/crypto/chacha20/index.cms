@@ -38,11 +38,7 @@ export class ChaChaKey {
 
 	/** From exactly 32 raw bytes. */
 	static import<R extends ByteInput>(raw: R): Result<ChaChaKey, CryptoError> {
-		const handle = msChacha20KeyNew(typeof raw == "string" ? raw.asBytes() : raw);
-		if (handle == 0) {
-			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ChaChaKey.import", "key must be 32 bytes"));
-		}
-		return Result.ok({ _handle: handle });
+		return importChaChaKey(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	/** A random key from the OS source. */
@@ -149,4 +145,12 @@ test "chacha20 import rejects a short key and seal draws a fresh nonce" {
 	const again = ChaChaKey.import(key.exportRaw());
 	assert again.ok;
 	assert (await open(again.value, a.value)).ok;
+}
+
+function importChaChaKey(raw: Readonly<Span<uint8>>): Result<ChaChaKey, CryptoError> {
+	const handle = msChacha20KeyNew(raw);
+	if (handle == 0) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ChaChaKey.import", "key must be 32 bytes"));
+	}
+	return Result.ok({ _handle: handle });
 }

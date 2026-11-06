@@ -58,11 +58,7 @@ export class AesKey {
 
 	/** From exactly 16 (AES-128) or 32 (AES-256) raw bytes. */
 	static import<R extends ByteInput>(raw: R): Result<AesKey, CryptoError> {
-		const handle = msCryptoAesKeyNew(typeof raw == "string" ? raw.asBytes() : raw);
-		if (handle == 0) {
-			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
-		}
-		return Result.ok({ _handle: handle });
+		return importAesKey(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	/** A random key from the OS source: 128 or 256 bits. */
@@ -227,4 +223,12 @@ test "aes import rejects a bad key length and generate round-trips through expor
 	const sealed = await seal(generated.value, "x");
 	assert sealed.ok;
 	assert (await open(again.value, sealed.value)).ok;
+}
+
+function importAesKey(raw: Readonly<Span<uint8>>): Result<AesKey, CryptoError> {
+	const handle = msCryptoAesKeyNew(raw);
+	if (handle == 0) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
+	}
+	return Result.ok({ _handle: handle });
 }

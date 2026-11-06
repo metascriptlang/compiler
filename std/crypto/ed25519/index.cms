@@ -37,9 +37,7 @@ export class Ed25519PublicKey {
 	_h: int64;
 
 	static importSync<R extends ByteInput>(raw: R): Result<Ed25519PublicKey, CryptoError> {
-		const h = msEd25519PublicFromRaw(typeof raw == "string" ? raw.asBytes() : raw);
-		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PublicKey.import", "public key must be 32 bytes"));
-		return Result.ok({ _h: h });
+		return importEd25519Public(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	static import<R extends ByteInput>(raw: R): Promise<Result<Ed25519PublicKey, CryptoError>> { return Promise.resolve(Ed25519PublicKey.importSync(raw)); }
@@ -70,9 +68,7 @@ export class Ed25519PrivateKey {
 	static async generate(): Promise<Result<Ed25519PrivateKey, CryptoError>> { return Ed25519PrivateKey.generateSync(); }
 
 	static fromSeedSync<S extends ByteInput>(seed: S): Result<Ed25519PrivateKey, CryptoError> {
-		const h = msEd25519KeyFromSeed(typeof seed == "string" ? seed.asBytes() : seed);
-		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
-		return Result.ok({ _h: h });
+		return ed25519FromSeed(typeof seed == "string" ? seed.asBytes() : seed);
 	}
 
 	static fromSeed<S extends ByteInput>(seed: S): Promise<Result<Ed25519PrivateKey, CryptoError>> { return Promise.resolve(Ed25519PrivateKey.fromSeedSync(seed)); }
@@ -119,3 +115,15 @@ function verifySpan(key: Ed25519PublicKey, signature: Readonly<Span<uint8>>, mes
 }
 
 export function verify<S extends ByteInput, M extends ByteInput>(key: Ed25519PublicKey, signature: S, message: M): Promise<boolean> { return Promise.resolve(verifySync(key, signature, message)); }
+
+function importEd25519Public(raw: Readonly<Span<uint8>>): Result<Ed25519PublicKey, CryptoError> {
+	const h = msEd25519PublicFromRaw(raw);
+	if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PublicKey.import", "public key must be 32 bytes"));
+	return Result.ok({ _h: h });
+}
+
+function ed25519FromSeed(seed: Readonly<Span<uint8>>): Result<Ed25519PrivateKey, CryptoError> {
+	const h = msEd25519KeyFromSeed(seed);
+	if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
+	return Result.ok({ _h: h });
+}

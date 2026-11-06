@@ -68,7 +68,7 @@ export class Blake2b {
 
 	update<D extends ByteInput>(data: D): Blake2b {
 		if (this._ctx == 0) throw new Error("Blake2b.update: the hasher already produced its digest");
-		msBlake2bUpdate(this._ctx, typeof data == "string" ? data.asBytes() : data);
+		blake2bUpdate(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		return this;
 	}
 
@@ -110,4 +110,8 @@ test "blake2b async and sync agree on the RFC 7693 abc vector, keyed and streame
 	assert (await blake2bKeyed("k", "abc")).ok;
 	assert !(await blake2bKeyed("", "abc")).ok;
 	assert !(await blake2b("abc", 0)).ok;
+}
+
+function blake2bUpdate(ctx: int64, data: Readonly<Span<uint8>>): void {
+	msBlake2bUpdate(ctx, data);
 }

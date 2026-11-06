@@ -208,7 +208,7 @@ export async function randomUUID(): Promise<Result<string, CryptoError>> {
 // ===== Timing-Safe Comparison =====
 
 export function timingSafeEqual<A extends ByteInput, B extends ByteInput>(a: A, b: B): boolean {
-	return msCryptoTimingSafeEqual(typeof a == "string" ? a.asBytes() : a, typeof b == "string" ? b.asBytes() : b);
+	return timingSafeEqualSpan(typeof a == "string" ? a.asBytes() : a, typeof b == "string" ? b.asBytes() : b);
 }
 
 // ===== Streaming Hash =====
@@ -224,7 +224,7 @@ export class Hasher {
 
 	update<D extends ByteInput>(data: D): Hasher {
 		if (this._ctx != 0) {
-			msCryptoHashUpdateHandle(this._ctx, typeof data == "string" ? data.asBytes() : data);
+			hashUpdate(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		}
 		return this;
 	}
@@ -252,14 +252,14 @@ export class Hmac {
 	_ctx: int64;
 
 	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
-		const ctx = msCryptoHmacInitHandle(algorithm, typeof key == "string" ? key.asBytes() : key);
+		const ctx = hmacInit(algorithm, typeof key == "string" ? key.asBytes() : key);
 		if (ctx == 0) throw new Error(`createHmac: could not start "${algorithm}"`);
 		return { _ctx: ctx };
 	}
 
 	update<D extends ByteInput>(data: D): Hmac {
 		if (this._ctx != 0) {
-			msCryptoHmacUpdateHandle(this._ctx, typeof data == "string" ? data.asBytes() : data);
+			hmacUpdate(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		}
 		return this;
 	}
@@ -358,3 +358,19 @@ function hkdfSpan(algorithm: HashAlgorithm, ikm: Readonly<Span<uint8>>, salt: Re
 }
 
 export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(hkdfSync(algorithm, ikm, salt, info, length)); }
+
+function timingSafeEqualSpan(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean {
+	return msCryptoTimingSafeEqual(a, b);
+}
+
+function hashUpdate(ctx: int64, data: Readonly<Span<uint8>>): void {
+	msCryptoHashUpdateHandle(ctx, data);
+}
+
+function hmacUpdate(ctx: int64, data: Readonly<Span<uint8>>): void {
+	msCryptoHmacUpdateHandle(ctx, data);
+}
+
+function hmacInit(algorithm: HashAlgorithm, key: Readonly<Span<uint8>>): int64 {
+	return msCryptoHmacInitHandle(algorithm, key);
+}

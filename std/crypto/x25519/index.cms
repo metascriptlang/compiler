@@ -28,9 +28,7 @@ export class X25519PublicKey {
 	_h: int64;
 
 	static importSync<R extends ByteInput>(raw: R): Result<X25519PublicKey, CryptoError> {
-		const h = msX25519PublicFromRaw(typeof raw == "string" ? raw.asBytes() : raw);
-		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PublicKey.import", "public key must be 32 bytes"));
-		return Result.ok({ _h: h });
+		return importX25519Public(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	static import<R extends ByteInput>(raw: R): Promise<Result<X25519PublicKey, CryptoError>> { return Promise.resolve(X25519PublicKey.importSync(raw)); }
@@ -61,9 +59,7 @@ export class X25519PrivateKey {
 	static async generate(): Promise<Result<X25519PrivateKey, CryptoError>> { return X25519PrivateKey.generateSync(); }
 
 	static fromRawSync<R extends ByteInput>(raw: R): Result<X25519PrivateKey, CryptoError> {
-		const h = msX25519KeyFromRaw(typeof raw == "string" ? raw.asBytes() : raw);
-		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
-		return Result.ok({ _h: h });
+		return x25519FromRaw(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	static fromRaw<R extends ByteInput>(raw: R): Promise<Result<X25519PrivateKey, CryptoError>> { return Promise.resolve(X25519PrivateKey.fromRawSync(raw)); }
@@ -90,3 +86,15 @@ export function sharedSecretSync(privateKey: X25519PrivateKey, publicKey: X25519
 }
 
 export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Promise<Result<Buffer, CryptoError>> { return sharedSecretSync(privateKey, publicKey); }
+
+function importX25519Public(raw: Readonly<Span<uint8>>): Result<X25519PublicKey, CryptoError> {
+	const h = msX25519PublicFromRaw(raw);
+	if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PublicKey.import", "public key must be 32 bytes"));
+	return Result.ok({ _h: h });
+}
+
+function x25519FromRaw(raw: Readonly<Span<uint8>>): Result<X25519PrivateKey, CryptoError> {
+	const h = msX25519KeyFromRaw(raw);
+	if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
+	return Result.ok({ _h: h });
+}
