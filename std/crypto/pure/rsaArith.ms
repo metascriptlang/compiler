@@ -188,39 +188,53 @@ export function rsaPrivateOperation(
 	const p = uintOf(key.p);
 	const q = uintOf(key.q);
 	const qi = uintOf(key.qi);
-	const blinding = blindingPair(n, key.e);
-	const t = n.mul(c, blinding.vi);
-	const dpBlinded = blindedExponent(p, key.dp);
-	const dqBlinded = blindedExponent(q, key.dq);
-	const m1 = mp.pow(mp.reduce(t), dpBlinded);
-	const m2 = mq.pow(mq.reduce(t), dqBlinded);
-	wipeBytes(dpBlinded);
-	wipeBytes(dqBlinded);
-	if (m1 == null || m2 == null) return null;
-	const h = mp.mul(mp.reduce(qi), mp.sub(m1, mp.reduce(m2)));
-	const width = c.length;
-	const result = uintWiden(m2, width);
-	const overflow = uintMulAdd(result, uintWiden(h, width), uintWiden(q, width));
-	const check = n.powPublic(result, key.e);
-	const consistent =
-		overflow == 0 && check != null && uintCompare(check, t) == 0;
-	const opened = n.mul(result, blinding.vf);
-	for (const scratch of [
-		p,
-		q,
-		qi,
-		t,
-		m1,
-		m2,
-		h,
-		result,
-		blinding.vi,
-		blinding.vf,
-	]) wipeWords(scratch);
-	if (!consistent) return null;
-	const out = uintToBytes(opened, rsaModulusBytes(key.n));
-	wipeWords(opened);
-	return out;
+	const words: uint32[][] = [p, q, qi];
+	const bytes: uint8[][] = [];
+	try {
+		const blinding = blindingPair(n, key.e);
+		words.push(blinding.vi);
+		words.push(blinding.vf);
+		const t = n.mul(c, blinding.vi);
+		words.push(t);
+		const dpBlinded = blindedExponent(p, key.dp);
+		bytes.push(dpBlinded);
+		const dqBlinded = blindedExponent(q, key.dq);
+		bytes.push(dqBlinded);
+		const tp = mp.reduce(t);
+		words.push(tp);
+		const tq = mq.reduce(t);
+		words.push(tq);
+		const m1 = mp.pow(tp, dpBlinded);
+		if (m1 != null) words.push(m1);
+		const m2 = mq.pow(tq, dqBlinded);
+		if (m2 != null) words.push(m2);
+		if (m1 == null || m2 == null) return null;
+		const qiP = mp.reduce(qi);
+		words.push(qiP);
+		const m2P = mp.reduce(m2);
+		words.push(m2P);
+		const difference = mp.sub(m1, m2P);
+		words.push(difference);
+		const h = mp.mul(qiP, difference);
+		words.push(h);
+		const width = c.length;
+		const result = uintWiden(m2, width);
+		words.push(result);
+		const wh = uintWiden(h, width);
+		words.push(wh);
+		const wq = uintWiden(q, width);
+		words.push(wq);
+		const overflow = uintMulAdd(result, wh, wq);
+		const check = n.powPublic(result, key.e);
+		if (check != null) words.push(check);
+		if (overflow != 0 || check == null || uintCompare(check, t) != 0) return null;
+		const opened = n.mul(result, blinding.vf);
+		words.push(opened);
+		return uintToBytes(opened, rsaModulusBytes(key.n));
+	} finally {
+		for (const scratch of words) wipeWords(scratch);
+		for (const scratch of bytes) wipeBytes(scratch);
+	}
 }
 
 function oddPrimesBelow1000(): int32[] {
