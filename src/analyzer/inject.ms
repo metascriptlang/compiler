@@ -10,6 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import { bakesIntoStaticCell } from "../checker/reachability";
+import { staticDataConstBinding } from "../checker/constFold";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
@@ -2989,10 +2990,11 @@ function releaseLeavesSlotNamingIt(rcInfo: RcInfo): boolean {
 	return rcInfo.rcKind == RcKind.Ref || rcInfo.rcKind == RcKind.String;
 }
 
-function tearDownGlobals(dctx: DrcContext, baked: Symbol[], loc: SourceLocation): Node[] {
+function tearDownGlobals(dctx: DrcContext, baked: Symbol[], staticData: Symbol[], loc: SourceLocation): Node[] {
 	const result: Node[] = [];
 	for (let i = dctx.globalsToDestroy.length - 1; i >= 0; i -= 1) {
 		const vi = dctx.globalsToDestroy[i];
+		if (staticData.includes(vi.sym)) continue;
 		if (baked.includes(vi.sym)) {
 			for (const s of destroyBakedCell(vi.sym, loc, dctx)) result.push(s);
 			continue;
@@ -3032,9 +3034,11 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && hasFlag(s.resolvedSym, SymbolFlag.HcrCell)) cells.push(s.resolvedSym);
 	}
 	const baked: Symbol[] = [];
+	const staticData: Symbol[] = [];
 	for (const s of d.programStmts) {
 		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
 		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
+		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && staticDataConstBinding(decl)) staticData.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
 	const fPrep = flowStart();
@@ -3053,7 +3057,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const fExits = flowStart();
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
-	const exits: Node[] = tearDownGlobals(dctx, baked, program.location);
+	const exits: Node[] = tearDownGlobals(dctx, baked, staticData, program.location);
 	for (const s of destroyClassStatics(d.programStmts, program.location, dctx)) exits.push(s);
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
