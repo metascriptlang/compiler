@@ -557,7 +557,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 	return reg;
 }
 
-export function storedFramePlace(s: RaiserCompState, node: Node): RaiserFramePlace | null {
+export function storedFramePlace(s: RaiserCompState, node: Node, checks: boolean = true): RaiserFramePlace | null {
 	if (node.kind == NodeKind.Identifier && resolveGlobal(s, node.resolvedSym) < 0) {
 		const shape = localSlotShape(s, node.resolvedSym);
 		if (shape != null && shape.block) return packedFramePlace(s, s.layouts,
@@ -565,9 +565,9 @@ export function storedFramePlace(s: RaiserCompState, node: Node): RaiserFramePla
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		const owner = storedFramePlace(s, d.object);
+		const owner = storedFramePlace(s, d.object, checks);
 		if (owner != null) {
-			if (isMaybeType(peelTransparentInstance(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+			if (checks && isMaybeType(peelTransparentInstance(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
 			const body = peelTransparentInstance(owner.valueType);
 			const at = body.typeNames.indexOf(d.property);
 			if (at >= 0 && !storesNothing(body, body.typeChildren[at])) return packedField(s, s.layouts, owner, d.property);
@@ -575,20 +575,96 @@ export function storedFramePlace(s: RaiserCompState, node: Node): RaiserFramePla
 	}
 	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		const owner = storedFramePlace(s, d.array);
+		const owner = storedFramePlace(s, d.array, checks);
 		if (owner != null && d.index.kind == NodeKind.NumberLiteral) return packedIndex(s, s.layouts, owner, (d.index.data as NumberLiteralData).value);
 	}
+	if (node.kind == NodeKind.TypeAssertion) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		if (assertsInPlace(s, node, inner)) {
+			const carrier = storedFramePlace(s, inner, checks);
+			if (carrier != null) return assertedPlace(s, node, carrier, checks);
+		}
+	}
 	return null;
+}
+
+function maybePayloadType(carrier: Type): Type | null {
+	const body = peelTransparentInstance(carrier);
+	if (!isMaybeType(body)) return null;
+	const at = body.typeNames.indexOf("value");
+	return at >= 0 ? body.typeChildren[at] : null;
+}
+
+function assertsInPlace(s: RaiserCompState, node: Node, inner: Node): boolean {
+	if (node.nodeType == null || inner.nodeType == null || packedSlotShapeOf(s.layouts, inner.nodeType) == null) return false;
+	if (typeKey(inner.nodeType) == typeKey(node.nodeType)) return true;
+	if (node.flags.has(NodeFlag.ObjCheck)) return false;
+	if (!node.flags.has(NodeFlag.ConvCheck) && typeKey(peelDistinct(inner.nodeType)) == typeKey(peelDistinct(node.nodeType))) return true;
+	const payload = maybePayloadType(inner.nodeType);
+	return payload != null && !isMaybeType(peelTransparentInstance(node.nodeType)) && !storesNothing(peelTransparentInstance(inner.nodeType), payload) &&
+		typeKey(payload) == typeKey(node.nodeType);
+}
+
+function assertedPlace(s: RaiserCompState, node: Node, carrier: RaiserFramePlace, checks: boolean): RaiserFramePlace {
+	if (typeKey(carrier.valueType) == typeKey(node.nodeType!)) return carrier;
+	if (maybePayloadType(carrier.valueType) == null || typeKey(peelDistinct(carrier.valueType)) == typeKey(peelDistinct(node.nodeType!))) {
+		return { base: carrier.base, offset: carrier.offset, valueType: node.nodeType!, whole: carrier.whole, words: carrier.words };
+	}
+	if (checks) checkPackedPresent(s, carrier);
+	return packedField(s, s.layouts, carrier, "value");
+}
+
+function packedRvalue(s: RaiserCompState, node: Node): boolean {
+	return (node.kind == NodeKind.CallExpr || node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.ConditionalExpr) &&
+		node.nodeType != null && packedSlotShapeOf(s.layouts, node.nodeType) != null;
+}
+
+function storedField(object: Node, property: string): boolean {
+	if (object.nodeType == null) return false;
+	const body = peelTransparentInstance(object.nodeType);
+	const at = body.kind == TypeKind.Struct ? body.typeNames.indexOf(property) : -1;
+	return at >= 0 && !storesNothing(body, body.typeChildren[at]);
+}
+
+function rootsInPackedRvalue(s: RaiserCompState, node: Node): boolean {
+	let inner: Node | null = null;
+	if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		if (storedField(d.object, d.property)) inner = d.object;
+	} else if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		if (d.index.kind == NodeKind.NumberLiteral && d.array.nodeType != null && packedSlotShapeOf(s.layouts, d.array.nodeType) != null) inner = d.array;
+	} else if (node.kind == NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		if (assertsInPlace(s, node, d.asExpr)) inner = d.asExpr;
+	}
+	return inner != null && (packedRvalue(s, inner) || rootsInPackedRvalue(s, inner));
+}
+
+// Read a path rooted in a cell (global, element, env field) in the cell: converting it to a
+// packed copy and back makes a cell nobody owns (NIM-REF CT-47).
+function packedPlaceOf(s: RaiserCompState, node: Node): RaiserFramePlace | null {
+	const stored = storedFramePlace(s, node);
+	if (stored != null) return stored;
+	if (packedRvalue(s, node)) return compilePackedExpr(s, node, node.nodeType!);
+	if (!rootsInPackedRvalue(s, node)) return null;
+	if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const owner = packedPlaceOf(s, d.object)!;
+		if (isMaybeType(peelTransparentInstance(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+		return packedField(s, s.layouts, owner, d.property);
+	}
+	if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		return packedIndex(s, s.layouts, packedPlaceOf(s, d.array)!, (d.index.data as NumberLiteralData).value);
+	}
+	return assertedPlace(s, node, packedPlaceOf(s, (node.data as TypeAssertionData).asExpr)!, true);
 }
 
 function packedReadOwner(s: RaiserCompState, object: Node, property: string): RaiserFramePlace | null {
 	const body = object.nodeType != null ? peelDistinct(object.nodeType) : null;
 	if (body == null || !(body.kind == TypeKind.Struct && body.typeNames.includes(property) || property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple))) return null;
-	const stored = storedFramePlace(s, object);
-	if (stored != null) return stored;
-	if (object.nodeType == null || packedSlotShapeOf(s.layouts, object.nodeType) == null) return null;
-	if (object.kind == NodeKind.CallExpr || object.kind == NodeKind.ObjectLiteral || object.kind == NodeKind.ConditionalExpr) return compilePackedExpr(s, object, object.nodeType);
-	return null;
+	return packedPlaceOf(s, object);
 }
 
 function checkPackedPresent(s: RaiserCompState, place: RaiserFramePlace): void {
@@ -775,7 +851,7 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 
 function compileTypedExpr(s: RaiserCompState, node: Node): int32 {
 	if (packedSlotShapeOf(s.layouts, node.nodeType) != null &&
-		(storedFramePlace(s, node) != null || node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.ConditionalExpr)) return emitPackedToLegacy(s, s.layouts, compilePackedExpr(s, node, node.nodeType!)).reg;
+		(node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.ConditionalExpr)) return emitPackedToLegacy(s, s.layouts, compilePackedExpr(s, node, node.nodeType!)).reg;
 	const reg = compileExprRaw(s, node);
 	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
 	const cls = regClassOf(s, node.nodeType);
@@ -806,13 +882,25 @@ function convertProjectedValue(
 	return emitNumericConv(s, value, sourceType, node.nodeType);
 }
 
+function unwrapCellCarrier(s: RaiserCompState, node: Node, inner: Node): int32 {
+	const carrier = compileExpr(s, inner);
+	const nil = allocBool(s);
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, nil, carrier, RaiserValueKind.Nil as int32));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, nil, 0, 1));
+	const present = emitJumpPlaceholder(s);
+	emitTrap(s, nullAccessHead(peelTransparentInstance(inner.nodeType!)) + "null'");
+	patchJumpTo(s, present, codeLen(s));
+	return convertProjectedValue(s, node, carrier, maybePayloadType(inner.nodeType!)!);
+}
+
 function compileExprRaw(s: RaiserCompState, node: Node): int32 {
-	const frame = storedFramePlace(s, node);
+	const frame = packedRvalue(s, node) ? null : packedPlaceOf(s, node);
 	if (frame != null) return vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, frame).reg : emitPackedLoad(s, s.layouts, frame);
 	if (node.kind == NodeKind.TypeAssertion) {
 		const inner = (node.data as TypeAssertionData).asExpr;
 		if (inner.nodeType != null && isMaybeType(peelTransparentInstance(inner.nodeType)) && packedSlotShapeOf(s.layouts, inner.nodeType) != null && !isMaybeType(peelTransparentInstance(node.nodeType!))) {
-			const carrier = compilePackedExpr(s, inner, inner.nodeType);
+			const carrier = packedPlaceOf(s, inner);
+			if (carrier == null) return unwrapCellCarrier(s, node, inner);
 			checkPackedPresent(s, carrier);
 			const payload = packedField(s, s.layouts, carrier, "value");
 			const value = vmLayoutOf(s.layouts, payload.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, payload).reg : emitPackedLoad(s, s.layouts, payload);
@@ -2080,8 +2168,9 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 }
 
 function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
-	const frame = storedFramePlace(s, node);
-	return frame != null && vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block;
+	const frame = storedFramePlace(s, node, false);
+	if (frame != null) return vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block;
+	return rootsInPackedRvalue(s, node) && vmLayoutOf(s.layouts, node.nodeType!).kind == MemKind.Block;
 }
 
 // A closure literal passed to a call is a temporary pair the call borrows, and so is the object a
