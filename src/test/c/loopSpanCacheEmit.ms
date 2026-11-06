@@ -1,6 +1,6 @@
-// E2E C: a loop with no call and no header write reads its arrays through local Spans under --danger.
+// E2E C: a loop with no call and no header write reads its arrays through local Spans (a checked build: a loop that stores an element).
 
-import { compileToC } from "../helpers";
+import { compileToC, builtModuleC } from "../helpers";
 import { hostTargetInfo } from "../../checker/types";
 
 function emitted(source: string, danger: boolean): string {
@@ -31,10 +31,27 @@ test "loop span cache: a fill loop reads and writes through local spans" {
 	assert c.split("(*a_p0).len").length == 2, "the length is read from the cell more than once";
 }
 
-test "loop span cache: a checked build keeps the heap cell" {
+test "loop span cache: a checked fill loop goes through spans and keeps every check" {
 	const c = emitted(loopIn(FILL), false);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert !c.includes("dollarspan_"), "a checked build was rewritten";
+	assert c.includes("msSpan_int32_t dollarspan_"), "no span local for the arrays";
+	assert c.includes("msSpanAccess(dollarspan_"), "the loop does not index a span";
+	assert !c.includes("msSpanAccessUnchecked(") && !c.includes("msArrayAccessUnchecked("), "a checked build dropped a bound check";
+	assert c.includes("msMulI32(") && c.includes("msAddAssign("), "a checked build dropped an overflow check";
+}
+
+test "loop span cache: a checked read-only loop keeps the heap cell" {
+	const c = emitted(loopIn("for (let i: int32 = 0; i < a.length; i++) n += a[i];"), false);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes("dollarspan_"), "a checked read-only loop was rewritten";
+}
+
+test "loop span cache: a checked mapped toArray fills through spans" {
+	const source = "function f(a: int32[]): int32[] {\n\treturn a.values().map((x) => x * 2).toArray();\n}\nconsole.log(f([1, 2, 3]).length);\n";
+	const c = builtModuleC("loopSpanCacheEmit", "maptoarray", source, []);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert c.includes("msSpanAccess(dollarspan_"), "the mapped loop does not index a span";
+	assert c.includes("msMulI32("), "the callback lost its overflow check";
 }
 
 test "loop span cache: a push in the loop keeps the heap cell" {
