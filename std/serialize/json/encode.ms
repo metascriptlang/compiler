@@ -98,7 +98,7 @@ export macro jsonValueOf(arg: Node): Node {
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
 	// Builtin elements → per-type fast helpers (jsonArrayOfX).
-	// Struct/interface or union element → `_jsonArrayOfValues<T>`, which re-expands jsonValueOf per element.
+	// Struct/interface, union or array element → `_jsonArrayOfValues<T>`, which re-expands jsonValueOf per element.
 	// IIFE-closure / function element types remain rejected.
 	if (tt.kind == NodeKind.TypeArray) {
 		const elemType: Node = implementationOf(tt.typExprElement);
@@ -129,7 +129,7 @@ export macro jsonValueOf(arg: Node): Node {
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
 			elemByValueOf = namesStruct(elemType);
-		} else if (elemType.kind == NodeKind.TypeUnion) {
+		} else if (elemType.kind == NodeKind.TypeUnion || elemType.kind == NodeKind.TypeArray) {
 			elemByValueOf = true;
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemByValueOf = true;

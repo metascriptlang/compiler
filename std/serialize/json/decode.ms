@@ -233,12 +233,15 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		};
 	}
 
-	if (tt.kind != NodeKind.TypeObject) {
+	// An array or atomic target is one read of `jv` itself: the array helpers
+	// (`_jsonToArrayOfValues<T>`, `_jsonToVecOfValues<T>`) re-enter here per element.
+	const rootValue: boolean = tt.kind == NodeKind.TypeArray || (tt.kind == NodeKind.Identifier && !namesStruct(tt));
+	if (!rootValue && tt.kind != NodeKind.TypeObject) {
 		error("jsonValueToStruct: target type must be a struct/interface; atomic types not supported", witness);
 	}
 
-	const fields: string[] = tt.typExprFieldNames;
-	const fieldTypes: Node[] = tt.typExprFieldTypes;
+	const fields: string[] = rootValue ? [""] : tt.typExprFieldNames;
+	const fieldTypes: Node[] = rootValue ? [tt] : tt.typExprFieldTypes;
 	const keyNodes: string[] = [];
 	const valueNodes: Node[] = [];
 	let i = 0;
@@ -393,9 +396,9 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			error("jsonValueToStruct: nullable field '" + fname + "' — only atomic or struct `X | null` is supported (nullable array deferred)", witness);
 		}
 
-		// Array field — V2: builtin atomic + enum/alias + struct/interface elements.
+		// Array field — V2: builtin atomic + enum/alias + struct/interface + array elements.
 		// Builtin → per-type fast helper (jsonToXArray).
-		// Struct/interface → `_jsonToStructArray<T>` generic.
+		// Struct/interface or array → `_jsonToArrayOfValues<T>` generic.
 		// Generic-helper paths emit a bare `null` witness — T binds via Pass 3
 		// contextual return-type binding (Nim parity inheritBindings,
 		// semcall.nim:777-859). See bug024 for the compiler mechanism.
@@ -403,7 +406,15 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			const elemType: Node = implementationOf(ftype.typExprElement);
 			let en: string = "";
 			let elemIsStruct: boolean = false;
+			const elemIsArray: boolean = elemType.kind == NodeKind.TypeArray;
+			const toVec: boolean = typeKind(fieldTypes[i]) == TypeKind.Array;
+			const getCall: Node = rootValue ? jv : {
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+				arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }],
+			};
 			if (elemType.kind == NodeKind.EnumDecl) {
+				if (toVec) error("jsonValueToStruct: field '" + fname + "' is a Vec of the enum " + elemType.enumName + "; declare it " + elemType.enumName + "[]", witness);
 				const ords: Node[] = [];
 				const names: Node[] = [];
 				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
@@ -416,7 +427,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToEnumArray" },
 					arguments: [
-						{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
+						getCall,
 						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
 						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
 						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
@@ -425,7 +436,8 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				i = i + 1;
 				continue;
 			}
-			if (elemType.kind == NodeKind.Identifier) {
+			if (elemIsArray) {
+			} else if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
 				elemIsStruct = namesStruct(elemType);
 			} else if (elemType.kind == NodeKind.TypeObject) {
@@ -457,28 +469,21 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				|| en == "int8" || en == "int16" || en == "int32" || en == "int64"
 				|| en == "uint8" || en == "uint16" || en == "uint32";
 
-			const getCall: Node = {
-				kind: NodeKind.CallExpr,
-				line: jv.line,
-				column: jv.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: jv.line,
-					column: jv.column,
-					name: "getDynamicField",
-				},
-				arguments: [
-					jv,
-					{
-						kind: NodeKind.StringLiteral,
-						line: jv.line,
-						column: jv.column,
-						value: fname,
-					},
-				],
-			};
-
-			// struct/interface → _jsonToStructArray<T>. Witness is bare
+			// A Vec destination takes a Vec<T>: its elements re-enter this macro.
+			if (toVec) {
+				if (!elemIsArray && !elemIsStruct && !isBuiltin) {
+					error("jsonValueToStruct: field '" + fname + "' is a Vec of " + en + "; a Vec element is a string, boolean, number, sized integer, struct or array", witness);
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToVecOfValues" },
+					arguments: [getCall, { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true }],
+				});
+				i = i + 1;
+				continue;
+			}
+			// struct/interface or array → _jsonToArrayOfValues<T>. Witness is bare
 			// `null` — T binds via Pass 3 contextual return-type binding
 			// (Nim parity inheritBindings, semcall.nim:777-859). The
 			// surrounding ObjectLiteral assignment context (`colors: ...
@@ -490,14 +495,14 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			// `as <Elem> | null` annotation needed — that path required
 			// scope to see `Elem` (failed for user-file types referenced
 			// from prelude macro expansion). See bug024 for full rationale.
-			if (elemIsStruct || !isBuiltin) {
+			if (elemIsArray || elemIsStruct || !isBuiltin) {
 				const witnessNode: Node = {
 					kind: NodeKind.NullLiteral,
 					line: jv.line,
 					column: jv.column,
 					nullPlaceholder: true,
 				};
-				const helperName: string = elemIsStruct ? "_jsonToStructArray" : "_jsonToIntArray";
+				const helperName: string = elemIsArray || elemIsStruct ? "_jsonToArrayOfValues" : "_jsonToIntArray";
 				const arrFieldAccess: Node = {
 					kind: NodeKind.CallExpr,
 					line: jv.line,
@@ -608,7 +613,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 			callee: {
 				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-				object: {
+				object: rootValue ? jv : {
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
 					arguments: [
@@ -628,6 +633,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		i = i + 1;
 	}
 
+	if (rootValue) return valueNodes[0];
 	return {
 		kind: NodeKind.ObjectLiteral,
 		line: jv.line,
@@ -857,7 +863,11 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		};
 	}
 
-	if (tt.kind != NodeKind.TypeObject) {
+	// An array or atomic target is one read of `jv` itself, reported under `pfx`
+	// as a whole path: the array helpers (`_jsonToValueArrayE<T>`, `_jsonToValueVecE<T>`)
+	// re-enter here per element.
+	const rootValue: boolean = tt.kind == NodeKind.TypeArray || (tt.kind == NodeKind.Identifier && !namesStruct(tt));
+	if (!rootValue && tt.kind != NodeKind.TypeObject) {
 		error("jsonValueToStructE: target type must be a struct/interface; atomic types not supported", witness);
 	}
 
@@ -877,8 +887,8 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		],
 	});
 
-	const fields: string[] = tt.typExprFieldNames;
-	const fieldTypes: Node[] = tt.typExprFieldTypes;
+	const fields: string[] = rootValue ? [""] : tt.typExprFieldNames;
+	const fieldTypes: Node[] = rootValue ? [tt] : tt.typExprFieldTypes;
 	const keyNodes: string[] = [];
 	const valueNodes: Node[] = [];
 	let i = 0;
@@ -1124,7 +1134,10 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			let en: string = "";
 			let elemIsStruct: boolean = false;
 			let elemIsEnum: boolean = false;
-			if (ec.kind == NodeKind.EnumDecl) {
+			const elemIsArray: boolean = ec.kind == NodeKind.TypeArray
+				|| (ec.kind == NodeKind.TypeGeneric && ec.typExprBase.kind == NodeKind.Identifier && ec.typExprBase.name == "Array");
+			if (elemIsArray) {
+			} else if (ec.kind == NodeKind.EnumDecl) {
 				elemIsEnum = true;
 			} else if (ec.kind == NodeKind.Identifier) {
 				en = ec.name;
@@ -1143,7 +1156,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 				callee: {
 					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-					object: {
+					object: rootValue ? jv : {
 						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
 						arguments: [jv, fnameLit],
@@ -1152,6 +1165,42 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				},
 				arguments: [pfx, fnameLit, errs],
 			};
+			// The array's own path; its elements append "[i]".
+			const arrPath: Node = rootValue ? pfx : {
+				kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
+				operator: "+",
+				left: pfx,
+				right: fnameLit,
+			};
+			// A Vec destination takes a Vec<T>: its elements re-enter this macro.
+			if (typeKind(fieldTypes[i]) == TypeKind.Array) {
+				if (elemIsEnum) error("jsonValueToStructE: field '" + fname + "' is a Vec of the enum " + ec.enumName + "; declare it " + ec.enumName + "[]", witness);
+				if (!elemIsArray && !elemIsStruct && !isBuiltin) {
+					error("jsonValueToStructE: field '" + fname + "' is a Vec of " + en + "; a Vec element is a string, boolean, number, sized integer, struct or array", witness);
+				}
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: elemIsStruct ? "_jsonToStructVecE" : "_jsonToValueVecE" },
+					arguments: [reqArrayCall,
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						errs, arrPath],
+				});
+				i = i + 1;
+				continue;
+			}
+			if (elemIsArray) {
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToValueArrayE" },
+					arguments: [reqArrayCall,
+						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+						errs, arrPath],
+				});
+				i = i + 1;
+				continue;
+			}
 
 			if (elemIsEnum) {
 				const ords: Node[] = [];
@@ -1172,7 +1221,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 						{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
 						{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ec.enumName },
 						errs,
-						{ kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: fnameLit },
+						arrPath,
 					],
 				});
 				i = i + 1;
@@ -1184,12 +1233,6 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				// element once T is concrete. T binds from the contextual
 				// return type (`T[]`), so the witness stays a bare null — no
 				// user type name has to resolve in the expanding module.
-				const arrPath: Node = {
-					kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
-					operator: "+",
-					left: pfx,
-					right: fnameLit,
-				};
 				keyNodes.push(fname);
 				valueNodes.push({
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
@@ -1201,14 +1244,6 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				i = i + 1;
 				continue;
 			}
-			// The array field's own path — elements append "[i]" to it, so an
-			// atomic element reports the same shape a struct element does.
-			const elemArrPath: Node = {
-				kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column,
-				operator: "+",
-				left: pfx,
-				right: fnameLit,
-			};
 			if (!isBuiltin) {
 				keyNodes.push(fname);
 				valueNodes.push({
@@ -1216,7 +1251,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonToIntArrayE" },
 					arguments: [reqArrayCall,
 						{ kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
-						errs, elemArrPath],
+						errs, arrPath],
 				});
 				i = i + 1;
 				continue;
@@ -1238,7 +1273,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			valueNodes.push({
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: arrHelper },
-				arguments: [reqArrayCall, errs, elemArrPath],
+				arguments: [reqArrayCall, errs, arrPath],
 			});
 			i = i + 1;
 			continue;
@@ -1348,7 +1383,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 			callee: {
 				kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-				object: {
+				object: rootValue ? jv : {
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
 					arguments: [jv, fnameLit],
@@ -1365,6 +1400,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		i = i + 1;
 	}
 
+	if (rootValue) return valueNodes[0];
 	return {
 		kind: NodeKind.ObjectLiteral,
 		line: jv.line,

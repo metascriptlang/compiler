@@ -61,7 +61,7 @@ function _jsonParseTyped<T>(input: string): Result<T, string> {
 // DCE bug (helpers get pruned from link). See memory
 // project_serialize_v15_array_support.
 //
-// `_jsonToIntArray<T>` / `_jsonToStructArray<T>` are the decode-side mirrors
+// `_jsonToIntArray<T>` / `_jsonToArrayOfValues<T>` are the decode-side mirrors
 // (used by jsonValueToStruct macro).
 
 export function _jsonArrayOfInts<T>(arr: Readonly<Span<T>>): JsonValue {
@@ -198,7 +198,7 @@ export function _jsonToIntArrayWitness<T>(jv: JsonValue, witness: T[]): T[] {
 	return out;
 }
 
-export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
+export function _jsonToArrayOfValues<T>(jv: JsonValue, witness: T | null): T[] {
 	const out: T[] = [];
 	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
@@ -209,23 +209,73 @@ export function _jsonToStructArray<T>(jv: JsonValue, witness: T | null): T[] {
 	return out;
 }
 
-// Strict mirror. `arrPath` is the dotted path of the ARRAY field itself, so
+export function _jsonToVecOfValues<T>(jv: JsonValue, witness: T | null): Vec<T> {
+	let out: Vec<T> = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(jsonValueToStruct(jv.items[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
+
+// Strict mirrors. `arrPath` is the dotted path of the ARRAY itself, so
 // element messages read `field 'items[0].qty': ...` and a non-object element
 // reads `field 'items[0]': expected object, got int`.
+function _jsonStructElementE<T>(item: JsonValue, witness: T | null, errs: string[], path: string): T {
+	const el: JsonValue = item != null && item.kind == JsonKind.Object
+		? item
+		: reqObject(item, path, "", errs);
+	const firstElementError = errs.length;
+	const value: T = jsonValueToStructE(el, witness, errs, "");
+	if (errs.length > firstElementError) {
+		prefixFieldErrors(errs, firstElementError, path + ".");
+	}
+	return value;
+}
+
 export function _jsonToStructArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
 	const out: T[] = [];
 	if (jv == null || jv.kind != JsonKind.Array) return out;
 	let i = 0;
 	while (i < jv.items.length) {
-		const item = jv.items[i];
-		const el: JsonValue = item != null && item.kind == JsonKind.Object
-			? item
-			: reqObject(item, elementPath(arrPath, i), "", errs);
-		const firstElementError = errs.length;
-		out.push(jsonValueToStructE(el, witness, errs, ""));
-		if (errs.length > firstElementError) {
-			prefixFieldErrors(errs, firstElementError, elementPath(arrPath, i) + ".");
-		}
+		out.push(_jsonStructElementE(jv.items[i], witness, errs, elementPath(arrPath, i)));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToStructVecE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): Vec<T> {
+	let out: Vec<T> = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(_jsonStructElementE(jv.items[i], witness, errs, elementPath(arrPath, i)));
+		i = i + 1;
+	}
+	return out;
+}
+
+// An array or atomic element: jsonValueToStructE reads it whole and reports
+// under `arrPath[i]`.
+export function _jsonToValueArrayE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): T[] {
+	const out: T[] = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(jsonValueToStructE(jv.items[i], witness, errs, elementPath(arrPath, i)));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _jsonToValueVecE<T>(jv: JsonValue, witness: T | null, errs: string[], arrPath: string): Vec<T> {
+	let out: Vec<T> = [];
+	if (jv == null || jv.kind != JsonKind.Array) return out;
+	let i = 0;
+	while (i < jv.items.length) {
+		out.push(jsonValueToStructE(jv.items[i], witness, errs, elementPath(arrPath, i)));
 		i = i + 1;
 	}
 	return out;
