@@ -1392,5 +1392,7 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: 
 		out.fill(0);
 		return null;
 	}
-	return out.slice(0, size - (pad as int32));
+	const plain = out.slice(0, size - (pad as int32));
+	wipeBytes(out);
+	return plain;
 }
