@@ -829,6 +829,7 @@ when (c) {
 		const out = fromWide(xw, m.v.length);
 		wideWipe(xw);
 		wideWipe(yw);
+		wideWipe(t);
 		return out;
 	}
 
