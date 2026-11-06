@@ -888,15 +888,24 @@ function varDeclNeedsRuntimeInit(node: Node): boolean {
 // frees it (msArrayPrepareAdd, msArrayPayloadFree). nativeLower wraps top-level
 // array initializers in msBoxRefArray(lit), and a string[] literal in
 // msStringArrayFromArr(count, ...), before computeAliveSet runs.
-export function bakedArrayElements(init: Readonly<Node>): Readonly<Node>[] | null {
-	if (init.kind == NodeKind.ArrayLiteral) return [...(init.data as ArrayLiteralData).elements];
+export function bakedArrayCarrier(init: Readonly<Node>): Readonly<Node> | null {
+	if (init.kind == NodeKind.ArrayLiteral) return init;
 	if (init.kind != NodeKind.CallExpr || init.resolvedSym == null) return null;
 	const cd = init.data as CallExprData;
 	if (init.resolvedSym.builtinKind == BuiltinKind.BoxRefArray) {
-		return cd.arguments.length == 1 ? bakedArrayElements(cd.arguments[0]) : null;
+		return cd.arguments.length == 1 ? bakedArrayCarrier(cd.arguments[0]) : null;
 	}
-	if (init.resolvedSym.builtinKind != BuiltinKind.StringArrayFromArr || cd.arguments.length < 1) return null;
-	return cd.arguments.slice(1);
+	return init.resolvedSym.builtinKind == BuiltinKind.StringArrayFromArr && cd.arguments.length >= 1 ? init : null;
+}
+
+export function bakedArrayCount(carrier: Readonly<Node>): int32 {
+	if (carrier.kind == NodeKind.ArrayLiteral) return (carrier.data as ArrayLiteralData).elements.length;
+	return (carrier.data as CallExprData).arguments.length - 1;
+}
+
+export function bakedArrayAt(carrier: Readonly<Node>, i: int32): Readonly<Node> {
+	if (carrier.kind == NodeKind.ArrayLiteral) return (carrier.data as ArrayLiteralData).elements[i];
+	return (carrier.data as CallExprData).arguments[i + 1];
 }
 
 export function bakedLeaf(e: Readonly<Node>): Readonly<Node> {
@@ -915,10 +924,10 @@ function bakeableLiteralArray(node: Readonly<Node>, init: Readonly<Node>): boole
 	const t = node.nodeType;
 	if (t == null || t.kind != TypeKind.Ref || t.typeReturn == null || t.typeReturn.kind != TypeKind.Array) return false;
 	const elemT = t.typeReturn.typeReturn;
-	const elements = bakedArrayElements(init);
-	if (elemT == null || elements == null) return false;
-	for (const e of elements) {
-		if (!bakeableLeaf(e, elemT)) return false;
+	const carrier = bakedArrayCarrier(init);
+	if (elemT == null || carrier == null) return false;
+	for (let i: int32 = 0; i < bakedArrayCount(carrier); i += 1) {
+		if (!bakeableLeaf(bakedArrayAt(carrier, i), elemT)) return false;
 	}
 	return true;
 }
