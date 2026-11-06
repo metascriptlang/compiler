@@ -764,7 +764,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		addError(ctx, `Accessor field '${(field.data as PropertyDeclData).propName}': a compiler intrinsic decorator does not apply to an accessor field`, field.location.line, field.location.column);
 	}
 	for (const member of d.classBody) {
-		if (member.kind == NodeKind.ConstructorDecl) {
+		if (classMemberDecl(member).kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);
 		}
 	}
@@ -840,7 +840,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.ConstructorDecl && hasParamProperties(member)) {
 			addError(ctx, `Actor '${d.actorName}': a constructor parameter written public, private, protected or readonly declares a field, which an actor constructor does not do; declare the field in the actor and assign it`, member.location.line, member.location.column);
 		}
-		if (member.kind == NodeKind.ConstructorDecl) {
+		if (classMemberDecl(member).kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);
 		}
 	}
