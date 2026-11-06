@@ -379,6 +379,12 @@ Traps, measured 2026-07-28 unless a line says otherwise:
   source-importing checker test asks JS to compile the compiler itself; a
   JS behavior claim needs a standalone language/corpus consumer instead.
 
+## Crypto assurance suite
+
+`src/test/crypto/suite.sh [--slow]` runs every test of the native MetaScript crypto port (`std/crypto/pure`): `portTests.ms` on C and JavaScript (known-answer vectors, Wycheproof, differentials against the public surface), `portDiffTests.cms` on C (against the vendored C), and with `--slow` `portSlowTests.ms` (P-256/P-384 Wycheproof), `rsaKeyGeneration.ms` and `pbkdf2LongVector.ms`. No gate runs it; run it for a slice that changes `std/crypto/pure` or `runtime/crypto`, and before the public std/crypto switches to the port. The public API vectors (`src/test/crypto/index.ms`) stay in the land gate's tests lane. It refuses a compiler outside the repository root, because that compiler would test its own std. A new `*Test.ms` beside the port joins `portTests.ms` by hand (a C-only one joins `portDiffTests.cms`); a test red because of an open compiler card moves to a `*Parked.ms`, as `ecNativeParked.ms` does.
+
+Measured 2026-11-06 with the host's copied compiler: m1m (Darwin arm64), default cells **3/3 green** with `portTests.ms` C 298/298 in 74 s, JS 295/295 in 46 s, `portDiffTests.cms` 18/18 in 14 s; rtx (Linux x86_64, msc 251a01c4f41), `--slow` **8/8 cells green, 650/650 tests** in about 6.5 min (C 51 s, JS 40 s, diff 34 s, slow Wycheproof C 74 s / JS 7 s, key generation 58 s, PBKDF2 2^24 iterations C 92 s / JS 29 s). Its first runs found an intermittent memory corruption in a spread of a module const on worker threads (compiler card `2026-11-06-spread-of-a-module-const-array-races-on-worker-threads`): the suite binary crashed 1 run in 12, the EC worker-thread test alone 7 in 60. What it does not cover: constant-time behaviour and erasure of secrets (taint/dudect, not yet wired), and performance.
+
 ## Edit-loop check costs
 
 Measured per-file costs of edit-loop checks, and the checks that do not fit the 60 s budget (`src/test/CLAUDE.md` §Edit loop).
