@@ -700,14 +700,13 @@ when (c) {
 		wideReduceOnce(x, t, carry, m);
 	}
 
-	function wideSetup(v: Readonly<uint32[]>, bits: int32): WideSetup {
+	function wideSetup(v: Readonly<uint32[]>, bits: int32, t: uint64[]): WideSetup {
 		const n = wideLimbsFor(bits);
 		const w = toWide(v, n);
 		const m0 = w[0];
 		let y = m0;
 		for (let i = 0; i < 5; i++) y = y * (2 - m0 * y);
 		const m0inv = zero64 - y;
-		const t = new Array<uint64>(n + 1);
 		// R mod m: 2^(bits - 1) is below m, then doubled up to 2^(64n).
 		const one = new Array<uint64>(n);
 		one[(bits - 1) >> 6] = one64 << (((bits - 1) & 63) as uint64);
@@ -722,7 +721,22 @@ when (c) {
 			if (((e >> bit) & 1) != 0) wideDouble(rr, w, t);
 			bit -= 1;
 		}
+		wideWipe(t);
 		return { w, rr, one, m0inv };
+	}
+
+	test "wide setup clears its workspace and keeps the constants" {
+		const m = modulusFromBytes("0100000000000000000000000000000033".decodeHex());
+		if (m == null) throw new Error("multiword modulus fixture rejected");
+		const t = new Array<uint64>(m.w.length + 1);
+		const wide = wideSetup(m.v, m.bits(), t);
+		for (const word of t) assert word == 0, "wideSetup: workspace not erased";
+		for (let i = 0; i < m.w.length; i++) {
+			assert wide.w[i] == m.w[i];
+			assert wide.rr[i] == m.wrr[i];
+			assert wide.one[i] == m.wone[i];
+		}
+		assert wide.m0inv == m.wm0inv;
 	}
 
 	function wideToMont(m: Modulus, x: Readonly<uint32[]>, t: uint64[]): uint64[] {
@@ -1051,7 +1065,8 @@ export function modulusFromUint(value: Readonly<uint32[]>): Modulus | null {
 	if (v.length < 2 && v[0] < 3) return null;
 	const leading = clz32(hi) - 1;
 	when (c) {
-		const wide = wideSetup(v, v.length * tBits - leading);
+		const bits = v.length * tBits - leading;
+		const wide = wideSetup(v, bits, new Array<uint64>(wideLimbsFor(bits) + 1));
 		return {
 			v,
 			rr: [],
@@ -1083,7 +1098,25 @@ export function modulusFromUint(value: Readonly<uint32[]>): Modulus | null {
 export function modulusFromBytes(bytes: Readonly<uint8[]>): Modulus | null {
 	const v = uintFromBytes(bytes, limbsFor(bytes.length * 8));
 	if (v == null) return null;
-	return modulusFromUint(v);
+	return modulusFromOwnedUint(v);
+}
+
+/** `modulusFromUint` that clears `value` once the modulus holds its own copy, kept or rejected. */
+export function modulusFromOwnedUint(value: uint32[]): Modulus | null {
+	const m = modulusFromUint(value);
+	wipeWords(value);
+	return m;
+}
+
+test "modulus from an owned integer clears it, kept or rejected" {
+	const kept: uint32[] = [0x33, 0, 0, 0, 8];
+	const m = modulusFromOwnedUint(kept);
+	if (m == null) throw new Error("odd modulus fixture rejected");
+	for (const limb of kept) assert limb == 0, "modulusFromOwnedUint: kept input not erased";
+	assert m.v[0] == 0x33 && m.v[4] == 8;
+	const rejected: uint32[] = [0x32, 5];
+	assert modulusFromOwnedUint(rejected) == null;
+	for (const limb of rejected) assert limb == 0, "modulusFromOwnedUint: rejected input not erased";
 }
 
 export function bits(this m: Modulus): int32 {

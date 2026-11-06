@@ -7,6 +7,7 @@
 import {
 	Modulus,
 	modulusFromUint,
+	modulusFromOwnedUint,
 	uintFromBytes,
 	uintToBytes,
 	uintToMinimalBytes,
@@ -53,7 +54,7 @@ function uintOf(bytes: Readonly<uint8[]>): uint32[] {
 
 /** The Montgomery constants of a key integer, built once per key; null when it is no odd modulus above 2. */
 export function rsaModulusOf(bytes: Readonly<uint8[]>): Modulus | null {
-	return modulusFromUint(uintOf(bytes));
+	return modulusFromOwnedUint(uintOf(bytes));
 }
 
 // `a * b mod m == 1` for any non-zero `m`.
