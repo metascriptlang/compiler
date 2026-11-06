@@ -34,7 +34,7 @@ import { stdModuleName } from "../../module/tiers";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
 import { metaTypeSeeds, isMetaSeedName, seedsComplete } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf, instantiateGenericFunction } from "../../checker/instantiate";
+import { lookupModuleCtx, moduleCtxInCheck, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf, instantiateGenericFunction } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage, lowerForRaiser, underLiftedOps, unwrapToFuncDecl } from "./rgen";
 import { LiftedOpsState, freshLiftedOps } from "../../transform/lowering/destructorLifting";
@@ -309,15 +309,15 @@ function isVmStdHelper(sym: Symbol): boolean {
 	return _vmStdHelpers!.has(origin);
 }
 
-function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
+function engineBodyCtx(definingModulePath: string, owner: Symbol | null, moduleInCheck: boolean = false): CheckerContext | null {
 	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
 	if (mod == null) return null;
 	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? preludeBodyCtx(raiserPreludeCtx(), definingModulePath) : null;
-	const declCtx = lookupModuleCtx(definingModulePath);
-	if (declCtx == null) return null;
+	const declCtx = lookupModuleCtx(definingModulePath) ?? (moduleInCheck ? moduleCtxInCheck(definingModulePath) : null);
+	if (declCtx == null || declCtx.errors.some((e: CheckerError): boolean => e.severity == Severity.Error)) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
 	if (known != null) return known;
 	registerSeedSymbols(withMetaSeeds(moduleScopeNamed(declCtx.table)), seedExtensionsOf(declCtx, null));
@@ -636,7 +636,7 @@ function buildBodyCtx(sym: Symbol): CheckerContext | null {
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.preludeCtx == null) return null;
 	if (outer.preludeCtx.preludeModuleScopes.has(sym.modulePath)) return preludeBodyCtx(outer.preludeCtx, sym.modulePath);
-	return engineBodyCtx(sym.modulePath, sym);
+	return engineBodyCtx(sym.modulePath, sym, true);
 }
 
 function declaresEngineProcs(bodyCtx: CheckerContext): boolean {
@@ -674,7 +674,7 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	enterEngineCompile();
 	defer leaveEngineCompile();
 	const outerHost = _tierInstanceHost;
-	const host = engineBodyCtx(sym.modulePath, sym);
+	const host = engineBodyCtx(sym.modulePath, sym, true);
 	if (host != null) _tierInstanceHost = host;
 	defer { _tierInstanceHost = outerHost; }
 	const clone = cloneNodeKeepSem(sym.declNode);

@@ -259,3 +259,29 @@ test "a build-world helper holding a bigint runs on the VM with every digit" {
 	assert !c.startsWith("ERROR:"), c;
 	assert c.includes("1180591620717411303424"), "the bigint expansion is missing";
 }
+
+const MAP_HELPER = `function storedThree(k: string): int32 { const m = new Map<string, int32>(); m.set(k, 3); return m.get(k) ?? -1; }`;
+
+function mapOnC(entries: MapEntry[]): string {
+	const before = engineRecheckCount();
+	const c = compileProjectToCWithStd(entries, "engineMapC/main.ms");
+	if (c.startsWith("ERROR:")) return c;
+	if (!c.includes("33")) return "the expansion is missing";
+	const again = engineRecheckCount() - before;
+	return again == 0 ? "" : `${again} helpers checked again: ${engineRecheckReasons().join(", ")}`;
+}
+
+test "a comptime block runs a Map helper of another module on C from the build-checked class and helper" {
+	const failure = mapOnC([
+		{ entryPath: "engineMapC/lib.ms", entrySource: `import { Map } from "std/core/struct";\nexport ${MAP_HELPER}\n` },
+		{ entryPath: "engineMapC/main.ms", entrySource: `import { storedThree } from "./lib";\nconst V: int32 = @comptime { return storedThree("a") + 30; };\nconsole.log(V);\n` },
+	]);
+	assert failure == "", failure;
+}
+
+test "a comptime block runs a Map helper of the module still in check on C from its checked body" {
+	const failure = mapOnC([
+		{ entryPath: "engineMapC/main.ms", entrySource: `import { Map } from "std/core/struct";\n${MAP_HELPER}\nconst V: int32 = @comptime { return storedThree("a") + 30; };\nconsole.log(V);\n` },
+	]);
+	assert failure == "", failure;
+}

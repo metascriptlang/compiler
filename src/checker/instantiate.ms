@@ -54,6 +54,20 @@ export function registerModuleCtx(modulePath: string, ctx: CheckerContext): void
 	_moduleCtxMap.set(modulePath, ctx);
 }
 
+let _modulesInCheck: HashMap<string, CheckerContext> = new HashMap<string, CheckerContext>();
+
+export function enterModuleCheck(modulePath: string, ctx: CheckerContext): void {
+	if (modulePath != "") _modulesInCheck.set(modulePath, ctx);
+}
+
+export function leaveModuleCheck(modulePath: string): void {
+	_modulesInCheck.delete(modulePath);
+}
+
+export function moduleCtxInCheck(modulePath: string): CheckerContext | null {
+	return _modulesInCheck.get(modulePath) ?? null;
+}
+
 export function lookupModuleCtx(modulePath: string): CheckerContext | null {
 	if (modulePath == "") return null;
 	if (!_moduleCtxMap.has(modulePath)) return null;
@@ -76,16 +90,18 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 export interface ModuleCtxRegistry {
 	ctxs: HashMap<string, CheckerContext>;
 	programs: HashMap<string, Node>;
+	inCheck: HashMap<string, CheckerContext>;
 }
 
 export function createModuleCtxRegistry(): ModuleCtxRegistry {
-	return { ctxs: new HashMap<string, CheckerContext>(), programs: new HashMap<string, Node>() };
+	return { ctxs: new HashMap<string, CheckerContext>(), programs: new HashMap<string, Node>(), inCheck: new HashMap<string, CheckerContext>() };
 }
 
 export function swapModuleCtxRegistry(next: ModuleCtxRegistry): ModuleCtxRegistry {
-	const prev: ModuleCtxRegistry = { ctxs: _moduleCtxMap, programs: _moduleProgramMap };
+	const prev: ModuleCtxRegistry = { ctxs: _moduleCtxMap, programs: _moduleProgramMap, inCheck: _modulesInCheck };
 	_moduleCtxMap = next.ctxs;
 	_moduleProgramMap = next.programs;
+	_modulesInCheck = next.inCheck;
 	return prev;
 }
 

@@ -24,7 +24,7 @@ import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContex
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUnownedPosition, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, enterModuleCheck, leaveModuleCheck, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
 import { isBuiltinDirective, decoratorNamed, isWasmPlacementStmt } from "./decoratorHelpers";
@@ -4579,7 +4579,13 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	const program = bound.program;
 	const outerGensym = beginGensymUnit();
 	rewindTemplateGensym(bound.gensymMark);
-	checkBoundProgram(ctx, program, bound.moduleNames);
+	const visibleInCheck = !isEngineCheckMode();
+	if (visibleInCheck) enterModuleCheck(ctx.modulePath, ctx);
+	try {
+		checkBoundProgram(ctx, program, bound.moduleNames);
+	} finally {
+		if (visibleInCheck) leaveModuleCheck(ctx.modulePath);
+	}
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
