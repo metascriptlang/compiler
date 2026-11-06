@@ -1,12 +1,13 @@
 // @stdout: own wake bytes 0
 // @stdout: next sleep 0 ms
 // @stdout: bumps 1
+// @stdout: the turn after its own wake ran work: true
 // @exit: 0
 // @serial
 // @skip-js: the wake pipe and msAdjustTimeout are the C event loop
 // @skip-raiser
 // @skip-windows: the loop on Windows wakes through its IOCP port, not a wake pipe
-// note: main sends to an actor homed on its own scheduler. The loop thread is running, so the send writes nothing to its wake pipe (old runtime: one byte per send and per reply, 39,999 writes over 20k CALLs); the loop's next ready-work check still answers 0 ms, as the byte made its next poll return at once.
+// note: main sends to an actor homed on its own scheduler. The loop thread is running, so the send writes nothing to its wake pipe (old runtime: one byte per send and per reply, 39,999 writes over 20k CALLs); the loop's next ready-work check still answers 0 ms, as the byte made its next poll return at once, and that turn reports work, as reading the byte did, so a main-thread await does not take the pool lock to prove it is idle (old wake-A runtime: false, +0.25 ms p50 on Haro's echo under load).
 
 @include("runtime/promise/dispatch.h");
 @include("poll.h");
@@ -14,6 +15,7 @@ extern function msRunOnce(timeoutMs: int32): boolean;
 extern function msGetDispatcher(): Ptr<void>;
 extern function msAdjustTimeout(d: Ptr<void>, pollTimeout: int32, nextTimerMs: int32): int32;
 extern function msGetWakePipeFd(): int32;
+extern function msActorWakeEventLoop(): void;
 extern function poll(fds: Ptr<void>, n: uint64, timeoutMs: int32): int32;
 
 actor Echo {
@@ -35,5 +37,8 @@ function run(): void {
 	console.log(`own wake bytes ${wakeBytesPending()}`);
 	console.log(`next sleep ${msAdjustTimeout(msGetDispatcher(), 1500 as int32, -1 as int32)} ms`);
 	console.log(`bumps ${await e.count()}`);
+	msRunOnce(0 as int32);
+	msActorWakeEventLoop();
+	console.log(`the turn after its own wake ran work: ${msRunOnce(0 as int32)}`);
 }
 run();
