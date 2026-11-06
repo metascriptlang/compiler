@@ -117,16 +117,17 @@ def cmakeArguments(spec, source, engine, config, build, ninja):
     """The configure command of one target's compiler-rt build; the compiler is the engine's clang through the target's
     config, so no flag of the host reaches it."""
     flags = "--no-default-config --config=" + config
+    tool = lambda name: os.path.join(engine, "bin", name + (".exe" if sys.platform == "win32" else ""))
     arguments = [
         "-S", os.path.join(source, "runtimes"), "-B", build, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" + ninja,
-        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_SYSTEM_NAME=" + spec["system"],
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_SYSTEM_NAME=" + spec["system"], "-DPython3_EXECUTABLE=" + sys.executable,
         "-DCMAKE_SYSTEM_PROCESSOR=" + spec["processor"],
-        "-DCMAKE_C_COMPILER=" + os.path.join(engine, "bin", "clang"),
-        "-DCMAKE_CXX_COMPILER=" + os.path.join(engine, "bin", "clang++"),
-        "-DCMAKE_ASM_COMPILER=" + os.path.join(engine, "bin", "clang"),
+        "-DCMAKE_C_COMPILER=" + tool("clang"),
+        "-DCMAKE_CXX_COMPILER=" + tool("clang++"),
+        "-DCMAKE_ASM_COMPILER=" + tool("clang"),
         "-DCMAKE_C_FLAGS=" + flags, "-DCMAKE_CXX_FLAGS=" + flags, "-DCMAKE_ASM_FLAGS=" + flags,
-        "-DCMAKE_AR=" + os.path.join(engine, "bin", "llvm-ar"), "-DCMAKE_RANLIB=" + os.path.join(engine, "bin", "llvm-ranlib"),
-        "-DCMAKE_NM=" + os.path.join(engine, "bin", "llvm-nm"),
+        "-DCMAKE_AR=" + tool("llvm-ar"), "-DCMAKE_RANLIB=" + tool("llvm-ranlib"),
+        "-DCMAKE_NM=" + tool("llvm-nm"),
         "-DCMAKE_C_COMPILER_WORKS=ON", "-DCMAKE_CXX_COMPILER_WORKS=ON", "-DCMAKE_ASM_COMPILER_WORKS=ON",
         "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
         "-DLLVM_ENABLE_RUNTIMES=compiler-rt", "-DLLVM_DEFAULT_TARGET_TRIPLE=" + spec["triple"], "-DLLVM_RUNTIME_TARGETS=",
@@ -157,8 +158,10 @@ def buildTarget(cmake, ninja, source, engine, runtime, target, work, jobs):
     """Configure and build one target's archives. Returns {runtime name: path}."""
     spec = TARGETS[target]
     build = os.path.join(work, target)
-    environment = {"PATH": "%s:%s:/usr/bin:/bin" % (os.path.dirname(cmake), os.path.dirname(ninja)),
+    environment = {"PATH": os.pathsep.join([os.path.dirname(cmake), os.path.dirname(ninja), "/usr/bin", "/bin"]),
                    "HOME": "/nonexistent", "TMPDIR": work, "PYTHONPATH": os.environ.get("PYTHONPATH", "")}
+    if sys.platform == "win32":
+        environment.update({"SystemRoot": os.environ["SystemRoot"], "TEMP": work, "TMP": work})
     runIn([cmake] + cmakeArguments(spec, source, engine, os.path.join(runtime, spec["config"]), build, ninja), environment)
     wanted = {name: os.path.join(build, "compiler-rt", "lib", spec["triple"], archiveName(name)) for name in spec["runtimes"]}
     runIn([ninja, "-C", build, "-j", str(jobs)] + [os.path.relpath(p, build) for p in wanted.values()], environment)
