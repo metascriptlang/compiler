@@ -54,7 +54,7 @@
 #endif
 
 /* ===== Address-keyed park (Tier 1: adaptive spin→park) ===== */
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(MSOS_BARE)
   #define MS_ULOCK_CMP_WAIT 1u
   #define MS_ULOCK_WAKE_ALL 0x00000100u
   extern int __ulock_wait(uint32_t op, void* addr, uint64_t val, uint32_t timeout_us);
@@ -68,7 +68,7 @@
   static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
     __ulock_wait(MS_ULOCK_CMP_WAIT, (void*)addr, (uint32_t)expected, us);
   }
-#elif defined(__linux__)
+#elif defined(__linux__) && !defined(MSOS_BARE)
   #include <limits.h>
   #include <unistd.h>
   #include <sys/syscall.h>
@@ -84,7 +84,7 @@
     struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
     syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, &ts, (void*)0, 0);
   }
-#elif defined(_WIN32)
+#elif defined(_WIN32) && !defined(MSOS_BARE)
   /* WaitOnAddress/WakeByAddressAll (Amendment E Tier 1's Windows arm) live in
    * api-ms-win-core-synch-l1-2-0 (Win8+; forwarded from kernel32 on newer
    * builds) — but the mingw import libs zig cc links do not carry them, so a
@@ -190,7 +190,9 @@ static inline void msTicketLockRelease(msTicketLock* L) {
  * holder writes it, between acquire and release, so a relaxed store and load
  * suffice: another thread can only ever read 0 or a foreign id. */
 
-#if defined(_WIN32)
+#if defined(MSOS_BARE)
+  static inline int64_t msLockedSelf(void) { return 1; }
+#elif defined(_WIN32)
   static inline int64_t msLockedSelf(void) { return (int64_t)GetCurrentThreadId(); }
 #else
   #include <pthread.h>

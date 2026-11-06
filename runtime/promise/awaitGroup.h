@@ -45,7 +45,9 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#ifdef _WIN32
+#if defined(MSOS_BARE)
+#define msYield() ((void)0)
+#elif defined(_WIN32)
 #include <windows.h>
 #define msYield() SwitchToThread()
 #else
@@ -161,7 +163,8 @@ typedef struct msAwaitGroup {
 	int64_t deadlineMs;           /* an async timed wait's deadline, 0 when untimed */
 	int64_t deadlineTimer;        /* the timer that cancels the group at deadlineMs */
 
-#ifdef _WIN32
+#if defined(MSOS_BARE)
+#elif defined(_WIN32)
 	CRITICAL_SECTION cs;
 	CONDITION_VARIABLE cv;
 #else
@@ -255,7 +258,7 @@ static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
 		msFuturePublishCrossThread(fut);
 	}
 #endif
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(MSOS_BARE)
 	/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
 	 * sites (thread.h): finishSlot's last worker completes doneFut via
 	 * msCompletionQueuePushOwned, which needs the

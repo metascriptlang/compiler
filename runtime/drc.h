@@ -23,6 +23,7 @@
 
 #include "runtime/types.h"
 #include "runtime/hcrTls.h"
+#include "runtime/bareHeap.h"
 
 /* ===== RC Encoding ===== */
 /* rc field = [strong:37][unowned:23][flags:4] (intptr_t) on 64-bit, [strong:28][flags:4] on 32-bit.
@@ -152,7 +153,11 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
  * (-DMS_SLAB_MAX=0): recycling inside the slab hides use-after-free from
  * ASAN/guard-malloc, which only see real malloc/free boundaries. */
 #ifndef MS_SLAB_MAX
+#if defined(MSOS_BARE)
+#define MS_SLAB_MAX 0          /* bare frees into msHeap, whose small chunks already recycle by size class */
+#else
 #define MS_SLAB_MAX 128        /* max total size (header + payload) for caching */
+#endif
 #endif
 #define MS_SLAB_BUCKET_SIZE 32 /* bucket granularity: 32, 64, 96, 128 */
 #define MS_SLAB_BUCKETS 4
@@ -289,8 +294,12 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 }
 
 static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
+#if MS_BARE_HEAP_REDIRECT
+	void* p = msHeapRealloc(old, oldSize, newSize);
+#else
 	(void)oldSize;
 	void* p = realloc(old, newSize);
+#endif
 	if (p == NULL && newSize != 0) msRaiseOutOfMemory();
 	return p;
 }

@@ -39,7 +39,9 @@ static inline __attribute__((always_inline, no_sanitize("undefined"))) char* msH
 
 #else
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+#if defined(MSOS_BARE)
+#define MS_TLS_STORAGE
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
 #define MS_TLS_STORAGE _Thread_local
 #else
 #define MS_TLS_STORAGE __thread

@@ -326,24 +326,12 @@ void* msReallocNeedsOldSize(void* old, size_t size)
 
 #elif defined(MSOS_BARE)
 
-/* Freestanding: system headers available but malloc/free redirected to arena */
-#include <stdlib.h>
+/* Freestanding: system headers available but malloc/free redirected to the heap */
+#include "runtime/bareHeap.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
-
-#if !MS_HEAP_USE_MALLOC
-static inline void* _ms_manual_calloc(size_t n, size_t size) {
-    return msHeapCalloc(n, size);
-}
-void* msReallocNeedsOldSize(void* old, size_t size)
-    __attribute__((error("realloc requires its old size in a bare build: call msRealloc(old, oldSize, newSize)")));
-#define malloc(s)     msHeapAlloc(s)
-#define calloc(n, s)  _ms_manual_calloc((n), (s))
-#define realloc(p, s) msReallocNeedsOldSize((p), (s))
-#define free(p)       msHeapFree(p)
-#endif
 
 #else
 

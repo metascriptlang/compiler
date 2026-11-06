@@ -170,7 +170,7 @@ typedef struct msDsBlock {
 
 static msDsBlock* gDsBlocks = NULL;
 static pthread_mutex_t gDsMutex = PTHREAD_MUTEX_INITIALIZER;
-static _Thread_local msDsBlock* tDsBlock = NULL;
+static MS_TLS_STORAGE msDsBlock* tDsBlock = NULL;
 
 static msDsBlock* msDsLocal(void) {
 	if (tDsBlock != NULL) return tDsBlock;
@@ -304,16 +304,17 @@ __attribute__((constructor)) static void msDsRegisterDump(void) { atexit(msDsDum
 #ifndef MSGC_MANUAL
 #include "runtime/drc.h"
 
-_Thread_local msSlab msSlabTLS;
+MS_TLS_STORAGE msSlab msSlabTLS;
 MS_TLS_PUBLISH(msSlabTLS)
 
 #include <stdio.h>
-#if defined(_WIN32)
+#if defined(MSOS_BARE)
+#elif defined(_WIN32)
 #include <windows.h>
 #else
 #include <pthread.h>
 #endif
-#if defined(__linux__)
+#if defined(__linux__) && !defined(MSOS_BARE)
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -324,7 +325,8 @@ enum { MS_DROP_FRAME = 1, MS_DROP_CONT = 2, MS_DROP_TAG = 3 };
 static void msDropBounds(msDropState* d) {
 	uintptr_t lo = 0;
 	uintptr_t hi = 0;
-#if defined(__APPLE__)
+#if defined(MSOS_BARE)
+#elif defined(__APPLE__)
 	pthread_t self = pthread_self();
 	hi = (uintptr_t)pthread_get_stackaddr_np(self);
 	lo = hi - (uintptr_t)pthread_get_stacksize_np(self);
@@ -368,12 +370,7 @@ static void msDropReserve(msDropState* d, int32_t extra) {
 	if (d->len + extra <= d->cap) return;
 	int32_t cap = d->cap < 64 ? 64 : d->cap;
 	while (cap < d->len + extra) cap *= 2;
-	msDropSlot* data = (msDropSlot*)realloc(d->data, (size_t)cap * sizeof(msDropSlot));
-	if (data == NULL) {
-		fprintf(stderr, "fatal: out of memory growing the drop stack to %d entries\n", cap);
-		abort();
-	}
-	d->data = data;
+	d->data = (msDropSlot*)msRealloc(d->data, (size_t)d->cap * sizeof(msDropSlot), (size_t)cap * sizeof(msDropSlot));
 	d->cap = cap;
 }
 
@@ -478,7 +475,7 @@ void msCellSeqInit(msCellSeq* s) {
 	s->cap = 0;
 }
 
-static _Thread_local int32_t msActorRootsDepth = 0;
+static MS_TLS_STORAGE int32_t msActorRootsDepth = 0;
 
 void msCellSeqGrow(msCellSeq* s) {
 	int32_t start = s == &msRoots && msActorRootsDepth > 0 ? 16 : 1024;
@@ -512,16 +509,16 @@ static void msCellSeqRemoveAt(msCellSeq* s, int32_t idx) {
 
 /* ===== Root Registry ===== */
 
-_Thread_local msCellSeq msRoots;
+MS_TLS_STORAGE msCellSeq msRoots;
 MS_TLS_PUBLISH(msRoots)
-_Thread_local int32_t msRootsThreshold = 0;
+MS_TLS_STORAGE int32_t msRootsThreshold = 0;
 MS_TLS_PUBLISH(msRootsThreshold)
 
 /* ===== ORC Diagnostics ===== */
 #ifdef MSGC_ORC_STATS
-_Thread_local int32_t msFreedCyclicObjects = 0;
+MS_TLS_STORAGE int32_t msFreedCyclicObjects = 0;
 MS_TLS_PUBLISH(msFreedCyclicObjects)
-_Thread_local int32_t msOrcCollections = 0;
+MS_TLS_STORAGE int32_t msOrcCollections = 0;
 MS_TLS_PUBLISH(msOrcCollections)
 #endif
 
@@ -802,11 +799,11 @@ static void forEachEdge(msGcEnv* j, void* p, const msTypeInfo* type, bool drop) 
 	}
 }
 
-static _Thread_local bool msOrcFinalizing = false;
+static MS_TLS_STORAGE bool msOrcFinalizing = false;
 
 /* A cell freed while the collector finalizes may still be the target of Unowned
  * edges held by cells later in the same dead set; its free waits for the end of the set. */
-static _Thread_local msCellSeq msUnownedDeferred;
+static MS_TLS_STORAGE msCellSeq msUnownedDeferred;
 
 _Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left);
 

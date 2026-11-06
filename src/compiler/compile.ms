@@ -1112,13 +1112,15 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	// reference project-root-relative paths like `#include "src/foo.h"`). See
 	// userProjectFlag() below and call sites in processCompileDirectives +
 	// per-module .ms → .c compile.
-	// --os=bare/solana: force-include manual.h before all .c files (runtime .c files need the defines)
+	// --os=bare/solana: force-include the runtime header every .c file allocates through:
+	// manual.h without DRC, else the bare heap redirect that drc.h also includes
 	if ((opts.targetOs == "bare" || opts.targetOs == "solana") && compilerRoot != "") {
 		let defines = "-DMSOS_BARE";
 		if (opts.targetOs == "solana") defines = "-DMSOS_SOLANA -DMSOS_BARE";
 		allFlags = appendFlag(allFlags, defines);
 		allFlags = appendFlag(allFlags, "-include");
-		allFlags = appendFlag(allFlags, quoteCcArg(`${compilerRoot}/runtime/manual.h`));
+		const forced = opts.gcMode == "drc" ? "bareHeap.h" : "manual.h";
+		allFlags = appendFlag(allFlags, quoteCcArg(`${compilerRoot}/runtime/${forced}`));
 	}
 	// --os=wasm/emcc: define MSOS_WASM/MSOS_EMCC for runtime @compile files (disables threading)
 	if (opts.targetOs == "wasm") {

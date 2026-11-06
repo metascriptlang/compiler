@@ -24,7 +24,9 @@
 /* ===== Thread-Local Storage (Standard reference threadvar pattern) ===== */
 
 #ifndef MS_THREAD_LOCAL
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+#if defined(MSOS_BARE)
+  #define MS_THREAD_LOCAL
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
   #define MS_THREAD_LOCAL _Thread_local
 #elif defined(__GNUC__) || defined(__clang__)
   #define MS_THREAD_LOCAL __thread

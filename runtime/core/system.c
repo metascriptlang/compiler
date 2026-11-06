@@ -1,6 +1,6 @@
 #include "runtime/core/system.h"
 
-#ifdef MSOS_BARE
+#if defined(MSOS_BARE) && defined(MSGC_MANUAL)
 #ifndef MSOS_SOLANA
 bool msErr = false;
 msException* msCurrException = NULL;
@@ -9,9 +9,9 @@ msCallSoonFn msCallSoonProc = NULL;
 void* msErrPayload = NULL;
 #endif
 
-/* Under --os=bare, manual.h provides all functions inline via -include.
+/* A bare manual build force-includes manual.h, which provides all functions inline.
    Skip the rest of this file to avoid redefinitions. */
-#ifndef MSOS_BARE
+#if !defined(MSOS_BARE) || !defined(MSGC_MANUAL)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +61,7 @@ _Atomic(int) gMsFutCbLock = 0;
 #ifdef _WIN32
 #include <windows.h>
 SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
-#elif !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+#elif !defined(__EMSCRIPTEN__) && !defined(__wasi__) && !defined(MSOS_BARE)
 #include <pthread.h>
 pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
 #endif
@@ -76,7 +76,7 @@ pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
 static SRWLOCK msLineLock = SRWLOCK_INIT;
 #define MS_LINE_LOCK(f) AcquireSRWLockExclusive(&msLineLock)
 #define MS_LINE_UNLOCK(f) ReleaseSRWLockExclusive(&msLineLock)
-#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || MS_ANDROID5_FLOCKFILE_DEADLOCKS
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__) || defined(MSOS_BARE) || MS_ANDROID5_FLOCKFILE_DEADLOCKS
 #define MS_LINE_LOCK(f) ((void)0)
 #define MS_LINE_UNLOCK(f) ((void)0)
 #else
@@ -94,9 +94,11 @@ static void msWriteLine(FILE* f, msString s) {
 	MS_LINE_UNLOCK(f);
 }
 
+#ifndef MS_FREESTANDING_LIBC
 void msPrintln(msString s) {
 	msWriteLine(stdout, s);
 }
+#endif
 
 void msEprintln(msString s) {
 	fflush(stdout);
@@ -175,7 +177,9 @@ void msRaiseAwaitedError(void* err) {
 void msFutureRaiseFrom(msFutureBase* f) {
 	if (f != NULL) {
 		atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
+#ifndef MSOS_BARE
 		msClearOrphanFailure(f);
+#endif
 	}
 	void* err = (f != NULL) ? f->error : NULL;
 	if (f != NULL && f->crossThreadPublished) f->error = NULL;
@@ -360,4 +364,4 @@ _Noreturn void msMapFatal(msString msg) {
 	exit(2);
 }
 
-#endif /* MSOS_BARE */
+#endif /* !MSOS_BARE || !MSGC_MANUAL */
