@@ -104,6 +104,7 @@ let _sourceDependenciesOnly = false;
 let _compileTimeModules = new HashSet<string>();
 let _reachedCompileTime = new HashSet<Symbol>();
 let _walkStack: string[] = [];
+let _immortalizes = false;
 
 // ===== Core Walker =====
 
@@ -431,6 +432,7 @@ function markReferenced(dispatchRegistry: DispatchRegistry, sym: Symbol, moduleP
 function markSymAndWalk(dispatchRegistry: DispatchRegistry, sym: Symbol, modulePath: string): void {
 	if (_visitedSyms.has(sym)) return;
 	_visitedSyms.add(sym);
+	if (sym.name == "msImmortalize") _immortalizes = true;
 	aliveSetAddSym(_aliveSet, sym);
 	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
 	if (home != "") aliveSetAddModule(_aliveSet, home);
@@ -762,6 +764,7 @@ export function computeAliveSet(
 	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
 	while (markAliveGlobalDestroys(graph.dispatchRegistry, globalDestroys)) markImportedModulesAlive(graph);
+	if (_immortalizes) markReachWalks();
 	return takeReachability();
 }
 
@@ -784,8 +787,21 @@ function markAliveGlobalDestroys(dispatchRegistry: DispatchRegistry, pending: Gl
 	return walked;
 }
 
+function markReachWalks(): void {
+	for (let i = 0; i < _aliveSet.typeInfos.length; i += 1) {
+		const demand = _aliveSet.typeInfos[i];
+		const reach = demand.kind == TypeInfoKind.Object ? getOpByKey(demand.subject, AttachedOp.AttachedReach)
+			: demand.kind == TypeInfoKind.RefArrayCell && demand.subject.typeReturn != null ? refArrayCellOp(demand.subject.typeReturn, AttachedOp.AttachedReach)
+			: null;
+		if (reach == null) continue;
+		demand.reach = reach;
+		markReferenced(reach, demand.owner != "" ? demand.owner : reach.modulePath);
+	}
+}
+
 function takeReachability(): AliveSet {
 	const result = _aliveSet;
+	_immortalizes = false;
 	_aliveSet = createAliveSet();
 	_singleModule = "";
 	_imageModules = new HashSet<string>();

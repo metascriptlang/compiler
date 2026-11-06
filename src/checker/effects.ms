@@ -120,6 +120,18 @@ export function deferEffectCheck(site: Node, rule: string, check: (ctx: CheckerC
 	deferred.push({ site, rule, check });
 }
 
+function judgeReadonlyModuleConsts(modulePath: string): void {
+	const program = lookupModuleProgram(modulePath);
+	if (program == null) return;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let n: Node | null = stmt;
+		if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
+		if (n != null && n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
+		if (n == null || n.kind != NodeKind.VariableDecl || n.resolvedSym == null) continue;
+		if (isReadonlyView(n.resolvedSym.symbolType)) isImmutableModuleConst(n.resolvedSym);
+	}
+}
+
 export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	const checks = deferred;
 	deferred = [];
@@ -128,6 +140,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	checkedModules.add(ctx.modulePath);
 	uncheckedBodiesReported = hasErrors(ctx);
 	for (const d of checks) d.check(ctx);
+	judgeReadonlyModuleConsts(ctx.modulePath);
 	hookRegistry = null;
 	checkHookEffects(ctx);
 	sideTable = emptyTable();

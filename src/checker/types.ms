@@ -1830,6 +1830,11 @@ export function isUnownedSlot(t: Readonly<Type | null>): boolean {
 	return t != null && (isUnownedRef(t) || (t.kind == TypeKind.Union && isUnownedRef(unwrapRefNullUnion(t))));
 }
 
+export function isReadonlyUnownedSlot(t: Readonly<Type | null>): boolean {
+	if (t == null || !isUnownedSlot(t)) return false;
+	return isReadonlyView(isUnownedRef(t) ? t : unwrapRefNullUnion(t));
+}
+
 export function withoutUnowned(t: Type): Type {
 	if (isUnownedRef(t) && t.plainType != null) return t.plainType;
 	if (isUnownedRef(t)) {
@@ -4755,6 +4760,12 @@ export function countedEvictElement(elemType: Type | null): Type | null {
 	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return null;
 	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return null;
 	return bare;
+}
+
+export function readonlyCountedElement(arrT: Readonly<Type | null>, elem: Type | null): boolean {
+	if (!isReadonlyView(arrT) && !isReadonlyView(elem)) return false;
+	const bare = countedEvictElement(elem);
+	return bare != null && !isAtomicRef(bare) && !isUnownedSlot(elem as Type);
 }
 
 export function evictionNeedsElementHook(elem: Type | null): boolean {
