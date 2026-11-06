@@ -30,6 +30,7 @@ import {
 	RsaPrivateData,
 	bytesBitLength,
 	rsaModulusBytes,
+	rsaWipePrivate,
 	sameBytes,
 } from "./rsaKey";
 import {
@@ -145,7 +146,11 @@ function privateFromSequence(
 	const values: uint8[][] = [];
 	for (let i = 1; i < 9; i++) {
 		const value = derUnsigned(buf, parts[i]);
-		if (value == null || (value.length == 1 && value[0] == 0)) return null;
+		if (value == null || (value.length == 1 && value[0] == 0)) {
+			if (value != null) wipeBytes(value);
+			for (const parsed of values) wipeBytes(parsed);
+			return null;
+		}
 		values.push(value);
 	}
 	const key: RsaPrivateData = {
@@ -164,9 +169,12 @@ function privateFromSequence(
 	if (
 		bytesBitLength(key.n) < rsaMinBits ||
 		!atLeastThree(key.p) ||
-		!atLeastThree(key.q)
-	) return null;
-	if (!rsaKeyConsistent(key)) return null;
+		!atLeastThree(key.q) ||
+		!rsaKeyConsistent(key)
+	) {
+		rsaWipePrivate(key);
+		return null;
+	}
 	return key;
 }
 
