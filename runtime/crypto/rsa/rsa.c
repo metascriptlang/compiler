@@ -94,11 +94,11 @@ static int64_t implRsaPublicOf(int64_t handle) {
 	return implRsaImportPublicPem(pem);
 }
 
-static msString implRsaSign(int64_t handle, msString algorithm, int32_t pss, msString data) {
+static msString implRsaSign(int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle);
 	mbedtls_md_type_t mdType;
 	unsigned char hash[MBEDTLS_MD_MAX_SIZE];
-	int hashLen = pkHash(algorithm, 1, data, &mdType, hash);
+	int hashLen = pkHash(algorithm, 1, data, dataLen, &mdType, hash);
 	if (hashLen == 0) return MS_EMPTY_STRING;
 	unsigned char sig[MBEDTLS_PK_SIGNATURE_MAX_SIZE];
 	size_t sigLen = 0;
@@ -108,21 +108,21 @@ static msString implRsaSign(int64_t handle, msString algorithm, int32_t pss, msS
 	return msStringNew((const char*)sig, (int64_t)sigLen);
 }
 
-static double implRsaVerify(int64_t handle, msString algorithm, int32_t pss, msString data, msString signature) {
+static double implRsaVerify(int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle);
 	mbedtls_md_type_t mdType;
 	unsigned char hash[MBEDTLS_MD_MAX_SIZE];
-	int hashLen = pkHash(algorithm, 0, data, &mdType, hash);
+	int hashLen = pkHash(algorithm, 0, data, dataLen, &mdType, hash);
 	if (hashLen == 0) return 0.0;
 	int ret = mbedtls_pk_verify_ext(pss ? MBEDTLS_PK_SIGALG_RSA_PSS : MBEDTLS_PK_SIGALG_RSA_PKCS1V15,
 		&key->pk, mdType, hash, hashLen,
-		(const unsigned char*)msStringToCString(signature), msStrLen(signature));
+		signature, (size_t)signatureLen);
 	return (ret == 0) ? 1.0 : 0.0;
 }
 
 /* A PSA key slot holds one algorithm, and the process has 32 slots for every key and TLS session,
  * so a key object keeps no slot of its own: OAEP imports the PK context for the call and destroys it. */
-static msString implRsaEncrypt(int64_t handle, msString data) {
+static msString implRsaEncrypt(int64_t handle, const uint8_t* data, int64_t dataLen) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle);
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
 	mbedtls_pk_get_psa_attributes(&key->pk, PSA_KEY_USAGE_ENCRYPT, &attributes);
@@ -135,7 +135,7 @@ static msString implRsaEncrypt(int64_t handle, msString data) {
 	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_encrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
-		(const uint8_t*)msStringToCString(data), msStrLen(data), NULL, 0, output, outSize, &olen);
+		data, (size_t)dataLen, NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
 	if (status != PSA_SUCCESS) { free(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);
@@ -143,7 +143,7 @@ static msString implRsaEncrypt(int64_t handle, msString data) {
 	return result;
 }
 
-static msString implRsaDecrypt(int64_t handle, msString data) {
+static msString implRsaDecrypt(int64_t handle, const uint8_t* data, int64_t dataLen) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle);
 	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
 	mbedtls_pk_get_psa_attributes(&key->pk, PSA_KEY_USAGE_DECRYPT, &attributes);
@@ -156,7 +156,7 @@ static msString implRsaDecrypt(int64_t handle, msString data) {
 	unsigned char* output = (unsigned char*)msMemAlloc(outSize);
 	size_t olen = 0;
 	psa_status_t status = psa_asymmetric_decrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
-		(const uint8_t*)msStringToCString(data), msStrLen(data), NULL, 0, output, outSize, &olen);
+		data, (size_t)dataLen, NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
 	if (status != PSA_SUCCESS) { mbedtls_platform_zeroize(output, outSize); free(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);
@@ -171,10 +171,10 @@ LOCKED(int64_t, RsaImportPublicPem, (msString pem), (pem), 0)
 LOCKED(msString, RsaExportPrivatePem, (int64_t handle), (handle), MS_EMPTY_STRING)
 LOCKED(msString, RsaExportPublicPem, (int64_t handle), (handle), MS_EMPTY_STRING)
 LOCKED(int64_t, RsaPublicOf, (int64_t handle), (handle), 0)
-LOCKED(msString, RsaSign, (int64_t handle, msString algorithm, int32_t pss, msString data), (handle, algorithm, pss, data), MS_EMPTY_STRING)
-LOCKED(double, RsaVerify, (int64_t handle, msString algorithm, int32_t pss, msString data, msString signature), (handle, algorithm, pss, data, signature), 0.0)
-LOCKED(msString, RsaEncrypt, (int64_t handle, msString data), (handle, data), MS_EMPTY_STRING)
-LOCKED(msString, RsaDecrypt, (int64_t handle, msString data), (handle, data), MS_EMPTY_STRING)
+LOCKED(msString, RsaSign, (int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen), (handle, algorithm, pss, data, dataLen), MS_EMPTY_STRING)
+LOCKED(double, RsaVerify, (int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen), (handle, algorithm, pss, data, dataLen, signature, signatureLen), 0.0)
+LOCKED(msString, RsaEncrypt, (int64_t handle, const uint8_t* data, int64_t dataLen), (handle, data, dataLen), MS_EMPTY_STRING)
+LOCKED(msString, RsaDecrypt, (int64_t handle, const uint8_t* data, int64_t dataLen), (handle, data, dataLen), MS_EMPTY_STRING)
 
 void msCryptoRsaFree(int64_t handle) {
 	msCryptoRsaKeyPair* key = RSA_FROM_HANDLE(handle);

@@ -8,7 +8,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { x25519 } from "../pure/x25519";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
@@ -105,18 +105,12 @@ export class X25519PublicKey {
 	_raw: Buffer;
 	_key: unknown;
 
-	static importSync(raw: Bytes): Result<X25519PublicKey, CryptoError> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
-		return Result.ok({ _raw: bytes.slice(0), _key: xNone() });
+	static importSync<R extends ByteInput>(raw: R): Result<X25519PublicKey, CryptoError> {
+		return x25519PublicOwned(bytesOf(raw));
 	}
 
-	static async import(raw: Bytes): Promise<Result<X25519PublicKey, CryptoError>> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
-		const done = await xImportPublic(bytes);
-		if (done.error != "") return X25519PublicKey.importSync(bytes);
-		return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
+	static import<R extends ByteInput>(raw: R): Promise<Result<X25519PublicKey, CryptoError>> {
+		return importX25519Public(bytesOf(raw));
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
@@ -143,18 +137,12 @@ export class X25519PrivateKey {
 		return Result.ok(made.value);
 	}
 
-	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
-		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
+	static fromRawSync<R extends ByteInput>(raw: R): Result<X25519PrivateKey, CryptoError> {
+		return x25519PrivateOwned(bytesOf(raw));
 	}
 
-	static async fromRaw(raw: Bytes): Promise<Result<X25519PrivateKey, CryptoError>> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
-		const done = await xFromRaw(bytes);
-		if (done.error != "") return X25519PrivateKey.fromRawSync(bytes);
-		return Result.ok({ _secret: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
+	static fromRaw<R extends ByteInput>(raw: R): Promise<Result<X25519PrivateKey, CryptoError>> {
+		return x25519FromRaw(bytesOf(raw));
 	}
 
 	publicKey(): X25519PublicKey {
@@ -184,4 +172,28 @@ export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X255
 	const done = await xDerive(privateKey._key, publicKey._key);
 	if (done.error != "" || !nonZero(done.value)) return refused();
 	return Result.ok(done.value);
+}
+
+async function importX25519Public(bytes: Buffer): Promise<Result<X25519PublicKey, CryptoError>> {
+	if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
+	const done = await xImportPublic(bytes);
+	if (done.error != "") return x25519PublicOwned(bytes);
+	return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
+}
+
+async function x25519FromRaw(bytes: Buffer): Promise<Result<X25519PrivateKey, CryptoError>> {
+	if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
+	const done = await xFromRaw(bytes);
+	if (done.error != "") return x25519PrivateOwned(bytes);
+	return Result.ok({ _secret: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
+}
+
+function x25519PublicOwned(bytes: Buffer): Result<X25519PublicKey, CryptoError> {
+	if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
+	return Result.ok({ _raw: bytes.slice(0), _key: xNone() });
+}
+
+function x25519PrivateOwned(bytes: Buffer): Result<X25519PrivateKey, CryptoError> {
+	if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
+	return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
 }

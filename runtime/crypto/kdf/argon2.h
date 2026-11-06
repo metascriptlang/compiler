@@ -21,16 +21,16 @@ msString msCryptoArgon2Check(int32_t timeCost, int32_t memoryCost,
  * memoryCost: memory in KiB (65536 = 64MB recommended)
  * parallelism: number of threads (4 recommended)
  * hashLen: output hash length in bytes (32 recommended) */
-msString msCryptoArgon2Hash(msString password, msString salt,
+msString msCryptoArgon2Hash(const uint8_t* password, int64_t passwordLen, const uint8_t* salt, int64_t saltLen,
                             int32_t timeCost, int32_t memoryCost,
                             int32_t parallelism, int32_t hashLen);
 
 /* Verify a password against an encoded Argon2 hash.
  * Returns 1.0 if match, 0.0 if not. */
-double msCryptoArgon2Verify(msString encoded, msString password);
+double msCryptoArgon2Verify(msString encoded, const uint8_t* password, int64_t passwordLen);
 
 /* Hash with raw output (binary, not encoded). */
-msString msCryptoArgon2HashRaw(msString password, msString salt,
+msString msCryptoArgon2HashRaw(const uint8_t* password, int64_t passwordLen, const uint8_t* salt, int64_t saltLen,
                                int32_t timeCost, int32_t memoryCost,
                                int32_t parallelism, int32_t hashLen);
 

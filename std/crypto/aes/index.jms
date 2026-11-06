@@ -11,7 +11,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt as pureCbcEncrypt, cbcDecrypt as pureCbcDecrypt } from "../pure/aes";
 import { randomBytesSync } from "../index";
@@ -97,7 +97,7 @@ export class AesKey {
 	_cbc: unknown;
 
 	/** From exactly 16 (AES-128) or 32 (AES-256) raw bytes. */
-	static import(raw: Bytes): Result<AesKey, CryptoError> {
+	static import<R extends ByteInput>(raw: R): Result<AesKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 16 && bytes.length != 32) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
@@ -144,23 +144,31 @@ async function subtleKey(key: AesKey, gcm: boolean, operation: string): Promise<
  * Encrypt with AES-GCM. Auto-generates a 12-byte nonce.
  * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
  */
-export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+export function sealSync<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Result<Buffer, CryptoError> {
+	return sealSyncOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+}
+
+function sealSyncOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer): Result<Buffer, CryptoError> {
 	const nonce = randomBytesSync(12);
 	if (!nonce.ok) {
 		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the platform random source failed"));
 	}
-	return Result.ok(gcmSealWithNonce(key._enc, nonce.value, bytesOf(plainTextBytes), bytesOf(aadBytes)) as Buffer);
+	return Result.ok(gcmSealWithNonce(key._enc, nonce.value, plainTextBytes, aadBytes) as Buffer);
 }
 
-export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
-	if (!wcAvailable()) return sealSync(key, plainTextBytes, aadBytes);
+export function seal<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> {
+	return sealOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+}
+
+async function sealOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return sealSyncOwned(key, plainTextBytes, aadBytes);
 	const nonce = randomBytesSync(12);
 	if (!nonce.ok) {
 		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the platform random source failed"));
 	}
 	const failed = await subtleKey(key, true, "seal");
 	if (failed != null) return Result.err(failed);
-	const done = await wcGcmSeal(key._gcm, nonce.value, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	const done = await wcGcmSeal(key._gcm, nonce.value, plainTextBytes, aadBytes);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", done.error));
 	return Result.ok(done.value);
 }
@@ -170,27 +178,35 @@ export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes =
  * Input: nonce(12) || cipherText || authTag(16).
  * Returns plainText or error if authentication fails.
  */
-export function openSync(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
-	const sealed = bytesOf(sealedBytes);
+export function openSync<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Result<Buffer, CryptoError> {
+	return openSyncOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+}
+
+function openSyncOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Result<Buffer, CryptoError> {
+	const sealed = sealedBytes;
 	if (sealed.length < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
-	const plain = gcmOpen(key._enc, sealed, bytesOf(aadBytes));
+	const plain = gcmOpen(key._enc, sealed, aadBytes);
 	if (plain == null) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(plain as Buffer);
 }
 
-export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> {
-	if (!wcAvailable()) return openSync(key, sealedBytes, aadBytes);
-	const sealed = bytesOf(sealedBytes);
+export function open<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> {
+	return openOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+}
+
+async function openOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return openSyncOwned(key, sealedBytes, aadBytes);
+	const sealed = sealedBytes;
 	if (sealed.length < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
 	const failed = await subtleKey(key, true, "open");
 	if (failed != null) return Result.err(failed);
-	const done = await wcGcmOpen(key._gcm, sealed, bytesOf(aadBytes));
+	const done = await wcGcmOpen(key._gcm, sealed, aadBytes);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	return Result.ok(done.value);
 }
@@ -201,23 +217,31 @@ export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""
  * AES-CBC encrypt with PKCS7 padding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
-export function cbcEncryptSync(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
-	const iv = bytesOf(ivBytes);
+export function cbcEncryptSync<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Result<Buffer, CryptoError> {
+	return cbcEncryptSyncOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+}
+
+function cbcEncryptSyncOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buffer): Result<Buffer, CryptoError> {
+	const iv = ivBytes;
 	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
-	return Result.ok(pureCbcEncrypt(key._enc, iv, bytesOf(plainTextBytes)) as Buffer);
+	return Result.ok(pureCbcEncrypt(key._enc, iv, plainTextBytes) as Buffer);
 }
 
-export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
-	if (!wcAvailable()) return cbcEncryptSync(key, plainTextBytes, ivBytes);
-	const iv = bytesOf(ivBytes);
+export function cbcEncrypt<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Promise<Result<Buffer, CryptoError>> {
+	return cbcEncryptOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+}
+
+async function cbcEncryptOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return cbcEncryptSyncOwned(key, plainTextBytes, ivBytes);
+	const iv = ivBytes;
 	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
 	const failed = await subtleKey(key, false, "cbcEncrypt");
 	if (failed != null) return Result.err(failed);
-	const done = await wcCbc(key._cbc, iv, bytesOf(plainTextBytes), true);
+	const done = await wcCbc(key._cbc, iv, plainTextBytes, true);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", done.error));
 	return Result.ok(done.value);
 }
@@ -227,25 +251,33 @@ export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: By
  * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
  * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
-export function cbcDecryptSync(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
-	const iv = bytesOf(ivBytes);
+export function cbcDecryptSync<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Result<Buffer, CryptoError> {
+	return cbcDecryptSyncOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+}
+
+function cbcDecryptSyncOwned(key: AesKey, cipherTextBytes: Buffer, ivBytes: Buffer): Result<Buffer, CryptoError> {
+	const iv = ivBytes;
 	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
-	const plain = pureCbcDecrypt(decryptSchedule(key), iv, bytesOf(cipherTextBytes));
+	const plain = pureCbcDecrypt(decryptSchedule(key), iv, cipherTextBytes);
 	if (plain == null) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
 	return Result.ok(plain as Buffer);
 }
 
-export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> {
-	if (!wcAvailable()) return cbcDecryptSync(key, cipherTextBytes, ivBytes);
-	const iv = bytesOf(ivBytes);
+export function cbcDecrypt<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Promise<Result<Buffer, CryptoError>> {
+	return cbcDecryptOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+}
+
+async function cbcDecryptOwned(key: AesKey, cipherTextBytes: Buffer, ivBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
+	if (!wcAvailable()) return cbcDecryptSyncOwned(key, cipherTextBytes, ivBytes);
+	const iv = ivBytes;
 	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
-	const cipher = bytesOf(cipherTextBytes);
+	const cipher = cipherTextBytes;
 	const failed = await subtleKey(key, false, "cbcDecrypt");
 	if (failed != null) return Result.err(failed);
 	const done = cipher.length == 0 || cipher.length % 16 != 0

@@ -14,18 +14,12 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "../core/encoding";
+import { bytesOf } from "./pure/bytes";
 import { HashState } from "./pure/state";
 import { hashKind, newHash, updateHash, finishHash, hashOf } from "./pure/hash";
 import { HmacState, newHmac, updateHmac, finishHmac, hmacOf, pbkdf2Of, hkdfOf } from "./pure/hmac";
 import { CryptoError, hashFailed, hmacFailed, randomFailed, keyDerivationFailed, invalidAlgorithm, invalidInput, invalidEncoding } from "./errors";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
-
-function ownedOf<D extends ByteInput>(data: D): Buffer {
-	if (typeof data == "string") return Buffer.fromString(data, "utf8");
-	const owned = new Array<uint8>(0);
-	for (const b of data) owned.push(b);
-	return owned as Buffer;
-}
 
 export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
@@ -121,11 +115,11 @@ export function cleanup(): void {}
 export function digestSync<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hashOf(kind, ownedOf(data)) as Buffer);
+	return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
 }
 
 export function digest<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Promise<Result<Buffer, CryptoError>> {
-	return digestOwned(algorithm, ownedOf(data));
+	return digestOwned(algorithm, bytesOf(data));
 }
 
 async function digestOwned(algorithm: HashAlgorithm, data: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -153,11 +147,11 @@ export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, Crypto
 export function hmacSync<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind < 0) return Result.err(invalidAlgorithm(algorithm));
-	return Result.ok(hmacOf(kind, ownedOf(key), ownedOf(data)) as Buffer);
+	return Result.ok(hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer);
 }
 
 export function hmac<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Promise<Result<Buffer, CryptoError>> {
-	return hmacOwned(algorithm, ownedOf(key), ownedOf(data));
+	return hmacOwned(algorithm, bytesOf(key), bytesOf(data));
 }
 
 async function hmacOwned(algorithm: HashAlgorithm, key: Buffer, data: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -226,8 +220,8 @@ export async function randomUUID(): Promise<Result<string, CryptoError>> {
 // ===== Timing-Safe Comparison =====
 
 export function timingSafeEqual<A extends ByteInput, B extends ByteInput>(a: A, b: B): boolean {
-	const x = ownedOf(a);
-	const y = ownedOf(b);
+	const x = bytesOf(a);
+	const y = bytesOf(b);
 	if (x.length != y.length) return false;
 	let diff: uint8 = 0;
 	for (let i = 0; i < x.length; i++) diff = diff | (x[i] ^ y[i]);
@@ -246,7 +240,7 @@ export class Hasher {
 	}
 
 	update<D extends ByteInput>(data: D): Hasher {
-		if (!this._state.finished) updateHash(this._state, ownedOf(data));
+		if (!this._state.finished) updateHash(this._state, bytesOf(data));
 		return this;
 	}
 
@@ -265,11 +259,11 @@ export class Hmac {
 	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 		const kind = hashKind(algorithm);
 		if (kind < 0) throw new Error(`createHmac: could not start "${algorithm}"`);
-		return { _state: newHmac(kind, ownedOf(key)), _done: false };
+		return { _state: newHmac(kind, bytesOf(key)), _done: false };
 	}
 
 	update<D extends ByteInput>(data: D): Hmac {
-		if (!this._done) updateHmac(this._state, ownedOf(data));
+		if (!this._done) updateHmac(this._state, bytesOf(data));
 		return this;
 	}
 
@@ -337,11 +331,11 @@ export function pbkdf2Sync<P extends ByteInput, S extends ByteInput>(password: P
 	if (invalid != null) return Result.err(invalid);
 	const kind = hashKind(digest);
 	if (kind < 0) return Result.err(invalidAlgorithm(digest));
-	return Result.ok(pbkdf2Of(kind, ownedOf(password), ownedOf(salt), iterations, keyLength) as Buffer);
+	return Result.ok(pbkdf2Of(kind, bytesOf(password), bytesOf(salt), iterations, keyLength) as Buffer);
 }
 
 export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
-	return pbkdf2Owned(ownedOf(password), ownedOf(salt), iterations, keyLength, digest);
+	return pbkdf2Owned(bytesOf(password), bytesOf(salt), iterations, keyLength, digest);
 }
 
 async function pbkdf2Owned(password: Buffer, salt: Buffer, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
@@ -366,11 +360,11 @@ function hkdfInvalid(algorithm: HashAlgorithm, length: int32): CryptoError | nul
 export function hkdfSync<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Result<Buffer, CryptoError> {
 	const invalid = hkdfInvalid(algorithm, length);
 	if (invalid != null) return Result.err(invalid);
-	return Result.ok(hkdfOf(hashKind(algorithm), ownedOf(ikm), ownedOf(salt), ownedOf(info), length) as Buffer);
+	return Result.ok(hkdfOf(hashKind(algorithm), bytesOf(ikm), bytesOf(salt), bytesOf(info), length) as Buffer);
 }
 
 export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> {
-	return hkdfOwned(algorithm, ownedOf(ikm), ownedOf(salt), ownedOf(info), length);
+	return hkdfOwned(algorithm, bytesOf(ikm), bytesOf(salt), bytesOf(info), length);
 }
 
 async function hkdfOwned(algorithm: HashAlgorithm, ikm: Buffer, salt: Buffer, info: Buffer, length: int32): Promise<Result<Buffer, CryptoError>> {

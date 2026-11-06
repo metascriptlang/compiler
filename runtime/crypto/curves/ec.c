@@ -98,11 +98,11 @@ static int32_t implEcBits(int64_t handle) {
 	return EC_FROM_HANDLE(handle)->bits;
 }
 
-static msString implEcdsaSign(int64_t handle, msString algorithm, msString data) {
+static msString implEcdsaSign(int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen) {
 	msCryptoEcKey* key = EC_FROM_HANDLE(handle);
 	mbedtls_md_type_t mdType;
 	unsigned char hash[MBEDTLS_MD_MAX_SIZE];
-	int hashLen = pkHash(algorithm, 1, data, &mdType, hash);
+	int hashLen = pkHash(algorithm, 1, data, dataLen, &mdType, hash);
 	if (hashLen == 0) return MS_EMPTY_STRING;
 	unsigned char sig[MBEDTLS_PK_SIGNATURE_MAX_SIZE];
 	size_t sigLen = 0;
@@ -110,14 +110,14 @@ static msString implEcdsaSign(int64_t handle, msString algorithm, msString data)
 	return msStringNew((const char*)sig, (int64_t)sigLen);
 }
 
-static double implEcdsaVerify(int64_t handle, msString algorithm, msString data, msString signature) {
+static double implEcdsaVerify(int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen) {
 	msCryptoEcKey* key = EC_FROM_HANDLE(handle);
 	mbedtls_md_type_t mdType;
 	unsigned char hash[MBEDTLS_MD_MAX_SIZE];
-	int hashLen = pkHash(algorithm, 0, data, &mdType, hash);
+	int hashLen = pkHash(algorithm, 0, data, dataLen, &mdType, hash);
 	if (hashLen == 0) return 0.0;
 	int ret = mbedtls_pk_verify(&key->pk, mdType, hash, hashLen,
-	                             (const unsigned char*)msStringToCString(signature), msStrLen(signature));
+	                             signature, (size_t)signatureLen);
 	return (ret == 0) ? 1.0 : 0.0;
 }
 
@@ -147,8 +147,8 @@ LOCKED(msString, EcExportPrivatePem, (int64_t handle), (handle), MS_EMPTY_STRING
 LOCKED(msString, EcExportPublicPem, (int64_t handle), (handle), MS_EMPTY_STRING)
 LOCKED(int64_t, EcPublicOf, (int64_t handle), (handle), 0)
 LOCKED(int32_t, EcBits, (int64_t handle), (handle), 0)
-LOCKED(msString, EcdsaSign, (int64_t handle, msString algorithm, msString data), (handle, algorithm, data), MS_EMPTY_STRING)
-LOCKED(double, EcdsaVerify, (int64_t handle, msString algorithm, msString data, msString signature), (handle, algorithm, data, signature), 0.0)
+LOCKED(msString, EcdsaSign, (int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen), (handle, algorithm, data, dataLen), MS_EMPTY_STRING)
+LOCKED(double, EcdsaVerify, (int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen), (handle, algorithm, data, dataLen, signature, signatureLen), 0.0)
 LOCKED(msString, EcdhDerive, (int64_t privateHandle, int64_t publicHandle), (privateHandle, publicHandle), MS_EMPTY_STRING)
 
 void msCryptoEcFree(int64_t handle) {

@@ -14,11 +14,11 @@
 
 /* Private keys. A handle is 0 on failure. The public half is derived once, here. */
 int64_t msX25519KeyGenerate(void);
-int64_t msX25519KeyFromRaw(msString raw);
+int64_t msX25519KeyFromRaw(const uint8_t* raw, int64_t rawLen);
 msString msX25519KeyPublicRaw(int64_t key);
 
 /* Public keys: 32 raw bytes. */
-int64_t msX25519PublicFromRaw(msString raw);
+int64_t msX25519PublicFromRaw(const uint8_t* raw, int64_t rawLen);
 msString msX25519PublicRaw(int64_t key);
 
 /* Shared secret of a private and a public key, or an empty string when it is all zero (a

@@ -14,7 +14,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { pemDecode, pemEncode } from "../pure/pem";
 import {
@@ -193,53 +193,85 @@ export class RsaPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export function signSync(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
+export function signSync<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
+	return signSyncOwned(key, bytesOf(data), hash, padding);
+}
+
+function signSyncOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
 	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
-	const message = bytesOf(data);
+	const message = data;
 	const signature = padding == "pss" ? rsaSignPss(key._data, hash, message) : rsaSignPkcs1(key._data, hash, message);
 	if (signature == null) return Result.err(signFailed(hash, padding, ""));
 	return Result.ok(signature as Buffer);
 }
 
-export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
+export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
+	return signOwned(key, bytesOf(data), hash, padding);
+}
+
+async function signOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Promise<Result<Buffer, CryptoError>> {
 	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
-	const done = await wcSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, bytesOf(data));
+	const done = await wcSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, data);
 	if (done.error != "") return Result.err(signFailed(hash, padding, `: ${done.error}`));
 	return Result.ok(done.value);
 }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export function verifySync(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
-	const message = bytesOf(data);
-	const sig = bytesOf(signature);
+export function verifySync<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
+	return verifySyncOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
+}
+
+function verifySyncOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, hash: string, padding: RsaPadding): boolean {
+	const message = data;
+	const sig = signature;
 	return padding == "pss" ? rsaVerifyPss(key._data, hash, message, sig) : rsaVerifyPkcs1(key._data, hash, message, sig);
 }
 
-export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
-	return await wcVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, bytesOf(data), bytesOf(signature));
+export function verify<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
+	return verifyOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
+}
+
+async function verifyOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, hash: string, padding: RsaPadding): Promise<boolean> {
+	return await wcVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, data, signature);
 }
 
 // RSA-OAEP with SHA-256.
-export function encryptSync(key: RsaPublicKey, data: Bytes): Result<Buffer, CryptoError> {
-	const encrypted = rsaOaepEncrypt(key._data, bytesOf(data));
+export function encryptSync<D extends ByteInput>(key: RsaPublicKey, data: D): Result<Buffer, CryptoError> {
+	return encryptSyncOwned(key, bytesOf(data));
+}
+
+function encryptSyncOwned(key: RsaPublicKey, data: Buffer): Result<Buffer, CryptoError> {
+	const encrypted = rsaOaepEncrypt(key._data, data);
 	if (encrypted == null) return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
 	return Result.ok(encrypted as Buffer);
 }
 
-export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	const done = await wcEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, bytesOf(data));
+export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promise<Result<Buffer, CryptoError>> {
+	return encryptOwned(key, bytesOf(data));
+}
+
+async function encryptOwned(key: RsaPublicKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+	const done = await wcEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, data);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", `RSA-OAEP encryption failed: ${done.error}`));
 	return Result.ok(done.value);
 }
 
-export function decryptSync(key: RsaPrivateKey, data: Bytes): Result<Buffer, CryptoError> {
-	const decrypted = rsaOaepDecrypt(key._data, bytesOf(data));
+export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): Result<Buffer, CryptoError> {
+	return decryptSyncOwned(key, bytesOf(data));
+}
+
+function decryptSyncOwned(key: RsaPrivateKey, data: Buffer): Result<Buffer, CryptoError> {
+	const decrypted = rsaOaepDecrypt(key._data, data);
 	if (decrypted == null) return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
 	return Result.ok(decrypted as Buffer);
 }
 
-export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	const done = await wcDecrypt(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, bytesOf(data));
+export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promise<Result<Buffer, CryptoError>> {
+	return decryptOwned(key, bytesOf(data));
+}
+
+async function decryptOwned(key: RsaPrivateKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+	const done = await wcDecrypt(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, data);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", `RSA-OAEP decryption failed: ${done.error}`));
 	return Result.ok(done.value);
 }

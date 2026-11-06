@@ -17,7 +17,7 @@
 /* A key object's native state: the raw bytes, wiped when freed. The handle is 0 for a raw length
  * other than 16 or 32 bytes. Generate returns 0 for a length other than 16 or 32 and -1 when the
  * OS random source failed. Export copies the raw bytes out. Free wipes and releases. */
-int64_t msCryptoAesKeyNew(msString raw);
+int64_t msCryptoAesKeyNew(const uint8_t* raw, int64_t rawLen);
 int64_t msCryptoAesKeyGenerate(int32_t byteLength);
 msString msCryptoAesKeyExport(int64_t handle);
 void msCryptoAesKeyFree(int64_t handle);
@@ -48,10 +48,10 @@ int64_t msCryptoAesOpenInto(int64_t keyHandle, const uint8_t* sealed, int64_t se
 /* ===== CBC Mode (expert use) ===== */
 
 /* CBC encrypt with PKCS7 padding. IV must be 16 bytes. Never empty on success. */
-msString msCryptoAesCbcEncrypt(int64_t keyHandle, msString plainText, msString iv);
+msString msCryptoAesCbcEncrypt(int64_t keyHandle, const uint8_t* plainText, int64_t plainTextLen, const uint8_t* iv, int64_t ivLen);
 
 /* CBC decrypt with PKCS7 unpadding, no authentication. IV must be 16 bytes.
  * Returns 1 and stores the plaintext in *plainTextOut (possibly empty), 0 on a bad padding or input. */
-int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, msString cipherText, msString iv, msString* plainTextOut);
+int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, const uint8_t* cipherText, int64_t cipherTextLen, const uint8_t* iv, int64_t ivLen, msString* plainTextOut);
 
 #endif /* MS_CRYPTO_AES_H */

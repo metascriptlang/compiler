@@ -14,7 +14,7 @@
 /* A key object's native state: 32 raw bytes, wiped when freed. New returns 0 for a length other than
  * 32; Generate returns -1 when the OS random source failed. Export copies the bytes out.
  * KeysLive counts keys created and not yet freed. */
-int64_t msChacha20KeyNew(msString raw);
+int64_t msChacha20KeyNew(const uint8_t* raw, int64_t rawLen);
 int64_t msChacha20KeyGenerate(void);
 msString msChacha20KeyExport(int64_t handle);
 void msChacha20KeyFree(int64_t handle);

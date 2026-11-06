@@ -22,11 +22,11 @@ typedef struct {
 
 static int64_t liveKeys = 0;
 
-int64_t msChacha20KeyNew(msString raw) {
-	if (msStrLen(raw) != 32) return 0;
+int64_t msChacha20KeyNew(const uint8_t* raw, int64_t rawLen) {
+	if (rawLen != 32) return 0;
 	msChachaKey *key = (msChachaKey *)calloc(1, sizeof(msChachaKey));
 	if (key == NULL) return 0;
-	memcpy(key->bytes, msStrData(&raw), 32);
+	memcpy(key->bytes, raw, 32);
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 	return (int64_t)(uintptr_t)key;
 }

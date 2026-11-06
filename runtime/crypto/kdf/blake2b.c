@@ -10,26 +10,26 @@
 
 /* ===== One-shot API ===== */
 
-msString msBlake2b(msString data, int32_t hashSize) {
+msString msBlake2b(const uint8_t* data, int64_t dataLen, int32_t hashSize) {
 	if (hashSize < 1 || hashSize > 64) return MS_EMPTY_STRING;
 
 	uint8_t hash[64];
 	crypto_blake2b(hash, (size_t)hashSize,
-		(const uint8_t *)msStrData(&data),
-		msStrLen(data));
+		(const uint8_t *)data,
+		dataLen);
 
 	return msStringNew((const char *)hash, (int64_t)hashSize);
 }
 
-msString msBlake2bKeyed(msString key, msString data, int32_t hashSize) {
+msString msBlake2bKeyed(const uint8_t* key, int64_t keyLen, const uint8_t* data, int64_t dataLen, int32_t hashSize) {
 	if (hashSize < 1 || hashSize > 64) return MS_EMPTY_STRING;
-	if (msStrLen(key) < 1 || msStrLen(key) > 64) return MS_EMPTY_STRING;
+	if (keyLen < 1 || keyLen > 64) return MS_EMPTY_STRING;
 
 	uint8_t hash[64];
 	crypto_blake2b_keyed(hash, (size_t)hashSize,
-		(const uint8_t *)msStrData(&key), msStrLen(key),
-		(const uint8_t *)msStrData(&data),
-		msStrLen(data));
+		(const uint8_t *)key, keyLen,
+		(const uint8_t *)data,
+		dataLen);
 
 	return msStringNew((const char *)hash, (int64_t)hashSize);
 }
@@ -54,12 +54,12 @@ int64_t msBlake2bInit(int32_t hashSize) {
 	return B2B_TO_HANDLE(c);
 }
 
-void msBlake2bUpdate(int64_t handle, msString data) {
+void msBlake2bUpdate(int64_t handle, const uint8_t* data, int64_t dataLen) {
 	msBlake2bCtx *c = B2B_FROM_HANDLE(handle);
 	if (!c) return;
-	if (msStrLen(data) > 0) {
+	if (dataLen > 0) {
 		crypto_blake2b_update(&c->ctx,
-			(const uint8_t *)msStrData(&data), msStrLen(data));
+			(const uint8_t *)data, dataLen);
 	}
 }
 

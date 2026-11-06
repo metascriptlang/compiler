@@ -30,8 +30,8 @@ int64_t msCryptoEcPublicOf(int64_t handle);
 int32_t msCryptoEcBits(int64_t handle);
 
 /* ECDSA sign/verify over the hash of data; signatures are DER. sha1 is refused for signing. */
-msString msCryptoEcdsaSign(int64_t handle, msString algorithm, msString data);
-double msCryptoEcdsaVerify(int64_t handle, msString algorithm, msString data, msString signature);
+msString msCryptoEcdsaSign(int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen);
+double msCryptoEcdsaVerify(int64_t handle, msString algorithm, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen);
 
 /* ECDH: shared secret of a private key and a peer public key; empty on failure (curves differ). */
 msString msCryptoEcdhDerive(int64_t privateHandle, int64_t publicHandle);

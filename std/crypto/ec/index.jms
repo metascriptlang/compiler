@@ -9,7 +9,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { pemDecode, pemEncode } from "../pure/pem";
 import {
@@ -253,34 +253,50 @@ function agreementFailed(reason: string): CryptoError {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused. The signature is DER and, here, uses the RFC 6979 nonce.
-export function ecdsaSignSync(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Result<Buffer, CryptoError> {
+export function ecdsaSignSync<D extends ByteInput>(key: EcPrivateKey, data: D, hash: string = "sha256"): Result<Buffer, CryptoError> {
+	return ecdsaSignSyncOwned(key, bytesOf(data), hash);
+}
+
+function ecdsaSignSyncOwned(key: EcPrivateKey, data: Buffer, hash: string): Result<Buffer, CryptoError> {
 	const kind = hashKind(hash);
 	if (hash == "sha1" || kind < 0 || kind == kindSha224 || kind == kindMd5) return Result.err(signFailed(hash, ""));
-	const raw = ecdsaSignRaw(key._data.curve, kind, key._data.d, hashOf(kind, bytesOf(data)));
+	const raw = ecdsaSignRaw(key._data.curve, kind, key._data.d, hashOf(kind, data));
 	if (raw == null) return Result.err(signFailed(hash, ""));
 	return Result.ok(ecdsaRawToDer(raw) as Buffer);
 }
 
-export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> {
+export function ecdsaSign<D extends ByteInput>(key: EcPrivateKey, data: D, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> {
+	return ecdsaSignOwned(key, bytesOf(data), hash);
+}
+
+async function ecdsaSignOwned(key: EcPrivateKey, data: Buffer, hash: string): Promise<Result<Buffer, CryptoError>> {
 	if (hash == "sha1") return Result.err(signFailed(hash, ""));
-	const done = await wcSign(key._cache, ecPrivateToPkcs8(key._data) as Buffer, key._data.curve.webName, hash, bytesOf(data));
+	const done = await wcSign(key._cache, ecPrivateToPkcs8(key._data) as Buffer, key._data.curve.webName, hash, data);
 	if (done.error != "") return Result.err(signFailed(hash, `: ${done.error}`));
 	return Result.ok(ecdsaRawToDer(done.value) as Buffer);
 }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export function ecdsaVerifySync(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): boolean {
-	const kind = hashKind(hash);
-	if (kind < 0 || kind == kindSha224 || kind == kindMd5) return false;
-	const raw = ecdsaDerToRaw(bytesOf(signature), key._data.curve.size);
-	if (raw == null) return false;
-	return ecdsaVerifyRaw(key._data.curve, key._data.point, hashOf(kind, bytesOf(data)), raw);
+export function ecdsaVerifySync<D extends ByteInput, S extends ByteInput>(key: EcPublicKey, data: D, signature: S, hash: string = "sha256"): boolean {
+	return ecdsaVerifySyncOwned(key, bytesOf(data), bytesOf(signature), hash);
 }
 
-export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> {
-	const raw = ecdsaDerToRaw(bytesOf(signature), key._data.curve.size);
+function ecdsaVerifySyncOwned(key: EcPublicKey, data: Buffer, signature: Buffer, hash: string): boolean {
+	const kind = hashKind(hash);
+	if (kind < 0 || kind == kindSha224 || kind == kindMd5) return false;
+	const raw = ecdsaDerToRaw(signature, key._data.curve.size);
 	if (raw == null) return false;
-	return await wcVerify(key._cache, key._data.point as Buffer, key._data.curve.webName, hash, bytesOf(data), raw as Buffer);
+	return ecdsaVerifyRaw(key._data.curve, key._data.point, hashOf(kind, data), raw);
+}
+
+export function ecdsaVerify<D extends ByteInput, S extends ByteInput>(key: EcPublicKey, data: D, signature: S, hash: string = "sha256"): Promise<boolean> {
+	return ecdsaVerifyOwned(key, bytesOf(data), bytesOf(signature), hash);
+}
+
+async function ecdsaVerifyOwned(key: EcPublicKey, data: Buffer, signature: Buffer, hash: string): Promise<boolean> {
+	const raw = ecdsaDerToRaw(signature, key._data.curve.size);
+	if (raw == null) return false;
+	return await wcVerify(key._cache, key._data.point as Buffer, key._data.curve.webName, hash, data, raw as Buffer);
 }
 
 // The two keys must be on the same curve.

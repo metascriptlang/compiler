@@ -27,14 +27,14 @@ msString msCryptoRsaExportPublicPem(int64_t handle);
 int64_t msCryptoRsaPublicOf(int64_t handle);
 
 /* Sign data with private key; pss is 1 for PSS and 0 for PKCS#1 v1.5. sha1 is refused. */
-msString msCryptoRsaSign(int64_t handle, msString algorithm, int32_t pss, msString data);
+msString msCryptoRsaSign(int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen);
 
 /* Verify signature with public key. Returns 1 if valid, 0 if not. */
-double msCryptoRsaVerify(int64_t handle, msString algorithm, int32_t pss, msString data, msString signature);
+double msCryptoRsaVerify(int64_t handle, msString algorithm, int32_t pss, const uint8_t* data, int64_t dataLen, const uint8_t* signature, int64_t signatureLen);
 
 /* RSA-OAEP (SHA-256) encrypt/decrypt. */
-msString msCryptoRsaEncrypt(int64_t handle, msString data);
-msString msCryptoRsaDecrypt(int64_t handle, msString data);
+msString msCryptoRsaEncrypt(int64_t handle, const uint8_t* data, int64_t dataLen);
+msString msCryptoRsaDecrypt(int64_t handle, const uint8_t* data, int64_t dataLen);
 
 /* Free a key. */
 void msCryptoRsaFree(int64_t handle);

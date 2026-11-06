@@ -8,7 +8,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
 import { ed25519PublicFromSeed, ed25519Sign, ed25519Verify, ed25519Acceptable } from "../pure/ed25519";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
@@ -110,18 +110,12 @@ export class Ed25519PublicKey {
 	_raw: Buffer;
 	_key: unknown;
 
-	static importSync(raw: Bytes): Result<Ed25519PublicKey, CryptoError> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
-		return Result.ok({ _raw: bytes.slice(0), _key: edNone() });
+	static importSync<R extends ByteInput>(raw: R): Result<Ed25519PublicKey, CryptoError> {
+		return ed25519PublicOwned(bytesOf(raw));
 	}
 
-	static async import(raw: Bytes): Promise<Result<Ed25519PublicKey, CryptoError>> {
-		const bytes = bytesOf(raw);
-		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
-		const done = await edImportPublic(bytes);
-		if (done.error != "") return Ed25519PublicKey.importSync(bytes);
-		return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
+	static import<R extends ByteInput>(raw: R): Promise<Result<Ed25519PublicKey, CryptoError>> {
+		return importEd25519Public(bytesOf(raw));
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
@@ -148,18 +142,12 @@ export class Ed25519PrivateKey {
 		return Result.ok(made.value);
 	}
 
-	static fromSeedSync(seed: Bytes): Result<Ed25519PrivateKey, CryptoError> {
-		const bytes = bytesOf(seed);
-		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
-		return Result.ok({ _seed: bytes.slice(0), _key: edNone(), _public: { _raw: ed25519PublicFromSeed(bytes) as Buffer, _key: edNone() } });
+	static fromSeedSync<S extends ByteInput>(seed: S): Result<Ed25519PrivateKey, CryptoError> {
+		return ed25519PrivateOwned(bytesOf(seed));
 	}
 
-	static async fromSeed(seed: Bytes): Promise<Result<Ed25519PrivateKey, CryptoError>> {
-		const bytes = bytesOf(seed);
-		if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
-		const done = await edFromSeed(bytes);
-		if (done.error != "") return Ed25519PrivateKey.fromSeedSync(bytes);
-		return Result.ok({ _seed: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
+	static fromSeed<S extends ByteInput>(seed: S): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+		return ed25519FromSeed(bytesOf(seed));
 	}
 
 	exportSeedSync(): Result<Buffer, CryptoError> {
@@ -173,27 +161,67 @@ export class Ed25519PrivateKey {
 	}
 }
 
-export function signSync(key: Ed25519PrivateKey, message: Bytes): Result<Buffer, CryptoError> {
-	return Result.ok(ed25519Sign(key._seed, key._public._raw, bytesOf(message)) as Buffer);
+export function signSync<M extends ByteInput>(key: Ed25519PrivateKey, message: M): Result<Buffer, CryptoError> {
+	return signSyncOwned(key, bytesOf(message));
 }
 
-export async function sign(key: Ed25519PrivateKey, message: Bytes): Promise<Result<Buffer, CryptoError>> {
-	if (edIsNone(key._key)) return signSync(key, message);
-	const done = await edSign(key._key, bytesOf(message));
+function signSyncOwned(key: Ed25519PrivateKey, message: Buffer): Result<Buffer, CryptoError> {
+	return Result.ok(ed25519Sign(key._seed, key._public._raw, message) as Buffer);
+}
+
+export function sign<M extends ByteInput>(key: Ed25519PrivateKey, message: M): Promise<Result<Buffer, CryptoError>> {
+	return signOwned(key, bytesOf(message));
+}
+
+async function signOwned(key: Ed25519PrivateKey, message: Buffer): Promise<Result<Buffer, CryptoError>> {
+	if (edIsNone(key._key)) return signSyncOwned(key, message);
+	const done = await edSign(key._key, message);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519.sign", done.error));
 	return Result.ok(done.value);
 }
 
 // False on any failure: a bad signature, a malformed input, a small-order key or R, or S not below L.
-export function verifySync(key: Ed25519PublicKey, signature: Bytes, message: Bytes): boolean {
-	const sig = bytesOf(signature);
-	if (!ed25519Acceptable(key._raw, sig)) return false;
-	return ed25519Verify(key._raw, sig, bytesOf(message));
+export function verifySync<S extends ByteInput, M extends ByteInput>(key: Ed25519PublicKey, signature: S, message: M): boolean {
+	return verifySyncOwned(key, bytesOf(signature), bytesOf(message));
 }
 
-export async function verify(key: Ed25519PublicKey, signature: Bytes, message: Bytes): Promise<boolean> {
-	if (edIsNone(key._key)) return verifySync(key, signature, message);
-	const sig = bytesOf(signature);
+function verifySyncOwned(key: Ed25519PublicKey, signature: Buffer, message: Buffer): boolean {
+	const sig = signature;
 	if (!ed25519Acceptable(key._raw, sig)) return false;
-	return await edVerify(key._key, sig, bytesOf(message));
+	return ed25519Verify(key._raw, sig, message);
+}
+
+export function verify<S extends ByteInput, M extends ByteInput>(key: Ed25519PublicKey, signature: S, message: M): Promise<boolean> {
+	return verifyOwned(key, bytesOf(signature), bytesOf(message));
+}
+
+async function verifyOwned(key: Ed25519PublicKey, signature: Buffer, message: Buffer): Promise<boolean> {
+	if (edIsNone(key._key)) return verifySyncOwned(key, signature, message);
+	const sig = signature;
+	if (!ed25519Acceptable(key._raw, sig)) return false;
+	return await edVerify(key._key, sig, message);
+}
+
+async function importEd25519Public(bytes: Buffer): Promise<Result<Ed25519PublicKey, CryptoError>> {
+	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
+	const done = await edImportPublic(bytes);
+	if (done.error != "") return ed25519PublicOwned(bytes);
+	return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
+}
+
+async function ed25519FromSeed(bytes: Buffer): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
+	const done = await edFromSeed(bytes);
+	if (done.error != "") return ed25519PrivateOwned(bytes);
+	return Result.ok({ _seed: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
+}
+
+function ed25519PublicOwned(bytes: Buffer): Result<Ed25519PublicKey, CryptoError> {
+	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
+	return Result.ok({ _raw: bytes.slice(0), _key: edNone() });
+}
+
+function ed25519PrivateOwned(bytes: Buffer): Result<Ed25519PrivateKey, CryptoError> {
+	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
+	return Result.ok({ _seed: bytes.slice(0), _key: edNone(), _public: { _raw: ed25519PublicFromSeed(bytes) as Buffer, _key: edNone() } });
 }

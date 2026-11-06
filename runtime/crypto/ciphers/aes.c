@@ -29,12 +29,12 @@ static const msAesKey* keyOf(int64_t handle) {
 	return (const msAesKey*)(uintptr_t)handle;
 }
 
-int64_t msCryptoAesKeyNew(msString raw) {
-	if (msStrLen(raw) != 16 && msStrLen(raw) != 32) return 0;
+int64_t msCryptoAesKeyNew(const uint8_t* raw, int64_t rawLen) {
+	if (rawLen != 16 && rawLen != 32) return 0;
 	msAesKey* key = (msAesKey*)calloc(1, sizeof(msAesKey));
 	if (key == NULL) return 0;
-	key->len = (size_t)msStrLen(raw);
-	memcpy(key->bytes, msStringToCString(raw), key->len);
+	key->len = (size_t)rawLen;
+	memcpy(key->bytes, raw, key->len);
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 	return (int64_t)(uintptr_t)key;
 }
@@ -195,19 +195,19 @@ int64_t msCryptoAesOpenInto(int64_t keyHandle, const uint8_t* sealed, int64_t se
 
 /* ===== AES-CBC ===== */
 
-msString msCryptoAesCbcEncrypt(int64_t keyHandle, msString plainText, msString iv) {
+msString msCryptoAesCbcEncrypt(int64_t keyHandle, const uint8_t* plainText, int64_t plainTextLen, const uint8_t* iv, int64_t ivLen) {
 	const msAesKey* key = keyOf(keyHandle);
 	if (key == NULL) return MS_EMPTY_STRING;
-	if (msStrLen(iv) != 16) return MS_EMPTY_STRING;
+	if (ivLen != 16) return MS_EMPTY_STRING;
 
-	size_t ptLen = (size_t)msStrLen(plainText);
+	size_t ptLen = (size_t)plainTextLen;
 	size_t paddedLen = ptLen + (16 - (ptLen % 16));
 	uint8_t* padded = (uint8_t*)msMemAlloc(paddedLen);
-	memcpy(padded, msStringToCString(plainText), ptLen);
+	if (ptLen > 0) memcpy(padded, plainText, ptLen);
 	memset(padded + ptLen, (int)(paddedLen - ptLen), paddedLen - ptLen);
 
 	uint8_t ivCopy[16];
-	memcpy(ivCopy, msStringToCString(iv), 16);
+	memcpy(ivCopy, iv, 16);
 
 	mbedtls_aes_context aes;
 	mbedtls_aes_init(&aes);
@@ -223,15 +223,15 @@ msString msCryptoAesCbcEncrypt(int64_t keyHandle, msString plainText, msString i
 	return result;
 }
 
-int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, msString cipherText, msString iv, msString* plainTextOut) {
+int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, const uint8_t* cipherText, int64_t cipherTextLen, const uint8_t* iv, int64_t ivLen, msString* plainTextOut) {
 	const msAesKey* key = keyOf(keyHandle);
 	if (key == NULL) return 0;
-	if (msStrLen(iv) != 16) return 0;
-	if (msStrLen(cipherText) == 0 || msStrLen(cipherText) % 16 != 0) return 0;
+	if (ivLen != 16) return 0;
+	if (cipherTextLen == 0 || cipherTextLen % 16 != 0) return 0;
 
-	size_t ctLen = (size_t)msStrLen(cipherText);
+	size_t ctLen = (size_t)cipherTextLen;
 	uint8_t ivCopy[16];
-	memcpy(ivCopy, msStringToCString(iv), 16);
+	memcpy(ivCopy, iv, 16);
 
 	mbedtls_aes_context aes;
 	mbedtls_aes_init(&aes);
@@ -239,7 +239,7 @@ int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, msString cipherText, msString i
 	int64_t plainLen = -1;
 	if (mbedtls_aes_setkey_dec(&aes, (const uint8_t*)key->bytes, (unsigned int)key->len * 8) == 0
 		&& mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ctLen, ivCopy,
-			(const uint8_t*)msStringToCString(cipherText), out) == 0) {
+			cipherText, out) == 0) {
 		plainLen = removePkcs7Padding(out, ctLen);
 	}
 	mbedtls_aes_free(&aes);

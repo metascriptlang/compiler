@@ -48,9 +48,9 @@ int64_t msEd25519KeyGenerate(void) {
 	return handle;
 }
 
-int64_t msEd25519KeyFromSeed(msString seed) {
-	if (msStrLen(seed) != 32) return 0;
-	return keyFromSeedBytes((const uint8_t *)msStrData(&seed));
+int64_t msEd25519KeyFromSeed(const uint8_t* seed, int64_t seedLen) {
+	if (seedLen != 32) return 0;
+	return keyFromSeedBytes((const uint8_t *)seed);
 }
 
 msString msEd25519KeySeed(int64_t key) {
@@ -61,9 +61,9 @@ msString msEd25519KeyPublicRaw(int64_t key) {
 	return msStringNew((const char *)blockOf(key) + 32, 32);
 }
 
-int64_t msEd25519PublicFromRaw(msString raw) {
-	if (msStrLen(raw) != 32) return 0;
-	return newBlock((const uint8_t *)msStrData(&raw), 32);
+int64_t msEd25519PublicFromRaw(const uint8_t* raw, int64_t rawLen) {
+	if (rawLen != 32) return 0;
+	return newBlock((const uint8_t *)raw, 32);
 }
 
 msString msEd25519PublicRaw(int64_t key) {
@@ -79,11 +79,11 @@ void msEd25519KeyFree(int64_t key) {
 /* RFC 8032 5.1.6 signs from the seed and derives A itself, and an A taken from the caller lets two
  * signatures share R with different S, which reveals the private scalar. The block's A was derived
  * from its seed at construction and no API takes one from the caller, so sign never derives it again. */
-msString msEd25519KeySign(int64_t key, msString message) {
+msString msEd25519KeySign(int64_t key, const uint8_t* message, int64_t messageLen) {
 	uint8_t sig[64];
 	crypto_ed25519_sign(sig, blockOf(key),
-		(const uint8_t *)msStrData(&message),
-		msStrLen(message));
+		(const uint8_t *)message,
+		messageLen);
 	return msStringNew((const char *)sig, 64);
 }
 
@@ -116,17 +116,17 @@ static int isSmallOrderPoint(const uint8_t enc[32]) {
 /* Strict verify: RFC 8032 5.1.7 (Monocypher's check also enforces S < L) plus a
  * refusal of small-order A or R, which Monocypher documents it allows and which
  * lets an identity key accept every message. */
-int32_t msEd25519PublicVerify(int64_t key, msString signature, msString message) {
-	if (msStrLen(signature) != 64) return 0;
+int32_t msEd25519PublicVerify(int64_t key, const uint8_t* signature, int64_t signatureLen, const uint8_t* message, int64_t messageLen) {
+	if (signatureLen != 64) return 0;
 	const uint8_t *publicKey = blockOf(key);
 	if (isSmallOrderPoint(publicKey)) return 0;
-	if (isSmallOrderPoint((const uint8_t *)msStrData(&signature))) return 0;
+	if (isSmallOrderPoint((const uint8_t *)signature)) return 0;
 
 	int r = crypto_ed25519_check(
-		(const uint8_t *)msStrData(&signature),
+		(const uint8_t *)signature,
 		publicKey,
-		(const uint8_t *)msStrData(&message),
-		msStrLen(message));
+		(const uint8_t *)message,
+		messageLen);
 
 	return r == 0 ? 1 : 0;
 }

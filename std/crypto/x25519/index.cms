@@ -11,15 +11,15 @@
 @passC("-Ivendor/monocypher/src");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 // C bindings
 extern function msX25519KeyGenerate(): int64;
-extern function msX25519KeyFromRaw(raw: string): int64;
+extern function msX25519KeyFromRaw(raw: Readonly<Span<uint8>>): int64;
 extern function msX25519KeyPublicRaw(key: int64): string;
-extern function msX25519PublicFromRaw(raw: string): int64;
+extern function msX25519PublicFromRaw(raw: Readonly<Span<uint8>>): int64;
 extern function msX25519PublicRaw(key: int64): string;
 extern function msX25519SharedSecret(privateKey: int64, publicKey: int64): string;
 extern function msX25519KeyFree(key: int64): void;
@@ -27,13 +27,13 @@ extern function msX25519KeyFree(key: int64): void;
 export class X25519PublicKey {
 	_h: int64;
 
-	static importSync(raw: Bytes): Result<X25519PublicKey, CryptoError> {
-		const h = msX25519PublicFromRaw(rawString(raw));
+	static importSync<R extends ByteInput>(raw: R): Result<X25519PublicKey, CryptoError> {
+		const h = msX25519PublicFromRaw(typeof raw == "string" ? raw.asBytes() : raw);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PublicKey.import", "public key must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
 
-	static async import(raw: Bytes): Promise<Result<X25519PublicKey, CryptoError>> { return X25519PublicKey.importSync(raw); }
+	static import<R extends ByteInput>(raw: R): Promise<Result<X25519PublicKey, CryptoError>> { return Promise.resolve(X25519PublicKey.importSync(raw)); }
 
 	exportSync(): Result<Buffer, CryptoError> {
 		return Result.ok(rawBuffer(msX25519PublicRaw(this._h)));
@@ -60,16 +60,16 @@ export class X25519PrivateKey {
 
 	static async generate(): Promise<Result<X25519PrivateKey, CryptoError>> { return X25519PrivateKey.generateSync(); }
 
-	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
-		const h = msX25519KeyFromRaw(rawString(raw));
+	static fromRawSync<R extends ByteInput>(raw: R): Result<X25519PrivateKey, CryptoError> {
+		const h = msX25519KeyFromRaw(typeof raw == "string" ? raw.asBytes() : raw);
 		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
 		return Result.ok({ _h: h });
 	}
 
-	static async fromRaw(raw: Bytes): Promise<Result<X25519PrivateKey, CryptoError>> { return X25519PrivateKey.fromRawSync(raw); }
+	static fromRaw<R extends ByteInput>(raw: R): Promise<Result<X25519PrivateKey, CryptoError>> { return Promise.resolve(X25519PrivateKey.fromRawSync(raw)); }
 
 	publicKey(): X25519PublicKey {
-		const h = msX25519PublicFromRaw(msX25519KeyPublicRaw(this._h));
+		const h = msX25519PublicFromRaw(msX25519KeyPublicRaw(this._h).asBytes());
 		if (h == 0) throw new Error("X25519PrivateKey.publicKey: out of memory");
 		return { _h: h };
 	}

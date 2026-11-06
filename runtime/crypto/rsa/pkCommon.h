@@ -37,12 +37,12 @@ static inline mbedtls_md_type_t pkMdType(msString algorithm) {
 
 /* Hashes data with the named algorithm into hash; returns the hash length, 0 when the name is
  * unknown, or when it is sha1 and forSigning (sha1 signatures are refused, verifying one is not). */
-static inline int pkHash(msString algorithm, int forSigning, msString data, mbedtls_md_type_t* mdType, unsigned char* hash) {
+static inline int pkHash(msString algorithm, int forSigning, const uint8_t* data, int64_t dataLen, mbedtls_md_type_t* mdType, unsigned char* hash) {
 	*mdType = pkMdType(algorithm);
 	if (*mdType == MBEDTLS_MD_NONE || (forSigning && *mdType == MBEDTLS_MD_SHA1)) return 0;
 	const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(*mdType);
 	if (!mdInfo) return 0;
-	if (mbedtls_md(mdInfo, (const unsigned char*)msStringToCString(data), msStrLen(data), hash) != 0) return 0;
+	if (mbedtls_md(mdInfo, data, (size_t)dataLen, hash) != 0) return 0;
 	return mbedtls_md_get_size(mdInfo);
 }
 
