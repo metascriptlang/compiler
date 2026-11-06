@@ -1,6 +1,7 @@
 /** RSA key integers as minimal big-endian bytes, shared by the key encodings and both arithmetic backends. */
 
 import { Modulus } from "./ff";
+import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
 
 /**
  * Key integers as minimal big-endian bytes. The `Modulus` fields carry the Montgomery constants the C arithmetic
@@ -24,6 +25,26 @@ export interface RsaPrivateData {
 	nModulus: Modulus | null;
 	pModulus: Modulus | null;
 	qModulus: Modulus | null;
+}
+
+function wipePrime(modulus: Modulus | null): void {
+	if (modulus == null) return;
+	wipeWords(modulus.v);
+	wipeWords(modulus.rr);
+	wipeWords64(modulus.w);
+	wipeWords64(modulus.wrr);
+	wipeWords64(modulus.wone);
+}
+
+/** Clears the private integers and prime moduli; the public half (`n`, `e`, `nModulus`) stays usable. */
+export function rsaWipePrivate(data: RsaPrivateData): void {
+	for (const bytes of [data.d, data.p, data.q, data.dp, data.dq, data.qi]) {
+		wipeBytes(bytes);
+	}
+	wipePrime(data.pModulus);
+	wipePrime(data.qModulus);
+	data.pModulus = null;
+	data.qModulus = null;
 }
 
 /** The bit length of a big-endian integer. */

@@ -2,8 +2,8 @@ import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { bytesOf } from "./bytes";
 import { pemDecode, pemEncode } from "./pem";
-import { Modulus } from "./ff";
-import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
+import { wipeBytes } from "./secret";
+import { rsaWipePrivate } from "./rsaKey";
 import {
 	RsaPublicData, RsaPrivateData,
 	rsaPublicFromPkcs1, rsaPublicFromSpki, rsaPublicToSpki,
@@ -43,25 +43,6 @@ function publicOfPem(pem: string): RsaPublicData | null {
 
 function validSignHash(hash: string): boolean {
 	return hash == "sha256" || hash == "sha384" || hash == "sha512";
-}
-
-function wipePrime(modulus: Modulus | null): void {
-	if (modulus == null) return;
-	wipeWords(modulus.v);
-	wipeWords(modulus.rr);
-	wipeWords64(modulus.w);
-	wipeWords64(modulus.wrr);
-	wipeWords64(modulus.wone);
-}
-
-function wipePrivate(data: RsaPrivateData): void {
-	for (const bytes of [data.d, data.p, data.q, data.dp, data.dq, data.qi]) {
-		wipeBytes(bytes);
-	}
-	wipePrime(data.pModulus);
-	wipePrime(data.qModulus);
-	data.pModulus = null;
-	data.qModulus = null;
 }
 
 export class RsaPublicKey {
@@ -183,7 +164,7 @@ export class RsaPrivateKey {
 	onDestroy(): void {
 		const data = this._data;
 		if (data != null) {
-			wipePrivate(data);
+			rsaWipePrivate(data);
 			this._data = null;
 		}
 	}
