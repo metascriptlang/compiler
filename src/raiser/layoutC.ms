@@ -6,7 +6,8 @@ import { createAliveSet, CEmissionFacts, CSection, createCGen, sec, extract } fr
 import { getTypeDesc } from "../codegen/c/types";
 import { mangleFieldName } from "../codegen/c/names";
 import { cwd, execFileCapture } from "std/process";
-import { writeFile, exists } from "std/fs";
+import { writeFile, exists, mkdirExclusive, removeAll } from "std/fs";
+import { tmpDir } from "std/os";
 import { MemKind, VmLayout, CELL_HEADER_SIZE } from "./layout";
 import { createVmLayouts, vmLayoutOf, vmCellOf } from "../codegen/raiser/layout";
 
@@ -59,9 +60,15 @@ function emitted(types: Type[]): string[] {
 function compileC(source: string): string {
 	const runtime = `${cwd()}/runtime`;
 	if (!exists(`${runtime}/manual.h`)) return `internal: no runtime tree at ${runtime}`;
-	const file = "/tmp/vmLayoutPin.c";
-	if (!writeFile(file, source).ok) return `internal: cannot write ${file}`;
+	const dir = tmpDir() + "/ms-vmLayoutPin-" + String(Math.floor(Math.random() * 1000000000));
+	if (!mkdirExclusive(dir).ok) return `internal: cannot create ${dir}`;
+	const file = dir + "/vmLayoutPin.c";
+	if (!writeFile(file, source).ok) {
+		removeAll(dir);
+		return `internal: cannot write ${file}`;
+	}
 	const r = execFileCapture("cc", ["-std=c11", "-fsyntax-only", "-I", runtime, "-I", cwd(), file]);
+	removeAll(dir);
 	return r.ok ? "" : r.error.errorOutput + r.error.output + r.error.message;
 }
 
