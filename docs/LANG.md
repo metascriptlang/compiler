@@ -3387,7 +3387,8 @@ live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Rais
 | `x as Ptr<void>` for a float or a boolean | refused at compile time: only an integer holds an address | the same checker rule (not run) | the same checker rule (not run) |
 | `p as int64` / `p as uint64` for a pointer | the address as an integer (`null` reads 0) | refused (measured for `int32`) | not measured |
 | `p as int32` (or any narrower integer, a float, a boolean) | refused at compile time: the address does not fit; before 2026-11-07 a C compile error | refused | the same checker rule (not run) |
-| `b as Ptr<void>` for a `B \| null` | the pointer, `null` for null (before 2026-11-07 an internal error on C; corpus `nullableClassAddress`) | same | leaks the object when a function returns the cast: inbox `2026-11-07-raiser-returned-class-to-ptr-cast-leaks-object` |
+| `b as Ptr<void>` for a `B \| null` | the pointer, `null` for null (before 2026-11-07 an internal error on C; corpus `nullableClassAddress`) | same | same (corpus `nullableClassAddress`) |
+| `return b as Ptr<void>` for a class parameter `b` | the pointer, but the object leaks one count (ledger `alloc=1 destroy=0`): inbox `2026-11-07-returned-class-to-ptr-cast-leaks-object` | not measured | leaks the same way |
 | a `const` binding or value-type parameter of a struct | `Readonly<Ptr<S>>`: reads compile, a write is refused | same | same |
 | a call or a literal of a struct (`mk() as Ptr<S>`) | refused: no address | refused | refused |
 | `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
