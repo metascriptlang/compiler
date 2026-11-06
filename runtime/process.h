@@ -1578,6 +1578,7 @@ static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
 		DWORD got = WaitForSingleObject(c->proc, 0);
 		if (got == WAIT_OBJECT_0) {
 			_msProcChildRecordStatus(c, 0);
+			while (_msProcChildPump(c, NULL, 0, NULL, 0)) {}
 			break;
 		}
 		if (got != WAIT_TIMEOUT) {
@@ -1947,6 +1948,16 @@ static inline msString msProcChildTake(int64_t h, int32_t stream) {
 	return taken;
 }
 
+static inline void _msProcChildDrainExited(msProcChild* c) {
+	for (;;) {
+		size_t before = c->out.len + c->err.len;
+		int outOpen = c->out.fd >= 0, errOpen = c->err.fd >= 0;
+		if (!outOpen && !errOpen) return;
+		_msProcChildPump(c, NULL, 0, NULL, 0);
+		if (c->out.len + c->err.len == before && (c->out.fd >= 0) == outOpen && (c->err.fd >= 0) == errOpen) return;
+	}
+}
+
 /* WNOHANG between pump rounds, backing off from 50 us to 50 ms; the deadline leaves the child running. */
 static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
 	msProcChild* c = _msProcChildOf(h);
@@ -1957,6 +1968,7 @@ static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
 		pid_t got = waitpid(c->pid, &status, WNOHANG);
 		if (got == c->pid) {
 			_msProcChildRecordStatus(c, status);
+			_msProcChildDrainExited(c);
 			break;
 		}
 		if (got < 0 && errno != EINTR) {
