@@ -325,6 +325,18 @@ test "a numeric constraint rejects a string and accepts every number" {
 	assert strictErrorCount(src + "const c = h(3);\nconst d = h(2.5);") == 0;
 }
 
+test "a union binding meets a wider union constraint member by member" {
+	const src = "function h<T extends string | number | boolean>(a: T): int32 { return 0; }\nfunction pick(f: boolean): string | number { return f ? \"s\" : 1; }\n";
+	assert strictErrorCount(src + "const c = h(pick(true));") == 0;
+	assert strictErrorCount(src + "const c = h<string | number>(pick(true));") == 0;
+	assert hasError("function h<T extends string | boolean>(a: T): int32 { return 0; }\nfunction pick(f: boolean): string | number { return f ? \"s\" : 1; }\nconst c = h(pick(true));", "Type 'number | string' does not satisfy constraint");
+}
+
+test "a union of a string and a typed array meets a byte-input constraint that holds a view" {
+	const src = "function h<B extends string | Uint8Array | Readonly<Span<uint8>>>(b: B): int32 { return 0; }\nfunction pick(f: boolean): string | Uint8Array { return f ? \"s\" : new Uint8Array(2); }\n";
+	assert strictErrorCount(src + "const c = h(pick(true));") == 0;
+}
+
 test "a constraint naming an earlier type parameter is checked after both bind" {
 	const src = "function k<T, U extends T[]>(a: T, b: U): T { return a; }\n";
 	assert hasError(src + "const c = k(1, [\"s\"]);", "does not satisfy constraint");

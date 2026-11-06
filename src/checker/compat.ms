@@ -355,7 +355,16 @@ export function unmetConstraint(param: Type, bound: Type, params: Type[], types:
 	if (raw == null) return null;
 	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
-	return isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) || holdsOnlyLength(bound, constraint) ? null : constraint;
+	return meetsConstraint(bound, constraint) ? null : constraint;
+}
+
+function meetsConstraint(bound: Type, constraint: Type): boolean {
+	if (isAssignable(bound, constraint) || literalHoldsFields(bound, constraint) || holdsOnlyLength(bound, constraint)) return true;
+	if (bound.kind != TypeKind.Union || bound.typeChildren.length == 0) return false;
+	for (const member of bound.typeChildren) {
+		if (member == null || !meetsConstraint(member, constraint)) return false;
+	}
+	return true;
 }
 
 // A `{ length: number }` constraint is met by a string or an array: the bound keeps its own type and no value is converted to the object type.
