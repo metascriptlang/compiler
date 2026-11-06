@@ -12,7 +12,7 @@ and with no `--target` a run takes every glibc and Windows target whose base con
     <target>.cxx/                                 the three archives and the aliases of their other spellings
     <target>.cxx.cfg  <target>.dll.cxx.cfg        one config per base config <name>.cfg (Windows has both)
     darwin/<target>.cxx{,.cfg}                    macOS: libc++abi and libc++ only, libunwind is libSystem's
-    notices/cpp-provenance.json, notices/{libcxx,libcxxabi,libunwind}/LICENSE.TXT
+    notices/cpp-provenance.json, notices/{libcxx,libcxxabi,libunwind}/LICENSE.TXT, notices/zig/LICENSE
 
 Zig runs once per config on a C++ fixture with a private cache (`--seed-cache` copies the private cache of an
 earlier run, which only skips building), and its compile and link lines give the defines, the include order and the
@@ -57,7 +57,7 @@ DARWIN_ZIG_VERSION = ".11.0"
 CXX_STANDARD = "-std=c++20"
 CPP_DEFINES = ("-D_LIBCPP_", "-D_LIBCXXABI_")
 HEADERS = {"libcxx": "libcxx/include", "libcxxabi": "libcxxabi/include", "libunwind": "libunwind/include"}
-SPEC = {"notices": {name: [name + "/LICENSE.TXT"] for name in HEADERS}}
+SPEC = {"notices": dict({name: [name + "/LICENSE.TXT"] for name in HEADERS}, zig=["../LICENSE"])}
 ARCHIVES = {LINUX: ["libc++abi.a", "libc++.a", "libunwind.a"], WINDOWS: ["c++abi.lib", "c++.lib", "unwind.lib"]}
 ARCHIVES[LINUX_ARM64], ARCHIVES[WINDOWS_ARM64] = ARCHIVES[LINUX], ARCHIVES[WINDOWS]
 ARCHIVES[MUSL], ARCHIVES[MUSL_ARM64] = ARCHIVES[LINUX], ARCHIVES[LINUX]

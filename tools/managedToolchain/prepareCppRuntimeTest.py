@@ -157,6 +157,14 @@ class CrossCheckTest(unittest.TestCase):
 
 
 class OverlayTest(TempCase):
+    def test_the_overlay_carries_the_zig_license_its_receipt_names_beside_the_libcxx_family(self):
+        zigLib = self.path("zig", "lib")
+        write(self.path("zig", "LICENSE"), "MIT License\n")
+        for name in pc.HEADERS:
+            write(os.path.join(zigLib, name, "LICENSE.TXT"))
+        records = pr.copyNotices(self.path("out"), zigLib, pc.SPEC)
+        self.assertEqual(sorted(records), ["notices/%s/LICENSE.TXT" % n for n in sorted(pc.HEADERS)] + ["notices/zig/LICENSE"])
+
     def test_an_alias_is_a_relative_link_to_the_file_it_stands_for_per_target_naming(self):
         for names, expected in ((pc.ARCHIVES[pc.LINUX], {"libstdc++.a": "libc++.a", "libsupc++.a": "libc++abi.a",
                                                          "libgcc_eh.a": "libunwind.a", "libgcc_s.a": "libunwind.a"}),
