@@ -107,3 +107,38 @@ test "E2E C: a generator reduction without a mask, with an effect or reading its
 		assert !out.contains("msRangeFits"), c;
 	}
 }
+
+function mapped(name: string, body: string, flags: string[]): string {
+	return builtModuleC("blockReduce", name, `function f(xs: int32[]): int32[] { ${body} }\nconsole.log(f([1, 2, 3]).length);\n`, flags);
+}
+
+test "E2E C: a mapped toArray of an affine term stores in blocks guarded by the source range" {
+	const cases: string[][] = [
+		["-1073741824LL", "1073741823LL", "return xs.values().map((x) => x * 2).toArray();"],
+		["-1073741824LL", "1073741823LL", "return xs.values().map((x) => x * 2 + 1).toArray();"],
+		["-2147483646LL", "2147483647LL", "return xs.values().map((x) => 1 - x).toArray();"],
+		["-715827877LL", "715827882LL", "return xs.values().map((x) => (x - 5) * 3 + 15).toArray();"],
+	];
+	for (const c of cases) {
+		const out = mapped("affine", c[2], ["--release"]);
+		assert !out.startsWith("error:"), out.slice(0, 400);
+		assert out.contains("msSpanMapFitsI32(") && out.contains(c[0]) && out.contains(c[1]), c[2];
+	}
+}
+
+test "E2E C: a mapped toArray outside the affine shape, or under --danger, keeps the checked loop alone" {
+	const cases: string[] = [
+		"return xs.values().map((x) => x * x).toArray();",
+		"return xs.values().map((x, i) => x + (i as int32)).toArray();",
+		"let k: int32 = 3; k = k + 1; return xs.values().map((x) => x * k).toArray();",
+		"return xs.values().map((x) => x & 7).toArray();",
+	];
+	for (const c of cases) {
+		const out = mapped("notaffine", c, ["--release"]);
+		assert !out.startsWith("error:"), out.slice(0, 400);
+		assert !out.contains("msSpanMapFits"), c;
+	}
+	const danger = mapped("danger", "return xs.values().map((x) => x * 2).toArray();", ["--danger"]);
+	assert !danger.startsWith("error:"), danger.slice(0, 400);
+	assert !danger.contains("msSpanMapFits");
+}
