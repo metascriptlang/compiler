@@ -43,6 +43,10 @@
 #endif
 #define MS_RC_INCREMENT      ((intptr_t)1 << MS_RC_SHIFT)
 #define MS_RC_STRONG_MASK    (~(intptr_t)MS_RC_MASK & ~MS_UNOWNED_MASK)
+/* An immortal count sits halfway between the floor and the sign bit ORC's trial deletion uses, so a
+ * stray plain increment or decrement leaves it immortal (PEP 683 _Py_IMMORTAL_REFCNT). */
+#define MS_RC_IMMORTAL_FLOOR ((intptr_t)1 << (sizeof(intptr_t) * 8 - 2))
+#define MS_RC_IMMORTAL       ((intptr_t)3 << (sizeof(intptr_t) * 8 - 3))
 
 /* ===== Reference Header ===== */
 
@@ -56,6 +60,10 @@ typedef struct {
 /* Get header from user pointer: header lives right before the object */
 static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
+}
+
+static inline bool msIsImmortal(void* p) {
+	return msHeader(p)->rc >= MS_RC_IMMORTAL_FLOOR;
 }
 
 static inline bool msIsInstance(void* p, const msTypeInfo* target) {
@@ -76,6 +84,7 @@ enum {
 	MS_DS_ORC_DEC_LAST, MS_DS_ORC_DEC_LAST_TRUE,
 	MS_DS_CYC_REG, MS_DS_COLLECT, MS_DS_COLLECT_TRACED, MS_DS_COLLECT_FREED,
 	MS_DS_CELLSEQ_GROW,
+	MS_DS_RC_RO_INC, MS_DS_RC_RO_DEC,
 	MS_DS_COUNT
 };
 void msDrcStatAdd(int id, uint64_t n);

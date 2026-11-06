@@ -29,13 +29,13 @@ function define(row: int32, names: string[]): void {
 	for (const name of names) rows.set(name, row);
 }
 
-define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
+define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msIncrefRo", "msIncrefCyclicRo", "msAtomicIncref", "msStringIncref", "msClosureCopy"]);
 define(ROW_DECREF, [
-	"msDecref", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
+	"msDecref", "msDecrefRo", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msStructCellDestroy",
 	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayUnownedRefDestroy", "msArrayAtomicRefDestroy",
 	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msUnownedRefArrayDestroy", "msAtomicRefArrayDestroy",
 ]);
-define(ROW_DECREF_CYCLIC, ["msDecrefCyclic"]);
+define(ROW_DECREF_CYCLIC, ["msDecrefCyclic", "msDecrefCyclicRo"]);
 define(ROW_CLEAR, [
 	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msStructCellWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",

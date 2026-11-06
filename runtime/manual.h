@@ -505,6 +505,11 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msPtrWasMoved(p)      do { (p) = (void*)0; } while(0)
 #define msIncrefCyclic(p)     ((void)0)
 #define msDecrefCyclic(p)     ((void)0)
+#define msIncrefRo(p)         ((void)0)
+#define msDecrefRo(p)         ((void)0)
+#define msIncrefCyclicRo(p)   ((void)0)
+#define msDecrefCyclicRo(p)   ((void)0)
+#define msDecrefCyclicEdgeRo(o, p) ((void)(o), false)
 #define msDecrefEdge(o, p)    ((void)(o), false)
 #define msDecrefCyclicEdge(o, p) ((void)(o), false)
 #define msDropHasRoom() true

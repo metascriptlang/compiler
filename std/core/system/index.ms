@@ -347,6 +347,21 @@ extern function msIncrefCyclic(p: Ptr<void>): void;
 extern function msDecrefCyclic(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msIncrefRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msDecrefRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msIncrefCyclicRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msDecrefCyclicRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msDecrefCyclicEdgeRo(owner: Ptr<void>, p: Ptr<void>): boolean;
+
+@compilerFunc
 extern function msDecrefEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
 
 @compilerFunc

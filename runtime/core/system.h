@@ -417,6 +417,19 @@ static inline void msStringCopy(msString* dest, msString src) {
 	} \
 } while(0)
 
+/* --- Readonly<T> flavor: a value reached through a read-only view may be immortal --- */
+#define MS_RO_OP(id, p, op) do { \
+	void* __msRoP = (void*)(p); \
+	if (__msRoP != NULL) { \
+		MS_DRC_STAT_ADD(id, 1); \
+		if (!msIsImmortal(__msRoP)) op(__msRoP); \
+	} \
+} while(0)
+#define msIncrefRo(p)         MS_RO_OP(MS_DS_RC_RO_INC, p, msIncRef)
+#define msDecrefRo(p)         MS_RO_OP(MS_DS_RC_RO_DEC, p, msDecref)
+#define msIncrefCyclicRo(p)   MS_RO_OP(MS_DS_RC_RO_INC, p, msOrcIncRef)
+#define msDecrefCyclicRo(p)   MS_RO_OP(MS_DS_RC_RO_DEC, p, msDecrefCyclic)
+
 #define MS_DECREF_EDGE(owner, p, isLast) ({ \
 	void* __msEdgeP = (void*)(p); \
 	bool __msEdgeQueued = false; \
@@ -432,6 +445,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 })
 #define msDecrefEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
 #define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msOrcDecRefIsLast)
+#define msDecrefCyclicEdgeRo(owner, p) ({ \
+	void* __msRoEdgeP = (void*)(p); \
+	if (__msRoEdgeP != NULL) MS_DRC_STAT_ADD(MS_DS_RC_RO_DEC, 1); \
+	__msRoEdgeP != NULL && !msIsImmortal(__msRoEdgeP) && msDecrefCyclicEdge(owner, __msRoEdgeP); \
+})
 
 /* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
  * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */

@@ -257,7 +257,7 @@ static void msDsPrintRows(FILE* f, const char* flow, const msDsTypeRow* rows, si
 static const char* msDsFlowNames[MS_DS_COUNT] = {
 	"alloc", "alloc", "free", "rc.inc", "rc.dec", "rc.incAtomic", "rc.decAtomic", "rc.incCyclic",
 	"orc.decLast", "orc.decLast.true", "cycle.register", "collect", "collect.traced", "collect.freed",
-	"collect.bufferGrow"
+	"collect.bufferGrow", "rc.roInc", "rc.roDec"
 };
 
 /* Runs from atexit, registered before the pool's, so it runs after the pool joined its workers. */
