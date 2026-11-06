@@ -16,6 +16,7 @@
 // GUARD-CHECK-FAIL it is stored in an object literal
 // GUARD-CHECK-FAIL cannot move this value: it is not the sole owner
 // GUARD-CHECK-FAIL the value destructured into 'data'
+// GUARD-CHECK-FAIL cannot move 'r.value': it is not the sole owner — a call with side effects may keep an alias of it
 
 struct Read { data: Buffer; }
 
@@ -48,8 +49,27 @@ function destructuredFromALiveLocal(sink: Readonly<Sink>): void {
 	console.log(got.data.length);
 }
 
+struct State { items: int32[]; }
+
+actor Keeper {
+	state(s: State): void { console.log(`state ${s.items.length}`); }
+}
+
+const sharedItems: int32[] = [1];
+
+function wrap(): Result<State, string> {
+	return Result.ok({ items: sharedItems });
+}
+
+function resultOfAShared(keeper: Readonly<Keeper>): void {
+	const r = wrap();
+	if (!r.ok) return;
+	keeper.state(move r.value); // GUARD-REFUSED
+}
+
 const s = new Sink();
 fieldOfAShared(s);
 fieldStoredTwice(s);
 callOfAParameter(s, Buffer.alloc(2));
 destructuredFromALiveLocal(s);
+resultOfAShared(new Keeper());
