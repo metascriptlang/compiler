@@ -279,10 +279,19 @@ function intCheckHelperNames(): HashSet<string> {
 }
 
 export function isIntCheckCall(n: Node): boolean {
+	return intCheckName(n) != "";
+}
+
+export function isIntCheckWrite(n: Node): boolean {
+	const name = intCheckName(n);
+	return name.includes("Assign") || name.startsWith("msPost");
+}
+
+function intCheckName(n: Node): string {
 	const sym = n.kind == NodeKind.CallExpr ? n.resolvedSym : null;
-	if (sym == null) return false;
+	if (sym == null) return "";
 	const name = sym.nativeName != "" ? sym.nativeName : sym.name;
-	return INT_CHECK_HELPERS.has(name) && isRuntimeProcSym(sym, name);
+	return INT_CHECK_HELPERS.has(name) && isRuntimeProcSym(sym, name) ? name : "";
 }
 
 function helperKind(t: Type): TypeKind {

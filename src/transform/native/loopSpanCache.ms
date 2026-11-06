@@ -16,7 +16,7 @@ import { arraySpanLiteral } from "../lowering/spanLower";
 import { isArrayLengthGuard } from "../lowering/forOfLower";
 import { extractBodyStmts } from "../util";
 import { closureFunction } from "./hcrIndirect";
-import { isIntCheckCall } from "./intCheckInject";
+import { isIntCheckCall, isIntCheckWrite } from "./intCheckInject";
 
 class Cached {
 	array: Symbol;
@@ -143,7 +143,7 @@ function cachesDeclaredArrays(loop: Node, st: LoopCache): boolean {
 function storesElement(n: Node): boolean {
 	if (n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) && (n.data as BinaryExprData).left.kind == NodeKind.ArrayAccess) return true;
 	if (n.kind == NodeKind.UpdateExpr && (n.data as UpdateExprData).updateArg.kind == NodeKind.ArrayAccess) return true;
-	if (isIntCheckCall(n) && (n.data as CallExprData).arguments.length > 0 && (n.data as CallExprData).arguments[0].kind == NodeKind.ArrayAccess) return true;
+	if (isIntCheckWrite(n) && (n.data as CallExprData).arguments.length > 0 && (n.data as CallExprData).arguments[0].kind == NodeKind.ArrayAccess) return true;
 	let found = false;
 	forEachChild(n, (c: Node): void => {
 		if (!found && storesElement(c)) found = true;

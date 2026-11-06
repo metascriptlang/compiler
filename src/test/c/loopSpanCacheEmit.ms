@@ -41,9 +41,11 @@ test "loop span cache: a checked fill loop goes through spans and keeps every ch
 }
 
 test "loop span cache: a checked read-only loop keeps the heap cell" {
-	const c = emitted(loopIn("for (let i: int32 = 0; i < a.length; i++) n += a[i];"), false);
-	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert !c.includes("dollarspan_"), "a checked read-only loop was rewritten";
+	for (const body of ["n += a[i];", "n += a[i] * out[i];"]) {
+		const c = emitted(loopIn(`for (let i: int32 = 0; i < a.length; i++) ${body}`), false);
+		assert !c.startsWith("error:"), c.slice(0, 400);
+		assert !c.includes("dollarspan_"), `a checked read-only loop was rewritten: ${body}`;
+	}
 }
 
 test "loop span cache: a checked mapped toArray fills through spans" {
