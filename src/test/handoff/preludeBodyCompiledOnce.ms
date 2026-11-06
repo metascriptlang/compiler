@@ -1,5 +1,5 @@
 import { compileToCWithStd, compileToJSWithStd } from "../helpers";
-import { engineRecheckCount } from "../../codegen/raiser/eval";
+import { engineRecheckCount, engineBuildLoweredCount, engineCompiledNames } from "../../codegen/raiser/eval";
 
 test "a prelude routine a macro calls is compiled from its checked body, not checked again" {
 	const before = engineRecheckCount();
@@ -23,8 +23,9 @@ function main(): void {
 	assert engineRecheckCount() == before, `prelude bodies checked again: ${engineRecheckCount() - before}`;
 }
 
-test "a macro helper the build checked for another target is checked again for the engine" {
-	const before = engineRecheckCount();
+test "a macro helper the build checked for another target reaches the engine from the Raiser's check, never lowered from the build's" {
+	const lowered = engineBuildLoweredCount();
+	const compiled = engineCompiledNames().length;
 	const result = compileToJSWithStd(`
 interface Person {
 	name: string;
@@ -35,7 +36,8 @@ const p: Person = { name: "Alice", age: 30 };
 console.log(JSON.stringify(p));
 `);
 	assert result.ok, result.ok ? "" : result.error;
-	assert engineRecheckCount() > before, "the helpers the JS build checked were not checked again for the engine";
+	assert engineBuildLoweredCount() == lowered, "a helper the JS build checked was lowered into the engine from the JS check";
+	assert engineCompiledNames().length > compiled, "the engine compiled none of the macro's helpers";
 }
 
 test "a macro helper the C build checked is checked again for the engine" {
