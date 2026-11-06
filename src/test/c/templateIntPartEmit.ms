@@ -43,3 +43,14 @@ test "E2E C: a single interpolated number is one formatter call with no concat" 
 	assert !c.contains("msStringConcat");
 	assert !c.contains("msNumberToStringRadix");
 }
+
+test "an int32 and a uint32 formatted in another radix take the integer kernel, not the double one" {
+	const c = emitFor(`
+		const x: int32 = -255;
+		const y: uint32 = 4294967295;
+		console.log(x.toString(16), y.toString(16));
+	`);
+	assert c != "";
+	assert c.contains("msIntToStringRadix");
+	assert !c.contains("msNumberToStringRadix");
+}

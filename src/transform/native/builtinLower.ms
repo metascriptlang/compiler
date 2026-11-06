@@ -251,7 +251,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		}
 		let fn = checked ? "msNumberToStringRadixChecked" : "msNumberToStringRadix";
 		if (objType.kind == TypeKind.Uint64) { fn = checked ? "msUint64ToStringRadixChecked" : "msUint64ToStringRadix"; }
-		else if (objType.kind == TypeKind.Int64) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
+		else if (isIntegerType(objType) && objType.kind != TypeKind.Char) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
 		const call = makeCall(runtimeRef(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
