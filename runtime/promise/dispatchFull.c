@@ -1068,6 +1068,10 @@ static bool msRunOnceIn(int timeoutMs) {
 	}
 
 	/* Step 2: Poll for cross-thread completions + I/O events */
+	if (tlOwnLoopWoken) {
+		tlOwnLoopWoken = false;
+		didWork = true;
+	}
 	/* A turn that ran work polls without waiting, so only a turn about to sleep asks (and drops the wake token). */
 	int adj = didWork ? 0 : msAdjustTimeout(d, timeoutMs, nextTimer);
 #ifdef _WIN32
