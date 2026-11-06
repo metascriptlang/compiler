@@ -38,6 +38,12 @@
 #endif
 #endif
 
+#if defined(MS_HCR_CORE) || defined(MS_HCR_MODULE)
+#define MS_HEAP_API
+#else
+#define MS_HEAP_API MS_LIB_PRIVATE
+#endif
+
 #define MS_HEAP_PAGE_SIZE 4096
 #ifndef MS_HEAP_MIN_PAGES
 #if MS_HEAP_THREADS
@@ -47,17 +53,17 @@
 #endif
 #endif
 
-MS_LIB_PRIVATE void* msHeapAlloc(size_t size);
-MS_LIB_PRIVATE void* msHeapCalloc(size_t count, size_t size);
-MS_LIB_PRIVATE void* msHeapRealloc(void* p, size_t oldSize, size_t newSize);
-MS_LIB_PRIVATE void msHeapFree(void* p);
-MS_LIB_PRIVATE void msHeapReset(void);
-MS_LIB_PRIVATE void msHeapThreadRelease(void);
+MS_HEAP_API void* msHeapAlloc(size_t size);
+MS_HEAP_API void* msHeapCalloc(size_t count, size_t size);
+MS_HEAP_API void* msHeapRealloc(void* p, size_t oldSize, size_t newSize);
+MS_HEAP_API void msHeapFree(void* p);
+MS_HEAP_API void msHeapReset(void);
+MS_HEAP_API void msHeapThreadRelease(void);
 
-MS_LIB_PRIVATE void* msHeapTryAllocPages(size_t bytes);
-MS_LIB_PRIVATE void msHeapDeallocPages(void* p, size_t bytes);
-MS_LIB_PRIVATE void msHeapResetPages(void);
-MS_LIB_PRIVATE _Noreturn void msHeapOutOfMemory(void);
+MS_HEAP_API void* msHeapTryAllocPages(size_t bytes);
+MS_HEAP_API void msHeapDeallocPages(void* p, size_t bytes);
+MS_HEAP_API void msHeapResetPages(void);
+MS_HEAP_API _Noreturn void msHeapOutOfMemory(void);
 
 #endif
 #endif
