@@ -4,6 +4,8 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 
 When measuring TypeScript compatibility, read [`compat/typescript/README.md`](compat/typescript/README.md) for the optional oracle lane's commands and interpretation, because backend parity alone does not establish TS compatibility.
 
+When changing `std/serialize/json` parsing or stringify, run [`compat/jsonTestSuite/README.md`](compat/jsonTestSuite/README.md) on c, js and raiser, because the corpus json programs do not cover the suite's malformed and edge inputs.
+
 ## Where a test goes
 
 | Tier | Lives in | Use for |
