@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
@@ -260,9 +260,15 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // atomic cell is born at MS_RC_INCREMENT, so it needs the atomic twin on top.
 // The counted-element test mirrors classify.ms classifyArray — Actor handles
 // and nested ref-arrays keep their own families.
-export function evictHelperName(nativeName: string, elemType: Type | null, ctx: TransformContext): string {
+export function evictHelperName(nativeName: string, elemType: Type | null, ctx: TransformContext, arrT: Type | null = null): string {
 	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
+	if (readonlyCountedElement(arrT, elemType)) {
+		if (nativeName == "msGenericArraySetLen") return "msRoRefArraySetLen";
+		if (nativeName == "msRefArraySplice") return "msRoRefArraySplice";
+		if (nativeName == "msRefArraySplice3") return "msRoRefArraySplice3";
+		return "";
+	}
 	const atomic = isAtomicRef(bare);
 	const acyclic = isAcyclicRefElement(elemType, ctx.cyclicCache, ctx.acyclicCache);
 	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : acyclic ? "msAcyclicRefArraySetLen" : "msRefArraySetLen";
@@ -285,7 +291,7 @@ function rewriteArrayEvictCall(node: Node, ctx: TransformContext): Node {
 		? recvT.typeReturn
 		: recvT;
 	if (arrT.kind != TypeKind.Array) return node;
-	const helper = evictHelperName(native, arrT.typeReturn, ctx);
+	const helper = evictHelperName(native, arrT.typeReturn, ctx, arrT);
 	if (helper == "") return node;
 	const call = makeCall(runtimeRef(helper, node.location), d.arguments, node.location);
 	call.nodeType = node.nodeType;

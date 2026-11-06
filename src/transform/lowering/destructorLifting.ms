@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isUnownedSlot, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
+import { isUnownedSlot, isReadonlyUnownedSlot, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, typeCarriesRef, readonlyCountedElement, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
@@ -84,6 +84,7 @@ class LiftCtx {
 	seqTypes: Type[];
 	refCellTraces: Type[];
 	refCellCustodies: Type[];
+	refCellReaches: Type[];
 	scannedTypes: HashSet<Type>;
 	arraysScanned: HashSet<Type>;
 	arraysScannedEpoch: int32;
@@ -159,6 +160,7 @@ function hookSuffix(hook: string): string {
 		"sink" => "Sink",
 		"trace" => "Trace",
 		"custody" => "Custody",
+		"reach" => "Reach",
 		"finalize" => "Finalize",
 		"release" => "Release",
 		_ => "WasMoved",
@@ -196,6 +198,7 @@ function aliasLiftedOps(orig: Type, canon: Type): void {
 	aliasOpByKey(orig, canon, AttachedOp.AttachedWasMoved);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedTrace);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedCustody);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedReach);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedFinalize);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedRelease);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
@@ -274,6 +277,7 @@ function attachedOpOf(hook: string): AttachedOp {
 		"dup" => AttachedOp.AttachedDup,
 		"trace" => AttachedOp.AttachedTrace,
 		"custody" => AttachedOp.AttachedCustody,
+		"reach" => AttachedOp.AttachedReach,
 		"finalize" => AttachedOp.AttachedFinalize,
 		"release" => AttachedOp.AttachedRelease,
 		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
@@ -282,7 +286,7 @@ function attachedOpOf(hook: string): AttachedOp {
 
 // The trace and the custody walk share one shape: (self, callback), pushing the cells they reach.
 function walksCells(hook: string): boolean {
-	return hook == "trace" || hook == "custody";
+	return hook == "trace" || hook == "custody" || hook == "reach";
 }
 
 // Whether a cell-walking hook enters a value of type `t`: the trace when it reaches a cell that
@@ -290,6 +294,7 @@ function walksCells(hook: string): boolean {
 function walksValue(hook: string, t: Type | null, lctx: LiftCtx): boolean {
 	if (hook == "trace") return traceReachesCycle(t, lctx.cyclicCache, lctx.nonCyclicCache);
 	if (hook == "custody") return custodyReaches(t, lctx.cyclicCache, lctx.nonCyclicCache);
+	if (hook == "reach") return typeCarriesRef(t);
 	return true;
 }
 
@@ -525,7 +530,8 @@ function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): stri
 	if (elem == null || isUncountedElement(elem) || isPlainFunctionPointer(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
 	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
-	if (isUnownedSlot(elem)) return "msUnownedRefArrayDestroy";
+	if (readonlyCountedElement(canon, elem)) return "msRoRefArrayDestroy";
+	if (isUnownedSlot(elem)) return isReadonlyView(canon) || isReadonlyUnownedSlot(elem) ? "msUnownedRoRefArrayDestroy" : "msUnownedRefArrayDestroy";
 	if (isAcyclicRefElement(elem, lctx.cyclicCache, lctx.nonCyclicCache)) return "msAcyclicRefArrayDestroy";
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
 		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msNumberArrayDestroy";
@@ -628,6 +634,9 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				genArrayLoop("custody", elem, xf, yf, lctx, buf, loc);
 			}
 		},
+		"reach" => {
+			if (needsElemLoop && elem != null && typeCarriesRef(elem)) genArrayLoop("reach", elem, xf, yf, lctx, buf, loc);
+		},
 		_ => {},
 	};
 }
@@ -670,31 +679,35 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 			// there would race the atomic count). Acyclic pointees are skipped per the
 			// reference attachedTrace gate (liftdestructors.nim:782-791).
 			if (!atomic && isCyclic) {
-				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef" + flavor, loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
 		},
 		"custody" => {
 			if (!atomic && (isCyclic || custodyReaches(heldType, lctx.cyclicCache, lctx.nonCyclicCache))) {
-				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef" + flavor, loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
+		},
+		"reach" => {
+			if (!atomic) buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 		},
 		_ => {},
 	};
 }
 
 // An Unowned<T> field counts on its target's second count: never traced, never the last strong owner.
-function unownedOp(hook: string, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function unownedOp(hook: string, xf: Node, yf: Node, readonly: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const decrefFn = readonly ? "msUnownedDecrefRo" : "msUnownedDecref";
 	match (hook) {
-		"destroy" => { genCall("msUnownedDecref", hook, xf, yf, buf, loc); },
+		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => {
-			const incref = makeTypedIdentResolved(attachedOpSym("msUnownedIncref", AttachedOp.AttachedAsgn), null, loc);
+			const incref = makeTypedIdentResolved(attachedOpSym(readonly ? "msUnownedIncrefRo" : "msUnownedIncref", AttachedOp.AttachedAsgn), null, loc);
 			buf.items.push(makeExprStmt(makeCall(incref, [clonePath(yf, loc)], loc), loc));
 			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
-			genCall("msUnownedDecref", "destroy", old, old, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
 		},
 		"sink" => {
 			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
-			genCall("msUnownedDecref", "destroy", old, old, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		_ => {},
@@ -774,7 +787,7 @@ function nullableDistinctOp(hook: string, held: Type, xf: Node, yf: Node, emptie
 			onLiveArm("wasMoved", xf, xf, xf);
 			genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
 		},
-		"trace" | "custody" => { onLiveArm(hook, xf, yf, xf); },
+		"trace" | "custody" | "reach" => { onLiveArm(hook, xf, yf, xf); },
 		_ => { throw new Error(`internal: a nullable distinct field has no '${hook}' operation`); },
 	};
 }
@@ -801,7 +814,7 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 		"copy" => { genCall(prefix + copySuffix, hook, xf, yf, buf, loc); },
 		"sink" => { genInlineSink(destroyName, xf, yf, buf, loc); },
 		"wasMoved" => { genCall(prefix + wasMovedSuffix, hook, xf, yf, buf, loc); },
-		"trace" | "custody" => { if (hasTrace) genCall(prefix + traceSuffix, "trace", xf, yf, buf, loc); },
+		"trace" | "custody" | "reach" => { if (hasTrace) genCall(prefix + traceSuffix, "trace", xf, yf, buf, loc); },
 		_ => {},
 	};
 }
@@ -919,7 +932,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (fieldType.sym != null && fieldType.sym.symbolKind == SymbolKind.Actor) {
 				defaultOp(hook, xf, yf, buf, loc);
 			} else if (isUnownedRef(fieldType)) {
-				unownedOp(hook, xf, yf, lctx, buf, loc);
+				unownedOp(hook, xf, yf, isReadonlyView(fieldType), lctx, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
 				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
@@ -988,7 +1001,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else if (isUnownedRef(refInner)) {
-					unownedOp(hook, xf, yf, lctx, buf, loc);
+					unownedOp(hook, xf, yf, isReadonlyView(refInner), lctx, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
 					refOp(hook, xf, yf, empties, refInner, cyclic, isAtomicRef(refInner), lctx, buf, loc);
@@ -1267,6 +1280,7 @@ function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
 			: own || hasUserDefinedHook(a, "destroy", lctx);
 		if (takes) {
 			if (!walksCells(hook)) return a;
+			if (hook == "reach") return typeCarriesRef(a) ? a : null;
 			return isCyclicType(a, lctx, createNameSet()) ? a : null;
 		}
 		a = baseClassOf(a);
@@ -1613,7 +1627,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const hookParamT = classType != null ? classType : createVar(objType);
 	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
 	const n2 = match (walk) {
-		"trace" | "custody" => "callback",
+		"trace" | "custody" | "reach" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
@@ -2010,6 +2024,9 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		const custodySym = generateHook("custody", typeName, cName, objType, orig, classType, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedCustody, custodySym);
 	}
+	if (typeCarriesRef(objType)) {
+		setOpByKey(objType, AttachedOp.AttachedReach, generateHook("reach", typeName, cName, objType, orig, classType, lctx, loc));
+	}
 
 	const userDup = getUserDefinedHookSym(orig, AttachedOp.AttachedDup, lctx);
 	if (userDup != null) {
@@ -2368,7 +2385,8 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 	let ti = 0;
 	let ci = 0;
 	let wi = 0;
-	while (ti < lctx.refCellTraces.length || ci < lctx.refCellCustodies.length || wi < lctx.seqTypes.length) {
+	let ri = 0;
+	while (ti < lctx.refCellTraces.length || ci < lctx.refCellCustodies.length || ri < lctx.refCellReaches.length || wi < lctx.seqTypes.length) {
 		if (ti < lctx.refCellTraces.length) {
 			generateArrayHook("trace", lctx.refCellTraces[ti], lctx, loc);
 			ti += 1;
@@ -2377,6 +2395,11 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		if (ci < lctx.refCellCustodies.length) {
 			generateArrayHook("custody", lctx.refCellCustodies[ci], lctx, loc);
 			ci += 1;
+			continue;
+		}
+		if (ri < lctx.refCellReaches.length) {
+			generateArrayHook("reach", lctx.refCellReaches[ri], lctx, loc);
+			ri += 1;
 			continue;
 		}
 		const arrT = lctx.seqTypes[wi];
@@ -2408,12 +2431,23 @@ function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellCustodies.push(canon);
 }
 
+function registerRefCellReach(arrT: Type, lctx: LiftCtx): void {
+	const elem = arrayOpElement(arrT.typeReturn);
+	if (elem == null || isUncountedElement(elem) || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !typeCarriesRef(elem)) return;
+	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
+	const cell = createRef(canon);
+	if (getOpByKey(cell, AttachedOp.AttachedReach) != null) return;
+	liftedOp(cell, AttachedOp.AttachedReach, refArrayCellName(canon) + "Reach", null);
+	lctx.refCellReaches.push(canon);
+}
+
 function scanTypeForArrays(t: Type, lctx: LiftCtx): void {
 	if (t == null || lctx.arraysScanned.has(t)) return;
 	lctx.arraysScanned.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
 		registerRefCellCustody(t.typeReturn, lctx);
+		registerRefCellReach(t.typeReturn, lctx);
 	}
 	if (t.kind == TypeKind.Array) {
 		if (t.typeReturn != null) registerArrayOps(t, lctx);
@@ -2739,6 +2773,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		seqTypes: [],
 		refCellTraces: [],
 		refCellCustodies: [],
+		refCellReaches: [],
 		scannedTypes: new HashSet<Type>(),
 		arraysScanned: new HashSet<Type>(),
 		arraysScannedEpoch: -1,

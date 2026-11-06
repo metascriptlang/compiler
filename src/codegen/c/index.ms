@@ -41,6 +41,7 @@ export class CModuleOutput {
 	hasDatInit: boolean = false;
 	hasInit: boolean = false;
 	hasDeinit: boolean = false;
+	immortalizes: boolean = false;
 	errors: CheckerError[] = [];
 }
 
@@ -237,6 +238,7 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	output.hasDatInit = datContent.length > 0;
 	output.hasInit = initContent.length > 0;
 	output.hasDeinit = deinitContent.length > 0;
+	output.immortalizes = initContent.contains("msImmortalize(");
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
@@ -319,10 +321,12 @@ export function genProjectDispatcher(
 	const emptyDatInits = new HashSet<string>();
 	const emptyInits = new HashSet<string>();
 	const deinits = new HashSet<string>();
+	let immortalizes = false;
 	for (const output of outputs) {
 		if (!output.hasDatInit) emptyDatInits.add(output.modulePath);
 		if (!output.hasInit) emptyInits.add(output.modulePath);
 		if (output.hasDeinit) deinits.add(output.modulePath);
+		if (output.immortalizes) immortalizes = true;
 	}
 
 	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for msTestErrorFlag + async futures
@@ -399,6 +403,7 @@ export function genProjectDispatcher(
 		const mp = modulePaths[di];
 		if (mp != entryPath && deinits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__Deinit000();`);
 	}
+	if (immortalizes) addLine(b, "msFreeImmortals();");
 	addLine(b, "#ifdef MS_DRC_LEDGER");
 	addLine(b, "msOrcCollect();");
 	addLine(b, "#endif");

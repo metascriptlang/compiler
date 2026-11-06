@@ -34,6 +34,7 @@ import { keepIntegerNumberLocals } from "./integerNumberLocal";
 import { lowerInductionPointers } from "./inductionPointer";
 import { lowerLoopSpans } from "./loopSpanCache";
 import { markConstData } from "./constDataMark";
+import { markImmortalConsts } from "./immortalConstMark";
 import { reportShareIfRequested } from "../shareCount";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
@@ -68,6 +69,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.lowerLoopSpans");
 	result = markConstData(result, ctx);
 	flowLap("pass.native.markConstData");
+	result = markImmortalConsts(result, ctx);
+	flowLap("pass.native.markImmortalConsts");
 	reportShareIfRequested(result, "native");
 	return result;
 }

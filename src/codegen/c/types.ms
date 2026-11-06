@@ -228,6 +228,7 @@ function attachedOpName(op: AttachedOp): string {
 		AttachedOp.AttachedCustody => "custody",
 		AttachedOp.AttachedFinalize => "finalize",
 		AttachedOp.AttachedRelease => "release",
+		AttachedOp.AttachedReach => "reach",
 	};
 }
 
@@ -1435,6 +1436,7 @@ function typeInfoFields(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly
 	let traceName = "NULL";
 	if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 	const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
+	const reach = info.reach != null ? `, .reachFn = ${emitRttiHook(g, info.cName + "RttiReach", info.reach, true)}` : "";
 	const finalizer = info.finalize != null && info.release != null
 		? `, .finalizeFn = ${emitRttiHook(g, info.cName + "RttiFinalize", info.finalize, false)}, .releaseFn = ${emitRttiHook(g, info.cName + "RttiRelease", info.release, false)}`
 		: "";
@@ -1443,7 +1445,7 @@ function typeInfoFields(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly
 	const label = typeInfoLabel(g, info);
 	const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 	return `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-		+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}`
+		+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}${reach}`
 		+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 }
 
