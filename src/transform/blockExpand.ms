@@ -3,7 +3,7 @@ import {
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
 	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData,
-	ExportDeclData, DecoratedDeclData, TryCatchStmtData, TestDeclData,
+	ExportDeclData, DecoratedDeclData, TryCatchStmtData, TestDeclData, AssertStmtData,
 	VariableDeclData, ExprStmtData, ReturnStmtData, ThrowStmtData,
 } from "../ast/node";
 import { Visitor, mapChildren } from "../ast/visitor";
@@ -101,6 +101,7 @@ function replaceBlockStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 
 function replaceCaseStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const cd = node.data as SwitchCaseData;
+	for (const t of cd.caseTests) expandWalk(t, w, visit);
 	const expanded = expandStmtList(cd.caseStmts, w, visit);
 	if (expanded != cd.caseStmts) node.data = { caseTests: cd.caseTests, caseStmts: expanded, isDefault: cd.isDefault };
 }
@@ -192,30 +193,42 @@ function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 			const d = node.data as TestDeclData;
 			walkFnBodyHooked(d.testBody, w, visit);
 		},
-		NodeKind.AssertStmt => {},
+		NodeKind.AssertStmt => {
+			const d = node.data as AssertStmtData;
+			expandWalk(d.assertExpr, w, visit);
+			if (d.assertMessageExpr != null) expandWalk(d.assertMessageExpr, w, visit);
+		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
+			expandWalk(d.condition, w, visit);
 			d.consequent = expandStmtBodyHooked(d.consequent, w, visit);
 			d.alternate = expandStmtBodyHooked(d.alternate, w, visit);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
+			expandWalk(d.whileCondition, w, visit);
 			d.whileBody = expandStmtBodyHooked(d.whileBody, w, visit);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			d.doBody = expandStmtBodyHooked(d.doBody, w, visit);
+			expandWalk(d.doCondition, w, visit);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
+			expandWalk(d.forInit, w, visit);
+			expandWalk(d.forCondition, w, visit);
+			expandWalk(d.forUpdate, w, visit);
 			d.forBody = expandStmtBodyHooked(d.forBody, w, visit);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
+			expandWalk(d.forOfIterable, w, visit);
 			d.forOfBody = expandStmtBodyHooked(d.forOfBody, w, visit);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
+			expandWalk(d.forInObject, w, visit);
 			d.forInBody = expandStmtBodyHooked(d.forInBody, w, visit);
 		},
 		NodeKind.TryCatchStmt => {
@@ -228,6 +241,7 @@ function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
+			expandWalk(d.switchDisc, w, visit);
 			for (const member of d.switchCases) {
 				expandWalk(member, w, visit);
 			}
