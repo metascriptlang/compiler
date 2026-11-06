@@ -80,9 +80,10 @@ TARGETS = {
 }
 # A variant's directory is `<target><suffix>` and its config `<target><suffix>.cfg`.
 VARIANTS = {
-    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj", "driverFlags": [], "suffix": ""},
+    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj",
+            "driverFlags": ["-mno-incremental-linker-compatible"], "suffix": ""},
     "dll": {"fixture": "runtimeWindowsDll.c", "zigArgs": ["-shared"], "startup": "dllcrt2.obj",
-            "driverFlags": ["-shared"], "suffix": ".dll"},
+            "driverFlags": ["-shared", "-mno-incremental-linker-compatible"], "suffix": ".dll"},
 }
 SPEC = {"clangTarget": None, "linker": "ld.lld",
         "notices": {"zig": ["../LICENSE"], "mingw-w64": ["libc/mingw/COPYING"]}}
@@ -537,6 +538,10 @@ def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes, target=TA
                 raise pe.EngineError("%s %s %s failed: %s" % (target, variant, name, done.stderr.strip()))
             if done.stderr.strip():
                 raise pe.EngineError("%s %s %s warned: %s" % (target, variant, name, done.stderr.strip()))
+        with open(obj, "rb") as f:
+            stamp = int.from_bytes(f.read(8)[4:8], "little")
+        if stamp != 0:
+            raise pe.EngineError("%s %s object carries COFF TimeDateStamp 0x%x, not 0" % (target, variant, stamp))
         present = [p for p in absentMacroPrefixes if "#define " + p in done.stdout]
         if present:
             raise pe.EngineError("%s %s config defines %s macros" % (target, variant, present))
