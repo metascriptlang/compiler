@@ -6,6 +6,11 @@
 // @stdout: distinct projection 67
 // @stdout: distinct snapshot 23
 // @stdout: packed element copy 23 23 45 9 9
+// @stdout: closure argument 23 23
+// @stdout: raising closure argument caught 2
+// @stdout: kept closure argument 23 23 9
+// @stdout: method argument snapshot 23 0
+// @stdout: sink argument 23 9
 struct Pair { x: int64; y: int64; }
 type OtherPair = distinct Pair;
 
@@ -79,6 +84,47 @@ struct Holder { pair: Pair; }
 	return `${snapshot.x * 10 + snapshot.y} ${xs[1].x * 10 + xs[1].y} ${xs[0].x * 10 + xs[0].y} ${p.x} ${h.pair.x}`;
 }
 
+class Keeper {
+	pair: Pair = { x: 2, y: 3 };
+	take(q: Pair): int64 { this.pair = { x: 0, y: 0 }; return q.x * 10 + q.y; }
+}
+
+@noinline function closureArgument(): string {
+	const p: Pair = { x: 2, y: 3 };
+	const f = (q: Pair): int64 => q.x * 10 + q.y;
+	return `${f(p)} ${f({ x: 2, y: 3 })}`;
+}
+
+@noinline function raisingClosureArgument(): string {
+	const p: Pair = { x: 2, y: 3 };
+	const f = (q: Pair): int64 => { if (q.x > 0) throw new Error("raised"); return q.x; };
+	let seen = "";
+	try { f(p); } catch (e) { seen = "caught"; }
+	return `${seen} ${p.x}`;
+}
+
+@noinline function keptClosureArgument(): string {
+	const kept: Pair[] = [];
+	let p: Pair = { x: 2, y: 3 };
+	const f = (q: Pair): int64 => { kept.push(q); return q.x * 10 + q.y; };
+	const n = f(p);
+	p.x = 9;
+	return `${n} ${kept[0].x * 10 + kept[0].y} ${p.x}`;
+}
+
+@noinline function methodArgumentSnapshot(): string {
+	const k = new Keeper();
+	return `${k.take(k.pair)} ${k.pair.x}`;
+}
+
+@noinline function sinkArgument(): string {
+	const xs: Pair[] = [];
+	let p: Pair = { x: 2, y: 3 };
+	xs.push(p);
+	p.x = 9;
+	return `${xs[0].x * 10 + xs[0].y} ${p.x}`;
+}
+
 console.log(`local closure ${fromClosure()}`);
 console.log(`borrowed place ${fromLegacyPlace()}`);
 console.log(`nullable closure ${fromNullableClosure()}`);
@@ -87,3 +133,8 @@ console.log(`borrowed projection ${fromBorrowedProjection()}`);
 console.log(`distinct projection ${fromDistinctProjection()}`);
 console.log(`distinct snapshot ${fromDistinctSnapshot()}`);
 console.log(`packed element copy ${packedElementCopy()}`);
+console.log(`closure argument ${closureArgument()}`);
+console.log(`raising closure argument ${raisingClosureArgument()}`);
+console.log(`kept closure argument ${keptClosureArgument()}`);
+console.log(`method argument snapshot ${methodArgumentSnapshot()}`);
+console.log(`sink argument ${sinkArgument()}`);
