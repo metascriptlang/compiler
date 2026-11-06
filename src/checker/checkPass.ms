@@ -3469,12 +3469,15 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	ctx.topProgram = program;
 	const stmts = program.data as ProgramData;
 	const hoistMark = ctx.pendingHoisted.length;
+	collectInferredNeeds(ctx, stmts.programStmts);
 	let i = 0;
 	while (i < stmts.programStmts.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion) || stopForInput(ctx.cancelCtx)) return;
+		checkNeedsFirst(ctx, declOfStatement(stmts.programStmts[i]), 0);
 		checkStmt(ctx, stmts.programStmts[i]);
 		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
 	}
+	ctx.inferredNeeds.clear();
 	checkOverloadSets(ctx, stmts.programStmts);
 	if (ctx.pendingLocalTypeDecls.length > 0) {
 		// Front, not back: C claims TypeInfo ownership when the declaration is
@@ -3490,6 +3493,84 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 		stmts.programStmts = merged;
 		ctx.liftedLocalTypeDecls = ctx.pendingLocalTypeDecls;
 		ctx.pendingLocalTypeDecls = [];
+	}
+}
+
+let _needPath: HashMap<Node, int32> = new HashMap<Node, int32>();
+const NO_CYCLE: int32 = 2147483647;
+
+function collectInferredNeeds(ctx: CheckerContext, stmts: Node[]): void {
+	ctx.inferredNeeds.clear();
+	const byName = new HashMap<string, Symbol>();
+	let lastInferred = -1;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const decl = declOfStatement(stmts[i]);
+		if (decl.resolvedSym != null && typedByItsDeclaration(ctx, decl.resolvedSym)) {
+			byName.set(decl.resolvedSym.name, decl.resolvedSym);
+			lastInferred = i;
+		}
+	}
+	for (let i = 0; i <= lastInferred; i += 1) {
+		const stmt = stmts[i];
+		const user = declOfStatement(stmt);
+		const scan = (node: Node): void => {
+			if (node.kind == NodeKind.Identifier) {
+				const sym = byName.get((node.data as IdentifierData).name);
+				if (sym != null && sym.declNode != user) noteInferredNeed(ctx, user, sym);
+				return;
+			}
+			forEachChild(node, scan);
+		};
+		scan(stmt);
+	}
+}
+
+function typedByItsDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
+	const decl = sym.declNode;
+	if (decl == null || decl.resolvedSym != sym || sym.modulePath != ctx.modulePath) return false;
+	if (sym.symbolKind == SymbolKind.Variable && decl.kind == NodeKind.VariableDecl) {
+		const d = decl.data as VariableDeclData;
+		return d.declType == "" && d.initializer != null;
+	}
+	return sym.symbolKind == SymbolKind.Function && decl.kind == NodeKind.FunctionDecl && sym.overloads.length == 0
+		&& sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn);
+}
+
+function noteInferredNeed(ctx: CheckerContext, user: Node, sym: Symbol): void {
+	let needs = ctx.inferredNeeds.get(user);
+	if (needs == null) {
+		needs = [];
+		ctx.inferredNeeds.set(user, needs);
+	}
+	if (needs.indexOf(sym) < 0) needs.push(sym);
+}
+
+function checkNeedsFirst(ctx: CheckerContext, decl: Node, depth: int32): int32 {
+	const onPath = _needPath.get(decl);
+	if (onPath != null) return onPath;
+	const needs = ctx.inferredNeeds.get(decl);
+	if (needs == null) return NO_CYCLE;
+	_needPath.set(decl, depth);
+	let low = NO_CYCLE;
+	for (const sym of needs) {
+		const reached = checkNeedsFirst(ctx, sym.declNode, depth + 1);
+		if (reached <= depth) {
+			low = Math.min(low, reached);
+			continue;
+		}
+		checkDeclarationFirst(ctx, sym);
+	}
+	_needPath.delete(decl);
+	ctx.inferredNeeds.delete(decl);
+	return low;
+}
+
+function checkDeclarationFirst(ctx: CheckerContext, sym: Symbol): void {
+	const decl = sym.declNode;
+	if (decl.kind == NodeKind.VariableDecl) {
+		if (sym.state != SymbolState.Checked && sym.state != SymbolState.Checking) checkBindingOnDemand(ctx, sym);
+	} else if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn)) {
+		demandFunctionBody(ctx, decl, sym);
 	}
 }
 
