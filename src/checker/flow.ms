@@ -30,7 +30,7 @@ import {
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, withoutUnowned, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance, isReadonlyView, peelToStruct, hasNullMember,
+	classAncestorInstance, isReadonlyView, createReadonlyView, peelToStruct, hasNullMember,
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember, declaresProperty } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
@@ -1262,13 +1262,13 @@ function narrowToPredicateTarget(t: Type, predicateTarget: Type, assumeTrue: boo
 			const kept: Type[] = [];
 			for (const v of t.typeChildren) {
 				if (typeRelation(predicateTarget, v) != TypeRelation.None) appendIfUnique(kept, v);
-				else if (typeRelation(v, predicateTarget) != TypeRelation.None) appendIfUnique(kept, predicateTarget);
+				else if (typeRelation(v, predicateTarget) != TypeRelation.None) appendIfUnique(kept, narrowedKeepingView(v, predicateTarget));
 			}
 			if (kept.length == 0) return t;
 			return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 		}
-		if (t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred) return predicateTarget;
-		return typeRelation(predicateTarget, t) != TypeRelation.None ? t : predicateTarget;
+		if (t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred) return narrowedKeepingView(t, predicateTarget);
+		return typeRelation(predicateTarget, t) != TypeRelation.None ? t : narrowedKeepingView(t, predicateTarget);
 	}
 	// FalseCondition: remove variants assignable to the predicate target.
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {
@@ -1308,6 +1308,10 @@ function narrowTypeByInKeyword(t: Type | null, left: Node, right: Node, refNode:
 	return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(t, kept);
 }
 
+function narrowedKeepingView(tested: Type, candidate: Type): Type {
+	return isReadonlyView(tested) ? createReadonlyView(candidate) : candidate;
+}
+
 // ===== instanceof narrowing =====
 
 // Narrow by `x instanceof Foo`. `left` is the tested value, `right` is the
@@ -1338,10 +1342,10 @@ function narrowTypeByInstanceof(t: Type | null, left: Node, right: Node, refNode
 		} else if (isDerivedFrom(m, target)) {
 			kept.push(m);
 		} else if (isDerivedFrom(target, m)) {
-			appendIfUnique(kept, target);
+			appendIfUnique(kept, narrowedKeepingView(m, target));
 		}
 	}
-	if (kept.length == 0) return assumeTrue ? target : t;
+	if (kept.length == 0) return assumeTrue ? narrowedKeepingView(t, target) : t;
 	if (sameMembers(kept, members)) return t;
 	if (kept.length == 1) return kept[0];
 	return isNullableShape(kept) ? nullableUnionOf(kept) : createUnion(kept);
