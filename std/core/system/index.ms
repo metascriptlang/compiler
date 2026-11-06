@@ -656,6 +656,15 @@ extern function msClosureWasMoved(c: () => void): void;
 extern function msClosureSink(d: () => void, v: () => void): void;
 
 @compilerFunc
+extern function msClosureCopyRo(c: () => void): void;
+
+@compilerFunc
+extern function msClosureDestroyRo(c: () => void): void;
+
+@compilerFunc
+extern function msClosureSinkRo(d: () => void, v: () => void): void;
+
+@compilerFunc
 extern function msClosureTrace(c: () => void, env: Ptr<void>): void;
 
 @compilerFunc

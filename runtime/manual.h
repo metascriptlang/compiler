@@ -528,6 +528,9 @@ static inline void* msUnownedGive(void* p) { return p; }
 #define msClosureCopy(c)      ((void)0)
 #define msClosureWasMoved(c)  do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureSink(d, ...) do { (d) = (__VA_ARGS__); } while(0)
+#define msClosureDestroyRo(c) msClosureDestroy(c)
+#define msClosureCopyRo(c)    ((void)0)
+#define msClosureSinkRo(d, ...) do { (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, e)  ((void)0)
 #define msClosureDisown(c)  ((void)0)
 
