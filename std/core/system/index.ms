@@ -350,6 +350,9 @@ extern function msDecrefCyclic(p: Ptr<void>): void;
 extern function msImmortalize(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msImmortalizeClosure(c: Ptr<void>): void;
+
+@compilerFunc
 extern function msImmortalBegin(): Ptr<void>;
 
 @compilerFunc
@@ -654,6 +657,18 @@ extern function msStringArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
 extern function msClosureArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msRoClosureArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayClosureRoDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayClosureRoCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayClosureRoSink(d: Ptr<void>, v: Ptr<void>): void;
 
 @compilerFunc
 extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;

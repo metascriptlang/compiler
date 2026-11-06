@@ -951,6 +951,35 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 	msClosureArrayDestroy(&old);
 }
 
+void msRoClosureArrayDestroy(msClosureArray* arr) {
+	msClosurePayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i].env);
+		free(p);
+	}
+}
+
+void msRoClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
+	const int64_t len = src->len;
+	const int64_t cap = src->p != NULL ? src->p->cap : 0;
+	msClosurePayload* newp = NULL;
+	if (src->p != NULL) {
+		newp = (msClosurePayload*)msMemAlloc0(sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure));
+		newp->cap = cap;
+		for (int64_t i = 0; i < len; i++) {
+			newp->data[i] = src->p->data[i];
+			msIncrefRo(newp->data[i].env);
+		}
+	}
+	msClosureArray old = *dest;
+	dest->len = len;
+	dest->p = newp;
+	msRoClosureArrayDestroy(&old);
+}
+
 void msClosureArrayWasMoved(msClosureArray* arr) {
 	arr->len = 0;
 	arr->p = NULL;

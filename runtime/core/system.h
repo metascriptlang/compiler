@@ -102,6 +102,8 @@ void msClosureArrayDestroy(msClosureArray* arr);
 void msClosureArrayPush(msClosureArray* arr, msClosure value);
 void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src);
 void msClosureArrayWasMoved(msClosureArray* arr);
+void msRoClosureArrayDestroy(msClosureArray* arr);
+void msRoClosureArrayCopy(msClosureArray* dest, const msClosureArray* src);
 #endif
 
 /* Exception handling — declared before future.h so a failed-future read can
@@ -368,6 +370,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayClosureCopy(d, s)       msClosureArrayCopy(&(d), &(s))
 #define msArrayClosureSink(d, ...)     do { msClosureArray __caold = (d); (d) = (__VA_ARGS__); if (__caold.p != (d).p) msClosureArrayDestroy(&__caold); } while(0)
 #define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
+#define msArrayClosureRoDestroy(arr)   msRoClosureArrayDestroy(&(arr))
+#define msArrayClosureRoCopy(d, s)     msRoClosureArrayCopy(&(d), &(s))
+#define msArrayClosureRoSink(d, ...)   do { msClosureArray __caold = (d); (d) = (__VA_ARGS__); if (__caold.p != (d).p) msRoClosureArrayDestroy(&__caold); } while(0)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
@@ -491,6 +496,7 @@ static inline void* msUnownedGiveRo(void* p) {
 #define msClosureSink(d, ...) do { msClosure __clold = (d); (d) = (__VA_ARGS__); msClosureDestroy(__clold); } while(0)
 #define msClosureDestroyRo(c) do { if ((c).env != NULL) { msDecrefCyclicRo((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureCopyRo(c)    do { if ((c).env != NULL) msIncrefCyclicRo((c).env); } while(0)
+#define msImmortalizeClosure(c) msImmortalize((c).env)
 #define msClosureSinkRo(d, ...) do { msClosure __clold = (d); (d) = (__VA_ARGS__); msClosureDestroyRo(__clold); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
 #define msClosureDisown(c) msOrcDisown((c).env)

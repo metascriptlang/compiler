@@ -503,6 +503,9 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayClosureCopy(d, s)       do { (d) = (s); } while(0)
 #define msArrayClosureSink(d, ...)     do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
+#define msArrayClosureRoDestroy(arr)   ((void)0)
+#define msArrayClosureRoCopy(d, s)     do { (d) = (s); } while(0)
+#define msArrayClosureRoSink(d, ...)   do { (d) = (__VA_ARGS__); } while(0)
 
 #define msIncref(p)           ((void)0)
 #define msDecref(p)           ((void)0)
@@ -702,6 +705,7 @@ static inline void msOrcTraceRefRo(void* child, void* env) { (void)child; (void)
 static inline void msImmortalize(void* p) { (void)p; }
 static inline void* msImmortalBegin(void) { return (void*)0; }
 static inline void msImmortalEnd(void) {}
+#define msImmortalizeClosure(c) ((void)(c))
 static inline void msFreeImmortals(void) {}
 
 /* ===== Async stubs ===== */
