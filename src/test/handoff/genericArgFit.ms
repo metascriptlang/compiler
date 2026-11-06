@@ -337,6 +337,13 @@ test "a union of a string and a typed array meets a byte-input constraint that h
 	assert strictErrorCount(src + "const c = h(pick(true));") == 0;
 }
 
+test "a numeric literal argument takes its type parameter's constraint as context, and one the constraint cannot hold is still refused" {
+	const src = "function b<D extends uint8>(d: D): int32 { return 0; }\nfunction v<D extends uint8[]>(d: D): int32 { return 0; }\nfunction n<D extends string | Uint8Array | Readonly<Span<uint8>>>(d: D): int32 { return 0; }\n";
+	assert strictErrorCount(src + "const c = b(200) + v([1, 2]) + n([97, 98]);") == 0;
+	assert hasError(src + "const c = b(300);", "300");
+	assert hasError(src + "const c = v([1, 256]);", "256");
+}
+
 test "a typeof test on a type-parameter value is decided per instance; one its constraint cannot pass and a concrete parameter still narrow to never" {
 	const generic = "function f<B extends string | uint8[]>(b: B): int32 { if (typeof b == \"string\") return 0; return b.length as int32; }\nconst a: uint8[] = [1];\nconst c = f(\"s\") + f(a);";
 	assert strictErrorCount(generic) == 0;
