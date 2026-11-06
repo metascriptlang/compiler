@@ -21,7 +21,8 @@ import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
 
 type Reduce = { acc: Node, op: string, term: Node };
-type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string, endLimit: int64 };
+type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string, endLimit: int64, term: Node | null, mask: int64 };
+type Consts = { syms: Symbol[], inits: Node[] };
 
 export function versionReductions(program: Node, ctx: TransformContext): Node {
 	if (!ctx.rangeChecks || ctx.jsBackend || ctx.raiserBackend) return program;
@@ -42,6 +43,7 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	endDecl.nodeType = i64;
 	const endRef = (): Node => makeIdentResolved(endSym, loc);
 
+	if (r.term != null) return boundedLoop(r, r.term, w, endDecl, endRef, loc);
 	const kind = r.arrays.length == 1 ? "Sum" : "Dot";
 	const args = (): Node[] => {
 		const out: Node[] = [ident(r.acc, loc)];
@@ -52,13 +54,8 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	};
 	let fits = makeCall(runtimeRef(`ms${kind}Fits${r.widthTag}`, loc), args(), loc);
 	fits.nodeType = booleanType();
+	fits = indexInRange(r, fits, endRef, loc);
 	const indexType = peelToRepr(r.index.nodeType)!;
-	if (indexType.kind != TypeKind.Int64) {
-		const inRange = makeBinary(endRef(), "<=", makeIntNumber(maxOf(indexType.kind), loc), loc);
-		inRange.nodeType = booleanType();
-		fits = makeBinary(inRange, "&&", fits, loc);
-		fits.nodeType = booleanType();
-	}
 	if (r.endLimit > 0) {
 		const unmasked = makeBinary(endRef(), "<=", makeIntNumber(r.endLimit, loc), loc);
 		unmasked.nodeType = booleanType();
@@ -69,10 +66,48 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	sum.nodeType = r.acc.nodeType;
 	const step = indexType.kind == TypeKind.Int64 ? endRef() : makeHiddenStdConv(endRef(), r.index.nodeType!, loc);
 	const fast = makeBlock([makeExprStmt(makeAssign(ident(r.acc, loc), sum, loc), loc), makeExprStmt(makeAssign(ident(r.index, loc), step, loc), loc)], loc);
+	return makeWhile(w.whileCondition, makeBlock([endDecl, makeIf(fits, fast, checkedBlock(r, w, endRef, loc), loc)], loc), loc);
+}
+
+function checkedBlock(r: Reduction, w: WhileStmtData, endRef: () => Node, loc: SourceLocation): Node {
 	const inBlock = makeBinary(ident(r.index, loc), "<", endRef(), loc);
 	inBlock.nodeType = booleanType();
-	const checked = makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
-	return makeWhile(w.whileCondition, makeBlock([endDecl, makeIf(fits, fast, checked, loc)], loc), loc);
+	return makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
+}
+
+function indexInRange(r: Reduction, fits: Node, endRef: () => Node, loc: SourceLocation): Node {
+	const indexType = peelToRepr(r.index.nodeType)!;
+	if (indexType.kind == TypeKind.Int64) return fits;
+	const inRange = makeBinary(endRef(), "<=", makeIntNumber(maxOf(indexType.kind), loc), loc);
+	inRange.nodeType = booleanType();
+	const both = makeBinary(inRange, "&&", fits, loc);
+	both.nodeType = booleanType();
+	return both;
+}
+
+// Each step moves acc by a value in [0, mask] (+=) or [-mask, 0] (-=), so a block whose two end points fit
+// keeps every partial sum in range and the plain add cannot overflow.
+function boundedLoop(r: Reduction, term: Node, w: WhileStmtData, endDecl: Node, endRef: () => Node, loc: SourceLocation): Node {
+	const i64 = getSysType(TypeKind.Int64);
+	const bound = (v: int64): Node => {
+		const n = makeIntNumber(v, loc);
+		n.nodeType = i64;
+		return n;
+	};
+	const add = r.op == "+=";
+	const fits = makeCall(runtimeRef(`msRangeFits${r.widthTag}`, loc), [ident(r.acc, loc), ident(r.index, loc), endRef(), bound(add ? 0 : -r.mask), bound(add ? r.mask : 0)], loc);
+	fits.nodeType = booleanType();
+	const next = makeBinary(ident(r.acc, loc), add ? "+" : "-", term, loc);
+	next.nodeType = r.acc.nodeType;
+	const one = makeIntNumber(1, loc);
+	one.nodeType = r.index.nodeType;
+	const stepped = makeBinary(ident(r.index, loc), "+", one, loc);
+	stepped.nodeType = r.index.nodeType;
+	const inBlock = makeBinary(ident(r.index, loc), "<", endRef(), loc);
+	inBlock.nodeType = booleanType();
+	const body = makeBlock([makeExprStmt(makeAssign(ident(r.acc, loc), next, loc), loc), makeExprStmt(makeAssign(ident(r.index, loc), stepped, loc), loc)], loc);
+	const fast = makeBlock([makeWhile(inBlock, body, loc)], loc);
+	return makeWhile(w.whileCondition, makeBlock([endDecl, makeIf(indexInRange(r, fits, endRef, loc), fast, checkedBlock(r, w, endRef, loc), loc)], loc), loc);
 }
 
 // ===== Recognizer =====
@@ -88,7 +123,9 @@ function matchReduction(loop: Node): Reduction | null {
 	const stmts = (w.whileBody.data as BlockStmtData).statements;
 	if (stmts.length == 4) return matchForOf(stmts, index, cd.right);
 	if (stmts.length != 2) return null;
-	return stmts[0].kind == NodeKind.BlockStmt ? matchElementLocal(stmts, index, cd.right) : matchIndexed(stmts, index, cd.right);
+	if (stmts[0].kind != NodeKind.BlockStmt) return matchIndexed(stmts, index, cd.right);
+	const element = matchElementLocal(stmts, index, cd.right);
+	return element != null ? element : matchBoundedTerm(stmts, index, cd.right);
 }
 
 // The fused loop of an array iterator, then the step of i, bounded by `xs.length` read each step (through
@@ -115,7 +152,76 @@ function matchElementLocal(stmts: Node[], index: Node, len: Node): Reduction | n
 	const bound = lengthOf(bareLen);
 	if (bound == null || !readsAnyOf(bound, [array]) || !distinctFrom(acc, [index, decl, array])) return null;
 	const tag = sumTag(acc, array);
-	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len: bareLen, widthTag: tag, endLimit: limit };
+	return tag == "" ? null : { acc, op: reduce.op, arrays: [array], index, len: bareLen, widthTag: tag, endLimit: limit, term: null, mask: 0 };
+}
+
+// A generator's fused loop under a local limit: `{ const x = <pure term>; ...; { acc op= T & C } }` and the step of i.
+// The mask bounds every step whatever its operands hold, so the operands only need to be pure.
+function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | null {
+	if (!isIndexStep(stmts[1], index) || !isSignedLocal(len) || sameLocal(len, index)) return null;
+	const inner = nestedStatements(stmts[0]);
+	const reduce = inner.length > 0 ? reduceStmt(inner[inner.length - 1]) : null;
+	if (reduce == null || !distinctFrom(reduce.acc, [index, len])) return null;
+	const consts: Consts = { syms: [], inits: [] };
+	const loc = reduce.acc.location;
+	for (let k = 0; k < inner.length - 1; k++) {
+		const s = inner[k];
+		if (s.kind != NodeKind.VariableDecl || s.resolvedSym == null) return null;
+		const init = (s.data as VariableDeclData).initializer;
+		if (init == null || pureTerm(init, consts, reduce.acc, loc) == null) return null;
+		consts.syms.push(s.resolvedSym!);
+		consts.inits.push(init);
+	}
+	const masked = widened(reduce.term, reduce.acc);
+	const mask = masked == null ? -1 : maskOf(masked);
+	const term = mask < 0 ? null : pureTerm(reduce.term, consts, reduce.acc, loc);
+	const k = signedKind(reduce.acc.nodeType);
+	if (term == null || k == null) return null;
+	return { acc: reduce.acc, op: reduce.op, arrays: [], index, len, widthTag: widthName(k), endLimit: 0, term, mask };
+}
+
+function maskOf(n: Node): int64 {
+	const k = signedKind(n.nodeType);
+	if (k == null || n.kind != NodeKind.BinaryExpr || (n.data as BinaryExprData).operator != "&") return -1;
+	const d = n.data as BinaryExprData;
+	for (const side of [peelStdConv(d.left), peelStdConv(d.right)]) {
+		if (side.kind != NodeKind.NumberLiteral) continue;
+		const m = side.data as NumberLiteralData;
+		if (!m.isFloat && m.intVal >= 0 && (k == TypeKind.Int64 || m.intVal <= maxOf(k))) return m.intVal;
+	}
+	return -1;
+}
+
+function pureTerm(n: Node, consts: Consts, acc: Node, loc: SourceLocation): Node | null {
+	if (n.kind == NodeKind.Identifier) {
+		if (n.resolvedSym == null || n.resolvedSym == acc.resolvedSym || signedKind(n.nodeType) == null) return null;
+		const at = consts.syms.indexOf(n.resolvedSym!);
+		return at < 0 ? cloneIdent(n, loc) : pureTerm(consts.inits[at], consts, acc, loc);
+	}
+	if (n.kind == NodeKind.NumberLiteral) {
+		const d = n.data as NumberLiteralData;
+		if (d.isFloat || signedKind(n.nodeType) == null) return null;
+		const c = makeIntNumber(d.intVal, loc);
+		c.nodeType = n.nodeType;
+		return c;
+	}
+	if (n.kind == NodeKind.HiddenStdConv) {
+		const d = n.data as HiddenStdConvData;
+		const to = signedKind(d.convType);
+		const from = signedKind(d.convExpr.nodeType);
+		if (to == null || from == null || bitsOfKind(from) > bitsOfKind(to)) return null;
+		const inner = pureTerm(d.convExpr, consts, acc, loc);
+		return inner == null ? null : makeHiddenStdConv(inner, d.convType, loc);
+	}
+	if (n.kind != NodeKind.BinaryExpr || signedKind(n.nodeType) == null) return null;
+	const d = n.data as BinaryExprData;
+	if (d.operator != "&" && d.operator != "|" && d.operator != "^") return null;
+	const left = pureTerm(d.left, consts, acc, loc);
+	const right = left == null ? null : pureTerm(d.right, consts, acc, loc);
+	if (left == null || right == null) return null;
+	const out = makeBinary(left, d.operator, right, loc);
+	out.nodeType = n.nodeType;
+	return out;
 }
 
 // `xs[k]` for the key const k, read through the standard conversion an index gets.

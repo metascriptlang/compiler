@@ -959,6 +959,14 @@ extern function msArrDataAtEither(c: boolean, a: Ptr<void>, b: Ptr<void>, i: int
 @compilerFunc
 extern function msBlockEnd(b: int64, len: int64): int64;
 @compilerFunc
+extern function msRangeFitsI8(acc: int8, b: int64, e: int64, lo: int64, hi: int64): boolean;
+@compilerFunc
+extern function msRangeFitsI16(acc: int16, b: int64, e: int64, lo: int64, hi: int64): boolean;
+@compilerFunc
+extern function msRangeFitsI32(acc: int32, b: int64, e: int64, lo: int64, hi: int64): boolean;
+@compilerFunc
+extern function msRangeFitsI64(acc: int64, b: int64, e: int64, lo: int64, hi: int64): boolean;
+@compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc
 extern function msAddI8(a: int8, b: int8): int8;

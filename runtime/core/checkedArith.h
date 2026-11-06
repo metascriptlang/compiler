@@ -148,6 +148,17 @@ static inline int64_t msBlockEnd(int64_t b, int64_t len) {
 	return len - b > MS_REDUCE_BLOCK ? b + MS_REDUCE_BLOCK : len;
 }
 
+static inline int msRangeFits_(int64_t acc, int64_t b, int64_t e, int64_t lo, int64_t hi, int64_t min, int64_t max) {
+	int64_t top, bottom;
+	if (e <= b || __builtin_mul_overflow(hi, e - b, &top) || __builtin_add_overflow(acc, top, &top)) return 0;
+	if (__builtin_mul_overflow(lo, e - b, &bottom) || __builtin_add_overflow(acc, bottom, &bottom)) return 0;
+	return top <= max && bottom >= min;
+}
+#define msRangeFitsI8(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT8_MIN, INT8_MAX)
+#define msRangeFitsI16(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT16_MIN, INT16_MAX)
+#define msRangeFitsI32(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT32_MIN, INT32_MAX)
+#define msRangeFitsI64(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT64_MIN, INT64_MAX)
+
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
 	if (acc > max) return 0;
 	return term <= (max - acc) / (uint64_t)n;
