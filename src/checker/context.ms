@@ -1645,7 +1645,8 @@ export class CheckerContext {
 	adoptStmt: ((stmt: Node) => void) | null;
 	adoptedParams: HashMap<Node, Symbol[]>;
 	boundIdents: HashMap<Node, Symbol>;
-	inferredNeeds: HashMap<Node, Symbol[]>;
+	inferredNeeds: HashMap<Node, Node[]>;
+	inferredOwners: HashMap<Node, Node>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
@@ -1758,7 +1759,8 @@ export function createContext(dispatchRegistry: DispatchRegistry = createDispatc
 		adoptStmt: null,
 		adoptedParams: new HashMap<Node, Symbol[]>(),
 		boundIdents: new HashMap<Node, Symbol>(),
-		inferredNeeds: new HashMap<Node, Symbol[]>(),
+		inferredNeeds: new HashMap<Node, Node[]>(),
+		inferredOwners: new HashMap<Node, Node>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
 		macroConverters: [],

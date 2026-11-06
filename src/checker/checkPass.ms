@@ -1633,6 +1633,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 			ctorExits = [];
 			ctx.ctorExitsNext = ctorExits;
 		}
+		checkNeedsFirst(ctx, classMemberDecl(member), 0);
 		checkClassMember(ctx, member, d.className, sym.symbolType);
 		ctx.ctorExitsNext = null;
 	}
@@ -3499,30 +3500,72 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 let _needPath: HashMap<Node, int32> = new HashMap<Node, int32>();
 const NO_CYCLE: int32 = 2147483647;
 
+interface InferredNames {
+	declared: HashMap<string, Node>;
+	members: HashMap<string, Node[]>;
+	ownerOf: HashMap<Node, Node>;
+}
+
 function collectInferredNeeds(ctx: CheckerContext, stmts: Node[]): void {
 	ctx.inferredNeeds.clear();
-	const byName = new HashMap<string, Symbol>();
+	const names: InferredNames = { declared: new HashMap<string, Node>(), members: new HashMap<string, Node[]>(), ownerOf: new HashMap<Node, Node>() };
 	let lastInferred = -1;
 	for (let i = 0; i < stmts.length; i += 1) {
 		const decl = declOfStatement(stmts[i]);
+		let inferred = false;
 		if (decl.resolvedSym != null && typedByItsDeclaration(ctx, decl.resolvedSym)) {
-			byName.set(decl.resolvedSym.name, decl.resolvedSym);
-			lastInferred = i;
+			names.declared.set(decl.resolvedSym.name, decl);
+			if (decl.kind == NodeKind.FunctionDecl) addInferredMember(names, decl.resolvedSym.name, decl);
+			inferred = true;
 		}
-	}
-	for (let i = 0; i <= lastInferred; i += 1) {
-		const stmt = stmts[i];
-		const user = declOfStatement(stmt);
-		const scan = (node: Node): void => {
-			if (node.kind == NodeKind.Identifier) {
-				const sym = byName.get((node.data as IdentifierData).name);
-				if (sym != null && sym.declNode != user) noteInferredNeed(ctx, user, sym);
-				return;
+		if (decl.kind == NodeKind.ClassDecl) {
+			for (const raw of (decl.data as ClassDeclData).classBody) {
+				const member = classMemberDecl(raw);
+				const name = inferredMemberName(decl, member);
+				if (name == "") continue;
+				addInferredMember(names, name, member);
+				names.ownerOf.set(member, decl);
+				inferred = true;
 			}
-			forEachChild(node, scan);
-		};
-		scan(stmt);
+		}
+		if (inferred) lastInferred = i;
 	}
+	ctx.inferredOwners = names.ownerOf;
+	for (let i = 0; i <= lastInferred; i += 1) {
+		const decl = declOfStatement(stmts[i]);
+		if (decl.kind != NodeKind.ClassDecl) {
+			noteNamesRead(ctx, names, decl, stmts[i]);
+			continue;
+		}
+		const cd = decl.data as ClassDeclData;
+		for (const raw of cd.classBody) noteNamesRead(ctx, names, classMemberDecl(raw), raw);
+	}
+}
+
+function addInferredMember(names: InferredNames, name: string, decl: Node): void {
+	const held = names.members.get(name);
+	if (held == null) names.members.set(name, [decl]);
+	else held.push(decl);
+}
+
+function noteNamesRead(ctx: CheckerContext, names: InferredNames, user: Node, root: Node): void {
+	const scan = (node: Node): void => {
+		if (node.kind == NodeKind.Identifier) {
+			const need = names.declared.get((node.data as IdentifierData).name);
+			if (need != null && need != user) noteInferredNeed(ctx, user, need);
+			return;
+		}
+		if (node.kind == NodeKind.MemberExpr) {
+			const held = names.members.get((node.data as MemberExprData).property);
+			if (held != null) {
+				for (const need of held) {
+					if (need != user) noteInferredNeed(ctx, user, need);
+				}
+			}
+		}
+		forEachChild(node, scan);
+	};
+	scan(root);
 }
 
 function typedByItsDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
@@ -3532,17 +3575,30 @@ function typedByItsDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
 		const d = decl.data as VariableDeclData;
 		return d.declType == "" && d.initializer != null;
 	}
-	return sym.symbolKind == SymbolKind.Function && decl.kind == NodeKind.FunctionDecl && sym.overloads.length == 0
-		&& sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn);
+	return sym.symbolKind == SymbolKind.Function && decl.kind == NodeKind.FunctionDecl && sym.overloads.length == 0 && returnLeftToBody(sym);
 }
 
-function noteInferredNeed(ctx: CheckerContext, user: Node, sym: Symbol): void {
+function returnLeftToBody(sym: Symbol): boolean {
+	return sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn);
+}
+
+function inferredMemberName(classDecl: Node, member: Node): string {
+	if (member.kind == NodeKind.PropertyDecl) {
+		const pd = member.data as PropertyDeclData;
+		return pd.propType == "" && pd.propInitializer != null && declGenericParams(classDecl) == "" ? pd.propName : "";
+	}
+	if (member.kind != NodeKind.MethodDecl || member.resolvedSym == null) return "";
+	const md = member.data as MethodDeclData;
+	return md.methodBody != null && !isGenericFn(md.methodFlags) && returnLeftToBody(member.resolvedSym) ? md.methodName : "";
+}
+
+function noteInferredNeed(ctx: CheckerContext, user: Node, need: Node): void {
 	let needs = ctx.inferredNeeds.get(user);
 	if (needs == null) {
 		needs = [];
 		ctx.inferredNeeds.set(user, needs);
 	}
-	if (needs.indexOf(sym) < 0) needs.push(sym);
+	if (needs.indexOf(need) < 0) needs.push(need);
 }
 
 function checkNeedsFirst(ctx: CheckerContext, decl: Node, depth: int32): int32 {
@@ -3552,26 +3608,39 @@ function checkNeedsFirst(ctx: CheckerContext, decl: Node, depth: int32): int32 {
 	if (needs == null) return NO_CYCLE;
 	_needPath.set(decl, depth);
 	let low = NO_CYCLE;
-	for (const sym of needs) {
-		const reached = checkNeedsFirst(ctx, sym.declNode, depth + 1);
+	for (const need of needs) {
+		const reached = checkNeedsFirst(ctx, need, depth + 1);
 		if (reached <= depth) {
 			low = Math.min(low, reached);
 			continue;
 		}
-		checkDeclarationFirst(ctx, sym);
+		checkDeclarationFirst(ctx, need);
 	}
 	_needPath.delete(decl);
 	ctx.inferredNeeds.delete(decl);
 	return low;
 }
 
-function checkDeclarationFirst(ctx: CheckerContext, sym: Symbol): void {
-	const decl = sym.declNode;
-	if (decl.kind == NodeKind.VariableDecl) {
-		if (sym.state != SymbolState.Checked && sym.state != SymbolState.Checking) checkBindingOnDemand(ctx, sym);
-	} else if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn)) {
-		demandFunctionBody(ctx, decl, sym);
-	}
+function checkDeclarationFirst(ctx: CheckerContext, decl: Node): void {
+	const sym = decl.resolvedSym;
+	match (decl.kind) {
+		NodeKind.VariableDecl => {
+			if (sym != null && sym.state != SymbolState.Checked && sym.state != SymbolState.Checking) checkBindingOnDemand(ctx, sym);
+		},
+		NodeKind.FunctionDecl => {
+			if (sym != null && returnLeftToBody(sym)) demandFunctionBody(ctx, decl, sym);
+		},
+		NodeKind.MethodDecl => {
+			if (sym != null && returnLeftToBody(sym)) demandMethodBody(ctx, decl, sym);
+		},
+		NodeKind.PropertyDecl => {
+			const owner = ctx.inferredOwners.get(decl);
+			if (owner != null && owner.resolvedSym != null && isUnresolvedFieldType(decl.nodeType) && !_fieldsCheckedOnDemand.has(decl)) {
+				demandFieldBody(ctx, owner.resolvedSym, owner, decl);
+			}
+		},
+		_ => {},
+	};
 }
 
 // ===== Main Entry Point =====
