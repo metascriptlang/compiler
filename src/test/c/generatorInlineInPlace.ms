@@ -375,3 +375,15 @@ test "E2E C: a consumer after an earlier operand whose effect no temp holds keep
 	assert c != "";
 	assert c.contains("collect__");
 }
+
+test "E2E C: a destructured for-of over entries() binds the yielded parts without a tuple" {
+	const c = arrayLoopC("entriesparts", `for (const [k, x] of xs.entries()) s += (x as int64) + (k as int64);`);
+	assert c != "";
+	assert !c.contains("dollarelem"), "entries() destructuring went through a tuple temp";
+}
+
+test "E2E C: a destructured for-of whose pattern does not match the yielded tuple keeps the tuple" {
+	const hole = arrayLoopC("entrieshole", `for (const [, x] of xs.entries()) s += x as int64;`);
+	assert hole != "";
+	assert hole.contains("dollarelem");
+}
