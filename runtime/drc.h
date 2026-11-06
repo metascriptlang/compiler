@@ -630,6 +630,8 @@ void msOrcCollect(void);
 void msOrcDisown(void* p);
 void msOrcDisownValue(void* p, msTraceProc custody);
 void msImmortalize(void* p);
+void* msImmortalBegin(void);
+void msImmortalEnd(void);
 void msFreeImmortals(void);
 
 static inline void msOrcEnable(void) { msRootsThreshold = 0; }

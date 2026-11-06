@@ -350,6 +350,12 @@ extern function msDecrefCyclic(p: Ptr<void>): void;
 extern function msImmortalize(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msImmortalBegin(): Ptr<void>;
+
+@compilerFunc
+extern function msImmortalEnd(): void;
+
+@compilerFunc
 extern function msIncrefRo(p: Ptr<void>): void;
 
 @compilerFunc

@@ -1046,23 +1046,48 @@ static void msMarkImmortal(void* p) {
 	h->rc = MS_RC_IMMORTAL | (h->rc & (MS_RC_MASK | MS_UNOWNED_MASK));
 }
 
+static void msImmortalRoot(void* p) {
+	msCell root = { p, msHeader(p)->type };
+	msOrphanRootsAcquire();
+	msCellSeqPush(&msImmortalRoots, root);
+	msOrphanRootsRelease();
+}
+
+static void msImmortalizeReached(msGcEnv* j) {
+	while (j->traceStack.len > 0) {
+		void* child = *(void**)j->traceStack.data[--j->traceStack.len].ptr;
+		if (child == NULL || msIsImmortal(child) || msStaysMortal(child)) continue;
+		msMarkImmortal(child);
+		msReach(child, j);
+	}
+}
+
 void msImmortalize(void* p) {
 	if (p == NULL || msIsImmortal(p) || msStaysMortal(p)) return;
 	msGcEnv j;
 	msCellSeqInit(&j.traceStack);
 	msMarkImmortal(p);
 	msReach(p, &j);
-	while (j.traceStack.len > 0) {
-		void* child = *(void**)j.traceStack.data[--j.traceStack.len].ptr;
-		if (child == NULL || msIsImmortal(child) || msStaysMortal(child)) continue;
-		msMarkImmortal(child);
-		msReach(child, &j);
-	}
+	msImmortalizeReached(&j);
 	msCellSeqFree(&j.traceStack);
-	msCell root = { p, msHeader(p)->type };
-	msOrphanRootsAcquire();
-	msCellSeqPush(&msImmortalRoots, root);
-	msOrphanRootsRelease();
+	msImmortalRoot(p);
+}
+
+static msGcEnv msImmortalPending;
+
+void* msImmortalBegin(void) {
+	msCellSeqInit(&msImmortalPending.traceStack);
+	return &msImmortalPending;
+}
+
+void msImmortalEnd(void) {
+	msGcEnv* j = &msImmortalPending;
+	for (int32_t i = 0; i < j->traceStack.len; i++) {
+		void* child = *(void**)j->traceStack.data[i].ptr;
+		if (child != NULL && !msIsImmortal(child) && !msStaysMortal(child)) msImmortalRoot(child);
+	}
+	msImmortalizeReached(j);
+	msCellSeqFree(&j->traceStack);
 }
 
 #define MS_IMMORTAL_GATHERED (-2)

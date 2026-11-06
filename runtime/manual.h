@@ -700,6 +700,8 @@ static inline void msRootsThreadTeardown(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
 static inline void msOrcTraceRefRo(void* child, void* env) { (void)child; (void)env; }
 static inline void msImmortalize(void* p) { (void)p; }
+static inline void* msImmortalBegin(void) { return (void*)0; }
+static inline void msImmortalEnd(void) {}
 static inline void msFreeImmortals(void) {}
 
 /* ===== Async stubs ===== */
