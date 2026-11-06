@@ -481,7 +481,7 @@ function unpack(
 	const result = allocRef(s);
 	if (body.kind == TypeKind.Struct) {
 		emitInst(s, raiserABC(RaiserOpcode.NewObject, result,
-			structShapeOperand(s, body, body.typeNames, slotClassesOf(s, body)), 0));
+			structShapeOperand(s, place.valueType, body.typeNames, slotClassesOf(s, body)), 0));
 		for (let i = 0; i < body.typeNames.length; i += 1) {
 			const value = storesNothing(body, body.typeChildren[i])
 				? literalValue(s, body.typeChildren[i])
