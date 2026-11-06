@@ -43,7 +43,7 @@ import {
 	rsaModulusBytes,
 } from "./rsaKey";
 import { randomOctets } from "./random";
-import { wipeBytes, wipeWords } from "./secret";
+import { declassify, wipeBytes, wipeWords } from "./secret";
 
 function uintOf(bytes: Readonly<uint8[]>): uint32[] {
 	const value = uintFromBytes(bytes, limbsFor(bytes.length * 8 + 1));
@@ -165,10 +165,10 @@ function blindedExponent(p: Readonly<uint32[]>, d: Readonly<uint8[]>): uint8[] {
 	const r = uintOf(randomOctets(28));
 	const blinded = uintMul(minusOne(p), r);
 	const exponent = uintOf(d);
-	if (uintAdd(blinded, exponent) != 0) throw new Error(
+	if (declassify(uintAdd(blinded, exponent)) != 0) throw new Error(
 		"rsa: a blinded exponent overflowed its width",
 	);
-	const bytes = uintToMinimalBytes(blinded);
+	const bytes = uintToBytes(blinded, (blinded.length * 31 + 7) >> 3) as uint8[];
 	wipeWords(r);
 	wipeWords(blinded);
 	wipeWords(exponent);
@@ -228,7 +228,7 @@ export function rsaPrivateOperation(
 		const overflow = uintMulAdd(result, wh, wq);
 		const check = n.powPublic(result, key.e);
 		if (check != null) words.push(check);
-		if (overflow != 0 || check == null || uintCompare(check, t) != 0) return null;
+		if (check == null || declassify(overflow | (uintCompare(check, t) as uint32)) != 0) return null;
 		const opened = n.mul(result, blinding.vf);
 		words.push(opened);
 		return uintToBytes(opened, rsaModulusBytes(key.n));

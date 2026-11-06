@@ -1,4 +1,4 @@
-import { valueBarrier, wipeWords } from "./secret";
+import { declassify, valueBarrier, valueBarrier64, wipeWords, wipeWords64 } from "./secret";
 /**
  * Modular arithmetic on fixed-length unsigned integers, ported from Zig's `std.crypto.ff` (MIT, see
  * LICENSE.zig.MIT). A limb is a `uint32` carrying 31 value bits, little-endian in a `uint32[]`; a field
@@ -133,7 +133,7 @@ export function uintToBytes(
 			remaining -= consumed;
 			shift = 0;
 			if (outI == 0) {
-				if ((limb | orLimbs(x, i + 1)) != 0) return null;
+				if (declassify(limb | orLimbs(x, i + 1)) != 0) return null;
 				return bytes;
 			}
 			outI -= 1;
@@ -317,7 +317,7 @@ export function uintMul(
 	const overflow = uintMulAdd(acc, wx, wy);
 	wipeWords(wx);
 	wipeWords(wy);
-	if (overflow != 0) throw new Error("uintMul: the product overflowed its own width");
+	if (declassify(overflow) != 0) throw new Error("uintMul: the product overflowed its own width");
 	return acc;
 }
 
@@ -654,7 +654,7 @@ when (c) {
 			borrow = ((~xj & mj) | (~(xj ^ mj) & d)) >> 63;
 			out[j] = d;
 		}
-		const keep = zero64 - (borrow & (carry ^ 1));
+		const keep = valueBarrier64(zero64 - (borrow & (carry ^ 1)));
 		for (let j = 0; j < n; j++) out[j] = (out[j] & ~keep) | (x[j] & keep);
 	}
 
@@ -1045,7 +1045,7 @@ when (c) {
 					for (let i = 0; i < n; i++) selected[i] = 0;
 					for (let k = 0; k < count; k++) {
 						const diff = (k ^ window) as uint32;
-						const hit = zero64 - ((((diff | ((0 as uint32) - diff)) >> 31) ^ 1) as uint64);
+						const hit = valueBarrier64(zero64 - ((((diff | ((0 as uint32) - diff)) >> 31) ^ 1) as uint64));
 						const entry = table[k];
 						for (let i = 0; i < n; i++) selected[i] |= entry[i] & hit;
 					}
@@ -1337,7 +1337,7 @@ function powInternal(
 ): uint32[] | null {
 	let acc = 0;
 	for (let i = 0; i < e.length; i++) acc |= e[i] as int32;
-	if (acc == 0) return null;
+	if (declassify(acc as uint32) == 0) return null;
 	when (c) {
 		return widePow(m, x, e, isPublic);
 	} else {
