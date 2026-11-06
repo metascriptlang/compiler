@@ -42,3 +42,32 @@ test "as between types that overlap still checks" {
 		assert text == "", source + " must check: " + text;
 	}
 }
+
+test "as between an address and a float, a boolean or a narrower integer is refused" {
+	const p = "const p = null as Ptr<void>;\n";
+	const cases: string[][] = [
+		["const f = 1.5;\nconst r = f as Ptr<void>;", "cannot convert float64 to Ptr<void> — only an integer holds an address"],
+		["const b = true;\nconst r = b as Ptr<void>;", "cannot convert boolean to Ptr<void> — only an integer holds an address"],
+		[p + "const r = p as int32;", "cannot convert Ptr<void> to int32 — an address does not fit in int32; read it with `as int64` or `as uint64`"],
+		[p + "const r = p as uint32;", "an address does not fit in uint32"],
+		[p + "const r = p as float64;", "cannot convert Ptr<void> to float64 — a pointer is not a number"],
+		[p + "function g<T>(q: Ptr<void>): T { return q as T; }\nconst r = g<int32>(p);", "an address does not fit in int32"],
+		["function h<T>(x: T): Ptr<void> { return x as Ptr<void>; }\nconst r = h(1.5);", "only an integer holds an address"],
+	];
+	for (const c of cases) {
+		const text = refusal(c[0]);
+		assert text.contains(c[1]), c[0] + " must be refused: " + text;
+	}
+}
+
+test "as between an address and a 64-bit integer, or an integer into an address, still checks" {
+	const sources: string[] = [
+		"const p = null as Ptr<void>;\nconst a = p as int64;\nconst b = p as uint64;",
+		"const n = 16 as int64;\nconst p = n as Ptr<void>;",
+		"const n = 16 as int32;\nconst p = n as Ptr<void>;",
+	];
+	for (const src of sources) {
+		const text = refusal(src);
+		assert text == "", src + " must check: " + text;
+	}
+}

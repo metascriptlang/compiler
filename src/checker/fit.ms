@@ -1846,6 +1846,21 @@ export function scalarConversionReason(src: Type, target: Type): string {
 	if (isTextlessScalar(src) && isStringLike(target)) return "format it with String(x) or x.toString()";
 	if ((src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral) && isNumeric(target)) return "a boolean is not a number; pick one with a conditional (b ? 1 : 0)";
 	if (isNumeric(widenNumberLiteralType(src)) && toBoolean) return "a number is not a boolean; compare it instead (x != 0)";
+	return pointerScalarReason(skipModifier(widenNumberLiteralType(src))!, skipModifier(target)!);
+}
+
+function pointerScalarReason(src: Type, target: Type): string {
+	const fromBool = src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral;
+	if (target.kind == TypeKind.Ptr && (isFloatType(src) || fromBool)) {
+		return "only an integer holds an address; convert the value to int64 or uint64 first if it is one";
+	}
+	if (src.kind != TypeKind.Ptr) return "";
+	if (isFloatType(target) || target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral) {
+		return "a pointer is not a number; read its address with `as int64` or `as uint64`";
+	}
+	if (isIntegerType(target) && target.kind != TypeKind.Int64 && target.kind != TypeKind.Uint64) {
+		return "an address does not fit in " + typeDisplayName(target) + "; read it with `as int64` or `as uint64`";
+	}
 	return "";
 }
 
