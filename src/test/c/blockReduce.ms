@@ -67,3 +67,33 @@ test "E2E C: the fused loop of keys() reduces in guarded blocks that end below 2
 	assert c.contains("msSumFitsI32I32("), c.slice(0, 400);
 	assert c.contains("<= 9007199254740992"), "a block of masked keys does not stop at 2^53";
 }
+
+const upTo = "function* upTo(n: int32): Iterator<int32> { for (let i: int32 = 0; i < n; i++) yield i; }\nfunction* relay(n: int32): Iterator<int32> { for (const x of upTo(n)) yield x; }\nfunction g(x: int32): int32 { return x; }\n";
+
+test "E2E C: a generator's masked reduction runs in range-guarded blocks" {
+	const cases: string[][] = [
+		["msRangeFitsI32(", "function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += (x ^ salt) & 1023; return total; }"],
+		["msRangeFitsI32(", "function f(salt: int32): int32 { let total: int32 = 0; for (const x of relay(70000)) total += (x ^ salt) & 1023; return total; }"],
+		["-255LL, 0LL)", "function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total -= 255 & (x | salt); return total; }"],
+		["msRangeFitsI64(", "function f(salt: int32): int64 { let total: int64 = 0; for (const x of upTo(70000)) total += x & 7; return total; }"],
+	];
+	for (const c of cases) {
+		const out = builtModuleC("blockReduce", "bounded", `${upTo}${c[1]}\nconsole.log(f(3));\n`, ["--release"]);
+		assert out.contains(c[0]), `${c[1]}\n${out.slice(0, 400)}`;
+	}
+}
+
+test "E2E C: a generator reduction without a mask, with an effect or reading its sum keeps the checked loop alone" {
+	const cases: string[] = [
+		"function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += x ^ salt; return total; }",
+		"function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += g(x) & 1023; return total; }",
+		"function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += (x + salt) & 1023; return total; }",
+		"function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += (x ^ total) & 1023; return total; }",
+		"function f(salt: int32): int32 { let total: int32 = 0; for (const x of upTo(70000)) total += x & -1; return total; }",
+	];
+	for (const c of cases) {
+		const out = builtModuleC("blockReduce", "unbounded", `${upTo}${c}\nconsole.log(f(3));\n`, ["--release"]);
+		assert !out.startsWith("error:"), out.slice(0, 400);
+		assert !out.contains("msRangeFits"), c;
+	}
+}

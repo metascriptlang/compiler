@@ -155,6 +155,59 @@ GF_DOT(I16, int16_t, 16)
 GF_DOT(I32, int32_t, 32)
 GF_DOT(I64, int64_t, 64)
 
+static int64_t grStops = 0;
+static int64_t grFast = 0;
+
+#define GR_RANGE(A, AT, AW) \
+static int grRun##A(AT acc, const int64_t* t, int64_t n, int sub, int blocked, int64_t mask, AT* out, int64_t* at) { \
+	for (int64_t i = 0; i < n;) { \
+		int64_t e = msBlockEnd(i, n); \
+		if (blocked && msRangeFits##A(acc, i, e, sub ? -mask : 0, sub ? 0 : mask)) { \
+			grFast++; \
+			for (; i < e; i++) acc = (AT)(sub ? acc - (AT)t[i] : acc + (AT)t[i]); \
+			continue; \
+		} \
+		for (; i < e; i++) { \
+			if (sub ? __builtin_sub_overflow(acc, (AT)t[i], &acc) : __builtin_add_overflow(acc, (AT)t[i], &acc)) { *at = i; return 1; } \
+		} \
+	} \
+	*out = acc; \
+	return 0; \
+} \
+static int64_t grFuzz##A(int64_t cases, int64_t* t) { \
+	int64_t bad = 0; \
+	for (int64_t c = 0; c < cases; c++) { \
+		int64_t n = gfLength(c); \
+		int64_t bits = 1 + (int64_t)(gfNext() % (AW - 1)); \
+		int64_t mask = (int64_t)(gfNext() >> (64 - bits)); \
+		int full = (int)(gfNext() % 2); \
+		for (int64_t i = 0; i < n; i++) t[i] = full ? mask : (int64_t)(gfNext() & (uint64_t)mask); \
+		AT acc = (AT)gfPick((int)(gfNext() % 5), AW); \
+		int sub = (int)(gfNext() & 1); \
+		AT r1 = 0, r2 = 0; \
+		int64_t i1 = -1, i2 = -1; \
+		int s1 = grRun##A(acc, t, n, sub, 0, mask, &r1, &i1); \
+		int s2 = grRun##A(acc, t, n, sub, 1, mask, &r2, &i2); \
+		grStops += s1; \
+		if (s1 != s2 || (!s1 && r1 != r2) || (s1 && i1 != i2)) bad++; \
+	} \
+	return bad; \
+}
+GR_RANGE(I8, int8_t, 8)
+GR_RANGE(I16, int16_t, 16)
+GR_RANGE(I32, int32_t, 32)
+GR_RANGE(I64, int64_t, 64)
+
+int64_t msTestRangeReduceMismatches(int64_t cases) {
+	int64_t* t = malloc(5000 * sizeof(int64_t));
+	int64_t bad = grFuzzI8(cases, t) + grFuzzI16(cases, t) + grFuzzI32(cases, t) + grFuzzI64(cases, t);
+	free(t);
+	return bad;
+}
+
+int64_t msTestRangeReduceStops(void) { return grStops; }
+int64_t msTestRangeReduceFastBlocks(void) { return grFast; }
+
 int64_t msTestBlockReduceMismatches(int64_t cases) {
 	return gfFuzzI8I8(cases) + gfFuzzI16I8(cases) + gfFuzzI16I16(cases) + gfFuzzI32I8(cases) + gfFuzzI32I16(cases)
 		+ gfFuzzI32I32(cases) + gfFuzzI64I8(cases) + gfFuzzI64I16(cases) + gfFuzzI64I32(cases) + gfFuzzI64I64(cases)
