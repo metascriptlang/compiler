@@ -6,6 +6,7 @@ export interface WasmmixSpec {
 	hasStdout: boolean;
 	foreignStdout: string[];
 	mixedErrors: string[];
+	errors: string[];
 	slots: boolean;
 	columns: string[];
 	mixedStderr: string[];
@@ -29,6 +30,7 @@ export function parseSpec(src: string): WasmmixSpec {
 		hasStdout: false,
 		foreignStdout: [],
 		mixedErrors: [],
+		errors: [],
 		slots: false,
 		columns: ["c", "js", "mixed"],
 		mixedStderr: [],
@@ -49,6 +51,8 @@ export function parseSpec(src: string): WasmmixSpec {
 			spec.foreignStdout.push(directiveValue(t, "@foreign-stdout"));
 		} else if (t.startsWith("// @mixed-error:")) {
 			spec.mixedErrors.push(directiveValue(t, "@mixed-error"));
+		} else if (t.startsWith("// @error:")) {
+			spec.errors.push(directiveValue(t, "@error"));
 		} else if (t.startsWith("// @columns:")) {
 			const names = directiveValue(t, "@columns").split(",").map((n) => n.trim());
 			if (names.every((n) => n == "c" || n == "js" || n == "mixed")) {
@@ -179,6 +183,15 @@ test "parseSpec reads @slots" {
 	assert s.slots;
 	assert s.unknown.length == 0;
 	assert !parseSpec("// @stdout: 1\nx").slots;
+}
+
+test "parseSpec reads every @error in order, apart from @mixed-error" {
+	const s = parseSpec("// @error: not an object\n// @error: retain\n// @mixed-error: m\nx");
+	assert s.errors.length == 2;
+	assert s.errors[0] == "not an object";
+	assert s.errors[1] == "retain";
+	assert s.mixedErrors.length == 1;
+	assert s.unknown.length == 0;
 }
 
 test "parseSpec defaults to all three columns and one load" {

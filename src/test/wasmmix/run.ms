@@ -4,6 +4,8 @@
 //
 //   // @stdout: <line>        -> one expected stdout line; repeated in order
 //   // @mixed-error: <substr> -> the mixed build must fail with <substr>
+//   // @error: <substr>       -> every column's build must fail with <substr>
+//                                (c, js, mixed and tree); no column runs
 //   // @foreign-stdout: <line> -> a line printed by foreign.mjs
 //   // @slots                 -> slotTable.mjs checks the built slot table
 //   // @columns: <list>       -> only these of c, js, mixed run (default all);
@@ -208,7 +210,7 @@ function readText(path: string): string {
 }
 
 function refusalProblems(
-	spec: WasmmixSpec,
+	wants: string[],
 	column: string,
 	args: string[],
 ): string[] {
@@ -216,13 +218,13 @@ function refusalProblems(
 	const r = execFileResult(MSC, args);
 	const text = r.output + r.errorOutput;
 	if (r.exitCode == 0) {
-		const want = JSON.stringify(spec.mixedErrors[0]);
+		const want = JSON.stringify(wants[0]);
 		problems.push(
 			`[${column}] succeeded, expected an error containing ${want}`,
 		);
 		return problems;
 	}
-	for (const want of spec.mixedErrors) {
+	for (const want of wants) {
 		if (hasLineWith(text, want)) continue;
 		const missing = `[${column}] error lacks ${JSON.stringify(want)}`;
 		problems.push(`${missing}:\n${tail(text)}`);
@@ -238,9 +240,24 @@ function expectedErrorProblems(
 	ensureDir(dir + "mixed/");
 	const bundle = dir + "mixed/app.js";
 	const mixedArgs = ["build", entry, "--target=js", "--output=" + bundle];
-	return refusalProblems(spec, "mixed", mixedArgs).concat(
-		refusalProblems(spec, "tree", ["run", "--target=js", entry]),
+	return refusalProblems(spec.mixedErrors, "mixed", mixedArgs).concat(
+		refusalProblems(spec.mixedErrors, "tree", ["run", "--target=js", entry]),
 	);
+}
+
+function everyColumnErrorProblems(
+	spec: WasmmixSpec,
+	dir: string,
+	entry: string,
+): string[] {
+	ensureDir(dir + "js/");
+	ensureDir(dir + "mixed/");
+	const js = ["build", entry, "--target=js", "--wasm-placement=off", "--output=" + dir + "js/app.js"];
+	const mixed = ["build", entry, "--target=js", "--output=" + dir + "mixed/app.js"];
+	return refusalProblems(spec.errors, "c", ["build", entry, "--output=" + dir + "c/app"])
+		.concat(refusalProblems(spec.errors, "js", js))
+		.concat(refusalProblems(spec.errors, "mixed", mixed))
+		.concat(refusalProblems(spec.errors, "tree", ["run", "--target=js", entry]));
 }
 
 function foreignProblems(
@@ -273,6 +290,14 @@ function runProgram(name: string): boolean {
 		return false;
 	}
 	const dir = OUT_DIR + name + "/";
+	if (spec.errors.length > 0) {
+		const others = spec.hasStdout || spec.mixedErrors.length > 0 || spec.foreignStdout.length > 0
+			|| spec.mixedStderr.length > 0 || spec.slots
+			|| spec.ledgerBalanced.length + spec.ledgerLeaks.length > 0;
+		if (others) problems.push("@error builds no column, so it stands alone in the head");
+		for (const p of everyColumnErrorProblems(spec, dir, entry)) problems.push(p);
+		return report(name, problems);
+	}
 	const cols: Column[] = [];
 	if (spec.columns.includes("c")) {
 		cols.push(runProcess("c", MSC, ["run", entry]));
@@ -330,6 +355,10 @@ function runProgram(name: string): boolean {
 		}
 	}
 	for (const p of judge(spec, cols)) problems.push(p);
+	return report(name, problems);
+}
+
+function report(name: string, problems: string[]): boolean {
 	if (problems.length == 0) {
 		say(`  PASS ${name}`);
 		return true;
