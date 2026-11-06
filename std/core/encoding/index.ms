@@ -1,7 +1,10 @@
 import {
-	EncodingIndex, emptyEncoding, newEncodingOutput, newDecodingOutput,
-	freshEncodingOutputBytes,
+	EncodingIndex, newEncodingOutput, newDecodingOutput, freshEncodingOutputBytes,
 } from "./output";
+
+when (!raiser) {
+	import { emptyEncoding } from "./output";
+}
 
 when (c) {
 	@include("runtime/core/base64.h");
