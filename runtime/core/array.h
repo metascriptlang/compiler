@@ -199,6 +199,7 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
  * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
 #define msArrDataOr0(p_) ((p_) ? (p_)->data : NULL)
 #define msArrDataAt(p_, i_) ((p_) ? (p_)->data + (i_) : NULL)
+#define msArrDataAtEither(c_, a_, b_, i_) ((c_) ? msArrDataAt(a_, i_) : msArrDataAt(b_, i_))
 
 #define msGenericArrayPush(arr_ptr, ...) do { \
 	__typeof__((arr_ptr)->p->data[0]) msPushedValue_ = (__VA_ARGS__); \

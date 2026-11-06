@@ -953,6 +953,8 @@ extern function msShrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
 @compilerFunc
 extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
 @compilerFunc
+extern function msArrDataAtEither(c: boolean, a: Ptr<void>, b: Ptr<void>, i: int64): Ptr<void>;
+@compilerFunc
 extern function msBlockEnd(b: int64, len: int64): int64;
 @compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;

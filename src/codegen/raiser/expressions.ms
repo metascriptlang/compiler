@@ -2764,8 +2764,7 @@ function isSpanType(t: Type | null): boolean {
 // A typed array as a Span: a view of its buffer's bytes from byteOffset for length elements.
 function compileTypedArraySpan(s: RaiserCompState, view: Node): int32 {
 	const viewReg = compileExpr(s, view);
-	const bufferReg = loadFieldOf(s, viewReg, view.nodeType, "buffer");
-	const bytesReg = loadFieldOf(s, bufferReg, declaredFieldType(view.nodeType, "buffer"), "bytes");
+	const bytesReg = typedArrayPayload(s, viewReg, view.nodeType);
 	const offsetReg = loadFieldOf(s, viewReg, view.nodeType, "byteOffset");
 	const lengthReg = loadFieldOf(s, viewReg, view.nodeType, "length");
 	const index = createPrimitive(TypeKind.Int64);
@@ -2785,6 +2784,23 @@ function compileTypedArraySpan(s: RaiserCompState, view: Node): int32 {
 	const dest = allocRef(s);
 	emitInst(s, width == ElemWidth.U8 ? raiserABC(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart) : slotInst(RaiserOpcode.ArraySlice, dest, bytesReg, slotStart, arrayClassSlot(cls, false, false, width)));
 	return dest;
+}
+
+// The bytes a view reads: its own until it is shared, then its buffer's (the layout spanLower reads on C).
+function typedArrayPayload(s: RaiserCompState, viewReg: int32, viewType: Type | null): int32 {
+	if (declaredFieldType(viewType, "own") == null) {
+		if (declaredFieldType(viewType, "bytes") != null) return loadFieldOf(s, viewReg, viewType, "bytes");
+		return loadFieldOf(s, loadFieldOf(s, viewReg, viewType, "buffer"), declaredFieldType(viewType, "buffer"), "bytes");
+	}
+	const bytesReg = allocRef(s);
+	const storeReg = loadFieldOf(s, viewReg, viewType, "store");
+	const unshared = emitBranchIfFalsy(s, storeReg);
+	emitInst(s, raiserABC(RaiserOpcode.Move, bytesReg, loadFieldOf(s, storeReg, nonNullMemberOfNullable(declaredFieldType(viewType, "store")), "bytes"), 0));
+	const done = emitJumpPlaceholder(s);
+	patchJumpTo(s, unshared, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.Move, bytesReg, loadFieldOf(s, viewReg, viewType, "own"), 0));
+	patchJumpTo(s, done, codeLen(s));
+	return bytesReg;
 }
 
 function loadFieldOf(s: RaiserCompState, objReg: int32, objType: Type | null, name: string): int32 {

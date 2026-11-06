@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, ThrowStmtData, SwitchStmtData, AssertStmtData, MemberExprData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier, typedArrayElement, declaredFieldType } from "../../checker/types";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier, typedArrayElement, declaredFieldType, booleanType } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
@@ -263,16 +263,32 @@ export function arraySpanLiteral(array: Node, elem: Type | null, spanType: Type,
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
 }
 
-// A typed array's view of its buffer's payload: { data: bytes + byteOffset, len: length }. The
-// constructor keeps byteOffset + length within the payload, so the view needs no clamp.
+// A typed array's view of its bytes: { data: payload + byteOffset, len: length }. The constructor keeps
+// byteOffset + length within the payload, so the view needs no clamp.
 function typedArraySpan(view: Node, elem: Type | null, spanType: Type, loc: SourceLocation): Node {
-	const bytes = fieldOf(fieldOf(view, "buffer", loc), "bytes", loc);
 	const offset = makeHiddenStdConv(fieldOf(secondRead(view), "byteOffset", loc), createPrimitive(TypeKind.Int64), loc);
-	const slot = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(bytes, "p", loc), offset], loc);
+	const slot = typedArraySlot(view, offset, loc);
 	slot.nodeType = createPtr(elem);
 	const dataExpr = makeHiddenStdConv(slot, spanDataPtr(elem), loc);
 	const lenExpr = makeHiddenStdConv(fieldOf(secondRead(view), "length", loc), createPrimitive(TypeKind.Int64), loc);
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
+}
+
+// The address `offset` bytes into the payload a view reads: the bytes it holds itself (`own`) until it is
+// shared, then its buffer's. A view whose class has no `own` field holds them in `bytes`, or reads its buffer's.
+function typedArraySlot(view: Node, offset: Node, loc: SourceLocation): Node {
+	if (declaredFieldType(view.nodeType, "own") != null) {
+		const store = fieldOf(secondRead(view), "store", loc);
+		const shared = makeBinary(store, "!=", makeNull(loc), loc);
+		shared.nodeType = booleanType();
+		const held = makeMember(fieldOf(secondRead(view), "store", loc), "bytes", loc);
+		held.nodeType = declaredFieldType(nonNullMemberOfNullable(store.nodeType), "bytes");
+		if (held.nodeType == null) throw new Error(`internal: a typed array span source at ${loc.line}:${loc.column} has no store with 'bytes'`);
+		const own = makeMember(fieldOf(view, "own", loc), "p", loc);
+		return makeCall(runtimeRef("msArrDataAtEither", loc), [shared, makeMember(held, "p", loc), own, offset], loc);
+	}
+	const bytes = declaredFieldType(view.nodeType, "bytes") != null ? fieldOf(view, "bytes", loc) : fieldOf(fieldOf(view, "buffer", loc), "bytes", loc);
+	return makeCall(runtimeRef("msArrDataAt", loc), [makeMember(bytes, "p", loc), offset], loc);
 }
 
 function fieldOf(obj: Node, name: string, loc: SourceLocation): Node {
