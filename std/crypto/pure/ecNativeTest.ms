@@ -67,13 +67,13 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEx7zZQz0qJfYfqaWG4c540aznhhZ4
 pWsZmDKeDAkeX8HkExUTXC1/i/IHt/R9BG0KD2SY1RmS8RFAPPbzCiN81Q==
 -----END PUBLIC KEY-----
 `;
-const rfcP256Pem = `-----BEGIN EC PRIVATE KEY-----
+export const rfcP256Pem = `-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIMmvqdhFunUWa1whV2ex1pNOUMPbNuibEnuKYisSD2choAoGCCqGSM49
 AwEHoUQDQgAEYP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Z5A/4QCLi8
 maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==
 -----END EC PRIVATE KEY-----
 `;
-const rfcP384Pem = `-----BEGIN EC PRIVATE KEY-----
+export const rfcP384Pem = `-----BEGIN EC PRIVATE KEY-----
 MIGkAgEBBDBrnT2tLhuMHAWxmHW2ZZ9N4jw7Znvyl7qapHdAeHE32JbVck5McKgl
 +HLJ6mDS7fWgBwYFK4EEACKhZANiAATsOk5BW04ZpFaGGAKfQn+l2pqLxK6S4C4G
 quUoazAMZN748OqQVYZgZKJUUVSAvBOAFdm3LX1XJE6o75rAxiGJZwilk2f537n1
@@ -92,18 +92,11 @@ function rawHex(der: Readonly<uint8[]>, size: int32): string {
 	return raw.encodeHex();
 }
 
-function signAndVerify(pem: string, size: int32): string {
+export function signAndVerify(pem: string, size: int32): string {
 	const key = got(EcPrivateKey.importPemSync(pem));
 	const sig = got(ecdsaSignSync(key, "sample", "sha256"));
 	if (!ecdsaVerifySync(key.publicKey(), "sample", sig, "sha256")) return "refused";
 	return rawHex(sig, size);
-}
-
-test "a worker thread signs and verifies with the base tables on both curves" {
-	const p256Task = spawn((): string => signAndVerify(rfcP256Pem, 32));
-	const p384Task = spawn((): string => signAndVerify(rfcP384Pem, 48));
-	assert await p256Task == "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8";
-	assert await p384Task == signAndVerify(rfcP384Pem, 48);
 }
 
 test "p256 RFC 6979 A.2.5: public point and deterministic signatures" {
