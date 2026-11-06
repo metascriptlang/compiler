@@ -2163,6 +2163,10 @@ export function propagateReadonlyView(t: Type | null): Type {
 	return createReadonlyView(t);
 }
 
+export function viewsAsReadonlyStruct(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Struct && structCarriesRef(t, 0);
+}
+
 export function createReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (isReadonlyView(t)) return t;

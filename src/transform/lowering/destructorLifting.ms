@@ -23,9 +23,9 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isUnownedSlot, isReadonlyUnownedSlot, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, typeCarriesRef, readonlyCountedElement, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
+import { isUnownedSlot, isReadonlyUnownedSlot, createReadonlyView, copyTypeShallow, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, typeCarriesRef, readonlyCountedElement, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, isReadonlyStructView, viewedArrayElement, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
 import { parseNumberLiteral } from "../../utils/string";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -113,7 +113,14 @@ function newBuf(): NodeBuf {
 // ownership registries dedup on that base, so a base less specific than the
 // emitted symbol makes the second declaring module skip hooks it still needs.
 function hookCName(typeName: string, t: Type | null, lctx: LiftCtx): string {
-	return hookBaseCName(typeName, t, lctx.checkerCtx);
+	const base = hookBaseCName(typeName, t, lctx.checkerCtx);
+	return isReadonlyStructView(t) ? base + "Ro" : base;
+}
+
+function withViewedFields(view: Type): Type {
+	const c = copyTypeShallow(view);
+	c.typeChildren = view.typeChildren.map((f) => f != null ? createReadonlyView(f) : f);
+	return c;
 }
 
 // Reference parity: only types that completed hook generation have hooks.
@@ -546,13 +553,13 @@ function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): stri
 
 function registerArrayOps(arrT: Type, lctx: LiftCtx): void {
 	if (hasGenericParams(arrT)) return;
-	const elem = arrayOpElement(arrT.typeReturn);
+	const elem = viewedArrayElement(arrT);
 	const cell = createRef(arrT);
 	if (getOpByKey(cell, AttachedOp.AttachedDestructor) != null) return;
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
 	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon, lctx), AttachedOp.AttachedDestructor);
 	if (!isRuntimeArrayFamily(canon)) {
-		const seqName = arrayCTypeName(canon);
+		const seqName = arrayCTypeName(canon) + (isReadonlyStructView(elem) ? "Ro" : "");
 		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
 			liftedOp(canon, attachedOpOf(hook), seqName + hookSuffix(hook), null);
 		}
@@ -1920,6 +1927,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
+	if (isReadonlyStructView(objType)) objType = withViewedFields(objType);
 	const cName = hookCName(typeName, objType, lctx);
 	const typeId = opTypeKey(objType);
 	if (nameSetContains(lctx.generated, typeId) || nameSetContains(lctx.trivial, typeId)) {
