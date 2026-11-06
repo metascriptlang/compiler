@@ -5,7 +5,9 @@
 // @stdout: true 1 0 2 true
 // @stdout: true 2 7 3
 // @stdout: true 2 7 3
-// note: a deep-Readonly module const is marked immortal after its initializer; storing it, a child of it and a list of it into holders (one of them self-cyclic) counts them through the Ro flavor, and the exit phase frees the graph once after every module deinit, so the SAN ledger stays balanced; an Unowned<Readonly<T>> edge to it is counted through the Ro flavor of the Unowned ops (assign, take, give, holder and array release); a Readonly<S> value, a struct const or one reached from a const, copies through its own hook pair whose fields count through the Ro flavor.
+// @stdout: 8 1 9
+// @stdout: 8 1 9
+// note: a deep-Readonly module const is marked immortal after its initializer; storing it, a child of it and a list of it into holders (one of them self-cyclic) counts them through the Ro flavor, and the exit phase frees the graph once after every module deinit, so the SAN ledger stays balanced; an Unowned<Readonly<T>> edge to it is counted through the Ro flavor of the Unowned ops (assign, take, give, holder and array release); a Readonly<S> value, a struct const or one reached from a const, copies through its own hook pair whose fields count through the Ro flavor; a Sendable function const has its env marked, and an array of Sendable functions releases through the Ro closure-array family.
 class Leaf { n: int32 = 1; }
 class Node { next: Node | null = null; leaf: Leaf = new Leaf(); leaves: Leaf[] = [new Leaf(), new Leaf()]; tag: string = "t"; }
 function chain(): Node {
@@ -67,3 +69,18 @@ function runStruct(): void {
 }
 runStruct();
 runStruct();
+
+type Handler = (n: int32) => int32;
+function mk(b: int32, tag: string): Sendable<Handler> { return (n: int32): int32 => n + b + tag.length; }
+const F: Sendable<Handler> = mk(3, "four");
+class FH { fs: Sendable<Handler>[] = []; one: Sendable<Handler>; constructor(f: Sendable<Handler>) { this.one = f; } }
+function runClosure(): void {
+	const h = new FH(F);
+	h.fs.push(F);
+	h.fs.push(h.one);
+	const g: Sendable<Handler> = h.fs[0];
+	h.fs.splice(0, 1);
+	console.log(g(1), h.fs.length, h.one(2));
+}
+runClosure();
+runClosure();
