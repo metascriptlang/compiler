@@ -4,12 +4,13 @@
 // before that statement, the graph holds only cells the initializer built); a later judgement
 // would read a transformed initializer.
 
-import { Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, SourceLocation } from "../../ast/node";
 import { isReadonlyView, isAtomicRef, unwrapRefNullUnion } from "../../checker/types";
 import { hasFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
+import { isReadonlyStructView, valueReachOp } from "../../codegen/c/types";
 import { TransformContext } from "../context";
-import { runtimeRef, makeCall, makeExprStmt, makeIdentResolved } from "../util";
+import { runtimeRef, makeCall, makeExprStmt, makeIdentResolved, makeTypedIdentResolved, makeHiddenAddr } from "../util";
 
 export function markImmortalConsts(program: Node, ctx: TransformContext): Node {
 	if (ctx.raiserBackend) return program;
@@ -20,9 +21,9 @@ export function markImmortalConsts(program: Node, ctx: TransformContext): Node {
 		const decl = moduleVarDecl(stmt);
 		if (decl == null) continue;
 		const sym = decl.resolvedSym;
-		if (sym == null || !marksImmortal(sym) || isBakeableAggregateConst(decl)) continue;
+		if (sym == null || !judgedImmutable(sym) || isBakeableAggregateConst(decl)) continue;
 		if ((decl.data as VariableDeclData).initializer == null) continue;
-		out.push(makeExprStmt(makeCall(runtimeRef("msImmortalize", decl.location), [makeIdentResolved(sym, decl.location)], decl.location), decl.location));
+		for (const mark of immortalizeCalls(sym, decl.location)) out.push(makeExprStmt(mark, decl.location));
 	}
 	pd.programStmts = out;
 	return program;
@@ -35,10 +36,18 @@ function moduleVarDecl(stmt: Node | null): Node | null {
 	return n != null && n.kind == NodeKind.VariableDecl ? n : null;
 }
 
-function marksImmortal(sym: Symbol): boolean {
+function judgedImmutable(sym: Symbol): boolean {
 	const t = sym.symbolType;
-	if (t == null || !isReadonlyView(t) || !hasFlag(sym, SymbolFlag.ImmutableModuleConst)) return false;
-	return isCountedCell(t) || isCountedCell(unwrapRefNullUnion(t));
+	return t != null && isReadonlyView(t) && hasFlag(sym, SymbolFlag.ImmutableModuleConst);
+}
+
+function immortalizeCalls(sym: Symbol, loc: SourceLocation): Node[] {
+	const t = sym.symbolType as Type;
+	if (isCountedCell(t) || isCountedCell(unwrapRefNullUnion(t))) return [makeCall(runtimeRef("msImmortalize", loc), [makeIdentResolved(sym, loc)], loc)];
+	const reach = isReadonlyStructView(t) ? valueReachOp(t) : null;
+	if (reach == null) return [];
+	const walk = makeCall(makeTypedIdentResolved(reach, null, loc), [makeHiddenAddr(makeIdentResolved(sym, loc), loc), makeCall(runtimeRef("msImmortalBegin", loc), [], loc)], loc);
+	return [walk, makeCall(runtimeRef("msImmortalEnd", loc), [], loc)];
 }
 
 function isCountedCell(t: Type | null): boolean {

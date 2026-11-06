@@ -432,7 +432,7 @@ function markReferenced(dispatchRegistry: DispatchRegistry, sym: Symbol, moduleP
 function markSymAndWalk(dispatchRegistry: DispatchRegistry, sym: Symbol, modulePath: string): void {
 	if (_visitedSyms.has(sym)) return;
 	_visitedSyms.add(sym);
-	if (sym.name == "msImmortalize") _immortalizes = true;
+	if (sym.name == "msImmortalize" || sym.name == "msImmortalEnd") _immortalizes = true;
 	aliveSetAddSym(_aliveSet, sym);
 	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
 	if (home != "") aliveSetAddModule(_aliveSet, home);
