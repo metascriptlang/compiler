@@ -245,6 +245,31 @@ ownership or wasm code change was needed. Raw m1m artifacts: `out/r8-probe/`, `o
 produced no safety verdict; only their missing controls were subsequently run. This does not
 certify M5, GPU screenshots, the full suite or integration after a rebase onto current main.
 
+Float32 copy-in, 2026-11-06, m1m/Node 24.1.0/emcc 5.0.5 (SDK `d7b4130`), tested tree
+`37b75ef0a7a66d9ae6713d246f9a46fd4a93ec91` (the arc rebased onto main `7228a864969`), candidate
+SHA256 `9fbb6c8c52e09f3b8c94e36e8d57e1f214288df499bdfbb378d283ada08b7176`. `jsGlue.ms`
+`__msbCopyTo` writes a `Float32Array` span through the SDK's live `HEAPF32` at an element offset,
+after an alignment and bounds check, instead of building a fresh view per call; copy-back and Vec
+results keep their per-call views, because the prototypes measured them slower with the shared
+view. Three interleaved rounds of the real generated `src/bench/wasmBoundary/main.ms` bundle
+(`--target=js --danger`, wasm SHA256 `2b7898ca…`); the control is the same bundle with only the
+Float32 branch removed from `__msbCopyTo`.
+
+| ns/call, median of per-process medians | plain n=4 | plain n=64 | plain n=1000 | typed n=4 | typed n=64 | typed n=1000 |
+|---|---|---|---|---|---|---|
+| sum, control → candidate | 59.1 → 42.1 | 142.1 → 130.9 | 1555.5 → 1545.3 | 73.7 → 55.4 | 129.4 → 116.0 | 1090.1 → 1076.8 |
+| scale, control → candidate | 101.2 → 74.4 | 184.3 → 164.2 | 1498.2 → 1481.0 | 120.8 → 98.6 | 133.4 → 113.5 | 313.2 → 295.5 |
+
+The candidate was faster in all 12 rows, by 18–29% at n=4 and 1–6% at n=1000. All 12 runs passed
+their value, range/alignment, real memory-growth, special-float (`-0`, `NaN`, `±Infinity`) and
+sink oracles. Restoring a stale pre-growth `HEAPF32` made the candidate throw, and removing the
+bounds guard made the range oracle fail, so the oracles reject both mistakes. The four named
+consumers `copies`, `spans`, `spanCopyPaths` and `spanCallback` (the latter now also edits
+Float32 spans in a callback) each reported `wasmmix: 1/1 pass`, and each generated companion
+assigns `HEAPF32`. The host's 1-minute load average was 16.6 before the rounds, so treat the
+small n=1000 differences as noise. This is single-host Node evidence, not a browser result. Raw
+m1m artifacts: `out/r3-generated/`.
+
 Earlier transport probe, 2026-10-04 (hand-written Emscripten module, Node 24.18 and Chromium 154):
 JS → wasm → JS → wasm re-entry, exact i64 and float32 negative zero, `externref` identity, a
 cached memory view detached by growth to 32 MiB, and `TextEncoder` losing a lone surrogate, which
