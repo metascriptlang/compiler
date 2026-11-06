@@ -465,6 +465,7 @@ interface EntryUsage {
 	hasString: boolean;
 	readsHeap: boolean;
 	copiesIn: boolean;
+	copiesFloat32: boolean;
 	hasScalarSome: boolean;
 	vecElements: BoundaryKind[];
 	resultImports: string[];
@@ -492,6 +493,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		hasString: true,
 		readsHeap: false,
 		copiesIn: false,
+		copiesFloat32: false,
 		hasScalarSome: false,
 		vecElements: [],
 		resultImports: [],
@@ -541,6 +543,13 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 				if (cb.params.includes(BoundaryKind.Span)) {
 					usage.readsHeap = true;
 				}
+				for (let i = 0; i < cb.params.length; i += 1) {
+					if (
+						cb.params[i] == BoundaryKind.Span
+						&& cb.elements[i] == BoundaryKind.F32
+						&& cb.modes[i] == BoundaryMode.Shared
+					) usage.copiesFloat32 = true;
+				}
 				if (!usage.callbacks.some((c) => c.signature == cb.signature)) {
 					usage.callbacks.push(cb);
 				}
@@ -555,6 +564,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			if (p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span) {
 				usage.readsHeap = true;
 				usage.copiesIn = true;
+				if (p.element == BoundaryKind.F32) usage.copiesFloat32 = true;
 			}
 			if (
 				p.kind == BoundaryKind.Vec
@@ -722,8 +732,9 @@ export function wasmEntrySource(
 		source: entryLines(fns, usage, importPathOf).join("\n") + "\n",
 		exportedFunctions: exportedSymbolsOf(fns, usage),
 		jsLibrary: jsLibraryOf(usage),
-		runtimeMethods: usage.hasString || usage.readsHeap
-			|| usage.viewElements.length > 0
+		runtimeMethods: usage.copiesFloat32
+			? ["HEAPU8", "HEAPF32"]
+			: usage.hasString || usage.readsHeap || usage.viewElements.length > 0
 			? ["HEAPU8"]
 			: [],
 	};

@@ -22,6 +22,7 @@ export function banner(): string { return "banner"; }
 export function report(cb: (s: string) => int32): int32 { return cb("x"); }
 export function sumBy(cb: (xs: Readonly<Span<float32>>) => float32): float32 { return 0; }
 export function edit(cb: (xs: Span<int32>, at: int32) => void): void {}
+export function editFloat(cb: (xs: Span<float32>) => void): void {}
 export function label(n: int32): string { return ""; }
 export function make(n: int32): Label { return { at: { x: 0, y: 0 }, text: "", count: n }; }
 export function bytes(s: string): int32 { return s.length; }
@@ -185,7 +186,7 @@ test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is h
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
 	assert e.jsLibrary.includes("\tmsb_rv: (a0, a1) => Module['msb'].takes.pop()(a0, a1),");
 	assert e.exportedFunctions.join(",") == "_msb_calc_scale,_malloc,_free,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8";
+	assert e.runtimeMethods.join(",") == "HEAPU8,HEAPF32";
 }
 
 test "wasm entry: a Span parameter is a view over the copied ptr and len, with no Vec rebuilt" {
@@ -195,7 +196,24 @@ test "wasm entry: a Span parameter is a view over the copied ptr and len, with n
 	assert s.includes("export function msb_calc_fill(xsPtr: uint32, xsLen: int32, at: int32): void {\n\ttry {\n\t\tmsbm0_fill((xsPtr as uint64 as Ptr<boolean>)[0..xsLen], at);");
 	assert !s.includes("msbVecFrom_");
 	assert e.exportedFunctions.join(",") == "_msb_calc_total,_msb_calc_fill,_malloc,_free,_MsMain";
-	assert e.runtimeMethods.join(",") == "HEAPU8";
+	assert e.runtimeMethods.join(",") == "HEAPU8,HEAPF32";
+}
+
+test "wasm entry: float32 Vec copies request the live HEAPF32 view" {
+	assert entryFor(["scale"]).runtimeMethods.join(",") == "HEAPU8,HEAPF32";
+}
+
+test "wasm entry: float32 Span copies request the live HEAPF32 view" {
+	assert entryFor(["total"]).runtimeMethods.join(",") == "HEAPU8,HEAPF32";
+}
+
+test "wasm entry: mutable float32 callback Spans request the live HEAPF32 view" {
+	assert entryFor(["editFloat"]).runtimeMethods.join(",") == "HEAPU8,HEAPF32";
+}
+
+test "wasm entry: float32 output-only paths keep bounded views without exporting HEAPF32" {
+	assert entryFor(["sumBy"]).runtimeMethods.join(",") == "HEAPU8";
+	assert nullableEntryFor(["upTo"]).runtimeMethods.join(",") == "HEAPU8";
 }
 
 test "wasm entry: data that only flows out of wasm needs the heap view and no allocator" {
@@ -216,7 +234,7 @@ test "wasm entry: a string parameter alone needs the allocator" {
 	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
 
-const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "isEven", "visit", "twice", "report", "sumBy", "edit", "label", "make", "bytes", "ramp"];
+const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "isEven", "visit", "twice", "report", "sumBy", "edit", "editFloat", "label", "make", "bytes", "ramp"];
 
 test "wasm entry: each runtime export is used by the js glue of that function and each use is exported" {
 	for (const name of EVERY_FUNCTION) {
@@ -231,7 +249,10 @@ test "wasm entry: each runtime export is used by the js glue of that function an
 		if (allocates) want += ",_free";
 		want += ",_MsMain";
 		assert e.exportedFunctions.join(",") == want;
-		assert e.runtimeMethods.join(",") == "HEAPU8";
+		const copiesFloat32 = ["scale", "total", "editFloat"].includes(name);
+		assert e.runtimeMethods.join(",") == (
+			copiesFloat32 ? "HEAPU8,HEAPF32" : "HEAPU8"
+		);
 		assert (code.includes("_free(") || code.includes("__msbFree(")) == allocates;
 	}
 }
