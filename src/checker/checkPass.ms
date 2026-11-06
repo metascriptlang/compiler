@@ -1272,6 +1272,11 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		addError(ctx, `'${sym.name}' is used before its declaration is checked, so its return type cannot be inferred yet; annotate the return type of '${sym.name}'`, read.location.line, read.location.column);
 		return;
 	}
+	const discarded = discardedCall(ctx, read);
+	if (discarded != null && laterInTheModuleWalk(ctx, sym, decl)) {
+		_discardedInFlightCalls.push({ call: discarded, sym });
+		return;
+	}
 	if (ctx.decoratorsPending) return;
 	const outer = keptComptimeOuter(ctx, sym);
 	const bodyCtx = enterOwnerModule(ctx, sym);
@@ -1351,6 +1356,12 @@ function demandMethodBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
 	closeScope(ctx.table);
 	leaveDeclarationState(ctx, saved);
 	_methodsCheckedOnDemand.add(decl);
+}
+
+function laterInTheModuleWalk(ctx: CheckerContext, sym: Symbol, decl: Node): boolean {
+	if (decl.kind != NodeKind.FunctionDecl || isForeign(ctx, sym)) return false;
+	const d = decl.data as FunctionDeclData;
+	return d.fnBody != null && !isGenericFn(d.fnFlags) && moduleScopeOf(ctx).symbols.get(sym.nameId) == sym;
 }
 
 function discardedCall(ctx: CheckerContext, callee: Node): Node | null {
@@ -3550,6 +3561,14 @@ function addInferredMember(names: InferredNames, name: string, decl: Node): void
 
 function noteNamesRead(ctx: CheckerContext, names: InferredNames, user: Node, root: Node): void {
 	const scan = (node: Node): void => {
+		if (node.kind == NodeKind.ExprStmt) {
+			const call = discardedStatementCall((node.data as ExprStmtData).expr);
+			if (call != null && callsADeclaredFunction(names, call)) {
+				const callee = (call.data as CallExprData).callee;
+				forEachChild(call, (child: Node): void => { if (child != callee) scan(child); });
+				return;
+			}
+		}
 		if (node.kind == NodeKind.Identifier) {
 			const need = names.declared.get((node.data as IdentifierData).name);
 			if (need != null && need != user) noteInferredNeed(ctx, user, need);
@@ -3566,6 +3585,16 @@ function noteNamesRead(ctx: CheckerContext, names: InferredNames, user: Node, ro
 		forEachChild(node, scan);
 	};
 	scan(root);
+}
+
+function discardedStatementCall(expr: Node): Node | null {
+	const call = expr.kind == NodeKind.AwaitExpr ? (expr.data as AwaitExprData).awaitArg : expr;
+	return call.kind == NodeKind.CallExpr && (call.data as CallExprData).callee.kind == NodeKind.Identifier ? call : null;
+}
+
+function callsADeclaredFunction(names: InferredNames, call: Node): boolean {
+	const need = names.declared.get(((call.data as CallExprData).callee.data as IdentifierData).name);
+	return need != null && need.kind == NodeKind.FunctionDecl;
 }
 
 function typedByItsDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
