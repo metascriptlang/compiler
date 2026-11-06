@@ -13,6 +13,7 @@ RULES=(
   'build,tools|^tools/bundler-plugin/|^src/test/js/declarationBundlers/'
   'hcr|^src/test/(hcr|ic)/|^src/compiler/transam/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
+  'crypto|^std/crypto/pure/|^runtime/crypto/|^src/test/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
@@ -25,10 +26,10 @@ RULES=(
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
-LADDER="build boundary cache suite lsp hcr tests fmt corpus san guard solana"
-PHASES=("build" "tools boundary cache suite tests fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
-KNOWN_LANES="boundary cache suite lsp hcr tests fmt corpus san tsan guard solana"
+ORDER="tools build boundary cache suite lsp hcr tests crypto fmt corpus san tsan guard solana"
+LADDER="build boundary cache suite lsp hcr tests crypto fmt corpus san guard solana"
+PHASES=("build" "tools boundary cache suite tests crypto fmt lsp guard" "hcr" "corpus" "san" "tsan" "solana")
+KNOWN_LANES="boundary cache suite lsp hcr tests crypto fmt corpus san tsan guard solana"
 # The land gate keeps the lanes that are very cheap, very important or often red (the person, 2026-10-30), from 3 days
 # of gate logs to 2026-10-30 (median wall, runs with a new red): cheap lsp 0.5m, tools 1.1m, solana 1.5m, fmt 2.6m;
 # important build 5.9m, suite 3.5m, tests 5.4m (15%); often red guard 5.0m (11%), hcr 5.7m (11%), and corpus 17m
@@ -50,7 +51,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san tsan guard solana
+  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests crypto fmt corpus san tsan guard solana
   --programs a,b corpus programs the owner picks for corpus and san, beside the ones the change adds or edits; the owner
                  knows what its change reaches, so this replaces the select's emit of every program
   --full        the lanes the diff selects, all of them, corpus and san on every program: the full gate a release
@@ -653,6 +654,9 @@ reds_of() {
     corpus|san|tsan) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
     guard|hcr|lsp) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
     solana) sed -n 's/^FAIL solana \([^:]*\):.*$/\1/p' "$log" ;;
+    crypto)
+      sed -nE 's/^RED +([a-z]+ [^ ]+) .*$/\1/p' "$log"
+      [ "$rc" -eq 0 ] || grep -q '^RED ' "$log" || echo "crypto setup" ;;
     fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
 }
@@ -2035,6 +2039,8 @@ src/test/c/solanaVaultHost.ms|build solana suite tests
 src/test/guard/solanaCpiFrame.ms|build guard suite
 src/codegen/js/expressions.ms|build corpus suite tests
 std/crypto/sha256.ms|build corpus hcr solana suite tests
+std/crypto/pure/sha512.ms|build corpus crypto hcr solana suite tests
+src/test/crypto/suite.sh|build crypto suite tests
 runtime/manual.h|boundary build corpus guard hcr san solana suite tests
 runtime/solana/host.c|boundary build corpus guard hcr solana suite tests
 std/solana/core.ms|build corpus guard hcr solana suite tests
@@ -2128,6 +2134,14 @@ CASES
   got=$(reds_of solana "$log" 1 | paste -sd'|' -)
   want="escrow-build|heap-replay|std/solana/test.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' 'ok   c std/crypto/pure/portTests.ms 400/400 51s' 'RED  js std/crypto/pure/portTests.ms 398/400 exit 1 40s' \
+    '     FAIL x' 'suite: 1/2 cells green, 798/800 tests passed' >"$log"
+  got=$(reds_of crypto "$log" 1 | paste -sd'|' -)
+  want="js std/crypto/pure/portTests.ms"
+  [ "$got" = "$want" ] || { printf 'FAIL reds crypto: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' 'suite: /x/msc is outside /y, so it would test its own std/, not this tree'"'"'s' >"$log"
+  got=$(reds_of crypto "$log" 2)
+  [ "$got" = "crypto setup" ] || { printf 'FAIL reds crypto setup: want "crypto setup", got "%s"\n' "$got"; bad=1; }
   rm -f "$log"
   got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
     | cat - <(printf 'ref\t\tsrc/test/corpus/programs/%s\n' '630-escapes.ms:"../../../' '802-nested/app/direct.ms:"../' '802-nested/main.ms:"./' '803-up/main.ms:"../') \
@@ -2571,6 +2585,13 @@ run_solana_lane() {
   return $rc
 }
 
+# the crypto assurance suite (src/test/crypto/suite.sh): its 3 default cells take about 2 min, so only --with crypto, --full
+# or a path hint the owner follows runs them; --release adds the --slow cells (about 6.5 min on rtx, 2026-11-06)
+run_crypto_lane() {
+  [ -f src/test/crypto/suite.sh ] || { printf 'crypto: src/test/crypto/suite.sh is missing\n'; return 2; }
+  MSC="$CAND" bash src/test/crypto/suite.sh $([ "$release" -eq 1 ] && echo --slow)
+}
+
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
 # A tier test (`msc test <index> --tests-in-dir`) holds about 3.3 GB at its peak, whatever the lane count: one gate's tests
@@ -2664,6 +2685,7 @@ totals_of() {
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
         /^[0-9]+ pass · [0-9]+ fail/ { p = $1; f = $4 }
         END { if (p != "") printf "%d/%d", p, p + f }' ;;
+    crypto) sed -n 's/^suite: .* cells green, \([0-9]*\)\/\([0-9]*\) tests passed$/\1\/\2/p' "$log" | tail -1 ;;
     suite|tests)
       sed $'s/\x1b\\[[0-9;]*m//g' "$log" | awk '
         /^ *Tests +[0-9]/ {
@@ -2823,6 +2845,7 @@ lane_body() {
     guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
+    crypto) with_slot bounded run_crypto_lane >"$log" 2>&1; rc=$? ;;
     boundary|corpus|san|tsan|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
