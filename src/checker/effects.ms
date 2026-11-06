@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
-import { declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
+import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { isScalarPrimitive } from "./fit";
 import { isFrozenByConst } from "./assignable";
@@ -688,7 +688,9 @@ function storedFresh(n: Node, s: FreshScope): boolean {
 	if (isFreshValue(n, s)) return true;
 	const p = peelView(n);
 	if (p.kind != NodeKind.SpreadExpr) return n.nodeType != null && isValueOnlyType(n.nodeType);
-	const t = (p.data as SpreadExprData).spreadArg.nodeType;
+	const src = (p.data as SpreadExprData).spreadArg.nodeType;
+	const bare = src == null ? null : brandBase(src) ?? src;
+	const t = bare != null && bare.kind == TypeKind.Ref ? bare.typeReturn : bare;
 	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.Span || t.kind == TypeKind.SizedArray) && isValueOnlyType(t.typeReturn);
 }
 
