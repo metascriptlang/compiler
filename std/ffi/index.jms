@@ -1,33 +1,33 @@
 @builtin("FfiHandle")
-export struct Handle<T> { ptr: Ptr<void>; }
+export struct Handle<T extends object> { ptr: Ptr<void>; }
 
-export function retain<T>(this typeof Handle, x: T): Handle<T> {
+export function retain<T extends object>(this typeof Handle, x: T): Handle<T> {
 	return { ptr: x as Ptr<void> };
 }
 
-export function borrow<T>(this typeof Handle, x: T): Handle<T> {
+export function borrow<T extends object>(this typeof Handle, x: T): Handle<T> {
 	return { ptr: x as Ptr<void> };
 }
 
-export function at<T>(this typeof Handle, p: Ptr<void>): Handle<T> {
+export function at<T extends object>(this typeof Handle, p: Ptr<void>): Handle<T> {
 	return { ptr: p };
 }
 
-export function value<T>(this h: Handle<T>): T {
+export function value<T extends object>(this h: Handle<T>): T {
 	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) throw new Error("Handle.value() on a wasm-owned handle: pass it to a @wasm function");`);
 	return h.ptr as T;
 }
 
-export function take<T>(this h: Handle<T>): T {
+export function take<T extends object>(this h: Handle<T>): T {
 	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) throw new Error("Handle.take() on a wasm-owned handle: pass it to a @wasm function");`);
 	return h.ptr as T;
 }
 
-export function retain<T>(this h: Handle<T>): void {
+export function retain<T extends object>(this h: Handle<T>): void {
 	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.retain(); return; }`);
 }
 
-export function release<T>(this h: Handle<T>): void {
+export function release<T extends object>(this h: Handle<T>): void {
 	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) { ${h}.ptr.release(); return; }`);
 }
 
