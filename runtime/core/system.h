@@ -267,9 +267,15 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayAcyclicRefDestroy(arr)  msAcyclicRefArrayDestroy((msRefArray*)&(arr))
 #define msArrayAcyclicRefCopy(d, s)    msArrayRefCopyThen(d, s, msAcyclicRefArrayDestroy)
 #define msArrayAcyclicRefSink(d, ...)  msArrayRefSinkThen(msAcyclicRefArrayDestroy, d, __VA_ARGS__)
+#define msArrayRoRefDestroy(arr)       msRoRefArrayDestroy((msRefArray*)&(arr))
+#define msArrayRoRefCopy(d, s)         msArrayRefCopyBy(d, s, msIncrefRo, msRoRefArrayDestroy)
+#define msArrayRoRefSink(d, ...)       msArrayRefSinkThen(msRoRefArrayDestroy, d, __VA_ARGS__)
 #define msArrayUnownedRefDestroy(arr)  msUnownedRefArrayDestroy((msRefArray*)&(arr))
 #define msArrayUnownedRefCopy(d, s)    msArrayRefCopyBy(d, s, msUnownedIncref, msUnownedRefArrayDestroy)
 #define msArrayUnownedRefSink(d, ...)  msArrayRefSinkThen(msUnownedRefArrayDestroy, d, __VA_ARGS__)
+#define msArrayUnownedRoRefDestroy(arr)  msUnownedRoRefArrayDestroy((msRefArray*)&(arr))
+#define msArrayUnownedRoRefCopy(d, s)    msArrayRefCopyBy(d, s, msUnownedIncrefRo, msUnownedRoRefArrayDestroy)
+#define msArrayUnownedRoRefSink(d, ...)  msArrayRefSinkThen(msUnownedRoRefArrayDestroy, d, __VA_ARGS__)
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
 #define msArrayRefCopyThen(d, s, destroyArr) msArrayRefCopyBy(d, s, msIncRef, destroyArr)
@@ -429,6 +435,24 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msDecrefRo(p)         MS_RO_OP(MS_DS_RC_RO_DEC, p, msDecref)
 #define msIncrefCyclicRo(p)   MS_RO_OP(MS_DS_RC_RO_INC, p, msOrcIncRef)
 #define msDecrefCyclicRo(p)   MS_RO_OP(MS_DS_RC_RO_DEC, p, msDecrefCyclic)
+#define msUnownedIncrefRo(p)  MS_RO_OP(MS_DS_RC_RO_INC, p, msUnownedIncref)
+#define msUnownedDecrefRo(p)  MS_RO_OP(MS_DS_RC_RO_DEC, p, msUnownedDecref)
+static inline void msUnownedAssignRoAt(void** slot, void* p) {
+	msUnownedIncrefRo(p);
+	void* old = *slot;
+	*slot = p;
+	msUnownedDecrefRo(old);
+}
+#define msUnownedAssignRo(slot, p) msUnownedAssignRoAt((void**)(slot), (p))
+static inline void* msUnownedTakeRo(void* p) {
+	msUnownedIncrefRo(p);
+	return p;
+}
+static inline void* msUnownedGiveRo(void* p) {
+	msIncrefRo(p);
+	msUnownedDecrefRo(p);
+	return p;
+}
 
 #define MS_DECREF_EDGE(owner, p, isLast) ({ \
 	void* __msEdgeP = (void*)(p); \

@@ -145,6 +145,15 @@ void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op) {
 	fflush(stderr);
 	abort();
 }
+
+bool msImmortalsReleasing = false;
+
+void msPlainRcOnImmortal(void* p, const char* op) {
+	fprintf(stderr, "\nNIM-GUARD LEDGER: PLAIN RC OP ON IMMORTAL %s of %s at %p: a count reached through Readonly took an op without the Ro flavor\n",
+		op, msLedgerRowName(msHeader(p)->type), p);
+	fflush(stderr);
+	abort();
+}
 #endif  /* MS_DRC_LEDGER */
 
 /* ===== DRC flow counters (perf-only, -DMS_DRC_STAT) ===== */
@@ -1015,6 +1024,84 @@ void msOrcDisownValue(void* p, msTraceProc custody) {
 	custody(p, &j);
 	msDisownBlack(&j);
 	msCellSeqFree(&j.traceStack);
+}
+
+/* ===== Immortal module consts ===== */
+
+static msCellSeq msImmortalRoots;
+
+static bool msStaysMortal(void* p) {
+	const msTypeInfo* t = msHeader(p)->type;
+	return t != NULL && (t->flags & (MS_TYPE_FLAG_ATOMIC | MS_TYPE_FLAG_FUTURE)) != 0;
+}
+
+static void msReach(void* p, msGcEnv* j) {
+	const msTypeInfo* t = msHeader(p)->type;
+	if (t != NULL && t->reachFn != NULL) t->reachFn(p, j);
+}
+
+static void msMarkImmortal(void* p) {
+	msRefHeader* h = msHeader(p);
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	h->rc = MS_RC_IMMORTAL | (h->rc & (MS_RC_MASK | MS_UNOWNED_MASK));
+}
+
+void msImmortalize(void* p) {
+	if (p == NULL || msIsImmortal(p) || msStaysMortal(p)) return;
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	msMarkImmortal(p);
+	msReach(p, &j);
+	while (j.traceStack.len > 0) {
+		void* child = *(void**)j.traceStack.data[--j.traceStack.len].ptr;
+		if (child == NULL || msIsImmortal(child) || msStaysMortal(child)) continue;
+		msMarkImmortal(child);
+		msReach(child, &j);
+	}
+	msCellSeqFree(&j.traceStack);
+	msCell root = { p, msHeader(p)->type };
+	msOrphanRootsAcquire();
+	msCellSeqPush(&msImmortalRoots, root);
+	msOrphanRootsRelease();
+}
+
+#define MS_IMMORTAL_GATHERED (-2)
+
+static void msGatherImmortal(void* p, msCellSeq* cells, msGcEnv* j) {
+	msRefHeader* h = msHeader(p);
+	if (h->rootIdx == MS_IMMORTAL_GATHERED || !msIsImmortal(p)) return;
+	h->rootIdx = MS_IMMORTAL_GATHERED;
+	msCell cell = { p, h->type };
+	msCellSeqPush(cells, cell);
+	msReach(p, j);
+}
+
+void msFreeImmortals(void) {
+	msCellSeq cells;
+	msCellSeqInit(&cells);
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	for (int32_t i = 0; i < msImmortalRoots.len; i++) {
+		msGatherImmortal(msImmortalRoots.data[i].ptr, &cells, &j);
+		while (j.traceStack.len > 0) {
+			void* child = *(void**)j.traceStack.data[--j.traceStack.len].ptr;
+			if (child != NULL) msGatherImmortal(child, &cells, &j);
+		}
+	}
+	msCellSeqFree(&j.traceStack);
+	msCellSeqFree(&msImmortalRoots);
+	for (int32_t i = 0; i < cells.len; i++) msHeader(cells.data[i].ptr)->rootIdx = -1;
+#ifdef MS_DRC_LEDGER
+	msImmortalsReleasing = true;
+#endif
+	for (int32_t i = 0; i < cells.len; i++) MS_DESTROY_DISPATCH(cells.data[i].type, cells.data[i].ptr);
+	for (int32_t i = 0; i < cells.len; i++) {
+		void* p = cells.data[i].ptr;
+		if (msHeader(p)->allocSize == 0) continue;
+		msHeader(p)->rc &= MS_RC_MASK | MS_UNOWNED_MASK;
+		msDestroyAndDispose(p);
+	}
+	msCellSeqFree(&cells);
 }
 
 #endif /* MSGC_MANUAL */

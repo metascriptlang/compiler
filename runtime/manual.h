@@ -482,12 +482,18 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayRefDestroy(arr)         ((void)0)
 #define msArrayRefCopy(d, s)           do { (d) = (s); } while(0)
 #define msArrayRefSink(d, ...)         do { (d) = (__VA_ARGS__); } while(0)
+#define msArrayRoRefDestroy(arr)       ((void)0)
+#define msArrayRoRefCopy(d, s)         do { (d) = (s); } while(0)
+#define msArrayRoRefSink(d, ...)       do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayAcyclicRefDestroy(arr)  ((void)0)
 #define msArrayAcyclicRefCopy(d, s)    do { (d) = (s); } while(0)
 #define msArrayAcyclicRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayUnownedRefDestroy(arr)  ((void)0)
 #define msArrayUnownedRefCopy(d, s)    do { (d) = (s); } while(0)
 #define msArrayUnownedRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
+#define msArrayUnownedRoRefDestroy(arr)  ((void)0)
+#define msArrayUnownedRoRefCopy(d, s)    do { (d) = (s); } while(0)
+#define msArrayUnownedRoRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayRefTrace(arr, cb)       ((void)0)
 #define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
 #define msArrayUint8Destroy(arr)       ((void)0)
@@ -692,6 +698,9 @@ static inline void  msLockedRelease(void* cell)              { ((int64_t*)cell)[
 static inline void msOrcCollect(void) {}
 static inline void msRootsThreadTeardown(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
+static inline void msOrcTraceRefRo(void* child, void* env) { (void)child; (void)env; }
+static inline void msImmortalize(void* p) { (void)p; }
+static inline void msFreeImmortals(void) {}
 
 /* ===== Async stubs ===== */
 #ifndef MS_THREAD_LOCAL

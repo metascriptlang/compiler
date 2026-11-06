@@ -35,6 +35,7 @@ typedef struct msTypeInfo {
 	msTraceProc custodyFn;   /* msOrcDisown's walk: traceFn, or one that also enters acyclic cells reaching a cycle */
 	msDestroyProc finalizeFn; /* the onDestroy part of destroyFn; the cycle collector runs it for a whole dead cycle first */
 	msDestroyProc releaseFn;  /* destroyFn without that part */
+	msTraceProc reachFn;      /* every counted child, acyclic too: msImmortalize's walk */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

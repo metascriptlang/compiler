@@ -119,13 +119,20 @@ void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
 
 #ifdef MS_DRC_LEDGER
 void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op);
+void msPlainRcOnImmortal(void* p, const char* op);
+extern bool msImmortalsReleasing;
 static inline void msRcFamilyCheck(void* p, bool wantAtomic, const char* op) {
 	const msTypeInfo* t = msHeader(p)->type;
 	if (t != NULL && ((t->flags & MS_TYPE_FLAG_ATOMIC) != 0) != wantAtomic) msRcFamilyMismatch(p, wantAtomic, op);
+	if (msIsImmortal(p) && msHeader(p)->allocSize != 0 && !msImmortalsReleasing) msPlainRcOnImmortal(p, op);
 }
 #define MS_RC_FAMILY_CHECK(p, wantAtomic, op) msRcFamilyCheck((p), (wantAtomic), (op))
+#define MS_PLAIN_ON_IMMORTAL_CHECK(p, op) do { \
+	if (msIsImmortal(p) && msHeader(p)->allocSize != 0 && !msImmortalsReleasing) msPlainRcOnImmortal((p), (op)); \
+} while (0)
 #else
 #define MS_RC_FAMILY_CHECK(p, wantAtomic, op) ((void)0)
+#define MS_PLAIN_ON_IMMORTAL_CHECK(p, op) ((void)0)
 #endif
 
 #ifdef MS_DRC_LEDGER
@@ -428,6 +435,7 @@ _Noreturn void msRaiseUnownedOverflow(void* p);
 
 static inline void msUnownedIncref(void* p) {
 	if (p != NULL && MS_UNOWNED_INCREMENT != 0) {
+		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedIncref");
 		msRefHeader* h = msHeader(p);
 		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_MASK) msRaiseUnownedOverflow(p);
 		h->rc += MS_UNOWNED_INCREMENT;
@@ -435,7 +443,10 @@ static inline void msUnownedIncref(void* p) {
 }
 
 static inline void msUnownedDecref(void* p) {
-	if (p != NULL) msHeader(p)->rc -= MS_UNOWNED_INCREMENT;
+	if (p != NULL) {
+		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedDecref");
+		msHeader(p)->rc -= MS_UNOWNED_INCREMENT;
+	}
 }
 
 static inline void msUnownedAssignAt(void** slot, void* p) {
@@ -618,6 +629,8 @@ static inline void msMarkMaybeCycle(void* p) {
 void msOrcCollect(void);
 void msOrcDisown(void* p);
 void msOrcDisownValue(void* p, msTraceProc custody);
+void msImmortalize(void* p);
+void msFreeImmortals(void);
 
 static inline void msOrcEnable(void) { msRootsThreshold = 0; }
 static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }
@@ -640,6 +653,11 @@ static inline void msOrcTraceRef(void* slotAddr, void* env) {
 	if (type != NULL && (type->flags & MS_TYPE_FLAG_ARRAY_CELL) && *(const int64_t*)child == 0) return;
 	msCell cell = { slotAddr, type };
 	msCellSeqPush(&((msGcEnv*)env)->traceStack, cell);
+}
+
+static inline void msOrcTraceRefRo(void* slotAddr, void* env) {
+	void* child = *(void**)slotAddr;
+	if (child != NULL && !msIsImmortal(child)) msOrcTraceRef(slotAddr, env);
 }
 
 #ifdef MSGC_ORC_STATS

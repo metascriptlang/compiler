@@ -839,6 +839,63 @@ void msAcyclicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCoun
 	msRefArraySpliceThenRelease(arr, start, deleteCount, item, msReleaseAcyclic);
 }
 
+/* Elements reached through Readonly<T>: each may be an immortal module const cell. */
+static void msReleaseRo(void* p) { msDecrefCyclicRo(p); }
+
+void msRoRefArrayDestroy(msRefArray* arr) {
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i]);
+		free(p);
+	}
+}
+
+void msUnownedRoRefArrayDestroy(msRefArray* arr) {
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msUnownedDecrefRo(p->data[i]);
+		free(p);
+	}
+}
+
+void msRoRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	if (newLen < 0) newLen = 0;
+	if (newLen > arr->len) {
+		msRefArrayGrow(arr, newLen, NULL);
+		return;
+	}
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msDecrefCyclicRo(evicted);
+	}
+}
+
+void msRoRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
+	start = msSpliceStart(start, arr->len);
+	if (arr->p == NULL || start >= arr->len) return;
+	if (deleteCount <= 0) return;
+	if (deleteCount > arr->len - start) deleteCount = arr->len - start;
+	for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclicRo(arr->p->data[i]);
+	int64_t remaining = arr->len - start - deleteCount;
+	if (remaining > 0) {
+		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+	}
+	arr->len -= deleteCount;
+}
+
+void msRoRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	msIncrefRo(item);
+	msRefArraySpliceThenRelease(arr, start, deleteCount, item, msReleaseRo);
+}
+
 /* ===== Closure Array =====
  * Per-element destroy: decref env (function pointer is untracked). The env's
  * own typeInfo handles deeper field cleanup via msDecref's virtual dispatch.
