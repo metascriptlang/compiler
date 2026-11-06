@@ -374,7 +374,7 @@ static void msPidTableFull(msActor* spawning) {
         if (k == used) {
             if (used == cap) {
                 int ncap = cap == 0 ? 16 : cap * 2;
-                msPidTypeCount* nt = (msPidTypeCount*)realloc(tab, (size_t)ncap * sizeof(msPidTypeCount));
+                msPidTypeCount* nt = (msPidTypeCount*)msRealloc(tab, (size_t)cap * sizeof(msPidTypeCount), (size_t)ncap * sizeof(msPidTypeCount));
                 if (nt == NULL) { tabOk = false; continue; }
                 tab = nt;
                 cap = ncap;
@@ -397,7 +397,7 @@ static void msPidTableFull(msActor* spawning) {
         if (used > shown) fprintf(stderr, " \xc2\xb7 +%d more types", used - shown);
         fputs("\n  live actors are never reclaimed until stopped: a type that keeps growing is not being stopped\n", stderr);
     }
-    free(tab);
+    msMemFree(tab);
     if (msFatalTrap != NULL) msFatalTrap();
     exit(1);
 }
@@ -533,7 +533,7 @@ typedef struct msSchedActors {
     int pollCount;                /* for periodic cycle detection (scheduler 0 only) */
     _Atomic(msActor*) runHead;    /* lock-free run queue: actors with pending messages */
     _Atomic(int) runPopLock;
-    msActor* deferredFree;        /* I19: hazard-pinned shells awaiting free (owner thread only) */
+    msActor* deferredFree;        /* I19: hazard-pinned shells awaiting msMemFree (owner thread only) */
     _Atomic(bool) wakeAmortized;  /* amortize wakes: true = worker already woken, skip syscall.
                                    * Removed Apr 8 (5122d20) citing "missed wakes / 500ms stalls" but
                                    * restored Apr 20 after Pony-design review: the claim conflated
@@ -754,7 +754,7 @@ static inline void msNameRegistryGrow(void) {
             }
         }
     }
-    free(oldTable);
+    msMemFree(oldTable);
 }
 
 /* Hook: auto-unregister on destroy (stored in dispatch.c — shared across TUs) */
@@ -869,7 +869,7 @@ typedef struct msActorJobs {
 extern void msTimerCancelId(int64_t id);  /* dispatchFull.c */
 
 static inline void msActorJobUnref(msActorJob* r) {
-    if (atomic_fetch_sub_explicit(&r->refs, 1, memory_order_acq_rel) == 1) free(r);
+    if (atomic_fetch_sub_explicit(&r->refs, 1, memory_order_acq_rel) == 1) msMemFree(r);
 }
 
 static inline msActorJobs* msActorJobsEnsure(msActor* a) {
@@ -1062,9 +1062,9 @@ static inline void msActorJobsFree(msActor* a) {
     if (j == NULL) return;
     msActorJobsDrain(j);
     msMpscDestroy(&j->queue);
-    free(j->held);
-    free(j->lent);
-    free(j);
+    msMemFree(j->held);
+    msMemFree(j->lent);
+    msMemFree(j);
     a->jobs = NULL;
 }
 
@@ -1380,7 +1380,7 @@ static inline void msActorFreeShell(msActor* a) {
         msActorDeferRetire(a);
     } else {
         msActorJobsFree(a);
-        free(a);
+        msMemFree(a);
     }
 }
 
@@ -1454,10 +1454,10 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         msActorJobsTeardown(a->jobs);
         msCurrentActor = prevActor;
     }
-    if (a->links != NULL) free(a->links);
-    if (a->monitorWatchers != NULL) free(a->monitorWatchers);
-    if (a->monitorRefs != NULL) free(a->monitorRefs);
-    if (a->refs != NULL) free(a->refs);
+    if (a->links != NULL) msMemFree(a->links);
+    if (a->monitorWatchers != NULL) msMemFree(a->monitorWatchers);
+    if (a->monitorRefs != NULL) msMemFree(a->monitorRefs);
+    if (a->refs != NULL) msMemFree(a->refs);
     /* Registry removal — I18: the reap runs on the owning scheduler's thread, so
      * each sched->actors[] keeps a single writer (stop() no longer removes). */
     if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
@@ -2047,7 +2047,7 @@ static inline bool msActorPollLocal(void) {
                 sched->deferredFree = d;
             } else {
                 msActorJobsFree(d);
-                free(d);
+                msMemFree(d);
                 didWork = true;
             }
             d = nx;
@@ -2145,7 +2145,7 @@ static inline void msCDUnmarkReachable(msActor* a) {
         }
         msHazardClear(ref);
     }
-    free(stack);
+    msMemFree(stack);
 }
 
 static inline void msCDRunDetection(void) {

@@ -36,15 +36,15 @@ static inline const char* msRaiserBridgeName(void* table, int64_t i) { return ((
 static inline const char* msRaiserBridgeSig(void* table, int64_t i) { return ((const MsRaiserBridge*)table)[i].sig; }
 static inline void* msRaiserBridgeFnAt(void* table, int64_t i) { return (void*)((const MsRaiserBridge*)table)[i].fn; }
 static inline void msRaiserBridgeCall(void* fn, int64_t* args, int64_t* result) { ((MsRaiserBridgeFn)fn)(args, result); }
-static inline int64_t* msRaiserBridgeWords(int64_t n) { return (int64_t*)calloc((size_t)(n > 0 ? n : 1), sizeof(int64_t)); }
+static inline int64_t* msRaiserBridgeWords(int64_t n) { return (int64_t*)msMemAllocN0((size_t)(n > 0 ? n : 1), sizeof(int64_t)); }
 static inline void msRaiserBridgeSetText(int64_t* args, int64_t i, const char* text) {
 	size_t n = strlen(text) + 1;
-	char* copy = (char*)malloc(n);
+	char* copy = (char*)msMemAlloc(n);
 	memcpy(copy, text, n);
 	args[i] = (int64_t)(intptr_t)copy;
 }
 static inline void msRaiserBridgeFreeText(int64_t* args, int64_t i) {
-	free((void*)(intptr_t)args[i]);
+	msMemFree((void*)(intptr_t)args[i]);
 	args[i] = 0;
 }
 

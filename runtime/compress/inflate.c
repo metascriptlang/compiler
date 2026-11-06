@@ -117,8 +117,8 @@ int64_t msInflateNew(int32_t format) {
 void msInflateFree(int64_t handle) {
     struct msInflateCtx* c = handleToCtx(handle);
     if (!c) return;
-    free(c->queue);
-    free(c);
+    msMemFree(c->queue);
+    msMemFree(c);
 }
 
 static int gzStageWanted(const struct msInflateCtx* c, gzStage s) {

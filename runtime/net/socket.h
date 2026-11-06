@@ -316,7 +316,7 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
 	char* buf = (char*)msMemAlloc((size_t)maxBytes);
 	ms_ssize_t n = msNetRecvRaw(fd, buf, maxBytes);
 	msString result = n > 0 ? msStringNew(buf, (int64_t)n) : MS_EMPTY_STRING;
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 

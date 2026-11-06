@@ -197,7 +197,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 
 /* --- Array lifecycle (unified) — uniquely owned payloads --- */
 /* Reference parity: payloads are never shared. DRC emits deep copy or move. */
-#define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
+#define msArrayDestroy(arr)            do { if ((arr).p) { msMemFree((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
 /* msArrayCopy: 1-arg = in-place deep copy (detach from shared payload), 2-arg = deep copy into different dest.
  * Reference parity: =copy for seq always allocates a fresh payload (unique ownership). */
@@ -492,7 +492,7 @@ static inline void* msBoxString(msString v) {
 }
 static inline msString msUnboxString(void* p) {
 	msString v = *(msString*)p;
-	free(p);  /* free the box shell; the payload's ownership moves to the reader */
+	msMemFree(p);  /* free the box shell; the payload's ownership moves to the reader */
 	return v;
 }
 

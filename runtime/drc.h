@@ -154,8 +154,8 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
  * (-DMS_SLAB_MAX=0): recycling inside the slab hides use-after-free from
  * ASAN/guard-malloc, which only see real malloc/free boundaries. */
 #ifndef MS_SLAB_MAX
-#if defined(MSOS_BARE)
-#define MS_SLAB_MAX 0          /* bare frees into msHeap, whose small chunks already recycle by size class */
+#if MS_HEAP_ENABLED
+#define MS_SLAB_MAX 0          /* msHeap's small chunks already recycle by size class */
 #else
 #define MS_SLAB_MAX 128        /* max total size (header + payload) for caching */
 #endif
@@ -203,23 +203,32 @@ static const size_t msSlabBucketSize[] = {32, 64, 96, 128};
  * ever carries a NULL payload. */
 _Noreturn void msRaiseOutOfMemory(void);
 
+#if MS_HEAP_ENABLED
+static inline void* msMemAlloc(size_t size) { return msHeapAlloc(size); }
+static inline void* msMemAlloc0(size_t size) { return msHeapCalloc(1, size); }
+static inline void* msMemAllocN0(size_t n, size_t size) { return msHeapCalloc(n, size); }
+static inline void msMemFree(void* p) { msHeapFree(p); }
+#else
 static inline void* msMemAlloc(size_t size) {
-	void* p = malloc(size);
+	void* p = msMemAlloc(size);
 	if (p == NULL && size != 0) msRaiseOutOfMemory();
 	return p;
 }
 
 static inline void* msMemAlloc0(size_t size) {
-	void* p = calloc(1, size);
+	void* p = msMemAllocN0(1, size);
 	if (p == NULL && size != 0) msRaiseOutOfMemory();
 	return p;
 }
 
 static inline void* msMemAllocN0(size_t n, size_t size) {
-	void* p = calloc(n, size);
+	void* p = msMemAllocN0(n, size);
 	if (p == NULL && n != 0 && size != 0) msRaiseOutOfMemory();
 	return p;
 }
+
+static inline void msMemFree(void* p) { msMemFree(p); }
+#endif
 
 /* Slab primitive WITHOUT any zeroing — caller owns the memory state.
  * Returns dirty memory on cache hit; malloc'd (dirty) memory on cache miss.
@@ -262,7 +271,7 @@ static inline void msSlabFree(void* p, size_t totalSize) {
 		msSlabTLS.count[b]++;
 		return;
 	}
-	free(p);
+	msMemFree(p);
 }
 
 /* ===== Allocation ===== */
@@ -295,7 +304,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 }
 
 static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
-#if MS_BARE_HEAP_REDIRECT
+#if MS_HEAP_ENABLED
 	void* p = msHeapRealloc(old, oldSize, newSize);
 #else
 	(void)oldSize;
@@ -472,7 +481,7 @@ static inline void msDropDispose(msSlab* slab, void* p) {
 		slab->count[b]++;
 		return;
 	}
-	free(h);
+	msMemFree(h);
 }
 
 static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {

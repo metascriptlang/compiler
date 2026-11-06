@@ -21,8 +21,8 @@ static inline int _msEnvKeyCompare(const void* a, const void* b) {
 }
 
 static inline void _msEnvFreeWide(wchar_t** items, size_t count) {
-	for (size_t i = 0; i < count; i++) free(items[i]);
-	free(items);
+	for (size_t i = 0; i < count; i++) msMemFree(items[i]);
+	msMemFree(items);
 }
 
 static inline wchar_t* _msEnvBlock(msStringArray* pairs, int* error) {
@@ -36,7 +36,7 @@ static inline wchar_t* _msEnvBlock(msStringArray* pairs, int* error) {
 		*error = ENOMEM;
 		return NULL;
 	}
-	wchar_t** items = (wchar_t**)calloc(n + 11, sizeof(wchar_t*));
+	wchar_t** items = (wchar_t**)msMemAllocN0(n + 11, sizeof(wchar_t*));
 	if (!items) { *error = ENOMEM; return NULL; }
 	size_t count = 0;
 	for (size_t i = 0; i < n; i++) {
@@ -61,13 +61,13 @@ static inline wchar_t* _msEnvBlock(msStringArray* pairs, int* error) {
 		if ((uint64_t)size + key + 1 > SIZE_MAX / sizeof(wchar_t)) {
 			*error = ENOMEM; goto failed;
 		}
-		wchar_t* item = (wchar_t*)malloc((size + key + 1) * sizeof(wchar_t));
+		wchar_t* item = (wchar_t*)msMemAlloc((size + key + 1) * sizeof(wchar_t));
 		if (!item) { *error = ENOMEM; goto failed; }
 		memcpy(item, required[i], key * sizeof(wchar_t));
 		item[key] = L'=';
 		DWORD got = GetEnvironmentVariableW(required[i], item + key + 1, size);
-		if (!got) { free(item); continue; }
-		if (got >= size) { free(item); *error = EAGAIN; goto failed; }
+		if (!got) { msMemFree(item); continue; }
+		if (got >= size) { msMemFree(item); *error = EAGAIN; goto failed; }
 		items[count++] = item;
 	}
 	size_t units = 1;
@@ -79,7 +79,7 @@ static inline wchar_t* _msEnvBlock(msStringArray* pairs, int* error) {
 		units += size;
 	}
 	if (units < 2) units = 2;
-	wchar_t* block = (wchar_t*)calloc(units, sizeof(wchar_t));
+	wchar_t* block = (wchar_t*)msMemAllocN0(units, sizeof(wchar_t));
 	if (!block) { *error = ENOMEM; goto failed; }
 	wchar_t* at = block;
 	size_t supplied = 0, inherited = n;
@@ -133,7 +133,7 @@ static inline wchar_t* _msEnvJoinTest(
 	if (units > SIZE_MAX / sizeof(wchar_t)) {
 		*error = ENOMEM; return NULL;
 	}
-	wchar_t* result = (wchar_t*)malloc((size_t)units * sizeof(wchar_t));
+	wchar_t* result = (wchar_t*)msMemAlloc((size_t)units * sizeof(wchar_t));
 	if (!result) { *error = ENOMEM; return NULL; }
 	wchar_t* at = result;
 	memcpy(at, cwd, cn * sizeof(wchar_t)); at += cn;
@@ -150,7 +150,7 @@ static inline wchar_t* _msEnvJoinTest(
 	if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
 		return result;
 	}
-	free(result);
+	msMemFree(result);
 	return NULL;
 }
 
@@ -216,11 +216,11 @@ static inline wchar_t* _msEnvExecutable(
 	if (!name) { *error = ENOMEM; return NULL; }
 	if (!childCwd) {
 		DWORD size = GetCurrentDirectoryW(0, NULL);
-		if (size) cwd = (wchar_t*)malloc((size_t)size * sizeof(wchar_t));
-		if (!cwd) { free(name); *error = ENOMEM; return NULL; }
+		if (size) cwd = (wchar_t*)msMemAlloc((size_t)size * sizeof(wchar_t));
+		if (!cwd) { msMemFree(name); *error = ENOMEM; return NULL; }
 		DWORD got = GetCurrentDirectoryW(size, cwd);
 		if (!got || got >= size) {
-			free(name); free(cwd); *error = EINVAL; return NULL;
+			msMemFree(name); msMemFree(cwd); *error = EINVAL; return NULL;
 		}
 		childCwd = cwd;
 	}
@@ -234,7 +234,7 @@ static inline wchar_t* _msEnvExecutable(
 		found = _msEnvSearchPath(name, childCwd, _msEnvPath(block), error);
 		if (!found && !*error) *error = ENOENT;
 	}
-	free(name); free(cwd);
+	msMemFree(name); msMemFree(cwd);
 	return found;
 }
 
@@ -243,8 +243,8 @@ static inline wchar_t* _msEnvExecutable(
 
 static inline void _msEnvFreePairs(char** envp) {
 	if (!envp) return;
-	for (char** p = envp; *p; p++) free(*p);
-	free(envp);
+	for (char** p = envp; *p; p++) msMemFree(*p);
+	msMemFree(envp);
 }
 
 static inline char** _msEnvPairs(msStringArray* pairs, int* error) {
@@ -252,7 +252,7 @@ static inline char** _msEnvPairs(msStringArray* pairs, int* error) {
 	if (count > SIZE_MAX / sizeof(char*) - 1) {
 		*error = ENOMEM; return NULL;
 	}
-	char** envp = (char**)calloc(count + 1, sizeof(char*));
+	char** envp = (char**)msMemAllocN0(count + 1, sizeof(char*));
 	if (!envp) { *error = ENOMEM; return NULL; }
 	for (size_t i = 0; i < count; i++) {
 		msString pair = pairs->p->data[i];
@@ -260,7 +260,7 @@ static inline char** _msEnvPairs(msStringArray* pairs, int* error) {
 		if (n == SIZE_MAX || memchr(msStrData(&pair), 0, n)) {
 			*error = EINVAL; _msEnvFreePairs(envp); return NULL;
 		}
-		envp[i] = (char*)malloc(n + 1);
+		envp[i] = (char*)msMemAlloc(n + 1);
 		if (!envp[i]) { *error = ENOMEM; _msEnvFreePairs(envp); return NULL; }
 		memcpy(envp[i], msStrData(&pair), n);
 		envp[i][n] = '\0';

@@ -105,7 +105,7 @@ static void disarmSide(msIoEngine* e, int fd, int writeSide) {
 msIoEngine* msIoEngineCreate(void) {
 	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	e->selector = msSelectorCreate();
-	if (e->selector == NULL) { free(e); return NULL; }
+	if (e->selector == NULL) { msMemFree(e); return NULL; }
 	e->fdMapCap = ENGINE_INIT_FDMAP;
 	e->fdMap = (msIoFdSlot*)msMemAllocN0(ENGINE_INIT_FDMAP, sizeof(msIoFdSlot));
 	/* Pre-allocate request pool */
@@ -126,11 +126,11 @@ void msIoEngineDestroy(msIoEngine* e) {
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
 		msIoRequest* next = r->next;
-		free(r);
+		msMemFree(r);
 		r = next;
 	}
-	free(e->fdMap);
-	free(e);
+	msMemFree(e->fdMap);
+	msMemFree(e);
 }
 
 /* ===== Thread-Local Singleton ===== */
@@ -253,7 +253,7 @@ static int completeRecv(msIoEngine* e, msIoRequest* req) {
 	}
 	/* Typed completion — no heap boxing, msFutureReadString reads inline value */
 	msFutureCompleteT((msFuture_msString*)req->fut, result);
-	free(req->buf);
+	msMemFree(req->buf);
 	req->buf = NULL;
 	return 0;
 }
@@ -340,7 +340,7 @@ static void cancelRequest(msIoEngine* e, msIoRequest* req) {
 			break;
 		}
 	}
-	if (req->op == MS_IO_RECV && req->buf != NULL) { free(req->buf); req->buf = NULL; }
+	if (req->op == MS_IO_RECV && req->buf != NULL) { msMemFree(req->buf); req->buf = NULL; }
 	freeRequest(e, req);
 }
 
@@ -520,9 +520,9 @@ static void fsWatchRelease(int32_t handle) {
 	if (w->readFd >= 0) close(w->readFd);
 	if (w->writeFd >= 0) close(w->writeFd);
 	pthread_mutex_destroy(&w->lock);
-	free(w->root);
-	free(w->batch);
-	free(w);
+	msMemFree(w->root);
+	msMemFree(w->batch);
+	msMemFree(w);
 	_msFsWatchers[handle] = NULL;
 }
 
@@ -538,7 +538,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	if (stat(given, &info) != 0) err = errno;
 	else if (!S_ISDIR(info.st_mode)) err = ENOTDIR;
 	else if (realpath(given, resolved) == NULL) err = errno;
-	free(given);
+	msMemFree(given);
 	if (err != 0) {
 		_msFsWatchLastError = fsWatchErrorCode(err);
 		return -1;
@@ -628,7 +628,7 @@ int32_t msFsWriteSettled(msString path) {
 	if (msStrLen(path) > 0) memcpy(name, msStrData(&path), (size_t)msStrLen(path));
 	name[msStrLen(path)] = 0;
 	int absent = access(name, F_OK) != 0;
-	free(name);
+	msMemFree(name);
 	return absent ? 1 : 0;
 }
 

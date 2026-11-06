@@ -175,7 +175,7 @@ static MS_TLS_STORAGE msDsBlock* tDsBlock = NULL;
 
 static msDsBlock* msDsLocal(void) {
 	if (tDsBlock != NULL) return tDsBlock;
-	msDsBlock* b = (msDsBlock*)calloc(1, sizeof(msDsBlock));
+	msDsBlock* b = (msDsBlock*)msMemAllocN0(1, sizeof(msDsBlock));
 	if (b == NULL) abort();
 	pthread_mutex_lock(&gDsMutex);
 	b->next = gDsBlocks;
@@ -227,7 +227,7 @@ static int msDsRowCmp(const void* a, const void* b) {
 
 /* Per-type totals over all threads, sorted by count: the register table (which 0) or the traced table. */
 static msDsTypeRow* msDsRows(int traced, size_t cap, size_t* nrows) {
-	msDsTypeRow* rows = (msDsTypeRow*)calloc(cap + 1, sizeof(msDsTypeRow));
+	msDsTypeRow* rows = (msDsTypeRow*)msMemAllocN0(cap + 1, sizeof(msDsTypeRow));
 	size_t n = 0;
 	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
 		const msTypeInfo** types = traced ? b->trcType : b->cycType;
@@ -284,7 +284,7 @@ static void msDsDump(void) {
 	}
 	fprintf(f, "drc\trc.decCyclic\tcount\t%llu\n", (unsigned long long)total[MS_DS_ORC_DEC_LAST]);
 	msDsPrintRows(f, "cycle.register", rows, nrows, other);
-	free(rows);
+	msMemFree(rows);
 	uint64_t trcOther = 0, trcArray = 0, trcArrayEmpty = 0;
 	size_t trcCap = 0;
 	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
@@ -295,7 +295,7 @@ static void msDsDump(void) {
 	fprintf(f, "drc\tcollect.traced.arrayCell\tcount\t%llu\n", (unsigned long long)trcArray);
 	fprintf(f, "drc\tcollect.traced.arrayCellEmpty\tcount\t%llu\n", (unsigned long long)trcArrayEmpty);
 	msDsPrintRows(f, "collect.traced", rows, nrows, trcOther);
-	free(rows);
+	msMemFree(rows);
 	pthread_mutex_unlock(&gDsMutex);
 	fclose(f);
 }
@@ -423,7 +423,7 @@ static void msDropRun(msSlab* s, void* root) {
 	d->cur = outerCur;
 	d->base = outerBase;
 	if (outerCur == NULL && floor == 0) {
-		free(d->data);
+		msMemFree(d->data);
 		d->data = NULL;
 		d->cap = 0;
 	}
@@ -491,7 +491,7 @@ void msCellSeqClear(msCellSeq* s) {
 }
 
 void msCellSeqFree(msCellSeq* s) {
-	free(s->data);
+	msMemFree(s->data);
 	s->data = NULL;
 	s->len = 0;
 	s->cap = 0;

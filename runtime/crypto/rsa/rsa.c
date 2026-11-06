@@ -24,7 +24,7 @@ static int64_t keyToHandle(msCryptoRsaKeyPair* kp) {
 
 static int64_t discard(msCryptoRsaKeyPair* kp) {
 	mbedtls_pk_free(&kp->pk);
-	free(kp);
+	msMemFree(kp);
 	return 0;
 }
 
@@ -137,9 +137,9 @@ static msString implRsaEncrypt(int64_t handle, const uint8_t* data, int64_t data
 	psa_status_t status = psa_asymmetric_encrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
 		data, (size_t)dataLen, NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
-	if (status != PSA_SUCCESS) { free(output); return MS_EMPTY_STRING; }
+	if (status != PSA_SUCCESS) { msMemFree(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);
-	free(output);
+	msMemFree(output);
 	return result;
 }
 
@@ -158,10 +158,10 @@ static msString implRsaDecrypt(int64_t handle, const uint8_t* data, int64_t data
 	psa_status_t status = psa_asymmetric_decrypt(keyId, PSA_ALG_RSA_OAEP(PSA_ALG_SHA_256),
 		data, (size_t)dataLen, NULL, 0, output, outSize, &olen);
 	psa_destroy_key(keyId);
-	if (status != PSA_SUCCESS) { mbedtls_platform_zeroize(output, outSize); free(output); return MS_EMPTY_STRING; }
+	if (status != PSA_SUCCESS) { mbedtls_platform_zeroize(output, outSize); msMemFree(output); return MS_EMPTY_STRING; }
 	msString result = msStringNew((const char*)output, (int64_t)olen);
 	mbedtls_platform_zeroize(output, outSize);
-	free(output);
+	msMemFree(output);
 	return result;
 }
 
@@ -182,5 +182,5 @@ void msCryptoRsaFree(int64_t handle) {
 	msPsaLock();
 	mbedtls_pk_free(&key->pk);
 	msPsaUnlock();
-	free(key);
+	msMemFree(key);
 }

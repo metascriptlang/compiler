@@ -245,7 +245,7 @@ static void name##_run(void* raw) { \
     bool owned = e->input->base.valueDrop != NULL; \
     if (!owned) e->input->value = NULL; \
     T val; \
-    if (box != NULL) { memcpy(&val, box, sizeof(T)); if (!owned) free(box); } \
+    if (box != NULL) { memcpy(&val, box, sizeof(T)); if (!owned) msMemFree(box); } \
     else memset(&val, 0, sizeof(T)); \
     void* fn = (void*)e->onFulfilled.fn; \
     void* env = e->onFulfilled.env; \
@@ -381,7 +381,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecrefAny(arr); }
  * Move the bits out, free the box shell — refs transfer to the slot. */
 #define MS_COPY_BOXED_MOVE(dst, src) do { \
         void** _bx = (void**)(src); \
-        if (*_bx != NULL) { memcpy((void*)(dst), *_bx, sizeof(*(dst))); free(*_bx); *_bx = NULL; } \
+        if (*_bx != NULL) { memcpy((void*)(dst), *_bx, sizeof(*(dst))); msMemFree(*_bx); *_bx = NULL; } \
     } while (0)
 
 /* Pre-instances for element types whose array mapping is stable across codegen:

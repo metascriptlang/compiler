@@ -117,7 +117,7 @@ static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 			 * the first byte after the base, which is where MS_FUTURE_STRUCT puts
 			 * the value field (possible alignment padding is part of the struct). */
 			memcpy((char*)ctx->fut + ctx->inlineValueOffset, result, ctx->inlineCopySize);
-			free(result);
+			msMemFree(result);
 			atomic_store_explicit(&((msFutureBase*)ctx->fut)->finished, true, memory_order_release);
 			msNotifyFutureComplete();
 			msCompletionQueuePushOwned(ctx->fut, false, NULL);
@@ -384,8 +384,8 @@ static inline void msSpawnHeldSettle(void* hp) {
 		msWaitForReady(h->futs[i]);
 		msDecrefAny(h->futs[i]);
 	}
-	free(h->futs);
-	free(h);
+	msMemFree(h->futs);
+	msMemFree(h);
 	msErr = err;
 	msCurrException = exc;
 }

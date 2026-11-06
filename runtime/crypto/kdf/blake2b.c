@@ -72,6 +72,6 @@ msString msBlake2bFinal(int64_t handle) {
 	msString result = msStringNew((const char *)hash, (int64_t)c->hash_size);
 
 	crypto_wipe(c, sizeof(msBlake2bCtx));
-	free(c);
+	msMemFree(c);
 	return result;
 }

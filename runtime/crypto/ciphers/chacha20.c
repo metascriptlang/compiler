@@ -24,7 +24,7 @@ static int64_t liveKeys = 0;
 
 int64_t msChacha20KeyNew(const uint8_t* raw, int64_t rawLen) {
 	if (rawLen != 32) return 0;
-	msChachaKey *key = (msChachaKey *)calloc(1, sizeof(msChachaKey));
+	msChachaKey *key = (msChachaKey *)msMemAllocN0(1, sizeof(msChachaKey));
 	if (key == NULL) return 0;
 	memcpy(key->bytes, raw, 32);
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
@@ -32,11 +32,11 @@ int64_t msChacha20KeyNew(const uint8_t* raw, int64_t rawLen) {
 }
 
 int64_t msChacha20KeyGenerate(void) {
-	msChachaKey *key = (msChachaKey *)calloc(1, sizeof(msChachaKey));
+	msChachaKey *key = (msChachaKey *)msMemAllocN0(1, sizeof(msChachaKey));
 	if (key == NULL) return 0;
 	if (ms_random_fill(key->bytes, 32) != 0) {
 		crypto_wipe(key, sizeof(msChachaKey));
-		free(key);
+		msMemFree(key);
 		return -1;
 	}
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
@@ -53,7 +53,7 @@ void msChacha20KeyFree(int64_t handle) {
 	msChachaKey *key = (msChachaKey *)(uintptr_t)handle;
 	if (key == NULL) return;
 	crypto_wipe(key, sizeof(msChachaKey));
-	free(key);
+	msMemFree(key);
 	__atomic_sub_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 }
 

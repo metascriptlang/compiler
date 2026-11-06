@@ -480,7 +480,7 @@ fail:
 	mbedtls_x509_crt_free(&ctx->ownCa);
 	msPsaUnlock();
 	if (ctx->fd >= 0) ms_close_socket(ctx->fd);
-	free(ctx);
+	msMemFree(ctx);
 	return 0;
 }
 
@@ -559,7 +559,7 @@ void msTlsClose(int64_t handle) {
 	mbedtls_x509_crt_free(&ctx->ownCa);
 	msPsaUnlock();
 	ms_close_socket(ctx->fd);
-	free(ctx);
+	msMemFree(ctx);
 }
 
 msString msTlsPeerCertSubject(int64_t handle) {

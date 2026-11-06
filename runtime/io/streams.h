@@ -59,7 +59,7 @@ static inline msString msReadBytes(double n) {
 	}
 	buf[total] = '\0';
 	msString result = msStringNew(buf, (int64_t)total);
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 

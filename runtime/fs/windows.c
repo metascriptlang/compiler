@@ -62,7 +62,7 @@ static wchar_t* msFsWidePath(msString path, int extra) {
 	const char* cpath = msStringToCString(path);
 	int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, cpath, -1, NULL, 0);
 	if (n <= 0) { _msFsLastErrno = EINVAL; return NULL; }
-	wchar_t* wide = (wchar_t*)malloc(((size_t)n + (size_t)extra) * sizeof(wchar_t));
+	wchar_t* wide = (wchar_t*)msMemAlloc(((size_t)n + (size_t)extra) * sizeof(wchar_t));
 	if (!wide) { _msFsLastErrno = ENOMEM; return NULL; }
 	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, cpath, -1, wide, n);
 	return wide;
@@ -80,7 +80,7 @@ msString msFsReadFile(msString path) {
 	if (!wide) return MS_EMPTY_STRING;
 	FILE* f = _wfopen(wide, L"rb");
 	int openErrno = errno;
-	free(wide);
+	msMemFree(wide);
 	errno = openErrno;
 	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
 	if (_fseeki64(f, 0, SEEK_END) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
@@ -118,7 +118,7 @@ msString msFsReadDirEntries(msString path) {
 
 	WIN32_FIND_DATAW fd;
 	HANDLE h = FindFirstFileW(pattern, &fd);
-	free(pattern);
+	msMemFree(pattern);
 	if (h == INVALID_HANDLE_VALUE) {
 		_msFsLastErrno = msFsErrnoFromWin32(GetLastError());
 		return MS_EMPTY_STRING;
@@ -126,7 +126,7 @@ msString msFsReadDirEntries(msString path) {
 
 	size_t cap = 4096;
 	size_t len = 0;
-	char* buf = (char*)malloc(cap);
+	char* buf = (char*)msMemAlloc(cap);
 	if (!buf) { FindClose(h); _msFsLastErrno = ENOMEM; return MS_EMPTY_STRING; }
 
 	do {
@@ -137,13 +137,13 @@ msString msFsReadDirEntries(msString path) {
 			continue;
 		}
 		int nlen = WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, NULL, 0, NULL, NULL) - 1;
-		if (nlen < 0) { free(buf); FindClose(h); _msFsLastErrno = EINVAL; return MS_EMPTY_STRING; }
+		if (nlen < 0) { msMemFree(buf); FindClose(h); _msFsLastErrno = EINVAL; return MS_EMPTY_STRING; }
 		int isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
 		/* Resize buffer if needed: name + optional "/" + "\n" */
 		while (len + nlen + 2 >= cap) {
 			size_t newCap = cap * 2;
-			char* nb = (char*)realloc(buf, newCap);
-			if (!nb) { free(buf); FindClose(h); _msFsLastErrno = ENOMEM; return MS_EMPTY_STRING; }
+			char* nb = (char*)msRealloc(buf, cap, newCap);
+			if (!nb) { msMemFree(buf); FindClose(h); _msFsLastErrno = ENOMEM; return MS_EMPTY_STRING; }
 			buf = nb;
 			cap = newCap;
 		}
@@ -155,7 +155,7 @@ msString msFsReadDirEntries(msString path) {
 	FindClose(h);
 
 	msString result = msStringNew(buf, (int64_t)len);
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 
@@ -173,7 +173,7 @@ msString msFsReadDirNames(msString path) {
 		(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
 		_msFsLastErrno = attributes == INVALID_FILE_ATTRIBUTES ?
 			msFsErrnoFromWin32(GetLastError()) : ENOTDIR;
-		free(pattern);
+		msMemFree(pattern);
 		return MS_EMPTY_STRING;
 	}
 	size_t end = wcslen(pattern);
@@ -191,14 +191,14 @@ msString msFsReadDirNames(msString path) {
 		if (attributes != INVALID_FILE_ATTRIBUTES &&
 			(attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) firstError = 0;
 	}
-	free(pattern);
+	msMemFree(pattern);
 	if (directory == INVALID_HANDLE_VALUE) {
 		_msFsLastErrno = firstError == 0 ? 0 : msFsErrnoFromWin32(firstError);
 		return MS_EMPTY_STRING;
 	}
 	size_t capacity = 4096;
 	size_t length = 0;
-	char* names = (char*)malloc(capacity);
+	char* names = (char*)msMemAlloc(capacity);
 	int error = names ? 0 : ENOMEM;
 	while (error == 0) {
 		const wchar_t* name = data.cFileName;
@@ -213,7 +213,7 @@ msString msFsReadDirNames(msString path) {
 			if ((size_t)needed > capacity - length) {
 				size_t grown = capacity * 2;
 				if (grown < length + needed) grown = length + needed;
-				char* next = (char*)realloc(names, grown);
+				char* next = (char*)msRealloc(names, capacity, grown);
 				if (!next) { error = ENOMEM; break; }
 				names = next;
 				capacity = grown;
@@ -235,6 +235,6 @@ msString msFsReadDirNames(msString path) {
 	_msFsLastErrno = error;
 	msString result = error == 0 && length > 0 ?
 		msStringNew(names, (int64_t)length) : MS_EMPTY_STRING;
-	free(names);
+	msMemFree(names);
 	return result;
 }

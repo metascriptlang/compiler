@@ -64,8 +64,8 @@ void msSelectorDestroy(msSelector* sel) {
 	if (sel == NULL) return;
 	if (sel->wakeFd >= 0) close(sel->wakeFd);
 	close(sel->epfd);
-	free(sel->userData);
-	free(sel);
+	msMemFree(sel->userData);
+	msMemFree(sel);
 }
 
 static uint32_t msEventsToEpoll(uint32_t events) {

@@ -361,6 +361,10 @@ static inline void* msMemAllocN0(size_t n, size_t size) {
     return p;
 }
 
+static inline void msMemFree(void* p) {
+    free(p);
+}
+
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"
 

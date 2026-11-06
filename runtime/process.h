@@ -294,7 +294,7 @@ static inline msString msProcessArgvAt(double index) {
 	char* buf = (char*)msMemAlloc(needed);
 	WideCharToMultiByte(CP_UTF8, 0, _msWargv[idx], -1, buf, needed, NULL, NULL);
 	msString result = msStringFromCStr(buf);
-	free(buf);
+	msMemFree(buf);
 	return result;
 #elif defined(__APPLE__)
 	char*** argv_ptr = _NSGetArgv();
@@ -372,7 +372,7 @@ static inline msString msProcessReadFile(msString path) {
 	fclose(f);
 	buf[nread] = '\0';
 	msString result = msStringFromCStr(buf);
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 
@@ -505,7 +505,7 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	/* Assemble command line: "path" arg1 arg2 ... */
 	size_t cap = 256;
 	size_t len = 0;
-	char* cmdLine = (char*)malloc(cap);
+	char* cmdLine = (char*)msMemAlloc(cap);
 	if (!cmdLine) return -1.0;
 	_msAppendWinArg(&cmdLine, &len, &cap, pathStr);
 	if (args != NULL && args->p != NULL) {
@@ -543,7 +543,7 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 		NULL,        /* inherit parent cwd */
 		&si, &pi);
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
-	free(cmdLine);
+	msMemFree(cmdLine);
 	if (!ok) return -1.0;
 
 	WaitForSingleObject(pi.hProcess, INFINITE);
@@ -579,17 +579,17 @@ static inline int _msSpawnPipe(int fds[2]) {
 static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
 	int64_t argc = (args != NULL) ? args->len : 0;
-	char** argv = (char**)malloc(sizeof(char*) * (argc + 2));
+	char** argv = (char**)msMemAlloc(sizeof(char*) * (argc + 2));
 	if (!argv) return -1.0;
 	argv[0] = (char*)pathStr;
 	/* msStringToCString may reuse a shared buffer — materialize each arg now. */
 	for (int64_t i = 0; i < argc; i++) {
 		const char* src = msStringToCString(args->p->data[i]);
 		size_t slen = strlen(src);
-		char* copy = (char*)malloc(slen + 1);
+		char* copy = (char*)msMemAlloc(slen + 1);
 		if (!copy) {
-			for (int64_t j = 1; j <= i; j++) free(argv[j]);
-			free(argv);
+			for (int64_t j = 1; j <= i; j++) msMemFree(argv[j]);
+			msMemFree(argv);
 			return -1.0;
 		}
 		memcpy(copy, src, slen + 1);
@@ -604,8 +604,8 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	pthread_mutex_lock(&_msSpawnCreateLock);
 	int spawnErr = posix_spawnp(&pid, pathStr, NULL, NULL, argv, MS_SPAWN_ENVIRON);
 	pthread_mutex_unlock(&_msSpawnCreateLock);
-	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
-	free(argv);
+	for (int64_t j = 1; j <= argc; j++) msMemFree(argv[j]);
+	msMemFree(argv);
 	if (spawnErr != 0) return -1.0;
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0) return -1.0;
@@ -674,8 +674,8 @@ static inline int msSpawnPumpFd(int fd, char** buf, size_t* cap, size_t* len) {
 	size_t got = (size_t)n;
 	while (*len + got + 1 > *cap) {
 		size_t newCap = *cap * 2;
-		char* grown = (char*)realloc(*buf, newCap);
-		if (!grown) { free(*buf); *buf = NULL; return 0; }  /* realloc keeps the old block on failure */
+		char* grown = (char*)msRealloc(*buf, *cap, newCap);
+		if (!grown) { msMemFree(*buf); *buf = NULL; return 0; }  /* realloc keeps the old block on failure */
 		*buf = grown;
 		*cap = newCap;
 	}
@@ -690,8 +690,8 @@ static inline int msSpawnPumpFd(int fd, char** buf, size_t* cap, size_t* len) {
 static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
 	size_t outCap = 4096, outLen = 0;
 	size_t errCap = 4096, errLen = 0;
-	char* outBuf = (char*)malloc(outCap);
-	char* errBuf = (char*)malloc(errCap);
+	char* outBuf = (char*)msMemAlloc(outCap);
+	char* errBuf = (char*)msMemAlloc(errCap);
 	int outOpen = 1, errOpen = 1;
 	while (outOpen || errOpen) {
 		struct pollfd fds[2];
@@ -715,8 +715,8 @@ static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
 
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0) {
-		if (outBuf) free(outBuf);
-		if (errBuf) free(errBuf);
+		if (outBuf) msMemFree(outBuf);
+		if (errBuf) msMemFree(errBuf);
 		return MS_EMPTY_STRING;
 	}
 
@@ -734,8 +734,8 @@ static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
 
 	msString stdoutResult = MS_EMPTY_STRING;
 	msString stderrResult = MS_EMPTY_STRING;
-	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
-	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); msMemFree(outBuf); }
+	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); msMemFree(errBuf); }
 	_msProcSpawnStderr = stderrResult;
 	return stdoutResult;
 }
@@ -761,8 +761,8 @@ static inline BOOL msSpawnPumpPipe(HANDLE h, char** buf, size_t* cap, size_t* le
 	size_t got = (size_t)nRead;
 	while (*len + got + 1 > *cap) {
 		size_t newCap = *cap * 2;
-		char* grown = (char*)realloc(*buf, newCap);
-		if (!grown) { free(*buf); *buf = NULL; return FALSE; }  /* realloc keeps the old block on failure */
+		char* grown = (char*)msRealloc(*buf, *cap, newCap);
+		if (!grown) { msMemFree(*buf); *buf = NULL; return FALSE; }  /* realloc keeps the old block on failure */
 		*buf = grown;
 		*cap = newCap;
 	}
@@ -816,8 +816,8 @@ static inline BOOL _msWinCreateCapturePipes(HANDLE* outRd, HANDLE* outWr, HANDLE
 static inline msString _msWinFinishCapture(HANDLE outRd, HANDLE errRd, PROCESS_INFORMATION pi) {
 	size_t outCap = 4096, outLen = 0;
 	size_t errCap = 4096, errLen = 0;
-	char* outBuf = (char*)malloc(outCap);
-	char* errBuf = (char*)malloc(errCap);
+	char* outBuf = (char*)msMemAlloc(outCap);
+	char* errBuf = (char*)msMemAlloc(errCap);
 	BOOL outOpen = TRUE, errOpen = TRUE;
 	while (outOpen || errOpen) {
 		BOOL didRead = FALSE;
@@ -843,8 +843,8 @@ static inline msString _msWinFinishCapture(HANDLE outRd, HANDLE errRd, PROCESS_I
 
 	msString stdoutResult = MS_EMPTY_STRING;
 	msString stderrResult = MS_EMPTY_STRING;
-	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); free(outBuf); }
-	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); free(errBuf); }
+	if (outBuf) { outBuf[outLen] = '\0'; stdoutResult = msStringNew(outBuf, (int64_t)outLen); msMemFree(outBuf); }
+	if (errBuf) { errBuf[errLen] = '\0'; stderrResult = msStringNew(errBuf, (int64_t)errLen); msMemFree(errBuf); }
 	_msProcSpawnStderr = stderrResult;
 	return stdoutResult;
 }
@@ -893,7 +893,7 @@ static inline msString msProcessSpawnSync(msString command) {
 	 * every process we spawn — non-deterministic builds and an injection point.
 	 *
 	 * Sizing: "cmd.exe /d /s /c \"" (18) + closing quote (1) + NUL (1) = 20. */
-	char* cmdLine = (char*)malloc(strlen(cmd) + 24);
+	char* cmdLine = (char*)msMemAlloc(strlen(cmd) + 24);
 	if (!cmdLine) {
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
@@ -913,7 +913,7 @@ static inline msString msProcessSpawnSync(msString command) {
 	ZeroMemory(&pi, sizeof(pi));
 
 	BOOL ok = CreateProcessA(NULL, cmdLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
-	free(cmdLine);
+	msMemFree(cmdLine);
 	CloseHandle(outWr);  /* child writes; parent reads */
 	CloseHandle(errWr);
 	/* Both write ends are gone from this process, so no later spawn can leak
@@ -1045,7 +1045,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	 * forward-slash ("C:/Users/…/zig.exe"), so normalize the exe token to
 	 * backslashes. Args keep their spelling — the child handles either. */
 	size_t exeLen = strlen(exeStr);
-	char* exeNorm = (char*)malloc(exeLen + 1);
+	char* exeNorm = (char*)msMemAlloc(exeLen + 1);
 	if (!exeNorm) {
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
@@ -1058,16 +1058,16 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	}
 	size_t cap = 256;
 	size_t len = 0;
-	char* cmdLine = (char*)malloc(cap);
+	char* cmdLine = (char*)msMemAlloc(cap);
 	if (!cmdLine) {
-		free(exeNorm);
+		msMemFree(exeNorm);
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
 		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 		return MS_EMPTY_STRING;
 	}
 	_msAppendWinArg(&cmdLine, &len, &cap, exeNorm);
-	free(exeNorm);
+	msMemFree(exeNorm);
 	if (args != NULL && args->p != NULL) {
 		for (int64_t i = 0; i < args->len; i++) {
 			if (len + 2 > cap) { cmdLine = (char*)msRealloc(cmdLine, cap, cap * 2); cap *= 2; }
@@ -1082,10 +1082,10 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	 * in UTF-8 and converting once keeps the quoting logic byte-based. */
 	int wlen = MultiByteToWideChar(CP_UTF8, 0, cmdLine, (int)len + 1, NULL, 0);
 	wchar_t* wcmd = NULL;
-	if (wlen > 0) wcmd = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)wlen);
+	if (wlen > 0) wcmd = (wchar_t*)msMemAlloc(sizeof(wchar_t) * (size_t)wlen);
 	if (wcmd == NULL || MultiByteToWideChar(CP_UTF8, 0, cmdLine, (int)len + 1, wcmd, wlen) == 0) {
-		free(cmdLine);
-		if (wcmd) free(wcmd);
+		msMemFree(cmdLine);
+		if (wcmd) msMemFree(wcmd);
 		CloseHandle(outRd); CloseHandle(outWr);
 		CloseHandle(errRd); CloseHandle(errWr);
 		ReleaseSRWLockExclusive(&_msSpawnCreateLock);
@@ -1096,11 +1096,11 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	if (cwd.len > 0) {
 		const char* cwdStr = msStringToCString(cwd);
 		int cwdLen = MultiByteToWideChar(CP_UTF8, 0, cwdStr, -1, NULL, 0);
-		if (cwdLen > 0) wcwd = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)cwdLen);
+		if (cwdLen > 0) wcwd = (wchar_t*)msMemAlloc(sizeof(wchar_t) * (size_t)cwdLen);
 		if (wcwd == NULL || MultiByteToWideChar(CP_UTF8, 0, cwdStr, -1, wcwd, cwdLen) == 0) {
-			free(cmdLine);
-			free(wcmd);
-			if (wcwd) free(wcwd);
+			msMemFree(cmdLine);
+			msMemFree(wcmd);
+			if (wcwd) msMemFree(wcwd);
 			CloseHandle(outRd); CloseHandle(outWr);
 			CloseHandle(errRd); CloseHandle(errWr);
 			ReleaseSRWLockExclusive(&_msSpawnCreateLock);
@@ -1122,9 +1122,9 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	ZeroMemory(&pi, sizeof(pi));
 
 	BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, wcwd, &si, &pi);
-	free(cmdLine);
-	free(wcmd);
-	if (wcwd) free(wcwd);
+	msMemFree(cmdLine);
+	msMemFree(wcmd);
+	if (wcwd) msMemFree(wcwd);
 	CloseHandle(outWr);  /* child writes; parent reads */
 	CloseHandle(errWr);
 	/* Both write ends are gone from this process — end of the critical
@@ -1153,7 +1153,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 	const char* exeStr = msStringToCString(exe);
 	int64_t argc = (args != NULL) ? args->len : 0;
-	char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
+	char** argv = (char**)msMemAlloc(sizeof(char*) * (size_t)(argc + 2));
 	if (!argv) {
 		close(outPipe[0]); close(outPipe[1]);
 		close(errPipe[0]); close(errPipe[1]);
@@ -1164,10 +1164,10 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	for (int64_t i = 0; i < argc; i++) {
 		const char* src = msStringToCString(args->p->data[i]);
 		size_t slen = strlen(src);
-		char* copy = (char*)malloc(slen + 1);
+		char* copy = (char*)msMemAlloc(slen + 1);
 		if (!copy) {
-			for (int64_t j = 1; j <= i; j++) free(argv[j]);
-			free(argv);
+			for (int64_t j = 1; j <= i; j++) msMemFree(argv[j]);
+			msMemFree(argv);
 			close(outPipe[0]); close(outPipe[1]);
 			close(errPipe[0]); close(errPipe[1]);
 			return MS_EMPTY_STRING;
@@ -1179,8 +1179,8 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 	posix_spawn_file_actions_t fa;
 	if (posix_spawn_file_actions_init(&fa) != 0) {
-		for (int64_t j = 1; j <= argc; j++) free(argv[j]);
-		free(argv);
+		for (int64_t j = 1; j <= argc; j++) msMemFree(argv[j]);
+		msMemFree(argv);
 		close(outPipe[0]); close(outPipe[1]);
 		close(errPipe[0]); close(errPipe[1]);
 		return MS_EMPTY_STRING;
@@ -1199,8 +1199,8 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 		pthread_mutex_unlock(&_msSpawnCreateLock);
 	}
 	posix_spawn_file_actions_destroy(&fa);
-	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
-	free(argv);
+	for (int64_t j = 1; j <= argc; j++) msMemFree(argv[j]);
+	msMemFree(argv);
 	if (spawnErr != 0) {
 		_msProcSpawnErrno = spawnErr;
 		close(outPipe[0]); close(outPipe[1]);
@@ -1301,7 +1301,7 @@ static inline int _msProcChildFill(msProcChild* c, msProcChildStream* s) {
 	if (s->len + want > s->cap) {
 		size_t newCap = s->cap == 0 ? 65536 : s->cap;
 		while (newCap < s->len + want) newCap *= 2;
-		char* grown = (char*)realloc(s->data, newCap);
+		char* grown = (char*)msRealloc(s->data, s->cap, newCap);
 		if (!grown) {
 			c->lastErrno = ENOMEM;
 			return 1;
@@ -1368,10 +1368,10 @@ static inline msProcChild* _msProcChildOf(int64_t h) { return (msProcChild*)(int
 static inline wchar_t* _msProcChildWide(const char* utf8, int backslashes) {
 	int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
 	if (n <= 0) return NULL;
-	wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)n);
+	wchar_t* w = (wchar_t*)msMemAlloc(sizeof(wchar_t) * (size_t)n);
 	if (w == NULL) return NULL;
 	if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n) == 0) {
-		free(w);
+		msMemFree(w);
 		return NULL;
 	}
 	if (backslashes) {
@@ -1387,20 +1387,20 @@ static inline wchar_t* _msProcChildWide(const char* utf8, int backslashes) {
 static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* args) {
 	const char* exeStr = msStringToCString(path);
 	size_t exeLen = strlen(exeStr);
-	char* exeNorm = (char*)malloc(exeLen + 1);
+	char* exeNorm = (char*)msMemAlloc(exeLen + 1);
 	if (!exeNorm) return NULL;
 	memcpy(exeNorm, exeStr, exeLen + 1);
 	for (char* p = exeNorm; *p; p++) {
 		if (*p == '/') *p = '\\';
 	}
 	size_t cap = 256, len = 0;
-	char* cmdLine = (char*)malloc(cap);
+	char* cmdLine = (char*)msMemAlloc(cap);
 	if (!cmdLine) {
-		free(exeNorm);
+		msMemFree(exeNorm);
 		return NULL;
 	}
 	_msAppendWinArg(&cmdLine, &len, &cap, exeNorm);
-	free(exeNorm);
+	msMemFree(exeNorm);
 	if (args != NULL && args->p != NULL) {
 		for (int64_t i = 0; i < args->len; i++) {
 			if (len + 2 > cap) { cmdLine = (char*)msRealloc(cmdLine, cap, cap * 2); cap *= 2; }
@@ -1410,7 +1410,7 @@ static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* arg
 	}
 	cmdLine[len] = '\0';
 	wchar_t* wide = _msProcChildWide(cmdLine, 0);
-	free(cmdLine);
+	msMemFree(cmdLine);
 	return wide;
 }
 
@@ -1421,9 +1421,9 @@ static inline int64_t _msProcChildSpawnImpl(
 	if (_msWinRunsThroughCmd(msStringToCString(path))) return -(int64_t)EINVAL;
 	wchar_t* wcmd = _msProcChildCommandLine(path, args);
 	wchar_t* wcwd = cwd.len > 0 ? _msProcChildWide(msStringToCString(cwd), 1) : NULL;
-	msProcChild* c = (msProcChild*)calloc(1, sizeof(msProcChild));
+	msProcChild* c = (msProcChild*)msMemAllocN0(1, sizeof(msProcChild));
 	if (wcmd == NULL || (cwd.len > 0 && wcwd == NULL) || c == NULL) {
-		free(wcmd); free(wcwd); free(c);
+		msMemFree(wcmd); msMemFree(wcwd); msMemFree(c);
 		return -(int64_t)ENOMEM;
 	}
 
@@ -1432,7 +1432,7 @@ static inline int64_t _msProcChildSpawnImpl(
 	wchar_t* executable = supplied && !failed
 		? _msEnvExecutable(path, wcwd, block, &failed) : NULL;
 	if (failed) {
-		free(wcmd); free(wcwd); free(c); free(block); free(executable);
+		msMemFree(wcmd); msMemFree(wcwd); msMemFree(c); msMemFree(block); msMemFree(executable);
 		return -(int64_t)failed;
 	}
 
@@ -1469,15 +1469,15 @@ static inline int64_t _msProcChildSpawnImpl(
 	_msProcChildCloseHandle(&outWr);
 	_msProcChildCloseHandle(&errWr);
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
-	free(wcmd);
-	free(wcwd);
-	free(block);
-	free(executable);
+	msMemFree(wcmd);
+	msMemFree(wcwd);
+	msMemFree(block);
+	msMemFree(executable);
 	if (failed) {
 		_msProcChildCloseHandle(&inWr);
 		_msProcChildCloseHandle(&outRd);
 		_msProcChildCloseHandle(&errRd);
-		free(c);
+		msMemFree(c);
 		return -(int64_t)failed;
 	}
 	CloseHandle(pi.hThread);
@@ -1620,8 +1620,8 @@ static inline void msProcChildClose(int64_t h) {
 	_msProcChildCloseHandle(&c->out.h);
 	_msProcChildCloseHandle(&c->err.h);
 	_msProcChildCloseHandle(&c->proc);
-	free(c->out.data);
-	free(c->err.data);
+	msMemFree(c->out.data);
+	msMemFree(c->err.data);
 	c->out.data = NULL; c->out.len = 0; c->out.cap = 0;
 	c->err.data = NULL; c->err.len = 0; c->err.cap = 0;
 	c->closed = 1;
@@ -1629,7 +1629,7 @@ static inline void msProcChildClose(int64_t h) {
 
 static inline void msProcChildFree(int64_t h) {
 	msProcChildClose(h);
-	free(_msProcChildOf(h));
+	msMemFree(_msProcChildOf(h));
 }
 #elif !MS_NO_SPAWN
 typedef struct {
@@ -1688,7 +1688,7 @@ static inline void _msProcChildFill(msProcChild* c, msProcChildStream* s) {
 	if (s->len + want > s->cap) {
 		size_t newCap = s->cap == 0 ? 65536 : s->cap;
 		while (newCap < s->len + want) newCap *= 2;
-		char* grown = (char*)realloc(s->data, newCap);
+		char* grown = (char*)msRealloc(s->data, s->cap, newCap);
 		if (!grown) {
 			c->lastErrno = ENOMEM;
 			return;
@@ -1788,8 +1788,8 @@ static inline int64_t _msProcChildSpawnImpl(
 	}
 
 	int64_t argc = (args != NULL) ? args->len : 0;
-	char** argv = (char**)calloc((size_t)(argc + 2), sizeof(char*));
-	msProcChild* c = (msProcChild*)calloc(1, sizeof(msProcChild));
+	char** argv = (char**)msMemAllocN0((size_t)(argc + 2), sizeof(char*));
+	msProcChild* c = (msProcChild*)msMemAllocN0(1, sizeof(msProcChild));
 	int failed = (argv == NULL || c == NULL) ? ENOMEM : 0;
 	char** privateEnv = !failed && supplied
 		? _msEnvPairs(environment, &failed) : NULL;
@@ -1797,7 +1797,7 @@ static inline int64_t _msProcChildSpawnImpl(
 	for (int64_t i = -1; !failed && i < argc; i++) {
 		const char* src = msStringToCString(i < 0 ? path : args->p->data[i]);
 		size_t slen = strlen(src);
-		char* copy = (char*)malloc(slen + 1);
+		char* copy = (char*)msMemAlloc(slen + 1);
 		if (!copy) { failed = ENOMEM; break; }
 		memcpy(copy, src, slen + 1);
 		argv[i + 1] = copy;
@@ -1828,9 +1828,11 @@ static inline int64_t _msProcChildSpawnImpl(
 		if (!mergeStderr) posix_spawn_file_actions_addclose(&fa, errPipe[1]);
 		char* cwdCopy = NULL;
 		if (msStrLen(cwd) > 0) {
-			cwdCopy = strdup(msStringToCString(cwd));
-			if (!cwdCopy) failed = ENOMEM;
-			else failed = posix_spawn_file_actions_addchdir_np(&fa, cwdCopy);
+			const char* cwdText = msStringToCString(cwd);
+			size_t cwdBytes = strlen(cwdText) + 1;
+			cwdCopy = msMemAlloc(cwdBytes);
+			memcpy(cwdCopy, cwdText, cwdBytes);
+			failed = posix_spawn_file_actions_addchdir_np(&fa, cwdCopy);
 		}
 		if (!failed) {
 			pid_t pid = 0;
@@ -1841,13 +1843,13 @@ static inline int64_t _msProcChildSpawnImpl(
 			pthread_mutex_unlock(&_msSpawnCreateLock);
 			c->pid = pid;
 		}
-		free(cwdCopy);
+		msMemFree(cwdCopy);
 	}
 	if (haveFa) posix_spawn_file_actions_destroy(&fa);
 	if (haveAttr) posix_spawnattr_destroy(&attr);
 	if (argv) {
-		for (int64_t j = 0; j <= argc; j++) free(argv[j]);
-		free(argv);
+		for (int64_t j = 0; j <= argc; j++) msMemFree(argv[j]);
+		msMemFree(argv);
 	}
 	_msEnvFreePairs(privateEnv);
 
@@ -1858,7 +1860,7 @@ static inline int64_t _msProcChildSpawnImpl(
 		close(inPipe[1]);
 		close(outPipe[0]);
 		if (!mergeStderr) close(errPipe[0]);
-		free(c);
+		msMemFree(c);
 		return -(int64_t)failed;
 	}
 
@@ -2013,8 +2015,8 @@ static inline void msProcChildClose(int64_t h) {
 	_msProcChildCloseFd(&c->inFd);
 	_msProcChildCloseFd(&c->out.fd);
 	_msProcChildCloseFd(&c->err.fd);
-	free(c->out.data);
-	free(c->err.data);
+	msMemFree(c->out.data);
+	msMemFree(c->err.data);
 	c->out.data = NULL; c->out.len = 0; c->out.cap = 0;
 	c->err.data = NULL; c->err.len = 0; c->err.cap = 0;
 	c->closed = 1;
@@ -2022,7 +2024,7 @@ static inline void msProcChildClose(int64_t h) {
 
 static inline void msProcChildFree(int64_t h) {
 	msProcChildClose(h);
-	free(_msProcChildOf(h));
+	msMemFree(_msProcChildOf(h));
 }
 #else
 /* No spawn on this target: msProcChildSpawn refuses with ENOSYS, so no handle ever reaches the rest. */
@@ -2177,15 +2179,15 @@ static inline msString msProcessExecPath(void) {
 	char* buf = (char*)msMemAlloc(needed);
 	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, needed, NULL, NULL);
 	msString result = msStringFromCStr(buf);
-	free(buf);
+	msMemFree(buf);
 	return result;
 #elif defined(__APPLE__)
 	uint32_t size = 0;
 	_NSGetExecutablePath(NULL, &size);
 	char* buf = (char*)msMemAlloc(size + 1);
-	if (_NSGetExecutablePath(buf, &size) != 0) { free(buf); return MS_EMPTY_STRING; }
+	if (_NSGetExecutablePath(buf, &size) != 0) { msMemFree(buf); return MS_EMPTY_STRING; }
 	msString result = msStringFromCStr(buf);
-	free(buf);
+	msMemFree(buf);
 	return result;
 #elif defined(__linux__)
 	char buf[4096];

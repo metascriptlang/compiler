@@ -39,9 +39,9 @@ msSelector* msSelectorCreate(void) {
 
 void msSelectorDestroy(msSelector* sel) {
 	if (sel == NULL) return;
-	free(sel->fds);
-	free(sel->userdata);
-	free(sel);
+	msMemFree(sel->fds);
+	msMemFree(sel->userdata);
+	msMemFree(sel);
 }
 
 static short msEventsToPoll(uint32_t events) {

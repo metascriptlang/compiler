@@ -273,7 +273,7 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 
 /* Destroy (free payload). */
 #define msGenericArrayDestroy(arr_ptr) do { \
-	if ((arr_ptr)->p != NULL) { free((arr_ptr)->p); (arr_ptr)->p = NULL; } \
+	if ((arr_ptr)->p != NULL) { msMemFree((arr_ptr)->p); (arr_ptr)->p = NULL; } \
 	(arr_ptr)->len = 0; \
 } while(0)
 

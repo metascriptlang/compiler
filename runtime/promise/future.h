@@ -315,10 +315,10 @@ static inline void msFutureDestroyInner(void* fp) {
 	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
-		free(cb);
+		msMemFree(cb);
 		cb = next;
 	}
-	free(atomic_load_explicit(&f->edge, memory_order_relaxed));
+	msMemFree(atomic_load_explicit(&f->edge, memory_order_relaxed));
 	msDestroyAndDispose(f);
 }
 
@@ -370,7 +370,7 @@ static inline void msFutureFireCallbacks(msFutureBase* f) {
 	while (cb) {
 		msCallSoon((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		msFutureCb* next = cb->next;
-		free(cb);
+		msMemFree(cb);
 		cb = next;
 	}
 	msNotifyFutureComplete();
@@ -406,7 +406,7 @@ static inline void msFutureCancel(void* fp) {
 	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
-		free(cb);
+		msMemFree(cb);
 		cb = next;
 	}
 	f->cancelled = true;

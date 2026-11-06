@@ -218,7 +218,7 @@ static _Thread_local int32_t msThreadDestructionCap = 0;
 void msOnThreadDestruction(void (*handler)(void)) {
     if (msThreadDestructionLen == msThreadDestructionCap) {
         int32_t cap = msThreadDestructionCap == 0 ? 4 : msThreadDestructionCap * 2;
-        void (**fns)(void) = realloc(msThreadDestructionFns, (size_t)cap * sizeof(*fns));
+        void (**fns)(void) = msRealloc(msThreadDestructionFns, (size_t)msThreadDestructionCap * sizeof(*fns), (size_t)cap * sizeof(*fns));
         if (fns == NULL) {
             fprintf(stderr, "msOnThreadDestruction: out of memory for %d handlers\n", cap);
             abort();
@@ -238,13 +238,16 @@ static void msAfterThreadRuns(void) {
     for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
     msRootsThreadTeardown();
     msMsgPoolsThreadTeardown();
-    free(msPoolRuns);
+    msMemFree(msPoolRuns);
     msPoolRuns = NULL;
     msPoolRunsCap = 0;
-    free(msThreadDestructionFns);
+    msMemFree(msThreadDestructionFns);
     msThreadDestructionFns = NULL;
     msThreadDestructionLen = 0;
     msThreadDestructionCap = 0;
+#if MS_HEAP_ENABLED
+    msHeapThreadRelease();
+#endif
 }
 
 static _Thread_local const msTaskFrame* msPoolFrame = NULL;
@@ -284,8 +287,9 @@ static void msPoolRunQueued(struct msSpawnCtx* task) {
 	const msTaskFrame* outer = msPoolFrame;
 	msPoolFrame = &frame;
 	if (msPoolRunning == msPoolRunsCap) {
+		int32_t oldRunsCap = msPoolRunsCap;
 		msPoolRunsCap = msPoolRunsCap == 0 ? 8 : msPoolRunsCap * 2;
-		msPoolRuns = (struct msSpawnCtx*)realloc(msPoolRuns, (size_t)msPoolRunsCap * sizeof(struct msSpawnCtx));
+		msPoolRuns = (struct msSpawnCtx*)msRealloc(msPoolRuns, (size_t)oldRunsCap * sizeof(struct msSpawnCtx), (size_t)msPoolRunsCap * sizeof(struct msSpawnCtx));
 		if (msPoolRuns == NULL) {
 			fprintf(stderr, "msPoolRunQueued: out of memory for %d running tasks\n", msPoolRunsCap);
 			abort();
@@ -618,7 +622,7 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 static msTicketLock gEdgeLock = { 0, 0 };
 
 void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) {
-	msFutureEdge* e = (msFutureEdge*)malloc(sizeof(msFutureEdge) + (size_t)count * sizeof(void*));
+	msFutureEdge* e = (msFutureEdge*)msMemAlloc(sizeof(msFutureEdge) + (size_t)count * sizeof(void*));
 	if (e == NULL) {
 		fprintf(stderr, "msFutureEdgeAll: out of memory for %d inputs\n", count);
 		abort();
@@ -643,7 +647,7 @@ void msFutureEdgeAwait(void* retFut, void* awaited) {
 	msFutureEdge* e = atomic_load_explicit(&r->edge, memory_order_relaxed);
 	if (e == NULL) {
 		if (awaited == NULL) return;
-		e = (msFutureEdge*)malloc(sizeof(msFutureEdge) + sizeof(void*));
+		e = (msFutureEdge*)msMemAlloc(sizeof(msFutureEdge) + sizeof(void*));
 		if (e == NULL) {
 			fprintf(stderr, "msFutureEdgeAwait: out of memory\n");
 			abort();
@@ -881,15 +885,15 @@ void msPoolShutdown(void) {
 		if (GetThreadId(gPool->workers[i]) != GetCurrentThreadId()) WaitForSingleObject(gPool->workers[i], INFINITE);
 		CloseHandle(gPool->workers[i]);
 	}
-	free(gPool->workers);
-	free(gPool->queue);
+	msMemFree(gPool->workers);
+	msMemFree(gPool->queue);
 	DeleteCriticalSection(&gPool->cs);
 #else
 	for (int i = 0; i < threads; i++) {
 		if (!pthread_equal(gPool->workers[i], pthread_self())) pthread_join(gPool->workers[i], NULL);
 	}
-	free(gPool->workers);
-	free(gPool->queue);
+	msMemFree(gPool->workers);
+	msMemFree(gPool->queue);
 	pthread_mutex_destroy(&gPool->mutex);
 	for (int i = 0; i < MS_POOL_MAX_WORKERS; i++) {
 		pthread_cond_destroy(&gPool->workerConds[i]);
@@ -912,7 +916,7 @@ void msPoolShutdown(void) {
 	msOrcCollect();
 #endif
 
-	free(gPool);
+	msMemFree(gPool);
 	gPool = NULL;
 }
 

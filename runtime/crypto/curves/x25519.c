@@ -19,7 +19,7 @@ static uint8_t *blockOf(int64_t handle) {
 }
 
 static int64_t newPrivate(const uint8_t sk[32]) {
-	uint8_t *block = (uint8_t *)calloc(1, KEY_BLOCK);
+	uint8_t *block = (uint8_t *)msMemAllocN0(1, KEY_BLOCK);
 	if (!block) return 0;
 	memcpy(block, sk, 32);
 	crypto_x25519_public_key(block + 32, sk);
@@ -45,7 +45,7 @@ msString msX25519KeyPublicRaw(int64_t key) {
 
 int64_t msX25519PublicFromRaw(const uint8_t* raw, int64_t rawLen) {
 	if (rawLen != 32) return 0;
-	uint8_t *block = (uint8_t *)calloc(1, KEY_BLOCK);
+	uint8_t *block = (uint8_t *)msMemAllocN0(1, KEY_BLOCK);
 	if (!block) return 0;
 	memcpy(block, raw, 32);
 	return (int64_t)(intptr_t)block;
@@ -75,5 +75,5 @@ msString msX25519SharedSecret(int64_t privateKey, int64_t publicKey) {
 void msX25519KeyFree(int64_t key) {
 	if (!key) return;
 	crypto_wipe(blockOf(key), KEY_BLOCK);
-	free(blockOf(key));
+	msMemFree(blockOf(key));
 }

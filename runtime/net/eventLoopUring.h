@@ -193,14 +193,14 @@ static void __uringThreadRelease(void) {
 		_uringEvtInit = 0;
 	}
 	for (int i = 0; i < _uringFdCap; i++) {
-		free(_uringRecvBufs[i]);
+		msMemFree(_uringRecvBufs[i]);
 		msStringDecref(_uringRespBufs[i]);
 	}
-	free(_uringRecvBufs);
+	msMemFree(_uringRecvBufs);
 	_uringRecvBufs = NULL;
-	free(_uringRespBufs);
+	msMemFree(_uringRespBufs);
 	_uringRespBufs = NULL;
-	free(_uringSends);
+	msMemFree(_uringSends);
 	_uringSends = NULL;
 	_uringFdCap = 0;
 	_uringReleaseRegistered = 0;
@@ -209,13 +209,13 @@ static void __uringThreadRelease(void) {
 static void __uringGrowFds(int fd) {
 	int cap = _uringFdCap > 0 ? _uringFdCap : 1024;
 	while (cap <= fd) cap *= 2;
-	char** recv = (char**)realloc(_uringRecvBufs, (size_t)cap * sizeof(char*));
+	char** recv = (char**)msRealloc(_uringRecvBufs, (size_t)_uringFdCap * sizeof(char*), (size_t)cap * sizeof(char*));
 	if (recv == NULL) msRaiseOutOfMemory();
 	_uringRecvBufs = recv;
-	msString* resp = (msString*)realloc(_uringRespBufs, (size_t)cap * sizeof(msString));
+	msString* resp = (msString*)msRealloc(_uringRespBufs, (size_t)_uringFdCap * sizeof(msString), (size_t)cap * sizeof(msString));
 	if (resp == NULL) msRaiseOutOfMemory();
 	_uringRespBufs = resp;
-	msUringSendState* sends = (msUringSendState*)realloc(_uringSends, (size_t)cap * sizeof(msUringSendState));
+	msUringSendState* sends = (msUringSendState*)msRealloc(_uringSends, (size_t)_uringFdCap * sizeof(msUringSendState), (size_t)cap * sizeof(msUringSendState));
 	if (sends == NULL) msRaiseOutOfMemory();
 	_uringSends = sends;
 	size_t added = (size_t)(cap - _uringFdCap);

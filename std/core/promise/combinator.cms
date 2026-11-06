@@ -19,7 +19,7 @@ extern function msFutureEdgeAll(result: Ptr<void>, inputs: Ptr<Ptr<void>>, count
 extern function msFutureEdgeSettle(result: Ptr<void>, index: int32): void;
 extern function msMemAlloc(size: uint64): Ptr<void>;
 extern function msMemAlloc0(size: uint64): Ptr<void>;
-extern function free(p: Ptr<void>): void;
+extern function msMemFree(p: Ptr<void>): void;
 
 struct AllState {
 	result: Ptr<void>;
@@ -39,7 +39,7 @@ function allCallback(env: Ptr<void>): void {
 	const e = env as Ptr<AllEnv>;
 	const s = e.state;
 	const index = e.index;
-	free(env);
+	msMemFree(env);
 	const input = s.inputs[index];
 	if (!s.failed) {
 		if (msPromiseInputRejected(input)) {
@@ -57,11 +57,11 @@ function allCallback(env: Ptr<void>): void {
 			msPromiseFreeValueOnDestroy(s.result);
 			msFutureComplete(s.result, s.values as Ptr<void>);
 		} else {
-			free(s.values as Ptr<void>);
+			msMemFree(s.values as Ptr<void>);
 		}
 		msPromiseRelease(s.result);
-		free(s.inputs as Ptr<void>);
-		free(s as Ptr<void>);
+		msMemFree(s.inputs as Ptr<void>);
+		msMemFree(s as Ptr<void>);
 	}
 }
 
@@ -127,7 +127,7 @@ function allTypedCallback(env: Ptr<void>): void {
 	const e = env as Ptr<AllTypedEnv>;
 	const s = e.state;
 	const index = e.index;
-	free(env);
+	msMemFree(env);
 	const failed = (s.failed as Ptr<Word32>) as Ptr<void>;
 	const input = s.inputs[index];
 	if (msPromiseLoadAcquire(failed) == 0) {
@@ -146,8 +146,8 @@ function allTypedCallback(env: Ptr<void>): void {
 			msPromiseRelease(s.arr);
 		}
 		msPromiseRelease(s.result);
-		free(s.inputs as Ptr<void>);
-		free(s as Ptr<void>);
+		msMemFree(s.inputs as Ptr<void>);
+		msMemFree(s as Ptr<void>);
 	}
 }
 
@@ -224,7 +224,7 @@ function firstCallback(env: Ptr<void>): void {
 	const e = env as Ptr<FirstEnv>;
 	const s = e.state;
 	const input = e.input;
-	free(env);
+	msMemFree(env);
 	const rejected = msPromiseInputRejected(input);
 	if (firstClaim(s, !rejected)) {
 		if (rejected) msFutureFailShared(s.result, msPromiseInputError(input));
@@ -233,7 +233,7 @@ function firstCallback(env: Ptr<void>): void {
 	msPromiseRelease(input);
 	if (msPromiseFetchSubAcqRel((s.remaining as Ptr<Word32>) as Ptr<void>, 1) == 1) {
 		msPromiseRelease(s.result);
-		free(s as Ptr<void>);
+		msMemFree(s as Ptr<void>);
 	}
 }
 

@@ -12,7 +12,7 @@ static void msPromiseAllSettledCb(void* env) {
 	msPromiseAllSettledCbEnv* e = (msPromiseAllSettledCbEnv*)env;
 	msPromiseAllSettledState* s = e->state;
 	int idx = e->index;
-	free(e);
+	msMemFree(e);
 	msFutureEdgeSettle(s->result, idx);
 	msDecrefAny(s->inputs[idx]);
 
@@ -21,8 +21,8 @@ static void msPromiseAllSettledCb(void* env) {
 	if (s->remaining == 0) {
 		msFutureComplete(s->result, NULL);
 		msDecrefAny(s->result);
-		free(s->inputs);
-		free(s);
+		msMemFree(s->inputs);
+		msMemFree(s);
 	}
 }
 
@@ -73,21 +73,21 @@ static void msFutureThenRunTagged(void* raw) {
 	case MS_TYPETAG_INT: {
 		/* val is msBoxInt32 result (int32_t* on heap) — dereference + free */
 		int32_t ival = val ? *(int32_t*)val : 0;
-		if (val) free(val);
+		if (val) msMemFree(val);
 		if (env) ((void(*)(int32_t, void*))fn)(ival, env);
 		else ((void(*)(int32_t))fn)(ival);
 		break;
 	}
 	case MS_TYPETAG_DOUBLE: {
 		double dval = val ? *(double*)val : 0.0;
-		if (val) free(val);
+		if (val) msMemFree(val);
 		if (env) ((void(*)(double, void*))fn)(dval, env);
 		else ((void(*)(double))fn)(dval);
 		break;
 	}
 	case MS_TYPETAG_STRING: {
 		msString sval = val ? *(msString*)val : MS_EMPTY_STRING;
-		if (val) free(val);
+		if (val) msMemFree(val);
 		if (env) ((void(*)(msString, void*))fn)(sval, env);
 		else ((void(*)(msString))fn)(sval);
 		break;

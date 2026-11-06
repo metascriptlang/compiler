@@ -113,14 +113,14 @@ int64_t msDeflateNew(int32_t format, int32_t level) {
     }
 
     if (tdefl_init(&c->tdefl, NULL, NULL, (int)flags) != TDEFL_STATUS_OKAY) {
-        free(c);
+        msMemFree(c);
         return 0;
     }
 
     /* For gzip, prewrite the 10-byte header to the output queue. */
     if (format == MS_COMPRESS_FORMAT_GZIP) {
         if (queuePush(c, GZ_HEADER, sizeof(GZ_HEADER)) < 0) {
-            free(c);
+            msMemFree(c);
             return 0;
         }
     }
@@ -131,8 +131,8 @@ int64_t msDeflateNew(int32_t format, int32_t level) {
 void msDeflateFree(int64_t handle) {
     struct msDeflateCtx* c = handleToCtx(handle);
     if (!c) return;
-    free(c->queue);
-    free(c);
+    msMemFree(c->queue);
+    msMemFree(c);
 }
 
 int32_t msDeflateFeed(int64_t handle, const uint8_t* in, int64_t inLenBytes, int32_t isLast) {

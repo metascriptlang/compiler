@@ -45,7 +45,7 @@ void msSelectorWake(msSelector* sel) {
 void msSelectorDestroy(msSelector* sel) {
 	if (sel == NULL) return;
 	close(sel->kqfd);
-	free(sel);
+	msMemFree(sel);
 }
 
 int msSelectorRegister(msSelector* sel, int fd, uint32_t events, void* userdata) {

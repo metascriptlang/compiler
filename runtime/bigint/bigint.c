@@ -77,7 +77,7 @@ msBigInt* msBigIntFromString(const char* s, size_t len) {
 		else if (c == 'b') { radix = 2; s += 2; len -= 2; }
 		else if (c == 'o') { radix = 8; s += 2; len -= 2; }
 	}
-	char* clean = (char*)malloc(len + 2);
+	char* clean = (char*)msMemAlloc(len + 2);
 	if (clean == NULL) bigFail("out of memory");
 	size_t n = 0;
 	if (neg) clean[n++] = '-';
@@ -94,7 +94,7 @@ msBigInt* msBigIntFromString(const char* s, size_t len) {
 	} else if (mbedtls_mpi_read_string(&r->v, radix, clean) != 0) {
 		bigFail("cannot convert string to a BigInt");
 	}
-	free(clean);
+	msMemFree(clean);
 	return r;
 }
 
@@ -147,7 +147,7 @@ msBigInt* msBigIntParse(msString str) {
 	int radix, neg;
 	if (!bigSyntax(str, &s, &len, &radix, &neg)) bigFail("cannot convert string to a BigInt");
 	if (len == 0) return msBigIntFromInt64(0);
-	char* clean = (char*)malloc(len + 2);
+	char* clean = (char*)msMemAlloc(len + 2);
 	if (clean == NULL) bigFail("out of memory");
 	size_t n = 0;
 	if (neg) clean[n++] = '-';
@@ -155,28 +155,28 @@ msBigInt* msBigIntParse(msString str) {
 	clean[n + len] = '\0';
 	msBigInt* r = newBig();
 	if (mbedtls_mpi_read_string(&r->v, radix, clean) != 0) bigFail("cannot convert string to a BigInt");
-	free(clean);
+	msMemFree(clean);
 	return r;
 }
 
 msString msBigIntToString(const msBigInt* a, int32_t radix) {
 	char* raw = msBigIntToCString(a, radix);
 	msString out = msStringNew(raw, (int64_t)strlen(raw));
-	free(raw);
+	msMemFree(raw);
 	return out;
 }
 
 msString msBigIntToDebugString(const msBigInt* a) {
 	char* raw = msBigIntToCString(a, 10);
 	size_t n = strlen(raw);
-	char* buf = (char*)malloc(n + 2);
+	char* buf = (char*)msMemAlloc(n + 2);
 	if (buf == NULL) bigFail("out of memory");
 	memcpy(buf, raw, n);
 	buf[n] = 'n';
 	buf[n + 1] = '\0';
-	free(raw);
+	msMemFree(raw);
 	msString out = msStringNew(buf, (int64_t)(n + 1));
-	free(buf);
+	msMemFree(buf);
 	return out;
 }
 
@@ -203,7 +203,7 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 	if (radix == 2 || radix == 4 || radix == 8 || radix == 16) {
 		size_t olen = 0;
 		mbedtls_mpi_write_string(&a->v, radix, NULL, 0, &olen);
-		char* buf = (char*)malloc(olen);
+		char* buf = (char*)msMemAlloc(olen);
 		if (buf == NULL) bigFail("out of memory");
 		CHK(mbedtls_mpi_write_string(&a->v, radix, buf, olen, &olen));
 		for (char* p = buf; *p; p++) *p = (char)tolower((unsigned char)*p);
@@ -226,7 +226,7 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 	if (neg) CHK(mbedtls_mpi_sub_mpi(&m, &zero, &a->v));
 	else CHK(mbedtls_mpi_copy(&m, &a->v));
 	size_t cap = mbedtls_mpi_bitlen(&m) + (size_t)k + 2;
-	char* tmp = (char*)malloc(cap);
+	char* tmp = (char*)msMemAlloc(cap);
 	if (tmp == NULL) bigFail("out of memory");
 	size_t n = 0;
 	while (mbedtls_mpi_cmp_int(&m, 0) > 0) {
@@ -243,13 +243,13 @@ char* msBigIntToCString(const msBigInt* a, int32_t radix) {
 		}
 	}
 	if (n == 0) tmp[n++] = '0';
-	char* out = (char*)malloc(n + 2);
+	char* out = (char*)msMemAlloc(n + 2);
 	if (out == NULL) bigFail("out of memory");
 	size_t w = 0;
 	if (neg) out[w++] = '-';
 	while (n > 0) out[w++] = tmp[--n];
 	out[w] = '\0';
-	free(tmp);
+	msMemFree(tmp);
 	mbedtls_mpi_free(&m); mbedtls_mpi_free(&zero); mbedtls_mpi_free(&q); mbedtls_mpi_free(&r);
 	return out;
 }
@@ -290,7 +290,7 @@ int64_t msBigIntToInt64(const msBigInt* a) {
 static _Noreturn void bigRangeFail(const msBigInt* a, int64_t lo, int64_t hi) {
 	char* s = msBigIntToCString(a, 10);
 	fprintf(stderr, "Error: value %s not in range %lld .. %lld\n", s, (long long)lo, (long long)hi);
-	free(s);
+	msMemFree(s);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
@@ -430,7 +430,7 @@ static msBigInt* bitwiseOp(const msBigInt* a, const msBigInt* b, int op) {
 	size_t lb = mbedtls_mpi_size(&b->v);
 	if (lb > L) L = lb;
 	L += 1;
-	uint8_t* ba = (uint8_t*)malloc(L * 2);
+	uint8_t* ba = (uint8_t*)msMemAlloc(L * 2);
 	if (ba == NULL) bigFail("out of memory");
 	uint8_t* bb = ba + L;
 	tcWrite(&a->v, ba, L);
@@ -439,7 +439,7 @@ static msBigInt* bitwiseOp(const msBigInt* a, const msBigInt* b, int op) {
 		ba[i] = op == 0 ? (ba[i] & bb[i]) : op == 1 ? (ba[i] | bb[i]) : (ba[i] ^ bb[i]);
 	}
 	msBigInt* r = tcRead(ba, L);
-	free(ba);
+	msMemFree(ba);
 	return sized(r);
 }
 

@@ -125,7 +125,7 @@ msIoEngine* msIoEngineCreate(void) {
 	ensureWsa();
 	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	e->iocp = msDispatcherShareIocp(iocpEngineEntry);
-	if (e->iocp == NULL) { free(e); return NULL; }
+	if (e->iocp == NULL) { msMemFree(e); return NULL; }
 	/* Pre-allocate request + OVERLAPPED pools */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
@@ -147,10 +147,10 @@ void msIoEngineDestroy(msIoEngine* e) {
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
 		msIoRequest* next = r->next;
-		free(r);
+		msMemFree(r);
 		r = next;
 	}
-	free(e);
+	msMemFree(e);
 }
 
 /* ===== Thread-Local Singleton ===== */
@@ -252,7 +252,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	DWORD flags = 0;
 	int rc = WSARecv(sock, &iov->wsaBuf, 1, NULL, &flags, &iov->ov, NULL);
 	if (rc == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-		free(req->buf);
+		msMemFree(req->buf);
 		req->buf = NULL;
 		msFutureCompleteT(fut, MS_EMPTY_STRING);
 		freeRequest(e, req);
@@ -337,7 +337,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	HANDLE dir = CreateFileW(wide, FILE_LIST_DIRECTORY,
 	                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
 	                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
-	free(wide);
+	msMemFree(wide);
 	if (dir == INVALID_HANDLE_VALUE) {
 		_msFsWatchLastError = GetLastError();
 		return -1;
@@ -365,7 +365,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	                                   NULL, &iov->ov, NULL);
 	if (!armed) {
 		_msFsWatchLastError = GetLastError();
-		free(req->buf);
+		msMemFree(req->buf);
 		req->buf = NULL;
 		msFutureCompleteT(fut, MS_EMPTY_STRING);
 		freeRequest(e, req);
@@ -384,7 +384,7 @@ int32_t msFsWriteSettled(msString path) {
 	MultiByteToWideChar(CP_UTF8, 0, msStrData(&path), (int)msStrLen(path), wide, wideLen);
 	wide[wideLen] = 0;
 	HANDLE file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	free(wide);
+	msMemFree(wide);
 	if (file == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION ? 0 : 1;
 	CloseHandle(file);
 	return 1;
@@ -416,7 +416,7 @@ static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
 		offset += info->NextEntryOffset;
 	}
 	msString result = msStringNew(out, (int64_t)used);
-	free(out);
+	msMemFree(out);
 	return result;
 }
 
@@ -464,7 +464,7 @@ static int completeEntries(msIoEngine* e, const OVERLAPPED_ENTRY* entries, ULONG
 				recvResult = msStringNew(req->buf, (int64_t)bytes);
 			}
 			msFutureCompleteT((msFuture_msString*)req->fut, recvResult);
-			free(req->buf);
+			msMemFree(req->buf);
 			req->buf = NULL;
 			break;
 		}
@@ -499,7 +499,7 @@ static int completeEntries(msIoEngine* e, const OVERLAPPED_ENTRY* entries, ULONG
 		}
 		case MS_IO_WATCH: {
 			msString changes = watchChanges(req->buf, bytes, entries[i].Internal);
-			free(req->buf);
+			msMemFree(req->buf);
 			req->buf = NULL;
 			msFutureCompleteT((msFuture_msString*)req->fut, changes);
 			break;

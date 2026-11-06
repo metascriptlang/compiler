@@ -187,7 +187,7 @@ static inline msString msStringDup(msString s) {
 /* Free if not literal */
 static inline void msStringDestroy(msString s) {
 	if (msStrIsHeap(s)) {
-		free(s.p);
+		msMemFree(s.p);
 	}
 }
 
@@ -198,7 +198,7 @@ static inline void msStringDestroy(msString s) {
  * to free literals (correct for actual literals), so callers needing the
  * eviction semantic use this helper. Not for general use. */
 static inline void msStringDestroyForce(msString s) {
-	if (s.p != NULL) free(s.p);
+	if (s.p != NULL) msMemFree(s.p);
 }
 
 /* Append string — slow path: grow, literal COW, self-alias, or src without a

@@ -89,9 +89,9 @@ void msAwaitGroupFree(msAwaitGroup* g) {
 #endif
 
 	if (g->results != NULL) {
-		free(g->results);
+		msMemFree(g->results);
 	}
-	free(g);
+	msMemFree(g);
 }
 
 /* Internal: decrement pending and wake waiter if we were the last one.
@@ -404,7 +404,7 @@ void msAwaitSlotRelease(void* sp) {
 		}
 	} else {
 		/* Heap fallback — free */
-		free(s);
+		msMemFree(s);
 	}
 }
 

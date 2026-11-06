@@ -31,7 +31,7 @@ static const msAesKey* keyOf(int64_t handle) {
 
 int64_t msCryptoAesKeyNew(const uint8_t* raw, int64_t rawLen) {
 	if (rawLen != 16 && rawLen != 32) return 0;
-	msAesKey* key = (msAesKey*)calloc(1, sizeof(msAesKey));
+	msAesKey* key = (msAesKey*)msMemAllocN0(1, sizeof(msAesKey));
 	if (key == NULL) return 0;
 	key->len = (size_t)rawLen;
 	memcpy(key->bytes, raw, key->len);
@@ -42,12 +42,12 @@ int64_t msCryptoAesKeyNew(const uint8_t* raw, int64_t rawLen) {
 /* 0 for a size other than 16 or 32, -1 when the OS random source failed. */
 int64_t msCryptoAesKeyGenerate(int32_t byteLength) {
 	if (byteLength != 16 && byteLength != 32) return 0;
-	msAesKey* key = (msAesKey*)calloc(1, sizeof(msAesKey));
+	msAesKey* key = (msAesKey*)msMemAllocN0(1, sizeof(msAesKey));
 	if (key == NULL) return 0;
 	key->len = (size_t)byteLength;
 	if (ms_random_fill(key->bytes, key->len) != 0) {
 		mbedtls_platform_zeroize(key, sizeof(msAesKey));
-		free(key);
+		msMemFree(key);
 		return -1;
 	}
 	__atomic_add_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
@@ -64,7 +64,7 @@ void msCryptoAesKeyFree(int64_t handle) {
 	msAesKey* key = (msAesKey*)(uintptr_t)handle;
 	if (key == NULL) return;
 	mbedtls_platform_zeroize(key, sizeof(msAesKey));
-	free(key);
+	msMemFree(key);
 	__atomic_sub_fetch(&liveKeys, 1, __ATOMIC_RELAXED);
 }
 
@@ -218,8 +218,8 @@ msString msCryptoAesCbcEncrypt(int64_t keyHandle, const uint8_t* plainText, int6
 		result = msStringNew((const char*)out, (int64_t)paddedLen);
 	}
 	mbedtls_aes_free(&aes);
-	free(padded);
-	free(out);
+	msMemFree(padded);
+	msMemFree(out);
 	return result;
 }
 
@@ -248,6 +248,6 @@ int64_t msCryptoAesCbcDecrypt(int64_t keyHandle, const uint8_t* cipherText, int6
 		msStringDestroy(*plainTextOut);
 		*plainTextOut = msStringNew((const char*)out, plainLen);
 	}
-	free(out);
+	msMemFree(out);
 	return plainLen >= 0 ? 1 : 0;
 }

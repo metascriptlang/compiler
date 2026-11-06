@@ -28,7 +28,7 @@ extern function msModuleArmTask(): void;
 extern function msMemAlloc(size: uint64): Ptr<void>;
 extern function msMemAllocN0(count: uint64, size: uint64): Ptr<void>;
 extern function msRealloc(old: Ptr<void>, oldSize: uint64, newSize: uint64): Ptr<void>;
-extern function free(p: Ptr<void>): void;
+extern function msMemFree(p: Ptr<void>): void;
 
 const PENDING: int32 = 0;
 const EVALUATING: int32 = 1;
@@ -140,7 +140,7 @@ function settleWaiters(r: Ptr<ModuleRecord>): void {
 	while (w != null) {
 		const next = w.next;
 		msModuleSettle(w.fut, r.error);
-		free(w as Ptr<void>);
+		msMemFree(w as Ptr<void>);
 		w = next;
 	}
 }
@@ -230,7 +230,7 @@ function sortGatheredByOrdinal(list: Ptr<int32>, count: int32): void {
 		width *= 2;
 	}
 	if (from != list) for (let k: int32 = 0; k < count; k++) list[k] = from[k];
-	free(scratch as Ptr<void>);
+	msMemFree(scratch as Ptr<void>);
 }
 
 function asyncFulfilled(m: Ptr<ModuleRecord>): void {
@@ -262,7 +262,7 @@ function asyncFulfilled(m: Ptr<ModuleRecord>): void {
 		p.status = EVALUATED;
 		settleWaiters(p);
 	}
-	free(list as Ptr<void>);
+	msMemFree(list as Ptr<void>);
 }
 
 @exportName("msModuleAsyncSettled")
@@ -277,7 +277,7 @@ function asyncSettled(env: Ptr<void>): void {
 		asyncFulfilled(m);
 	}
 	msModuleDestroyFuture(run.fut);
-	free(env);
+	msMemFree(env);
 }
 
 function executeAsync(m: Ptr<ModuleRecord>): void {
@@ -379,12 +379,12 @@ function evaluate(w: Ptr<Waiter>): void {
 		if (failed) {
 			for (let k: int32 = 0; k < gDepth; k++) recordError(recordAt(gStack[k]), gError);
 		}
-		free(gStack as Ptr<void>);
+		msMemFree(gStack as Ptr<void>);
 		if (failed) {
 			const error = gError;
 			msModuleSettle(w.fut, error);
 			if (gThrown) msModuleRelease(error);
-			free(w as Ptr<void>);
+			msMemFree(w as Ptr<void>);
 			return;
 		}
 	}
@@ -395,7 +395,7 @@ function evaluate(w: Ptr<Waiter>): void {
 	}
 	if (r.status != EVALUATED) msModuleAbort(r.name, "import() settled while its evaluation is unfinished");
 	msModuleSettle(w.fut, r.error);
-	free(w as Ptr<void>);
+	msMemFree(w as Ptr<void>);
 }
 
 @exportName("msModuleRunPending")
@@ -447,7 +447,7 @@ function deinitLazy(): void {
 		const r = recordAt(i);
 		if (r.error != null) msModuleRelease(r.error);
 		r.error = nil;
-		free(r.asyncParents as Ptr<void>);
+		msMemFree(r.asyncParents as Ptr<void>);
 		r.asyncParents = nil as Ptr<int32>;
 		r.asyncParentCount = 0;
 		let w = r.waiters;
@@ -455,11 +455,11 @@ function deinitLazy(): void {
 		while (w != null) {
 			const next = w.next;
 			msModuleDestroyFuture(w.fut);
-			free(w as Ptr<void>);
+			msMemFree(w as Ptr<void>);
 			w = next;
 		}
 	}
-	free(gRanOrder as Ptr<void>);
+	msMemFree(gRanOrder as Ptr<void>);
 	gRanOrder = nil as Ptr<int32>;
 	gRanCount = 0;
 }

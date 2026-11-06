@@ -2915,7 +2915,7 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 			emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
 			addrArg = "&" + valTmp.snippet;
 		}
-		emitStmtsLine(p, `${boxTmp.snippet} = malloc(sizeof(${sinkType}));`);
+		emitStmtsLine(p, `${boxTmp.snippet} = msMemAlloc(sizeof(${sinkType}));`);
 		emitStmtsLine(p, `memcpy(${boxTmp.snippet}, ${addrArg}, sizeof(${sinkType}));`);
 		// Neutralize source: zero all bytes so DRC destroy sees no refs to release
 		emitStmtsLine(p, `memset(${addrArg}, 0, sizeof(${sinkType}));`);
@@ -3006,7 +3006,7 @@ function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<Ex
 		const valTmp = getTemp(p, unboxType);
 		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);
 		emitStmtsLine(p, `if (${ptrTmp.snippet} != NULL) ${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
-		emitStmtsLine(p, `free(${ptrTmp.snippet});`);
+		emitStmtsLine(p, `msMemFree(${ptrTmp.snippet});`);
 		ctx.results.push(valTmp.snippet);
 		return;
 	}

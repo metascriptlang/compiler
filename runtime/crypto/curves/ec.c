@@ -20,7 +20,7 @@ struct msCryptoEcKey {
 
 static int64_t discard(msCryptoEcKey* kp) {
 	mbedtls_pk_free(&kp->pk);
-	free(kp);
+	msMemFree(kp);
 	return 0;
 }
 
@@ -157,5 +157,5 @@ void msCryptoEcFree(int64_t handle) {
 	msPsaLock();
 	mbedtls_pk_free(&key->pk);
 	msPsaUnlock();
-	free(key);
+	msMemFree(key);
 }

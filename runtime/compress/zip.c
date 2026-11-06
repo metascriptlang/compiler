@@ -66,8 +66,8 @@ int64_t msZipReaderOpen(msString data) {
     c->dataLen = (size_t)msStrLen(data);
 
     if (!mz_zip_reader_init_mem(&c->zip, c->dataCopy, c->dataLen, 0)) {
-        free(c->dataCopy);
-        free(c);
+        msMemFree(c->dataCopy);
+        msMemFree(c);
         return 0;
     }
 
@@ -145,8 +145,8 @@ void msZipReaderClose(int64_t handle) {
     struct msZipReaderCtx* c = rHandleToCtx(handle);
     if (!c) return;
     mz_zip_reader_end(&c->zip);
-    free(c->dataCopy);
-    free(c);
+    msMemFree(c->dataCopy);
+    msMemFree(c);
 }
 
 /* ===== Writer ===== */
@@ -154,7 +154,7 @@ void msZipReaderClose(int64_t handle) {
 int64_t msZipWriterNew(void) {
     struct msZipWriterCtx* c = (struct msZipWriterCtx*)msMemAlloc0(sizeof(*c));
     if (!mz_zip_writer_init_heap(&c->zip, 0, 0)) {
-        free(c);
+        msMemFree(c);
         return 0;
     }
     return wCtxToHandle(c);
@@ -205,5 +205,5 @@ void msZipWriterClose(int64_t handle) {
     struct msZipWriterCtx* c = wHandleToCtx(handle);
     if (!c) return;
     mz_zip_writer_end(&c->zip);
-    free(c);
+    msMemFree(c);
 }

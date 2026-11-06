@@ -18,7 +18,7 @@
 #define KEY_BLOCK 64
 
 static int64_t newBlock(const uint8_t *bytes, size_t len) {
-	uint8_t *block = (uint8_t *)calloc(1, KEY_BLOCK);
+	uint8_t *block = (uint8_t *)msMemAllocN0(1, KEY_BLOCK);
 	if (!block) return 0;
 	memcpy(block, bytes, len);
 	return (int64_t)(intptr_t)block;
@@ -73,7 +73,7 @@ msString msEd25519PublicRaw(int64_t key) {
 void msEd25519KeyFree(int64_t key) {
 	if (!key) return;
 	crypto_wipe(blockOf(key), KEY_BLOCK);
-	free(blockOf(key));
+	msMemFree(blockOf(key));
 }
 
 /* RFC 8032 5.1.6 signs from the seed and derives A itself, and an A taken from the caller lets two

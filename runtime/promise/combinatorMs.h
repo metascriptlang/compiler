@@ -28,7 +28,7 @@ static inline void** msPromiseSlotsZeroed(int32_t count) {
 }
 
 static inline void msPromiseFreeValueOnDestroy(void* fut) {
-	((msFuture*)fut)->base.valueDestructor = free;
+	((msFuture*)fut)->base.valueDestructor = msMemFree;
 }
 
 static inline bool msPromiseInputRejected(void* f) {

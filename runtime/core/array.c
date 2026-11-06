@@ -130,7 +130,7 @@ msNumberArray msNumberArrayFrom(int64_t count, ...) {
 
 void msNumberArrayDestroy(msNumberArray* arr) {
 	if (arr->p != NULL) {
-		free(arr->p);
+		msMemFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
@@ -274,7 +274,7 @@ void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t
 		memmove(base + right, base, left);
 		memcpy(base, tmp, right);
 	}
-	if (tmp != few) free(tmp);
+	if (tmp != few) msMemFree(tmp);
 }
 
 /* ===== Number Array Lifecycle ===== */
@@ -340,7 +340,7 @@ void msStringArrayDestroy(msStringArray* arr) {
 		for (int64_t i = 0; i < arr->len; i++) {
 			msStringDestroy(arr->p->data[i]);
 		}
-		free(arr->p);
+		msMemFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
@@ -511,7 +511,7 @@ int64_t msStringArrayCapacity(msStringArray* arr) {
 
 void msUint8ArrayDestroy(msUint8Array* arr) {
 	if (arr->p != NULL) {
-		free(arr->p);
+		msMemFree(arr->p);
 		arr->p = NULL;
 	}
 	arr->len = 0;
@@ -533,7 +533,7 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 
 static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {
 	(void)resume;
-	free(payload);
+	msMemFree(payload);
 }
 
 void msRefArrayDestroy(msRefArray* arr) {
@@ -554,7 +554,7 @@ void msRefArrayDestroy(msRefArray* arr) {
 		msDropDefer(p, msRefPayloadFreeAfterDrop, 0);
 		return;
 	}
-	free(p);
+	msMemFree(p);
 }
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
@@ -615,7 +615,7 @@ void msAcyclicRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefAny(p->data[i]);
-		free(p);
+		msMemFree(p);
 	}
 }
 
@@ -626,7 +626,7 @@ void msUnownedRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msUnownedDecref(p->data[i]);
-		free(p);
+		msMemFree(p);
 	}
 }
 
@@ -772,7 +772,7 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msAtomicDecref(p->data[i]);
-		free(p);
+		msMemFree(p);
 	}
 }
 
@@ -808,7 +808,7 @@ static void msRefArraySpliceThenRelease(msRefArray* arr, int64_t start, int64_t 
 	arr->p->data[start] = item;
 	arr->len += 1;
 	for (int64_t i = 0; i < removedLen; i++) release(removed[i]);
-	if (removed != fewRemoved) free(removed);
+	if (removed != fewRemoved) msMemFree(removed);
 }
 
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
@@ -855,7 +855,7 @@ void msClosureArrayDestroy(msClosureArray* arr) {
 				msDecrefCyclic(p->data[i].env);
 			}
 		}
-		free(p);
+		msMemFree(p);
 	}
 }
 

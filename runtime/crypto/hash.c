@@ -225,12 +225,12 @@ msCryptoHashCtx* msCryptoHashInit(msString algorithm) {
 
 	mbedtls_md_init(&ctx->ctx);
 	if (mbedtls_md_setup(&ctx->ctx, md_info, 0) != 0) {
-		free(ctx);
+		msMemFree(ctx);
 		return NULL;
 	}
 	if (mbedtls_md_starts(&ctx->ctx) != 0) {
 		mbedtls_md_free(&ctx->ctx);
-		free(ctx);
+		msMemFree(ctx);
 		return NULL;
 	}
 
@@ -254,7 +254,7 @@ int64_t msCryptoHashFinalInto(msCryptoHashCtx* ctx, void* output, int64_t capaci
 	}
 	mbedtls_md_free(&ctx->ctx);
 	ctx->valid = 0;
-	free(ctx);
+	msMemFree(ctx);
 	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
@@ -270,7 +270,7 @@ void msCryptoHashFree(msCryptoHashCtx* ctx) {
 		mbedtls_md_free(&ctx->ctx);
 		ctx->valid = 0;
 	}
-	free(ctx);
+	msMemFree(ctx);
 }
 
 /* ===== Streaming HMAC Context ===== */
@@ -290,13 +290,13 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, const uint8_t* key, int64_
 	mbedtls_md_init(&ctx->ctx);
 	if (mbedtls_md_setup(&ctx->ctx, md_info, 0) != 0 || mbedtls_md_hmac_setup(&ctx->ctx, md_info) != 0) {
 		mbedtls_md_free(&ctx->ctx);
-		free(ctx);
+		msMemFree(ctx);
 		return NULL;
 	}
 
 	if (mbedtls_md_hmac_starts(&ctx->ctx, key, (size_t)keyLen) != 0) {
 		mbedtls_md_free(&ctx->ctx);
-		free(ctx);
+		msMemFree(ctx);
 		return NULL;
 	}
 
@@ -320,7 +320,7 @@ int64_t msCryptoHmacFinalInto(msCryptoHmacCtx* ctx, void* output, int64_t capaci
 	}
 	mbedtls_md_free(&ctx->ctx);
 	ctx->valid = 0;
-	free(ctx);
+	msMemFree(ctx);
 	return ret == 0 ? (int64_t)hashLen : 0;
 }
 
@@ -336,7 +336,7 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
 		mbedtls_md_free(&ctx->ctx);
 		ctx->valid = 0;
 	}
-	free(ctx);
+	msMemFree(ctx);
 }
 
 /* ===== Utility ===== */
@@ -453,7 +453,7 @@ static int pbkdf2_hmac(
 	mbedtls_platform_zeroize(U, sizeof(U));
 	mbedtls_platform_zeroize(T, sizeof(T));
 	mbedtls_platform_zeroize(salt_block, salt_len + 4);
-	free(salt_block);
+	msMemFree(salt_block);
 	return ret;
 }
 
@@ -468,7 +468,7 @@ msString msCryptoPbkdf2(const uint8_t* password, int64_t passwordLen, const uint
 		(uint32_t)iterations, output, (size_t)keyLength);
 	msString result = ret == 0 ? msStringNew((const char*)output, (int64_t)keyLength) : MS_EMPTY_STRING;
 	mbedtls_platform_zeroize(output, (size_t)keyLength);
-	free(output);
+	msMemFree(output);
 	return result;
 }
 
@@ -512,11 +512,11 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 		counter++;
 	}
 	mbedtls_platform_zeroize(input, input_cap);
-	if (input != stack_input) free(input);
+	if (input != stack_input) msMemFree(input);
 	msString result = ret == 0 ? msStringNew((const char*)okm, (int64_t)length) : MS_EMPTY_STRING;
 	mbedtls_platform_zeroize(T, sizeof(T));
 	mbedtls_platform_zeroize(okm, length);
-	free(okm);
+	msMemFree(okm);
 	return result;
 }
 

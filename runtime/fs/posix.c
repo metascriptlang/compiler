@@ -90,7 +90,7 @@ msString msFsReadFile(msString path) {
 		ungetc(next, f);
 		cap = size * 2;
 	}
-	char* buf = (char*)malloc(cap);
+	char* buf = (char*)msMemAlloc(cap);
 	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); if (msStrLen(direct) > 0) msStringDecref(direct); return MS_EMPTY_STRING; }
 	if (len > 0) { memcpy(buf, msStrData(&direct), len); msStringDecref(direct); }
 	for (;;) {
@@ -99,7 +99,7 @@ msString msFsReadFile(msString path) {
 		if (ferror(f)) { _msFsLastErrno = errno != 0 ? errno : EIO; break; }
 		if (feof(f)) break;
 		if (cap > (size_t)MS_LEN_MAX) { _msFsLastErrno = EFBIG; break; }
-		char* grown = (char*)realloc(buf, cap * 2);
+		char* grown = (char*)msRealloc(buf, cap, cap * 2);
 		if (!grown) { _msFsLastErrno = ENOMEM; break; }
 		buf = grown;
 		cap = cap * 2;
@@ -107,7 +107,7 @@ msString msFsReadFile(msString path) {
 	fclose(f);
 	if (_msFsLastErrno == 0 && len > (size_t)MS_LEN_MAX) _msFsLastErrno = EFBIG;
 	msString result = _msFsLastErrno != 0 || len == 0 ? MS_EMPTY_STRING : msStringNew(buf, (int64_t)len);
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 
@@ -123,7 +123,7 @@ msString msFsReadDirEntries(msString path) {
 	}
 	size_t cap = 4096;
 	size_t len = 0;
-	char* buf = (char*)malloc(cap);
+	char* buf = (char*)msMemAlloc(cap);
 	if (!buf) {
 		closedir(d);
 		_msFsLastErrno = ENOMEM;
@@ -155,16 +155,16 @@ msString msFsReadDirEntries(msString path) {
 			if (stat(tmp, &st) == 0 && S_ISDIR(st.st_mode)) {
 				isDir = 1;
 			}
-			free(tmp);
+			msMemFree(tmp);
 #ifdef DT_DIR
 		}
 #endif
 		/* Resize buffer if needed: name + optional "/" + "\n" */
 		while (len + nlen + 2 >= cap) {
 			size_t newCap = cap * 2;
-			char* nb = (char*)realloc(buf, newCap);
+			char* nb = (char*)msRealloc(buf, cap, newCap);
 			if (!nb) {
-				free(buf);
+				msMemFree(buf);
 				closedir(d);
 				_msFsLastErrno = ENOMEM;
 				return MS_EMPTY_STRING;
@@ -179,7 +179,7 @@ msString msFsReadDirEntries(msString path) {
 	}
 	closedir(d);
 	msString result = msStringNew(buf, (int64_t)len);
-	free(buf);
+	msMemFree(buf);
 	return result;
 }
 
@@ -197,7 +197,7 @@ msString msFsReadDirNames(msString path) {
 	}
 	size_t capacity = 4096;
 	size_t length = 0;
-	char* names = (char*)malloc(capacity);
+	char* names = (char*)msMemAlloc(capacity);
 	int error = names ? 0 : ENOMEM;
 	while (error == 0) {
 		errno = 0;
@@ -213,7 +213,7 @@ msString msFsReadDirNames(msString path) {
 		if (needed > capacity - length) {
 			size_t grown = capacity * 2;
 			if (grown < length + needed) grown = length + needed;
-			char* next = (char*)realloc(names, grown);
+			char* next = (char*)msRealloc(names, capacity, grown);
 			if (!next) { error = ENOMEM; break; }
 			names = next;
 			capacity = grown;
@@ -225,7 +225,7 @@ msString msFsReadDirNames(msString path) {
 	_msFsLastErrno = error;
 	msString result = error == 0 && length > 0 ?
 		msStringNew(names, (int64_t)length) : MS_EMPTY_STRING;
-	free(names);
+	msMemFree(names);
 	return result;
 }
 

@@ -43,7 +43,7 @@ static void msDequeAppend(msCallbackDeque* q, msClosure cb) {
         int count = 0;
         int i = q->head;
         while (i != q->tail) { newItems[count++] = q->items[i]; i = (i + 1) % q->cap; }
-        free(q->items);
+        msMemFree(q->items);
         q->items = newItems;
         q->head = 0;
         q->tail = count;
@@ -191,9 +191,9 @@ msFuture_void* msSleepAsync(int ms) {
 int32_t msGetWakePipeFd(void) { return -1; }
 void msDestroyDispatcher(void) {
     if (gDispatcher) {
-        free(gDispatcher->callbacks.items);
-        free(gDispatcher->timers.data);
-        free(gDispatcher);
+        msMemFree(gDispatcher->callbacks.items);
+        msMemFree(gDispatcher->timers.data);
+        msMemFree(gDispatcher);
         gDispatcher = NULL;
     }
 }
@@ -223,7 +223,7 @@ void msAsyncCb(void* raw) {
             ? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
             : ((msFutureBase*(*)(void))e->stepper.fn)();
     }
-    if (next == NULL) { free(e); return; }
+    if (next == NULL) { msMemFree(e); return; }
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
 }
 

@@ -177,7 +177,7 @@ static void msDequeGrow(msCallbackDeque* d) {
 	for (int i = 0; i < len; i++) {
 		newItems[i] = d->items[(d->head + i) % oldCap];
 	}
-	free(d->items);
+	msMemFree(d->items);
 	d->items = newItems;
 	d->head = 0;
 	d->tail = len;
@@ -483,7 +483,7 @@ static void msIocpDispatchMsg(msCompletionMsg* msg) {
 		fprintf(stderr, "internal: unknown completion kind %d\n", (int)msg->kind);
 		abort();
 	}
-	free(msg);
+	msMemFree(msg);
 }
 
 static MS_THREAD_LOCAL msIocpEntryFn gIocpEngineEntry = NULL;
@@ -819,9 +819,9 @@ bool msCompletionQueueDrainAll(void) {
 static void msDispatcherThreadDestroy(void) {
 	msDispatcher* d = gDispatcher;
 	if (d == NULL || msDequeLen(&d->callbacks) > 0) return;
-	free(d->callbacks.items);
+	msMemFree(d->callbacks.items);
 	if (d->selector != NULL) msSelectorDestroy(d->selector);
-	free(d);
+	msMemFree(d);
 	gDispatcher = NULL;
 }
 
@@ -1476,7 +1476,7 @@ void* msAsyncCurrentChain(void) { return gAsyncChain; }
 static void msAsyncCbEnvDrop(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
 	if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
-	free(e);
+	msMemFree(e);
 }
 
 /* A step that suspends returns while the tasks it submitted are still queued, so no
@@ -1538,7 +1538,7 @@ static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e,
 		 * → destroyFn fires → memory freed. The raw msAsyncCbEnv* pointer that
 		 * carried env through the callback chain is then released via free(e). */
 		if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
-		free(e);
+		msMemFree(e);
 		return;
 	}
 
@@ -1606,7 +1606,7 @@ void msDestroyDispatcher(void) {
 		} else if (t.actorJob) msActorJobAbandon(t.cb.env);
 		else if (t.cb.env != NULL) msDecrefAny(t.cb.env);
 	}
-	free(gTimers.data);
+	msMemFree(gTimers.data);
 	gTimers.data = NULL;
 	gTimers.cap = 0;
 	gTimers.live = 0;
@@ -1616,7 +1616,7 @@ void msDestroyDispatcher(void) {
 		msClosure cb = msDequePop(&d->callbacks);
 		((void(*)(void*))cb.fn)(cb.env);
 	}
-	free(d->callbacks.items);
+	msMemFree(d->callbacks.items);
 	/* Destroy platform-specific I/O notification */
 #ifdef _WIN32
 	if (d->iocp != NULL) { CloseHandle(d->iocp); d->iocp = NULL; }
@@ -1628,7 +1628,7 @@ void msDestroyDispatcher(void) {
 #endif
 	/* Reset globals */
 	msCallSoonProc = NULL;
-	free(d);
+	msMemFree(d);
 	gDispatcher = NULL;
 }
 

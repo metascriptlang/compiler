@@ -197,7 +197,7 @@ static void uringArmLoop(msIoEngine* e) {
 msIoEngine* msIoEngineCreate(void) {
 	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	if (uringInit(&e->ring) < 0) {
-		free(e);
+		msMemFree(e);
 		return NULL;
 	}
 	e->loopFd = -1;
@@ -219,10 +219,10 @@ void msIoEngineDestroy(msIoEngine* e) {
 	msIoRequest* r = e->freeList;
 	while (r != NULL) {
 		msIoRequest* next = r->next;
-		free(r);
+		msMemFree(r);
 		r = next;
 	}
-	free(e);
+	msMemFree(e);
 }
 
 /* ===== Thread-Local Singleton ===== */
@@ -280,7 +280,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->fut = fut;
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
-	if (sqe == NULL) { free(req->buf); msFutureCompleteT(fut, MS_EMPTY_STRING); freeRequest(e, req); return fut; }
+	if (sqe == NULL) { msMemFree(req->buf); msFutureCompleteT(fut, MS_EMPTY_STRING); freeRequest(e, req); return fut; }
 	sqe->opcode = IORING_OP_RECV;
 	sqe->fd = fd;
 	sqe->addr = (uint64_t)(uintptr_t)req->buf;
@@ -387,7 +387,7 @@ static char* fsWatchJoin(const char* a, const char* b) {
 static int fsWatchAdd(msFsWatcher* w, const char* rel) {
 	char* full = fsWatchJoin(w->root, rel);
 	int wd = inotify_add_watch(w->fd, full, MS_FS_WATCH_MASK | IN_ONLYDIR);
-	free(full);
+	msMemFree(full);
 	if (wd < 0) return wd;
 	for (int32_t i = 0; i < w->count; i++) {
 		if (w->wds[i] == wd) return wd;
@@ -410,7 +410,7 @@ static void fsWatchAddTree(msFsWatcher* w, const char* rel) {
 	if (fsWatchAdd(w, rel) < 0) return;
 	char* full = fsWatchJoin(w->root, rel);
 	DIR* dir = opendir(full);
-	free(full);
+	msMemFree(full);
 	if (dir == NULL) return;
 	struct dirent* entry;
 	while ((entry = readdir(dir)) != NULL) {
@@ -419,8 +419,8 @@ static void fsWatchAddTree(msFsWatcher* w, const char* rel) {
 		char* childFull = fsWatchJoin(w->root, child);
 		struct stat info;
 		if (lstat(childFull, &info) == 0 && S_ISDIR(info.st_mode)) fsWatchAddTree(w, child);
-		free(childFull);
-		free(child);
+		msMemFree(childFull);
+		msMemFree(child);
 	}
 	closedir(dir);
 }
@@ -435,7 +435,7 @@ static const char* fsWatchDir(msFsWatcher* w, int wd) {
 static void fsWatchForget(msFsWatcher* w, int wd) {
 	for (int32_t i = 0; i < w->count; i++) {
 		if (w->wds[i] != wd) continue;
-		free(w->dirs[i]);
+		msMemFree(w->dirs[i]);
 		w->wds[i] = w->wds[w->count - 1];
 		w->dirs[i] = w->dirs[w->count - 1];
 		w->count--;
@@ -446,10 +446,10 @@ static void fsWatchForget(msFsWatcher* w, int wd) {
 static void fsWatchRelease(msFsWatcher* w) {
 	if (w->fd >= 0) close(w->fd);
 	w->fd = -1;
-	for (int32_t i = 0; i < w->count; i++) free(w->dirs[i]);
-	free(w->wds);
-	free(w->dirs);
-	free(w->root);
+	for (int32_t i = 0; i < w->count; i++) msMemFree(w->dirs[i]);
+	msMemFree(w->wds);
+	msMemFree(w->dirs);
+	msMemFree(w->root);
 	w->wds = NULL;
 	w->dirs = NULL;
 	w->root = NULL;
@@ -466,13 +466,13 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	struct stat info;
 	if (stat(root, &info) != 0 || !S_ISDIR(info.st_mode)) {
 		_msFsWatchLastError = fsWatchErrorCode(stat(root, &info) != 0 ? errno : ENOTDIR);
-		free(root);
+		msMemFree(root);
 		return -1;
 	}
 	int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (fd < 0) {
 		_msFsWatchLastError = fsWatchErrorCode(errno);
-		free(root);
+		msMemFree(root);
 		return -1;
 	}
 	int32_t handle = _msFsWatcherCount;
@@ -499,7 +499,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 static void fsWatchArm(msIoEngine* e, msFsWatcher* w, msIoRequest* req) {
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
 	if (sqe == NULL) {
-		free(req->buf);
+		msMemFree(req->buf);
 		req->buf = NULL;
 		w->pending = NULL;
 		msFutureCompleteT((msFuture_msString*)req->fut, msStringNew("*", 1));
@@ -543,7 +543,7 @@ int32_t msFsWriteSettled(msString path) {
 	if (msStrLen(path) > 0) memcpy(name, msStrData(&path), (size_t)msStrLen(path));
 	name[msStrLen(path)] = 0;
 	int absent = access(name, F_OK) != 0;
-	free(name);
+	msMemFree(name);
 	return absent ? 1 : 0;
 }
 
@@ -579,7 +579,7 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 		res = (int32_t)got;
 	}
 	if (res <= 0 || !w->open) {
-		free(req->buf);
+		msMemFree(req->buf);
 		req->buf = NULL;
 		if (!w->open) fsWatchRelease(w);
 		msFutureCompleteT((msFuture_msString*)req->fut, MS_EMPTY_STRING);
@@ -605,16 +605,16 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 		out[used++] = (!(ev->mask & IN_ISDIR) && (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO))) ? 'w' : 'c';
 		memcpy(out + used, rel, length);
 		used += length;
-		free(rel);
+		msMemFree(rel);
 	}
 	if (!overflow && used == 0) {
-		free(out);
+		msMemFree(out);
 		fsWatchArm(e, w, req);
 		return 1;
 	}
 	msString changes = overflow ? msStringNew("*", 1) : msStringNew(out, (int64_t)used);
-	free(out);
-	free(req->buf);
+	msMemFree(out);
+	msMemFree(req->buf);
 	req->buf = NULL;
 	msFutureCompleteT((msFuture_msString*)req->fut, changes);
 	return 0;
@@ -748,7 +748,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 				recvResult = msStringNew(req->buf, (int64_t)res);
 			}
 			msFutureCompleteT((msFuture_msString*)req->fut, recvResult);
-			free(req->buf);
+			msMemFree(req->buf);
 			req->buf = NULL;
 			break;
 		}
