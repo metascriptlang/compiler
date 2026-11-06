@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets, randomInto } from "./random";
 import { store32LE } from "./endian";
 import { wipeBytes, wipeWords } from "./secret";
@@ -14,7 +14,10 @@ export class ChaChaKey {
 
 	static import(raw: Bytes): Result<ChaChaKey, CryptoError> {
 		const words = new Array<uint32>(8);
-		if (!keyWords(bytesOf(raw), words)) {
+		const bytes = bytesOf(raw);
+		const fits = keyWords(bytes, words);
+		wipeIfCopied(raw, bytes);
+		if (!fits) {
 			return Result.err(cryptoError(
 				CryptoErrorKind.InvalidKey,
 				"ChaChaKey.import", "key must be 32 bytes",

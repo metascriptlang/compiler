@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
 import { wipeBytes } from "./secret";
 import {
@@ -19,12 +19,14 @@ export class AesKey {
 	static import(raw: Bytes): Result<AesKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 16 && bytes.length != 32) {
+			wipeIfCopied(raw, bytes);
 			return Result.err(cryptoError(
 				CryptoErrorKind.InvalidKey,
 				"AesKey.import", "key must be 16 or 32 bytes",
 			));
 		}
 		const owned = bytes.slice(0);
+		wipeIfCopied(raw, bytes);
 		return Result.ok({ _raw: owned, _schedule: expandKey(owned) });
 	}
 

@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
 import { wipeBytes } from "./secret";
 import {
@@ -51,13 +51,16 @@ export class Ed25519PrivateKey {
 		Result<Ed25519PrivateKey, CryptoError> {
 		const bytes = bytesOf(seed);
 		const publicBytes = ed25519PublicFromSeed(bytes);
+		const owned = bytes.slice(0);
+		wipeIfCopied(seed, bytes);
 		if (publicBytes.length != 32) {
+			wipeBytes(owned);
 			return Result.err(cryptoError(
 				CryptoErrorKind.InvalidKey, "Ed25519PrivateKey.fromSeed",
 				"seed must be 32 bytes",
 			));
 		}
-		return Result.ok({ _seed: bytes.slice(0), _public: publicBytes });
+		return Result.ok({ _seed: owned, _public: publicBytes });
 	}
 
 	static async fromSeed(seed: Bytes):

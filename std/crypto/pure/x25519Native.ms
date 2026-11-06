@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
 import { wipeBytes } from "./secret";
 import { x25519 } from "./x25519";
@@ -48,6 +48,7 @@ export class X25519PrivateKey {
 	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 32) {
+			wipeIfCopied(raw, bytes);
 			return Result.err(cryptoError(
 				CryptoErrorKind.InvalidKey, "X25519PrivateKey.fromRaw",
 				"private key must be 32 bytes",
@@ -55,9 +56,9 @@ export class X25519PrivateKey {
 		}
 		const base = new Array<uint8>(32);
 		base[0] = 9;
-		return Result.ok({
-			_scalar: bytes.slice(0), _public: x25519(bytes, base),
-		});
+		const key: X25519PrivateKey = { _scalar: bytes.slice(0), _public: x25519(bytes, base) };
+		wipeIfCopied(raw, bytes);
+		return Result.ok(key);
 	}
 
 	static async fromRaw(raw: Bytes):
