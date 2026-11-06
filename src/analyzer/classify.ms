@@ -182,7 +182,7 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
 	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
-	if (elem.kind == TypeKind.Tuple) {
+	if (elem.kind == TypeKind.Tuple || elem.kind == TypeKind.SizedArray) {
 		if (!classifyType(elem, ctx, requireOps).needsCleanup) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 		}
