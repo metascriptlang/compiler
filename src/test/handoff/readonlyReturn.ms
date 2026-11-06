@@ -89,6 +89,8 @@ test "readonlyReturn: spawned code that stores a view of what the task borrows i
 	assert errors(lent + "const xs: Readonly<Node>[] = []; xs.push(shared.kids[0]);" + done, "stores the view 'shared' into a sink parameter") == 1;
 	assert errors(lent + "for (const c of shared.kids) h.f = c;" + done, "stores the view 'shared' into a field") == 1;
 	assert errors(lent + "h.f = shared;" + done, "store an explicit copy of it") == 1;
+	assert errors("extern function bumpOf(c: Readonly<Node>): int32;\n" + lent + "h.n = bumpOf(shared);" + done, "passes the view 'shared' to the external 'bumpOf' through a parameter of type") == 1;
+	assert errors("extern function nOf(n: int32): int32;\n" + lent + "h.n = nOf(shared.n);" + done, "to the external") == 0;
 }
 
 test "readonlyReturn: a view stored into a literal in spawned code names the store, the view and the borrow form" {
