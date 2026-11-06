@@ -312,7 +312,7 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 // A move of a field or element hands over part of its root's graph, so the root must be the sole
 // owner of that graph, as it must when the root itself moves; any other operand must be fresh.
 function recordActorMove(ctx: CheckerContext, mv: Node): void {
-	const arg = peelHidden((mv.data as MoveExprData).moveArg);
+	const arg = peelOperand((mv.data as MoveExprData).moveArg);
 	if (arg.kind != NodeKind.Identifier) {
 		if (arg.nodeType == null || !typeCarriesRef(arg.nodeType)) return;
 		const root = pathRoot(arg);
@@ -331,12 +331,22 @@ function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
 }
 
-function pathRoot(n: Node): Node | null {
-	let cur = peelHidden(n);
-	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
-		cur = peelHidden(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+// A narrowed read (a Result's value after `if (!r.ok) return`) arrives wrapped in a conversion.
+function peelOperand(n: Node): Node {
+	let cur = n;
+	while (true) {
+		const next = peelHidden(peelView(cur));
+		if (next == cur) return cur;
+		cur = next;
 	}
-	return cur.kind == NodeKind.Identifier && cur != peelHidden(n) ? cur : null;
+}
+
+function pathRoot(n: Node): Node | null {
+	let cur = peelOperand(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelOperand(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	return cur.kind == NodeKind.Identifier && cur != peelOperand(n) ? cur : null;
 }
 
 // The env of a Sendable closure is counted by the binding that holds it, so a copy sent to an actor would be counted on two
