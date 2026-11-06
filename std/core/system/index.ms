@@ -347,6 +347,9 @@ extern function msIncrefCyclic(p: Ptr<void>): void;
 extern function msDecrefCyclic(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msImmortalize(p: Ptr<void>): void;
+
+@compilerFunc
 extern function msIncrefRo(p: Ptr<void>): void;
 
 @compilerFunc
@@ -398,6 +401,21 @@ extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 extern function msUnownedGive(sink p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
+extern function msUnownedIncrefRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedDecrefRo(p: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedAssignRo(slot: Ptr<void>, p: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedTakeRo(p: Ptr<void>): Ptr<void>;
+
+@compilerFunc
+extern function msUnownedGiveRo(sink p: Ptr<void>): Ptr<void>;
+
+@compilerFunc
 extern function msPtrWasMoved(p: Ptr<void>): void;
 
 @compilerFunc
@@ -408,6 +426,9 @@ extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
 extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
+
+@compilerFunc
+extern function msOrcTraceRefRo(child: Ptr<void>, env: Ptr<void>): void;
 
 @compilerFunc
 extern function msHeldCount(p: Ptr<void>): int64;
@@ -528,6 +549,39 @@ extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayRoRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayRoRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayRoRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+@compilerFunc
+extern function msRoRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayUnownedRoRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayUnownedRoRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayUnownedRoRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedRoRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msRoRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+@compilerFunc
+extern function msRoRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
+
+@compilerFunc
+extern function msRoRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayUnownedRefDestroy(arr: Ptr<void>): void;

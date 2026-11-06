@@ -111,6 +111,7 @@ export enum AttachedOp {
 	AttachedCustody,
 	AttachedFinalize,
 	AttachedRelease,
+	AttachedReach,
 }
 
 // ===== Type =====
