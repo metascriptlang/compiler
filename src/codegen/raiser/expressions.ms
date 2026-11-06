@@ -2079,17 +2079,26 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 	return false;
 }
 
-// A closure literal passed to a call is a temporary pair the call borrows. Its env is counted
+function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
+	const frame = storedFramePlace(s, node);
+	return frame != null && vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block;
+}
+
+// A closure literal passed to a call is a temporary pair the call borrows, and so is the object a
+// packed frame value is materialized into for a declared non-sink parameter of a call that takes
+// objects. Its env is counted
 // once for the pair, so the pair is released after the call, as a stored copy of it would be;
 // when the call or a later argument raises, the Finally the raise passes through releases it,
 // as a scope's final destroys a temporary on every exit. The callee's registers overlap the
 // registers allocated after the call block, so the registers that keep the pairs across the
 // call are reserved before the block.
-function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee: int32 = -1): ClosureArgs {
+function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee: int32 = -1, params: Type[] | null = null): ClosureArgs {
 	const held: int32[] = [];
 	let any = callee >= 0;
-	for (const a of args) {
-		const reg = isClosureLiteral(a) ? allocRef(s) : -1;
+	for (let i = 0; i < args.length; i += 1) {
+		const a = args[i];
+		const borrowed = params != null && i < params.length && params[i].kind != TypeKind.Sink;
+		const reg = isClosureLiteral(a) || borrowed && materializesFramePlace(s, a) ? allocRef(s) : -1;
 		held.push(reg);
 		if (reg >= 0) {
 			emitLoadConst(s, reg, raiserNil());
@@ -2106,6 +2115,11 @@ function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee
 function compileClosureArg(s: RaiserCompState, arg: Node, slot: int32, held: int32): void {
 	if (held < 0) {
 		compileExprInto(s, arg, slot);
+		return;
+	}
+	if (!isClosureLiteral(arg)) {
+		compileExprInto(s, arg, slot);
+		emitInst(s, raiserABC(RaiserOpcode.Move, held, slot, 0));
 		return;
 	}
 	const pair = compileExpr(s, arg);
@@ -2631,7 +2645,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 				if (declaredParams != null && i < declaredParams.length) runtimeParams.push(declaredParams[i]);
 			}
 			const cells = reserveCells(s, runtimeArgs);
-			const closures = reserveClosureArgs(s, node, runtimeArgs);
+			const closures = reserveClosureArgs(s, node, runtimeArgs, -1, declaredParams != null ? runtimeParams : null);
 			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null);
 			for (let i = 0; i < runtimeArgs.length; i = i + 1) compileClosureArg(s, runtimeArgs[i], dest + 1 + i, closures.held[i]);
 			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(s, calleeSym), runtimeArgs.length) : [];
@@ -2778,7 +2792,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	}
 	const plain = calleeType != null && isPlainFunctionPointer(calleeType);
 	if (!plain) closureClasses.push(RaiserRegClass.Ref);
-	const closures = reserveClosureArgs(s, node, d.arguments, calleeHeld);
+	const closures = reserveClosureArgs(s, node, d.arguments, calleeHeld, declaredParams);
 	const dest = allocBlock(s, closureClasses);
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
