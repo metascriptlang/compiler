@@ -3073,6 +3073,7 @@ export function unservedCallReason(s: RaiserCompState, node: Node): string {
 	const d = node.data as CallExprData;
 	if (isInterceptedCall(s, node)) return "";
 	if (isToStringCall(node)) return "toString with an argument";
+	if (callBuiltinKind(node) != BuiltinKind.None) return "";
 	const sym = d.callee.resolvedSym;
 	if (sym == null || (d.callee.kind != NodeKind.Identifier && d.callee.kind != NodeKind.MemberExpr)) return "";
 	if (ownershipRow(sym) != 0) return "";
