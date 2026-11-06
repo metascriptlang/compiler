@@ -5,7 +5,10 @@ import { Uint8Array } from "./core";
 import { wellFormedPrefix } from "../string/utf8Repair";
 import { decodeUtf8 } from "./utf8";
 
-const UTF8_LABELS = ["unicode-1-1-utf-8", "unicode11utf8", "unicode20utf8", "utf-8", "utf8", "x-unicode20utf8"];
+function isUtf8Label(label: string): boolean {
+	return label == "unicode-1-1-utf-8" || label == "unicode11utf8" || label == "unicode20utf8"
+		|| label == "utf-8" || label == "utf8" || label == "x-unicode20utf8";
+}
 const NO_BYTES: uint8[] = [];
 
 export interface TextDecoderOptions {
@@ -47,7 +50,7 @@ export class TextDecoder {
 	readonly ignoreBOM: boolean;
 
 	constructor(label: string = "utf-8", options: TextDecoderOptions = {}) {
-		if (!UTF8_LABELS.includes(label.trim().toLowerCase())) throw new RangeError(`The "${label}" encoding is not supported`);
+		if (!isUtf8Label(label.trim().toLowerCase())) throw new RangeError(`The "${label}" encoding is not supported`);
 		this.fatal = options.fatal ?? false;
 		this.ignoreBOM = options.ignoreBOM ?? false;
 	}
