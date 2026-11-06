@@ -198,9 +198,60 @@ GR_RANGE(I16, int16_t, 16)
 GR_RANGE(I32, int32_t, 32)
 GR_RANGE(I64, int64_t, 64)
 
+#define GR_RANGE_SUM(A, AT, AW, E, ET, EW) \
+typedef MS_ARRAY(ET) grArr##A##E; \
+static int grSumRun##A##E(AT acc, grArr##A##E a, const int64_t* t, int sub, int blocked, int64_t mask, AT* out, int64_t* at) { \
+	for (int64_t i = 0; i < a.len;) { \
+		int64_t e = msBlockEnd(i, a.len); \
+		if (blocked && msRangeSumFits##A##E(acc, a, i, e, 0, mask, (int64_t)((((uint64_t)1) << (AW - 1)) - 1), sub)) { \
+			grFast++; \
+			for (; i < e; i++) { AT v = (AT)(a.p->data[i] + (AT)t[i]); acc = (AT)(sub ? acc - v : acc + v); } \
+			continue; \
+		} \
+		for (; i < e; i++) { \
+			AT v; \
+			if (__builtin_add_overflow((AT)a.p->data[i], (AT)t[i], &v) || (sub ? __builtin_sub_overflow(acc, v, &acc) : __builtin_add_overflow(acc, v, &acc))) { *at = i; return 1; } \
+		} \
+	} \
+	*out = acc; \
+	return 0; \
+} \
+static int64_t grSumFuzz##A##E(int64_t cases, int64_t* t) { \
+	int64_t bad = 0; \
+	grArr##A##E a; \
+	a.p = malloc(sizeof(*a.p) + 5000 * sizeof(ET)); \
+	for (int64_t c = 0; c < cases; c++) { \
+		int64_t n = gfLength(c); \
+		int mode = (int)(gfNext() % 5); \
+		int64_t bits = 1 + (int64_t)(gfNext() % (EW - 1)); \
+		int64_t mask = (int64_t)(gfNext() >> (64 - bits)); \
+		for (int64_t i = 0; i < n; i++) { \
+			a.p->data[i] = (ET)gfPick(gfNext() % 3 == 0 ? mode : 1, EW); \
+			t[i] = (int64_t)(gfNext() & (uint64_t)mask); \
+		} \
+		a.len = n; \
+		AT acc = (AT)gfPick(gfNext() % 2 ? 1 : mode, AW); \
+		int sub = (int)(gfNext() & 1); \
+		AT r1 = 0, r2 = 0; \
+		int64_t i1 = -1, i2 = -1; \
+		int s1 = grSumRun##A##E(acc, a, t, sub, 0, mask, &r1, &i1); \
+		int s2 = grSumRun##A##E(acc, a, t, sub, 1, mask, &r2, &i2); \
+		grStops += s1; \
+		if (s1 != s2 || (!s1 && r1 != r2) || (s1 && i1 != i2)) bad++; \
+	} \
+	free(a.p); \
+	return bad; \
+}
+GR_RANGE_SUM(I8, int8_t, 8, I8, int8_t, 8)
+GR_RANGE_SUM(I32, int32_t, 32, I16, int16_t, 16)
+GR_RANGE_SUM(I32, int32_t, 32, I32, int32_t, 32)
+GR_RANGE_SUM(I64, int64_t, 64, I32, int32_t, 32)
+GR_RANGE_SUM(I64, int64_t, 64, I64, int64_t, 64)
+
 int64_t msTestRangeReduceMismatches(int64_t cases) {
 	int64_t* t = malloc(5000 * sizeof(int64_t));
-	int64_t bad = grFuzzI8(cases, t) + grFuzzI16(cases, t) + grFuzzI32(cases, t) + grFuzzI64(cases, t);
+	int64_t bad = grFuzzI8(cases, t) + grFuzzI16(cases, t) + grFuzzI32(cases, t) + grFuzzI64(cases, t)
+		+ grSumFuzzI8I8(cases, t) + grSumFuzzI32I16(cases, t) + grSumFuzzI32I32(cases, t) + grSumFuzzI64I32(cases, t) + grSumFuzzI64I64(cases, t);
 	free(t);
 	return bad;
 }
