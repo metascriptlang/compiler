@@ -2,8 +2,9 @@
 // @stdout: alternating 2147483647 0 -2147483647 9223372036854775807 wide 2147483647
 // @stdout: wide max 10737418235000
 // @stdout: values() -250 2147483647
+// @stdout: keys() -250 2147483647
 // note: reductions over arrays of 0, 1, 1023, 1024, 1025 and 5000 elements give the exact sum on every width, for-of and
-// indexed, through values(), += and -=, and a dot product; blocks of large alternating values the guard refuses fall back and stay exact.
+// indexed, through values() and keys(), += and -=, and a dot product; blocks of large alternating values the guard refuses fall back and stay exact.
 
 function sumOf32(xs: int32[]): int32 {
 	let s: int32 = 0;
@@ -14,6 +15,12 @@ function sumOf32(xs: int32[]): int32 {
 function sumIter32(xs: int32[]): int32 {
 	let s: int32 = 0;
 	for (const x of xs.values()) s += x;
+	return s;
+}
+
+function sumKeys32(xs: int32[]): int32 {
+	let s: int32 = 0;
+	for (const k of xs.keys()) s += xs[k];
 	return s;
 }
 
@@ -109,6 +116,7 @@ function main(): void {
 	const last: int32[] = [];
 	for (let i = 0; i < 5000; i++) last.push((i * 7) % 201 - 100);
 	console.log(`values() ${sumIter32(last)} ${sumIter32(big)}`);
+	console.log(`keys() ${sumKeys32(last)} ${sumKeys32(big)}`);
 }
 
 main();

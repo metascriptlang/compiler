@@ -61,3 +61,9 @@ test "E2E C: the fused loop of values() reduces in guarded blocks, and one that 
 	assert !writes.startsWith("error:"), writes.slice(0, 400);
 	assert !writes.contains("msBlockEnd("), "a values() loop that writes its array was versioned";
 }
+
+test "E2E C: the fused loop of keys() reduces in guarded blocks that end below 2^53" {
+	const c = builtModuleC("blockReduce", "keyssum", "function f(xs: int32[]): int32 { let s: int32 = 0; for (const k of xs.keys()) s += xs[k]; return s; }\nconsole.log(f([1, 2, 3]));\n", ["--release"]);
+	assert c.contains("msSumFitsI32I32("), c.slice(0, 400);
+	assert c.contains("<= 9007199254740992"), "a block of masked keys does not stop at 2^53";
+}
