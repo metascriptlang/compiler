@@ -461,16 +461,19 @@ export function hidden(h: Handle<Hidden>): int32 { return 0; }
 	assert errorFor(m.errors, "hidden").includes("Handle<Hidden>: Hidden must be exported to cross");
 }
 
-test "manifest: a Handle of a scalar or an array is refused with what T may be" {
+test "manifest: a Handle of a scalar, an array or a struct is refused with what T may be" {
 	const src = HANDLE + `
+export struct Spot { x: int32; }
 export function scalar(h: Handle<int32>): int32 { return 0; }
 export function items(): Handle<int32[]> { return null as unknown as Handle<int32[]>; }
+export function spot(h: Handle<Spot>): int32 { return 0; }
 `;
-	const names = ["scalar", "items"];
+	const names = ["scalar", "items", "spot"];
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
 	assert m.functions.length == 0;
-	assert errorFor(m.errors, "scalar").includes("Handle<int32>: T must be an exported class or struct, as in Handle<Counter>");
-	assert errorFor(m.errors, "items").includes("T must be an exported class or struct");
+	assert errorFor(m.errors, "scalar").includes("Handle<int32>: T must be an exported class, as in Handle<Counter>");
+	assert errorFor(m.errors, "items").includes("T must be an exported class,");
+	assert errorFor(m.errors, "spot").includes("Handle<Spot>: T must be an exported class,");
 }
 
 test "manifest: a Handle of an exported class is recorded as a placed handle target" {
@@ -524,6 +527,6 @@ test "manifest: a Handle of a VecBox of a non-scalar, a bool or a bare Vec keeps
 	const m = manifestFor(MODULE, ENTRY, exportsOf(VEC_BOX, names), names);
 	assert m.functions.length == 0;
 	for (const n of names) {
-		assert errorFor(m.errors, n).includes("T must be an exported class or struct, as in Handle<Counter>"), n;
+		assert errorFor(m.errors, n).includes("T must be an exported class, as in Handle<Counter>"), n;
 	}
 }

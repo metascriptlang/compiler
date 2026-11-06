@@ -232,10 +232,8 @@ export function handleTarget(t: Type): Type | null {
 		: arg;
 }
 
-function isNominalTarget(target: Type): boolean {
-	return target.sym != null
-		&& (target.sym!.symbolKind == SymbolKind.Class
-			|| target.sym!.symbolKind == SymbolKind.Struct);
+function isClassTarget(target: Type): boolean {
+	return target.sym != null && target.sym!.symbolKind == SymbolKind.Class;
 }
 
 export function vecBoxElement(target: Type): BoundaryKind | null {
@@ -280,10 +278,10 @@ function checkHandle(
 	const target = handleTarget(t);
 	const box = target != null && isVecBox(target);
 	const usable = target != null
-		&& (box ? vecBoxElement(target) != null : isNominalTarget(target));
+		&& (box ? vecBoxElement(target) != null : isClassTarget(target));
 	if (target == null || !usable) {
 		const shown = describe(t);
-		const text = `${shown}: T must be an exported class or struct, `
+		const text = `${shown}: T must be an exported class, `
 			+ "as in Handle<Counter>";
 		handleRefusal(c, "handle-target", what, text);
 		return null;
