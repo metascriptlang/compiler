@@ -2094,7 +2094,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		}
 
 		if (srcType != null && srcType.kind == TypeKind.Union && node.nodeType != null
-			&& srcType.typeChildren != null) {
+			&& srcType.typeChildren != null && unwrapRefNullUnion(srcType) == null) {
 			getTypeDesc(g, srcType);
 			const targetDesc = getTypeDesc(g, node.nodeType);
 			for (let vi = 0; vi < srcType.typeChildren.length; vi += 1) {
