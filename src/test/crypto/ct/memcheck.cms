@@ -1,0 +1,55 @@
+// Valgrind memcheck client requests for the constant-time taint run (src/test/crypto/ct/taintRun.ms): mark secret
+// bytes undefined, read whether a buffer still carries that mark, and declassify a result. Test-only; the build passes
+// --passC=-I<valgrind>/usr/include (tools/crypto/ctTaint.sh). Outside Valgrind every request is a no-op.
+
+@include("valgrind/memcheck.h");
+
+export function onValgrind(): boolean {
+	let running: int32 = 0;
+	@emit(`${running} = (int32_t)RUNNING_ON_VALGRIND;`);
+	return running != 0;
+}
+
+export function markSecret(data: Span<uint8>): void {
+	const length = data.length;
+	if (length == 0) return;
+	const cursor = data as Ptr<uint8>;
+	@emit(`VALGRIND_MAKE_MEM_UNDEFINED(${cursor}, (size_t)${length});`);
+}
+
+export function declassify(data: Span<uint8>): void {
+	const length = data.length;
+	if (length == 0) return;
+	const cursor = data as Ptr<uint8>;
+	@emit(`VALGRIND_MAKE_MEM_DEFINED(${cursor}, (size_t)${length});`);
+}
+
+/** How many bytes of `data` carry undefined bits; -1 when memcheck did not answer (not under Valgrind). */
+export function undefinedBytes(data: Span<uint8>): int32 {
+	const length = data.length;
+	if (length == 0) return 0;
+	const cursor = data as Ptr<uint8>;
+	const vbits = new Array<uint8>(length);
+	const vspan: Span<uint8> = vbits;
+	const vcursor = vspan as Ptr<uint8>;
+	let answer: int32 = 0;
+	@emit(`${answer} = (int32_t)VALGRIND_GET_VBITS(${cursor}, ${vcursor}, (size_t)${length});`);
+	if (answer != 1) return -1;
+	let count = 0;
+	for (let i = 0; i < length; i++) if (vbits[i] != 0) count += 1;
+	return count;
+}
+
+export function markSecretWords(data: Span<uint32>): void {
+	const length = data.length;
+	if (length == 0) return;
+	const cursor = data as Ptr<uint32>;
+	@emit(`VALGRIND_MAKE_MEM_UNDEFINED(${cursor}, (size_t)${length} * 4);`);
+}
+
+export function markSecretWords64(data: Span<uint64>): void {
+	const length = data.length;
+	if (length == 0) return;
+	const cursor = data as Ptr<uint64>;
+	@emit(`VALGRIND_MAKE_MEM_UNDEFINED(${cursor}, (size_t)${length} * 8);`);
+}
