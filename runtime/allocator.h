@@ -4,6 +4,17 @@
 #include <stddef.h>
 
 #if defined(MSOS_BARE) && !defined(MSOS_SOLANA)
+#define MS_HEAP_ENABLED 1
+#define MS_HEAP_THREADS 0
+#elif !defined(MSOS_BARE) && !defined(MSOS_SOLANA) && !defined(MSOS_WASM) && !defined(MSOS_EMCC) && !defined(__EMSCRIPTEN__) && !defined(__wasm__)
+#define MS_HEAP_ENABLED 1
+#define MS_HEAP_THREADS 1
+#else
+#define MS_HEAP_ENABLED 0
+#define MS_HEAP_THREADS 0
+#endif
+
+#if MS_HEAP_ENABLED
 
 #ifndef MS_HEAP_USE_MALLOC
 #if defined(__SANITIZE_ADDRESS__)
@@ -29,7 +40,11 @@
 
 #define MS_HEAP_PAGE_SIZE 4096
 #ifndef MS_HEAP_MIN_PAGES
+#if MS_HEAP_THREADS
+#define MS_HEAP_MIN_PAGES 128
+#else
 #define MS_HEAP_MIN_PAGES 16
+#endif
 #endif
 
 MS_LIB_PRIVATE void* msHeapAlloc(size_t size);
@@ -37,6 +52,7 @@ MS_LIB_PRIVATE void* msHeapCalloc(size_t count, size_t size);
 MS_LIB_PRIVATE void* msHeapRealloc(void* p, size_t oldSize, size_t newSize);
 MS_LIB_PRIVATE void msHeapFree(void* p);
 MS_LIB_PRIVATE void msHeapReset(void);
+MS_LIB_PRIVATE void msHeapThreadRelease(void);
 
 MS_LIB_PRIVATE void* msHeapTryAllocPages(size_t bytes);
 MS_LIB_PRIVATE void msHeapDeallocPages(void* p, size_t bytes);

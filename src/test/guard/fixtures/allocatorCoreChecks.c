@@ -7,6 +7,7 @@
 #define msHeapRealloc msHeapProbeRealloc
 #define msHeapFree msHeapProbeFree
 #define msHeapReset msHeapProbeReset
+#define msHeapThreadRelease msHeapProbeThreadRelease
 #define msHeapTryAllocPages msHeapProbeTryAllocPages
 #define msHeapDeallocPages msHeapProbeDeallocPages
 #define msHeapResetPages msHeapProbeResetPages

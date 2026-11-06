@@ -1,6 +1,6 @@
 #include "runtime/allocator.h"
 
-#if defined(MSOS_BARE) && !defined(MSOS_SOLANA)
+#if MS_HEAP_ENABLED
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -10,7 +10,37 @@
 _Static_assert((MS_HEAP_PAGE_SIZE & (MS_HEAP_PAGE_SIZE - 1)) == 0,
 	"heap page size must be a power of two");
 
-#if defined(__wasm__)
+#if MS_HEAP_THREADS && defined(_WIN32)
+
+#include <windows.h>
+
+void* msHeapTryAllocPages(size_t bytes) {
+	return VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+
+void msHeapDeallocPages(void* p, size_t bytes) {
+	(void)bytes;
+	if (!VirtualFree(p, 0, MEM_RELEASE)) __builtin_trap();
+}
+
+void msHeapResetPages(void) {}
+
+#elif MS_HEAP_THREADS
+
+#include <sys/mman.h>
+
+void* msHeapTryAllocPages(size_t bytes) {
+	void* p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	return p == MAP_FAILED ? NULL : p;
+}
+
+void msHeapDeallocPages(void* p, size_t bytes) {
+	if (munmap(p, bytes) != 0) __builtin_trap();
+}
+
+void msHeapResetPages(void) {}
+
+#elif defined(__wasm__)
 
 extern unsigned char __heap_base;
 static uintptr_t msHeapPageBase;
@@ -95,8 +125,15 @@ void msHeapResetPages(void) {
 #endif
 #endif
 
+#if MS_HEAP_THREADS
+_Noreturn void msRaiseOutOfMemory(void);
+_Noreturn void msHeapOutOfMemory(void) {
+	msRaiseOutOfMemory();
+}
+#else
 _Noreturn void msHeapOutOfMemory(void) {
 	__builtin_trap();
 }
+#endif
 
 #endif
