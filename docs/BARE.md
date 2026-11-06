@@ -13,8 +13,9 @@ Zig-inspired memory model for MetaScript targeting constrained environments (Sol
 | `--mm=manual` | malloc | None | defer / manual free | Performance, game engines, libraries |
 
 `--gc=` is refused with an error that names `--mm`; there is no mode without the cycle collector.
-`--os=bare` implies `--mm=manual` unless `--mm=` is given; `--os=solana` is always `manual` (or `none`
-when asked), whatever `--mm=` says (`targetMemoryMode`, `src/compiler/buildConfig.ms`).
+`--os=bare` defaults to `--mm=drc` like every other target (since 2026-11-06; it implied `manual`
+before); `--os=solana` is always `manual` (or `none` when asked), whatever `--mm=` says
+(`targetMemoryMode`, `src/compiler/buildConfig.ms`).
 
 ### `--os=` (Platform Target)
 
@@ -34,7 +35,7 @@ when asked), whatever `--mm=` says (`targetMemoryMode`, `src/compiler/buildConfi
 | | `--mm=drc` | `--mm=none` | `--mm=manual` |
 |---|---|---|---|
 | `--os=auto` | **Default** | Debug/leak test | Performance, game engines |
-| `--os=bare` | Partial: a sync hello builds and runs, async fails in the C compile (2026-10-20) | Not useful | **Default here**, freestanding target |
+| `--os=bare` | **Default**: hooks, cycle collection, frees into the bare heap; async refused (E01) — measured below | Not useful | Opt-in, explicit free only |
 | `--os=solana` | Not supported (resolved to manual) | Not useful | Blockchain contract |
 | `--os=wasm` | Not supported | Not useful | Blockchain contract |
 | `--os=linux/macos/windows` | Cross-compile | Cross debug | Cross manual |
@@ -152,8 +153,9 @@ this document were not re-audited by this tooling run.
 
 The generic target is `--os=bare --cpu=wasm32 --gc=manual --app=lib`, not
 `--os=wasm` or a chain-specific compiler target. The commands below are the 2026-09-28 record;
-`--gc=manual` is spelled `--mm=manual` since 2026-10-20, and `--os=bare` already implies it (the
-wasm32 build was not re-run under the new spelling). The ordinary LLVM Clang/wasm-ld
+`--gc=manual` is spelled `--mm=manual` since 2026-10-20, and `--os=bare` no longer implies it
+(2026-11-06): `std/arbitrum` refuses any other mode, so the build passes `--mm=manual` (the wasm32
+build was not re-run under the new spelling). The ordinary LLVM Clang/wasm-ld
 toolchain emits the contract; no Rust contract or WASI host is involved.
 
 On source tree `aa2a89d6118531a64f7a4b4be98102df1e3d1973` (based on landed
@@ -331,9 +333,33 @@ MetaScript → Parse → Check → Transform → [Skip Analyzer] → Codegen →
 → exit 0, binary runs, prints. **Not re-measured**: testStructParams (24/24), test_enum,
 testArrayPush, testJson, httpConcurrent — inherited from the original write-up.
 
+## Bare DRC — the default bare mode (measured 2026-11-06)
+
+A bare DRC build runs the same DRC runtime as a desktop build (`runtime/drc.h`, `drc.c`,
+`core/system.c`), single-threaded: thread-local storage is plain storage, the lock and futex
+helpers are no-ops, and the drop stack never probes an OS stack. Every allocation goes to the
+bare heap (`runtime/allocator.c`): `-include runtime/bareHeap.h` redirects `malloc`, `calloc`
+and `free` to `msHeap*` and refuses a `realloc` without its old size, the redirect `manual.h`
+shares; a freestanding wasm32 build reaches the same heap through `runtime/freestanding/libc.c`.
+Under ASan the heap is libc's (`MS_HEAP_USE_MALLOC`), so LeakSanitizer sees every free.
+
+| guard | what it pins | Linux rtx | macOS m1m | Windows d87 |
+|---|---|---|---|---|
+| `bareDrcRunsHooks` | a scope's object runs `onDestroy` (plain run + ASan) | green | green | green |
+| `bareDrcCollectsCycles` | `collectCycles` destroys a ring (plain + ASan) | green | green | green |
+| `bareArenaReallocCopy` | Array/Map/Set/string growth, ASan with LSan on | green | green | green |
+| `bareWasmDrcReleasesScopes` | wasm32, 4096 scoped blocks over 1 KiB in a 1 MiB memory, no imports | green | green | green |
+| `bareRefusesAsync` | async refused with E01 | green | green | green |
+
+All on the candidate of tree `wt/runtime-allocator` on 2026-11-06. On the installed build of
+that day (bare default manual) `bareDrcRunsHooks`, `bareDrcCollectsCycles` and
+`bareWasmDrcReleasesScopes` were red (Linux); the manual ASan cell of `bareArenaReallocCopy`
+leaked 3721 B in 13 objects (rtx, 2026-11-06), because manual never disposes. Not verified: hardware execution of an
+ARM bare object, and a long-running bare DRC program's peak heap against the manual arena.
+
 ## Phase 2: `--os=bare` (Freestanding, no libc) — mechanism DONE, end-to-end link RED on this host
 
-When `--os=bare` is combined with `--mm=manual` (its default), the runtime uses a static arena instead of malloc. All runtime `.c` files route through the arena via preprocessor redirects. No libc dependency.
+When `--os=bare` is combined with `--mm=manual`, the runtime uses a static arena instead of malloc. All runtime `.c` files route through the arena via preprocessor redirects. No libc dependency.
 
 **Approach:** Same `.c` files for all modes, behavior switches via preprocessor. `manual.h` defines `#define malloc → msArenaAlloc` when `MSOS_BARE` is set. The build system passes `-DMSOS_BARE -include runtime/manual.h` to clang (`src/compiler/compile.ms:587-591`; `--os=solana` passes `-DMSOS_SOLANA -DMSOS_BARE`), forcing arena redirects before each `.c` file's own headers. Codegen additionally emits `#define MSOS_BARE` as line 6 of **every** generated module TU (`src/codegen/c/index.ms:46-55`) — verified by `--emit=c`, 9 of 10 emitted files carry it (`_dispatch.c` does not).
 
@@ -345,7 +371,7 @@ When `--os=bare` is combined with `--mm=manual` (its default), the runtime uses 
 | `runtime/manual.h` | `MS_MANUAL_MODE` flag to skip `.c` function bodies (manual.h provides inline versions) | 1 |
 | `src/compiler/compile.ms` | `initCBuildState`: add `-DMSOS_BARE -include runtime/manual.h` when `--os=bare` | 3 |
 | `src/codegen/c/index.ms` | `genProjectDispatcher` takes `osTarget` param, generates per-OS entry points | ~30 |
-| `runtime/core/system.c` | Wrapped in `#ifndef MSOS_BARE` (manual.h provides all functions inline) | 2 |
+| `runtime/core/system.c` | Skipped for a bare manual build (manual.h provides all functions inline); bare DRC compiles it | 2 |
 | `runtime/promise/dispatchFull.c` | Wrapped in `#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)` | 2 |
 | `runtime/promise/combinator.c` | Same three-way guard | 2 |
 | `runtime/promise/pool.c` | Same three-way guard | 2 |
@@ -684,7 +710,7 @@ constructs cannot lower there at all. Rather than let them reach codegen and fai
 the compiler refuses in-pipeline with a line/col diagnostic per site:
 
 ```
-error: async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher,
+error: async/await is unsupported under the freestanding runtime: no dispatcher,
 no thread pool, no await slots (FREESTANDING E01)
 --> …/async.ms:1:16
 ```
@@ -703,10 +729,11 @@ and reported post-DCE, so a module that is dead under the alive set costs nothin
 | `build async.ms --os=bare --gc=drc` | 0 | 1 — proceeds to the pre-existing bare+drc engine gap |
 | `build async.ms` (host default) | 0 | 0, builds |
 
-An explicit `--mm=` wins over the `--os=bare` implication, which is what the third row pins (its
-`--gc=drc` is today's `--mm=drc`; re-probed 2026-10-20: `build async.ms --os=bare --mm=drc` reports no
-E01 and fails in the C compile): the gate keys on the effective memory mode, not on the platform.
-`--os=solana` is the exception: it resolves to `manual` whatever `--mm=` says.
+Since 2026-11-06 the gate keys on the target as well as the mode (`refusesAsync`,
+`src/checker/freestanding.ms`): every `--os=bare` and `--os=solana` build refuses async, because
+bare DRC has no dispatcher either, and `--mm=manual` refuses it on any target. The third row above
+is history: guard `bareRefusesAsync` (bare, default mode) reports E01 on both marked lines, and the
+same probe under `--mm=drc` on the installed build of 2026-11-06 (25b184cf867) reported none.
 
 The language server reports the same sites as **warnings** (severity 2) when `build.ms` declares a
 freestanding target via `lsp = { os, mm }` — see docs/PACKAGE.md "`lsp` — editor-only target" for
