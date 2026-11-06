@@ -42,7 +42,7 @@ export function clampUint8(value: number): uint8 {
 }
 
 export class ArrayBuffer {
-	bytes: uint8[];
+	bytes: Vec<uint8>;
 
 	constructor(byteLength: number = 0) {
 		this.bytes = new Array<uint8>(wholeLength(byteLength, "array buffer length"));
@@ -59,16 +59,30 @@ export class ArrayBuffer {
 	}
 }
 
+// A view made by length holds its bytes itself (`own`): one object and one payload. The first time it is
+// shared (`buffer`, `subarray`) the bytes move into an ArrayBuffer (`store`) that every view of them reads,
+// so `buffer` answers the same object each time.
 @builtin("TypedArray")
 export class TypedArray<T> {
-	readonly buffer: ArrayBuffer;
+	own: Vec<uint8>;
+	store: ArrayBuffer | null;
 	readonly byteOffset: number;
 	readonly length: number;
 
-	constructor(buffer: ArrayBuffer, byteOffset: number, length: number) {
-		this.buffer = buffer;
+	constructor(own: Vec<uint8>, store: ArrayBuffer | null, byteOffset: number, length: number) {
+		this.own = own;
+		this.store = store;
 		this.byteOffset = byteOffset;
 		this.length = length;
+	}
+
+	get buffer(): ArrayBuffer {
+		const held = this.store;
+		if (held != null) return held;
+		const made = new ArrayBuffer(0);
+		made.bytes = move this.own;
+		this.store = made;
+		return made;
 	}
 
 	set(source: Readonly<Span<T>>, offset: number = 0): void {
@@ -103,12 +117,12 @@ export class Int8Array extends TypedArray<int8> {
 	constructor(source: number | Readonly<int8[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 1), 0, count);
+			super(new Array<uint8>(count * 1), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 1, "Int8Array");
-			super(source, offset, viewLength(source, offset, length, 1, "Int8Array"));
+			super([], source, offset, viewLength(source, offset, length, 1, "Int8Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 1), 0, source.length);
+			super(new Array<uint8>(source.length * 1), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -156,12 +170,12 @@ export class Uint8Array extends TypedArray<uint8> {
 	constructor(source: number | Readonly<uint8[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 1), 0, count);
+			super(new Array<uint8>(count * 1), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 1, "Uint8Array");
-			super(source, offset, viewLength(source, offset, length, 1, "Uint8Array"));
+			super([], source, offset, viewLength(source, offset, length, 1, "Uint8Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 1), 0, source.length);
+			super(new Array<uint8>(source.length * 1), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -209,12 +223,12 @@ export class Uint8ClampedArray extends TypedArray<uint8> {
 	constructor(source: number | Readonly<number[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 1), 0, count);
+			super(new Array<uint8>(count * 1), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 1, "Uint8ClampedArray");
-			super(source, offset, viewLength(source, offset, length, 1, "Uint8ClampedArray"));
+			super([], source, offset, viewLength(source, offset, length, 1, "Uint8ClampedArray"));
 		} else {
-			super(new ArrayBuffer(source.length * 1), 0, source.length);
+			super(new Array<uint8>(source.length * 1), null, 0, source.length);
 			const into: Span<uint8> = this;
 			for (let i = 0; i < source.length; i++) into[i] = clampUint8(source[i]);
 		}
@@ -264,12 +278,12 @@ export class Int16Array extends TypedArray<int16> {
 	constructor(source: number | Readonly<int16[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 2), 0, count);
+			super(new Array<uint8>(count * 2), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 2, "Int16Array");
-			super(source, offset, viewLength(source, offset, length, 2, "Int16Array"));
+			super([], source, offset, viewLength(source, offset, length, 2, "Int16Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 2), 0, source.length);
+			super(new Array<uint8>(source.length * 2), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -317,12 +331,12 @@ export class Uint16Array extends TypedArray<uint16> {
 	constructor(source: number | Readonly<uint16[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 2), 0, count);
+			super(new Array<uint8>(count * 2), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 2, "Uint16Array");
-			super(source, offset, viewLength(source, offset, length, 2, "Uint16Array"));
+			super([], source, offset, viewLength(source, offset, length, 2, "Uint16Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 2), 0, source.length);
+			super(new Array<uint8>(source.length * 2), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -370,12 +384,12 @@ export class Int32Array extends TypedArray<int32> {
 	constructor(source: number | Readonly<int32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 4), 0, count);
+			super(new Array<uint8>(count * 4), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 4, "Int32Array");
-			super(source, offset, viewLength(source, offset, length, 4, "Int32Array"));
+			super([], source, offset, viewLength(source, offset, length, 4, "Int32Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 4), 0, source.length);
+			super(new Array<uint8>(source.length * 4), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -423,12 +437,12 @@ export class Uint32Array extends TypedArray<uint32> {
 	constructor(source: number | Readonly<uint32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 4), 0, count);
+			super(new Array<uint8>(count * 4), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 4, "Uint32Array");
-			super(source, offset, viewLength(source, offset, length, 4, "Uint32Array"));
+			super([], source, offset, viewLength(source, offset, length, 4, "Uint32Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 4), 0, source.length);
+			super(new Array<uint8>(source.length * 4), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -476,12 +490,12 @@ export class Float32Array extends TypedArray<float32> {
 	constructor(source: number | Readonly<float32[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 4), 0, count);
+			super(new Array<uint8>(count * 4), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 4, "Float32Array");
-			super(source, offset, viewLength(source, offset, length, 4, "Float32Array"));
+			super([], source, offset, viewLength(source, offset, length, 4, "Float32Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 4), 0, source.length);
+			super(new Array<uint8>(source.length * 4), null, 0, source.length);
 			this.set(source);
 		}
 	}
@@ -529,12 +543,12 @@ export class Float64Array extends TypedArray<float64> {
 	constructor(source: number | Readonly<float64[]> | ArrayBuffer = 0, byteOffset: number = 0, length: number = -1) {
 		if (typeof source == "number") {
 			const count = wholeLength(source, "typed array length");
-			super(new ArrayBuffer(count * 8), 0, count);
+			super(new Array<uint8>(count * 8), null, 0, count);
 		} else if (source instanceof ArrayBuffer) {
 			const offset = viewStart(source, byteOffset, 8, "Float64Array");
-			super(source, offset, viewLength(source, offset, length, 8, "Float64Array"));
+			super([], source, offset, viewLength(source, offset, length, 8, "Float64Array"));
 		} else {
-			super(new ArrayBuffer(source.length * 8), 0, source.length);
+			super(new Array<uint8>(source.length * 8), null, 0, source.length);
 			this.set(source);
 		}
 	}
