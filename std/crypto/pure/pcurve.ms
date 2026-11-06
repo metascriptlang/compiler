@@ -11,7 +11,7 @@ import {
 	Limbs, Modulus, zeroLimbs, select, nonzero, mul, square, add, sub, opp, equal,
 	invert, pow, fromBytes, toBytes, toMontgomery, fromMontgomery,
 } from "./montgomery";
-import { valueBarrier } from "./secret";
+import { declassify, valueBarrier } from "./secret";
 import { p256Windows, p384Windows } from "./pcurveBaseTable";
 
 export struct CurveMath {
@@ -168,12 +168,12 @@ export function basePoint(cm: Readonly<CurveMath>): Point {
 	return { x: cm.gx, y: cm.gy, z: cm.field.one };
 }
 
-/** The identity: z is zero, or the affine encodings (0, 0) and (0, 1). */
+/** The identity: z is zero, or the affine encodings (0, 0) and (0, 1). Every caller reveals the answer (a null result), so it is declassified. */
 export function isIdentity(cm: Readonly<CurveMath>, p: Point): boolean {
 	const f = cm.field;
-	const zeroX = nonzero(f, p.x) == 0;
-	const zeroOrOneY = nonzero(f, p.y) == 0 || equal(f, p.y, f.one);
-	return nonzero(f, p.z) == 0 || (zeroX && zeroOrOneY);
+	const zeroX = nonzero(f, p.x) ^ 1;
+	const zeroOrOneY = (nonzero(f, p.y) ^ 1) | (nonzero(f, sub(f, p.y, f.one)) ^ 1);
+	return declassify((nonzero(f, p.z) ^ 1) | (zeroX & zeroOrOneY)) == 1;
 }
 
 export function neg(cm: Readonly<CurveMath>, p: Point): Point {

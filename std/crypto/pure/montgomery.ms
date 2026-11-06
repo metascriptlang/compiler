@@ -7,7 +7,7 @@ import { valueBarrier } from "./secret";
  * which branches on its exponent, so the exponent must be public.
  */
 
-import { valueBarrier } from "./secret";
+import { declassify, valueBarrier } from "./secret";
 
 /** 12 limbs hold a 384-bit value; a 256-bit modulus uses the low 8 and keeps the rest zero. */
 export type Limbs = uint32[12];
@@ -215,7 +215,7 @@ export function fromBytes(md: Readonly<Modulus>, bytes: Readonly<uint8[]>, from:
 		const x = (out[i] as uint64) - (md.m[i] as uint64) - borrow;
 		borrow = x >> 63;
 	}
-	return borrow == 1 ? out : null;
+	return declassify(borrow as uint32) == 1 ? out : null;
 }
 
 /** Big-endian bytes, `4 * words` of them, reduced by one subtraction, so exact when m > 2^(32 * words - 1). */

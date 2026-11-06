@@ -1,4 +1,6 @@
-import { newGhash, updateGhash, finishGhash, storeBE32 } from "./ghash";
+import { newGhash, updateGhash, finishGhash } from "./ghash";
+import { declassify, wipeBytes, wipeWords, wipeWords64 } from "./secret";
+import { load32LE, store32LE, store32BE } from "./endian";
 
 when (c) {
 	import { Buffer } from "std/core/buffer";
@@ -1276,8 +1278,8 @@ export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: Readonly<uint8[]>, a
 	gcmTag(batch.bytes, aad, src, srcAt, length, computed);
 	let diff: uint8 = 0;
 	for (let i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
-	computed.fill(0);
-	if (diff != 0) {
+	wipeBytes(computed);
+	if (declassify(diff as uint32) != 0) {
 		wipe(batch);
 		return false;
 	}
@@ -1388,11 +1390,11 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: Readonly<uint8[]>, cipher: 
 		const inPadding = (0 as uint32) - (((i as uint32) - pad) >> 31);
 		bad |= ((out[size - 1 - i] as uint32) ^ pad) & inPadding;
 	}
-	if (bad != 0) {
-		out.fill(0);
+	if (declassify(bad) != 0) {
+		wipeBytes(out);
 		return null;
 	}
-	const plain = out.slice(0, size - (pad as int32));
+	const plain = out.slice(0, size - (declassify(pad) as int32));
 	wipeBytes(out);
 	return plain;
 }

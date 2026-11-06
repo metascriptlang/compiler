@@ -15,7 +15,7 @@ import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decode
 import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw, bigExpandPoint } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
-import { wipeBytes } from "./secret";
+import { declassify, wipeBytes } from "./secret";
 
 export interface Curve {
 	name: string;
@@ -212,7 +212,7 @@ export function ecdsaRawToDer(raw: Readonly<uint8[]>): uint8[] {
 function secretScalar(c: Readonly<Curve>, d: Readonly<uint8[]>): Limbs | null {
 	if (d.length != c.size) return null;
 	const k = fromBytes(c.math.order, d, 0);
-	if (k == null || nonzero(c.math.order, k) == 0) return null;
+	if (k == null || declassify(nonzero(c.math.order, k)) == 0) return null;
 	return k;
 }
 
@@ -313,7 +313,7 @@ function signRaw(c: Readonly<Curve>, kind: int32, d: Readonly<uint8[]>, digest: 
 	const rd = mul(order, toMontgomery(order, r), toMontgomery(order, scalar));
 	const sum = add(order, toMontgomery(order, digestScalar(c, digest)), rd);
 	const s = fromMontgomery(order, mul(order, invert(order, toMontgomery(order, k)), sum));
-	if (nonzero(order, r) == 0 || nonzero(order, s) == 0) return null;
+	if (declassify(nonzero(order, r) & nonzero(order, s)) == 0) return null;
 	return derJoin([toBytes(order, r), toBytes(order, s)]);
 }
 

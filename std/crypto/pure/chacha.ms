@@ -4,7 +4,7 @@ import {
 	padPoly1305,
 	finishPoly1305,
 } from "./poly1305";
-import { wipeBytes, wipeWords } from "./secret";
+import { declassify, wipeBytes, wipeWords } from "./secret";
 import { load32LE } from "./endian";
 
 when (c) {
@@ -388,7 +388,7 @@ function tagMatches(
 	let diff: uint32 = 0;
 	for (let i = 0; i < 16; i++) diff =
 		diff | ((w.tag[i] ^ sealed[at + i]) as uint32);
-	return diff == 0;
+	return declassify(diff) == 0;
 }
 
 /**
