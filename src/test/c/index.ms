@@ -109,6 +109,7 @@ import "./ownedEdge";
 import "./unownedEdge";
 import "./openSlotCycleClassification";
 import "./readonlyRcFlavor";
+import "./immortalConstMark";
 import "./spawnViewCursor";
 import "./spawnCaptureCursor";
 import "./genericHolderSlots";
