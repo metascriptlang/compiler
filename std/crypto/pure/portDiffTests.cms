@@ -1,0 +1,8 @@
+// The C-only checks of the port against the vendored C (Argon2, BLAKE2b, legacy hashes, X25519) and the hardware-path probe:
+// `msc test std/crypto/pure/portDiffTests.cms --target=c --tests-in-dir` from the repository root.
+
+import "./argon2DiffTest";
+import "./blake2bDiffTest";
+import "./hwNativeTest";
+import "./legacyHashDiffTest";
+import "./x25519DiffTest";
