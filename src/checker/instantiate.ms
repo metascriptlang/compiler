@@ -8,6 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { decideInstanceTypeTests } from "./instanceTypeTest";
 import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
 import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
@@ -986,6 +987,7 @@ export function takeLocalInstances(sym: Symbol): Node[] | null {
 function instantiateLocalGeneric(ctx: CheckerContext, sym: Symbol, name: string, routine: RoutineBindings, host: CheckerContext, declScope: Scope): Symbol {
 	const cloned = monoCloneNode(unwrapToFunctionDecl(sym.declNode)!);
 	const cd = cloned.data as FunctionDeclData;
+	decideInstanceTypeTests(unwrapToFunctionDecl(sym.declNode)!, cloned, routine.b.names, routine.b.params, routine.b.types);
 	cd.fnName = name;
 	cd.fnFlags = stripGenFlag(cd.fnFlags);
 	clearCheckerState(cd.fnBody);
@@ -1086,6 +1088,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 	// (via substNodeLocal) and walks the body via forEachChild.
 	const cloned = monoCloneNode(fnNode);
 	const cd = cloned.data as FunctionDeclData;
+	decideInstanceTypeTests(fnNode, cloned, dedup.names, dedup.params, dedup.types);
 	replaceTypeVars(cloned, dedup.params, dedup.types);
 
 	// Rename + strip flags

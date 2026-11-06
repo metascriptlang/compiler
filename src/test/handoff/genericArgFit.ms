@@ -337,6 +337,13 @@ test "a union of a string and a typed array meets a byte-input constraint that h
 	assert strictErrorCount(src + "const c = h(pick(true));") == 0;
 }
 
+test "a typeof test on a type-parameter value is decided per instance; one its constraint cannot pass and a concrete parameter still narrow to never" {
+	const generic = "function f<B extends string | uint8[]>(b: B): int32 { if (typeof b == \"string\") return 0; return b.length as int32; }\nconst a: uint8[] = [1];\nconst c = f(\"s\") + f(a);";
+	assert strictErrorCount(generic) == 0;
+	assert hasError("function g(b: string): int32 { if (typeof b == \"string\") return 0; return b.length as int32; }", "does not exist on type 'never'");
+	assert hasError("function h<B extends string | uint8[]>(b: B): int32 { if (typeof b == \"number\") return b.length as int32; return 0; }\nconst c = h(\"s\");", "does not exist on type 'never'");
+}
+
 test "a constraint naming an earlier type parameter is checked after both bind" {
 	const src = "function k<T, U extends T[]>(a: T, b: U): T { return a; }\n";
 	assert hasError(src + "const c = k(1, [\"s\"]);", "does not satisfy constraint");
