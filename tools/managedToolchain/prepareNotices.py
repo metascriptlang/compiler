@@ -11,6 +11,7 @@ the payload no longer carries is an error too. A receipt of a kind this file has
 """
 import json
 import os
+import posixpath
 import sys
 
 import prepareEngine as pe
@@ -32,18 +33,18 @@ def need(requirements, component, relative, sha256=None):
 
 def zigRequirements(requirements, receipt, base):
     if "zig" in receipt:
-        need(requirements, "zig", os.path.join(base, "notices", "zig", "LICENSE"))
+        need(requirements, "zig", posixpath.join(base, "notices", "zig", "LICENSE"))
     for relative in receipt.get("notices", []):
-        need(requirements, relative.split("/")[-2], os.path.join(base, relative))
+        need(requirements, relative.split("/")[-2], posixpath.join(base, relative))
     for target in receipt.get("targets", []):
         if not isinstance(target, dict):
             continue
         for relative in target.get("notices", []):
-            need(requirements, relative.split("/")[-2], os.path.join(base, relative))
+            need(requirements, relative.split("/")[-2], posixpath.join(base, relative))
         for marker, files in LIBC_BY_TARGET:
             if marker in str(target.get("target", target.get("config", ""))):
                 for relative in files:
-                    need(requirements, relative.split("/")[0], os.path.join(base, "notices", relative))
+                    need(requirements, relative.split("/")[0], posixpath.join(base, "notices", relative))
 
 
 def engineRequirements(requirements, receipt):
@@ -78,7 +79,7 @@ def receiptsOf(root):
         for here, _, names in sorted(os.walk(directory)):
             for name in sorted(names):
                 if name.endswith("provenance.json"):
-                    relative = os.path.relpath(os.path.join(here, name), root)
+                    relative = os.path.relpath(os.path.join(here, name), root).replace(os.sep, "/")
                     with open(os.path.join(root, relative), encoding="utf-8") as f:
                         found.append((relative, os.path.dirname(notices), json.load(f)))
     return found
@@ -88,7 +89,7 @@ def shippedNotices(root):
     shipped = []
     for notices in NOTICE_ROOTS:
         for here, _, names in os.walk(os.path.join(root, notices)):
-            shipped += [os.path.relpath(os.path.join(here, n), root) for n in names if not n.endswith("provenance.json")]
+            shipped += [os.path.relpath(os.path.join(here, n), root).replace(os.sep, "/") for n in names if not n.endswith("provenance.json")]
     return sorted(shipped)
 
 
