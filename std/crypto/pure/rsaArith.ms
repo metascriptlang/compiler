@@ -294,13 +294,15 @@ function millerRabin(x: Readonly<uint32[]>, rounds: int32): boolean {
 		uintShiftRightPublic(r, s);
 		const exponent = uintToMinimalBytes(r);
 		bytes.push(exponent);
-		const size = (uintBitLenPublic(m.v) + 7) >> 3;
+		const bits = uintBitLenPublic(m.v);
+		const size = (bits + 7) >> 3;
 		const k = uintBitLenPublic(w);
 		for (let round = 0; round < rounds; round++) {
 			let a: uint32[] = [];
 			let count = 0;
 			while (true) {
 				const octets = randomOctets(size);
+				octets[0] = ((octets[0] as int32) & (0xff >> (size * 8 - bits))) as uint8;
 				const drawn = uintFromBytes(octets, m.v.length);
 				wipeBytes(octets);
 				if (drawn == null) throw new Error(
@@ -501,6 +503,15 @@ export function rsaGenerateKey(bits: int32): RsaPrivateData {
 		]) wipeWords(scratch);
 		return key;
 	}
+}
+
+test "Miller-Rabin keeps a large prime and refuses a product of two" {
+	const mersenne127: uint32[] = [0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7];
+	assert millerRabin(mersenne127, 20);
+	for (const limb of mersenne127) assert limb != 0, "millerRabin: borrowed candidate changed";
+	const product = uintMul([0x7fffffff, 0x3fffffff], [0x7fffffff]);
+	assert checkSmallFactors(product) == 0;
+	assert !millerRabin(product, 20);
 }
 
 test "a generated 1024-bit key is consistent and inverts its public operation" {
