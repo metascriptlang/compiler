@@ -511,6 +511,12 @@ function _bridgeMsProcSpawnGetErrno(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnErrno);
 }
 
+extern function msProcSpawnGetUnsupported(): int32;
+
+function _bridgeMsProcSpawnGetUnsupported(args: RaiserValue[]): RaiserValue {
+	return boxInt(msProcSpawnGetUnsupported());
+}
+
 function _bridgeMsProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnExitCode);
 }
@@ -1699,6 +1705,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcSpawnGetOk",      _bridgeMsProcSpawnGetOk);
 	registerHostFn("msProcSpawnGetPipeOk",  _bridgeMsProcSpawnGetPipeOk);
 	registerHostFn("msProcSpawnGetErrno",   _bridgeMsProcSpawnGetErrno);
+	registerHostFn("msProcSpawnGetUnsupported", _bridgeMsProcSpawnGetUnsupported);
 	registerHostFn("msProcSpawnGetExitCode", _bridgeMsProcSpawnGetExitCode);
 	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);
