@@ -149,6 +149,8 @@ export interface RaiserCompState {
 	moveTempAt: int32;
 	moveTempReg: int32;
 	moveTempSource: Node | null;
+	packedMoveAt: int32;
+	packedMoveSource: Node | null;
 	tries: RaiserTryInfo[];
 	cellNodes: Node[];
 	cellRegs: int32[];
@@ -174,7 +176,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], layouts: createVmLayouts(), legacyRoots: new HashSet<Symbol>(), resultType: null, resultShape: null, locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>() };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, packedMoveAt: -1, packedMoveSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>() };
 }
 
 export function enterSite(s: RaiserCompState, node: Node): void {

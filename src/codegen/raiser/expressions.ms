@@ -687,6 +687,29 @@ export function copyPackedExpr(s: RaiserCompState, dest: RaiserFramePlace, node:
 	}
 }
 
+function heldInCell(s: RaiserCompState, node: Node): boolean {
+	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return false;
+	return storedFramePlace(s, node, false) == null && !rootsInPackedRvalue(s, node);
+}
+
+function cellCarried(s: RaiserCompState, t: Type): boolean {
+	const payload = maybePayloadType(t);
+	return vmLayoutOf(s.layouts, payload ?? t).kind == MemKind.Block;
+}
+
+// A plain-data move leaves its source holding the value, and a packed destination shares no cell
+// with it, so the wasMoved that follows the move keeps the source cell instead of copying it.
+export function notePackedMove(s: RaiserCompState, dest: Type, node: Node): void {
+	if (!cellCarried(s, dest) || !heldInCell(s, node)) return;
+	s.packedMoveAt = codeLen(s);
+	s.packedMoveSource = node;
+}
+
+export function movePackedExpr(s: RaiserCompState, dest: RaiserFramePlace, node: Node): void {
+	copyPackedExpr(s, dest, node);
+	notePackedMove(s, dest.valueType, node);
+}
+
 function shapedSourceCall(s: RaiserCompState, node: Node): int32 {
 	if (node.kind != NodeKind.CallExpr) return -1;
 	const d = node.data as CallExprData;
@@ -1692,7 +1715,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		if (refusedTarget >= 0) return refusedTarget;
 		const frameDest = storedFramePlace(s, d.left);
 		if (frameDest != null) {
-			copyPackedExpr(s, frameDest, d.right);
+			movePackedExpr(s, frameDest, d.right);
 			return vmLayoutOf(s.layouts, frameDest.valueType).kind == MemKind.Block ? emitPackedToLegacy(s, s.layouts, frameDest).reg : emitPackedLoad(s, s.layouts, frameDest);
 		}
 		const assigned = compileValueAssign(s, d.left, d.right);
@@ -2947,7 +2970,10 @@ export function compileExprForEffect(s: RaiserCompState, node: Node): void {
 	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "=") {
 		const d = node.data as BinaryExprData;
 		const dest = storedFramePlace(s, d.left);
-		if (dest != null) { copyPackedExpr(s, dest, d.right); return; }
+		if (dest != null) {
+			movePackedExpr(s, dest, d.right);
+			return;
+		}
 	}
 	if (packedSlotShapeOf(s.layouts, node.nodeType) != null) { compilePackedExpr(s, node, node.nodeType!); return; }
 

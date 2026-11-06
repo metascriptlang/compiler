@@ -9,7 +9,7 @@ import { getOpByKey } from "../c/types";
 import { raiserFlatCellUnion, raiserBareUnion, raiserStructSlotUnion } from "../../analyzer/classify";
 import { isUnionSlotLocation } from "../../analyzer/alias";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
-import { storedFramePlace, copyPackedExpr, compileExpr, compileIndex } from "./expressions";
+import { storedFramePlace, copyPackedExpr, movePackedExpr, compileExpr, compileIndex } from "./expressions";
 import { allocPackedValue, emitPackedCopy } from "./packedValues";
 import { fieldInst, aggregateAssignPlan, isUnionCell, emitValueCopy, emitZeroValue, nullIsZeroValue, emitCellSwap, isInPlaceCell, isNilBranch, emitZeroNilElements } from "./valueCopy";
 import {
@@ -90,7 +90,7 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 		return;
 	}
 	if (leavesEmptyArray && isPlainDataType(place.nodeType, declaresUserHook)) {
-		if (needsValueCopy(place.nodeType)) emitKeptCopy(s, name, place);
+		if (needsValueCopy(place.nodeType) && !movedIntoPackedStorage(s, place)) emitKeptCopy(s, name, place);
 		return;
 	}
 	if (needsValueCopy(place.nodeType) && !(leavesEmptyArray && (isArrayType(place.nodeType) || nullIsZeroValue(place.nodeType)))) {
@@ -100,6 +100,12 @@ function emitClear(s: RaiserCompState, name: string, arg: Node, leavesEmptyArray
 		return;
 	}
 	emitPlaceStore(s, name, place, emitZeroValue(s, place.nodeType));
+}
+
+function movedIntoPackedStorage(s: RaiserCompState, place: Node): boolean {
+	const moved = s.packedMoveAt == codeLen(s) && s.packedMoveSource != null && samePlace(s.packedMoveSource, place);
+	s.packedMoveAt = -1;
+	return moved;
 }
 
 function emitKeptCopy(s: RaiserCompState, name: string, place: Node): void {
@@ -418,7 +424,8 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		if (frame != null) {
 			const generated = sym != null && sym.symFlags.has(SymbolFlag.GeneratedOp);
 			if (row == ROW_SINK || row == ROW_COPY_VALUE && d.arguments.length == 2 || generated && (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellSink(d) || isSizedArrayCopy(d))) {
-				copyPackedExpr(s, frame, placeOf(d.arguments[1]));
+				if (row == ROW_SINK || isLiftedCellSink(d)) movePackedExpr(s, frame, placeOf(d.arguments[1]));
+				else copyPackedExpr(s, frame, placeOf(d.arguments[1]));
 				return true;
 			}
 			if (row == ROW_CLEAR || generated && (isCellHook(d, SymbolFlag.WasMovedOp) || isCellHook(d, SymbolFlag.DestroyOp))) {

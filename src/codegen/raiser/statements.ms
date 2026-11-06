@@ -22,7 +22,7 @@ import {
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
-import { compilePackedExpr, compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
+import { compilePackedExpr, notePackedMove, compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { markBoundedCounterStep } from "../../transform/util";
 import { compileOwnershipStmt } from "./drcLower";
@@ -182,6 +182,7 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 	if (shape != null) {
 		const value = d.initializer != null ? compilePackedExpr(s, d.initializer, node.nodeType!) : allocPackedValue(s, s.layouts, node.nodeType!);
 		declareLocal(s, declaredSymbol(node, d.declName), value.base, false, shape);
+		if (d.initializer != null) notePackedMove(s, node.nodeType!, d.initializer);
 		return;
 	}
 
