@@ -565,7 +565,9 @@ export function uintGcd(
 	uintShiftRightPublic(a, aShift);
 	uintShiftRightPublic(b, bShift);
 	condSwap(a, b, limbsCmpLt(b, a));
-	const g = uintGcdModinvOdd(a, b).gcd;
+	const found = uintGcdModinvOdd(a, b);
+	for (const scratch of [a, b, found.inverse]) wipeWords(scratch);
+	const g = found.gcd;
 	shiftLeft(g, Math.min(aShift, bShift) as int32);
 	return g;
 }
@@ -1119,6 +1121,15 @@ export function modulusFromUint(value: Readonly<uint32[]>): Modulus | null {
 			wm0inv: 0,
 		};
 	}
+}
+
+/** Clears every limb and Montgomery constant of a modulus that is no longer used. */
+export function wipeModulus(m: Modulus): void {
+	wipeWords(m.v);
+	wipeWords(m.rr);
+	wipeWords64(m.w);
+	wipeWords64(m.wrr);
+	wipeWords64(m.wone);
 }
 
 export function modulusFromBytes(bytes: Readonly<uint8[]>): Modulus | null {
