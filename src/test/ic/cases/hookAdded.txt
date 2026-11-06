@@ -1,0 +1,42 @@
+A hook added to and removed from a generic class's module changes how an importer that holds an
+instance releases it, though the importer's text and the module's exports do not change.
+#!FILE a.ms
+let trail = "";
+export function trailOf(): string {
+	return trail;
+}
+export class Bag<T> {
+	n: T;
+	constructor(n: T) { this.n = n; }
+}
+#!FILE main.ms
+import { Bag, trailOf } from "./a";
+function run(): void {
+	const b = new Bag<int32>(3);
+}
+run();
+console.log(`end${trailOf()}`);
+#!STEP expect: end
+#!FILE a.ms
+let trail = "";
+export function trailOf(): string {
+	return trail;
+}
+export class Bag<T> {
+	n: T;
+	constructor(n: T) { this.n = n; }
+}
+function onDestroy<T>(this self: Bag<T>): void {
+	trail = trail + " d";
+}
+#!STEP expect: end d; rebuilt
+#!FILE a.ms
+let trail = "";
+export function trailOf(): string {
+	return trail;
+}
+export class Bag<T> {
+	n: T;
+	constructor(n: T) { this.n = n; }
+}
+#!STEP expect: end; rebuilt
