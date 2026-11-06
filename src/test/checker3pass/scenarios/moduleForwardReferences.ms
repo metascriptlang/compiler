@@ -11,6 +11,20 @@ let block = false;
 const BOX = make();
 `;
 
+const SRC_CONSTRUCTOR_CALLS_LATER = `
+class Item { v: int32 = 0; }
+class Span {
+	item: Item;
+	start: int32;
+	constructor(item: Item) {
+		this.item = item;
+		this.start = key(item.v);
+	}
+}
+function key(v: int32) { return v * 2; }
+const span = new Span(new Item());
+`;
+
 const SRC_FORWARD_MISMATCH = `
 function show(): string { return LATER; }
 const LATER = 41;
@@ -134,4 +148,9 @@ test "a closure binding typed by its signature calls itself and is read from abo
 test "an annotated binding read inside a closure in its own initializer checks" {
 	const result = checkOnly(SRC_ANNOTATED_CLOSURE);
 	assert result.errors.length == 0, "an annotated binding needs no inference: " + result.errors.join("\n");
+}
+
+test "a constructor that calls a later function with an inferred return keeps its own field assignments" {
+	const result = checkOnly(SRC_CONSTRUCTOR_CALLS_LATER);
+	assert result.errors.length == 0, "the constructor assigns every field: " + result.errors.join("\n");
 }

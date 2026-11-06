@@ -1457,6 +1457,8 @@ interface DeclarationState {
 	jsxMacroArgDepth: int32;
 	matchArmExpected: Type | null;
 	initTracker: InitTracker;
+	ctorExits: string[][] | null;
+	ctorExitsNext: string[][] | null;
 	condEvalDepth: int32;
 	inGenericContext: int32;
 	stmtPosExpr: Node;
@@ -1486,6 +1488,8 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		jsxMacroArgDepth: ctx.jsxMacroArgDepth,
 		matchArmExpected: ctx.matchArmExpected,
 		initTracker: ctx.initTracker,
+		ctorExits: ctx.ctorExits,
+		ctorExitsNext: ctx.ctorExitsNext,
 		condEvalDepth: ctx.condEvalDepth,
 		inGenericContext: ctx.inGenericContext,
 		stmtPosExpr: ctx.stmtPosExpr,
@@ -1512,6 +1516,8 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.jsxMacroArgDepth = 0;
 	ctx.matchArmExpected = null;
 	ctx.initTracker = createInitTracker();
+	ctx.ctorExits = null;
+	ctx.ctorExitsNext = null;
 	ctx.condEvalDepth = 0;
 	ctx.inGenericContext = 0;
 	ctx.stmtPosExpr = null as unknown as Node;
@@ -1541,6 +1547,8 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.jsxMacroArgDepth = saved.jsxMacroArgDepth;
 	ctx.matchArmExpected = saved.matchArmExpected;
 	ctx.initTracker = saved.initTracker;
+	ctx.ctorExits = saved.ctorExits;
+	ctx.ctorExitsNext = saved.ctorExitsNext;
 	ctx.condEvalDepth = saved.condEvalDepth;
 	ctx.inGenericContext = saved.inGenericContext;
 	ctx.stmtPosExpr = saved.stmtPosExpr;
