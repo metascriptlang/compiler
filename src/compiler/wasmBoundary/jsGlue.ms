@@ -45,6 +45,17 @@ const GLUE = [
 	"}",
 	"function __msbCopyTo(p, a, off, n, T) {",
 	"\t__msbInRange(a, off, n);",
+	"\tif (T === Float32Array) {",
+	"\t\tconst h = __msbMod.HEAPF32;",
+	"\t\tconst at = p / 4;",
+	"\t\tif (!Number.isInteger(at) || !Number.isInteger(n)",
+	"\t\t\t|| at < 0 || n < 0 || at + n > h.length)",
+	"\t\t\tthrow new RangeError(\"Float32 copy destination out of range\");",
+	"\t\tif (ArrayBuffer.isView(a)) h.set(a.subarray(off, off + n), at);",
+	"\t\telse if (off === 0 && n === a.length) h.set(a, at);",
+	"\t\telse for (let i = 0; i < n; i++) h[at + i] = a[off + i];",
+	"\t\treturn;",
+	"\t}",
 	"\tconst v = new T(__msbMod.HEAPU8.buffer, p, n);",
 	"\tif (ArrayBuffer.isView(a)) v.set(a.subarray(off, off + n));",
 	"\telse if (off === 0 && n === a.length) v.set(a);",
@@ -524,4 +535,30 @@ export function viewHelpers(viewsIn: boolean, viewsOut: boolean): string[] {
 	if (viewsIn) for (const l of VIEWS_IN) views.push(l);
 	if (viewsOut) for (const l of VIEWS_OUT) views.push(l);
 	return views;
+}
+
+test "js glue: float32 copy-in uses the live heap with aligned bounded element offsets" {
+	const p = preludeFor("./half.mjs", false, true, [], false, false);
+	const body = p.slice(
+		p.indexOf("function __msbCopyTo("),
+		p.indexOf("function __msbCopyBack("),
+	);
+	assert body.includes("if (T === Float32Array) {");
+	assert body.includes("const h = __msbMod.HEAPF32;");
+	assert body.includes("const at = p / 4;");
+	assert body.includes("!Number.isInteger(at) || !Number.isInteger(n)");
+	assert body.includes("at + n > h.length");
+	assert body.includes("h.set(a.subarray(off, off + n), at)");
+	assert body.includes("h.set(a, at)");
+	assert body.includes("h[at + i] = a[off + i]");
+}
+
+test "js glue: copy-back and Vec results retain their bounded typed views" {
+	const p = preludeFor("./half.mjs", false, true, [], false, false);
+	const body = p.slice(
+		p.indexOf("function __msbCopyBack("),
+		p.indexOf("function __msbSeal("),
+	);
+	assert body.split("const v = new T(__msbMod.HEAPU8.buffer, p, n);").length == 3;
+	assert !body.includes("__msbMod.HEAPF32");
 }
