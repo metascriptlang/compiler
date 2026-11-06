@@ -161,10 +161,11 @@ def hasUnwind(target):
 def splitIsystem(isystem, unwind=True):
     """(Zig lib directory, libc directory names) of the order libcxx, libcxxabi, builtin, libc..., libunwind, which
     has no libunwind for a target without one."""
+    isystem = [os.path.normpath(d) for d in isystem]
     zigLib = os.path.dirname(os.path.dirname(isystem[0]))
-    expected = [os.path.join(zigLib, HEADERS["libcxx"]), os.path.join(zigLib, HEADERS["libcxxabi"]),
-                os.path.join(zigLib, "include")]
-    last = os.path.join(zigLib, HEADERS["libunwind"])
+    expected = [os.path.normpath(os.path.join(zigLib, HEADERS["libcxx"])),
+                os.path.normpath(os.path.join(zigLib, HEADERS["libcxxabi"])), os.path.join(zigLib, "include")]
+    last = os.path.normpath(os.path.join(zigLib, HEADERS["libunwind"]))
     if isystem[:3] != expected or len(isystem) < 4 + unwind or (unwind and isystem[-1] != last) or (
             not unwind and last in isystem):
         raise pe.EngineError("C++ include order %s is not libcxx, libcxxabi, builtin, libc...%s" % (
@@ -520,7 +521,7 @@ def searchList(text, root):
     if not found:
         raise pe.EngineError("no include search list in %s" % text)
     real = os.path.dirname(os.path.dirname(os.path.realpath(os.path.join(root, "bin", "clang"))))
-    return [os.path.normpath(line.strip().replace(root, "$ROOT").replace(real, "$ROOT"))
+    return [os.path.normpath(line.strip().replace(root, "$ROOT").replace(real, "$ROOT")).replace(os.sep, "/")
             for line in found.group(1).splitlines() if line.strip()]
 
 
