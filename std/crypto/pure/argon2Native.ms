@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import {
 	argon2Problem, argon2Raw, argon2Encode, argon2VerifyEncoded,
 	decodeArgon2id,
@@ -46,9 +46,11 @@ export function argon2HashSync(
 			CryptoErrorKind.InvalidInput, "argon2Hash", problem,
 		));
 	}
+	const secret = bytesOf(password);
 	const encoded = argon2Encode(
-		bytesOf(password), salt, timeCost, memoryCost, parallelism, hashLen,
+		secret, salt, timeCost, memoryCost, parallelism, hashLen,
 	);
+	wipeIfCopied(password, secret);
 	if (!encoded.ok) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.HashFailed, "argon2Hash", "Argon2id hashing failed",
@@ -87,9 +89,11 @@ export function argon2HashRawSync(
 			CryptoErrorKind.InvalidInput, "argon2HashRaw", problem,
 		));
 	}
+	const secret = bytesOf(password);
 	const raw = argon2Raw(
-		bytesOf(password), salt, timeCost, memoryCost, parallelism, hashLen,
+		secret, salt, timeCost, memoryCost, parallelism, hashLen,
 	);
+	wipeIfCopied(password, secret);
 	if (!raw.ok) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.HashFailed, "argon2HashRaw",
@@ -118,11 +122,14 @@ export function argon2VerifySync(
 	limits: Argon2Limits = freshDefaultLimits(),
 ): boolean {
 	if (decodeArgon2id(encoded) == null) return false;
-	return argon2VerifyEncoded(encoded, bytesOf(password), {
+	const secret = bytesOf(password);
+	const ok = argon2VerifyEncoded(encoded, secret, {
 		memoryCost: limits.memoryCost,
 		timeCost: limits.timeCost,
 		parallelism: limits.parallelism,
 	});
+	wipeIfCopied(password, secret);
+	return ok;
 }
 
 export async function argon2Verify(

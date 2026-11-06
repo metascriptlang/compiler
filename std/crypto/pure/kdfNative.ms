@@ -3,7 +3,7 @@ import { Bytes } from "std/core/buffer/bytes";
 import {
 	HashAlgorithm, createHmac, digestSync, isHashSupported,
 } from "./coreNative";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { hashKind } from "./hash";
 import { pbkdf2Of, hkdfOf } from "./hmac";
 import { wipeBytes } from "./secret";
@@ -111,14 +111,18 @@ export function pbkdf2Sync(
 	const key = bytesOf(password);
 	const saltBytes = bytesOf(salt);
 	const kind = hashKind(digest);
-	if (kind >= 0) {
-		return Result.ok(
-			pbkdf2Of(kind, key, saltBytes, iterations, keyLength) as Buffer,
-		);
+	try {
+		if (kind >= 0) {
+			return Result.ok(
+				pbkdf2Of(kind, key, saltBytes, iterations, keyLength) as Buffer,
+			);
+		}
+		return Result.ok(extendedPassword(
+			digest, key, saltBytes, iterations, keyLength,
+		) as Buffer);
+	} finally {
+		wipeIfCopied(password, key);
 	}
-	return Result.ok(extendedPassword(
-		digest, key, saltBytes, iterations, keyLength,
-	) as Buffer);
 }
 
 export async function pbkdf2(
@@ -152,14 +156,18 @@ export function hkdfSync(
 	const saltBytes = bytesOf(salt);
 	const infoBytes = bytesOf(info);
 	const kind = hashKind(algorithm);
-	if (kind >= 0) {
-		return Result.ok(
-			hkdfOf(kind, key, saltBytes, infoBytes, length) as Buffer,
-		);
+	try {
+		if (kind >= 0) {
+			return Result.ok(
+				hkdfOf(kind, key, saltBytes, infoBytes, length) as Buffer,
+			);
+		}
+		return Result.ok(extendedKey(
+			algorithm, key, saltBytes, infoBytes, length,
+		) as Buffer);
+	} finally {
+		wipeIfCopied(ikm, key);
 	}
-	return Result.ok(extendedKey(
-		algorithm, key, saltBytes, infoBytes, length,
-	) as Buffer);
 }
 
 export async function hkdf(
