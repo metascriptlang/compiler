@@ -6,8 +6,9 @@
 #
 #   src/test/crypto/suite.sh [--slow]
 #
-# The compiler must sit in the repository root (./msc, or MSC=<root>/<name>), because a compiler loads std/ from
-# beside itself and this suite tests the tree's std/, not an installed one. A host build copied in works:
+# The compiler must load this tree's std/ (./msc, out/gate/msc, or any MSC whose nearest std/ is this root), because
+# a compiler loads std/ from beside itself and this suite tests the tree's std/, not an installed one. A host build
+# copied in works:
 #   cp "$(command -v msc)" ./hostcomp && MSC=$PWD/hostcomp src/test/crypto/suite.sh
 set -uo pipefail
 
@@ -23,8 +24,20 @@ done
 
 msc=${MSC:-$root/msc}
 [ -x "$msc" ] || { echo "suite: no compiler at $msc; build ./msc or copy one into the repository root (see the header)" >&2; exit 2; }
-[ "$(cd "$(dirname "$msc")" && pwd)" = "$root" ] \
-	|| { echo "suite: $msc is outside $root, so it would test its own std/, not this tree's" >&2; exit 2; }
+# The std/ the compiler loads: the nearest of its binary's real directory and three parents that holds
+# std/core/system/index.ms (runtimeDirFrom, src/utils/path.ms).
+std_root() {
+	local d i
+	d=$(cd -P "$(dirname "$1")" && pwd) || return 1
+	for i in 0 1 2 3; do
+		[ -f "$d/std/core/system/index.ms" ] && { echo "$d"; return 0; }
+		d=$(dirname "$d")
+	done
+	return 1
+}
+loads=$(std_root "$msc") || loads="none"
+[ "$loads" = "$(cd -P "$root" && pwd)" ] \
+	|| { echo "suite: $msc loads std/ from $loads, not from $root, so it would not test this tree" >&2; exit 2; }
 
 pure=std/crypto/pure
 cells=(
