@@ -29,3 +29,23 @@ test "assertionEvaluation: a message-less assertion over a union's text or equal
 	assert heldMember(0) == heldTextOrFlag(1);
 	assert heldMember(1) != heldTextOrFlag(0);
 }
+
+struct AssertedFixture { name: string; id: int64; }
+
+function assertedFixture(): AssertedFixture { return { name: "alice", id: 7 }; }
+
+function refusedBy(f: () => void): boolean {
+	try { f(); } catch { return true; }
+	return false;
+}
+
+function holdsFor(f: () => boolean): boolean { return f(); }
+
+test "assertionEvaluation: a callback inside an assertion destructures like one in a statement" {
+	assert refusedBy(() => {
+		const { name, id } = assertedFixture();
+		if (name == "alice" && id == 7) throw new Error("expected refusal");
+	});
+	assert holdsFor(() => { const [a, b] = [3, 4]; return a + b == 7; });
+	assert holdsFor(() => holdsFor(() => { const { id } = assertedFixture(); return id == 7; })), holdsFor(() => { const [m] = ["unused"]; return m == "unused"; }) ? "nested" : "message";
+}
