@@ -31,7 +31,7 @@ test "packed source: a namespace producer supplies its actual body result to pac
 		modules.push({ modulePath: path, program: lowerForRaiser(program, ctx) });
 	}
 	const ctx = createContext();
-	load(ctx, generateRaiserProject(modules));
+	load(ctx, generateRaiserProject(modules, graph.dispatchRegistry));
 	execute(ctx);
 	assert ctx.lastError == "", ctx.lastError;
 	assert ctx.lastResult.intVal == 45;

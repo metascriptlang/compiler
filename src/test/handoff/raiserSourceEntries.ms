@@ -31,7 +31,7 @@ test "packed source entries: exported boxed entry returns the complete source re
 	assert !hasErrors(ctx);
 	const exports = collectExports(ctx, ctx.modulePath);
 	const mod = generateRaiserProject([{ modulePath: ctx.modulePath,
-		program: lowerForRaiser(parsed.value, ctx) }], new DynamicModulePlan(), exports);
+		program: lowerForRaiser(parsed.value, ctx) }], ctx.dispatchRegistry, new DynamicModulePlan(), exports);
 	assert mod.exports.length == 1;
 	const entry = mod.exports[0];
 	assert mod.functions[entry.funcIdx].callShape == null;
