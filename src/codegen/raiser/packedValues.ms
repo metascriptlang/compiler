@@ -38,7 +38,7 @@ export interface RaiserLegacyValue {
 	shape: RaiserSlotShape;
 }
 
-function bodyOf(t: Type): Type {
+export function bodyOf(t: Type): Type {
 	let body = t;
 	while ((body.kind == TypeKind.Alias || body.kind == TypeKind.Distinct ||
 		body.kind == TypeKind.GenericInstance) && body.typeReturn != null) {

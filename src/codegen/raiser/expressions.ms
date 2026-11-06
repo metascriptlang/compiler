@@ -39,7 +39,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
 	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
-import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy } from "./packedValues";
+import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy, bodyOf } from "./packedValues";
 import { nullAccessHead } from "../../transform/maybeCarrier";
 import { packedSlotShapeOf } from "./valueCopy";
 import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
@@ -568,7 +568,7 @@ export function storedFramePlace(s: RaiserCompState, node: Node, checks: boolean
 		const owner = storedFramePlace(s, d.object, checks);
 		if (owner != null) {
 			if (checks && isMaybeType(peelTransparentInstance(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
-			const body = peelTransparentInstance(owner.valueType);
+			const body = bodyOf(owner.valueType);
 			const at = body.typeNames.indexOf(d.property);
 			if (at >= 0 && !storesNothing(body, body.typeChildren[at])) return packedField(s, s.layouts, owner, d.property);
 		}
@@ -621,7 +621,7 @@ function packedRvalue(s: RaiserCompState, node: Node): boolean {
 
 function storedField(object: Node, property: string): boolean {
 	if (object.nodeType == null) return false;
-	const body = peelTransparentInstance(object.nodeType);
+	const body = bodyOf(object.nodeType);
 	const at = body.kind == TypeKind.Struct ? body.typeNames.indexOf(property) : -1;
 	return at >= 0 && !storesNothing(body, body.typeChildren[at]);
 }
@@ -662,7 +662,7 @@ function packedPlaceOf(s: RaiserCompState, node: Node): RaiserFramePlace | null 
 }
 
 function packedReadOwner(s: RaiserCompState, object: Node, property: string): RaiserFramePlace | null {
-	const body = object.nodeType != null ? peelDistinct(object.nodeType) : null;
+	const body = object.nodeType != null ? bodyOf(object.nodeType) : null;
 	if (body == null || !(body.kind == TypeKind.Struct && body.typeNames.includes(property) || property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple))) return null;
 	return packedPlaceOf(s, object);
 }
@@ -845,7 +845,7 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 		const d = node.data as MemberExprData;
 		const owner = packedReadOwner(s, d.object, d.property);
 		if (owner != null) {
-			if (isMaybeType(peelDistinct(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
+			if (isMaybeType(bodyOf(owner.valueType)) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
 			const result = allocPackedValue(s, s.layouts, valueType);
 			emitPackedCopy(s, s.layouts, result, packedField(s, s.layouts, owner, d.property));
 			return result;
@@ -934,7 +934,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 		const d = node.data as MemberExprData;
 		const owner = packedReadOwner(s, d.object, d.property);
 		if (owner != null) {
-			const body = peelDistinct(owner.valueType);
+			const body = bodyOf(owner.valueType);
 			if (d.property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple)) {
 				const length = allocWord(s);
 				emitLoadConst(s, length, raiserInt((body.kind == TypeKind.SizedArray ? body.typeValue : body.typeChildren.length) as int64));
