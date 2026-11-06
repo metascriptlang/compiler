@@ -278,12 +278,31 @@ export function uintMulAdd(
 	x: Readonly<uint32[]>,
 	y: Readonly<uint32[]>,
 ): uint32 {
+	return mulAddWith(acc, x, y, new Array<uint32>(2 * acc.length));
+}
+
+// `uintMulAdd` on a caller's `2 * acc.length`-limb workspace, cleared before it returns.
+function mulAddWith(
+	acc: uint32[],
+	x: Readonly<uint32[]>,
+	y: Readonly<uint32[]>,
+	wide: uint32[],
+): uint32 {
 	const n = acc.length;
-	const wide = new Array<uint32>(2 * n);
 	for (let i = 0; i < n; i++) wide[i] = acc[i];
 	for (let i = 0; i < n; i++) wide[i + n] = mulAddLimb(wide, i, x, y[i]);
 	for (let i = 0; i < n; i++) acc[i] = wide[i];
-	return isNonZero(orLimbs(wide, n));
+	const overflow = isNonZero(orLimbs(wide, n));
+	wipeWords(wide);
+	return overflow;
+}
+
+test "multiply-add clears its workspace and keeps the low half" {
+	const acc: uint32[] = [5, 0];
+	const wide = new Array<uint32>(4);
+	assert mulAddWith(acc, [0x7fffffff, 0], [3, 0], wide) == 0;
+	assert acc[0] == 2 && acc[1] == 3;
+	for (const limb of wide) assert limb == 0, "mulAddWith: workspace not erased";
 }
 
 /** The full product, `x.length + y.length` limbs wide. */
@@ -293,9 +312,12 @@ export function uintMul(
 ): uint32[] {
 	const width = x.length + y.length;
 	const acc = new Array<uint32>(width);
-	if (
-		uintMulAdd(acc, uintWiden(x, width), uintWiden(y, width)) != 0
-	) throw new Error("uintMul: the product overflowed its own width");
+	const wx = uintWiden(x, width);
+	const wy = uintWiden(y, width);
+	const overflow = uintMulAdd(acc, wx, wy);
+	wipeWords(wx);
+	wipeWords(wy);
+	if (overflow != 0) throw new Error("uintMul: the product overflowed its own width");
 	return acc;
 }
 
@@ -418,7 +440,8 @@ function reduceInto(
 	quotient: uint32[] | null,
 ): uint32[] {
 	const n = m.length;
-	const wide = x.length >= n ? x : uintWiden(x, n);
+	const widened = x.length >= n ? null : uintWiden(x, n);
+	const wide = widened ?? x;
 	const out = new Array<uint32>(n);
 	let i = wide.length - 1;
 	if (n >= 2) {
@@ -436,6 +459,7 @@ function reduceInto(
 		if (i == 0) break;
 		i -= 1;
 	}
+	if (widened != null) wipeWords(widened);
 	return out;
 }
 
@@ -448,6 +472,7 @@ export function uintDivRem(
 	const m = normalize(divisor);
 	const quotient = new Array<uint32>(Math.max(x.length, m.length) as int32);
 	const remainder = reduceInto(m, x, quotient);
+	wipeWords(m);
 	return { quotient, remainder };
 }
 
