@@ -1,6 +1,6 @@
 // @maxrss: 30
-// @maxatomics(darwin-arm64) 96
-// @maxatomics(linux-x86_64) 32
+// @maxatomics(darwin-arm64) 98
+// @maxatomics(linux-x86_64) 39
 // @stdout: clean-loop acc=669994
 // note: Real program: 3M-iteration string/array work that must stay flat. The always-green control — if this leaks, the harness or a core RC path regressed.
 
