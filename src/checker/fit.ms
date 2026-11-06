@@ -3532,6 +3532,7 @@ export function isFreshOwnable(n: Node): boolean {
 	return match (n.kind) {
 		NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.NullLiteral => true,
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => isFreshOwnable((n.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => isFreshOwnable((n.data as TypeAssertionData).asExpr),
 		NodeKind.ConditionalExpr => isFreshOwnable((n.data as ConditionalExprData).ternaryConsequent) && isFreshOwnable((n.data as ConditionalExprData).ternaryAlternate),
 		_ => false,
 	};

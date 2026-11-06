@@ -229,6 +229,16 @@ test "a cast of a fresh value into an owning edge is accepted" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
+test "a fresh object literal cast to its plain union type enters an owned slot" {
+	const r = compileToC("type D = { x: int32 } | { y: string };\nclass N { data: Owned<D> = { x: 0 }; }\nconst n = new N();\nn.data = { y: \"a\" } as D;\nconsole.log(\"y\" in n.data);\n");
+	assert r.ok, r.ok ? "" : r.error;
+}
+
+test "a cast of a shared value to its plain union type does not enter an owned slot" {
+	const message = refused("type D = { x: int32 } | { y: string };\nclass N { data: Owned<D> = { x: 0 }; }\nconst n = new N();\nconst shared: D[] = [{ x: 1 }];\nn.data = shared[0] as D;\n");
+	assert message.contains("an owned slot takes the unique owning edge"), message;
+}
+
 test "a cast through unknown into an owning edge is refused" {
 	const message = refused(CAST + "a.kids.push((shared[0] as unknown) as Owned<N>);\n");
 	assert message.contains("owning edge") || message.contains("unknown"), message;
