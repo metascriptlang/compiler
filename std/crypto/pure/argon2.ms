@@ -1018,7 +1018,7 @@ function fromBase64NoPad(text: string): uint8[] | null {
 function minimalDecimal(text: string): number {
 	if (text.length == 0 || text.length > 10) return -1;
 	if (text.length > 1 && text.charCodeAt(0) == 48) return -1;
-	let value = 0;
+	let value: number = 0;
 	for (let i = 0; i < text.length; i++) {
 		const digit = text.charCodeAt(i) - 48;
 		if (digit < 0 || digit > 9) return -1;
