@@ -1,8 +1,8 @@
 // MetaScript CBOR — Decoder (RFC 8949 §3, §5)
 //
 // Reads a byte stream and produces a CborValue tree. Mirrors encoder's design:
-// internal reader uses `uint8[]`. Public API at index.ms accepts a Buffer
-// and converts to uint8[] for the reader (one-time linear copy, V1 simple).
+// the reader reads a `Readonly<Span<uint8>>`, so a Buffer, a uint8[] or a typed
+// array decodes in place with no copy.
 //
 // V1 scope mirrors encoder:
 //   - Major 0..6 fully supported
@@ -39,7 +39,7 @@ const MAX_COLLECTION_SIZE: number = 100000000;
 // Copy `length` bytes from r.buf[start..start+length] into a freshly-
 // allocated Buffer. Used by both Bytes decoding and the double-precision
 // float decode path; previously inlined in 3 places.
-function bytesToBuffer(src: uint8[], start: number, length: number): Buffer {
+function bytesToBuffer(src: Readonly<Span<uint8>>, start: number, length: number): Buffer {
 	const buf = Buffer.alloc(length);
 	let i = 0;
 	while (i < length) {
@@ -51,28 +51,28 @@ function bytesToBuffer(src: uint8[], start: number, length: number): Buffer {
 
 // --- Reader state ---
 
-export interface CborReader {
-	buf: uint8[];
+export struct CborReader {
+	buf: Readonly<Span<uint8>>;
 	pos: number;
 	error: string;  // empty when no error
 	depth: number;  // recursion depth tracker
 }
 
-export function newCborReader(bytes: uint8[]): CborReader {
+export function newCborReader(bytes: Readonly<Span<uint8>>): CborReader {
 	return { buf: bytes, pos: 0, error: "", depth: 0 };
 }
 
 // --- Low-level byte primitives ---
 
-function setError(r: CborReader, msg: string): void {
+function setError(ref r: CborReader, msg: string): void {
 	if (r.error == "") r.error = msg;
 }
 
-function remaining(r: CborReader): number {
+function remaining(ref r: CborReader): number {
 	return r.buf.length - r.pos;
 }
 
-function readByte(r: CborReader): number {
+function readByte(ref r: CborReader): number {
 	if (r.pos >= r.buf.length) {
 		setError(r, "unexpected end of input");
 		return 0;
@@ -84,7 +84,7 @@ function readByte(r: CborReader): number {
 
 // Peek next byte without advancing. Used by indefinite-length decoders to
 // detect the 0xff break code before deciding to read another chunk/item.
-function peekByte(r: CborReader): number {
+function peekByte(ref r: CborReader): number {
 	if (r.pos >= r.buf.length) return -1;
 	return r.buf[r.pos] & 0xff;
 }
@@ -92,7 +92,7 @@ function peekByte(r: CborReader): number {
 // Consume next byte iff it is the break code (0xff = major 7 + info 31).
 // Returns true on consume, false if next byte is something else (caller
 // continues reading another chunk/item).
-function tryConsumeBreak(r: CborReader): boolean {
+function tryConsumeBreak(ref r: CborReader): boolean {
 	if (peekByte(r) == 0xff) { r.pos = r.pos + 1; return true; }
 	return false;
 }
@@ -100,7 +100,7 @@ function tryConsumeBreak(r: CborReader): boolean {
 // Read `byteCount` bytes BE, return as number. Caller ensures byteCount ≤ 6
 // to keep result < 2^48 (well within JS safe integer). For 8-byte case use
 // readInt64BE. Sets error if not enough bytes.
-function readBE(r: CborReader, byteCount: number): number {
+function readBE(ref r: CborReader, byteCount: number): number {
 	if (remaining(r) < byteCount) {
 		setError(r, "truncated multi-byte argument");
 		return 0;
@@ -119,7 +119,7 @@ function readBE(r: CborReader, byteCount: number): number {
 // 4 bytes with lower 4 bytes via multiply-and-add. Result fits in int64 if
 // the high bit of the high byte is 0 (i.e., value < 2^63). Otherwise we
 // signal error since V1 doesn't support uint64 > 2^63-1.
-function readInt64BE(r: CborReader): int64 {
+function readInt64BE(ref r: CborReader): int64 {
 	if (remaining(r) < 8) {
 		setError(r, "truncated 8-byte argument");
 		return 0 as int64;
@@ -146,7 +146,7 @@ export interface CborHead {
 	info: number;  // additional_info bits 0..4 of initial byte (preserved for caller)
 }
 
-export function readHead(r: CborReader): CborHead {
+export function readHead(ref r: CborReader): CborHead {
 	const ib = readByte(r);
 	if (r.error != "") return { major: 0, arg: 0 as int64, info: 0 };
 	const major = (ib >> 5) & 0x07;
@@ -190,7 +190,7 @@ export function readHead(r: CborReader): CborHead {
 
 // --- Major-type decoders ---
 
-function decodeBytes(r: CborReader, length: number): CborValue {
+function decodeBytes(ref r: CborReader, length: number): CborValue {
 	if (remaining(r) < length) {
 		setError(r, "truncated byte string payload");
 		return cborNull();
@@ -207,7 +207,7 @@ function decodeBytes(r: CborReader, length: number): CborValue {
 // truncated multi-byte sequences (V1: silently drops the trailing partial
 // run; spec strict mode would error). Caller passes the byte source array
 // and the byte range to decode.
-function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
+function utf8FromBytes(bytes: Readonly<Span<uint8>>, start: number, length: number): string {
 	// All masks/constants declared as int32 so the bitwise ops stay int-typed
 	// throughout. MS's `&` requires integer operands; mixing int32 with a
 	// `number` literal (which defaults to float64) errors at type-check.
@@ -269,7 +269,7 @@ function utf8FromBytes(bytes: uint8[], start: number, length: number): string {
 	return s;
 }
 
-function decodeText(r: CborReader, length: number): CborValue {
+function decodeText(ref r: CborReader, length: number): CborValue {
 	if (remaining(r) < length) {
 		setError(r, "truncated text string payload");
 		return cborNull();
@@ -282,7 +282,7 @@ function decodeText(r: CborReader, length: number): CborValue {
 // Enter a nested-decode scope. Bumps depth and signals failure (depth too
 // deep) so the caller can early-return. Pair with `exitDepth` on every exit
 // path. Used by array/map/tag decoders.
-function enterDepth(r: CborReader): boolean {
+function enterDepth(ref r: CborReader): boolean {
 	r.depth = r.depth + 1;
 	if (r.depth > MAX_DEPTH) {
 		setError(r, "max recursion depth exceeded");
@@ -292,14 +292,14 @@ function enterDepth(r: CborReader): boolean {
 	return true;
 }
 
-function exitDepth(r: CborReader): void {
+function exitDepth(ref r: CborReader): void {
 	r.depth = r.depth - 1;
 }
 
 // Reject collection lengths that exceed the sanity cap or claim more items
 // than the remaining payload could possibly hold. `minBytesPerItem` is 1 for
 // arrays (each item ≥1 byte head) and 2 for map pairs (key + value).
-function rejectOversizedCollection(r: CborReader, length: number, minBytesPerItem: number, label: string): boolean {
+function rejectOversizedCollection(ref r: CborReader, length: number, minBytesPerItem: number, label: string): boolean {
 	if (length > MAX_COLLECTION_SIZE || (length * minBytesPerItem) > remaining(r)) {
 		setError(r, `${label} length exceeds sanity cap or available payload`);
 		return true;
@@ -307,7 +307,7 @@ function rejectOversizedCollection(r: CborReader, length: number, minBytesPerIte
 	return false;
 }
 
-function decodeArrayLen(r: CborReader, length: number): CborValue {
+function decodeArrayLen(ref r: CborReader, length: number): CborValue {
 	if (rejectOversizedCollection(r, length, 1, "array")) return cborNull();
 	if (!enterDepth(r)) return cborNull();
 	const items: CborValue[] = [];
@@ -322,7 +322,7 @@ function decodeArrayLen(r: CborReader, length: number): CborValue {
 	return cborArray(items);
 }
 
-function decodeMapLen(r: CborReader, pairCount: number): CborValue {
+function decodeMapLen(ref r: CborReader, pairCount: number): CborValue {
 	if (rejectOversizedCollection(r, pairCount, 2, "map pair")) return cborNull();
 	if (!enterDepth(r)) return cborNull();
 	const keys: CborValue[] = [];
@@ -355,7 +355,7 @@ function decodeMapLen(r: CborReader, pairCount: number): CborValue {
 // Append finite-length chunks of major-type `expectedMajor` until break.
 // Chunks must NOT themselves be indefinite (RFC §3.2.3 prohibits nesting).
 // Returns the concatenated byte buffer.
-function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: string): uint8[] {
+function readIndefiniteByteChunks(ref r: CborReader, expectedMajor: number, label: string): uint8[] {
 	const out: uint8[] = [];
 	while (true) {
 		if (r.error != "") return out;
@@ -390,7 +390,7 @@ function readIndefiniteByteChunks(r: CborReader, expectedMajor: number, label: s
 	return out;  // unreachable
 }
 
-function decodeBytesIndef(r: CborReader): CborValue {
+function decodeBytesIndef(ref r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const bytes = readIndefiniteByteChunks(r, 2, "byte string");
 	exitDepth(r);
@@ -399,7 +399,7 @@ function decodeBytesIndef(r: CborReader): CborValue {
 	return cborBytes(buf);
 }
 
-function decodeTextIndef(r: CborReader): CborValue {
+function decodeTextIndef(ref r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const bytes = readIndefiniteByteChunks(r, 3, "text string");
 	exitDepth(r);
@@ -407,7 +407,7 @@ function decodeTextIndef(r: CborReader): CborValue {
 	return cborText(utf8FromBytes(bytes, 0, bytes.length));
 }
 
-function decodeArrayIndef(r: CborReader): CborValue {
+function decodeArrayIndef(ref r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const items: CborValue[] = [];
 	while (true) {
@@ -426,7 +426,7 @@ function decodeArrayIndef(r: CborReader): CborValue {
 	return cborArray(items);
 }
 
-function decodeMapIndef(r: CborReader): CborValue {
+function decodeMapIndef(ref r: CborReader): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const keys: CborValue[] = [];
 	const values: CborValue[] = [];
@@ -461,7 +461,7 @@ function decodeMapIndef(r: CborReader): CborValue {
 //   25 = half float, 26 = single float, 27 = double float
 // info=31 (break code) is intercepted in decodeValue before this dispatch
 // fires — see indefinite-length branch.
-function decodeSpecial(r: CborReader, info: number, arg: int64): CborValue {
+function decodeSpecial(ref r: CborReader, info: number, arg: int64): CborValue {
 	return match (info) {
 		20 => cborBool(false),
 		21 => cborBool(true),
@@ -479,7 +479,7 @@ function decodeSpecial(r: CborReader, info: number, arg: int64): CborValue {
 // Set error and return a sentinel CborValue. Match-arm-friendly wrapper —
 // `setError` is `void` so it can't appear on its own as a match arm body
 // (the arm needs to produce a CborValue).
-function decodeError(r: CborReader, msg: string): CborValue {
+function decodeError(ref r: CborReader, msg: string): CborValue {
 	setError(r, msg);
 	return cborNull();
 }
@@ -558,7 +558,7 @@ function decodeSingleFloat(arg: int64): CborValue {
 // unconsumed (its int64 path rejects bit patterns with sign bit set, which
 // covers all negative floats and ±Inf). Read the raw bytes directly here.
 // Inline float tests skipped — coverage via native probe.
-function decodeDoubleFloat(r: CborReader): CborValue {
+function decodeDoubleFloat(ref r: CborReader): CborValue {
 	if (remaining(r) < 8) {
 		return decodeError(r, "truncated double-precision float payload");
 	}
@@ -569,7 +569,7 @@ function decodeDoubleFloat(r: CborReader): CborValue {
 
 // --- Generic dispatch ---
 
-export function decodeValue(r: CborReader): CborValue {
+export function decodeValue(ref r: CborReader): CborValue {
 	if (r.error != "") return cborNull();
 	const head = readHead(r);
 	if (r.error != "") return cborNull();
@@ -602,7 +602,7 @@ export function decodeValue(r: CborReader): CborValue {
 // Major 6 (tag) decode with depth check. Tag chains `tag(tag(tag(...)))`
 // would otherwise recurse via decodeValue without bumping depth (only
 // array/map paths do), so a nested-tag bomb could blow the C call stack.
-function decodeTag(r: CborReader, tagNum: int64): CborValue {
+function decodeTag(ref r: CborReader, tagNum: int64): CborValue {
 	if (!enterDepth(r)) return cborNull();
 	const inner = decodeValue(r);
 	exitDepth(r);
@@ -612,8 +612,8 @@ function decodeTag(r: CborReader, tagNum: int64): CborValue {
 
 // --- Top-level decode entry ---
 
-export function decodeAll(bytes: uint8[]): Result<CborValue, string> {
-	const r = newCborReader(bytes);
+export function decodeAll(bytes: Readonly<Span<uint8>>): Result<CborValue, string> {
+	let r = newCborReader(bytes);
 	const v = decodeValue(r);
 	if (r.error != "") return Result.err(r.error);
 	if (r.pos < r.buf.length) {

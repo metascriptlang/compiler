@@ -1,9 +1,8 @@
 // MetaScript CBOR — Public API hub
 //
 // Re-exports the public surface from internal modules and provides Buffer-
-// based entry points for end users. Internal encoder/decoder operate on
-// `uint8[]`; this layer routes Buffer payloads through that internal
-// representation.
+// based entry points for end users. The encoder writes a `uint8[]`; the
+// decoder reads any `Readonly<Span<uint8>>` in place.
 
 import { Buffer } from "std/core/buffer";
 
@@ -34,9 +33,9 @@ import { UntypedTree } from "../contracts";
 
 // --- Public decode entry ---
 //
-// Parses a Buffer as a single CBOR data item, returns Result<CborValue, error>.
+// Parses bytes (a Buffer, a uint8[] or a typed array, read in place) as a single CBOR data item.
 
-export function decode(buf: uint8[]): Result<CborValue, string> {
+export function decode(buf: Readonly<Span<uint8>>): Result<CborValue, string> {
 	return decodeAll(buf);
 }
 
@@ -48,5 +47,5 @@ export function decode(buf: uint8[]): Result<CborValue, string> {
 // input is a Buffer, so this wraps `decode()`.
 
 export const cborUntyped: UntypedTree<CborValue, Buffer> = {
-	parseValue: decode,
+	parseValue: (input: Buffer): Result<CborValue, string> => decode(input),
 };
