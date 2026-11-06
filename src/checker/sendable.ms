@@ -309,12 +309,34 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	return false;
 }
 
+// A move of a field or element hands over part of its root's graph, so the root must be the sole
+// owner of that graph, as it must when the root itself moves; any other operand must be fresh.
 function recordActorMove(ctx: CheckerContext, mv: Node): void {
 	const arg = peelHidden((mv.data as MoveExprData).moveArg);
-	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (arg.kind != NodeKind.Identifier) {
+		if (arg.nodeType == null || !typeCarriesRef(arg.nodeType)) return;
+		const root = pathRoot(arg);
+		if (root != null) {
+			if (root.resolvedSym != null) checkMoveSoleOwner(ctx, root.resolvedSym!, [root.resolvedSym!.name], mv, mv.location, describeExpr(arg));
+			return;
+		}
+		if (!isFreshValue(arg, REPLY_SCOPE)) {
+			addError(ctx, "cannot move this value: it is not the sole owner — it is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh); only a value nothing else can reach may cross to the actor" + SOLE_OWNER_TAG, mv.location.line, mv.location.column);
+		}
+		return;
+	}
+	const sym = arg.resolvedSym;
 	if (sym == null || !typeCarriesRef(sym.symbolType)) return;
 	checkMoveSoleOwner(ctx, sym, [sym.name], mv, mv.location);
 	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
+function pathRoot(n: Node): Node | null {
+	let cur = peelHidden(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelHidden(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	return cur.kind == NodeKind.Identifier && cur != peelHidden(n) ? cur : null;
 }
 
 // The env of a Sendable closure is counted by the binding that holds it, so a copy sent to an actor would be counted on two
@@ -1826,6 +1848,7 @@ interface OwnerWalk {
 	ctx: CheckerContext;
 	sym: Symbol;
 	name: string;
+	label: string;
 	moveNames: string[];
 	thunk: Node;
 	site: SourceLocation;
@@ -1932,7 +1955,7 @@ function describeExpr(n: Node): string {
 function reportNotSoleOwner(w: OwnerWalk, why: string): void {
 	if (w.reported) return;
 	w.reported = true;
-	addError(w.ctx, "cannot move '" + w.name + "': it is not the sole owner — " + why + "; only a binding nothing else can reach may cross into the thunk" + SOLE_OWNER_TAG, w.at.line, w.at.column);
+	addError(w.ctx, "cannot move '" + w.label + "': it is not the sole owner — " + why + "; only a binding nothing else can reach may cross into the thunk" + SOLE_OWNER_TAG, w.at.line, w.at.column);
 }
 
 function reportEscape(n: Node, how: string, w: OwnerWalk): void {
@@ -2012,7 +2035,10 @@ function walkOwner(node: Node | null, w: OwnerWalk): void {
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
-			if (escapesOwner(d.destrInit, w)) reportEscape(node, "it is destructured", w);
+			if (node == w.sym.declNode) {
+				w.declared = true;
+				requireFresh(d.destrInit, "the value destructured into '" + w.name + "'", w);
+			} else if (escapesOwner(d.destrInit, w)) reportEscape(node, "it is destructured", w);
 			walkOwner(d.destrInit, w);
 		},
 		NodeKind.ForOfStmt => {
@@ -2099,7 +2125,8 @@ function isActorRef(t: Type | null): boolean {
 	return bare.kind == TypeKind.Ref && bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor;
 }
 
-export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation): void {
+export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: string[], thunk: Node, at: SourceLocation, path: string = ""): void {
+	const label = path == "" ? sym.name : path;
 	if (!typeCarriesRef(sym.symbolType) || isActorRef(sym.symbolType)) return;
 	const sinkParam = sym.symbolKind == SymbolKind.Parameter && hasFlag(sym, SymbolFlag.Sink);
 	const ownedParam = sinkParam && isValueOnlyType(sym.symbolType);
@@ -2107,17 +2134,17 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 		const why = sinkParam
 			? "it is a sink parameter holding a reference, and a caller that keeps using its value passes a copy that shares the graph — pass a fresh value or bind a fresh copy locally and move that"
 			: "it is a parameter, so the caller still owns it — bind a fresh value locally and move that";
-		addError(ctx, "cannot move '" + sym.name + "': " + why + SOLE_OWNER_TAG, at.line, at.column);
+		addError(ctx, "cannot move '" + label + "': " + why + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
 	if (hasFlag(sym, SymbolFlag.Global)) {
-		addError(ctx, "cannot move '" + sym.name + "': it is a module-level binding that every function in the module can reach — move a binding local to one function" + SOLE_OWNER_TAG, at.line, at.column);
+		addError(ctx, "cannot move '" + label + "': it is a module-level binding that every function in the module can reach — move a binding local to one function" + SOLE_OWNER_TAG, at.line, at.column);
 		return;
 	}
 	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
-	const w: OwnerWalk = { ctx, sym, name: sym.name, moveNames, thunk, site: thunk.location, at, declared: ownedParam, reported: false };
+	const w: OwnerWalk = { ctx, sym, name: sym.name, label, moveNames, thunk, site: thunk.location, at, declared: ownedParam, reported: false };
 	if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {
-		addError(ctx, "cannot move '" + sym.name + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);
+		addError(ctx, "cannot move '" + label + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);
 	}
 }
