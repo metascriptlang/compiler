@@ -606,6 +606,10 @@ function getCalleeNameForDefaults(callNode: Node): string {
 	if (cd.callee.kind == NodeKind.Identifier) {
 		return (cd.callee.data as IdentifierData).name;
 	}
+	if (cd.callee.kind == NodeKind.MemberExpr && cd.callee.resolvedSym != null) {
+		const me = cd.callee.data as MemberExprData;
+		if (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module) return me.property;
+	}
 	return "";
 }
 
@@ -3694,6 +3698,28 @@ function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: 
 	}
 }
 
+function bindFromOmittedDefaults(cd: CallExprData, calleeType: Type, given: int32, eb: UnifyBindings, ebFrom: int32[]): void {
+	const params: Type[] = [];
+	const types: Type[] = [];
+	const from: int32[] = [];
+	const skip: boolean[] = [];
+	const literal: boolean[] = [];
+	const mapped: boolean[] = [];
+	for (let i = given; i < cd.arguments.length && i < calleeType.typeChildren.length; i += 1) {
+		const filled = cd.arguments[i];
+		const formal = calleeType.typeChildren[i];
+		if (filled == null || filled.nodeType == null || !filled.flags.has(NodeFlag.DefaultAwaitsInstance) || formal.kind != TypeKind.GenericParam) continue;
+		const ab = createUnifyBindings();
+		unifyType(formal, filled.nodeType, ab);
+		collectArgCandidates(eb, ab, i, filled, params, types, from, skip, literal, mapped);
+	}
+	const fold = foldTypeParamCandidates(params, types, skip, createUnifyBindings(), literal, mapped);
+	for (let k = 0; k < fold.params.length; k += 1) {
+		bindParam(eb, fold.params[k], fold.types[k]);
+		ebFrom.push(from[fold.chosen[k]]);
+	}
+}
+
 // A type parameter read only through `Readonly<T>` (or another homomorphic mapped type) has
 // nothing to infer from a primitive argument; the call names the type argument to write.
 function refusePrimitiveThroughMapped(ctx: CheckerContext, cd: CallExprData, calleeType: Type, argTypes: Type[], limit: int32, eb: UnifyBindings, typeParamCount: int32): boolean {
@@ -3940,6 +3966,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		bindParam(eb, fold.params[k], fold.types[k]);
 		ebFrom.push(candFrom[fold.chosen[k]]);
 	}
+	bindFromOmittedDefaults(cd, calleeType, argTypes.length, eb, ebFrom);
 	if (refusePrimitiveThroughMapped(ctx, cd, calleeType, argTypes, limit, eb, genericNames.length)) return null as unknown as Type;
 	reportTypeParamMisfits(ctx, fold, candParams, candTypes, candFrom, cd, conflicted);
 	const fixedNames: string[] = [];
