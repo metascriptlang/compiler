@@ -596,7 +596,7 @@ function maybePayloadType(carrier: Type): Type | null {
 }
 
 function assertsInPlace(s: RaiserCompState, node: Node, inner: Node): boolean {
-	if (node.nodeType == null || inner.nodeType == null || packedSlotShapeOf(s.layouts, inner.nodeType) == null) return false;
+	if (node.nodeType == null || inner.nodeType == null || packedSlotShapeOf(s.layouts, inner.nodeType) == null || packedSlotShapeOf(s.layouts, node.nodeType) == null) return false;
 	if (typeKey(inner.nodeType) == typeKey(node.nodeType)) return true;
 	if (node.flags.has(NodeFlag.ObjCheck)) return false;
 	if (!node.flags.has(NodeFlag.ConvCheck) && typeKey(peelDistinct(inner.nodeType)) == typeKey(peelDistinct(node.nodeType))) return true;
