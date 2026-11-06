@@ -43,7 +43,7 @@ import {
 import { randomOctets } from "./random";
 import { hashKind, hashOf } from "./hash";
 import { kindSha256 } from "./state";
-import { wipeBytes } from "./secret";
+import { declassify, wipeBytes } from "./secret";
 
 export { RsaPublicData, RsaPrivateData, rsaModulusBytes } from "./rsaKey";
 export { rsaModulusOf } from "./rsaArith";
@@ -505,8 +505,10 @@ export function rsaOaepDecrypt(
 		padding += inPadding;
 	}
 	const at = 32 + padding;
-	bad |= (block[at] ^ 1) as int32;
-	const message = bad == 0 ? block.slice(at + 1) : null;
+	let marker = 0;
+	for (let i = 32; i < block.length; i++) marker |= (block[i] as int32) & ((((i ^ at) - 1) >> 31) & 255);
+	bad |= marker ^ 1;
+	const message = declassify(bad as uint32) == 0 ? block.slice((declassify(at as uint32) as int32) + 1) : null;
 	for (const scratch of [encoded, seed, block, seedMask, blockMask]) wipeBytes(scratch);
 	return message;
 }

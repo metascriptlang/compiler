@@ -14,7 +14,7 @@
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha512 } from "./state";
 import { hashOf, newHash, updateHash, finishHash } from "./hash";
-import { wipeBytes } from "./secret";
+import { declassify, wipeBytes } from "./secret";
 import { baseTableFe, baseOddTableFe } from "./ed25519BaseTable";
 import {
 	Fe,
@@ -97,7 +97,8 @@ function fromBytes(s: Readonly<uint8[]>, from: int32): Point | null {
 function toBytes(p: Readonly<Point>): uint8[] {
 	const zi = feInv(p.z);
 	const s = feToBytes(feMul(p.y, zi));
-	if (feIsNegative(feMul(p.x, zi))) s[31] = s[31] ^ 0x80;
+	const x = feToBytes(feMul(p.x, zi));
+	s[31] = s[31] ^ ((x[0] & 1) << 7);
 	return s;
 }
 
@@ -114,7 +115,10 @@ function isCanonicalEncoding(s: Readonly<uint8[]>, from: int32): boolean {
 }
 
 function isIdentityX(p: Readonly<Point>): boolean {
-	return feIsZero(p.x);
+	const x = feToBytes(p.x);
+	let bits: uint32 = 0;
+	for (let i = 0; i < 32; i++) bits |= x[i] as uint32;
+	return declassify(bits) == 0;
 }
 
 function neg(p: Readonly<Point>): Point {
@@ -280,7 +284,7 @@ function clamp(s: uint8[]): void {
 }
 
 function slide(s: Readonly<uint8[]>): int32[] {
-	const reduced = ((s[31] as int32) & 0x80) == 0 ? s : scalarReduce32(s);
+	const reduced = declassify((s[31] as uint32) & 0x80) == 0 ? s : scalarReduce32(s);
 	const e: int32[] = [];
 	for (let i = 0; i < 32; i++) {
 		e.push((reduced[i] as int32) & 15);
