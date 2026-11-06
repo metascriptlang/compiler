@@ -373,8 +373,10 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 
 function reservedNameErrors(seeds: NamedSymbol[], declCtx: CheckerContext): CheckerError[] {
 	const errors: CheckerError[] = [];
+	const engineOwn = withMetaSeeds([]);
 	for (const s of seeds) {
 		if (!isMetaSeedName(s.name)) continue;
+		if (engineOwn.some((m: NamedSymbol): boolean => m.name == s.name && m.sym == s.sym)) continue;
 		const at = s.sym.declNode;
 		errors.push({
 			message: `'${s.name}' is reserved for the compiler's macro programs and cannot be declared (${declCtx.modulePath})`,
