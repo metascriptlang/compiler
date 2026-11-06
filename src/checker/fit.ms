@@ -3840,6 +3840,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
+	if (formal.kind == TypeKind.Span && needsStdConv(exprType.kind == TypeKind.Ref && exprType.typeReturn != null ? exprType.typeReturn : exprType, formal)) return wrapInConv(expr, formal);
 	if (isStructIntoPtr(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — a struct value is not a pointer, and its address is never taken implicitly", expr.location.line, expr.location.column);
 		return expr;
