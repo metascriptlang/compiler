@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import * as vendor from "../index";
+import * as vendor from "../oracle";
 import * as pure from "./coreNative";
 import { CryptoError } from "../errors";
 

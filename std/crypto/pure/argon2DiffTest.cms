@@ -1,4 +1,4 @@
-import { argon2HashRawSync, argon2HashSync, argon2VerifySync } from "std/crypto/argon2";
+import { argon2HashRawSync, argon2HashSync, argon2VerifySync } from "std/crypto/oracle/argon2";
 import { rawString } from "std/core/buffer/bytes";
 import { Argon2Mode, argon2Encode, argon2Raw, argon2VerifyEncoded } from "./argon2";
 

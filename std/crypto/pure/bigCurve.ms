@@ -6,6 +6,7 @@
  */
 
 import { derJoin } from "./asn1";
+import { Number } from "std/core/number";
 import { bigFromBytes, bigToBytes, bitLength, modInverse, modPow } from "./bigint";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";

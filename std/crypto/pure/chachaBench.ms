@@ -4,7 +4,7 @@
 // out/bench
 
 import { Buffer } from "std/core/buffer";
-import { ChaChaKey, sealSync } from "../chacha20";
+import { ChaChaKey, sealSync } from "../oracle/chacha20";
 import { keyWords, xchachaSealInto } from "./chacha";
 
 const MIN_ROUND_MS = 60.0;

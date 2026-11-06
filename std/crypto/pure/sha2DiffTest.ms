@@ -1,5 +1,5 @@
 import { encodeHex } from "../../core/encoding";
-import { HashAlgorithm, createHash, digestSync, toHex } from "std/crypto";
+import { HashAlgorithm, createHash, digestSync, toHex } from "std/crypto/oracle";
 import { newHash, updateHash, finishHash, hashOf } from "./hash";
 import { kindSha256, kindSha224, kindSha512, kindSha384 } from "./state";
 

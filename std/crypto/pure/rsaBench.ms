@@ -14,7 +14,7 @@ import {
 	verifySync,
 	encryptSync,
 	decryptSync,
-} from "std/crypto/rsa";
+} from "std/crypto/oracle/rsa";
 import { pemDecode } from "./pem";
 import {
 	rsaPrivateFromPkcs8,

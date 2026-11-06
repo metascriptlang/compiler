@@ -2,10 +2,11 @@
  * The std/crypto/tls API (tlsConnect, read, write, close, peerCert) over the
  * MetaScript TLS 1.3 client: a blocking std/net socket, OS random bytes for
  * the handshake, and the server chain checked by x509.ms against the root
- * store. Private until the public index switches to it; it keeps the
- * index's error kinds, messages and timeout behaviour.
+ * store. The public std/crypto/tls index re-exports it; it keeps the
+ * vendor binding's error kinds, messages and timeout behaviour.
  */
 
+import { Date } from "std/core/date";
 import {
 	createSocket, connect as connectSocket, send as sendSocket,
 	recv as receiveSocket, recvTimedOut, close as closeSocket,

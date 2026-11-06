@@ -40,7 +40,7 @@ when (!testBuild) {
 	);
 
 	when (c) {
-		import { argon2HashRawSync } from "std/crypto/argon2";
+		import { argon2HashRawSync } from "std/crypto/oracle/argon2";
 
 		struct Row {
 			label: string;

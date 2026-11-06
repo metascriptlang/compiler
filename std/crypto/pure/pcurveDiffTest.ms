@@ -8,7 +8,7 @@ import {
 import {
 	EcPrivateKey as VendorPrivateKey, EcPublicKey as VendorPublicKey,
 	ecdsaSignSync as vendorSign, ecdsaVerifySync as vendorVerify, ecdhSync as vendorEcdh,
-} from "../ec";
+} from "../oracle/ec";
 import { encodeHex } from "../../core/encoding";
 
 function must<T, E>(result: Result<T, E>): T {

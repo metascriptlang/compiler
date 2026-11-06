@@ -6,7 +6,7 @@
 // time per call of each and their ratio (pure / vendor; below 1 means the pure path is faster).
 
 import { Buffer } from "std/core/buffer";
-import * as vendor from "../index";
+import * as vendor from "../oracle";
 import * as pure from "./coreNative";
 
 const ROUNDS = 7;

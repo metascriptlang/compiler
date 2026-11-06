@@ -15,7 +15,7 @@ when (c) {
 		Ed25519PublicKey as NativePublicKey,
 		signSync as nativeSign,
 		verifySync as nativeVerify,
-	} from "std/crypto/ed25519";
+	} from "std/crypto/oracle/ed25519";
 }
 
 function must<T>(sink result: Result<T, CryptoError>): T {

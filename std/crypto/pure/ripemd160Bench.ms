@@ -1,4 +1,4 @@
-import { digestSync } from "std/crypto";
+import { digestSync } from "std/crypto/oracle";
 import { ripemd160Of } from "./ripemd160";
 
 const ROUNDS = 7;

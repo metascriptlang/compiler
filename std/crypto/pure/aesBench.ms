@@ -7,7 +7,7 @@
 
 import { Buffer } from "std/core/buffer";
 import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt, cbcDecrypt } from "./aes";
-import { AesKey, CryptoError, sealSync, openSync, cbcEncryptSync, cbcDecryptSync } from "../aes";
+import { AesKey, CryptoError, sealSync, openSync, cbcEncryptSync, cbcDecryptSync } from "../oracle/aes";
 
 const ROUND_MS = 60.0;
 const ROUNDS = 5;

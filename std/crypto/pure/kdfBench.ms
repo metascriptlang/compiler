@@ -1,4 +1,4 @@
-import { hmacSync, pbkdf2Sync } from "std/crypto";
+import { hmacSync, pbkdf2Sync } from "std/crypto/oracle";
 import { hmacOf, pbkdf2Of } from "./hmac";
 import { kindSha256 } from "./state";
 

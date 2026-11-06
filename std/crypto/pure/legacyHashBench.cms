@@ -1,6 +1,6 @@
 import { kindSha1, kindMd5 } from "./state";
 import { hashOf } from "./hash";
-import { sha1Sync, md5Sync } from "../index";
+import { sha1Sync, md5Sync } from "../oracle";
 import { performance } from "std/core/performance";
 
 function nsPerByte(start: number, size: int32, reps: int32): number {

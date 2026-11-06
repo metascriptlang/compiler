@@ -4,7 +4,7 @@
 
 import { env } from "std/process";
 import { tlsConnect as nativeConnect, read as nativeRead, write as nativeWrite, close as nativeClose } from "./native";
-import { tlsConnect as vendorConnect, read as vendorRead, write as vendorWrite, close as vendorClose } from "./index";
+import { tlsConnect as vendorConnect, read as vendorRead, write as vendorWrite, close as vendorClose } from "../oracle/tls";
 import { cipherSuiteOf, aeadSeal, aeadOpen, aeadTagLength, suiteAes128GcmSha256, suiteChacha20Poly1305Sha256 } from "./aead";
 import {
 	TrafficKeys, trafficKeysOf, sealRecords, openRecord, newRecordBuffer, append, takeRecord, recordNonce,

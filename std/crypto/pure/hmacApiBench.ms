@@ -1,6 +1,6 @@
 import { Buffer } from "std/core/buffer";
 import { argv } from "std/process";
-import { hmacSync as nativeHmac } from "std/crypto";
+import { hmacSync as nativeHmac } from "std/crypto/oracle";
 import { hmacSync as pureHmac } from "./coreNative";
 import { CryptoError } from "../errors";
 

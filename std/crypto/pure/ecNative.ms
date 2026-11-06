@@ -19,6 +19,7 @@ import { wipeBytes } from "./secret";
 import { p256 } from "./p256";
 import { p384 } from "./p384";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
 
 export type EcCurve = "p256" | "p384";
 

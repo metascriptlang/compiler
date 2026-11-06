@@ -17,7 +17,7 @@ when (c) {
 	import {
 		pbkdf2Sync as nativePbkdf2,
 		hkdfSync as nativeHkdf,
-	} from "std/crypto";
+	} from "std/crypto/oracle";
 }
 
 struct KdfVector {

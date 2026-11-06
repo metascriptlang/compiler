@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { ChaChaKey, sealSync, openSync } from "../chacha20";
+import { ChaChaKey, sealSync, openSync } from "../oracle/chacha20";
 import { keyWords, xchachaSealInto, xchachaOpenInto } from "./chacha";
 
 class Rng {

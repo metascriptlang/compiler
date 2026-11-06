@@ -3,31 +3,31 @@ import { argv } from "std/process";
 import { CryptoError } from "../errors";
 import {
 	AesKey as NAesKey, sealSync as nAesSeal, openSync as nAesOpen,
-} from "../aes";
+} from "../oracle/aes";
 import {
 	AesKey as PAesKey, sealSync as pAesSeal,
 } from "./aesNative";
 import {
 	ChaChaKey as NChaChaKey, sealSync as nChachaSeal, openSync as nChachaOpen,
-} from "../chacha20";
+} from "../oracle/chacha20";
 import {
 	ChaChaKey as PChaChaKey, sealSync as pChachaSeal,
 } from "./chachaNative";
 import {
 	Ed25519PrivateKey as NEdKey, signSync as nEdSign, verifySync as nEdVerify,
-} from "../ed25519";
+} from "../oracle/ed25519";
 import {
 	Ed25519PrivateKey as PEdKey, signSync as pEdSign, verifySync as pEdVerify,
 } from "./ed25519Native";
 import {
 	X25519PrivateKey as NXKey, X25519PublicKey as NXPub,
 	sharedSecretSync as nXShared,
-} from "../x25519";
+} from "../oracle/x25519";
 import {
 	X25519PrivateKey as PXKey, X25519PublicKey as PXPub,
 	sharedSecretSync as pXShared,
 } from "./x25519Native";
-import { blake2bSync as nBlake } from "../blake2b";
+import { blake2bSync as nBlake } from "../oracle/blake2b";
 import { blake2bSync as pBlake } from "./blake2bNative";
 
 let sink: number = 0;

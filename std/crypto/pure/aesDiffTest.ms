@@ -3,7 +3,7 @@
 // pure code, so there the run only proves the two entry points agree.
 
 import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt, cbcDecrypt } from "./aes";
-import { AesKey, CryptoError, sealSync, openSync, cbcEncryptSync, cbcDecryptSync } from "../aes";
+import { AesKey, CryptoError, sealSync, openSync, cbcEncryptSync, cbcDecryptSync } from "../oracle/aes";
 import { Buffer } from "std/core/buffer";
 
 class Rng {

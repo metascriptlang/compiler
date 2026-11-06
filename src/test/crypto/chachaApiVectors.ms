@@ -13,7 +13,7 @@ when (c) {
 		ChaChaKey as NativeKey,
 		sealSync as nativeSeal,
 		openSync as nativeOpen,
-	} from "std/crypto/chacha20";
+	} from "std/crypto/oracle/chacha20";
 }
 
 function pattern(length: int32): uint8[] {

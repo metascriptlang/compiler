@@ -1,6 +1,6 @@
 import { newBlake2b, updateBlake2b, finishBlake2b, blake2bOf } from "./blake2b";
 import { blake2bSync as vendorSync, blake2bKeyedSync as vendorKeyedSync, createBlake2b as vendorCreate } from "./blake2bVendor";
-import { blake2bSync, blake2bKeyedSync } from "../blake2b";
+import { blake2bSync, blake2bKeyedSync } from "../oracle/blake2b";
 import { Buffer } from "std/core/buffer";
 
 class Rng {

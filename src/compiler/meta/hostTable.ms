@@ -84,7 +84,7 @@ import { registerCompileTimeRead } from "../cache";
 import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 import "std/compress/zip";
-import "std/crypto";
+import "std/crypto/encodingNative";
 
 // --- Errno-poll state ---
 // The C runtime sets a thread-local errno after each fallible operation and

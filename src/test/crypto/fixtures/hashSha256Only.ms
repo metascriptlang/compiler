@@ -3,7 +3,7 @@ import { encodeHex } from "std/core/encoding";
 when (cryptoImport == "pure") {
 	import { digestSync as pureDigest } from "std/crypto/pure/coreNative";
 } else when (cryptoImport == "native") {
-	import { digestSync as nativeDigest } from "std/crypto";
+	import { digestSync as nativeDigest } from "std/crypto/oracle";
 }
 
 const expected = "ba7816bf8f01cfea414140de5dae2223" +

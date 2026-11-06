@@ -1,6 +1,7 @@
 /** Arbitrary-size integer helpers for the portable elliptic-curve code. Not constant-time. */
 
 import { randomOctets } from "./random";
+import { Number } from "std/core/number";
 
 export { randomOctets } from "./random";
 

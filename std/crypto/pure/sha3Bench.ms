@@ -4,7 +4,7 @@
 //   msc run --target=js std/crypto/pure/sha3Bench.ms
 
 import { Buffer } from "std/core/buffer";
-import { digestSync, HashAlgorithm } from "std/crypto";
+import { digestSync, HashAlgorithm } from "std/crypto/oracle";
 import { sha3Of } from "./sha3";
 
 const MIN_ROUND_MS = 40.0;

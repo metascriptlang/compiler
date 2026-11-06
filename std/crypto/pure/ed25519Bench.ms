@@ -7,7 +7,7 @@ import {
 	Ed25519PrivateKey,
 	signSync,
 	verifySync,
-} from "std/crypto/ed25519";
+} from "std/crypto/oracle/ed25519";
 import { ed25519PublicFromSeed, ed25519Sign, ed25519Verify } from "./ed25519";
 
 const rounds = 7;

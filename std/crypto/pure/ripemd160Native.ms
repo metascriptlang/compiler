@@ -1,4 +1,4 @@
-import { digestSync, toHex } from "std/crypto";
+import { digestSync, toHex } from "std/crypto/oracle";
 import { ripemd160Of, newRipemd160, updateRipemd160, finishRipemd160 } from "./ripemd160";
 
 function vendorHex(data: uint8[]): string {

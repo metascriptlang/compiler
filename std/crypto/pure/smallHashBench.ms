@@ -3,7 +3,7 @@
 //
 //   msc build std/crypto/pure/smallHashBench.ms --danger --output=out/bench && out/bench
 
-import { HashAlgorithm, digestSync } from "std/crypto";
+import { HashAlgorithm, digestSync } from "std/crypto/oracle";
 import { digestSync as pureDigestSync } from "./coreNative";
 import { newHashState, wipeHashState } from "./state";
 import { Buffer } from "std/core/buffer";

@@ -1,7 +1,7 @@
 import { kindSha1, kindMd5 } from "./state";
 import { newHash, updateHash, finishHash, hashOf } from "./hash";
 import { encodeHex } from "../../core/encoding";
-import { sha1Sync, md5Sync, createHash, toHex } from "../index";
+import { sha1Sync, md5Sync, createHash, toHex } from "../oracle";
 
 function nextSeed(seed: uint32): uint32 {
 	return seed * 1664525 + 1013904223;

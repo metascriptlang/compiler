@@ -2,7 +2,7 @@ import { hmacOf, pbkdf2Of, hkdfOf } from "./hmac";
 import { hashKind } from "./hash";
 import { newHashState } from "./state";
 import { encodeHex } from "../../core/encoding";
-import { HashAlgorithm, hmacSync, pbkdf2Sync, hkdfSync } from "../index";
+import { HashAlgorithm, hmacSync, pbkdf2Sync, hkdfSync } from "../oracle";
 
 const algorithms: HashAlgorithm[] = ["sha1", "sha224", "sha256", "sha384", "sha512", "md5"];
 const boundaryLengths: int32[] = [0, 1, 55, 56, 63, 64, 65, 111, 112, 119, 120, 127, 128, 129, 191, 192, 255, 256, 257, 1023, 1024, 2047, 2048];

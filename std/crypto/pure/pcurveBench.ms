@@ -4,7 +4,7 @@ import {
 import {
 	EcPrivateKey as VendorPrivateKey, EcPublicKey as VendorPublicKey,
 	ecdsaSignSync as vendorSign, ecdsaVerifySync as vendorVerify, ecdhSync as vendorEcdh,
-} from "../ec";
+} from "../oracle/ec";
 
 let sink: number = 0;
 

@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { digestSync, HashAlgorithm } from "std/crypto";
+import { digestSync, HashAlgorithm } from "std/crypto/oracle";
 import { encodeHex } from "../../core/encoding";
 import { sha3Of } from "./sha3";
 

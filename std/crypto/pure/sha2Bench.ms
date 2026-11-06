@@ -5,7 +5,7 @@
 // Each row alternates pure and vendor rounds and prints the median ns/B of each and pure/vendor
 // (below 1 means the pure path is faster).
 
-import { HashAlgorithm, digestSync } from "std/crypto";
+import { HashAlgorithm, digestSync } from "std/crypto/oracle";
 import { digestSync as pureDigestSync } from "./coreNative";
 
 let sink: number = 0;

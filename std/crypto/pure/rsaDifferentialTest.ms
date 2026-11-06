@@ -10,7 +10,7 @@
 	verifySync,
 	encryptSync,
 	decryptSync,
-} from "std/crypto/rsa";
+} from "std/crypto/oracle/rsa";
 import { pemDecode, pemEncode } from "./pem";
 import {
 	RsaPrivateData,
