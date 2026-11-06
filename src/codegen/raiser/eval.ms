@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
@@ -481,6 +481,18 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 	const tierPath = sym.modulePath.slice(0, sym.modulePath.byteLength - 4) + ".rms";
 	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
 	if (tier == null) return null;
+	return tierTwinIn(sym, tier);
+}
+
+function vmPreludeTwin(sym: Symbol): Symbol | null {
+	if (!isRoutineSym(sym) || stdModuleName(sym.modulePath) == "") return null;
+	const path = sym.modulePath.endsWith(".jms") ? sym.modulePath.slice(0, sym.modulePath.byteLength - 4) + ".rms" : sym.modulePath;
+	const tier = raiserPreludeCtx().preludeModuleScopes.get(path);
+	if (tier == null) return null;
+	return tierTwinIn(sym, tier);
+}
+
+function tierTwinIn(sym: Symbol, tier: Symbol[]): Symbol | null {
 	if (sym.instantiatedFrom != null) return tierInstanceOf(sym, tier);
 	const builtShape = signatureShape(sym.symbolType);
 	let tierShape = "";
@@ -635,8 +647,8 @@ function declaresEngineProcs(bodyCtx: CheckerContext): boolean {
 }
 
 function lowerBuildCheckedHelper(sym: Symbol): int32 {
-	if (sym.symbolKind == SymbolKind.Class || !isCheckedRoutineDecl(sym.declNode)) {
-		_buildLoweringBlockedBy = sym.symbolKind == SymbolKind.Class ? "class" : "not checked";
+	if (!isCheckedRoutineDecl(sym.declNode)) {
+		_buildLoweringBlockedBy = "not checked";
 		return BUILD_LOWERING_BLOCKED;
 	}
 	if (sym.modulePath.endsWith(".jms")) {
@@ -666,7 +678,9 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	if (host != null) _tierInstanceHost = host;
 	defer { _tierInstanceHost = outerHost; }
 	const clone = cloneNodeKeepSem(sym.declNode);
-	(clone.data as FunctionDeclData).fnName = "$comptime:helper";
+	let engineName = "$comptime:helper";
+	if (clone.kind == NodeKind.ClassDecl) engineName = (clone.data as ClassDeclData).className + "_new";
+	else (clone.data as FunctionDeclData).fnName = engineName;
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(sym.declNode.location));
 	const transformed = transformCheckedForEngine(program, bodyCtx);
 	const unserved = blockedForm(transformed, true);
@@ -675,7 +689,7 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 		return BUILD_LOWERING_BLOCKED;
 	}
 	_engineBuildLowered += 1;
-	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, "$comptime:helper", sym));
+	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym));
 }
 
 const _engineBodyNames: string[] = [];
@@ -720,6 +734,13 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		const lowered = lowerBuildCheckedHelper(sym);
 		if (lowered != BUILD_LOWERING_BLOCKED) return lowered;
 		recheckReason = _buildLoweringBlockedBy;
+		const twin = vmPreludeTwin(sym);
+		if (twin == sym) return -1;
+		if (twin != null) {
+			const twinIdx = ensureCompiledIntoEngine(twin);
+			if (twinIdx >= 0) _engine.funcMap.symbolIndices.set(sym, twinIdx);
+			return twinIdx;
+		}
 	}
 	noteRecheck(recheckReason);
 	const seedCtx = seedCtxForSym(sym);
