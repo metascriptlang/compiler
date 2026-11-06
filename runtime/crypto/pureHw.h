@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "runtime/crypto/cpuFeatures.h"
+#include "runtime/crypto/ctValidation.h"
 #include "runtime/crypto/sha256HwKernel.h"
 #include "runtime/crypto/sha512HwKernel.h"
 #include "runtime/crypto/ciphers/aesHw.h"
@@ -99,6 +100,7 @@ static inline int32_t msPureAesGcmOpenFresh(const uint64_t *keys, int64_t keysLe
 	uint8_t diff = 0;
 	for (int i = 0; i < 16; i++) diff |= computed[i] ^ tag[tagAt + i];
 	msPureHwWipe(computed, sizeof(computed));
+	msDeclassify(&diff, sizeof(diff));
 	if (diff != 0) {
 		msPureHwWipe(dst + dstAt, (size_t)length);
 		return 0;

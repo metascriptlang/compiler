@@ -9,6 +9,7 @@
 
 #include "runtime/crypto/ciphers/aesHw.h"
 #include "runtime/crypto/cpuFeatures.h"
+#include "runtime/crypto/ctValidation.h"
 #include <string.h>
 
 static void wipe(void* p, size_t n) {
@@ -365,6 +366,7 @@ int msAesGcmHwOpen(const uint8_t* rk, int nr, const uint8_t iv[12], const uint8_
 	gcmRun(&s, rk, nr, iv, aad, aadLen, in, len, NULL, computed, 1, 0, 1);
 	uint8_t diff = 0;
 	for (int i = 0; i < 16; i++) diff |= computed[i] ^ tag[i];
+	msDeclassify(&diff, sizeof(diff));
 	const int ok = diff == 0;
 	if (ok) gcmRun(&s, rk, nr, iv, aad, aadLen, in, len, out, NULL, 1, 1, 0);
 	wipe(computed, sizeof(computed));

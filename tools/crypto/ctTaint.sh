@@ -3,7 +3,9 @@
 # Constant-time taint over the native crypto port: builds src/test/crypto/ct/taintRun.ms once (--danger), then runs
 # every case (default: all of `taintRun --list`) in its own Valgrind memcheck process with the case's secret marked
 # undefined. A memcheck error is a finding; leakyBranch and leakyIndex must produce one, noop must report that taint
-# never reached its output (status 14), or the run proves nothing. MSC=<compiler that loads this tree's std>.
+# never reached its output (status 14), or the run proves nothing. argon2id must produce one too: its second half indexes
+# memory by data (RFC 9106 3.4.1.3), so a clean argon2id would mean the taint stopped short. The build defines
+# MS_CT_VALIDATION, which turns msDeclassify (runtime/crypto/ctValidation.h) on for verdicts the caller reveals. MSC=<compiler that loads this tree's std>.
 set -uo pipefail
 out=${1:?outDir}
 shift
@@ -26,7 +28,7 @@ echo "tool $("${vg[0]}" --version) clang $(clang --version | head -1)"
 
 bin=$out/taintRun
 "$MSC" build src/test/crypto/ct/taintRun.ms --danger --cc=clang --lto=off "--passC=-g" \
-	"--passC=-I$deps/valgrind/usr/include" "--cache-dir=$out/cache" "--output=$bin" >"$out/build.log" 2>&1 \
+	"--passC=-I$deps/valgrind/usr/include" "--passC=-DMS_CT_VALIDATION" "--cache-dir=$out/cache" "--output=$bin" >"$out/build.log" 2>&1 \
 	|| { echo "FAIL build"; tail -n 30 "$out/build.log"; exit 1; }
 
 if [ "$#" -gt 0 ]; then cases=("$@"); else mapfile -t cases < <("$bin" --list); fi
@@ -43,12 +45,15 @@ for c in "${cases[@]}"; do
 	errors=$(sed -n 's/.*ERROR SUMMARY: \([0-9]*\) errors.*/\1/p' "$log" | tail -1)
 	case "$c" in
 		leakyBranch|leakyIndex) want=99 ;;
+		argon2id) want=99 ;;
 		noop) want=14 ;;
 		*) want=0 ;;
 	esac
 	if [ "$status" = "$want" ] && { [ "$want" != 0 ] || [ "${errors:-x}" = 0 ]; }; then
 		ok=$((ok + 1))
-		if [ "$want" = 99 ]; then
+		if [ "$c" = argon2id ]; then
+			echo "ok   $c (data-dependent by design, RFC 9106 3.4.1.3: $(firstFrame "$log"))"
+		elif [ "$want" = 99 ]; then
 			echo "ok   $c (control caught: $(firstFrame "$log"))"
 		else
 			echo "ok   $c (status $status, ${errors:-?} memcheck errors)"
