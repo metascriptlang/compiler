@@ -88,6 +88,9 @@ test "E2E C: the fused loop of entries() reduces in range-guarded blocks that en
 	assert c.contains("msRangeSumFitsI32I32("), c.slice(0, 400);
 	assert c.contains("<= 2147483648"), "a block whose key is narrowed to int32 does not stop at 2^31";
 	assert c.contains("msArrayAccessUnchecked("), "the fast block still checks its element read";
+	const masked = builtModuleC("blockReduce", "entriesmasked", "function f(xs: int32[]): int32 { let s: int32 = 0; for (const [k, x] of xs.entries()) s += (x + (k as int32)) & 3; return s; }\nconsole.log(f([1, 2, 3]));\n", ["--release"]);
+	assert !masked.startsWith("error:"), masked.slice(0, 400);
+	assert !masked.contains("msRangeSumFits") && !masked.contains("msRangeFits"), "a checked add under a mask lost its check";
 }
 
 test "E2E C: a generator reduction without a mask, with an effect or reading its sum keeps the checked loop alone" {
