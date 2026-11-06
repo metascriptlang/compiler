@@ -19,6 +19,12 @@ when (js) {
 
 	export const feZero: Fe = 0n;
 	export const feOne: Fe = 1n;
+	/** The curve constant d = -121665/121666. */
+	export const feEdwardsD: Fe = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n;
+	/** 2d. */
+	export const feEdwardsD2: Fe = 0x2406d9dc56dffce7198e80f2eef3d13000e0149a8283b156ebd69b9426b2f159n;
+	/** A square root of -1. */
+	export const feSqrtMinusOne: Fe = 0x2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0n;
 
 	export function feFromBytes(bytes: Readonly<uint8[]>, from: int32): Fe {
 		return (bigFromBytes(bytes, from, 32) & ((1n << 255n) - 1n)) % P;
@@ -112,6 +118,9 @@ when (js) {
 		Fe,
 		feZero,
 		feOne,
+		feEdwardsD,
+		feEdwardsD2,
+		feSqrtMinusOne,
 		feFromBytes,
 		feToBytes,
 		feAdd,

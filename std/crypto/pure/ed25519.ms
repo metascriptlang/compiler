@@ -20,6 +20,9 @@ import {
 	Fe,
 	feZero,
 	feOne,
+	feEdwardsD as edwardsD,
+	feEdwardsD2 as edwardsD2,
+	feSqrtMinusOne as sqrtMinusOne,
 	feFromBytes,
 	feToBytes,
 	feAdd,
@@ -43,20 +46,6 @@ import {
 	scalarMulAdd,
 	scalarIsCanonical,
 } from "./scalar25519";
-
-function feHex(hex: string): Fe {
-	return feFromBytes(hex.decodeHex(), 0);
-}
-
-const edwardsD = feHex(
-	"a3785913ca4deb75abd841414d0a700098e879777940c78c73fe6f2bee6c0352",
-);
-const edwardsD2 = feHex(
-	"59f1b226949bd6eb56b183829a14e00030d1f3eef2808e19e7fcdf56dcd90624",
-);
-const sqrtMinusOne = feHex(
-	"b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b",
-);
 
 export const ed25519SeedLength = 32;
 export const ed25519SecretKeyLength = 64;

@@ -13,6 +13,12 @@ export type Fe = uint32[10];
 
 export const feZero: Fe = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 export const feOne: Fe = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/** The curve constant d = -121665/121666. */
+export const feEdwardsD: Fe = [56195235, 13857412, 51736253, 6949390, 114729, 24766616, 60832955, 30306712, 48412415, 21499315];
+/** 2d. */
+export const feEdwardsD2: Fe = [45281625, 27714825, 36363642, 13898781, 229458, 15978800, 54557047, 27058993, 29715967, 9444199];
+/** A square root of -1. */
+export const feSqrtMinusOne: Fe = [34513072, 25610706, 9377949, 3500415, 12389472, 33281959, 41962654, 31548777, 326685, 11406482];
 
 function fiat_25519_addcarryx_u26(ref out1: uint32, ref out2: uint8, arg1: uint8, arg2: uint32, arg3: uint32): void {
 	let x1: uint32 = 0;
