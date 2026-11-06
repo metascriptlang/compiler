@@ -536,7 +536,7 @@ function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: N
 function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): string {
 	if (elem == null || isUncountedElement(elem) || isPlainFunctionPointer(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
-	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
+	if (elem.kind == TypeKind.Function) return isSendableFunction(elem) || isReadonlyView(canon) ? "msRoClosureArrayDestroy" : "msClosureArrayDestroy";
 	if (readonlyCountedElement(canon, elem)) return "msRoRefArrayDestroy";
 	if (isUnownedSlot(elem)) return isReadonlyView(canon) || isReadonlyUnownedSlot(elem) ? "msUnownedRoRefArrayDestroy" : "msUnownedRefArrayDestroy";
 	if (isAcyclicRefElement(elem, lctx.cyclicCache, lctx.nonCyclicCache)) return "msAcyclicRefArrayDestroy";

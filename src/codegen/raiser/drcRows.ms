@@ -33,20 +33,20 @@ define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msIncrefRo", "msIncrefCyclicR
 define(ROW_DECREF, [
 	"msDecref", "msDecrefRo", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msClosureDestroyRo", "msStructCellDestroy",
 	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayRoRefDestroy", "msArrayUnownedRefDestroy", "msArrayUnownedRoRefDestroy", "msArrayAtomicRefDestroy",
-	"msArrayClosureDestroy", "msClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msRoRefArrayDestroy", "msUnownedRefArrayDestroy", "msUnownedRoRefArrayDestroy", "msAtomicRefArrayDestroy",
+	"msArrayClosureDestroy", "msArrayClosureRoDestroy", "msClosureArrayDestroy", "msRoClosureArrayDestroy", "msNumberArrayDestroy", "msStringArrayDestroy", "msRefArrayDestroy", "msAcyclicRefArrayDestroy", "msRoRefArrayDestroy", "msUnownedRefArrayDestroy", "msUnownedRoRefArrayDestroy", "msAtomicRefArrayDestroy",
 ]);
 define(ROW_DECREF_CYCLIC, ["msDecrefCyclic", "msDecrefCyclicRo"]);
 define(ROW_CLEAR, [
 	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msStructCellWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
 ]);
-define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msClosureSink", "msClosureSinkRo", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink", "msArrayRoRefSink", "msArrayUnownedRefSink", "msArrayUnownedRoRefSink"]);
+define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msArrayClosureRoSink", "msClosureSink", "msClosureSinkRo", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink", "msArrayRoRefSink", "msArrayUnownedRefSink", "msArrayUnownedRoRefSink"]);
 define(ROW_SHARE, ["msStringCopy"]);
 define(ROW_HELD, ["msHeldCount"]);
 define(ROW_KEPT, ["msDestroyLeftNoRef"]);
 define(ROW_COPY_VALUE, [
 	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayRoRefCopy", "msArrayUnownedRefCopy", "msArrayUnownedRoRefCopy", "msArrayAtomicRefCopy",
-	"msArrayClosureCopy", "msStructCellCopy",
+	"msArrayClosureCopy", "msArrayClosureRoCopy", "msStructCellCopy",
 ]);
 
 define(ROW_STR_CONCAT, ["msStringConcat"]);

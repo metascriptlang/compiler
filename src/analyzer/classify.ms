@@ -255,6 +255,9 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 	// INLINE (16B stride), NOT as void* pointers. Routing to msArrayRefDestroy
 	// would misread struct data as void* → misalignment crash on cleanup
 	// (BUG #3). Use the dedicated runtime helper.
+	if (elem.kind == TypeKind.Function && (isSendableFunction(elem) || isReadonlyView(t))) {
+		return makeRcInfo(RcKind.Named, "", "msArrayClosureRoDestroy", "msArrayClosureRoCopy", "msArrayClosureWasMoved", "msArrayClosureRoSink", true);
+	}
 	if (elem.kind == TypeKind.Function) {
 		return makeRcInfo(RcKind.Named, "", "msArrayClosureDestroy", "msArrayClosureCopy", "msArrayClosureWasMoved", "msArrayClosureSink", true);
 	}
