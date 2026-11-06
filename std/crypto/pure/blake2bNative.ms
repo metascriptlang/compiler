@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { Bytes } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import {
 	Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, blake2bOf,
 } from "./blake2b";
@@ -34,13 +34,19 @@ export function blake2bKeyedSync(
 ): Result<Buffer, CryptoError> {
 	const key = bytesOf(keyBytes);
 	if (key.length < 1 || key.length > 64) {
+		wipeIfCopied(keyBytes, key);
 		return Result.err(cryptoError(
 			CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes",
 		));
 	}
 	const bad = badHashSize(hashSize, "blake2bKeyed");
-	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, key, bytesOf(data)) as Buffer);
+	if (bad != null) {
+		wipeIfCopied(keyBytes, key);
+		return Result.err(bad);
+	}
+	const digest = blake2bOf(hashSize, key, bytesOf(data));
+	wipeIfCopied(keyBytes, key);
+	return Result.ok(digest as Buffer);
 }
 
 export async function blake2b(

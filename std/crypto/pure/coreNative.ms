@@ -3,7 +3,7 @@ import { Bytes } from "std/core/buffer/bytes";
 import {
 	encodeHex, decodeHex, encodeBase64, decodeBase64,
 } from "../../core/encoding";
-import { bytesOf } from "./bytes";
+import { bytesOf, wipeIfCopied } from "./bytes";
 import { HashState } from "./state";
 import {
 	hashKind, newHash, updateHash, finishHash, hashOf,
@@ -350,15 +350,18 @@ export function hmacSync(
 				typeof data == "string" ? data.asBytes() : data,
 			) as Buffer);
 		} else {
-			return Result.ok(
-				hmacOf(kind, bytesOf(key), bytesOf(data)) as Buffer,
-			);
+			const secret = bytesOf(key);
+			const mac = hmacOf(kind, secret, bytesOf(data));
+			wipeIfCopied(key, secret);
+			return Result.ok(mac as Buffer);
 		}
 	}
 	if (!isExtAlg(algorithm)) {
 		return Result.err(invalidAlgorithm(algorithm));
 	}
-	const ctx = newExtHmac(algorithm, bytesOf(key));
+	const secret = bytesOf(key);
+	const ctx = newExtHmac(algorithm, secret);
+	wipeIfCopied(key, secret);
 	updateExtHmac(ctx, bytesOf(data));
 	return Result.ok(finishExtHmac(ctx) as Buffer);
 }
@@ -469,21 +472,16 @@ export class Hmac {
 
 	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
 		const kind = hashKind(algorithm);
-		if (kind >= 0) {
-			return {
-				_ctx: newHmac(kind, bytesOf(key)),
-				_done: false,
-			};
-		}
-		if (!isExtAlg(algorithm)) {
+		if (kind < 0 && !isExtAlg(algorithm)) {
 			throw new Error(
 				`createHmac: could not start "${algorithm}"`,
 			);
 		}
-		return {
-			_ctx: newExtHmac(algorithm, bytesOf(key)),
-			_done: false,
-		};
+		const secret = bytesOf(key);
+		const ctx: HmacState | ExtHmacCtx = kind >= 0 ?
+			newHmac(kind, secret) : newExtHmac(algorithm, secret);
+		wipeIfCopied(key, secret);
+		return { _ctx: ctx, _done: false };
 	}
 
 	update(data: Bytes): Hmac {
