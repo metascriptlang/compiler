@@ -1,8 +1,9 @@
 # std/core/json bench baseline
 
 Each table is one `src/bench/run.sh json 3` run: the median of three runs per arm, each run itself the median of
-three rounds of at least 250 ms. `candidate` is std/core/json on the C backend built `--release`; `node` is
-`bench.node.mjs` on V8's `JSON`. The command:
+three rounds of at least 250 ms. `candidate` is std/core/json on the C backend built `--release`; `js` is the same
+`bench.ms` built `--target=js` and run by node; `raiser` is `msc run --target=raiser`; `node` is
+`bench.node.mjs` on V8's `JSON`. The arms are listed in `arms`; the 2026-11-04 tables predate `js` and `raiser`. The command:
 
 ```
 ~/metascript/.gate-host/run-remote.sh <host flags> -- sh -c 'cp "$(command -v msc)" builder && \
@@ -59,3 +60,52 @@ Commit `5e328c6222e`, tree `082d453c198`, 2026-11-04, load 17.9 before, 9.4 afte
 Every row is behind node on both hosts: parse by 4.2 to 7.7x on m1m and 2.2 to 6.5x on rtx, stringify of objects and
 strings by 7.3 to 8.6x on m1m and 2.8 to 4.4x on rtx, and the typed rows by 6.7 to 11x on m1m and 3.7 to 6.9x on rtx.
 Only `stringify numbers` comes close, 1.4x on m1m and 1.1x on rtx.
+
+## After the JSON arc — 2026-11-07
+
+Commit `0430e5f016b`, tree `769becddfc3`, which carries the region allocator (`75d931660bd`). Both runs took a quiet
+window (`run-remote.sh --host <host> --quiet 15`); the checksums match the 2026-11-04 runs.
+
+### rtx
+
+Load 1.16 before, 1.70 after (one-minute average).
+
+| row | unit | candidate | js | raiser | node |
+|---|---|---|---|---|---|
+| parse small object | us/op | 0.56 | 1.545 | 48.643 | 0.441 |
+| parse medium 64 KB | MB/s | 308.1 | 134.1 | 3.77 | 383.7 |
+| parse large 1 MB | MB/s | 291.6 | 132.9 | 3.554 | 339.8 |
+| parse numbers 64 KB | MB/s | 535.6 | 164.8 | 3.994 | 897.2 |
+| parse strings 64 KB | MB/s | 906.4 | 34.05 | 9.29 | 1638 |
+| stringify small object | us/op | 0.265 | 0.623 | 21.72 | 0.245 |
+| stringify medium 64 KB | MB/s | 849.9 | 101.2 | 4.639 | 878 |
+| stringify large 1 MB | MB/s | 826.6 | 72.69 | 0.442 | 636.2 |
+| stringify numbers 64 KB | MB/s | 564.9 | 326.8 | 7.868 | 415.8 |
+| stringify strings 64 KB | MB/s | 700.4 | 34.26 | 13.05 | 1215 |
+| decode typed medium 64 KB | MB/s | 214.4 | 167.7 | 2.975 | 384.3 |
+| encode typed medium 64 KB | MB/s | 388.7 | 98.7 | 4.154 | 892.5 |
+
+### m1m
+
+Load 39.3 before (the jobs that ended as the window opened), 4.81 after (one-minute average, 8 cores).
+
+| row | unit | candidate | js | raiser | node |
+|---|---|---|---|---|---|
+| parse small object | us/op | 1.183 | 1.816 | 68.97 | 0.546 |
+| parse medium 64 KB | MB/s | 152.9 | 102.3 | 2.629 | 307.5 |
+| parse large 1 MB | MB/s | 152 | 106.7 | 2.664 | 249.4 |
+| parse numbers 64 KB | MB/s | 274.5 | 109.2 | 2.523 | 565.4 |
+| parse strings 64 KB | MB/s | 350.4 | 23.86 | 5.18 | 603.8 |
+| stringify small object | us/op | 0.55 | 1.125 | 32.39 | 0.367 |
+| stringify medium 64 KB | MB/s | 459.8 | 71.66 | 1.765 | 572.7 |
+| stringify large 1 MB | MB/s | 452.1 | 61.65 | 0.186 | 557.7 |
+| stringify numbers 64 KB | MB/s | 370.3 | 203.9 | 3.406 | 241.6 |
+| stringify strings 64 KB | MB/s | 327.5 | 22.96 | 6.833 | 1374 |
+| decode typed medium 64 KB | MB/s | 110 | 109.3 | 2.078 | 303.3 |
+| encode typed medium 64 KB | MB/s | 197.8 | 70.66 | 1.693 | 570.9 |
+
+Every candidate row is faster than the 2026-11-04 table of its host: on rtx by 1.56x (stringify numbers) to 5.5x
+(stringify large), on m1m by 2.0x (stringify strings) to 6.9x (stringify medium). Against node, the C backend is ahead on
+`stringify numbers` on both hosts and on `stringify large` on rtx, and 3% behind on `stringify medium` on rtx. Parse stays
+behind node by 1.2 to 1.8x on rtx and 1.6 to 2.2x on m1m, and the typed rows by 1.8 to 2.3x on rtx and 2.8 to 2.9x on
+m1m. The `js` arm loses most on strings with escapes (34 against 1638 MB/s on rtx).
