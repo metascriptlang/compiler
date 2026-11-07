@@ -1831,6 +1831,10 @@ export function isUnownedSlot(t: Readonly<Type | null>): boolean {
 	return t != null && (isUnownedRef(t) || (t.kind == TypeKind.Union && isUnownedRef(unwrapRefNullUnion(t))));
 }
 
+export function isOwnedSlot(t: Readonly<Type | null>): boolean {
+	return t != null && (isOwnedRef(t) || (t.kind == TypeKind.Union && isOwnedRef(unwrapRefNullUnion(t))));
+}
+
 export function isReadonlyUnownedSlot(t: Readonly<Type | null>): boolean {
 	if (t == null || !isUnownedSlot(t)) return false;
 	return isReadonlyView(isUnownedRef(t) ? t : unwrapRefNullUnion(t));
@@ -1888,6 +1892,10 @@ export function unownedElementOf(t: Type | null): Type | null {
 export function unownedSlotOf(place: Node): boolean {
 	if (place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType)) return true;
 	return isUnownedSlot(place.nodeType);
+}
+
+export function ownedSlotOf(place: Node): boolean {
+	return place.kind == NodeKind.MemberExpr && ((place.resolvedSym != null && isOwnedSlot(place.resolvedSym.symbolType)) || isOwnedSlot(place.nodeType));
 }
 
 export function isOwnedRef(t: Readonly<Type | null>): boolean {
