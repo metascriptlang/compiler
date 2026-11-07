@@ -15,7 +15,7 @@ import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, cr
 import { isCHeaderPath } from "../module/loader";
 import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName, valueCustodyOp } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isIntegerType, isFloatType, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion } from "./types";
+import { hasGenericParams, isIntegerType, isFloatType, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion, isReadonlyView, declaredFieldType } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -172,6 +172,10 @@ function walkBody(dispatchRegistry: DispatchRegistry, node: Node, modulePath: st
 			&& isBakeableAggregateConst(node)) {
 		markRefArrayCell(dispatchRegistry, node.nodeType.typeReturn, modulePath);
 	}
+	if (k == NodeKind.VariableDecl && (node.data as VariableDeclData).initializer != null
+			&& (node.data as VariableDeclData).initializer.kind == NodeKind.ObjectLiteral && bakesIntoStaticCell(node)) {
+		markBakedArrayFields(dispatchRegistry, node, modulePath);
+	}
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
 		markRematerializedMemberTypeInfo(dispatchRegistry, (node.data as HiddenStdConvData).convType, modulePath);
@@ -203,6 +207,17 @@ function walkBody(dispatchRegistry: DispatchRegistry, node: Node, modulePath: st
 	// NOTE: forEachChild uses a callback — we pass module-level state
 	// instead of closure-captured value-type arrays to avoid use-after-free
 	walkChildrenGeneric(dispatchRegistry, node, modulePath);
+}
+
+function markBakedArrayFields(dispatchRegistry: DispatchRegistry, node: Node, modulePath: string): void {
+	const owner = peelToStructOrUnion(node.nodeType);
+	if (owner == null || owner.kind != TypeKind.Struct) return;
+	const od = (node.data as VariableDeclData).initializer.data as ObjectLiteralData;
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const fieldT = declaredFieldType(owner, od.keys[i]);
+		const arrT = fieldT != null && bakedRefArrayType(fieldT) != null ? fieldT.typeReturn : null;
+		if (arrT != null && bakedArrayCarrier(od.properties[i]) != null) markRefArrayCell(dispatchRegistry, arrT, modulePath);
+	}
 }
 
 function moveTypeInfoOwnerIntoCore(dispatchRegistry: DispatchRegistry, key: string, demander: string): void {
@@ -925,9 +940,17 @@ function bakeableLeaf(e: Readonly<Node>, elemT: Readonly<Type>): boolean {
 }
 
 function bakeableLiteralArray(node: Readonly<Node>, init: Readonly<Node>): boolean {
-	const t = node.nodeType;
-	if (t == null || t.kind != TypeKind.Ref || t.typeReturn == null || t.typeReturn.kind != TypeKind.Array) return false;
-	const elemT = t.typeReturn.typeReturn;
+	return bakeableArrayOf(node.nodeType, init);
+}
+
+export function bakedRefArrayType(t: Readonly<Type | null>): Readonly<Type> | null {
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : null;
+}
+
+function bakeableArrayOf(t: Readonly<Type | null>, init: Readonly<Node>): boolean {
+	const arrT = bakedRefArrayType(t);
+	if (arrT == null) return false;
+	const elemT = arrT.typeReturn;
 	const carrier = bakedArrayCarrier(init);
 	if (elemT == null || carrier == null) return false;
 	for (let i: int32 = 0; i < bakedArrayCount(carrier); i += 1) {
@@ -966,6 +989,7 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	const od = init.data as ObjectLiteralData;
 	if (od.properties.length == 0) return false;
 	const owner = peelToStructOrUnion(node.nodeType);
+	const readonly = isReadonlyBinding(node);
 	for (let i = 0; i < od.properties.length; i += 1) {
 		const prop = od.properties[i];
 		if (prop == null) return false;
@@ -973,14 +997,28 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 			if (prop.kind != NodeKind.BooleanLiteral) return false;
 			continue;
 		}
-		const bakeable = match (prop.kind) {
-			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
-			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure) && closureWithoutEnv(prop),
-			_ => false,
-		};
-		if (!bakeable) return false;
+		if (!bakeableField(prop, owner != null && owner.kind == TypeKind.Struct ? fieldTypeView(owner, od.keys[i]) : null, readonly)) return false;
 	}
 	return true;
+}
+
+export function bakedFieldIsData(prop: Readonly<Node>, fieldT: Readonly<Type | null>): boolean {
+	return !prop.flags.has(NodeFlag.Closure) && (prop.kind == NodeKind.ObjectLiteral || prop.kind == NodeKind.ArrayLiteral)
+		&& readonlyDataTypeShape(fieldT, 1, true) && readonlyDataInitializer(prop, 1, true);
+}
+
+export function isReadonlyBinding(decl: Readonly<Node>): boolean {
+	const t = decl.nodeType;
+	return isReadonlyView(t) || (t != null && isReadonlyView(t.typeReturn));
+}
+
+function bakeableField(prop: Readonly<Node>, fieldT: Readonly<Type | null>, readonly: boolean): boolean {
+	return match (prop.kind) {
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
+		NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure) ? closureWithoutEnv(prop) : bakedFieldIsData(prop, fieldT),
+		NodeKind.ArrayLiteral | NodeKind.CallExpr => bakedFieldIsData(prop, fieldT) || (readonly && bakeableArrayOf(fieldT, prop)),
+		_ => false,
+	};
 }
 
 function closureWithoutEnv(pair: Readonly<Node>): boolean {

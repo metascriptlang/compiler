@@ -9,13 +9,13 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { bakesIntoStaticCell } from "../checker/reachability";
+import { bakesIntoStaticCell, isReadonlyBinding } from "../checker/reachability";
 import { staticDataConstBinding } from "../checker/constFold";
 import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
-import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, hasNullMember, isReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, hasNullMember } from "../checker/types";
 import { holdsNonNullRef } from "../checker/visibility";
 import { declaredTypeOfLocation } from "../checker/fit";
 import { getOpByKey } from "../codegen/c/types";
@@ -2986,11 +2986,6 @@ function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): 
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
-function readonlyBinding(decl: Readonly<Node>): boolean {
-	const t = decl.nodeType;
-	return isReadonlyView(t) || (t != null && isReadonlyView(t.typeReturn));
-}
-
 function releaseLeavesSlotNamingIt(rcInfo: RcInfo): boolean {
 	return rcInfo.rcKind == RcKind.Ref || rcInfo.rcKind == RcKind.String;
 }
@@ -3043,7 +3038,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	for (const s of d.programStmts) {
 		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
 		if (decl.kind != NodeKind.VariableDecl || decl.resolvedSym == null) continue;
-		if (bakesIntoStaticCell(decl)) (readonlyBinding(decl) ? staticData : baked).push(decl.resolvedSym);
+		if (bakesIntoStaticCell(decl)) (isReadonlyBinding(decl) ? staticData : baked).push(decl.resolvedSym);
 		if (staticDataConstBinding(decl)) staticData.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);

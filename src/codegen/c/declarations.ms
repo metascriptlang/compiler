@@ -20,7 +20,7 @@ import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag, RoutineFlag, decodeRoutineFlags } from "../../checker/symbol";
-import { bakesIntoStaticCell, bakedArrayCarrier, bakedArrayCount, bakedArrayAt, bakedLeaf, functionDeclIsAlive } from "../../checker/reachability";
+import { bakesIntoStaticCell, bakedFieldIsData, bakedRefArrayType, bakedArrayCarrier, bakedArrayCount, bakedArrayAt, bakedLeaf, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
 // ===== genDecl — main declaration dispatcher =====
@@ -665,11 +665,14 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 			i = i + 1;
 			continue;
 		}
+		const fieldT = owner != null && owner.kind == TypeKind.Struct ? fieldTypeView(owner, od.keys[i]) : null;
 		const sv = prop.kind == NodeKind.StringLiteral ? (prop.data as StringLiteralData).value : "";
-		const snippet = prop.kind == NodeKind.StringLiteral
-			? msStringPoolRef(internString(g.stringPool, sv), cStringByteLen(sv))
+		const snippet = prop.kind == NodeKind.StringLiteral ? msStringPoolRef(internString(g.stringPool, sv), cStringByteLen(sv))
+			: bakedFieldIsData(prop, fieldT) ? readonlyDataBracedInit(g, prop, fieldT)
+			: prop.kind == NodeKind.ArrayLiteral || prop.kind == NodeKind.CallExpr ? bakedArrayCellRef(g, node, `${varName}_${mangleFieldName(od.keys[i])}`, bakedRefArrayType(fieldT), prop)
 			: genExpr(g, p, prop);
-		if (prop.kind == NodeKind.ObjectLiteral && !snippet.endsWith(".env = NULL }")) closuresOk = false;
+		if (snippet == "") return refuseBake(g, node, `its field '${od.keys[i]}' has no static form`);
+		if (prop.flags.has(NodeFlag.Closure) && !snippet.endsWith(".env = NULL }")) closuresOk = false;
 		if (braced.length > 0) braced = braced + ", ";
 		braced = braced + "." + mangleFieldName(od.keys[i]) + " = " + snippet;
 		i = i + 1;
@@ -694,12 +697,22 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	if (arrT == null || arrT.kind != TypeKind.Array) return refuseBake(g, node, "its type is not a reference array");
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return;
-	const arrCType = cType.slice(0, cType.length - 1);
+	const cell = bakedArrayCellRef(g, node, varName, arrT, d.initializer!);
+	if (cell == "") return;
+	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = ${cell};`);
+	nameSetAdd(g.declaredGlobals, varName);
+}
+
+function bakedArrayCellRef(g: CGen, node: Readonly<Node>, varName: string, arrT: Readonly<Type> | null, init: Readonly<Node>): string {
+	const carrier = bakedArrayCarrier(init);
+	const elemT = arrT != null ? arrT.typeReturn : null;
+	if (arrT == null || carrier == null || elemT == null) {
+		refuseBake(g, node, "its initializer is not a literal array");
+		return "";
+	}
+	const arrCType = getTypeDesc(g, arrT);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	const carrier = bakedArrayCarrier(d.initializer!);
-	const elemT = arrT.typeReturn;
-	if (carrier == null || elemT == null) return refuseBake(g, node, "its initializer is not a literal array");
 	const count = bakedArrayCount(carrier);
 	let payload = "NULL";
 	if (count > 0) {
@@ -717,8 +730,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	}
 	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = MS_RC_INCREMENT << 26, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${count}, ${payload} } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
-	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
-	nameSetAdd(g.declaredGlobals, varName);
+	return `&${varName}_konst_.b`;
 }
 
 import { CEmissionFacts, createAliveSet, createCGen, assembleOutput, scopeMangledParam } from "./context";
