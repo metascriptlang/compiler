@@ -6,11 +6,13 @@ export { ArrayBuffer, TypedArray, Int8Array, Uint8Array, Uint8ClampedArray, Int1
 export { TextEncoder, TextDecoder, TextDecoderOptions, TextDecodeOptions } from "./text";
 import { TypedArray, Uint8ClampedArray, clampUint8 } from "./core";
 
+@inline
 export function `[]`<T>(this a: Readonly<TypedArray<T>>, index: number): T {
 	const elements: Readonly<Span<T>> = a;
 	return elements[index];
 }
 
+@inline
 export function `[]=`<T>(this a: TypedArray<T>, index: number, value: T): void {
 	const elements: Span<T> = a;
 	elements[index] = value;
