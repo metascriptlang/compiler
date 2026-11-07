@@ -485,14 +485,19 @@ static inline void msOwnedRelease(void* child) {
 	if (child != NULL) *msOwnerSlot(child) = NULL;
 }
 
-/* `slot = v` on an owned slot whose holder is `holder`: v is adopted before the old value is released, so a
- * refused store leaves the slot as it was; storing the value the slot already holds changes nothing. */
-static inline void msOwnedAssignAt(void** slot, void* v, void* holder) {
-	void* old = *slot;
+/* An owned slot holding `old` is about to store `v` for `holder`: v is adopted before old is released, so a
+ * refused store leaves both owners as they were; storing the value the slot already holds changes nothing. */
+static inline void msOwnedReplace(void* old, void* v, void* holder) {
 	if (v == old) return;
 	msOwnedAdopt(v, holder);
 	msOwnedRelease(old);
 }
+
+static inline void* msOwnedTake(void* p) {
+	msOwnedRelease(p);
+	return p;
+}
+
 _Noreturn void msRaiseUnownedOverflow(void* p);
 
 static inline void msUnownedIncref(void* p) {

@@ -404,6 +404,12 @@ extern function msUnownedDecref(p: Ptr<void>): void;
 extern function msUnownedAssign(slot: Ptr<void>, p: Ptr<void>): void;
 
 @compilerFunc
+extern function msOwnedReplace(old: Ptr<void>, v: Ptr<void>, holder: Ptr<void>): void;
+
+@compilerFunc
+extern function msOwnedTake(sink p: Ptr<void>): Ptr<void>;
+
+@compilerFunc
 extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
