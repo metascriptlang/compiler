@@ -793,6 +793,14 @@ test "replay: a macro from a build.ms global import expands in the editor" {
 	assert runMemoryScenario("a macro from a build.ms global import expands in the editor") == "";
 }
 
+test "replay: a macro passes its std/meta Node to a std/meta function" {
+	assert runMemoryScenario("a macro passes its std/meta Node to a std/meta function") == "";
+}
+
+test "replay: an imported macro passes its std/meta Node to a std/meta function" {
+	assert runMemoryScenario("an imported macro passes its std/meta Node to a std/meta function") == "";
+}
+
 test "replay: a dependency shared by two projects resolves through each project's own deps" {
 	assert runMemoryScenario("a dependency shared by two projects resolves through each project's own deps") == "";
 }

@@ -1464,6 +1464,32 @@ function globalImportMacroExpands(): LspScenario {
 	};
 }
 
+const KEEP_NODE =
+	"import { Node, childCount } from \"std/meta\";\nexport macro keepNode(n: Node): Node {\n\tconst count = childCount(n);\n\treturn n;\n}\n";
+
+function macroPassesMetaNode(imported: boolean): LspScenario {
+	const uri = imported ? PROJECT_URI + "user.ms" : "file:///lspwire/keepNode.ms";
+	const use = "const answer = keepNode(1);\nconsole.log(answer);\n";
+	const text = imported ? "import { keepNode } from \"./keep\";\n" + use : KEEP_NODE + use;
+	return {
+		name: imported
+			? "an imported macro passes its std/meta Node to a std/meta function"
+			: "a macro passes its std/meta Node to a std/meta function",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, text))]),
+		],
+		check: (r: LspReplay) => sameText("publish 0", "[]", publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [1],
+			probes: [{ uri, line: imported ? 1 : 5, character: 16 }],
+		},
+		project: imported ? [{ path: "keep.ms", text: KEEP_NODE }] : null,
+	};
+}
+
 function sharedDepResolvesPerProject(): LspScenario {
 	const aPlain = PROJECT_URI + "a/plain.ms";
 	const aGeneric = PROJECT_URI + "a/generic.ms";
@@ -4446,6 +4472,8 @@ export function lspScenarios(): LspScenario[] {
 		twoProjectsKeepTheirConfig(),
 		sharedDepResolvesPerProject(),
 		globalImportMacroExpands(),
+		macroPassesMetaNode(false),
+		macroPassesMetaNode(true),
 		globalImportSharesClassIdentity(),
 		globalImportSharesMacroModuleIdentity(),
 		globalImportEditReachesItsUsers(),
