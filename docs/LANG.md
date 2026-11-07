@@ -3787,8 +3787,12 @@ class Node {
 
 An owning edge is move-only, so owning edges form a forest: a cycle needs one edge that is not owned. A class whose
 references are all owned is therefore acyclic and stays out of the cycle collector (`isCyclic = MS_FALSE` in its
-TypeInfo). `Vec<Owned<N>>` and `Owned<N> | null` keep `N` acyclic; `N[]` and `Owned<N>[]` do not, because the shared
-array cell is a plain edge. `A.owned -> B` with `B.plain -> A` stays cyclic. The `new` expression is typed as plain `N`:
+TypeInfo). `Vec<Owned<N>>` and `Owned<N> | null` keep `N` acyclic; `N[]` does not, because the shared array cell is a
+plain edge. An owned element in a shared array is refused, because two holders of the array would own the same element
+(`kids: Owned<N>[]`, measured on a candidate of main df3e3d84c17, 2026-11-08: `error: 'Owned<N>' cannot be an array
+element: every holder of an array shares it, so two of them would own the same element; hold owned elements in
+'Vec<Owned<N>>'`; `Array<Owned<N> | null>` and an alias `Kid[]` of `type Kid = Owned<N>` are refused the same way).
+`A.owned -> B` with `B.plain -> A` stays cyclic. The `new` expression is typed as plain `N`:
 write the owned type on the binding or the field.
 
 Known limit: the forest holds only while no owned value is moved into its own subtree. `r.kids.push(r)`, or
