@@ -10,7 +10,7 @@
 // BODY moves unchanged into the fallback, so a block the guard refuses keeps every check and stops
 // at the exact element. Any other loop is left alone.
 
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, FunctionDeclData, ReturnStmtData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, UpdateExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, FunctionDeclData, ReturnStmtData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, UpdateExprData } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { isAssignOp } from "../../ast/operators";
 import { peelToRepr, peelTransparentInstance, getSysType, booleanType } from "../../checker/types";
@@ -23,7 +23,7 @@ import { walkNode } from "../walker";
 import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall, generatedRef, extractBodyStmts } from "../util";
 import { makeIntNumber } from "../../checker/literalNodes";
 import { clonePlace } from "../place";
-import { isSignedKind, bitsOfKind, isFloatKind } from "../numKinds";
+import { isSignedKind, bitsOfKind } from "../numKinds";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string, endLimit: int64, bounded: Bounded | null };
@@ -218,7 +218,7 @@ function matchMapStore(loop: Node, callees: Callees): MapStore | null {
 	const range: int64[] = [minOfKind(e), kindMax(e)];
 	const form = affineOf(term, param, range);
 	if (form == null || form.a == 0 || !constrain(form, dk, range) || range[0] > range[1]) return null;
-	const bound = boundFor(bounds, src);
+	const bound = boundFor(bounds, src, dst);
 	if (bound == null) return null;
 	return { index, bound, src, dst, param, term, step, lo: range[0], hi: range[1], tag: widthName(e) };
 }
@@ -233,17 +233,19 @@ function conjunctBounds(cond: Node, out: Node[]): boolean {
 	return true;
 }
 
-function boundFor(bounds: Node[], src: Node): Node | null {
-	for (const b of bounds) {
-		const right = (b.data as BinaryExprData).right;
-		if (right.kind == NodeKind.Identifier && signedKind(right.nodeType) == TypeKind.Int64) return right;
-	}
+function boundFor(bounds: Node[], src: Node, dst: Node): Node | null {
+	let local: Node | null = null;
+	let spanLength: Node | null = null;
 	for (const b of bounds) {
 		const right = (b.data as BinaryExprData).right;
 		const bare = right.kind == NodeKind.TypeAssertion ? (right.data as TypeAssertionData).asExpr : right;
-		if (bare.kind == NodeKind.MemberExpr && (bare.data as MemberExprData).property == "length" && sameSym((bare.data as MemberExprData).object, src.resolvedSym!)) return right;
+		const isLength = bare.kind == NodeKind.MemberExpr && (bare.data as MemberExprData).property == "length"
+			&& (sameSym((bare.data as MemberExprData).object, src.resolvedSym!) || sameSym((bare.data as MemberExprData).object, dst.resolvedSym!));
+		if (isLength) spanLength = right;
+		else if (local == null && right.kind == NodeKind.Identifier && signedKind(right.nodeType) == TypeKind.Int64) local = right;
+		else return null;
 	}
-	return null;
+	return local != null ? local : spanLength;
 }
 
 function spanRead(n: Node, index: Node): Node | null {
@@ -265,7 +267,7 @@ function floatUnitStep(stmt: Node): Node | null {
 	if (e.kind != NodeKind.BinaryExpr || (e.data as BinaryExprData).operator != "+=") return null;
 	const d = e.data as BinaryExprData;
 	const t = peelToRepr(d.left.nodeType);
-	if (d.left.kind != NodeKind.Identifier || d.left.resolvedSym == null || t == null || !isFloatKind(t.kind)) return null;
+	if (d.left.kind != NodeKind.Identifier || d.left.resolvedSym == null || t == null || (t.kind != TypeKind.Float64 && t.kind != TypeKind.Number)) return null;
 	const one = peelStdConv(d.right);
 	if (one.kind != NodeKind.NumberLiteral || (one.data as NumberLiteralData).value != 1) return null;
 	return d.left;
@@ -291,15 +293,20 @@ function affineOf(n: Node, p: Symbol, range: int64[]): Affine | null {
 	const l = affineOf(args[0], p, range);
 	const r = l == null ? null : affineOf(args[1], p, range);
 	if (k == null || bitsOfKind(k) > 32 || l == null || r == null) return null;
+	const limit: int64 = 2147483648;
 	let out: Affine;
 	if (op == "+") out = { a: l.a + r.a, b: l.b + r.b };
 	else if (op == "-") out = { a: l.a - r.a, b: l.b - r.b };
+	else if (!withinWord(l, limit) || !withinWord(r, limit)) return null;
 	else if (l.a == 0) out = { a: l.b * r.a, b: l.b * r.b };
 	else if (r.a == 0) out = { a: l.a * r.b, b: l.b * r.b };
 	else return null;
-	const limit: int64 = 2147483648;
-	if (out.a > limit || out.a < -limit || out.b > limit * 512 || out.b < -limit * 512) return null;
+	if (!withinWord(out, limit * limit / 4)) return null;
 	return constrain(out, k, range) ? out : null;
+}
+
+function withinWord(f: Affine, limit: int64): boolean {
+	return f.a <= limit && f.a >= -limit && f.b <= limit && f.b >= -limit;
 }
 
 function checkedOp(n: Node): string {
@@ -475,7 +482,7 @@ function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | nu
 		} else if (cloneTerm(init, s, false) != null) {
 			s.consts.push(decl.resolvedSym!);
 			s.inits.push(init);
-		} else if (init.kind == NodeKind.TypeAssertion || init.kind == NodeKind.HiddenStdConv) {
+		} else if (castOfLocal(init)) {
 			s.hidden.push(decl.resolvedSym!);
 		} else return null;
 	}
@@ -485,6 +492,7 @@ function matchBoundedTerm(stmts: Node[], index: Node, len: Node): Reduction | nu
 	const term = span == null ? null : cloneTerm(reduce.term, s, true);
 	if (span == null || term == null || span.elems > 1 || s.reads > span.elems) return null;
 	const array = span.elems == 1 ? s.array : null;
+	if (s.elem != null && array == null) return null;
 	if (array != null && !distinctFrom(acc, [array])) return null;
 	if (array == null && span.hi > span.tmax) return null;
 	const k = signedKind(acc.nodeType);
@@ -655,9 +663,18 @@ function maskedIndexLimit(n: Node | null, index: Node): int64 {
 function castOf(s: Node, decl: Node): boolean {
 	if (s.kind != NodeKind.VariableDecl) return false;
 	const init = (s.data as VariableDeclData).initializer;
-	if (init == null) return false;
-	const operand = init.kind == NodeKind.TypeAssertion ? (init.data as TypeAssertionData).asExpr : init.kind == NodeKind.HiddenStdConv ? (init.data as HiddenStdConvData).convExpr : null;
-	return operand != null && operand.kind == NodeKind.Identifier && operand.resolvedSym == decl.resolvedSym;
+	return init != null && castOfLocal(init) && castOperand(init)!.resolvedSym == decl.resolvedSym;
+}
+
+function castOfLocal(init: Node): boolean {
+	const operand = castOperand(init);
+	return operand != null && operand.kind == NodeKind.Identifier && operand.resolvedSym != null
+		&& !init.flags.has(NodeFlag.ConvCheck) && !init.flags.has(NodeFlag.ObjCheck);
+}
+
+function castOperand(init: Node): Node | null {
+	if (init.kind == NodeKind.TypeAssertion) return (init.data as TypeAssertionData).asExpr;
+	return init.kind == NodeKind.HiddenStdConv ? (init.data as HiddenStdConvData).convExpr : null;
 }
 
 function nestedStatements(block: Node): Node[] {
