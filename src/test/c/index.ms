@@ -25,6 +25,7 @@ import "./macroSandbox";
 import "./toycodec";
 import "./structuralPrefix";
 import "./drcLifecycle";
+import "./runtimeHeaderClosure";
 import "./int64Literal";
 import "./constFoldOrder";
 import "./bigintChecker";

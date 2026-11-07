@@ -61,6 +61,7 @@ import "./c/macroSandbox";
 import "./c/toycodec";
 import "./c/structuralPrefix";
 import "./c/drcLifecycle";
+import "./c/runtimeHeaderClosure";
 import "./c/int64Literal";
 import "./c/bigintChecker";
 import "./c/rangeCheckPolicy";
