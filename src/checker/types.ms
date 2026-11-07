@@ -5479,6 +5479,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyIntoUnionFormal(formal, concrete, bindings);
 		return;
 	}
+	if (concrete.kind == TypeKind.Union && formal.kind != TypeKind.Union && formal.kind != TypeKind.Conditional) {
+		for (const member of concrete.typeChildren) unifyTypeGuard(formal, member, bindings);
+		return;
+	}
 	if (formal.kind == TypeKind.Mapped && formal.typeChildren.length == 2) {
 		if (concrete.kind == TypeKind.Mapped && concrete.typeChildren.length >= 2) {
 			unifyTypeGuard(formal.typeChildren[0], concrete.typeChildren[0], bindings);
