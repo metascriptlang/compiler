@@ -48,7 +48,8 @@ test "readonlyReturn: only a Readonly module constant itself is a program-lifeti
 	assert errors(node + "const ROOT: Readonly<Node> = new Node();\nfunction f(t: Readonly<Node>): Readonly<Node> { return t.n > 0 ? t : ROOT; }", "") == 0;
 	assert errors(node + "let root: Readonly<Node> = new Node();\nfunction f(t: Readonly<Node>): Readonly<Node> { return root; }", "'root' is not a Readonly module constant") == 1;
 	assert errors(node + "const ROOT: Node = new Node();\nfunction f(t: Readonly<Node>): Readonly<Node> { return ROOT; }", "'ROOT' is not a Readonly module constant") == 1;
-	assert errors(node + "const ROOT: Readonly<Node> = new Node();\nfunction f(t: Readonly<Node>): Readonly<Node> { return ROOT.kids[0]; }", "a path below the module constant 'ROOT'") == 1;
+	assert errors(node + "const ROOT: Readonly<Node> = new Node();\nfunction f(t: Readonly<Node>): Readonly<Node> { return ROOT.kids[0]; }", "a path below the module constant 'ROOT'") == 0;
+	assert errors(node + "const SHARED_N = new Node();\nconst RALIAS: Readonly<Node> = SHARED_N;\nfunction f(t: Readonly<Node>): Readonly<Node> { return RALIAS.kids[0]; }", "a path below the module constant 'RALIAS'") == 1;
 }
 
 test "readonlyReturn: a function value with a Readonly result follows the same rule" {
@@ -56,14 +57,19 @@ test "readonlyReturn: a function value with a Readonly result follows the same r
 	assert errors(node + "const f = (t: Readonly<Node>): Readonly<Node> => t.kids[0];", "") == 0;
 }
 
-const shared = node + "class Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\nfunction take(sink t: Readonly<Node>): int32 { return t.n; }\n";
+const shared = node + "class Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\nconst SHARED_N = new Node();\nconst RALIAS: Readonly<Node> = SHARED_N;\nfunction take(sink t: Readonly<Node>): int32 { return t.n; }\n";
 
-test "readonlyReturn: spawned code that stores a shared module const is refused" {
-	assert errors(shared + "const w = spawn(() => { const h = new Holder(); h.f = ROOT; return 0; });", "stores the module const 'ROOT' into a field") == 1;
-	assert errors(shared + "const w = spawn(() => { const xs: (Readonly<Node> | null)[] = [null]; xs[0] = ROOT; return 0; });", "stores the module const 'ROOT' into an array element") == 1;
-	assert errors(shared + "const w = spawn(() => { const xs: Readonly<Node>[] = []; xs.push(ROOT); return 0; });", "stores the module const 'ROOT' into a sink parameter") == 1;
-	assert errors(shared + "const w = spawn(() => take(ROOT));", "stores the module const 'ROOT' into a sink parameter") == 1;
-	assert errors(shared + "function store(h: Holder): void { h.f = ROOT; }\nconst w = spawn(() => { store(new Holder()); return 0; });", "which stores the module const 'ROOT' into a field") == 1;
+test "readonlyReturn: spawned code may store an immortal module const; a Readonly array const, which stays mortal, is still refused" {
+	assert errors(shared + "const w = spawn(() => { const h = new Holder(); h.f = ROOT; return 0; });", "stores the module const 'ROOT' into a field") == 0;
+	assert errors(shared + "const w = spawn(() => { const h = new Holder(); h.f = RALIAS; return 0; });", "uses module-level 'RALIAS'") == 1;
+	assert errors(shared + "const w = spawn(() => { const xs: (Readonly<Node> | null)[] = [null]; xs[0] = ROOT; return 0; });", "stores the module const 'ROOT' into an array element") == 0;
+	assert errors(shared + "const w = spawn(() => { const xs: (Readonly<Node> | null)[] = [null]; xs[0] = RALIAS; return 0; });", "uses module-level 'RALIAS'") == 1;
+	assert errors(shared + "const w = spawn(() => { const xs: Readonly<Node>[] = []; xs.push(ROOT); return 0; });", "stores the module const 'ROOT' into a sink parameter") == 0;
+	assert errors(shared + "const w = spawn(() => { const xs: Readonly<Node>[] = []; xs.push(RALIAS); return 0; });", "uses module-level 'RALIAS'") == 1;
+	assert errors(shared + "const w = spawn(() => take(ROOT));", "stores the module const 'ROOT' into a sink parameter") == 0;
+	assert errors(shared + "const w = spawn(() => take(RALIAS));", "uses module-level 'RALIAS'") == 1;
+	assert errors(shared + "function store(h: Holder): void { h.f = ROOT; }\nconst w = spawn(() => { store(new Holder()); return 0; });", "which stores the module const 'ROOT' into a field") == 0;
+	assert errors(shared + "function store(h: Holder): void { h.f = RALIAS; }\nconst w = spawn(() => { store(new Holder()); return 0; });", "uses module-level 'RALIAS'") == 1;
 }
 
 test "readonlyReturn: the same stores outside spawned code, and borrows inside it, compile" {
@@ -159,7 +165,7 @@ test "readonlyReturn: a const for-of element of a view parameter borrows that pa
 	assert errors(node + "function mk(): Node[] { return [new Node()]; }\nfunction f(t: Readonly<Node>): Readonly<Node> | null {\n\tfor (const k of mk()) { return k; }\n\treturn null;\n}", "escapes its stack frame") == 1;
 }
 
-const hostShape = node + "struct Host { get: (k: int32) => int32; }\nstruct Ctx { db: Host; }\nstruct Handle { host: Host; n: int32; }\nstruct Kept { host: Host; t: Readonly<Node>; }\nclass Box { f: Readonly<Node> | null = null; }\nstruct Ctx2 { box: Box; }\nclass Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\n";
+const hostShape = node + "struct Host { get: (k: int32) => int32; }\nstruct Ctx { db: Host; }\nstruct Handle { host: Host; n: int32; }\nstruct Kept { host: Host; t: Readonly<Node>; }\nclass Box { f: Readonly<Node> | null = null; }\nstruct Ctx2 { box: Box; }\nclass Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\nconst SHARED_N = new Node();\nconst RALIAS: Readonly<Node> = SHARED_N;\n";
 const inTask = "const w = spawn(() => { const ctx: Ctx = { db: { get: (k: int32): int32 => k } }; ";
 
 test "readonlyReturn: a by-value receiver holding only function values keeps no argument of a call on it" {
@@ -168,21 +174,26 @@ test "readonlyReturn: a by-value receiver holding only function values keeps no 
 	assert errors(hostShape + "struct G<T> { host: Host; v: T; }\nfunction open<T>(this host: Host, t: Readonly<Node>, v: T): G<T> { return { host: host, v: v }; }\n" + inTask + "return ctx.db.open(ROOT, 1).v; });", "stores") == 0;
 }
 
-test "readonlyReturn: a receiver call that stores the module const, or a receiver that holds a reference, stays refused" {
-	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return ctx.db.open(ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 1;
-	assert errors(hostShape + "function open(host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return open(ctx.db, ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 1;
-	assert errors(hostShape + "function look(this b: Box, v: Readonly<Node>): int32 { return v.n; }\nconst w = spawn(() => { const c: Ctx2 = { box: new Box() }; const k = c.box.look(ROOT); const h = new Holder(); h.f = c.box.f; return k; });", "stores the module const 'ROOT' into a field") == 1;
+test "readonlyReturn: a receiver call that stores a mortal module const, or a receiver that holds a reference, stays refused; an immortal one is shared" {
+	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return ctx.db.open(ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 0;
+	assert errors(hostShape + "function open(this host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return ctx.db.open(RALIAS).t.n; });", "uses module-level 'RALIAS'") == 1;
+	assert errors(hostShape + "function open(host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return open(ctx.db, ROOT).t.n; });", "which stores the view 't' into the field 't' of an object literal") == 0;
+	assert errors(hostShape + "function open(host: Host, t: Readonly<Node>): Kept { return { host: host, t: t }; }\n" + inTask + "return open(ctx.db, RALIAS).t.n; });", "uses module-level 'RALIAS'") == 1;
+	assert errors(hostShape + "function look(this b: Box, v: Readonly<Node>): int32 { return v.n; }\nconst w = spawn(() => { const c: Ctx2 = { box: new Box() }; const k = c.box.look(ROOT); const h = new Holder(); h.f = c.box.f; return k; });", "stores the module const 'ROOT' into a field") == 0;
+	assert errors(hostShape + "function look(this b: Box, v: Readonly<Node>): int32 { return v.n; }\nconst w = spawn(() => { const c: Ctx2 = { box: new Box() }; const k = c.box.look(RALIAS); const h = new Holder(); h.f = c.box.f; return k; });", "uses module-level 'RALIAS'") == 1;
 }
 
 const curKept = "struct CurKept { host: Host; t: Cursor<Readonly<Node>>; }\nstruct GenKept<T> { v: T; t: Cursor<Readonly<Node>>; }\n";
 
-test "readonlyReturn: a module const stored into a Cursor field of an object literal takes no count, while a Readonly field stays a counted store" {
+test "readonlyReturn: a module const stored into a Cursor field of an object literal takes no count, while a Readonly field stays a counted store, refused only for a mortal const" {
 	assert errors(hostShape + curKept + "function keep(host: Host, t: Readonly<Node>): CurKept { return { host: host, t: t }; }\n" + inTask + "return keep(ctx.db, ROOT).t!.n; });", "stores") == 0;
 	assert errors(hostShape + curKept + inTask + "const k: CurKept = { host: ctx.db, t: ROOT }; return k.t!.n; });", "stores") == 0;
 	assert errors(hostShape + curKept + "function keep<T>(v: T, t: Readonly<Node>): GenKept<T> { return { v: v, t: t }; }\n" + inTask + "return keep(1, ROOT).t!.n; });", "stores") == 0;
-	assert errors(hostShape + curKept + inTask + "const k: Kept = { host: ctx.db, t: ROOT }; return k.t.n; });", "stores the module const 'ROOT' into the field 't' of an object literal") == 1;
-	const byValue = "struct SRow { n: int32; f: Sendable<(k: int32) => int32>; }\nconst SR: Readonly<SRow> = { n: 1, f: (k: int32): int32 => k };\nstruct SKept { s: Cursor<Readonly<SRow>>; }\n";
-	assert errors(hostShape + byValue + inTask + "const k: SKept = { s: SR }; return k.s!.n; });", "stores the module const 'SR' into the field 's' of an object literal") == 1;
+	assert errors(hostShape + curKept + inTask + "const k: Kept = { host: ctx.db, t: ROOT }; return k.t.n; });", "stores the module const 'ROOT' into the field 't' of an object literal") == 0;
+	assert errors(hostShape + curKept + inTask + "const k: Kept = { host: ctx.db, t: RALIAS }; return k.t.n; });", "uses module-level 'RALIAS'") == 1;
+	const byValue = "struct SRow { n: int32; f: Sendable<(k: int32) => int32>; }\nconst SR: Readonly<SRow> = { n: 1, f: (k: int32): int32 => k };\nconst SRBASE: SRow = { n: 1, f: (k: int32): int32 => k };\nconst SRA: Readonly<SRow> = SRBASE;\nstruct SKept { s: Cursor<Readonly<SRow>>; }\n";
+	assert errors(hostShape + byValue + inTask + "const k: SKept = { s: SR }; return k.s!.n; });", "stores the module const 'SR' into the field 's' of an object literal") == 0;
+	assert errors(hostShape + byValue + inTask + "const k: SKept = { s: SRA }; return k.s!.n; });", "uses module-level 'SRA'") == 1;
 }
 
 const podShapes = "struct Pod { name: string; base: int32; }\nstruct GPod<T> { name: string; base: int32; v: T; }\nstruct Wrap<T> { inner: GPod<T>; }\nclass Cell { n: int32 = 0; }\n";

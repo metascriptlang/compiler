@@ -55,16 +55,26 @@ test "moduleConstShare: a local bound from a module const that tasks share takes
 	}
 }
 
-const REFUSED = "stores the module const 'T' into the owned result it returns";
+const REFUSED = "uses module-level 'TA'";
+const MORTAL = PLAIN + "export const TA: Readonly<Table> = T;\n";
 
-test "moduleConstShare: an owned result returning a shared module const's interior is refused in code a task runs" {
+test "moduleConstShare: an owned result returning the interior of a module const that stays mortal is refused in code a task runs" {
 	const refused = [
+		{ name: "an alias's closure field", source: MORTAL + "function get(): Sendable<(id: uint32) => uint32> { return TA.keyOf; }\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
+		{ name: "an arrow with an expression body", source: MORTAL + "const get = (): Sendable<(id: uint32) => uint32> => TA.keyOf;\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
+		{ name: "a return through a local", source: MORTAL + "function get(): Sendable<(id: uint32) => uint32> { const k = TA.keyOf; return k; }\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
+	];
+	for (const item of refused) assert refuses(item.source, REFUSED), item.name;
+}
+
+test "moduleConstShare: an owned result returning the interior of an immortal module const compiles in code a task runs" {
+	const shared = [
 		{ name: "a plain const's closure field", source: PLAIN + "function get(): Sendable<(id: uint32) => uint32> { return T.keyOf; }\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
 		{ name: "a Readonly const's closure field", source: READONLY + "function get(): Sendable<(id: uint32) => uint32> { return T.keyOf; }\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
 		{ name: "an arrow with an expression body", source: READONLY + "const get = (): Sendable<(id: uint32) => uint32> => T.keyOf;\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
 		{ name: "a return through a local", source: PLAIN + "function get(): Sendable<(id: uint32) => uint32> { const k = T.keyOf; return k; }\nfunction probe(i: uint32): uint32 { return get()(i); }" + TASKS },
 	];
-	for (const item of refused) assert refuses(item.source, REFUSED), item.name;
+	for (const item of shared) assert !refuses(item.source, "stores the module const"), item.name;
 }
 
 test "moduleConstShare: a call through the field, a view result and a return outside tasks compile" {
