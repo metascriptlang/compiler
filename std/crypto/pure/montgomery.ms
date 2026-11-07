@@ -1,4 +1,3 @@
-import { valueBarrier } from "./secret";
 /**
  * Arithmetic modulo an odd 256- or 384-bit modulus on 32-bit little-endian limbs, in the
  * Montgomery domain (R = 2^(32 * words)): word-by-word Montgomery multiplication with one final

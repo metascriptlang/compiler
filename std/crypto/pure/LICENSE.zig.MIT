@@ -1,3 +1,7 @@
+std/crypto/pure/pcurve.ms and the ECDSA checks of std/crypto/pure/weierstrass.ms follow Zig's
+std.crypto.pcurves and std.crypto.ecdsa; std/crypto/pure/ed25519.ms and std/crypto/pure/scalar25519.ms
+follow Zig's std.crypto.25519; std/crypto/pure/ff.ms follows Zig's std.crypto.ff (https://github.com/ziglang/zig).
+
 The MIT License (Expat)
 
 Copyright (c) Zig contributors

@@ -541,8 +541,8 @@ function narrowGcdModinvOdd(
 		div2ModOdd(q, n);
 		condSwap(r, q, swap);
 	}
-	uintWipe(d);
-	uintWipe(dq);
+	wipeWords(d);
+	wipeWords(dq);
 	return { gcd: v, inverse: q };
 }
 
@@ -570,11 +570,6 @@ export function uintGcd(
 	const g = found.gcd;
 	shiftLeft(g, Math.min(aShift, bShift) as int32);
 	return g;
-}
-
-/** Zeroes secret scratch once it is no longer needed. */
-export function uintWipe(x: uint32[]): void {
-	for (let i = 0; i < x.length; i++) x[i] = 0;
 }
 
 when (c) {
@@ -978,7 +973,7 @@ when (c) {
 	}
 
 	function wideWipe(x: uint64[]): void {
-		for (let i = 0; i < x.length; i++) x[i] = 0;
+		wipeWords64(x);
 	}
 
 	// The window width mbedTLS's exponentiation takes for an exponent of this many bits.

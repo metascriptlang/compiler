@@ -64,13 +64,14 @@ function usesChacha(code: int32): boolean {
 export class AeadKey {
 	suite: int32;
 	key: uint8[];
-	aesSchedule: uint32[];
+	aesSchedule: KeySchedule;
 	chachaKey: uint32[];
 }
 
 function onDestroy(this key: AeadKey): void {
 	wipeBytes(key.key);
-	wipeWords(key.aesSchedule);
+	wipeKeySchedule(key.aesSchedule);
+	wipeWords(key.chachaKey);
 }
 
 export function newAeadKey(suite: int32, key: Readonly<uint8[]>): AeadKey {

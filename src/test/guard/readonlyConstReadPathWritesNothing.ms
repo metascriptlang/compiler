@@ -1,9 +1,12 @@
-// guard: a deep Readonly module const crosses threads only when nothing a task calls on it can write
-// a cell: a C extern reached from a call that reads the const, through a method receiver or a free
-// call, directly or through a routine with a body, refuses the const on C and JS; a string length
-// and == read of the const are accepted, and so are a @pure extern (push) that writes only a fresh
-// local and the @pure array reads (includes, indexOf, lastIndexOf), while the same push into a
-// module `let` stays refused as module state.
+// guard: a deep Readonly module const crosses threads when nothing a task or an actor hands it to
+// can count or write it. Passing the const, a parameter bound to it, or a pointer cast of it to a C
+// extern whose parameter is a counted handle or an opaque pointer refuses it on C and JS, whether
+// the call is on the task's own line or inside a routine the const reaches, and an actor method
+// that passes it to such an extern is refused the same way, while storing it is a share (ULTRALOCK
+// V0) and storing a Readonly alias of mortal module state stays refused; a string, scalar or
+// Readonly view of value-only data passes (includes, indexOf, lastIndexOf, the Readonly pointer
+// asString copies through), and so does an extern a helper calls with its own locals (a push into
+// a fresh Vec), while a push into a module `let` stays refused as module state.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent.
 //
@@ -112,20 +115,43 @@ const cases: Case[] = [
 			+ "function read(): int32 { return shape.firstOffset(); }\n" + RUN,
 	},
 	{
-		name: "a @pure string[] includes on the const inside a routine a task calls",
+		name: "a string[] includes on the const inside a routine a task calls",
 		refused: false,
 		text: "const known: Readonly<string[]> = [\"a\", \"b\"];\n"
 			+ "function has(x: string): boolean { return known.includes(x); }\n"
 			+ "function read(): int32 { return has(\"b\") ? 1 : 0; }\n" + RUN,
 	},
 	{
-		name: "a @pure number[] indexOf and string[] lastIndexOf called on the const directly",
+		name: "a number[] indexOf and string[] lastIndexOf called on the const directly",
 		refused: false,
 		text: "const nums: Readonly<number[]> = [1, 2];\nconst names: Readonly<string[]> = [\"a\", \"b\"];\n"
 			+ "function read(): number { return nums.indexOf(2) + names.lastIndexOf(\"a\"); }\n" + RUN,
 	},
 	{
-		name: "a @pure push into a module let inside a routine that reads the const",
+		name: "a C extern given the const cast to an opaque Readonly pointer",
+		refused: true,
+		mark: "to the external 'look' through a parameter",
+		rule: FOREIGN,
+		text: CELL
+			+ "extern function look(p: Readonly<Ptr<void>>): int32;\n"
+			+ "function read(): int32 { return look(K as Readonly<Ptr<void>>); }\n" + RUN,
+	},
+	{
+		name: "an asString of a slice of the const's bytes in a Sendable function (std copies them through a Readonly pointer)",
+		refused: false,
+		text: "struct Doc { bytes: Vec<uint8>; }\nconst doc: Readonly<Doc> = { bytes: [104, 105] };\n"
+			+ "function text(): string { return doc.bytes[0..2].asString(); }\n"
+			+ "const run: Sendable<() => string> = (): string => text();\nconsole.log(run());\n",
+	},
+	{
+		name: "a push of the const into a local Vec of cursors, whose elements take no count",
+		refused: false,
+		text: CELL
+			+ "function seen(c: Readonly<Cell>): int32 { let xs: Cursor<Readonly<Cell>>[] = []; xs.push(c); return xs.length; }\n"
+			+ "function read(): int32 { return seen(K); }\n" + RUN,
+	},
+	{
+		name: "a push into a module let inside a routine that reads the const",
 		refused: true,
 		mark: "module-level 'kept'",
 		rule: MODULE_STATE_RULE,

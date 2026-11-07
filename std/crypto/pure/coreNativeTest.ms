@@ -122,7 +122,9 @@ test "streaming hash and HMAC equal the one-shot result for every hash" {
 	assert toHex(got(digestSync("sha256", "abc"))) ==
 		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 	assert !isHashSupported("sha0");
-	for (const name of ["ripemd160", "sha3-224", "sha3-256", "sha3-384", "sha3-512"] as HashAlgorithm[]) {
+	for (const name of [
+		"ripemd160", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+	] as HashAlgorithm[]) {
 		assert isHashSupported(name);
 	}
 	assert encodedHash("nope", "x", "hex") == "";
@@ -165,8 +167,6 @@ test "ripemd160 and sha3 block/rate boundary streaming" {
 }
 
 test "ripemd160 and sha3 HMAC known-answer vectors" {
-	// Source: msCryptoHmacSpanInto on rtx, msc 56ad1fdf80f (mbedTLS 3.6).
-	// ripemd160 TC1 and TC2 also match RFC 2286 §4.
 	const hk = (
 		name: HashAlgorithm, key: uint8[], data: string,
 	): string => {
@@ -244,7 +244,9 @@ test "ripemd160 and sha3 HMAC with long key, empty and binary-NUL messages" {
 	for (let i = 0; i < 50; i++) msg[i] = (i * 3 & 255) as uint8;
 	const empty: uint8[] = [];
 	const nulMsg = new Array<uint8>(10);
-	for (const name of ["ripemd160", "sha3-224", "sha3-256", "sha3-384", "sha3-512"] as HashAlgorithm[]) {
+	for (const name of [
+		"ripemd160", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+	] as HashAlgorithm[]) {
 		const r1 = hmacSync(name, longKey, msg);
 		assert r1.ok;
 		const m1 = createHmac(name, longKey);
@@ -263,26 +265,34 @@ test "ripemd160 and sha3 HMAC with long key, empty and binary-NUL messages" {
 }
 
 test "Hmac.digest wipes old-six key-cache state on consume" {
-	const oldSix: HashAlgorithm[] = ["sha256", "sha512", "sha384", "sha224", "sha1", "md5"];
-	const key = "pintest-key";
-	const data = "pintest-data";
-	for (const name of oldSix) {
-		const ref = hmacSync(name, key, data);
-		assert ref.ok;
-		const expected = toHex(ref.value);
-		const m = createHmac(name, key);
-		m.update(data);
-		const mac = toHex(m.digest());
-		assert mac == expected;
-		const ctx = m._ctx;
-		assert ctx instanceof HmacState;
-		for (let i = 0; i < 16; i++) assert ctx.innerKeyed.state[i] == 0;
-		for (let i = 0; i < 16; i++) assert ctx.outerKeyed.state[i] == 0;
-		for (let i = 0; i < 16; i++) assert ctx.inner.state[i] == 0;
-		for (let i = 0; i < 16; i++) assert ctx.outer.state[i] == 0;
-		for (const b of ctx.innerDigest) assert b == 0;
-		assert m.digest().length == 0;
-		m.update(data);
-		assert m.digest().length == 0;
+	const oldSix: HashAlgorithm[] = [
+		"sha256", "sha512", "sha384", "sha224", "sha1", "md5",
+	];
+	for (const length of [7, 200]) {
+		const key = new Array<uint8>(length);
+		for (let i = 0; i < length; i++) key[i] = (i & 255) as uint8;
+		const before = toHex(key);
+		const data = "pintest-data";
+		for (const name of oldSix) {
+			const reference = hmacSync(name, key, data);
+			assert reference.ok;
+			const hmac = createHmac(name, key);
+			const ctx = hmac._ctx;
+			assert ctx instanceof HmacState;
+			hmac.update(data);
+			assert toHex(hmac.digest()) == toHex(reference.value);
+			for (const state of [
+				ctx.inner, ctx.outer, ctx.innerKeyed, ctx.outerKeyed,
+			]) {
+				for (const word of state.state) assert word == 0;
+				for (const word of state.schedule) assert word == 0;
+				for (const byte of state.block) assert byte == 0;
+			}
+			for (const byte of ctx.innerDigest) assert byte == 0;
+			assert toHex(key) == before;
+			assert hmac.digest().length == 0;
+			hmac.update(data);
+			assert hmac.digest().length == 0;
+		}
 	}
 }
