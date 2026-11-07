@@ -1,0 +1,221 @@
+diff --git a/src/Graph.ts b/src/Graph.ts
+index efd3960..540ac23 100644
+--- a/src/Graph.ts
++++ b/src/Graph.ts
+@@ -7,6 +7,7 @@ import type ExternalModule from './ExternalModule';
+ import Module from './Module';
+ import { ModuleLoader, type UnresolvedModule } from './ModuleLoader';
+ import type {
++	ChokidarOptions,
+ 	ModuleInfo,
+ 	ModuleJSON,
+ 	NormalizedInputOptions,
+@@ -57,7 +58,10 @@ export interface GraphWatchHooks {
+ 	watchChange(...parameters: Parameters<WatchChangeHook>): Promise<void>;
+ }
+ 
+-export type RegisterWatchHooks = (watchHooks: GraphWatchHooks) => void;
++export type RegisterWatchHooks = (
++	watchHooks: GraphWatchHooks,
++	processedChokidarOptions?: ChokidarOptions
++) => void;
+ 
+ export default class Graph {
+ 	readonly astLru = flru<ProgramNode>(5);
+diff --git a/src/rollup/rollup.ts b/src/rollup/rollup.ts
+index 67de652..d54939f 100644
+--- a/src/rollup/rollup.ts
++++ b/src/rollup/rollup.ts
+@@ -24,6 +24,7 @@ import { getSortedValidatedPlugins } from '../utils/PluginDriver';
+ import { ANONYMOUS_OUTPUT_PLUGIN_PREFIX, ANONYMOUS_PLUGIN_PREFIX } from '../utils/pluginNames';
+ import { getTimings, initialiseTimers, timeEnd, timeStart } from '../utils/timers';
+ import type {
++	ChokidarOptions,
+ 	InputOptions,
+ 	NormalizedInputOptions,
+ 	NormalizedOutputOptions,
+@@ -51,15 +52,19 @@ export async function rollupInternal(
+ 	rawInputOptions: RollupOptions,
+ 	registerWatchHooks: RegisterWatchHooks | null
+ ): Promise<RollupBuild> {
+-	const { options: inputOptions, unsetOptions: unsetInputOptions } = await getInputOptions(
+-		rawInputOptions,
+-		registerWatchHooks !== null
+-	);
++	const {
++		options: inputOptions,
++		unsetOptions: unsetInputOptions,
++		processedChokidarOptions
++	} = await getInputOptions(rawInputOptions, registerWatchHooks !== null);
+ 	initialiseTimers(inputOptions);
+ 
+ 	await initWasm();
+ 
+-	const graph = new Graph(inputOptions, registerWatchHooks);
++	const graph = new Graph(
++		inputOptions,
++		registerWatchHooks && (watchHooks => registerWatchHooks(watchHooks, processedChokidarOptions))
++	);
+ 
+ 	// remove the cache object from the memory after graph creation (cache is not used anymore)
+ 	const useCache = rawInputOptions.cache !== false;
+@@ -137,14 +142,24 @@ export async function rollupInternal(
+ async function getInputOptions(
+ 	initialInputOptions: InputOptions,
+ 	watchMode: boolean
+-): Promise<{ options: NormalizedInputOptions; unsetOptions: Set<string> }> {
++): Promise<{
++	options: NormalizedInputOptions;
++	unsetOptions: Set<string>;
++	processedChokidarOptions: ChokidarOptions | undefined;
++}> {
+ 	if (!initialInputOptions) {
+ 		throw new Error('You must supply an options object to rollup');
+ 	}
+ 	const processedInputOptions = await getProcessedInputOptions(initialInputOptions, watchMode);
+ 	const { options, unsetOptions } = await normalizeInputOptions(processedInputOptions, watchMode);
+ 	normalizePlugins(options.plugins, ANONYMOUS_PLUGIN_PREFIX);
+-	return { options, unsetOptions };
++	return {
++		options,
++		unsetOptions,
++		processedChokidarOptions: processedInputOptions.watch
++			? processedInputOptions.watch.chokidar
++			: undefined
++	};
+ }
+ 
+ async function getProcessedInputOptions(
+diff --git a/src/watch/fileWatcher.ts b/src/watch/fileWatcher.ts
+index 96d5391..ceddc83 100644
+--- a/src/watch/fileWatcher.ts
++++ b/src/watch/fileWatcher.ts
+@@ -3,11 +3,17 @@ import { platform } from 'node:os';
+ import type { ChangeEvent, ChokidarOptions } from '../rollup/types';
+ import type { Task } from './watch';
+ 
++type RegistrationWatcher = FSWatcher & {
++	_pendingAdds: Set<Promise<unknown>>;
++	_waitForPendingAdds(): Promise<void>;
++};
++
+ export class FileWatcher {
++	private closed = false;
+ 	private readonly chokidarOptions: ChokidarOptions;
+ 	private readonly task: Task;
+-	private readonly transformWatchers = new Map<string, FSWatcher>();
+-	private readonly watcher: FSWatcher;
++	private readonly transformWatchers = new Map<string, RegistrationWatcher>();
++	private readonly watcher: RegistrationWatcher;
+ 
+ 	constructor(task: Task, chokidarOptions: ChokidarOptions) {
+ 		this.chokidarOptions = chokidarOptions;
+@@ -16,6 +22,7 @@ export class FileWatcher {
+ 	}
+ 
+ 	close(): void {
++		this.closed = true;
+ 		this.watcher.close();
+ 		for (const watcher of this.transformWatchers.values()) {
+ 			watcher.close();
+@@ -41,7 +48,18 @@ export class FileWatcher {
+ 		}
+ 	}
+ 
+-	private createWatcher(transformWatcherId: string | null): FSWatcher {
++	async waitForPendingAdds(): Promise<void> {
++		let watchers: RegistrationWatcher[];
++		do {
++			watchers = [this.watcher, ...this.transformWatchers.values()];
++			await Promise.all(watchers.map(watcher => watcher._waitForPendingAdds()));
++		} while (!this.closed && (
++			watchers.some(watcher => watcher._pendingAdds.size > 0) ||
++			[...this.transformWatchers.values()].some(watcher => !watchers.includes(watcher))
++		));
++	}
++
++	private createWatcher(transformWatcherId: string | null): RegistrationWatcher {
+ 		const task = this.task;
+ 		const isLinux = platform() === 'linux';
+ 		const isFreeBSD = platform() === 'freebsd';
+@@ -62,6 +80,12 @@ export class FileWatcher {
+ 			.on('add', id => handleChange(id, 'create'))
+ 			.on('change', id => handleChange(id, 'update'))
+ 			.on('unlink', id => handleChange(id, 'delete'));
+-		return watcher;
++		const registrationWatcher = watcher as RegistrationWatcher;
++		if (!(registrationWatcher._pendingAdds instanceof Set) ||
++			typeof registrationWatcher._waitForPendingAdds !== 'function') {
++			watcher.close();
++			throw new Error('Native watcher registration lifecycle is unavailable');
++		}
++		return registrationWatcher;
+ 	}
+ }
+diff --git a/src/watch/watch.ts b/src/watch/watch.ts
+index a349d8f..bc1bc31 100644
+--- a/src/watch/watch.ts
++++ b/src/watch/watch.ts
+@@ -183,7 +183,8 @@ export class Task {
+ 	cache: RollupCache = { modules: [] };
+ 	watchFiles: string[] = [];
+ 
+-	private readonly fileWatcher: FileWatcher;
++	private fileWatcher: FileWatcher;
++	private initialChokidarOptionsApplied = false;
+ 	private filter: (id: string) => boolean;
+ 	private invalidated = true;
+ 	private readonly options: MergedRollupOptions;
+@@ -265,8 +266,18 @@ export class Task {
+ 		let result: RollupBuild | null = null;
+ 
+ 		try {
+-			result = await rollupInternal(options, watchHooks => {
+-				if (!this.watcher.closed) this.watchHooks = watchHooks;
++			result = await rollupInternal(options, (watchHooks, processedChokidarOptions) => {
++				if (this.watcher.closed) return;
++				this.watchHooks = watchHooks;
++				if (!this.initialChokidarOptionsApplied) {
++					this.fileWatcher.close();
++					this.fileWatcher = new FileWatcher(this, {
++						...processedChokidarOptions,
++						disableGlobbing: true,
++						ignoreInitial: true
++					});
++					this.initialChokidarOptionsApplied = true;
++				}
+ 			});
+ 			if (this.watcher.closed) {
+ 				return;
+@@ -279,6 +290,8 @@ export class Task {
+ 				}
+ 				this.updateWatchedFiles(result!);
+ 			}
++			await this.fileWatcher.waitForPendingAdds();
++			if (this.watcher.closed) return;
+ 			await this.watcher.emitter.emit('event', {
+ 				code: 'BUNDLE_END',
+ 				duration: Date.now() - start,
+@@ -297,6 +310,12 @@ export class Task {
+ 					this.cache.modules = this.cache.modules.filter(module => module.id !== error.id);
+ 				}
+ 			}
++			try {
++				await this.fileWatcher.waitForPendingAdds();
++			} catch (registrationError) {
++				error = registrationError;
++			}
++			if (this.watcher.closed) return;
+ 			await this.watcher.emitter.emit('event', {
+ 				code: 'ERROR',
+ 				error,
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "rollup",
+-  "version": "4.67.5",
++  "version": "4.67.5+metascript.1",
+   "description": "Next-generation ES module bundler",
+   "main": "dist/rollup.js",
+   "module": "dist/es/rollup.js",

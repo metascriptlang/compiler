@@ -1,0 +1,609 @@
+diff --git a/node_modules/chokidar/index.js b/node_modules/chokidar/index.js
+index 8752893..d864d6c 100644
+--- a/node_modules/chokidar/index.js
++++ b/node_modules/chokidar/index.js
+@@ -307,6 +307,14 @@ constructor(_opts) {
+   this._symlinkPaths = new Map();
+ 
+   this._streams = new Set();
++  this._pendingChanges = new Map();
++  this._pathMutation = 0;
++  this._pathBarriers = new Map();
++  this._closedAt = -1;
++  this._pendingAdds = new Set();
++  this._registrationClosed = new Promise(resolve => {
++    this._resolveRegistrationClosed = resolve;
++  });
+   this.closed = false;
+ 
+   // Set up default options.
+@@ -406,7 +414,14 @@ constructor(_opts) {
+  * @returns {FSWatcher} for chaining
+  */
+ add(paths_, _origAdd, _internal) {
++  if (this.closed) {
++    this._registrationError = undefined;
++    this._registrationClosed = new Promise(resolve => {
++      this._resolveRegistrationClosed = resolve;
++    });
++  }
+   const {cwd, disableGlobbing} = this.options;
++  if (this.closed) this._pathMutation++;
+   this.closed = false;
+   let paths = unifyPaths(paths_);
+   if (cwd) {
+@@ -442,11 +457,11 @@ add(paths_, _origAdd, _internal) {
+   if (this.options.useFsEvents && this._fsEventsHandler) {
+     if (!this._readyCount) this._readyCount = paths.length;
+     if (this.options.persistent) this._readyCount += paths.length;
+-    paths.forEach((path) => this._fsEventsHandler._addToFsEvents(path));
++    paths.forEach((path) => this._trackAdd(this._fsEventsHandler._addToFsEvents(path)));
+   } else {
+     if (!this._readyCount) this._readyCount = 0;
+     this._readyCount += paths.length;
+-    Promise.all(
++    this._trackAdd(Promise.all(
+       paths.map(async path => {
+         const res = await this._nodeFsHandler._addToNodeFs(path, !_internal, 0, 0, _origAdd);
+         if (res) this._emitReady();
+@@ -457,7 +472,7 @@ add(paths_, _origAdd, _internal) {
+       results.filter(item => item).forEach(item => {
+         this.add(sysPath.dirname(item), sysPath.basename(_origAdd || item));
+       });
+-    });
++    }));
+   }
+ 
+   return this;
+@@ -480,6 +495,7 @@ unwatch(paths_) {
+       path = sysPath.resolve(path);
+     }
+ 
++    this._cancelPath(path);
+     this._closePath(path);
+ 
+     this._ignoredPaths.add(path);
+@@ -502,6 +518,15 @@ unwatch(paths_) {
+ close() {
+   if (this.closed) return this._closePromise;
+   this.closed = true;
++  this._closedAt = ++this._pathMutation;
++  this._pendingChanges.clear();
++  this._throttled.forEach(entries => entries.forEach(entry => entry.clear(false)));
++  if (this._pendingUnlinks) {
++    this._pendingUnlinks.forEach(pending => clearTimeout(pending.timer));
++    this._pendingUnlinks.clear();
++  }
++  if (this._pendingWrites) this._pendingWrites.forEach(entry => entry.cancelWait());
++  this._resolveRegistrationClosed();
+ 
+   // Memory management.
+   this.removeAllListeners();
+@@ -544,6 +569,29 @@ emitWithAll(event, args) {
+ // Common helpers
+ // --------------
+ 
++_trackAdd(task) {
++  const tracked = Promise.resolve(task).finally(() => {
++    this._pendingAdds.delete(tracked);
++  });
++  this._pendingAdds.add(tracked);
++  tracked.catch(error => {
++    if (!this.closed && !this._registrationError) this._registrationError = error;
++  });
++  return tracked;
++}
++
++async _waitForPendingAdds() {
++  while (!this.closed && this._pendingAdds.size > 0) {
++    await Promise.race([
++      Promise.allSettled([...this._pendingAdds]),
++      this._registrationClosed
++    ]);
++  }
++  const error = this._registrationError;
++  this._registrationError = undefined;
++  if (!this.closed && error) throw error;
++}
++
+ /**
+  * Normalize and emit events.
+  * Calling _emit DOES NOT MEAN emit() would be called!
+@@ -554,8 +602,68 @@ emitWithAll(event, args) {
+  * @param {*=} val3
+  * @returns the error if defined, otherwise the value of the FSWatcher instance's `closed` flag
+  */
++_invalidatePath(path) {
++  this._pathBarriers.set(sysPath.resolve(path), ++this._pathMutation);
++}
++
++_isPathActive(path, generation) {
++  if (this.closed || generation <= this._closedAt) return false;
++  const key = sysPath.resolve(path);
++  for (const [barrier, mutation] of this._pathBarriers) {
++    if (mutation <= generation) continue;
++    const relative = sysPath.relative(barrier, key);
++    if (relative === '' || (relative !== '..' && !relative.startsWith(`..${sysPath.sep}`) && !sysPath.isAbsolute(relative))) return false;
++  }
++  return true;
++}
++
++_cancelPath(path) {
++  this._invalidatePath(path);
++  const key = sysPath.resolve(path);
++  const contains = candidate => {
++    const relative = sysPath.relative(key, sysPath.resolve(candidate));
++    return relative === '' || (relative !== '..' && !relative.startsWith(`..${sysPath.sep}`) && !sysPath.isAbsolute(relative));
++  };
++  for (const [pendingKey, pending] of this._pendingChanges) {
++    if (contains(pending.path)) this._pendingChanges.delete(pendingKey);
++  }
++  if (this._pendingWrites) {
++    for (const [pendingPath, pending] of this._pendingWrites) {
++      if (contains(this.options.cwd ? sysPath.resolve(this.options.cwd, pendingPath) : pendingPath)) pending.cancelWait();
++    }
++  }
++  if (this._pendingUnlinks) {
++    for (const [pendingPath, pending] of this._pendingUnlinks) {
++      if (contains(this.options.cwd ? sysPath.resolve(this.options.cwd, pendingPath) : pendingPath)) {
++        clearTimeout(pending.timer);
++        this._pendingUnlinks.delete(pendingPath);
++      }
++    }
++  }
++  this._throttled.forEach((entries, action) => {
++    if (action === 'readdir') {
++      const targetKey = `${sysPath.dirname(path)}:${sysPath.basename(path)}`;
++      for (const candidate of [path, key, targetKey]) {
++        const entry = entries.get(candidate);
++        if (entry) entry.clear(false);
++      }
++    } else {
++      for (const [candidate, entry] of entries) {
++        const source = action === EV_CHANGE && this.options.cwd ? sysPath.resolve(this.options.cwd, candidate) : candidate;
++        if (contains(source)) entry.clear(false);
++      }
++    }
++  });
++}
++
+ async _emit(event, path, val1, val2, val3) {
+   if (this.closed) return;
++  const sourcePath = path;
++  const changeKey = sysPath.resolve(sourcePath);
++  if (event === EV_UNLINK || event === EV_UNLINK_DIR) {
++    this._pendingChanges.delete(changeKey);
++  }
++  const generation = this._pathMutation;
+ 
+   const opts = this.options;
+   if (isWindows) path = sysPath.normalize(path);
+@@ -566,6 +674,12 @@ async _emit(event, path, val1, val2, val3) {
+   else if (val2 !== undefined) args.push(val1, val2);
+   else if (val1 !== undefined) args.push(val1);
+ 
++  if (event === EV_UNLINK || event === EV_UNLINK_DIR) {
++    const changes = this._throttled.get(EV_CHANGE);
++    const change = changes && changes.get(path);
++    if (change) change.clear(false);
++  }
++
+   const awf = opts.awaitWriteFinish;
+   let pw;
+   if (awf && (pw = this._pendingWrites.get(path))) {
+@@ -575,24 +689,30 @@ async _emit(event, path, val1, val2, val3) {
+ 
+   if (opts.atomic) {
+     if (event === EV_UNLINK) {
+-      this._pendingUnlinks.set(path, args);
+-      setTimeout(() => {
+-        this._pendingUnlinks.forEach((entry, path) => {
+-          this.emit(...entry);
+-          this.emit(EV_ALL, ...entry);
+-          this._pendingUnlinks.delete(path);
+-        });
++      const existing = this._pendingUnlinks.get(path);
++      if (existing) clearTimeout(existing.timer);
++      const timer = setTimeout(() => {
++        const pending = this._pendingUnlinks.get(path);
++        if (!pending || pending.timer !== timer) return;
++        this._pendingUnlinks.delete(path);
++        if (this.closed) return;
++        this.emit(...pending.event);
++        this.emit(EV_ALL, ...pending.event);
+       }, typeof opts.atomic === 'number' ? opts.atomic : 100);
++      this._pendingUnlinks.set(path, {event: args, timer});
+       return this;
+     }
+-    if (event === EV_ADD && this._pendingUnlinks.has(path)) {
++    const pendingUnlink = this._pendingUnlinks.get(path);
++    if (event === EV_ADD && pendingUnlink) {
+       event = args[0] = EV_CHANGE;
++      clearTimeout(pendingUnlink.timer);
+       this._pendingUnlinks.delete(path);
+     }
+   }
+ 
+   if (awf && (event === EV_ADD || event === EV_CHANGE) && this._readyEmitted) {
+     const awfEmit = (err, stats) => {
++      if (!this._isPathActive(sourcePath, generation)) return;
+       if (err) {
+         event = args[0] = EV_ERROR;
+         args[1] = err;
+@@ -613,8 +733,23 @@ async _emit(event, path, val1, val2, val3) {
+   }
+ 
+   if (event === EV_CHANGE) {
+-    const isThrottled = !this._throttle(EV_CHANGE, path, 50);
+-    if (isThrottled) return this;
++    const throttler = this._throttle(EV_CHANGE, path, 50, suppressedCount => {
++      const pending = this._pendingChanges.get(changeKey);
++      this._pendingChanges.delete(changeKey);
++      if (suppressedCount > 0 && pending && pending.replay && this._isPathActive(pending.path, pending.generation)) {
++        this._emit(EV_CHANGE, pending.path, ...pending.values).catch(error => this._handleError(error));
++      }
++    });
++    if (!throttler) {
++      const pending = this._pendingChanges.get(changeKey);
++      if (pending && !this._sameChangeStats(pending.values[0], val1)) {
++        pending.path = sourcePath;
++        pending.values = [val1, val2, val3];
++        pending.replay = true;
++      }
++      return this;
++    }
++    this._pendingChanges.set(changeKey, {path: sourcePath, values: [val1, val2, val3], generation, replay: false});
+   }
+ 
+   if (opts.alwaysStat && val1 === undefined &&
+@@ -626,7 +761,7 @@ async _emit(event, path, val1, val2, val3) {
+       stats = await stat(fullPath);
+     } catch (err) {}
+     // Suppress event when fs_stat fails, to avoid sending undefined 'stat'
+-    if (!stats || this.closed) return;
++    if (!stats || !this._isPathActive(sourcePath, generation)) return;
+     args.push(stats);
+   }
+   this.emitWithAll(event, args);
+@@ -656,7 +791,12 @@ _handleError(error) {
+  * @param {Number} timeout duration of time to suppress duplicate actions
+  * @returns {Object|false} tracking object or false if action should be suppressed
+  */
+-_throttle(actionType, path, timeout) {
++_sameChangeStats(left, right) {
++  if (left === undefined || right === undefined) return false;
++  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
++}
++
++_throttle(actionType, path, timeout, onRelease) {
+   if (!this._throttled.has(actionType)) {
+     this._throttled.set(actionType, new Map());
+   }
+@@ -672,15 +812,17 @@ _throttle(actionType, path, timeout) {
+   }
+ 
+   let timeoutObject;
+-  const clear = () => {
++  const clear = (invokeRelease = true) => {
+     const item = action.get(path);
+     const count = item ? item.count : 0;
+     action.delete(path);
+     clearTimeout(timeoutObject);
+     if (item) clearTimeout(item.timeoutObject);
++    if (invokeRelease && onRelease) onRelease(count);
+     return count;
+   };
+   timeoutObject = setTimeout(clear, timeout);
++  if (!this.options.persistent) timeoutObject.unref();
+   const thr = {timeoutObject, clear, count: 0};
+   action.set(path, thr);
+   return thr;
+@@ -707,11 +849,18 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
+   }
+ 
+   const now = new Date();
++  let pending;
+ 
+   const awaitWriteFinish = (prevStat) => {
+     fs.stat(fullPath, (err, curStat) => {
+-      if (err || !this._pendingWrites.has(path)) {
+-        if (err && err.code !== 'ENOENT') awfEmit(err);
++      if (this.closed || this._pendingWrites.get(path) !== pending) return;
++      if (err) {
++        pending.cancelWait();
++        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
++          this._remove(sysPath.dirname(fullPath), sysPath.basename(fullPath));
++        } else {
++          awfEmit(err);
++        }
+         return;
+       }
+ 
+@@ -737,14 +886,15 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
+   };
+ 
+   if (!this._pendingWrites.has(path)) {
+-    this._pendingWrites.set(path, {
++    pending = {
+       lastChange: now,
+       cancelWait: () => {
+-        this._pendingWrites.delete(path);
++        if (this._pendingWrites.get(path) === pending) this._pendingWrites.delete(path);
+         clearTimeout(timeoutHandler);
+         return event;
+       }
+-    });
++    };
++    this._pendingWrites.set(path, pending);
+     timeoutHandler = setTimeout(
+       awaitWriteFinish,
+       this.options.awaitWriteFinish.pollInterval
+diff --git a/node_modules/chokidar/lib/fsevents-handler.js b/node_modules/chokidar/lib/fsevents-handler.js
+index fe29393..ef2e553 100644
+--- a/node_modules/chokidar/lib/fsevents-handler.js
++++ b/node_modules/chokidar/lib/fsevents-handler.js
+@@ -31,6 +31,7 @@ const {
+   EV_ERROR,
+   STR_DATA,
+   STR_END,
++  STR_CLOSE,
+   FSEVENT_CREATED,
+   FSEVENT_MODIFIED,
+   FSEVENT_DELETED,
+@@ -242,15 +243,17 @@ addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts) {
+ }
+ 
+ async checkExists(path, fullPath, realPath, parent, watchedDir, item, info, opts) {
++  const generation = this.fsw._pathMutation;
+   try {
+-    const stats = await stat(path)
+-    if (this.fsw.closed) return;
++    const stats = await stat(path);
++    if (!this.fsw._isPathActive(path, generation)) return;
+     if (sameTypes(info, stats)) {
+       this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
+     } else {
+       this.handleEvent(EV_UNLINK, path, fullPath, realPath, parent, watchedDir, item, info, opts);
+     }
+   } catch (error) {
++    if (!this.fsw._isPathActive(path, generation)) return;
+     if (error.code === 'EACCES') {
+       this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
+     } else {
+@@ -277,7 +280,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+         // push symlinks back to the top of the stack to get handled
+         const curDepth = opts.depth === undefined ?
+           undefined : calcDepth(fullPath, realPath) + 1;
+-        return this._addToFsEvents(path, false, true, curDepth);
++        return this.fsw._trackAdd(this._addToFsEvents(path, false, true, curDepth));
+       }
+ 
+       // track new paths
+@@ -289,7 +292,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+      */
+     const eventName = info.type === FSEVENT_TYPE_DIRECTORY ? event + DIR_SUFFIX : event;
+     this.fsw._emit(eventName, path);
+-    if (eventName === EV_ADD_DIR) this._addToFsEvents(path, false, true);
++    if (eventName === EV_ADD_DIR) this.fsw._trackAdd(this._addToFsEvents(path, false, true));
+   }
+ }
+ 
+@@ -304,6 +307,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+   if (this.fsw.closed || this.fsw._isIgnored(watchPath)) return;
+   const opts = this.fsw.options;
++  const generation = this.fsw._pathMutation;
+   const watchCallback = async (fullPath, flags, info) => {
+     if (this.fsw.closed) return;
+     if (
+@@ -313,6 +317,7 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+     const path = transform(sysPath.join(
+       watchPath, sysPath.relative(watchPath, fullPath)
+     ));
++    if (!this.fsw._isPathActive(path, generation)) return;
+     if (globFilter && !globFilter(path)) return;
+     // ensure directories are tracked
+     const parent = sysPath.dirname(path);
+@@ -328,7 +333,7 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+         try {
+           stats = await stat(path);
+         } catch (error) {}
+-        if (this.fsw.closed) return;
++        if (!this.fsw._isPathActive(path, generation)) return;
+         if (this.checkIgnored(path, stats)) return;
+         if (sameTypes(info, stats)) {
+           this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
+@@ -387,7 +392,7 @@ async _handleFsEventsSymlink(linkPath, fullPath, transform, curDepth) {
+ 
+     // add the linkTarget for watching with a wrapper for transform
+     // that causes emitted paths to incorporate the link's path
+-    this._addToFsEvents(linkTarget || linkPath, (path) => {
++    await this._addToFsEvents(linkTarget || linkPath, (path) => {
+       let aliasedPath = linkPath;
+       if (linkTarget && linkTarget !== DOT_SLASH) {
+         aliasedPath = path.replace(linkTarget, linkPath);
+@@ -451,6 +456,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+   const processPath = typeof transform === FUNCTION_TYPE ? transform : IDENTITY_FN;
+ 
+   const wh = this.fsw._getWatchHelpers(path);
++  let scan;
+ 
+   // evaluate what is at the path we're being asked to watch
+   try {
+@@ -467,7 +473,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+       if (priorDepth && priorDepth > opts.depth) return;
+ 
+       // scan the contents of the dir
+-      this.fsw._readdirp(wh.watchPath, {
++      scan = new Promise(resolve => this.fsw._readdirp(wh.watchPath, {
+         fileFilter: entry => wh.filterPath(entry),
+         directoryFilter: entry => wh.filterDir(entry),
+         ...Depth(opts.depth - (priorDepth || 0))
+@@ -487,13 +493,14 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+           const curDepth = opts.depth === undefined ?
+             undefined : calcDepth(joinedPath, sysPath.resolve(wh.watchPath)) + 1;
+ 
+-          this._handleFsEventsSymlink(joinedPath, fullPath, processPath, curDepth);
++          this.fsw._trackAdd(this._handleFsEventsSymlink(joinedPath, fullPath, processPath, curDepth));
+         } else {
+           this.emitAdd(joinedPath, entry.stats, processPath, opts, forceAdd);
+         }
+-      }).on(EV_ERROR, EMPTY_FN).on(STR_END, () => {
++      }).on(EV_ERROR, EMPTY_FN).once(STR_CLOSE, resolve).on(STR_END, () => {
+         this.fsw._emitReady();
+-      });
++        resolve();
++      }));
+     } else {
+       this.emitAdd(wh.watchPath, stats, processPath, opts, forceAdd);
+       this.fsw._emitReady();
+@@ -518,6 +525,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+       this.initWatch(realPath, path, wh, processPath);
+     }
+   }
++  await scan;
+ }
+ 
+ }
+diff --git a/node_modules/chokidar/lib/nodefs-handler.js b/node_modules/chokidar/lib/nodefs-handler.js
+index 199cfe9..3f75eeb 100644
+--- a/node_modules/chokidar/lib/nodefs-handler.js
++++ b/node_modules/chokidar/lib/nodefs-handler.js
+@@ -19,12 +19,11 @@ const {
+   EV_ERROR,
+   STR_DATA,
+   STR_END,
++  STR_CLOSE,
+   BRACE_START,
+   STAR
+ } = require('./constants');
+ 
+-const THROTTLE_MODE_WATCH = 'watch';
+-
+ const open = promisify(fs.open);
+ const stat = promisify(fs.stat);
+ const lstat = promisify(fs.lstat);
+@@ -357,18 +356,21 @@ _handleFile(file, stats, initialAdd) {
+   // if the file is already being watched, do nothing
+   if (parent.has(basename)) return;
+ 
+-  const listener = async (path, newStats) => {
+-    if (!this.fsw._throttle(THROTTLE_MODE_WATCH, file, 5)) return;
++  const generation = this.fsw._pathMutation;
++  const isActive = () => this.fsw._isPathActive(file, generation);
++  const reconcile = async (path, newStats) => {
++    if (!isActive()) return;
+     if (!newStats || newStats.mtimeMs === 0) {
+       try {
+         const newStats = await stat(file);
+-        if (this.fsw.closed) return;
++        if (!isActive()) return;
+         // Check that change event was not fired because of changed only accessTime.
+         const at = newStats.atimeMs;
+         const mt = newStats.mtimeMs;
+-        if (!at || at <= mt || mt !== prevStats.mtimeMs) {
++        if (!at || at <= mt || mt !== prevStats.mtimeMs || newStats.size !== prevStats.size || newStats.ino !== prevStats.ino) {
+           this.fsw._emit(EV_CHANGE, file, newStats);
+         }
++        if (!isActive()) return;
+         if (isLinux && prevStats.ino !== newStats.ino) {
+           this.fsw._closeFile(path)
+           prevStats = newStats;
+@@ -377,20 +379,39 @@ _handleFile(file, stats, initialAdd) {
+           prevStats = newStats;
+         }
+       } catch (error) {
+-        // Fix issues where mtime is null but file is still present
+-        this.fsw._remove(dirname, basename);
++        if (!isActive()) return;
++        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') this.fsw._remove(dirname, basename);
++        else this.fsw._handleError(error);
+       }
+       // add is about to be emitted if file not already tracked in parent
+     } else if (parent.has(basename)) {
+       // Check that change event was not fired because of changed only accessTime.
+       const at = newStats.atimeMs;
+       const mt = newStats.mtimeMs;
+-      if (!at || at <= mt || mt !== prevStats.mtimeMs) {
++      if (!at || at <= mt || mt !== prevStats.mtimeMs || newStats.size !== prevStats.size || newStats.ino !== prevStats.ino) {
+         this.fsw._emit(EV_CHANGE, file, newStats);
+       }
+       prevStats = newStats;
+     }
+-  }
++  };
++  let pending;
++  let running;
++  const listener = (path, newStats) => {
++    if (!isActive()) return;
++    pending = {path, stats: newStats};
++    if (running) return running;
++    running = Promise.resolve().then(async () => {
++      do {
++        const current = pending;
++        pending = undefined;
++        await reconcile(current.path, current.stats);
++      } while (pending && isActive());
++    }).catch(this._boundHandleError).finally(() => {
++      running = undefined;
++      if (pending && isActive()) listener(pending.path, pending.stats);
++    });
++    return running;
++  };
+   // kick off the watcher
+   const closer = this._watchWithNodeFs(file, listener);
+ 
+@@ -469,7 +490,7 @@ _handleRead(directory, initialAdd, wh, target, dir, depth, throttler) {
+     fileFilter: entry => wh.filterPath(entry),
+     directoryFilter: entry => wh.filterDir(entry),
+     depth: 0
+-  }).on(STR_DATA, async (entry) => {
++  }).on(STR_DATA, (entry) => this.fsw._trackAdd((async () => {
+     if (this.fsw.closed) {
+       stream = undefined;
+       return;
+@@ -495,17 +516,22 @@ _handleRead(directory, initialAdd, wh, target, dir, depth, throttler) {
+       // ensure relativeness of path is preserved in case of watcher reuse
+       path = sysPath.join(dir, sysPath.relative(dir, path));
+ 
+-      this._addToNodeFs(path, initialAdd, wh, depth + 1);
++      await this._addToNodeFs(path, initialAdd, wh, depth + 1);
+     }
+-  }).on(EV_ERROR, this._boundHandleError);
++  })())).on(EV_ERROR, this._boundHandleError);
+ 
+   return new Promise(resolve =>
+-    stream.once(STR_END, () => {
++    stream.once(STR_CLOSE, resolve).once(STR_END, () => {
+       if (this.fsw.closed) {
+         stream = undefined;
+         return;
+       }
+-      const wasThrottled = throttler ? throttler.clear() : false;
++      const readdirThrottles = this.fsw._throttled.get('readdir');
++      const ownsThrottle = readdirThrottles && (
++        readdirThrottles.get(directory) === throttler ||
++        readdirThrottles.get(target ? `${directory}:${target}` : directory) === throttler
++      );
++      const wasThrottled = throttler && ownsThrottle ? throttler.clear() : false;
+ 
+       resolve();
+ 
+@@ -528,7 +554,7 @@ _handleRead(directory, initialAdd, wh, target, dir, depth, throttler) {
+       stream = undefined;
+ 
+       // one more time for any missed in case changes came in extremely quickly
+-      if (wasThrottled) this._handleRead(directory, false, wh, target, dir, depth, throttler);
++      if (wasThrottled) this.fsw._trackAdd(this._handleRead(directory, false, wh, target, dir, depth, throttler));
+     })
+   );
+ }
+@@ -568,7 +594,7 @@ async _handleDir(dir, stats, initialAdd, depth, target, wh, realpath) {
+       // if current directory is removed, do nothing
+       if (stats && stats.mtimeMs === 0) return;
+ 
+-      this._handleRead(dirPath, false, wh, target, dir, depth, throttler);
++      this.fsw._trackAdd(this._handleRead(dirPath, false, wh, target, dir, depth, throttler));
+     });
+   }
+   return closer;

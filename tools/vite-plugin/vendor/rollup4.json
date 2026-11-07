@@ -1,0 +1,79 @@
+{
+  "version": "4.67.5+metascript.1",
+  "baseVersion": "4.67.5",
+  "baseGit": "6b1937666ffaffd346992115283d63336bd2464a",
+  "source": {
+    "url": "https://codeload.github.com/rollup/rollup/tar.gz/6b1937666ffaffd346992115283d63336bd2464a",
+    "sha256": "b02bfde54936a050c8657d2b09bb3609cf792af7cdfe77e619b2facfa4c0d70a",
+    "integrity": "sha512-2A1Q/t68kQ2bg9RgZPtI4CaqZ+ROrnIXzxDvp94jQVVrQYCdonw58Oj9Ff3WeM4bBhFn0R3qP6G37Aeh23jSMg=="
+  },
+  "published": {
+    "url": "https://registry.npmjs.org/rollup/-/rollup-4.67.5.tgz",
+    "sha256": "c0af59e02f577c16227a06af8ae968f98b5a994105ca6b67fffd42bd6c6a5e34",
+    "integrity": "sha512-3Ve5VH1hacCVutdpbmu/htg4kz+JCOIWgy4Q3hjHPYGHeHeIElNHJ0LcJ3rCfIsd5G7qOl5k5mwpzGMj9kdHPA=="
+  },
+  "lockSHA256": "f96ef5bcf57db5b9f45f57702e355b1a75ab63e16336504f0b89967f1015dbbf",
+  "nativeABI": "4.67.5",
+  "patches": {
+    "rollup4.patch": "c03a8778464c0b60d101bf1c4000bca4d612ce6d572b3974cb5e2ef553b39e33",
+    "chokidar.patch": "e8d202f202acd830aa5b951c631b872df5dc7d1f5645a427cfdad57b809d778f"
+  },
+  "canonicalSources": {
+    "src/Graph.ts": {
+      "sha256": "ec831bc9111a7f16ae1ec24793e114bc10569c7a7a54a1a8ea79398f8705ee02",
+      "bytes": 8434
+    },
+    "src/rollup/rollup.ts": {
+      "sha256": "033015a16c0b0eea4010f7b28777abe733c8e926756697fddef83f8ab8aff034",
+      "bytes": 10684
+    },
+    "src/watch/fileWatcher.ts": {
+      "sha256": "80f2f609650b1f05cf299cd2a8d70d9b41ba7ce4bce8bbb20377d982866f9ff1",
+      "bytes": 3098
+    },
+    "src/watch/watch.ts": {
+      "sha256": "3c7972b6e44d0a6fd605af027eb94ce673d281b391251392ec0b68056da7a8b9",
+      "bytes": 10007
+    },
+    "node_modules/chokidar/index.js": {
+      "sha256": "34f9d4f36bbe35ba7478bad994b705ef5bb2af9ed76a137e8291e17aeb64ae63",
+      "bytes": 34254
+    },
+    "node_modules/chokidar/lib/nodefs-handler.js": {
+      "sha256": "89d57d4393e101f9afd4dc27c1aac3aaedf394e4065603d53135427d979504bc",
+      "bytes": 21315
+    },
+    "node_modules/chokidar/lib/fsevents-handler.js": {
+      "sha256": "81d590bd4e879503af1f56e96f8a815ceb838beb47cba4762b84ccdef5cc089d",
+      "bytes": 16809
+    }
+  },
+  "artifactSHA256": "728f65d0979c8cfd1980064705c5f847487b46c22b18ed7f1f99ab8c5bb50490",
+  "buildNode": ">=24.12.0",
+  "runtimeNode": ">=18.0.0; CJS/ESM standalone JSON/error recovery and CLI verified at v18.0.0 on Linux x64 GNU",
+  "recipe": "node tools/vite-plugin/vendor/buildRollup.mjs /absolute/fresh-work-directory /absolute/rollup4.tgz",
+  "stages": [
+    "npm ci --ignore-scripts --no-audit --no-fund (locked upstream dev dependencies, before version mutation)",
+    "npm run prepare:patch (upstream patches plus chokidar.patch)",
+    "git apply rollup4.patch (canonical C2 plus public version)",
+    "tsc --noEmit -p .",
+    "npm run build:js:node",
+    "overlay exactly published runtime paths and generated LICENSE; change only published version; deterministic tar+gzip"
+  ],
+  "banner": "SOURCE_DATE_EPOCH=0; upstream get-banner reports commit unknown without .git; baseGit above identifies actual input",
+  "maintenance": "App pins file tar and overrides rollup to $rollup; no registry publication. Rebase patches on each upstream upgrade; retain exact native ABI optional package versions.",
+  "buildPython": "Python with tarfile.data_filter; native-free extractor verified on 3.11.11",
+  "reproducibility": "Fixed source/date/archive framing; complete independent rebuild equivalence not yet measured",
+  "validation": {
+    "buildNode": "v24.12.0 Linux x64 GNU",
+    "nativeABI": "4.67.5",
+    "nativeControls": "4/4 CJS/ESM JSON and actual ERROR recovery",
+    "app": "npm filetar retains version; Vite6.3.5 actual physical import/public meta; root override rollup:$rollup",
+    "nodeFloor": "2/2 standalone v18.0.0 controls plus CLI",
+    "rawArchiveSHA256": "45285f6b295eaf12b252edcae8178a4ac24865d46cc4c1ed619d3290341769e2",
+    "wholeAttemptRC": 2,
+    "residual": "Final fixture-empty guard failed on node-compile-cache; no processes/leases. Functional audit passed; whole attempt not green.",
+    "independentFullRebuild": false,
+    "postBuildGuard": "Builder now records exact raw symlink targets; native-free equivalent-target-text fixture detects delta; actual source archive20 raw targets verified after build"
+  }
+}
