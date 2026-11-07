@@ -36,6 +36,29 @@ Apple M1 Pro, Darwin arm64, node v24.1.0, Emscripten 5.0.5, cargo 1.99.1, commit
 `accept: 5/11 rows meet neon and wasmbindgen (mixed at most 10% above)`. A busy-host run of the same
 tree an hour earlier (load 14 → 7, 3 rounds) gave the same verdicts with every median within 3%.
 
+## 2026-11-08, m1m
+
+Same machine and toolchains, main `0fd7cd6b524` (argument encoders return the pointer; owned ASCII
+strings up to 24 chars take a short path). A `--quiet 25` window, but load 22.3 before and 11.4 after
+from work outside the host picker; every row the change does not reach is within 3% of the
+2026-11-07 table. Median of 5 rounds, us/op.
+
+| row | mixed | jsonly | neon | wasmbindgen | accept |
+|---|---|---|---|---|---|
+| add x1000 | 2.876 | 0.482 | 40.431 | 11.58 | ok |
+| add64 x1000 | 4.731 | 2.058 | 53.303 | 4.359 | ok |
+| strLen16 x1000 | 23.408 | 6.098 | 72.298 | 25.835 | ok |
+| echo16 x1000 | 124.377 | 0.324 | 87.974 | 151.796 | slower than neon |
+| mid x1000 | 52.871 | 0.884 | 368.506 | 327.485 | ok |
+| sumVec 1k Array | 1.715 | 3.019 | 52.568 | 1.48 | slower than wasmbindgen |
+| sumSpan 1k Float32Array | 1.029 | 2.69 | 1.038 | 1.007 | ok |
+| scaleSpan 1k Float32Array | 0.283 | 0.527 | 0.158 | 0.423 | slower than neon |
+| makeVec 1k | 2.633 | 3.388 | 0.868 | 0.895 | slower than neon, wasmbindgen |
+| callback 1k | 6.82 | 0.429 | 49.557 | 116.98 | ok |
+| primes 2M | 5771.215 | 21252.292 | 4436.433 | 5224.994 | slower than neon, wasmbindgen |
+
+`accept: 6/11 rows meet neon and wasmbindgen (mixed at most 10% above)`.
+
 Differences between the arms that are not the boundary: `makeVec` returns a JS `Array` on `mixed`
 (a `Vec<float32>` is an Array in JS) and a `Float32Array` on the Rust arms; `neon` runs native code,
 so `primes` and the in-place `scaleSpan` measure native against wasm there; wasm-bindgen's `mid`
