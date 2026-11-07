@@ -77,6 +77,8 @@ let pidConsts = new HashMap<Symbol, boolean>();
 let checkedModules = new HashSet<string>();
 let moduleGraph: ModuleGraph | null = null;
 let paramStoreTables: EffectTable[] = [];
+let paramForeignTables: EffectTable[] = [];
+let sharedParams: string[] = [];
 let viewSyms: Symbol[] = [];
 let viewParams: string[] = [];
 let forOfSources = new HashMap<Symbol, Node>();
@@ -153,6 +155,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	freshConsts = new HashMap<Symbol, boolean>();
 	pidConsts = new HashMap<Symbol, boolean>();
 	paramStoreTables = [];
+	paramForeignTables = [];
 	forOfSources = new HashMap<Symbol, Node>();
 	assignedSources = new HashMap<Symbol, Node[]>();
 	heldSources = new HashMap<Symbol, Node[]>();
@@ -221,7 +224,7 @@ function expressionResultStore(dispatchRegistry: DispatchRegistry, decl: Node): 
 
 function resultStoreOf(dispatchRegistry: DispatchRegistry, value: Node | null): EffectCause | null {
 	if (value == null || ownResult == null || returnsView(ownResult) || holdsNoCount(ownResult) || ownResult!.kind == TypeKind.Lent) return null;
-	const what = borrowedOf(dispatchRegistry, value);
+	const what = storedBorrow(dispatchRegistry, borrowedOf(dispatchRegistry, value));
 	return what != null && what.kind == BorrowKind.ModuleConst ? storeCause(value, what, "into the owned result it returns") : null;
 }
 
@@ -241,18 +244,20 @@ function isRoutineNode(n: Node): boolean {
 		|| n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
 }
 
-function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: Effect, views: string[] = []): EffectCause | null {
+function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: Effect, views: string[] = [], shared: boolean = false): EffectCause | null {
 	if (decl == null) return null;
 	const outer = ownParams;
 	const outerAsync = inAsync;
 	const outerSyms = viewSyms;
 	const outerParams = viewParams;
+	const outerShared = sharedParams;
 	const outerResult = ownResult;
 	ownParams = routineParams(decl);
 	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewSyms = [];
 	viewParams = views;
+	sharedParams = shared ? views : [];
 	if (e == Effect.StoresBorrowed) scanFlows(routineBody(decl));
 	const c = (e == Effect.StoresBorrowed ? expressionResultStore(dispatchRegistry, decl) : null) ?? walkEffect(dispatchRegistry, routineBody(decl), e);
 	ownParams = outer;
@@ -260,18 +265,22 @@ function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: E
 	inAsync = outerAsync;
 	viewSyms = outerSyms;
 	viewParams = outerParams;
+	sharedParams = outerShared;
 	return c;
 }
 
 export function walkWithViews(dispatchRegistry: DispatchRegistry, node: Node, e: Effect, views: Symbol[]): EffectCause | null {
 	const outerSyms = viewSyms;
 	const outerParams = viewParams;
+	const outerShared = sharedParams;
 	viewSyms = views;
 	viewParams = [];
+	sharedParams = [];
 	if (e == Effect.StoresBorrowed) scanFlows(node);
 	const c = walkEffect(dispatchRegistry, node, e);
 	viewSyms = outerSyms;
 	viewParams = outerParams;
+	sharedParams = outerShared;
 	return c;
 }
 
@@ -908,6 +917,11 @@ function isStdBuiltinWritingNothing(sym: Symbol): boolean {
 	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind);
 }
 
+function isGenericArrayByteMover(sym: Symbol): boolean {
+	const native = sym.nativeName.startsWith("&") ? sym.nativeName.slice(1) : sym.nativeName;
+	return native.startsWith("msGenericArray");
+}
+
 function isScalarToString(call: Node, sym: Symbol): boolean {
 	const args = (call.data as CallExprData).arguments;
 	return sym.builtinKind == BuiltinKind.ToString && args.length == 1 && isScalarPrimitive(args[0].nodeType);
@@ -1084,7 +1098,7 @@ function isLocalBinding(sym: Symbol | null): boolean {
 function bindingBorrow(dispatchRegistry: DispatchRegistry, n: Node, value: Node): BorrowSource | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
-	if (isImmutableModuleConst(dispatchRegistry, sym)) return isImmortalModuleConst(dispatchRegistry, sym) ? null : { kind: BorrowKind.ModuleConst, sym };
+	if (isImmutableModuleConst(dispatchRegistry, sym)) return { kind: BorrowKind.ModuleConst, sym };
 	if (isViewRoot(sym)) return { kind: BorrowKind.View, sym };
 	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
 	resolving.push(sym);
@@ -1184,6 +1198,15 @@ function holdsPointerByValue(t: Type | null, depth: int32): boolean {
 	};
 }
 
+// An immortal module const is shared, not lent: storing it, or the parameter a callee received it
+// through, takes the Ro flavor of the count, which skips its header, so neither store is a cause.
+// Handing it to C still is.
+function storedBorrow(dispatchRegistry: DispatchRegistry, what: BorrowSource | null): BorrowSource | null {
+	if (what == null || what.sym == null) return what;
+	if (what.kind == BorrowKind.ModuleConst) return isImmortalModuleConst(dispatchRegistry, what.sym) ? null : what;
+	return what.kind == BorrowKind.View && sharedParams.includes(what.sym.name) && viewParams.includes(what.sym.name) ? null : what;
+}
+
 function storeCause(site: Node, what: BorrowSource, into: string): EffectCause {
 	return cause(site, "stores " + borrowText(what) + " " + into);
 }
@@ -1206,7 +1229,7 @@ function slotStoreOf(dispatchRegistry: DispatchRegistry, node: Node): EffectCaus
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator != "=" || d.left == null || d.left.kind == NodeKind.Identifier || holdsNoCount(d.left.nodeType)) return null;
-		const what = borrowedOf(dispatchRegistry, d.right);
+		const what = storedBorrow(dispatchRegistry, borrowedOf(dispatchRegistry, d.right));
 		return what != null ? storeCause(node, what, d.left.kind == NodeKind.ArrayAccess ? "into an array element" : "into a field") : null;
 	}
 	if (node.kind == NodeKind.ArrayLiteral && elementHoldsNoCount(node.nodeType)) return null;
@@ -1214,7 +1237,7 @@ function slotStoreOf(dispatchRegistry: DispatchRegistry, node: Node): EffectCaus
 	for (let i = 0; i < items.length; i += 1) {
 		const keys = node.kind == NodeKind.ObjectLiteral ? (node.data as ObjectLiteralData).keys : [];
 		if (i < keys.length && keys[i] != "" && isCursorToReference(declaredFieldType(node.nodeType, keys[i]))) continue;
-		const what = borrowedOf(dispatchRegistry, items[i]);
+		const what = storedBorrow(dispatchRegistry, borrowedOf(dispatchRegistry, items[i]));
 		if (what == null) continue;
 		const into = node.kind == NodeKind.ArrayLiteral ? "into an array literal" : i < keys.length && keys[i] != "" ? "into the field '" + keys[i] + "' of an object literal" : "into an object literal";
 		return storeCause(items[i], what, into);
@@ -1229,7 +1252,7 @@ function sinkStoreOf(dispatchRegistry: DispatchRegistry, call: Node): EffectCaus
 	const args = (call.data as CallExprData).arguments;
 	const receiver = shift == 1 ? receiverOf(call) : null;
 	if (receiver != null && sig.typeChildren.length > 0 && sig.typeChildren[0] != null && sig.typeChildren[0].kind == TypeKind.Sink) {
-		const what = borrowedOf(dispatchRegistry, receiver);
+		const what = storedBorrow(dispatchRegistry, borrowedOf(dispatchRegistry, receiver));
 		if (what != null) return storeCause(receiver, what, "into a sink parameter");
 	}
 	const into = receiver != null ? receiver : receiverOf(call);
@@ -1237,7 +1260,7 @@ function sinkStoreOf(dispatchRegistry: DispatchRegistry, call: Node): EffectCaus
 	for (let i = 0; i < args.length; i += 1) {
 		const f = i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
 		if (f == null || f.kind != TypeKind.Sink || holdsNoCount(f.typeReturn)) continue;
-		const what = borrowedOf(dispatchRegistry, args[i]);
+		const what = storedBorrow(dispatchRegistry, borrowedOf(dispatchRegistry, args[i]));
 		if (what != null) return storeCause(args[i], what, "into a sink parameter");
 	}
 	return null;
@@ -1286,6 +1309,7 @@ function passedViewEffect(dispatchRegistry: DispatchRegistry, call: Node, passed
 		for (const t of targets) {
 			if (isExternalRoutine(t)) {
 				if (isStdBuiltinWritingNothing(t)) continue;
+				if (storedBorrow(dispatchRegistry, lent) == null && isGenericArrayByteMover(t)) continue;
 				const sig = call.kind == NodeKind.CallExpr && t == targets[0] ? calledRoutineType(call) : t.symbolType;
 				const formal = sig != null && i < sig.typeChildren.length ? sig.typeChildren[i] : null;
 				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType) && !elementHoldsNoCount(passed[i]!.nodeType)) return lentToForeign(call, lent, name, "through a parameter of type '" + typeNameOf(formal) + "'");
@@ -1294,7 +1318,8 @@ function passedViewEffect(dispatchRegistry: DispatchRegistry, call: Node, passed
 			if (what == null) continue;
 			const decl = unpackDecl(t.declNode);
 			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
-			const c = i < params.length ? paramStoreEffect(dispatchRegistry, t, decl!, i, params[i]) : null;
+			const shared = storedBorrow(dispatchRegistry, what) == null;
+			const c = i < params.length ? paramStoreEffect(dispatchRegistry, t, decl!, i, params[i], shared) : null;
 			if (c != null) return through(call, "passes " + borrowText(what) + " to '" + name + "'", c);
 		}
 	}
@@ -1334,10 +1359,11 @@ function elementsValueOnly(formal: Type, actual: Type | null): boolean {
 	return elem != null && elem.kind != TypeKind.Void && isValueOnlyType(elem);
 }
 
-function paramStoreEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
+function paramStoreEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, decl: Node, index: int32, name: string, shared: boolean): EffectCause | null {
 	recordBodyRead(sym.modulePath);
-	while (paramStoreTables.length <= index) paramStoreTables.push(emptyTable());
-	return memoIn(paramStoreTables[index], sym, (): EffectCause | null => walkRoutine(dispatchRegistry, decl, Effect.StoresBorrowed, [name]));
+	const tables = shared ? paramForeignTables : paramStoreTables;
+	while (tables.length <= index) tables.push(emptyTable());
+	return memoIn(tables[index], sym, (): EffectCause | null => walkRoutine(dispatchRegistry, decl, Effect.StoresBorrowed, [name], shared));
 }
 
 function walkChildren(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): EffectCause | null {
