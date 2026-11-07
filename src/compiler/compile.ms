@@ -95,7 +95,7 @@ import { placedModuleErrors, placedImportErrors, placedMemberUses } from "./wasm
 import { wasmReachedRoutines } from "../checker/sendable";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, pdbLinkArg, dsymutilArgv, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, foreignSourceFlags, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, CcPlan, includePrefix, buildPch, buildsPch, linkObjects, pdbLinkArg, dsymutilArgv, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, foreignSourceFlags, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -1435,7 +1435,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			continue;
 		}
 		const args = parts.value;
-		const plan = NO_PLAN;
+		const shared = NO_PLAN;
+		const plan: CcPlan = { exe: shared.exe, args: [...shared.args], input: shared.input, output: shared.output, outputStem: shared.outputStem, deps: shared.deps, implib: shared.implib, implibStub: shared.implibStub };
 		futures.push(spawn(() => {
 			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
 			if (!r.ok && r.error.exitCode == 0) {
@@ -1564,7 +1565,8 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 			continue;
 		}
 		const args = parts.value;
-		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
+		const shared = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
+		const plan: CcPlan = { exe: shared.exe, args: [...shared.args], input: shared.input, output: shared.output, outputStem: shared.outputStem, deps: shared.deps, implib: shared.implib, implibStub: shared.implibStub };
 		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
 			let r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
