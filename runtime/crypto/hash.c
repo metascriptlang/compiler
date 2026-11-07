@@ -418,7 +418,7 @@ static int pbkdf2_hmac(
 	uint8_t U[64];
 	uint8_t T[64];
 	uint8_t* salt_block = (uint8_t*)msMemAlloc(salt_len + 4);
-	memcpy(salt_block, salt, salt_len);
+	if (salt_len > 0) memcpy(salt_block, salt, salt_len);
 	mbedtls_md_context_t ictx, octx, work;
 	mbedtls_md_init(&ictx);
 	mbedtls_md_init(&octx);
