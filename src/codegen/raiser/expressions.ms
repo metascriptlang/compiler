@@ -2255,7 +2255,7 @@ function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
 function makesFreshCell(s: RaiserCompState, node: Node): boolean {
 	const inner = convertedFrom(node);
 	if (inner.kind == NodeKind.CallExpr) return !readsInPlace(inner);
-	if (inner.kind == NodeKind.NewExpr || inner.kind == NodeKind.ObjectLiteral || inner.kind == NodeKind.ArrayLiteral) return true;
+	if (inner.kind == NodeKind.NewExpr || inner.kind == NodeKind.AwaitExpr || inner.kind == NodeKind.ObjectLiteral || inner.kind == NodeKind.ArrayLiteral) return true;
 	return materializesFramePlace(s, inner) || packedRvalue(s, inner) && vmLayoutOf(s.layouts, inner.nodeType!).kind == MemKind.Block;
 }
 
