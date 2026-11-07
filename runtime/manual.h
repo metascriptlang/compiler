@@ -539,6 +539,9 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 
 static inline void msUnownedAssignAt(void** slot, void* p) { *slot = p; }
 #define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
+#define msOwnedAdopt(child, holder)        ((void)(child), (void)(holder))
+#define msOwnedRelease(child)               ((void)(child))
+#define msOwnedAssignAt(slot, v, holder)    ((void)(slot), (void)(v), (void)(holder))
 static inline void* msUnownedTake(void* p) { return p; }
 static inline void* msUnownedGive(void* p) { return p; }
 #define msUnownedIncrefRo(p)  ((void)0)

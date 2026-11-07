@@ -292,6 +292,21 @@ static inline void msSlabFree(void* p, size_t totalSize) {
 
 /* ===== Allocation ===== */
 
+/* An object of a class some Owned<T> names ends with one owner word: NULL while no owned slot holds it, the
+ * holder while one does, MS_OWNER_ROOT when the holder has no owner word itself (a local Vec, a plain class).
+ * At the tail, so every free path keyed by allocSize stays as it is. */
+#define MS_OWNER_ROOT ((void*)1)
+static inline size_t msOwnerWordSize(const msTypeInfo* type) {
+	return type != NULL && (type->flags & MS_TYPE_FLAG_OWNED_TARGET) != 0 ? sizeof(void*) : 0;
+}
+
+/* The owner word sits at allocSize - sizeof(void*), so the size before it is rounded up to a word: a payload of
+ * an odd size (a record of one int32) would otherwise put it on a misaligned address. */
+static inline size_t msTotalWithOwnerWord(size_t total, const msTypeInfo* type) {
+	if (msOwnerWordSize(type) == 0) return total;
+	return ((total + sizeof(void*) - 1) & ~(sizeof(void*) - 1)) + sizeof(void*);
+}
+
 /* Allocate object with ref header. Returns pointer to user data (past header).
  * Safe default: header + payload are zero-initialised. Matches Nim nimNewObj. */
 static inline void* msAlloc(size_t size) {
@@ -308,7 +323,7 @@ static inline void* msAlloc(size_t size) {
 /* Allocate with RTTI — for typed class instances (ORC-aware).
  * Safe default: header + payload are zero-initialised. Matches Nim nimNewObj. */
 static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
-	size_t total = sizeof(msRefHeader) + size;
+	size_t total = msTotalWithOwnerWord(sizeof(msRefHeader) + size, type);
 	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
 	h->rootIdx = -1;
 	h->type = type;
@@ -370,13 +385,14 @@ static inline void* msAllocUninit(size_t size) {
 }
 
 static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
-	size_t total = sizeof(msRefHeader) + size;
+	size_t total = msTotalWithOwnerWord(sizeof(msRefHeader) + size, type);
 	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;
 	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
+	if (msOwnerWordSize(type) != 0) *(void**)((char*)h + total - sizeof(void*)) = NULL;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
@@ -442,6 +458,41 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 }
 
 void msUnownedOutlives(void* p);
+_Noreturn void msRaiseOwnedTwice(void* child, void* holder);
+_Noreturn void msRaiseOwnedAncestor(void* child, void* holder);
+_Noreturn void msRaiseOwnedNoWord(void* child);
+
+static inline void** msOwnerSlot(void* p) {
+	msRefHeader* h = msHeader(p);
+	if (msOwnerWordSize(h->type) == 0) msRaiseOwnedNoWord(p);
+	return (void**)((char*)h + h->allocSize - sizeof(void*));
+}
+
+/* An owned slot takes `child` for `holder`: refused when the child already has an owner, or when the
+ * holder is the child or one of its descendants, so owned edges stay a forest. */
+static inline void msOwnedAdopt(void* child, void* holder) {
+	if (child == NULL) return;
+	void** slot = msOwnerSlot(child);
+	if (*slot != NULL) msRaiseOwnedTwice(child, holder);
+	bool holderHasWord = holder != NULL && msOwnerWordSize(msHeader(holder)->type) != 0;
+	for (void* a = holderHasWord ? holder : NULL; a != NULL && a != MS_OWNER_ROOT; a = *msOwnerSlot(a)) {
+		if (a == child) msRaiseOwnedAncestor(child, holder);
+	}
+	*slot = holderHasWord ? holder : MS_OWNER_ROOT;
+}
+
+static inline void msOwnedRelease(void* child) {
+	if (child != NULL) *msOwnerSlot(child) = NULL;
+}
+
+/* `slot = v` on an owned slot whose holder is `holder`: v is adopted before the old value is released, so a
+ * refused store leaves the slot as it was; storing the value the slot already holds changes nothing. */
+static inline void msOwnedAssignAt(void** slot, void* v, void* holder) {
+	void* old = *slot;
+	if (v == old) return;
+	msOwnedAdopt(v, holder);
+	msOwnedRelease(old);
+}
 _Noreturn void msRaiseUnownedOverflow(void* p);
 
 static inline void msUnownedIncref(void* p) {

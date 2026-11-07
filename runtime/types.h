@@ -47,5 +47,6 @@ typedef struct msTypeInfo {
 #define MS_TYPE_FLAG_ARRAY_CELL 8  /* Array cell: the payload starts with int64_t len, and len 0 means no outgoing refs */
 #define MS_TYPE_FLAG_ATOMIC 16  /* The cell's own rc is atomic: Arc and Locked boxes */
 #define MS_TYPE_FLAG_FINALIZER 32  /* finalizeFn and releaseFn are set */
+#define MS_TYPE_FLAG_OWNED_TARGET 64  /* Some Owned<T> names this class: the allocation ends with its owner word */
 
 #endif /* MS_TYPEINFO_H */

@@ -287,6 +287,25 @@ _Noreturn void msRaiseDestroyKeptSelf(void* p) {
 	exit(1);
 }
 
+_Noreturn void msRaiseOwnedTwice(void* child, void* holder) {
+	(void)holder;
+	fprintf(stderr, "Error: this %s already has an owner; an Owned<%s> slot takes an object no other owned slot holds (remove it from its owner first)\n", msTypeInfoShownName(msHeader(child)->type), msTypeInfoShownName(msHeader(child)->type));
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseOwnedAncestor(void* child, void* holder) {
+	fprintf(stderr, "Error: this %s would own its own ancestor: the %s storing it is the %s itself or one of its descendants\n", msTypeInfoShownName(msHeader(child)->type), msTypeInfoShownName(msHeader(holder)->type), msTypeInfoShownName(msHeader(child)->type));
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseOwnedNoWord(void* child) {
+	fprintf(stderr, "internal: a %s reached an owned slot without an owner word (its TypeInfo lacks MS_TYPE_FLAG_OWNED_TARGET)\n", msHeader(child)->type != NULL ? msTypeInfoShownName(msHeader(child)->type) : "untyped object");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left) {
 	fprintf(stderr, "Error: %lld Unowned<%s> edge(s) still point at the %s being freed; each would dangle\n", (long long)left, msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
