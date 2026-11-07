@@ -5,9 +5,12 @@
 
 import { Buffer } from "std/core/buffer";
 import { exists, isDir, isFile, join, readDirNames, readFileBytes } from "std/fs";
-import { env, execPath } from "std/process";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { derItem, tagSequence } from "../pure/asn1";
+
+@include("runtime/process.h");
+extern function msProcessGetEnv(name: string): string;
+extern function msProcessExecPath(): string;
 
 export interface TrustAnchor {
 	der: Buffer;
@@ -146,7 +149,7 @@ export function windowsCaCandidates(
 /** The fixed places this build's OS keeps its trust anchors, in order. */
 export function systemCaCandidates(lookupEnv: EnvLookup): string[] {
 	when (windows) {
-		return windowsCaCandidates(execPath, lookupEnv("PATH"));
+		return windowsCaCandidates(msProcessExecPath(), lookupEnv("PATH"));
 	}
 	when (macos || ios) {
 		return [...MACOS_CA_PATHS];
@@ -198,7 +201,7 @@ export function resolveRootStore(
 }
 
 function processEnv(name: string): string {
-	return env.get(name);
+	return msProcessGetEnv(name);
 }
 
 /** `resolveRootStore` against this process's environment and OS. */
