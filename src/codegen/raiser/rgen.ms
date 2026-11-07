@@ -170,21 +170,24 @@ function markLegacyRoot(s: RaiserCompState, node: Node): void {
 }
 
 export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
-	const aliases: BinaryExprData[] = [];
+	const aliases: Symbol[] = [];
 	collectRootsIn(s, node, aliases);
 	let grew = true;
 	while (grew) {
 		grew = false;
-		for (const a of aliases) {
-			if (s.legacyRoots.has(a.left.resolvedSym!) && !s.legacyRoots.has(a.right.resolvedSym!)) {
-				s.legacyRoots.add(a.right.resolvedSym!);
+		for (let i = 0; i < aliases.length; i += 2) {
+			const a = aliases[i];
+			const b = aliases[i + 1];
+			if (s.legacyRoots.has(a) != s.legacyRoots.has(b)) {
+				s.legacyRoots.add(a);
+				s.legacyRoots.add(b);
 				grew = true;
 			}
 		}
 	}
 }
 
-function collectRootsIn(s: RaiserCompState, node: Node, aliases: BinaryExprData[]): void {
+function collectRootsIn(s: RaiserCompState, node: Node, aliases: Symbol[]): void {
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		if (d.arguments.length > 0 && locationResult(s, node.nodeType, [])) markLegacyRoot(s, d.arguments[0]);
@@ -199,7 +202,11 @@ function collectRootsIn(s: RaiserCompState, node: Node, aliases: BinaryExprData[
 	if (node.kind == NodeKind.ArrayAccess && (node.data as ArrayAccessData).index.kind != NodeKind.NumberLiteral) markLegacyRoot(s, (node.data as ArrayAccessData).array);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator == "=" && d.left.kind == NodeKind.Identifier && d.right.kind == NodeKind.Identifier && d.left.resolvedSym != null && d.right.resolvedSym != null) aliases.push(d);
+		if (d.operator == "=" && d.left.kind == NodeKind.Identifier && d.right.kind == NodeKind.Identifier && d.left.resolvedSym != null && d.right.resolvedSym != null) { aliases.push(d.left.resolvedSym); aliases.push(d.right.resolvedSym); }
+	}
+	if (node.kind == NodeKind.VariableDecl) {
+		const init = (node.data as VariableDeclData).initializer;
+		if (node.resolvedSym != null && init != null && init.kind == NodeKind.Identifier && init.resolvedSym != null) { aliases.push(node.resolvedSym); aliases.push(init.resolvedSym); }
 	}
 	forEachChild(node, (child: Node): void => collectRootsIn(s, child, aliases));
 }
