@@ -1818,6 +1818,7 @@ export function createUnowned(ref: Type): Type {
 	if (isUnownedRef(ref)) return ref;
 	const c = copyTypeShallow(ref);
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsUnowned);
+	c.plainType = ref;
 	return c;
 }
 
@@ -1830,6 +1831,7 @@ export function isUnownedSlot(t: Readonly<Type | null>): boolean {
 }
 
 export function withoutUnowned(t: Type): Type {
+	if (isUnownedRef(t) && t.plainType != null) return t.plainType;
 	if (isUnownedRef(t)) {
 		const c = copyTypeShallow(t);
 		c.typeFlags = c.typeFlags.excl(TypeFlag.IsUnowned);
@@ -1892,7 +1894,7 @@ export function isSinkTypeForParam(t: Readonly<Type | null>): boolean {
 }
 
 export function withoutOwned(t: Type): Type {
-	if (t.plainType != null) return t.plainType;
+	if (t.plainType != null && !isUnownedRef(t)) return t.plainType;
 	if (t.kind == TypeKind.Ref && isOwnedRef(t)) {
 		const c = copyTypeShallow(t);
 		c.typeFlags = c.typeFlags.excl(TypeFlag.IsOwned);

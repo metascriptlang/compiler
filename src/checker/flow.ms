@@ -28,7 +28,7 @@ import {
 	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
-	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
+	nullableUnionOf, hasGenericParams, isNullableShape, withoutUnowned, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 	classAncestorInstance, isReadonlyView, peelToStruct, hasNullMember,
 } from "./types";
@@ -1461,9 +1461,11 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 	return null;
 }
 
+// A local reads a back edge as the reference it keeps alive while it is used, never as the edge itself, so the
+// type an assignment narrows a local to is the read type of an `Unowned` slot, as a declaration's is.
 function assignedValueType(value: Node): Type {
 	const t = value.nodeType!;
-	return value.kind == NodeKind.NullLiteral && !value.flags.has(NodeFlag.AssertedNull) && isNullableShape([t]) ? nullType() : t;
+	return value.kind == NodeKind.NullLiteral && !value.flags.has(NodeFlag.AssertedNull) && isNullableShape([t]) ? nullType() : withoutUnowned(t);
 }
 
 function stripHidden(n: Node | null): Node | null {
