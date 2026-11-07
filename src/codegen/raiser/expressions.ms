@@ -3199,19 +3199,9 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 					node.location.line, node.location.column);
 				callArgs = [];
 			}
-			const params = sym != null ? constructorParamTypes(sym) : null;
-			const held: int32[] = [];
-			for (let i = 0; i < callArgs.length; i = i + 1) {
-				const borrowed = params != null && i < params.length && params[i].kind != TypeKind.Sink;
-				held.push(borrowed && materializesFramePlace(s, callArgs[i]) ? allocRef(s) : -1);
-			}
-			const dest = callBlock(s, node.nodeType, callArgs, params);
-			for (let i = 0; i < callArgs.length; i = i + 1) {
-				compileExprInto(s, callArgs[i], dest + 1 + i);
-				if (held[i] >= 0) emitInst(s, raiserABC(RaiserOpcode.Move, held[i], dest + 1 + i, 0));
-			}
+			const dest = callBlock(s, node.nodeType, callArgs, sym != null ? constructorParamTypes(sym) : null);
+			emitCallArgs(s, dest, callArgs);
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
-			for (const reg of held) if (reg >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, reg, 0, 0));
 			return dest;
 		}
 	}
