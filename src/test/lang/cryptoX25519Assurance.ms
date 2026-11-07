@@ -2,7 +2,7 @@ import { readFile } from "std/fs";
 import { exit } from "std/process";
 import { Buffer } from "std/core/buffer";
 import { CryptoError, sha256Sync, toHex } from "std/crypto";
-import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
 import {
 	X25519PrivateKey, X25519PublicKey, sharedSecretSync,
 } from "std/crypto/x25519";
@@ -45,7 +45,7 @@ function pointMaskingKernel(output: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<u
 }
 
 function rawAsSharedSecret(scalar: Buffer, point: Buffer): Result<Buffer, CryptoError> {
-	const output = newOutputBuffer(32);
+	const output = newUninitOutputBuffer(32);
 	crypto_x25519(outputBytes(output), outputBytes(scalar), outputBytes(point));
 	return Result.ok(output);
 }
@@ -79,7 +79,7 @@ function mustApi<T>(result: Result<T, CryptoError>): T {
 }
 
 function raw(scalar: string, point: string): string {
-	const output = newOutputBuffer(32);
+	const output = newUninitOutputBuffer(32);
 	const scalarBytes = fromHex(scalar);
 	const pointBytes = fromHex(point);
 	crypto_x25519(outputBytes(output), outputBytes(scalarBytes), outputBytes(pointBytes));

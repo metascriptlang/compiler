@@ -1,7 +1,7 @@
 import { readFile } from "std/fs";
 import { Buffer } from "std/core/buffer";
 import { CryptoError, fromHex, toHex } from "std/crypto";
-import { newOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
+import { newUninitOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
 import { JsonKind, JsonValue, getDynamicField, asString, asInt32, at, length, parseJson } from "std/core/json";
 
 const ZERO_SHARED = "0".repeat(64);
@@ -147,7 +147,7 @@ export function checkRawX25519(cases: X25519Case[], scalarMult: X25519Raw): X255
 		classify(item, tally);
 		const scalar = decodeX25519Hex(item.scalar);
 		const point = decodeX25519Hex(item.point);
-		const output = newOutputBuffer(32);
+		const output = newUninitOutputBuffer(32);
 		scalarMult(outputBytes(output), outputBytes(scalar), outputBytes(point));
 		const got = toHex(output);
 		if (got != item.shared) {
