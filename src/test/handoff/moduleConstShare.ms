@@ -96,6 +96,14 @@ test "moduleConstShare: a part of an immortal module const stored by a construct
 	assert refuses(foreign, "C may count or write what it receives there"), "a C extern given a part of the immortal const";
 }
 
+test "moduleConstShare: only the array natives that move bytes without counting may receive a part of an immortal const in code a task runs" {
+	const pushed = CELLS + "function probe(i: uint32): uint32 { const xs: Readonly<Child>[] = []; xs.push(K.child); return (xs.length as uint32) + i; }" + TASKS;
+	assert !refuses(pushed, "C may count or write what it receives there"), "push";
+	const lookalike = CELLS + "extern function smuggle(c: Readonly<Child>): int32 from \"msGenericArraySmuggle\";\n"
+		+ "function probe(i: uint32): uint32 { return (smuggle(K.child) as uint32) + i; }" + TASKS;
+	assert refuses(lookalike, "C may count or write what it receives there"), "an extern whose C name only shares the prefix";
+}
+
 test "moduleConstShare: a constructor parameter given a part of an immortal const and reassigned to a mortal view before it is stored is refused in code a task runs" {
 	const reassigned = CELLS
 		+ "class Swaps { c: Readonly<Child>; constructor(c: Readonly<Child>, d: Readonly<Child>) { c = d; this.c = c; } }\n"
