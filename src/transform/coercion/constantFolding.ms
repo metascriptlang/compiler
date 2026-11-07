@@ -13,7 +13,7 @@
 //   "a" + 1          — mixed types
 
 import { Node, NodeKind, Type, BinaryExprData, UnaryExprData, MemberExprData, StringLiteralData } from "../../ast/node";
-import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral, foldConstInitializer } from "../../checker/constFold";
+import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral, foldConstInitializer, foldConstAggregateLeaves } from "../../checker/constFold";
 import { declaresUserHook } from "../../checker/instantiate";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -44,6 +44,7 @@ function foldNode(node: Node, declaresHook: (owner: Type) => boolean): Node {
 
 function foldConstDecl(node: Node, declaresHook: (owner: Type) => boolean): Node {
 	foldConstInitializer(node, declaresHook);
+	foldConstAggregateLeaves(node, declaresHook);
 	return node;
 }
 

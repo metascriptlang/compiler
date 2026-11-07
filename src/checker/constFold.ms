@@ -535,6 +535,48 @@ export function foldConstInitializer(binding: Node, declaresHook: (owner: Type) 
 	d.initializer = folded;
 }
 
+export function foldConstAggregateLeaves(binding: Node, declaresHook: (owner: Type) => boolean): void {
+	const d = binding.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const || d.initializer == null) return;
+	const init = d.initializer;
+	if (init.kind == NodeKind.ArrayLiteral) {
+		const elements = (init.data as ArrayLiteralData).elements;
+		for (let i = 0; i < elements.length; i += 1) elements[i] = foldedLeaf(elements[i], declaresHook);
+	} else if (init.kind == NodeKind.ObjectLiteral && !init.flags.has(NodeFlag.Closure)) {
+		const properties = (init.data as ObjectLiteralData).properties;
+		for (let i = 0; i < properties.length; i += 1) properties[i] = foldedLeaf(properties[i], declaresHook);
+	}
+}
+
+function foldedLeaf(leaf: Node, declaresHook: (owner: Type) => boolean): Node {
+	if (leaf == null || leaf.kind != NodeKind.Identifier) return leaf;
+	const t = leaf.nodeType;
+	if (t != null && t.kind == TypeKind.String) {
+		const text = constStringLiteral(leaf, 0);
+		if (text == null) return leaf;
+		const copy = createNode(NodeKind.StringLiteral, { value: (text.data as StringLiteralData).value }, syntheticToken(leaf.location));
+		copy.nodeType = t;
+		return copy;
+	}
+	if (!readonlyDataTypeShape(t, 0) || holdsHookedValue(t, declaresHook, 0)) return leaf;
+	const folded = constantTreeOf(leaf, 0);
+	if (folded == null) return leaf;
+	if (isScalarLiteral(folded)) {
+		const typed = retypedLiteral(folded, t, leaf.location);
+		return typed != null ? typed : leaf;
+	}
+	folded.nodeType = t;
+	return folded;
+}
+
+function constStringLiteral(expr: Node, depth: int32): Node {
+	const none = null as unknown as Node;
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return none;
+	if (expr.kind == NodeKind.StringLiteral) return expr;
+	if (expr.kind != NodeKind.Identifier) return none;
+	const init = constBindingInitializer(expr.resolvedSym);
+	return init != null ? constStringLiteral(init, depth + 1) : none;
+}
 
 function integerBitWidth(t: Type): int32 {
 	return match (t.kind) {
