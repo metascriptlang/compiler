@@ -25,6 +25,19 @@ function refused(src: string): string {
 	return r.ok ? "compiled" : r.error;
 }
 
+function typeInfoLine(decls: string, name: string): string {
+	const r = compileToC(decls + "\nconsole.log(\"ok\");\n");
+	if (!r.ok) return r.error;
+	return typeInfoOf(r.value, name);
+}
+
+test "a class some Owned<T> names, and its subclass, carry the owner-word flag in their TypeInfo" {
+	const decls = "class N { kid: Owned<N> | null = null; }\nclass M extends N { }\nclass P { v: int32 = 0; }\nconst n = new N();\nconst m = new M();\nconst p = new P();";
+	assert typeInfoLine(decls, "N").contains("MS_TYPE_FLAG_OWNED_TARGET"), "N is named by Owned<N>";
+	assert typeInfoLine(decls, "M").contains("MS_TYPE_FLAG_OWNED_TARGET"), "M can sit in an Owned<N> slot";
+	assert !typeInfoLine(decls, "P").contains("MS_TYPE_FLAG_OWNED_TARGET"), "P is named by no Owned<T>";
+}
+
 test "a Vec of owned children is acyclic" {
 	assert verdict("class N { kids: Vec<Owned<N>> = []; }\nconst n = new N();", "N") == "acyclic";
 }
