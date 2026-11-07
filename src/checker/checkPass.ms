@@ -4792,7 +4792,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
-	runDeferredEffectChecks(ctx);
+	runDeferredEffectChecks(ctx, program);
 	checkViewBorrows(ctx, program);
 	checkMovesIn(ctx, program);
 	listMovePaths(ctx, program);
