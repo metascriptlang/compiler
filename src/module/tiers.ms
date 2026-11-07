@@ -1,7 +1,8 @@
-import { Node, NodeKind, Symbol, SymbolKind, ProgramData, ExportDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, ExternDeclData, DecoratedDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, ProgramData, ExportDeclData, ImportDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, ExternDeclData, DecoratedDeclData } from "../ast/node";
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { exists, readFile } from "std/fs";
+import { dirname, join, normalize } from "std/fs/path";
 import { resolveRuntimeDir } from "../utils/path";
 
 export const TIER_EXTENSIONS: string[] = [".cms", ".jms"];
@@ -18,13 +19,44 @@ function declName(decl: Node): string {
 	};
 }
 
-function exportsName(path: string, name: string): boolean {
+const REEXPORT_DEPTH_LIMIT: int32 = 8;
+
+function exportsName(path: string, name: string, depth: int32 = 0): boolean {
 	const source = readFile(path);
 	if (!source.ok) return false;
 	const parsed = parseSource(source.value);
 	if (!parsed.ok) return false;
 	for (const stmt of (parsed.value.data as ProgramData).programStmts) {
 		if (exportedName(stmt) == name) return true;
+		const from = reexportSource(stmt, name);
+		if (from == null) continue;
+		if (from.names) return true;
+		if (depth < REEXPORT_DEPTH_LIMIT && starTargetExports(path, from.source, name, depth + 1)) return true;
+	}
+	return false;
+}
+
+interface Reexport {
+	source: string;
+	names: boolean;
+}
+
+// `export { name } from "m"` names it outright; `export * from "m"` exports it when `m` does.
+function reexportSource(stmt: Node, name: string): Reexport | null {
+	if (stmt.kind != NodeKind.ExportDecl) return null;
+	const inner = (stmt.data as ExportDeclData).exportedDecl;
+	if (inner == null || inner.kind != NodeKind.ImportDecl) return null;
+	const d = inner.data as ImportDeclData;
+	if (d.importNames.length == 1 && d.importNames[0] == "*") return d.importAliases[0] == "*" ? { source: d.importSource, names: false } : null;
+	return d.importAliases.includes(name) ? { source: d.importSource, names: true } : null;
+}
+
+function starTargetExports(fromPath: string, source: string, name: string, depth: int32): boolean {
+	const base = source.startsWith("std/") ? resolveRuntimeDir() + "/" + source : source.startsWith(".") ? normalize(join(dirname(fromPath), source)) : "";
+	if (base == "") return false;
+	const tierExt = fromPath.slice(stemOf(fromPath).length);
+	for (const candidate of [base + ".ms", base + tierExt, base + "/index.ms", base + "/index" + tierExt]) {
+		if (exists(candidate)) return exportsName(candidate, name, depth);
 	}
 	return false;
 }
