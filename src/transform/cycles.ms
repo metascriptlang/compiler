@@ -37,16 +37,38 @@ function typeIdentity(t: Type, holder: NameSet): string {
 
 function identityOf(t: Type): string {
 	if (t.kind == TypeKind.GenericInstance) {
-		if (t.typeName != "") return monoInstanceName(t);
+		if (t.typeName != "") return monoInstanceName(t) + edgeKindsOf(t.typeChildren);
 		return "";
 	}
-	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) return typeKey(t);
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) return typeKey(t) + edgeMarks(edgeKindAt(t.typeReturn, 0));
 	if (t.typeName != "" && !isAnonTypeName(t.typeName)) {
 		if (t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return t.typeName;
 		return t.sym != null && t.sym.instantiatedFrom != null ? t.typeName : nominalTypeKey(t);
 	}
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
+}
+
+// The output spelling of an instance is the same for `Vec<Owned<T>>` and `Vec<T>`, but an owned and a plain
+// element are different edges here, so the visited key carries each argument's edge kinds.
+function edgeKindsOf(args: Readonly<Type[]>): string {
+	let marks = "";
+	for (const a of args) marks = marks + edgeKindAt(a, 0) + ",";
+	return edgeMarks(marks);
+}
+
+function edgeMarks(marks: string): string {
+	return marks.includes("o") || marks.includes("u") ? "#" + marks : "";
+}
+
+function edgeKindAt(t: Readonly<Type | null>, depth: int32): string {
+	if (t == null || depth > 8) return "";
+	return match (t.kind) {
+		TypeKind.Ref => (isOwnedRef(t) ? "o" : isUnownedRef(t) ? "u" : "p") + edgeKindAt(t.typeReturn, depth + 1),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => "[" + edgeKindAt(t.typeReturn, depth + 1) + "]",
+		TypeKind.GenericInstance => "<" + t.typeChildren.map((c: Readonly<Type>): string => edgeKindAt(c, depth + 1)).join(",") + ">",
+		_ => "",
+	};
 }
 
 function heldKey(held: Type, holder: NameSet): string {
