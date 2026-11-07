@@ -169,9 +169,10 @@ function markLegacyRoot(s: RaiserCompState, node: Node): void {
 	forEachChild(node, (child: Node): void => markLegacyRoot(s, child));
 }
 
-export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
+export function collectLegacyRoots(s: RaiserCompState, node: Node, legacyParams: Symbol[] = []): void {
 	const aliases: Symbol[] = [];
 	collectRootsIn(s, node, aliases);
+	for (const param of legacyParams) if (s.legacyRoots.has(param) || aliases.includes(param)) s.legacyRoots.add(param);
 	let grew = true;
 	while (grew) {
 		grew = false;
@@ -239,9 +240,11 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
 
-	collectLegacyRoots(s, body);
 	const idx = routine != null ? funcMap.symbolIndices.get(routine) : null;
 	const packed = idx != null ? funcMap.packed.get(idx) : null;
+	const legacyParams: Symbol[] = [];
+	for (let i = 0; i < paramSyms.length; i += 1) if (packed == null || !packed.shape.params[i].block) legacyParams.push(paramSyms[i]);
+	collectLegacyRoots(s, body, legacyParams);
 	s.resultType = routine != null && routine.symbolType != null ? routine.symbolType.typeReturn : null;
 	s.resultShape = packed != null ? packed.shape.result : null;
 	for (let i = 0; i < paramSyms.length; i += 1) {
@@ -306,7 +309,7 @@ function compileClassInit(
 	if (globals != null) s.globals = globals;
 	const thisReg = allocRef(s);
 	s.receiverReg = thisReg;
-	if (ctorBody != null) collectLegacyRoots(s, ctorBody);
+	if (ctorBody != null) collectLegacyRoots(s, ctorBody, ctorSyms);
 	for (let i = 0; i < ctorSyms.length; i += 1) {
 		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
@@ -332,7 +335,7 @@ function compileClassConstructor(
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
 
-	if (ctorBody != null) collectLegacyRoots(s, ctorBody);
+	if (ctorBody != null) collectLegacyRoots(s, ctorBody, ctorSyms);
 
 	// Declare ctor params
 	const arity = ctorArity(ctorSyms);
