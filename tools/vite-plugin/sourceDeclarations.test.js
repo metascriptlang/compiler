@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 async function fixture(t) {
  const { createSourceDeclarationPublisher } = await import("./sourceDeclarations.js");
- const root = mkdtempSync(join(tmpdir(), "msc-publisher-"));
+ const root = realpathSync(mkdtempSync(join(tmpdir(), "msc-publisher-")));
  const options = { outDir: join(root, "types"), rootDir: root };
  const owners = [];
  const open = () => { const owner = createSourceDeclarationPublisher(options, root); owners.push(owner); return owner; };

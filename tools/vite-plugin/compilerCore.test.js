@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { buildCompilerGraph, canonicalPath, instanceOf, outputOf, stripQuery, withInstance } from "./compilerCore.js";
 
 function fixture(t) {
-	const root = mkdtempSync(join(tmpdir(), "msc core contract "));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "msc core contract ")));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const entry = join(root, "main.ms");
 	const dependency = join(root, "types.jms");

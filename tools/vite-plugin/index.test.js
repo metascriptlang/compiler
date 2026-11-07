@@ -483,3 +483,56 @@ test("Vite bounds source roots separately from exact compiler and config watches
  server = devServer(); plugin.configureServer(server); build(); bounds(true);
  assert.ok(existsSync(sidecar));
 });
+
+for (const owned of ["editor-types", "workspace"]) test(`Vite exact compiler and JSON controls precede ${owned} ownership`, t => {
+ const f = fixture(t);
+ const directory = join(f.root,owned); mkdirSync(directory,{recursive:true});
+ const msc = join(directory,"fake-msc.cjs"), data = join(directory,"schema.json");
+ writeFileSync(msc,readFileSync(join(f.root,"fake-msc.cjs"),"utf8").replaceAll("__dirname",JSON.stringify(f.root))); chmodSync(msc,0o755);
+ writeFileSync(data,"{}");
+ f.state.manifest.dependencies.push(data);
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}';
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;"; f.save();
+ const plugin = metascript({msc,entry:f.entry,outDir:join(f.root,"workspace"),sourceDeclarations:{outDir:"editor-types"}});
+ plugin.configResolved({root:f.root});
+ const server = devServer(); plugin.configureServer(server); t.after(() => plugin.closeBundle());
+ plugin.buildStart.call(f.context);
+ const sidecar = join(f.root,"editor-types/main.d.ms.ts");
+ let calls = f.calls().length;
+ for (const file of [msc,data]) {
+  assert.ok(server.watched.has(file));
+  assert.deepEqual(plugin.handleHotUpdate.call(f.context,{file,server}),[]);
+  assert.equal(f.calls().length,++calls);
+  f.state.fail = true; f.save();
+  plugin.handleHotUpdate.call(f.context,{file,server});
+  assert.equal(f.calls().length,++calls); assert.equal(existsSync(sidecar),false);
+  assert.match(server.sent.at(-1).err.message,/diagnostic/);
+  f.state.fail = false; f.save();
+  plugin.handleHotUpdate.call(f.context,{file,server});
+  assert.equal(f.calls().length,++calls); assert.ok(existsSync(sidecar));
+ }
+ plugin.handleHotUpdate.call(f.context,{file:sidecar,server}); assert.equal(f.calls().length,calls);
+});
+
+test("Vite source declarations beside MS/JMS retain edit, deletion and error recovery", t => {
+ const f = fixture(t,{sourceDeclarations:{outDir:"."}});
+ f.state.manifest.sourceDeclarationRoot = "_source_declarations";
+ f.state.manifest.sourceDeclarationPackage = "_source_declarations/package.json";
+ f.state.manifest.sourceDeclarations = [{source:f.entry,out:"_source_declarations/main.d.ms.ts"}];
+ f.state.files["_source_declarations/package.json"] = '{"type":"module"}';
+ f.state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: number;"; f.save();
+ const server = devServer(); f.plugin.configureServer(server); t.after(() => f.plugin.closeBundle());
+ f.plugin.buildStart.call(f.context);
+ const sidecar = join(f.root,"main.d.ms.ts"); let calls = f.calls().length;
+ writeFileSync(f.entry,"changed source"); hot(f,server); assert.equal(f.calls().length,++calls);
+ const unknown = join(f.root,"new.jms"); writeFileSync(unknown,"new source");
+ hot(f,server,unknown); assert.equal(f.calls().length,++calls);
+ rmSync(f.typeInput); hot(f,server,f.typeInput); assert.equal(f.calls().length,++calls); assert.equal(existsSync(sidecar),false);
+ writeFileSync(f.typeInput,"restored source"); hot(f,server,f.typeInput); assert.equal(f.calls().length,++calls); assert.ok(existsSync(sidecar));
+ f.state.fail = true; f.save(); hot(f,server); assert.equal(f.calls().length,++calls); assert.equal(existsSync(sidecar),false);
+ f.state.fail = false; f.save(); hot(f,server); assert.equal(f.calls().length,++calls); assert.ok(existsSync(sidecar));
+ hot(f,server,sidecar); assert.equal(f.calls().length,calls);
+});

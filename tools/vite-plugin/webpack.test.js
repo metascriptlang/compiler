@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -125,6 +125,7 @@ test("one compilation snapshot supplies JS maps dependencies and declaration ass
 	}
 	assert.ok(g.compilation.fileDependencies.has(f.dependency));
 	assert.ok(g.compilation.buildDependencies.has(f.settings.msc));
+	assert.ok(g.compilation.fileDependencies.has(f.settings.msc));
 	assert.equal(g.compilation.contextDependencies.size, 0);
 	assert.equal(g.compilation.missingDependencies.size, 0);
 	assert.equal(g.compilation.hooks.processAssets.options.stage, -2000);
@@ -402,6 +403,7 @@ test("relative compiler paths track the executable used by the shared core", t =
 	const g = generation(compiler);
 	assert.deepEqual(g.compilation.errors, []);
 	assert.ok(g.compilation.buildDependencies.has(f.settings.msc));
+	assert.ok(g.compilation.fileDependencies.has(f.settings.msc));
 	assert.equal(f.calls(), 1);
 });
 
@@ -423,6 +425,11 @@ test("webpack source-only publishing invalidates immediately and recovers in the
  f.state.fail = false; f.save(); g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.ok(existsSync(file));
  compiler.hooks.shutdown.call(); assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
 });
+
+// macOS watchpack also wakes on the fixture's call counter and webpack's own bundle, which sit
+// in the watched root; such a generation recompiles nothing, and the `invalid` check proves
+// no plugin output woke one.
+const compilingGenerations = records => records.filter((record, index) => index === 0 || record.calls !== records[index - 1].calls || record.errors !== records[index - 1].errors).length;
 
 function sourceSettings(f) {
  f.state.manifest.sourceDeclarationRoot = "_source_declarations";
@@ -456,7 +463,8 @@ test("source watch wrapper preserves runtime ignored options and observes callba
   assert.equal(runtime.ignored,ignored);
   assert.deepEqual(args[4].ignored.slice(0,-1), ignored === undefined ? [] : Array.isArray(ignored) ? ignored : [ignored]);
   const outputs = args[4].ignored.at(-1);
-  assert.ok(outputs.test(join(f.root,"editor-types"))); assert.ok(outputs.test(join(f.root,"node_modules/.metascript/webpack-private"))); assert.equal(outputs.test(f.entry),false);
+  for (const owned of ["editor-types/main.d.ms.ts","editor-types/package.json","editor-types/.msc-source-lease","editor-types/.msc-source-lease/owner.json","editor-types/.msc-source-ledger.json","node_modules/.metascript/webpack-private"]) assert.ok(outputs.test(join(f.root,owned)),owned);
+  for (const kept of [f.entry,f.dependency,f.settings.msc,join(f.root,"editor-types"),join(f.root,"editor-types/new.jms"),join(f.root,"editor-types/schema.json"),join(f.root,"node_modules/.metascript/late.ms")]) assert.equal(outputs.test(kept),false,kept);
   args[6](join(f.root,"calls"),1); assert.ok(existsSync(file));
   args[6](f.entry,2); assert.deepEqual(forwarded,[f.entry,2]);
   generation(compiler); assert.ok(existsSync(file));
@@ -494,7 +502,8 @@ test("source watch wrapper preserves native option identity and isolates compile
  assert.equal(first.aggregateTimeout,17);
  assert.deepEqual(first.ignored.slice(0,-1),ignored);
  assert.equal(first.ignored[0],ignored[0]);
- assert.ok(first.ignored.at(-1).test(join(f.root,"editor-types")));
+ assert.ok(first.ignored.at(-1).test(join(f.root,"editor-types/main.d.ms.ts")));
+ assert.equal(first.ignored.at(-1).test(join(f.root,"editor-types")),false);
  assert.equal(first.ignored.at(-1).test(f.entry),false);
  assert.deepEqual(options,{aggregateTimeout:17,ignored:[/keep-this/i,"**/keep-this/**"]});
  const nextOptions = Object.freeze({aggregateTimeout:23,ignored:"**/other/**"});
@@ -523,11 +532,31 @@ test("directory-only aggregates validate source bytes after failures and reuse u
  g = generation(pluginCompiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),3);
  f.state.fail = false; f.save(); writeFileSync(unknown,"valid bytes");
  g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),4);
- writeFileSync(join(f.root,"editor-types/ignored.jms"),"owned output");
+ writeFileSync(join(f.root,"editor-types/ignored.d.jms.ts"),"owned output");
  g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),4);
  assert.ok(existsSync(join(f.root,"editor-types/main.d.ms.ts")));
  rmSync(unknown);
  g = generation(pluginCompiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),5);
+});
+
+test("a source reported again after its bytes compiled reuses the snapshot, while controls still recompile", t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ const data = join(f.root,"schema.json"); writeFileSync(data,"{}"); f.state.manifest.dependencies.push(data); f.save();
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(settings),{invalid:new Hook(),shutdown:new Hook()});
+ compiler.watchMode = true; t.after(() => compiler.hooks.shutdown.call());
+ const sidecar = join(f.root,"editor-types/main.d.ms.ts");
+ let g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),1);
+ writeFileSync(f.entry,"edited source"); compiler.modifiedFiles = new Set([f.root]);
+ g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),2);
+ compiler.hooks.invalid.call(f.entry); assert.equal(existsSync(sidecar),false);
+ compiler.modifiedFiles = new Set([f.root,f.entry]);
+ g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),2); assert.ok(existsSync(sidecar));
+ writeFileSync(f.entry,"newer source"); compiler.hooks.invalid.call(f.entry);
+ g = generation(compiler); assert.equal(f.calls(),3); assert.ok(existsSync(sidecar));
+ writeFileSync(data,'{"changed":true}'); compiler.hooks.invalid.call(data); compiler.modifiedFiles = new Set([f.root]);
+ g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),4); assert.ok(existsSync(sidecar));
+ compiler.hooks.invalid.call(undefined); compiler.modifiedFiles = new Set([f.root]);
+ g = generation(compiler); assert.equal(f.calls(),5);
 });
 
 test("real webpack watch recovers missing new imports, deletion and restoration without output feedback", {skip:unavailable,timeout:15000}, async t => {
@@ -593,4 +622,180 @@ test("real webpack watch restart reacquires source lease on the same compiler", 
  assert.ok(existsSync(file)); assert.equal(f.calls(),2);
  await stop();
  assert.equal(existsSync(lease),false); assert.equal(queue.pending,0);
+});
+
+for (const declarationDir of ["editor-types", "."]) test(`webpack directory inventory retains MS/JMS under owned prefixes (${declarationDir})`, t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ settings.outDir = "workspace"; settings.sourceDeclarations.outDir = declarationDir;
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(settings),{shutdown:new Hook()});
+ compiler.watchMode = true; t.after(() => compiler.hooks.shutdown.call());
+ let g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); let calls = f.calls();
+ compiler.modifiedFiles = new Set([f.root]);
+ for (const prefix of [declarationDir,"workspace"]) {
+  const dir = join(f.root,prefix); mkdirSync(dir,{recursive:true});
+  const source = join(dir,"unknown.jms");
+  writeFileSync(source,"first source"); g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),++calls);
+  writeFileSync(source,"other source"); generation(compiler); assert.equal(f.calls(),++calls);
+  f.state.fail = true; f.save(); writeFileSync(source,"invalid source");
+  g = generation(compiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),++calls);
+  f.state.fail = false; f.save(); writeFileSync(source,"restored source");
+  g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),++calls);
+  rmSync(source); generation(compiler); assert.equal(f.calls(),++calls);
+ }
+ const generated = join(f.root,declarationDir,"main.d.ms.ts");
+ writeFileSync(generated,"external generated-file edit"); generation(compiler); assert.equal(f.calls(),calls);
+});
+
+for (const prefix of ["editor-types", "workspace"]) test(`webpack exact compiler and JSON controls precede ${prefix} ownership`, t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ settings.outDir = "workspace";
+ const dir = join(f.root,prefix); mkdirSync(dir,{recursive:true});
+ settings.msc = join(dir,"fake-msc.cjs");
+ writeFileSync(settings.msc,readFileSync(f.settings.msc,"utf8").replaceAll("__dirname",JSON.stringify(f.root))); chmodSync(settings.msc,0o755);
+ const data = join(dir,"schema.json"); writeFileSync(data,"{}"); f.state.manifest.dependencies.push(data); f.save();
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(settings),{invalid:new Hook(),shutdown:new Hook()});
+ compiler.watchMode = true; t.after(() => compiler.hooks.shutdown.call());
+ let g = generation(compiler); assert.deepEqual(g.compilation.errors,[]);
+ const sidecar = join(f.root,"editor-types/main.d.ms.ts"); let calls = f.calls();
+ assert.ok(g.compilation.fileDependencies.has(settings.msc)); assert.ok(g.compilation.fileDependencies.has(data));
+ for (const file of [settings.msc,data]) {
+  compiler.modifiedFiles = new Set([file]); compiler.hooks.invalid.call(file); assert.equal(existsSync(sidecar),false);
+  g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),++calls);
+  f.state.fail = true; f.save(); compiler.hooks.invalid.call(file);
+  g = generation(compiler); assert.match(g.compilation.errors[0].message,/diagnostic/); assert.equal(f.calls(),++calls); assert.equal(existsSync(sidecar),false);
+  f.state.fail = false; f.save(); compiler.hooks.invalid.call(file);
+  g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); assert.equal(f.calls(),++calls); assert.ok(existsSync(sidecar));
+ }
+});
+
+test("webpack explicit compiler outside context is an exact live file dependency, not a source root", t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ const external = canonicalPath(mkdtempSync(join(tmpdir(),"msc external compiler ")));
+ t.after(() => rmSync(external,{recursive:true,force:true}));
+ settings.msc = join(external,"fake-msc.cjs");
+ writeFileSync(settings.msc,readFileSync(f.settings.msc,"utf8").replaceAll("__dirname",JSON.stringify(f.root))); chmodSync(settings.msc,0o755);
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(settings),{shutdown:new Hook()});
+ t.after(() => compiler.hooks.shutdown.call());
+ const g = generation(compiler); assert.deepEqual(g.compilation.errors,[]);
+ assert.ok(g.compilation.fileDependencies.has(settings.msc)); assert.ok(g.compilation.buildDependencies.has(settings.msc));
+ assert.equal(g.compilation.contextDependencies.has(external),false);
+});
+
+
+test("owned-control native colocated source declarations retain MS/JMS lifecycle without feedback", {skip:unavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t), settings = sourceSettings(f);
+ settings.sourceDeclarations.outDir = "."; settings.outDir = "workspace";
+ const compiler = webpack(nativeConfig(f,new MetaScriptPlugin(settings)));
+ const queue = watchTestQueue(), arms = watchTestQueue(), records = [], invalid = [];
+ let stage = {name:"initial",file:null,calls:1}, generationNumber = 0, input;
+ compiler.hooks.watchRun.tap("OwnedControlProbe", current => {
+  input = {generation:++generationNumber,stage:{...stage},files:[...(current.modifiedFiles ?? []),...(current.removedFiles ?? [])]};
+ });
+ compiler.hooks.invalid.tap("OwnedControlProbe",file => invalid.push(file));
+ const nativeWatch = compiler.watchFileSystem.watch;
+ compiler.watchFileSystem.watch = function(...args) {
+  const handle = nativeWatch.apply(this,args); arms.push(generationNumber); return handle;
+ };
+ const watching = compiler.watch({aggregateTimeout:10},(error,stats) => {
+  const record = {input,calls:f.calls(),error:error?.message,errors:stats?.hasErrors(),detail:stats?.toString({all:false,errors:true})};
+  records.push(record); queue.push({error,stats,record});
+ });
+ let closed = false;
+ const stop = async () => { if (!closed) { closed = true; await new Promise((resolve,reject) => watching.close(error => error ? reject(error) : resolve())); await close(compiler); } };
+ t.after(stop); t.after(() => t.diagnostic(JSON.stringify({nativeColocation:true,records,invalid,calls:f.calls()})));
+ const next = async errors => {
+  while (true) {
+   const value = await queue.next(); assert.ifError(value.error);
+   const r = value.record;
+   if (r.input.stage.name !== stage.name) continue;
+   if (stage.file && !r.input.files.includes(stage.file) && !(stage.context && r.input.files.includes(f.root))) continue;
+   if (r.calls < stage.calls) continue;
+   assert.equal(r.calls,stage.calls); assert.equal(value.stats.hasErrors(),errors,r.detail);
+   while ((await arms.next()) < r.input.generation) {}
+   return value;
+  }
+ };
+ const edit = async (name,file,action,errors=false,context=false) => {
+  stage = {name,file,calls:f.calls()+1,context}; action(); await next(errors);
+ };
+ try {
+  await next(false); const sidecar = join(f.root,"main.d.ms.ts"); assert.ok(existsSync(sidecar));
+  await edit("known-ms",f.entry,() => writeFileSync(f.entry,"edited source"));
+  const unknown = join(f.root,"new.jms");
+  await edit("new-jms",unknown,() => writeFileSync(unknown,"new source"),false,true);
+  await edit("edit-jms",unknown,() => writeFileSync(unknown,"other source"),false,true);
+  await edit("delete-known",f.dependency,() => rmSync(f.dependency),true); assert.equal(existsSync(sidecar),false);
+  await edit("restore-known",f.dependency,() => writeFileSync(f.dependency,"restored source")); assert.ok(existsSync(sidecar));
+  f.state.fail = true; f.save();
+  await edit("source-error",f.entry,() => writeFileSync(f.entry,"invalid source"),true); assert.equal(existsSync(sidecar),false);
+  f.state.fail = false; f.save();
+  await edit("source-recovery",f.entry,() => writeFileSync(f.entry,"valid source")); assert.ok(existsSync(sidecar));
+  await edit("delete-new",unknown,() => rmSync(unknown),false,true);
+  await stop();
+  assert.equal(f.calls(),9); assert.equal(compilingGenerations(records),9); assert.equal(queue.pending,0);
+  assert.equal(invalid.some(file => file && (/\.d\.(?:ms\.ts|jms\.ts|ts)$/.test(file) || file.includes("workspace/") || file.includes(".msc-source-"))),false);
+  assert.equal(existsSync(join(f.root,".msc-source-lease")),false);
+ } finally { await stop(); }
+});
+
+for (const prefix of ["editor-types","workspace"]) test(`owned-control native external compiler and ${prefix} JSON remain exact and update runtime`, {skip:unavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = fixture(t), settings = sourceSettings(f); settings.outDir = "workspace";
+ const external = canonicalPath(mkdtempSync(join(tmpdir(),"owned external compiler ")));
+ t.after(() => rmSync(external,{recursive:true,force:true}));
+ settings.msc = join(external,"fake-msc.cjs");
+ const originalCompiler = readFileSync(f.settings.msc,"utf8").replaceAll("__dirname",JSON.stringify(f.root));
+ writeFileSync(settings.msc,originalCompiler); chmodSync(settings.msc,0o755);
+ mkdirSync(join(f.root,prefix),{recursive:true}); const data = join(f.root,prefix,"schema.json");
+ writeFileSync(data,"{}"); f.state.manifest.dependencies.push(data); f.save();
+ const compiler = webpack(nativeConfig(f,new MetaScriptPlugin(settings),{output:{path:join(f.root,"dist"),filename:"bundle.cjs",library:{type:"commonjs2"}}}));
+ const queue = watchTestQueue(), arms = watchTestQueue(), records = [], watches = [], invalid = [];
+ let stage = {name:"initial",file:null,calls:1}, generationNumber = 0, input;
+ compiler.hooks.watchRun.tap("OwnedControlProbe",current => {
+  input = {generation:++generationNumber,stage:{...stage},files:[...(current.modifiedFiles ?? []),...(current.removedFiles ?? [])]};
+ });
+ compiler.hooks.invalid.tap("OwnedControlProbe",file => invalid.push(file));
+ const nativeWatch = compiler.watchFileSystem.watch;
+ compiler.watchFileSystem.watch = function(files,directories,...args) {
+  watches.push({files:[...files],directories:[...directories]});
+  const handle = nativeWatch.call(this,files,directories,...args); arms.push(generationNumber); return handle;
+ };
+ const watching = compiler.watch({aggregateTimeout:10},(error,stats) => {
+  const record = {input,calls:f.calls(),error:error?.message,errors:stats?.hasErrors(),detail:stats?.toString({all:false,errors:true})};
+  records.push(record); queue.push({error,stats,record});
+ });
+ let closed = false;
+ const stop = async () => { if (!closed) { closed = true; await new Promise((resolve,reject) => watching.close(error => error ? reject(error) : resolve())); await close(compiler); } };
+ t.after(stop); t.after(() => t.diagnostic(JSON.stringify({nativeControl:prefix,records,watches,invalid,calls:f.calls()})));
+ const next = async (errors=false,value=1) => {
+  while (true) {
+   const item = await queue.next(); assert.ifError(item.error); const r = item.record;
+   if (r.input.stage.name !== stage.name || (stage.file && !r.input.files.includes(stage.file))) continue;
+   assert.equal(r.calls,stage.calls); assert.equal(item.stats.hasErrors(),errors,r.detail);
+   while ((await arms.next()) < r.input.generation) {}
+   if (!errors) {
+    const result = {exports:{}};
+    new Function("module","exports",readFileSync(join(f.root,"dist/bundle.cjs"),"utf8"))(result,result.exports);
+    assert.equal(result.exports.value,value);
+   }
+   return item;
+  }
+ };
+ const edit = async (name,file,action,errors=false,value=1) => { stage={name,file,calls:f.calls()+1}; action(); await next(errors,value); };
+ try {
+  await next();
+  for (const watch of watches) { assert.ok(watch.files.includes(settings.msc)); assert.equal(watch.directories.includes(external),false); assert.equal(watch.directories.includes(dirname(external)),false); }
+  await edit("json-control",data,() => writeFileSync(data,'{"changed":true}'));
+  const changedCompiler = originalCompiler.replace("fs.writeFileSync(file, text);",'fs.writeFileSync(file, name === "nested/main.js" ? text.replace("value = 1", "value = 2") : text);');
+  assert.notEqual(changedCompiler,originalCompiler);
+  await edit("compiler-only",settings.msc,() => writeFileSync(settings.msc,changedCompiler),false,2);
+  const sidecar = join(f.root,"editor-types/main.d.ms.ts");
+  f.state.fail = true; f.save(); await edit("error-control",data,() => writeFileSync(data,'{"fail":true}'),true); assert.equal(existsSync(sidecar),false);
+  f.state.fail = false; f.save(); await edit("recovery-control",data,() => writeFileSync(data,'{"restored":true}'),false,2); assert.ok(existsSync(sidecar));
+  await edit("source-barrier",f.entry,() => writeFileSync(f.entry,"barrier source"),false,2);
+  await stop(); assert.equal(f.calls(),6); assert.equal(compilingGenerations(records),6); assert.equal(queue.pending,0);
+  assert.equal(invalid.some(file => file && (/\.d\.(?:ms\.ts|jms\.ts|ts)$/.test(file) || file.includes(".msc-source-"))),false);
+  assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
+ } finally { await stop(); }
 });

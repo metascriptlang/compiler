@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import metascript from "./rollup.js";
@@ -10,7 +12,11 @@ import { canonicalPath } from "./compilerCore.js";
 
 function fixture(t, options = {}) {
 	const root = canonicalPath(mkdtempSync(join(tmpdir(), "msc rollup ")));
-	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const callCounter = `${root}.calls.jsonl`;
+	t.after(() => {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(callCounter, { force: true });
+	});
 	const entry = join(root, "main.ms");
 	const dependency = join(root, "types.jms");
 	writeFileSync(entry, "source");
@@ -20,7 +26,7 @@ function fixture(t, options = {}) {
 const fs = require("node:fs");
 const path = require("node:path");
 const state = JSON.parse(fs.readFileSync(path.join(__dirname, "state.json"), "utf8"));
-fs.appendFileSync(path.join(__dirname, "calls.jsonl"), "call\\n");
+fs.appendFileSync(${JSON.stringify(callCounter)}, "call\\n");
 if (state.fail || (state.required && !fs.existsSync(state.required))) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
 const out = process.argv.find(arg => arg.startsWith("--output=")).slice(9);
 for (const [name, text] of Object.entries(state.files)) {
@@ -53,7 +59,7 @@ fs.writeFileSync(path.join(out, "_manifest.json"), JSON.stringify(state.manifest
 		addWatchFile: file => watched.add(file),
 		emitFile: asset => { assets.push(asset); return String(assets.length); },
 	};
-	const calls = () => existsSync(join(root, "calls.jsonl")) ? readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").length : 0;
+	const calls = () => existsSync(callCounter) ? readFileSync(callCounter, "utf8").trim().split("\n").length : 0;
 	return { root, entry, dependency, state, save, settings, plugin, watched, assets, context, calls };
 }
 
@@ -218,6 +224,7 @@ if (!rollupPath) {
 	catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }
 }
 const realRollup = rollupPath ? await import(pathToFileURL(rollupPath).href) : null;
+if (realRollup) await import("./vendor/watchPolicy.test.mjs");
 const rollupUnavailable = realRollup ? false : "Rollup is not provisioned; hook fixtures are not bundler acceptance";
 
 test("real Rollup generates JS/maps and declarations for every in-memory ES output", { skip: rollupUnavailable }, async t => {
@@ -532,4 +539,338 @@ test("real Rollup keeps compiler parents out of native source roots across resta
  start(); await boundary(); assert.equal(f.calls(),2);
  assert.notEqual(JSON.parse(readFileSync(join(lease,"owner.json"),"utf8")).token,owner.token);
  await stop(); assert.equal(queue.pending,0); assert.equal(existsSync(lease),false);
+});
+
+const optionsRoot = join(tmpdir(), "msc-options-unit-root");
+const watchContext = Object.freeze({ meta: Object.freeze({ watchMode: true, rollupVersion: "4.67.5+metascript.2" }) });
+const outputFileStats = Object.freeze({ isDirectory: () => false });
+const outputDirectoryStats = Object.freeze({ isDirectory: () => true });
+
+for (const [name, ignored] of [
+	["undefined", undefined],
+	["string", join(optionsRoot, "caller-ignore")],
+	["RegExp", Object.freeze(/caller-ignore/)],
+	["function", Object.freeze(path => path.endsWith("caller-ignore"))],
+	["frozen array", Object.freeze([join(optionsRoot, "caller-ignore"), Object.freeze(/caller-pattern/), Object.freeze(() => false)])]
+]) {
+	test(`public options preserves frozen caller config and ${name} ignored`, t => {
+		const root = canonicalPath(mkdtempSync(join(tmpdir(), "msc rollup options ")));
+		t.after(() => rmSync(root, { recursive: true, force: true }));
+		mkdirSync(join(root, "editor-types"));
+		const awaitWriteFinish = Object.freeze({ stabilityThreshold: 123, pollInterval: 17 });
+		const chokidar = Object.freeze({ ignored, atomic: false, awaitWriteFinish, alwaysStat: true, usePolling: false, followSymlinks: false, ignoreInitial: false, cwd: root });
+		const onInvalidate = () => {};
+		const watch = Object.freeze({ chokidar, buildDelay: 19, skipWrite: true, clearScreen: false, onInvalidate, include: Object.freeze([/\.ms$/]), exclude: "caller-exclude" });
+		const plugins = Object.freeze([]);
+		const output = Object.freeze({ dir: join(root, "dist"), format: "es" });
+		const inputOptions = Object.freeze({ input: join(root, "main.ms"), watch, plugins, output, treeshake: false });
+		const compilerArgs = Object.freeze(["--config=compiler.json"]);
+		const sourceDeclarations = Object.freeze({ outDir: "editor-types", rootDir: root });
+		const adapterOptions = Object.freeze({ root, sourceDeclarations, msc: join(root, "fake-msc.cjs"), compilerArgs });
+		const plugin = metascript(adapterOptions);
+		const processed = plugin.options.call(watchContext, inputOptions);
+		assert.notEqual(processed, inputOptions);
+		assert.notEqual(processed.watch, watch);
+		assert.notEqual(processed.watch.chokidar, chokidar);
+		for (const [key, value] of Object.entries(inputOptions)) if (key !== "watch") assert.equal(processed[key], value);
+		for (const [key, value] of Object.entries(watch)) if (key !== "chokidar") assert.equal(processed.watch[key], value);
+		for (const [key, value] of Object.entries(chokidar)) if (key !== "ignored") assert.equal(processed.watch.chokidar[key], value);
+		assert.equal(watch.chokidar, chokidar);
+		assert.equal(chokidar.ignored, ignored);
+		assert.equal(chokidar.ignoreInitial, false);
+		assert.equal(adapterOptions.compilerArgs, compilerArgs);
+		const expected = ignored === undefined ? [] : Array.isArray(ignored) ? [...ignored] : [ignored];
+		const merged = processed.watch.chokidar.ignored;
+		assert.notEqual(merged, ignored);
+		assert.equal(merged.length, expected.length + 1);
+		for (let index = 0; index < expected.length; index++) assert.equal(merged[index], expected[index]);
+		const owned = merged.at(-1);
+		assert.equal(typeof owned, "function");
+		for (const path of [join(root, "editor-types/main.d.ms.ts"), join(root, "node_modules/.metascript/out.js")]) {
+			assert.equal(owned(path, outputFileStats), true);
+			assert.equal(owned(path), true);
+		}
+		assert.equal(owned(join(root, "editor-types"), outputDirectoryStats), false);
+		assert.equal(owned(join(root, "editor-types")), false);
+		for (const path of [inputOptions.input, join(root, "types.jms"), adapterOptions.msc, join(root, "compiler.json"), join(root, "rollup.config.js"), join(root, "state.json"), join(root, "editor-types-sibling/main.ms"), join(root, "editor-types/new.ms"), join(root, "node_modules/.metascript/new.jms")]) assert.equal(owned(path, outputFileStats), false);
+		const again = plugin.options.call(watchContext, inputOptions);
+		assert.equal(again.watch.chokidar.ignored.length, merged.length);
+		assert.notEqual(again.watch.chokidar.ignored, merged);
+		assert.equal(inputOptions.watch, watch);
+	});
+}
+
+test("options hook returns null outside source-declaration watch or when watch is false", () => {
+	const root = optionsRoot;
+	const enabled = metascript({ root, sourceDeclarations: { outDir: "editor-types" } });
+	const ordinary = metascript({ root });
+	const disabled = Object.freeze({ input: join(root, "main.ms"), watch: false });
+	const normal = Object.freeze({ input: join(root, "main.ms"), watch: Object.freeze({ skipWrite: true }) });
+	assert.equal(enabled.options.call(watchContext, disabled), null);
+	assert.equal(enabled.options.call({ meta: { watchMode: false, rollupVersion: "4.44.1" } }, normal), null);
+	assert.equal(enabled.options.call({}, normal), null);
+	assert.equal(ordinary.options.call({ meta: { watchMode: true, rollupVersion: "4.44.1" } }, normal), null);
+});
+
+test("options hook copies absent watch/chokidar and honors an explicit compiler workspace", () => {
+	const root = optionsRoot;
+	const plugin = metascript({ root, msc: join(root, "compiler-output/fake-msc.cjs"), outDir: "compiler-output", sourceDeclarations: { outDir: "editor-types" } });
+	for (const input of [Object.freeze({ input: join(root, "main.ms") }), Object.freeze({ watch: Object.freeze({ skipWrite: true }) })]) {
+		const processed = plugin.options.call(watchContext, input);
+		assert.equal(processed.watch.chokidar.ignored.length, 1);
+		const owned = processed.watch.chokidar.ignored[0];
+		assert.equal(owned(join(root, "compiler-output/generated.js"), outputFileStats), true);
+		assert.equal(owned(join(root, "node_modules/.metascript/not-owned.js"), outputFileStats), false);
+		assert.equal(owned(join(root, "fake-msc.cjs"), outputFileStats), false);
+		assert.equal(owned(join(root, "compiler-output/fake-msc.cjs"), outputFileStats), false);
+		assert.equal(owned(join(root, "editor-types/main.ms"), outputFileStats), false);
+	}
+});
+
+for (const rollupVersion of [undefined, "4.44.1", "4.67.5", "4.67.5+other.1"]) {
+	test(`source-declaration watch refuses an unqualified host ${rollupVersion}`, () => {
+		const plugin = metascript({ root: optionsRoot, sourceDeclarations: { outDir: "editor-types" } });
+		assert.throws(() => plugin.options.call({ meta: { watchMode: true, rollupVersion } }, { input: "main.ms" }),
+			/requires Rollup 4\.67\.5\+metascript\.2; pin the host Rollup dependency/);
+	});
+}
+
+for (const [name, options, file] of [
+ ["compiler beside declarations", {sourceDeclarations:{outDir:"types"},msc:join(optionsRoot,"types/compiler.cjs")}, join(optionsRoot,"types/compiler.cjs")],
+ ["compiler in its workspace", {sourceDeclarations:{outDir:"types"},outDir:"generated",msc:join(optionsRoot,"generated/compiler.cjs")}, join(optionsRoot,"generated/compiler.cjs")],
+ ["source beside declarations", {sourceDeclarations:{outDir:"src"}}, join(optionsRoot,"src/main.ms")]
+]) {
+ test(`public options retains ${name} as an input`, () => {
+  const plugin = metascript({root:optionsRoot,...options});
+  const owned = plugin.options.call(watchContext,{input:join(optionsRoot,"src/main.ms")}).watch.chokidar.ignored.at(-1);
+  assert.equal(typeof owned === "function" ? owned(file,outputFileStats) : owned.test(file),false);
+ });
+}
+
+test("public Rollup CLI watch recovers JSON errors and reloads config in one process", { skip: rollupUnavailable, timeout: 15000 }, async t => {
+	const { watchTestQueue } = await import("./watchTestQueue.js");
+	const packageRoot = dirname(createRequire(pathToFileURL(rollupPath)).resolve("rollup/package.json"));
+	const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+	assert.equal(realRollup.VERSION, "4.67.5+metascript.2");
+	assert.equal(pkg.version, realRollup.VERSION);
+	assert.equal(pkg.bin.rollup, "dist/bin/rollup");
+	const cli = join(packageRoot, "dist/bin/rollup");
+	assert.ok(existsSync(cli));
+	const root = canonicalPath(mkdtempSync(join(tmpdir(), "msc rollup cli ")));
+	const project = join(root, "project");
+	const entry = join(project, "main.js");
+	const data = join(project, "value.json");
+	const config = join(project, "rollup.config.mjs");
+	const output = join(root, "out/bundle.mjs");
+	const logs = [];
+	const queue = watchTestQueue();
+	let child, closed;
+	const readers = [];
+	const abort = () => {
+		child?.kill("SIGKILL");
+		queue.push("test aborted");
+	};
+	t.signal.addEventListener("abort", abort, { once: true });
+	const saveConfig = offset => writeFileSync(config, `import { readFileSync } from "node:fs";
+const entry = ${JSON.stringify(entry)};
+const data = ${JSON.stringify(data)};
+export default {
+ input: entry,
+ output: { file: ${JSON.stringify(output)}, format: "es" },
+ watch: { clearScreen: false },
+ plugins: [{
+  name: "cli-json-pin",
+  transform(code, id) {
+   if (id !== entry) return null;
+   this.addWatchFile(data);
+   const { value } = JSON.parse(readFileSync(data, "utf8"));
+   return { code: "export const value = " + (value + ${offset}) + ";", map: null };
+  }
+ }]
+};
+`);
+	const execute = code => import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+	const created = async () => assert.match(await queue.next(), /^created \.\.\/out\/bundle\.mjs in .+$/, "expected CLI created-output line");
+	const runtime = async value => {
+		await created();
+		assert.equal((await execute(readFileSync(output, "utf8"))).value, value);
+	};
+	try {
+		mkdirSync(project);
+		writeFileSync(entry, "export const value = 0;\n");
+		writeFileSync(data, '{"value":1}');
+		saveConfig(0);
+		child = spawn(process.execPath, [cli, "--config", config, "--watch", "--no-stdin"], {
+			cwd: project,
+			env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+			stdio: ["ignore", "pipe", "pipe"]
+		});
+		child.on("error", error => queue.push(error));
+		closed = new Promise(resolve => child.once("close", (code, signal) => {
+			const result = { code, signal };
+			queue.push(result);
+			resolve(result);
+		}));
+		for (const [stream, input] of [["stdout", child.stdout], ["stderr", child.stderr]]) {
+			const reader = createInterface({ input, crlfDelay: Infinity });
+			reader.on("error", error => queue.push(error));
+			readers.push(reader);
+			reader.on("line", line => {
+				logs.push({ stream, line });
+				if (stream === "stderr" && (/^created /.test(line) || /^\[!\]/.test(line))) queue.push(line);
+			});
+		}
+		await created();
+		writeFileSync(data, '{"value":2}');
+		await runtime(2);
+		assert.ok(logs.some(({ stream, line }) => stream === "stderr" && line === "rollup v4.67.5+metascript.2"));
+		writeFileSync(data, "{");
+		assert.match(await queue.next(), /^\[!\] \(plugin cli-json-pin\) SyntaxError: /, "expected genuine JSON parse error");
+		writeFileSync(data, '{"value":3}');
+		await runtime(3);
+		saveConfig(10);
+		await runtime(13);
+		writeFileSync(config, 'throw new Error("ROLLUP_CLI_CONFIG_PIN");\n');
+		assert.equal(await queue.next(), "[!] Error: ROLLUP_CLI_CONFIG_PIN", "expected config-module error");
+		saveConfig(20);
+		await runtime(23);
+		assert.equal(queue.pending, 0, "unexpected extra CLI terminal");
+	} finally {
+		try {
+			if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGINT");
+			if (closed) await closed;
+		} finally {
+			for (const reader of readers) reader.close();
+			t.signal.removeEventListener("abort", abort);
+			for (const { stream, line } of logs) t.diagnostic(`${stream}: ${line}`);
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+	assert.deepEqual(await closed, { code: 0, signal: null }, "CLI did not exit cleanly after SIGINT");
+	assert.equal(queue.pending, 1, "expected exactly one queued CLI close event");
+	assert.deepEqual(await queue.next(), { code: 0, signal: null });
+	assert.deepEqual(logs.filter(({ stream }) => stream === "stdout"), []);
+	assert.equal(logs.filter(({ stream, line }) => stream === "stderr" && /^created /.test(line)).length, 5);
+	assert.equal(logs.filter(({ stream, line }) => stream === "stderr" && /^\[!\]/.test(line)).length, 2);
+	assert.equal(logs.filter(({ stream, line }) => stream === "stderr" && line === "Reloading updated config...").length, 3);
+});
+
+test("native exact compiler edits alone invalidate and recover bounded source declarations", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = boundedSourceFixture(t);
+ const queue = watchTestQueue();
+ const events = [];
+ const changes = [];
+ const compiler = f.settings.msc;
+ const original = readFileSync(compiler,"utf8");
+ const broken = original.replace("if (state.fail ||", "if (true || state.fail ||");
+ assert.notEqual(broken,original);
+ const inputs = [f.entry,f.data,join(f.container,"state.json")];
+ const before = inputs.map(path => readFileSync(path,"utf8"));
+ const watcher = realRollup.watch({input:f.entry,plugins:[f.plugin,{
+  name:"exact-compiler-only-observer",
+  watchChange(id){changes.push(canonicalPath(id));}
+ }],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true}});
+ let stopped = false;
+ const stop = async () => {if (!stopped) {stopped=true;await watcher.close();}};
+ t.after(stop);
+ t.after(() => t.diagnostic(JSON.stringify({events,changes,calls:f.calls()})));
+ watcher.on("event",event => {
+  events.push({code:event.code,calls:f.calls(),error:event.error?.message});
+  if(event.code==="ERROR"||event.code==="BUNDLE_END")queue.push(event);
+ });
+ const bundled = async () => {
+  const event = await queue.next();
+  assert.equal(event.code,"BUNDLE_END",event.error?.message);
+  try {
+   assert.ok(event.result.watchFiles.includes(compiler));
+   assert.equal(event.result.watchFiles.includes(f.container),false);
+   assert.ok(existsSync(f.sidecar));
+  } finally {await event.result.close();}
+ };
+ await bundled();assert.equal(f.calls(),1);
+ writeFileSync(compiler,broken);
+ const error = await queue.next();
+ assert.equal(error.code,"ERROR");assert.match(error.error.message,/fixture compiler diagnostic/);
+ assert.equal(f.calls(),2);assert.equal(existsSync(f.sidecar),false);
+ assert.deepEqual(changes,[canonicalPath(compiler)]);
+ writeFileSync(compiler,original);
+ await bundled();assert.equal(f.calls(),3);
+ assert.deepEqual(changes,[canonicalPath(compiler),canonicalPath(compiler)]);
+ assert.deepEqual(inputs.map(path=>readFileSync(path,"utf8")),before);
+ assert.equal(readFileSync(compiler,"utf8"),original);
+ await stop();assert.equal(queue.pending,0);
+});
+
+for (const folder of ["editor-types", "generated"]) for (const relativeEvents of [false, true]) {
+ test(`native owned-prefix compiler and JSON controls in ${folder}, relative events ${relativeEvents}`, {skip:rollupUnavailable,timeout:15000}, async t => {
+  const {watchTestQueue} = await import("./watchTestQueue.js");
+  const f = boundedSourceFixture(t);
+  const directory = join(f.container,folder);
+  mkdirSync(directory,{recursive:true});
+  const compiler = join(directory,"compiler.cjs");
+  const data = join(directory,"schema.json");
+  writeFileSync(data,'{"value":1}');
+  const original = readFileSync(f.settings.msc,"utf8");
+  const script = original.replace('path.join(__dirname, "state.json")', JSON.stringify(join(f.container,"state.json")))
+   .replace("const out =", `const value = JSON.parse(fs.readFileSync(${JSON.stringify(data)}, "utf8")).value;
+state.files["nested/main.js"] = "export const value = " + value + ";";
+state.files["_source_declarations/main.d.ms.ts"] = "export declare const value: " + value + ";";
+const out =`);
+  assert.notEqual(script,original);
+  writeFileSync(compiler,script,{mode:0o755});
+  f.state.manifest.dependencies = [data];f.save();
+  const plugin = metascript({root:f.root,entry:f.entry,msc:compiler,declaration:false,outDir:join(f.container,"generated"),sourceDeclarations:{outDir:join(f.container,"editor-types")}});
+  const queue = watchTestQueue();
+  const changes = [];
+  const watcher = realRollup.watch({input:f.entry,plugins:[plugin,{
+   name:"owned-prefix-controls",
+   watchChange(id){changes.push(canonicalPath(resolve(relativeEvents ? f.container : process.cwd(),id)));}
+  }],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true,chokidar:relativeEvents ? {cwd:f.container} : {}}});
+  t.after(() => watcher.close());
+  watcher.on("event",event => {if(event.code==="ERROR"||event.code==="BUNDLE_END")queue.push(event);});
+  const runtime = async value => {
+   const event = await queue.next();assert.equal(event.code,"BUNDLE_END",event.error?.message);
+   try {
+    const result = await event.result.generate({format:"es"});
+    const chunk = result.output.find(item => item.type==="chunk" && item.isEntry);
+    assert.equal((await import(`data:text/javascript;base64,${Buffer.from(chunk.code).toString("base64")}`)).value,value);
+    assert.equal(readFileSync(f.sidecar,"utf8"),`export declare const value: ${value};`);
+   } finally {await event.result.close();}
+  };
+  await runtime(1);assert.equal(f.calls(),1);
+  writeFileSync(compiler,script.replace("if (state.fail ||","if (true || state.fail ||"));
+  let event = await queue.next();assert.equal(event.code,"ERROR");assert.match(event.error.message,/fixture compiler diagnostic/);
+  assert.equal(f.calls(),2);assert.equal(existsSync(f.sidecar),false);
+  writeFileSync(compiler,script);await runtime(1);assert.equal(f.calls(),3);
+  writeFileSync(data,'{"value":2}');await runtime(2);assert.equal(f.calls(),4);
+  writeFileSync(data,"{");event = await queue.next();assert.equal(event.code,"ERROR");assert.match(event.error.message,/SyntaxError/);
+  assert.equal(f.calls(),5);assert.equal(existsSync(f.sidecar),false);
+  writeFileSync(data,'{"value":3}');await runtime(3);assert.equal(f.calls(),6);
+  assert.deepEqual(changes,[compiler,compiler,data,data,data].map(canonicalPath));
+  await watcher.close();assert.equal(queue.pending,0);
+ });
+}
+
+test("native source edits beside declarations invalidate before entry validation and restore without feedback", {skip:rollupUnavailable,timeout:15000}, async t => {
+ const {watchTestQueue} = await import("./watchTestQueue.js");
+ const f = boundedSourceFixture(t);
+ f.state.required = f.entry;f.save();
+ const sidecar = join(f.root,"main.d.ms.ts");
+ const plugin = metascript({root:f.root,entry:f.entry,msc:f.settings.msc,declaration:false,outDir:join(f.container,"generated"),sourceDeclarations:{outDir:f.root}});
+ const queue = watchTestQueue();
+ const watcher = realRollup.watch({input:f.entry,plugins:[plugin],output:{dir:join(f.container,"dist"),format:"es"},watch:{skipWrite:true}});
+ t.after(() => watcher.close());
+ watcher.on("event",event => {if(event.code==="ERROR"||event.code==="BUNDLE_END")queue.push(event);});
+ const bundled = async () => {
+  const event = await queue.next();assert.equal(event.code,"BUNDLE_END",event.error?.message);
+  try {assert.ok(existsSync(sidecar));} finally {await event.result.close();}
+ };
+ await bundled();assert.equal(f.calls(),1);
+ writeFileSync(f.entry,"source edit");await bundled();assert.equal(f.calls(),2);
+ rmSync(f.entry);const event = await queue.next();assert.equal(event.code,"ERROR");
+ assert.equal(event.error.message,"Invalid msc split manifest: entry must be an absolute existing input file");
+ assert.equal(f.calls(),2);assert.equal(existsSync(sidecar),false);
+ writeFileSync(f.entry,"source restore");await bundled();assert.equal(f.calls(),3);
+ await watcher.close();assert.equal(queue.pending,0);
 });
