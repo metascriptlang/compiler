@@ -1,6 +1,6 @@
 // Owned<T> is the unique owning edge of a class reference: a cycle needs one edge that is not
-// owned, a copy of an owned location is refused unless it is the last read, and a plain
-// reference becomes owned only when it is fresh. Runtime behaviour: corpus `ownedTreeDrop`.
+// owned, any reference of the class enters an owned slot, and the store checks at run time that
+// the object has no other owner. Runtime behaviour: corpus `ownedTreeDrop`, `ownedField*`.
 
 import { compileToC } from "../helpers";
 
@@ -129,14 +129,14 @@ test "an owned value reads as a plain reference without a copy of the owner" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a plain reference does not become owned" {
-	const message = refused(TREE + "let p: N = new N();\nroot.kids.push(p);\n}\n");
-	assert message.contains("Type 'N' is not assignable to type 'Owned<N>'"), message;
+test "a plain reference enters an owned element slot with its store checked at run time" {
+	const r = compileToC(TREE + "let p: N = new N();\nroot.kids.push(p);\nconsole.log(p.id);\n}\nadopt(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
+	assert r.value.contains("msOwnedAdopt("), r.value;
 }
 
-test "a plain argument does not become an owned parameter" {
-	const message = refused("class N { id: int32 = 0; }\nfunction take(x: Owned<N>): void { console.log(x.id); }\ntake(new N());\nlet p: N = new N();\ntake(p);\n");
-	assert message.contains("Type 'N' is not assignable to type 'Owned<N>'"), message;
+test "a plain argument passes to an owned parameter" {
+	assert refused("class N { id: int32 = 0; }\nfunction take(x: Owned<N>): void { console.log(x.id); }\ntake(new N());\nlet p: N = new N();\ntake(p);\nconsole.log(p.id);\n") == "compiled";
 }
 
 test "a fresh value and null become owned" {
@@ -195,24 +195,20 @@ test "a const bound to a fresh value enters an owned slot at its last read" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a fresh const read again after entering an owned slot is a refused copy" {
-	const message = refused(TREE + "const b = new N();\nroot.kids.push(b);\nroot.kids.push(b);\n}\n");
-	assert message.contains("cannot copy 'b'"), message;
+test "a const pushed twice compiles; the second owner stops at run time" {
+	assert refused(TREE + "const b = new N();\nroot.kids.push(b);\nroot.kids.push(b);\n}\nadopt(new N());\n") == "compiled";
 }
 
-test "a fresh const that is read after entering an owned slot is refused" {
-	const message = refused(TREE + "const b = new N();\nroot.kids.push(b);\nconsole.log(b.id);\n}\n");
-	assert message.contains("cannot copy 'b'"), message;
+test "a const stays readable after it enters an owned slot" {
+	assert refused(TREE + "const b = new N();\nroot.kids.push(b);\nconsole.log(b.id);\n}\nadopt(new N());\n") == "compiled";
 }
 
-test "a let bound to a fresh value does not enter an owned slot" {
-	const message = refused(TREE + "let b = new N();\nroot.kids.push(b);\n}\n");
-	assert message.contains("Type 'N' is not assignable to type 'Owned<N>'"), message;
+test "a let bound to a fresh value enters an owned slot" {
+	assert refused(TREE + "let b = new N();\nroot.kids.push(b);\n}\nadopt(new N());\n") == "compiled";
 }
 
-test "a const bound to a plain reference does not enter an owned slot" {
-	const message = refused("class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }\nfunction make(): N { return new N(); }\nfunction f(root: N): void {\n\tconst b = make();\n\troot.kids.push(b);\n}\n");
-	assert message.contains("Type 'N' is not assignable to type 'Owned<N>'"), message;
+test "a const bound to a call result enters an owned slot" {
+	assert refused("class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }\nfunction make(): N { return new N(); }\nfunction f(root: N): void {\n\tconst b = make();\n\troot.kids.push(b);\n}\nf(new N());\n") == "compiled";
 }
 
 const TOP = "class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }\nconst root = new N();\nroot.kids.push(new N());\n";
@@ -228,16 +224,14 @@ test "a module-level for-of whose body removes elements holds each element by a 
 	assert r.value.contains("msIncref(dollarborrow_"), r.value;
 }
 
-test "a module-level owned local is never a last read" {
-	const message = refused(TOP + "const other = new N();\nconst moved = root.kids.pop()!;\nother.kids.push(moved);\n");
-	assert message.contains("cannot copy 'moved'") && message.contains("'move'"), message;
+test "a value popped from an owned Vec is a plain local" {
+	assert refused(TOP + "const other = new N();\nconst moved = root.kids.pop()!;\nother.kids.push(moved);\nconsole.log(moved.id);\n") == "compiled";
 }
 
 const CAST = "class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }\nconst a = new N();\nconst shared: N[] = [new N()];\n";
 
-test "a cast of a shared reference into an owning edge is refused" {
-	const message = refused(CAST + "a.kids.push(shared[0] as Owned<N>);\n");
-	assert message.contains("cannot cast") && message.contains("owning edge"), message;
+test "a cast of a shared reference into an owning edge compiles; its store is checked at run time" {
+	assert refused(CAST + "a.kids.push(shared[0] as Owned<N>);\n") == "compiled";
 }
 
 test "a cast of a fresh value into an owning edge is accepted" {
@@ -250,14 +244,12 @@ test "a fresh object literal cast to its plain union type enters an owned slot" 
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a cast of a shared value to its plain union type does not enter an owned slot" {
-	const message = refused("type D = { x: int32 } | { y: string };\nclass N { data: Owned<D> = { x: 0 }; }\nconst n = new N();\nconst shared: D[] = [{ x: 1 }];\nn.data = shared[0] as D;\n");
-	assert message.contains("an owned slot takes the unique owning edge"), message;
+test "a cast of a shared value into an owned union slot compiles" {
+	assert refused("type D = { x: int32 } | { y: string };\nclass N { data: Owned<D> = { x: 0 }; }\nconst n = new N();\nconst shared: D[] = [{ x: 1 }];\nn.data = shared[0] as D;\n") == "compiled";
 }
 
-test "a cast through unknown into an owning edge is refused" {
-	const message = refused(CAST + "a.kids.push((shared[0] as unknown) as Owned<N>);\n");
-	assert message.contains("owning edge") || message.contains("unknown"), message;
+test "a cast through unknown into an owning edge compiles; its store is checked at run time" {
+	assert refused(CAST + "a.kids.push((shared[0] as unknown) as Owned<N>);\n") == "compiled";
 }
 
 test "an owned value cast to Owned passes the checker" {
@@ -381,9 +373,8 @@ test "a callback that owns its element is refused where a bare type parameter le
 	assert message.contains("takes 'k' as its owner, but the expected '(x: K, i: number) => boolean' passes it lent"), message;
 }
 
-test "a generic body that stores a lent parameter is refused per instance" {
-	const message = refused(KIDS + "function hold<T>(ref xs: Vec<T>, x: T): void { xs.push(x); }\nlet more: Vec<Owned<K>> = [];\nhold(more, mk(3));\n");
-	assert message.contains("'x' is written 'T', so it lends an Owned argument without its ownership — declare it 'sink x: T'"), message;
+test "a generic body stores a plain parameter into an owned Vec" {
+	assert refused(KIDS + "function hold<T>(ref xs: Vec<T>, x: T): void { xs.push(x); }\nlet more: Vec<Owned<K>> = [];\nhold(more, mk(3));\nconst k = new K(4);\nhold(more, k);\nconsole.log(more.length, k.v);\n") == "compiled";
 }
 
 test "a sink type parameter takes an owned argument" {
