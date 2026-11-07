@@ -15,7 +15,7 @@ import { isCHeaderPath } from "../module/loader";
 import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName, valueCustodyOp } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion } from "./types";
-import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
+import { SymbolKind, Symbol, Type, TypeFlag, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DispatchRegistry, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -350,7 +350,7 @@ function markObjectTypeInfo(dispatchRegistry: DispatchRegistry, type: Type | nul
 		markObjectTypeInfo(dispatchRegistry, base, modulePath);
 		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody, finalize, release };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody, finalize, release, ownedTarget: isOwnedTargetClass(subject) };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(dispatchRegistry, destroy, owner);
@@ -358,6 +358,16 @@ function markObjectTypeInfo(dispatchRegistry: DispatchRegistry, type: Type | nul
 	if (custody != null) markReferenced(dispatchRegistry, custody, owner);
 	if (finalize != null) markReferenced(dispatchRegistry, finalize, owner);
 	if (release != null) markReferenced(dispatchRegistry, release, owner);
+}
+
+function isOwnedTargetClass(subject: Type): boolean {
+	let t: Type | null = subject;
+	for (let depth = 0; t != null; depth += 1) {
+		if (depth > 64) throw new Error(`internal: the class chain of '${subject.typeName}' does not end`);
+		if (t.typeFlags.has(TypeFlag.OwnedTarget)) return true;
+		t = classBaseOf(t);
+	}
+	return false;
 }
 
 function classBaseOf(subject: Type): Type | null {

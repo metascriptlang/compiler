@@ -1811,6 +1811,7 @@ export function createOwned(ref: Type): Type {
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsOwned);
 	c.plainType = ref;
 	ref.ownedType = c;
+	if (ref.typeReturn != null) ref.typeReturn.typeFlags = ref.typeReturn.typeFlags.incl(TypeFlag.OwnedTarget);
 	return c;
 }
 

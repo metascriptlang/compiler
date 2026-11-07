@@ -616,6 +616,7 @@ export class CTypeInfoDemand {
 	finalize: Symbol | null = null;
 	release: Symbol | null = null;
 	reach: Symbol | null = null;
+	ownedTarget: boolean = false;
 }
 
 export class AliveSet {
