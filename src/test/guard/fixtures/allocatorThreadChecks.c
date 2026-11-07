@@ -12,6 +12,7 @@
 #define msHeapDeallocPages msHeapThreadProbeDeallocPages
 #define msHeapResetPages msHeapThreadProbeResetPages
 #define msHeapOutOfMemory msHeapThreadProbeOutOfMemory
+#define msThreadAttach msHeapThreadProbeAttach
 #include "../../../../runtime/allocator.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,8 @@ static void probeJoin(probeThread t) { pthread_join(t, NULL); }
 #endif
 void msHeapResetPages(void) {}
 _Noreturn void msHeapOutOfMemory(void) { fprintf(stderr, "GUARD-FAIL allocator threads: out of memory\n"); abort(); }
+static int attachCalls;
+void msThreadAttach(void) { __atomic_add_fetch(&attachCalls, 1, __ATOMIC_RELAXED); }
 
 enum { CELLS = 600, BIG = 64 * 1024 };
 static void* cells[CELLS];
@@ -186,7 +189,8 @@ static void retireAndAdopt(void) {
     CHECK(adoptedReuse > CELLS / 2);
 }
 
-/* M11: a foreign thread keeps its region; its cells freed elsewhere stay safe. */
+/* M11: a thread's first allocation asks the runtime for its exit release; until that
+ * release runs, the thread keeps its region, and its cells freed elsewhere stay safe. */
 static void allocateAndLeave(void* arg) {
     (void)arg;
     for (int i = 0; i < CELLS; ++i) cells[i] = msHeapAlloc(24 + (i % 5) * 16);
@@ -195,7 +199,9 @@ static void allocateAndLeave(void* arg) {
 
 static void foreignThreadExit(void) {
     phase = "foreign thread exit";
+    int attachedBefore = __atomic_load_n(&attachCalls, __ATOMIC_RELAXED);
     probeJoin(probeSpawn(allocateAndLeave, NULL));
+    CHECK(__atomic_load_n(&attachCalls, __ATOMIC_RELAXED) == attachedBefore + 1);
     for (int i = 0; i < CELLS; ++i) msHeapFree(cells[i]);
     msHeapFree(bigs[0]);
 }

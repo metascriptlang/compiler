@@ -234,6 +234,75 @@ static _Thread_local int32_t msPoolRunsCap = 0;
 
 extern void msMsgPoolsThreadTeardown(void);
 
+static void msAfterThreadRuns(void);
+
+static void msThreadExit(void) {
+    msFutureReleaseFlush();
+    msAfterThreadRuns();
+}
+
+#ifdef _WIN32
+static INIT_ONCE msThreadExitOnce = INIT_ONCE_STATIC_INIT;
+static DWORD msThreadExitKey = FLS_OUT_OF_INDEXES;
+
+static void NTAPI msThreadExitRun(PVOID armed) {
+    if (armed != NULL) msThreadExit();
+}
+
+static BOOL CALLBACK msThreadExitCreate(PINIT_ONCE once, PVOID param, PVOID* context) {
+    (void)once; (void)param; (void)context;
+    msThreadExitKey = FlsAlloc(msThreadExitRun);
+    return msThreadExitKey != FLS_OUT_OF_INDEXES;
+}
+
+static void msThreadExitArm(void* armed) {
+    if (!InitOnceExecuteOnce(&msThreadExitOnce, msThreadExitCreate, NULL, NULL) || !FlsSetValue(msThreadExitKey, armed)) {
+        fprintf(stderr, "msThreadAttach: no fiber-local slot for the thread-exit release (error %lu)\n", (unsigned long)GetLastError());
+        abort();
+    }
+}
+#elif defined(__APPLE__)
+extern void _tlv_atexit(void (*terminator)(void*), void* arg);
+static _Thread_local bool msThreadExitRegistered = false;
+static _Thread_local bool msThreadExitArmed = false;
+
+static void msThreadExitRun(void* unused) {
+    (void)unused;
+    while (msThreadExitArmed) msThreadExit();
+}
+
+static void msThreadExitArm(void* armed) {
+    msThreadExitArmed = armed != NULL;
+    if (msThreadExitArmed && !msThreadExitRegistered && !pthread_main_np()) {
+        msThreadExitRegistered = true;
+        _tlv_atexit(msThreadExitRun, NULL);
+    }
+}
+#else
+static pthread_once_t msThreadExitOnce = PTHREAD_ONCE_INIT;
+static pthread_key_t msThreadExitKey;
+static int msThreadExitKeyError = 0;
+
+static void msThreadExitRun(void* armed) {
+    if (armed != NULL) msThreadExit();
+}
+
+static void msThreadExitCreate(void) {
+    msThreadExitKeyError = pthread_key_create(&msThreadExitKey, msThreadExitRun);
+}
+
+static void msThreadExitArm(void* armed) {
+    pthread_once(&msThreadExitOnce, msThreadExitCreate);
+    int error = msThreadExitKeyError ? msThreadExitKeyError : pthread_setspecific(msThreadExitKey, armed);
+    if (error) {
+        fprintf(stderr, "msThreadAttach: no thread-specific key for the thread-exit release (error %d)\n", error);
+        abort();
+    }
+}
+#endif
+
+void msThreadAttach(void) { msThreadExitArm((void*)1); }
+
 static void msAfterThreadRuns(void) {
     for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
     msRootsThreadTeardown();
@@ -248,6 +317,7 @@ static void msAfterThreadRuns(void) {
 #if MS_HEAP_ENABLED
     msHeapThreadRelease();
 #endif
+    msThreadExitArm(NULL);
 }
 
 static _Thread_local const msTaskFrame* msPoolFrame = NULL;

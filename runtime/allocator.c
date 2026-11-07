@@ -34,15 +34,26 @@ static msHeapPairing* msHeapUntag(void* p) {
     return block;
 }
 
+extern void msThreadAttach(void);
+static _Thread_local int msHeapAttached;
+
+static void* msHeapTagHere(msHeapPairing* block, size_t size) {
+    if (!msHeapAttached) {
+        msHeapAttached = 1;
+        msThreadAttach();
+    }
+    return msHeapTag(block, size);
+}
+
 void* msHeapAlloc(size_t size) {
     if (size > SIZE_MAX - sizeof(msHeapPairing)) msHeapOutOfMemory();
-    return msHeapTag(malloc(sizeof(msHeapPairing) + size), size);
+    return msHeapTagHere(malloc(sizeof(msHeapPairing) + size), size);
 }
 
 void* msHeapCalloc(size_t count, size_t size) {
     size_t bytes = msHeapProduct(count, size);
     if (bytes > SIZE_MAX - sizeof(msHeapPairing)) msHeapOutOfMemory();
-    return msHeapTag(calloc(sizeof(msHeapPairing) + bytes, 1), bytes);
+    return msHeapTagHere(calloc(sizeof(msHeapPairing) + bytes, 1), bytes);
 }
 
 void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
@@ -53,12 +64,12 @@ void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
     }
     if (newSize > SIZE_MAX - sizeof(msHeapPairing)) msHeapOutOfMemory();
     msHeapPairing* block = p ? msHeapUntag(p) : NULL;
-    return msHeapTag(realloc(block, sizeof(msHeapPairing) + newSize), newSize);
+    return msHeapTagHere(realloc(block, sizeof(msHeapPairing) + newSize), newSize);
 }
 
 void msHeapFree(void* p) { if (p) free(msHeapUntag(p)); }
 void msHeapReset(void) {}
-void msHeapThreadRelease(void) {}
+void msHeapThreadRelease(void) { msHeapAttached = 0; }
 
 #elif MS_HEAP_USE_MALLOC
 
@@ -227,6 +238,8 @@ static pthread_mutex_t msHeapRetiredLock = PTHREAD_MUTEX_INITIALIZER;
 static msHeapHandle* msHeapRetired;
 static _Thread_local msHeapHandle* msHeapCurrent;
 
+extern void msThreadAttach(void);
+
 static msHeapHandle* msHeapAcquire(void) {
     msHeapRetiredAcquire();
     msHeapHandle* handle = msHeapRetired;
@@ -238,6 +251,7 @@ static msHeapHandle* msHeapAcquire(void) {
     }
     handle->nextRetired = NULL;
     msHeapCurrent = handle;
+    msThreadAttach();
     return handle;
 }
 
