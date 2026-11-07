@@ -24,6 +24,7 @@ import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArg
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
 import { VERSION } from "./usage";
+import { recordCompileTimeRead } from "./meta/compileTimeReads";
 import { selectedNativeToolchain, type NativeToolchain } from "./toolchain";
 import { CC_PREPARED } from "./options";
 
@@ -453,6 +454,7 @@ export function registerNativeDependencies(srcPath: string, compileCmd: string):
 
 export function registerCompileTimeRead(path: string): void {
 	registerNativeProjectDep(path);
+	recordCompileTimeRead(path);
 }
 
 function registerNativeProjectDep(path: string): void {
