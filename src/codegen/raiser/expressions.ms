@@ -2232,6 +2232,7 @@ function convertedFrom(node: Node): Node {
 }
 
 function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
+	if (node.nodeType == null || !inRefFile(regClassOf(s, node.nodeType))) return false;
 	const inner = convertedFrom(node);
 	const frame = storedFramePlace(s, inner, false);
 	if (frame != null) return vmLayoutOf(s.layouts, frame.valueType).kind == MemKind.Block;
