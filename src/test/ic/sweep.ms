@@ -39,7 +39,8 @@ function put(path: string, content: string): void {
 }
 
 function modulesUnder(dir: string, rel: string, out: string[]): void {
-	for (const name of readDir(rel == "" ? dir : `${dir}/${rel}`)) {
+	for (const entry of readDir(rel == "" ? dir : `${dir}/${rel}`)) {
+		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
 		const path = rel == "" ? name : `${rel}/${name}`;
 		if (name == "out" && rel == "") continue;
 		if (isDir(`${dir}/${path}`)) modulesUnder(dir, path, out);
