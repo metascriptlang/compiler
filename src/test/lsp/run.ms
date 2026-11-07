@@ -27,6 +27,8 @@
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)
 //      LSP_REPLAY_TIMEOUT_MS=<deadline of each wait> (default 10000)
 //      LSP_PERF=1, LSP_PERF_REPS=<repetitions> (default 5), LSP_PERF_OUT=<file> (default stdout)
+//      LSP_PERF_STAGE=<dir>: read the revision and the pinned app from <dir> instead of git, for a
+//      tree copied without .git (run-remote.sh); src/test/lsp/perfStage.sh <dir> writes it
 import {
 	spawn as spawnChild,
 	ChildProcess,
@@ -110,6 +112,7 @@ function neutralDir(): string {
 }
 
 const NEUTRAL = neutralDir();
+const STAGE = env.get("LSP_PERF_STAGE") == "" ? "" : absolutize(env.get("LSP_PERF_STAGE"));
 
 // ===== Frames =====
 
@@ -1225,24 +1228,34 @@ function workspaceDir(): Result<string, string> {
 // Writes the real app at its pinned commits under dir, laid out as neon imports it. The
 // shader headers stay out: over 100 MB, and no module the app reaches imports them.
 function extractTodoList(dir: string): Result<void, string> {
-	const workspace = try workspaceDir();
+	let workspace = "";
+	if (STAGE == "") workspace = try workspaceDir();
 	const repos = [
 		["neon", NEON_REV, "build.ms", "src", "examples/components"],
 		["void", VOID_REV, "build.ms", "src", ":(exclude)*.glsl.h"],
 		["yoga", YOGA_REV, "build.ms", "src"],
 	];
 	for (const repo of repos) {
-		const tar = `${NEUTRAL}/${repo[0]}-${repo[1]}.tar`;
-		const args = ["-C", `${workspace}/${repo[0]}`, "archive", `--prefix=${repo[0]}/`];
-		for (const arg of ["-o", tar, repo[1], "--"]) args.push(arg);
-		for (let k = 2; k < repo.length; k++) args.push(repo[k]);
-		try commandOutput("git", args);
+		const tar = `${STAGE == "" ? NEUTRAL : STAGE}/${repo[0]}-${repo[1]}.tar`;
+		if (STAGE == "") {
+			const args = ["-C", `${workspace}/${repo[0]}`, "archive", `--prefix=${repo[0]}/`];
+			for (const arg of ["-o", tar, repo[1], "--"]) args.push(arg);
+			for (let k = 2; k < repo.length; k++) args.push(repo[k]);
+			try commandOutput("git", args);
+		} else if (!exists(tar)) {
+			return Result.err(`LSP_PERF_STAGE has no ${tar}; write it with src/test/lsp/perfStage.sh`);
+		}
 		try commandOutput("tar", ["-xf", tar, "-C", dir]);
 	}
 	return Result.ok(null);
 }
 
 function recompilerRevision(): Result<string, string> {
+	if (STAGE != "") {
+		const staged = try readFile(`${STAGE}/revision`) catch "";
+		if (staged == "") return Result.err(`LSP_PERF_STAGE has no ${STAGE}/revision; write it with src/test/lsp/perfStage.sh`);
+		return Result.ok(staged.trim());
+	}
 	const head = try commandOutput("git", ["rev-parse", "--short=12", "HEAD"], ROOT);
 	const status = ["status", "--porcelain", "--", "src/test/lsp", "src/compiler/lsp"];
 	const dirty = try commandOutput("git", status, ROOT);
