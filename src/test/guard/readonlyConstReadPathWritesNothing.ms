@@ -2,7 +2,8 @@
 // can count or write it. Passing the const, a parameter bound to it, or a pointer cast of it to a C
 // extern whose parameter is a counted handle or an opaque pointer refuses it on C and JS, whether
 // the call is on the task's own line or inside a routine the const reaches, and an actor method
-// that stores the const or passes it to such an extern is refused the same way; a string, scalar or
+// that passes it to such an extern is refused the same way, while storing it is a share (ULTRALOCK
+// V0) and storing a Readonly alias of mortal module state stays refused; a string, scalar or
 // Readonly view of value-only data passes (includes, indexOf, lastIndexOf, the Readonly pointer
 // asString copies through), and so does an extern a helper calls with its own locals (a push into
 // a fresh Vec), while a push into a module `let` stays refused as module state.
@@ -167,10 +168,17 @@ const cases: Case[] = [
 			+ "actor Holder { read(): int32 { return bumpOf(K); } }\n" + ACTOR_RUN,
 	},
 	{
-		name: "an actor method that stores the const into a field",
+		name: "an actor method that stores a Readonly alias of mortal module state into a field",
 		refused: true,
-		mark: "stores the module const 'K' into a field",
-		rule: "store an explicit copy of it",
+		mark: "module-level 'ALIAS'",
+		rule: MODULE_STATE_RULE,
+		text: "class Cell { n: int32 = 7; }\nconst SHARED = new Cell();\nconst ALIAS: Readonly<Cell> = SHARED;\n"
+			+ "class Keep { held: Readonly<Cell> | null = null; }\n"
+			+ "actor Holder { keep: Keep = new Keep(); read(): int32 { this.keep.held = ALIAS; return 1; } }\n" + ACTOR_RUN,
+	},
+	{
+		name: "an actor method that keeps the immortal const in a field",
+		refused: false,
 		text: CELL
 			+ "class Keep { held: Readonly<Cell> | null = null; }\n"
 			+ "actor Holder { keep: Keep = new Keep(); read(): int32 { this.keep.held = K; return 1; } }\n" + ACTOR_RUN,

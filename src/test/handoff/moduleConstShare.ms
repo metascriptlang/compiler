@@ -77,6 +77,25 @@ test "moduleConstShare: an owned result returning the interior of an immortal mo
 	for (const item of shared) assert !refuses(item.source, "stores the module const"), item.name;
 }
 
+const CELLS = `
+class Child { n: int32 = 1; }
+class Cell { child: Child = new Child(); }
+class Holder { c: Readonly<Child>; constructor(c: Readonly<Child>) { this.c = c; } }
+class Builds { h: Holder; constructor(c: Readonly<Child>) { this.h = new Holder(c); } }
+extern function bumpOf(c: Readonly<Child>): int32;
+export const K: Readonly<Cell> = new Cell();
+`;
+
+test "moduleConstShare: a part of an immortal module const stored by a constructor a task calls compiles, and C still may not receive it" {
+	const stored = [
+		{ name: "an own constructor", source: CELLS + "function probe(i: uint32): uint32 { return (new Holder(K.child).c.n as uint32) + i; }" + TASKS },
+		{ name: "a constructor that builds the storing object", source: CELLS + "function probe(i: uint32): uint32 { return (new Builds(K.child).h.c.n as uint32) + i; }" + TASKS },
+	];
+	for (const item of stored) assert !refuses(item.source, "the module const 'K'"), item.name;
+	const foreign = CELLS + "function probe(i: uint32): uint32 { return (bumpOf(K.child) as uint32) + i; }" + TASKS;
+	assert refuses(foreign, "C may count or write what it receives there"), "a C extern given a part of the immortal const";
+}
+
 test "moduleConstShare: a call through the field, a view result and a return outside tasks compile" {
 	const legal = [
 		{ name: "a call through the closure field", source: PLAIN + "function probe(i: uint32): uint32 { return T.keyOf(i); }" + TASKS },
