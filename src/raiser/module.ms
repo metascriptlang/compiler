@@ -28,7 +28,8 @@ export interface RaiserFunction {
 	callShape: RaiserCallShape | null;
 	localsCount: number;
 	frameSize: int32;     // slots the frame holds: one per register, the parameters first
-	ownRefs: int32[];     // the Ref and Dyn registers that are not parameters, which the frame releases and starts at zero
+	ownRefs: int32[];     // the Ref and Dyn registers, parameters first: the frame holds what each one holds and releases it at exit
+	firstLocalRef: int32; // the index in ownRefs of the first register that is not a parameter; those start at zero
 	regClasses: RaiserRegClass[];   // class of each register
 	regOps: int32[];      // the tagged operand of each register
 	blocks: int64[];      // site table: the callee's first slot, argument count, class signature, then a tagged operand per argument
@@ -112,8 +113,13 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
 	}
 	const ownRefs: int32[] = [];
-	for (let r = paramWords; r < regCount; r += 1) if (inRefFile(layout.regClasses[r])) ownRefs.push(r);
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, paramWords, callShape, localsCount, frameSize: regCount as int32, ownRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: callShape == null ? layout.sigs : [], copyPlans: [], classTypes: [] };
+	let firstLocalRef: int32 = 0;
+	for (let r: int32 = 0; r < regCount; r += 1) {
+		if (!inRefFile(layout.regClasses[r])) continue;
+		ownRefs.push(r);
+		if (r < paramWords) firstLocalRef += 1;
+	}
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, paramWords, callShape, localsCount, frameSize: regCount as int32, ownRefs, firstLocalRef, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: callShape == null ? layout.sigs : [], copyPlans: [], classTypes: [] };
 	validateShapeClasses(func);
 	bindReturns(func);
 	return func;
@@ -220,8 +226,8 @@ function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): voi
 	}
 }
 
-// A packed Ret carries what its frame releases: B the first register that is not a parameter, C the owned ref count times two,
-// plus one when the function opens a handler and the Ret must check for one still open.
+// A packed Ret carries what its frame releases: C the owned ref count times two, plus one when the function opens a handler
+// and the Ret must check for one still open.
 function bindReturns(func: RaiserFunction): void {
 	let opensHandler: int32 = 0;
 	for (const inst of func.code) {
@@ -231,7 +237,7 @@ function bindReturns(func: RaiserFunction): void {
 	for (let pc = 0; pc < func.code.length; pc += 1) {
 		const inst = func.code[pc];
 		if (inst.op != RaiserOpcode.Ret) continue;
-		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramWords, owned * 2 + opensHandler));
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, 0, owned * 2 + opensHandler));
 	}
 }
 
