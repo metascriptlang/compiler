@@ -132,6 +132,7 @@ test "E2E C: a mapped toArray outside the affine shape, or under --danger, keeps
 		"return xs.values().map((x, i) => x + (i as int32)).toArray();",
 		"let k: int32 = 3; k = k + 1; return xs.values().map((x) => x * k).toArray();",
 		"return xs.values().map((x) => x & 7).toArray();",
+		"return xs.values().map((x) => (x - 2147483647) * 512 * 2147483647).toArray();",
 	];
 	for (const c of cases) {
 		const out = mapped("notaffine", c, ["--release"]);
