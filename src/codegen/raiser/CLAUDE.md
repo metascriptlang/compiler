@@ -40,7 +40,7 @@ Compiles the placed AST into Raiser bytecode: `parse → check → transform →
 
 Each probed on `msc run --target=raiser`:
 
-- `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
+- `static` fields — `cannot evaluate '<Class>' at comptime: symbol kind is Class` (not re-probed since static methods were fixed). A static method compiles with the class that declares it (`declaringClassOf`, `eval.ms`): corpus `comptimeCallsStaticMethods` prints `x! y! o!k | x!` on the raiser cell and at comptime (2026-11-07).
 - A string index — `s[1]` stops with `expected an array, got value kind String` (a `for..of` over a string runs: `abc`, measured 2026-10-06).
 
 ## Tests
