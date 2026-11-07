@@ -15,8 +15,7 @@
   #include "runtime/actor/selector.h"
   #endif
   #ifdef _WIN32
-  #include <winsock2.h>
-  #include <windows.h>
+  struct _OVERLAPPED_ENTRY;
   #endif
 #endif
 
@@ -76,7 +75,7 @@ typedef struct msDispatcher {
 	msCallbackDeque callbacks;
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
   #ifdef _WIN32
-	HANDLE iocp;             /* I/O Completion Port for cross-thread signaling */
+	void* iocp;              /* I/O Completion Port (HANDLE) for cross-thread signaling */
   #else
 	msSelector* selector;    /* I/O event notification (kqueue/epoll/poll) */
 	int completionPipe[2];   /* [0]=read (event loop), [1]=write (pool threads) */
@@ -149,9 +148,9 @@ void msDispatcherWatchIoEngine(int engineFd, msIoPollFn poll);
 
 #if defined(_WIN32) && !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 #define MS_IOCP_ENGINE_KEY 1
-typedef void (*msIocpEntryFn)(const OVERLAPPED_ENTRY* entry);
-HANDLE msDispatcherShareIocp(msIocpEntryFn engineEntry);
-void msDispatcherCompleteEntry(const OVERLAPPED_ENTRY* entry);
+typedef void (*msIocpEntryFn)(const struct _OVERLAPPED_ENTRY* entry);
+void* msDispatcherShareIocp(msIocpEntryFn engineEntry);
+void msDispatcherCompleteEntry(const struct _OVERLAPPED_ENTRY* entry);
 #endif
 
 #endif /* MS_DISPATCH_H */

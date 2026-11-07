@@ -48,7 +48,6 @@
 #if defined(MSOS_BARE)
 #define msYield() ((void)0)
 #elif defined(_WIN32)
-#include <windows.h>
 #define msYield() SwitchToThread()
 #else
 #include <pthread.h>
@@ -165,8 +164,8 @@ typedef struct msAwaitGroup {
 
 #if defined(MSOS_BARE)
 #elif defined(_WIN32)
-	CRITICAL_SECTION cs;
-	CONDITION_VARIABLE cv;
+	void* csStorage[5];           /* a CRITICAL_SECTION, sized and reached in awaitGroup.c */
+	void* cvStorage;              /* a CONDITION_VARIABLE */
 #else
 	pthread_mutex_t mutex;
 	pthread_cond_t cv;

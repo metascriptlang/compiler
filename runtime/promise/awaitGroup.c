@@ -24,6 +24,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#if defined(_WIN32) && !defined(MSOS_BARE)
+#include <windows.h>
+#define AG_CS(g) ((CRITICAL_SECTION*)(void*)(g)->csStorage)
+#define AG_CV(g) ((CONDITION_VARIABLE*)(void*)&(g)->cvStorage)
+_Static_assert(sizeof(CRITICAL_SECTION) == sizeof(((msAwaitGroup*)0)->csStorage), "csStorage holds one CRITICAL_SECTION");
+_Static_assert(sizeof(CONDITION_VARIABLE) == sizeof(((msAwaitGroup*)0)->cvStorage), "cvStorage holds one CONDITION_VARIABLE");
+#endif
 
 /* Phase 3: need monotonic time for deadline-based wait */
 extern int64_t msMonoTimeMs(void);
@@ -58,8 +65,8 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	}
 
 #ifdef _WIN32
-	InitializeCriticalSection(&g->cs);
-	InitializeConditionVariable(&g->cv);
+	InitializeCriticalSection(AG_CS(g));
+	InitializeConditionVariable(AG_CV(g));
 #else
 	pthread_mutex_init(&g->mutex, NULL);
 	pthread_cond_init(&g->cv, NULL);
@@ -82,7 +89,7 @@ void msAwaitGroupFree(msAwaitGroup* g) {
 	if (g->error != NULL) msNoteOrphanError(g->error);
 
 #ifdef _WIN32
-	DeleteCriticalSection(&g->cs);
+	DeleteCriticalSection(AG_CS(g));
 #else
 	pthread_mutex_destroy(&g->mutex);
 	pthread_cond_destroy(&g->cv);
@@ -106,9 +113,9 @@ static void finishSlot(msAwaitGroup* g) {
 		g->doneAtMs = msMonoTimeMs();
 		/* We were the last — wake any waiter. */
 #ifdef _WIN32
-		EnterCriticalSection(&g->cs);
-		WakeAllConditionVariable(&g->cv);
-		LeaveCriticalSection(&g->cs);
+		EnterCriticalSection(AG_CS(g));
+		WakeAllConditionVariable(AG_CV(g));
+		LeaveCriticalSection(AG_CS(g));
 #else
 		pthread_mutex_lock(&g->mutex);
 		pthread_cond_broadcast(&g->cv);
@@ -156,9 +163,9 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 			&g->failed, &expected, true,
 			memory_order_acq_rel, memory_order_relaxed)) {
 #ifdef _WIN32
-		EnterCriticalSection(&g->cs);
+		EnterCriticalSection(AG_CS(g));
 		g->error = error;
-		LeaveCriticalSection(&g->cs);
+		LeaveCriticalSection(AG_CS(g));
 #else
 		pthread_mutex_lock(&g->mutex);
 		g->error = error;
@@ -205,20 +212,20 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	 * Drop group lock, msPoolRunEdge (it takes the pool lock),
 	 * re-acquire group lock. */
 #ifdef _WIN32
-		EnterCriticalSection(&g->cs);
+		EnterCriticalSection(AG_CS(g));
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			LeaveCriticalSection(&g->cs);
+			LeaveCriticalSection(AG_CS(g));
 			if (queued && msPoolRunEdge(g, false, true)) {
-				EnterCriticalSection(&g->cs);
+				EnterCriticalSection(AG_CS(g));
 				continue;
 			}
 			queued = false;
-			EnterCriticalSection(&g->cs);
+			EnterCriticalSection(AG_CS(g));
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-				SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
+				SleepConditionVariableCS(AG_CV(g), AG_CS(g), INFINITE);
 			}
 		}
-		LeaveCriticalSection(&g->cs);
+		LeaveCriticalSection(AG_CS(g));
 #else
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
@@ -298,23 +305,23 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	 * top of every iteration (see the non-worker arm for why the check must
 	 * precede running a task). */
 #ifdef _WIN32
-		EnterCriticalSection(&g->cs);
+		EnterCriticalSection(AG_CS(g));
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
-			LeaveCriticalSection(&g->cs);
+			LeaveCriticalSection(AG_CS(g));
 			if (queued && msPoolRunEdge(g, false, false)) {
-				EnterCriticalSection(&g->cs);
+				EnterCriticalSection(AG_CS(g));
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
 			queued = false;
-			EnterCriticalSection(&g->cs);
+			EnterCriticalSection(AG_CS(g));
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
 			int64_t remainMs = deadlineMs - msMonoTimeMs();
 			/* Clamp: a negative remainder cast to DWORD would sleep ~49 days. */
-			SleepConditionVariableCS(&g->cv, &g->cs, remainMs > 0 ? (DWORD)remainMs : 0);
+			SleepConditionVariableCS(AG_CV(g), AG_CS(g), remainMs > 0 ? (DWORD)remainMs : 0);
 		}
-		LeaveCriticalSection(&g->cs);
+		LeaveCriticalSection(AG_CS(g));
 #else
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
