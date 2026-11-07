@@ -56,11 +56,38 @@ const tree: Tree = { value: 1, children: [{ value: 2, children: [] }] };
 console.log(tree.children[0].value);
 `;
 
-test "immortalConstMark: a recursive value struct lifts its reach hook before its own element walk calls it" {
+function reachHooks(c: string): Map<string, string> {
+	const hooks = new Map<string, string>();
+	const lines = c.split("\n");
+	for (let i = 0; i < lines.length; i += 1) {
+		const open = lines[i].indexOf("(");
+		if (!lines[i].startsWith("void ") || !lines[i].endsWith("{") || open < 0) continue;
+		const words = lines[i].substring(0, open).split(" ");
+		const name = words[words.length - 1];
+		if (!name.endsWith("Reach")) continue;
+		const body: string[] = [];
+		let j = i + 1;
+		while (j < lines.length && lines[j] != "}") { body.push(lines[j]); j += 1; }
+		hooks.set(name, body.join("\n"));
+	}
+	return hooks;
+}
+
+function reachCalls(hooks: Map<string, string>, from: string): string[] {
+	const body = hooks.get(from) ?? "";
+	return [...hooks.keys()].filter((name) => body.contains(name + "("));
+}
+
+test "immortalConstMark: a recursive value struct's reach hook walks its elements back through itself" {
 	const result = compileToC(RECURSIVE);
 	assert result.ok, result.ok ? "" : result.error;
 	const c = result.ok ? result.value : "";
-	assert c.contains("void Tree__") && c.contains("Reach(Tree__"), "the reach hook of Tree is emitted";
+	const hooks = reachHooks(c);
+	const tree = [...hooks.keys()].filter((name) => name.startsWith("Tree__"));
+	assert tree.length == 1, [...hooks.keys()].join(", ");
+	const own = tree[0];
+	const recurses = reachCalls(hooks, own).some((next) => next == own || reachCalls(hooks, next).includes(own));
+	assert recurses, own + " does not reach itself through its elements:\n" + (hooks.get(own) ?? "");
 }
 
 const CLOSURES = `
