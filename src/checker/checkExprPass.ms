@@ -4997,7 +4997,7 @@ function viewsAsInterface(source: Type, target: Type): boolean {
 
 // The kinds whose overlap is certain: a cast between two of them that share none is refused
 // as TS refuses it, and any other kind leaves the decision to the conversions below.
-enum PlainKind { Unknown, Number, Text, Truth, List, Routine, Null }
+enum PlainKind { Unknown, Number, Text, Truth, List, Routine, Null, Instance }
 
 function plainKind(t: Type): PlainKind {
 	const k = t.kind;
@@ -5007,6 +5007,7 @@ function plainKind(t: Type): PlainKind {
 	if (k == TypeKind.Boolean || k == TypeKind.BooleanLiteral) return PlainKind.Truth;
 	if (isArrayShaped(t)) return PlainKind.List;
 	if (isFunctionKind(t)) return PlainKind.Routine;
+	if (k == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return PlainKind.Instance;
 	return PlainKind.Unknown;
 }
 
@@ -5024,6 +5025,7 @@ function disjointCastReason(src: Type, target: Type, operand: Node): string {
 		for (const b of to) {
 			const kb = plainKind(b);
 			if (kb == PlainKind.Unknown || ka == kb) return "";
+			if ((ka == PlainKind.Instance && kb == PlainKind.Null) || (ka == PlainKind.Null && kb == PlainKind.Instance)) return "";
 		}
 	}
 	for (const b of to) {
@@ -5040,6 +5042,7 @@ function disjointCastReason(src: Type, target: Type, operand: Node): string {
 	if (plainKind(toValue) == PlainKind.Routine) return "only a function converts to a function type";
 	if (plainKind(fromValue) == PlainKind.List) return "an array is not a " + typeDisplayName(toValue) + "; read an element or its length";
 	if (plainKind(toValue) == PlainKind.List) return "only an array converts to an array; build one ([x])";
+	if (plainKind(toValue) == PlainKind.Instance) return "only an instance of " + typeDisplayName(toValue) + " or of a class it extends converts to it; build one (new " + typeDisplayName(toValue) + "(...))";
 	return "neither type overlaps the other";
 }
 
