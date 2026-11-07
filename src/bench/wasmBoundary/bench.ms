@@ -1,89 +1,54 @@
-import {
-	Point,
-	add,
-	add64,
-	strLen,
-	echo,
-	mid,
-	sumVec,
-	sumSpan,
-	makeVec,
-	scaleSpan,
-	each,
-	primes,
-} from "./benchWasm";
+import { bench } from "../harness";
+import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, each, primes } from "./benchWasm";
 
-let sink: float64 = 0;
-
-function bench(name: string, calls: int32, body: () => void): void {
-	for (let w = 0; w < 3; w += 1) body();
-	const times: float64[] = [];
-	for (let r = 0; r < 7; r += 1) {
-		const t0 = performance.now();
-		body();
-		times.push(performance.now() - t0);
-	}
-	times.sort((a: float64, b: float64): float64 => a - b);
-	console.log(`${name} ${(times[3] * 1000000 / calls).toFixed(1)}`);
-}
-
-const N = 1000000;
+let sink: number = 0;
 const s16 = "hello wasm world";
 let xs: Vec<float32> = [];
 for (let i = 0; i < 1000; i += 1) xs.push((i as float32) * 0.25);
+let fx: float32[1000] = [0];
+for (let i = 0; i < 1000; i += 1) fx[i] = (i as float32) * 0.25;
 
-bench("add", N, (): void => {
+bench("add x1000", 0, (): void => {
 	let s = 0;
-	for (let i = 0; i < N; i += 1) s = add(i & 1023, 7);
+	for (let i = 0; i < 1000; i += 1) s = add(i & 1023, 7);
 	sink += s;
 });
-bench("add64", N, (): void => {
+bench("add64 x1000", 0, (): void => {
 	let s: int64 = 0;
-	for (let i = 0; i < N; i += 1) s = add64(i as int64, 7);
-	sink += s as float64;
+	for (let i = 0; i < 1000; i += 1) s = add64(i as int64, 7);
+	sink += s as number;
 });
-bench("strLen16", N, (): void => {
+bench("strLen16 x1000", 0, (): void => {
 	let s = 0;
-	for (let i = 0; i < N; i += 1) s += strLen(s16);
+	for (let i = 0; i < 1000; i += 1) s += strLen(s16);
 	sink += s;
 });
-bench("echo16", N, (): void => {
+bench("echo16 x1000", 0, (): void => {
 	let s = 0;
-	for (let i = 0; i < N; i += 1) s += echo(s16).length;
+	for (let i = 0; i < 1000; i += 1) s += echo(s16).length;
 	sink += s;
 });
-bench("mid", N, (): void => {
+bench("mid x1000", 0, (): void => {
 	let s = 0.0;
-	for (let i = 0; i < N; i += 1) s += mid({ x: i, y: 2 }).x;
+	for (let i = 0; i < 1000; i += 1) s += mid({ x: i, y: 2 }).x;
 	sink += s;
 });
-bench("sumVec1k", 10000, (): void => {
-	let s: float32 = 0;
-	for (let i = 0; i < 10000; i += 1) s += sumVec(xs);
-	sink += s as float64;
+bench("sumVec 1k Array", 0, (): void => {
+	sink += sumVec(xs);
 });
-bench("sumSpan1k", 10000, (): void => {
-	let s: float32 = 0;
-	for (let i = 0; i < 10000; i += 1) s += sumSpan(xs);
-	sink += s as float64;
+bench("sumSpan 1k Float32Array", 0, (): void => {
+	sink += sumSpan(fx);
 });
-bench("makeVec1k", 10000, (): void => {
-	let s = 0;
-	for (let i = 0; i < 10000; i += 1) s += makeVec(1000).length;
-	sink += s;
+bench("scaleSpan 1k Float32Array", 0, (): void => {
+	scaleSpan(fx, 1);
 });
-bench("scaleSpan1k", 10000, (): void => {
-	for (let i = 0; i < 10000; i += 1) scaleSpan(xs, 1);
+bench("makeVec 1k", 0, (): void => {
+	sink += makeVec(1000).length;
 });
-bench("callback1k", 1000, (): void => {
-	let s = 0;
-	for (let i = 0; i < 1000; i += 1)
-		s += each(1000, (k: int32): int32 => k & 7);
-	sink += s;
+bench("callback 1k", 0, (): void => {
+	sink += each(1000, (k: int32): int32 => k & 7);
 });
-bench("primes2M", 10, (): void => {
-	let s = 0;
-	for (let i = 0; i < 10; i += 1) s += primes(2000000);
-	sink += s;
+bench("primes 2M", 0, (): void => {
+	sink += primes(2000000);
 });
-console.log(`sink ${sink > 0}`);
+if (sink == 0) console.log("sink unused");
