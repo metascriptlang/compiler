@@ -66,6 +66,18 @@ three handle checks and drop the site.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 
+## Is it still green
+
+Two checks answer it, both outside the land gate and the core tests, run on a host with Emscripten:
+
+- **Correct:** `src/test/wasmmix/check.sh` runs every wasm boundary unit test and every wasmmix
+  program in all its columns; `WASMMIX_BROWSER=1 CHROME=<path>` adds headless Chrome. It ends with
+  `js-wasm check: GREEN` and exit 0. 2026-11-07 on m1m, main `804c40e867a`: units 170/170, wasmmix 79/79.
+- **Fast enough:** `src/bench/run.sh wasmBoundary` then `node src/bench/wasmBoundary/accept.mjs`
+  times the same rows in MetaScript, neon-bindings and wasm-bindgen and prints which rows meet the bar
+  (exit 0 when all do). Recipe, arms and the recorded table: `src/bench/wasmBoundary/baseline.md`;
+  2026-11-07 it read 5 of 11 rows.
+
 ## Measurements
 
 Boundary cost, 2026-11-03, m1m (Apple M1), node 24.1, Emscripten 5.0.5, `--danger`, tree
