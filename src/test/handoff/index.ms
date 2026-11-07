@@ -164,6 +164,7 @@ import "./sendableFunction";
 import "./slotRelation";
 import "./brandArrayRelations";
 import "./storageMutability";
+import "./ownerInCheck";
 import "./moduleConstShare";
 import "./symbolNotSpelling";
 import "./viewStructStorage";

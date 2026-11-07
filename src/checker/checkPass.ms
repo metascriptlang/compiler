@@ -24,7 +24,7 @@ import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContex
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUnownedPosition, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { membersOf } from "./unitsInCheck";
+import { takeUnits, putUnits, membersOf } from "./unitsInCheck";
 import { lookupModuleCtx, registerModuleCtx, enterModuleCheck, leaveModuleCheck, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
@@ -1648,14 +1648,19 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 		defineTypeParams(ctx, sym, genericStr);
 	}
 	let ctorExits: string[][] | null = null;
-	for (const member of d.classBody) {
-		if (member.kind == NodeKind.ConstructorDecl) {
-			ctorExits = [];
-			ctx.ctorExitsNext = ctorExits;
+	const members = takeUnits(node);
+	try {
+		for (const member of members) {
+			if (member.kind == NodeKind.ConstructorDecl) {
+				ctorExits = [];
+				ctx.ctorExitsNext = ctorExits;
+			}
+			checkNeedsFirst(ctx, classMemberDecl(member), 0);
+			checkClassMember(ctx, member, d.className, sym.symbolType);
+			ctx.ctorExitsNext = null;
 		}
-		checkNeedsFirst(ctx, classMemberDecl(member), 0);
-		checkClassMember(ctx, member, d.className, sym.symbolType);
-		ctx.ctorExitsNext = null;
+	} finally {
+		putUnits(node, members);
 	}
 	refuseUnassignedFields(ctx, d.classBody, ctorExits);
 	checkOverloadSets(ctx, d.classBody);
@@ -3491,13 +3496,19 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	const hoistMark = ctx.pendingHoisted.length;
 	collectInferredNeeds(ctx, stmts.programStmts);
+	const units = takeUnits(program);
 	let i = 0;
-	while (i < stmts.programStmts.length) {
-		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion) || stopForInput(ctx.cancelCtx)) return;
-		checkNeedsFirst(ctx, declOfStatement(stmts.programStmts[i]), 0);
-		checkStmt(ctx, stmts.programStmts[i]);
-		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
+	try {
+		while (i < units.length) {
+			if (isCancelled(ctx.cancelCtx, ctx.cancelVersion) || stopForInput(ctx.cancelCtx)) break;
+			checkNeedsFirst(ctx, declOfStatement(units[i]), 0);
+			checkStmt(ctx, units[i]);
+			i = i + drainHoisted(ctx, units, i, hoistMark) + 1;
+		}
+	} finally {
+		putUnits(program, units);
 	}
+	if (i < units.length) return;
 	ctx.inferredNeeds.clear();
 	checkOverloadSets(ctx, stmts.programStmts);
 	if (ctx.pendingLocalTypeDecls.length > 0) {
