@@ -392,18 +392,18 @@ function wrapperLines(
 	): void => {
 		if (adopted) wasmOwns = true;
 		encoded.push(name);
+		encoded.push(`${name}n`);
 		cleanup.push(
 			adopted
-				? `if (${name} && !sent) __msbMod._free(${name}[0]);`
-				: `if (${name}) __msbFree(${name}[0]);`,
+				? `if (${name} && !sent) __msbMod._free(${name});`
+				: `if (${name}) __msbFree(${name});`,
 		);
 		if (absent == "") {
-			encodes.push(`		${name} = ${fn}(${expr});`);
-			argList.push(`${name}[0], ${name}[1]`);
+			encodes.push(`		${name} = ${fn}(${expr}); ${name}n = __msbLen;`);
 		} else {
-			encodes.push(`		${name} = ${absent} ? null : ${fn}(${expr});`);
-			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
+			encodes.push(`		${name} = ${absent} ? 0 : ${fn}(${expr}); ${name}n = ${name} ? __msbLen : 0;`);
 		}
+		argList.push(`${name}, ${name}n`);
 	};
 	const encodeView = (
 		name: string,
@@ -474,7 +474,8 @@ function wrapperLines(
 				const written = p.mode == BoundaryMode.Shared;
 				if (written) {
 					const bool = p.element == BoundaryKind.Bool;
-					copyBacks.push(`__msbCopyBack(e${i}[0], ${view}, ${bool});`);
+					const at = shared ? `e${i}[0]` : `e${i}`;
+					copyBacks.push(`__msbCopyBack(${at}, ${view}, ${bool});`);
 					backRanges.push(`__msbRangeErr(a${i}.base, a${i}.off, a${i}.len)`);
 				}
 				const role = written ? "write" : "read";

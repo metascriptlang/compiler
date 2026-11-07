@@ -154,12 +154,12 @@ test "js side: callback ids are generation-tagged slots of a dense table with a 
 
 test "js side: a string parameter is encoded as a payload that wasm adopts, and freed here only when the call was never made" {
 	const code = bindingsFor(["both"]).modules[0].code;
-	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e2, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0);\n\t\te2 = __msbEncOwned(a2);\n\t\tsent = true;\n\t\tlet v;\n\t\ttry { v = __msbMod._msb_calc_both(e0[0], e0[1], a1, e2[0], e2[1]); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn v;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0[0]);\n\t\tif (e2 && !sent) __msbMod._free(e2[0]);\n\t}\n}");
+	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e0n, e2, e2n, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\te2 = __msbEncOwned(a2); e2n = __msbLen;\n\t\tsent = true;\n\t\tlet v;\n\t\ttry { v = __msbMod._msb_calc_both(e0, e0n, a1, e2, e2n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn v;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0);\n\t\tif (e2 && !sent) __msbMod._free(e2);\n\t}\n}");
 }
 
 test "js side: a Vec beside a string is still released after the call, only the string block is wasm's" {
 	const code = bindingsFor(["mixed"]).modules[0].code;
-	assert code.includes("function bundled_mixed(a0, a1) {\n\t__msb.enter();\n\tlet v;\n\tlet e0, e1, sent = false;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0);\n\t\te1 = __msbCopyIn(a1, 0, a1.length, Float32Array);\n\t\tsent = true;\n\t\ttry { v = __msbMod._msb_calc_mixed(e0[0], e0[1], e1[0], e1[1]); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0[0]);\n\tif (e1) __msbFree(e1[0]);\n\tif (failed) throw thrown;\n\treturn v;\n}");
+	assert code.includes("function bundled_mixed(a0, a1) {\n\t__msb.enter();\n\tlet v;\n\tlet e0, e0n, e1, e1n, sent = false;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\te1 = __msbCopyIn(a1, 0, a1.length, Float32Array); e1n = __msbLen;\n\t\tsent = true;\n\t\ttry { v = __msbMod._msb_calc_mixed(e0, e0n, e1, e1n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0);\n\tif (e1) __msbFree(e1);\n\tif (failed) throw thrown;\n\treturn v;\n}");
 }
 
 test "js side: copied arguments are bump-allocated from the scratch block, and only a heap pointer is freed" {
@@ -186,7 +186,7 @@ test "js side: a wrapper marks the scratch top before its first encode and reset
 	assert code.split("\tconst mark = __msbTop;\n\ttry {").length == 4;
 	assert code.split("\t} finally {\n\t\t__msbTop = mark;\n").length == 2;
 	assert code.split("\n\t__msbTop = mark;\n").length == 3;
-	assert code.includes("\tlet e0_2, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0_2 = __msbEncOwned(a0.text);");
+	assert code.includes("\tlet e0_2, e0_2n, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0_2 = __msbEncOwned(a0.text); e0_2n = __msbLen;");
 }
 
 const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "mul64u", "evaluate", "isEven", "flip", "wide", "visit", "pick", "twice", "banner", "both", "sumBy", "edit", "patch", "stamp", "cut", "swap"];
@@ -213,7 +213,7 @@ test "js side: a wrapper takes a scratch mark exactly when its function copies a
 
 test "js side: a string result is built by a taker pushed for the call, so a nested call keeps its own" {
 	const b = bindingsFor(["twice"]);
-	assert b.modules[0].code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0);\n\t\tsent = true;\n\t\ttry { __msbMod._msb_calc_twice(e0[0], e0[1]); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0[0]);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;\n\t}\n}");
+	assert b.modules[0].code.includes("function bundled_twice(a0) {\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0, e0n, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\tsent = true;\n\t\ttry { __msbMod._msb_calc_twice(e0, e0n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;\n\t}\n}");
 	assert !b.modules[0].code.includes("msb_ret_len");
 	assert !b.prelude.includes("msb_ret_len");
 }
@@ -225,17 +225,18 @@ test "js side: a string result with no parameter still pushes its taker and pops
 
 test "js side: the owned string encoder lays out a payload, cap then bytes then a NUL, from the heap allocator, and sends no block for an empty string" {
 	const p = bindingsFor(["twice"]).prelude;
-	assert p.includes("function __msbSeal(h, p, n) {\n\th[p] = n; h[p + 1] = n >>> 8; h[p + 2] = n >>> 16; h[p + 3] = n >>> 24;\n\th[p + 4] = 0; h[p + 5] = 0; h[p + 6] = 0; h[p + 7] = 0;\n\th[p + 8 + n] = 0;\n\treturn [p, n];\n}");
+	assert p.includes("function __msbSeal(h, p, n) {\n\th[p] = n; h[p + 1] = n >>> 8; h[p + 2] = n >>> 16; h[p + 3] = n >>> 24;\n\th[p + 4] = 0; h[p + 5] = 0; h[p + 6] = 0; h[p + 7] = 0;\n\th[p + 8 + n] = 0;\n\t__msbLen = n;\n\treturn p;\n}");
 	const enc = p.slice(p.indexOf("function __msbEncAt("), p.indexOf("function __msbDecLoop("));
-	assert enc.includes("\tif (own && n === 0) return [0, 0];\n\tconst hd = own ? 8 : 0;\n");
+	assert enc.includes("\tif (own && n === 0) { __msbLen = 0; return 0; }\n\tconst hd = own ? 8 : 0;\n");
 	assert enc.includes("const p = __msbHeapAlloc(own ? n + 9 : n || 1);");
 	assert enc.includes("h.subarray(p + hd, p + hd + n)");
-	assert enc.includes("return own ? __msbSeal(h, p, n) : [p, n];");
+	assert enc.includes("return own ? __msbSeal(h, p, n) : (__msbLen = n, p);");
 	assert enc.includes("const p = __msbHeapAlloc(own ? cap + 9 : cap);\n\tconst h = __msbMod.HEAPU8;\n\tlet o = p + hd;");
 	assert enc.includes("if (o - p - hd > cap) throw new Error(");
-	assert enc.includes("return own ? __msbSeal(h, p, o - p - hd) : [p, o - p];");
+	assert enc.includes("return own ? __msbSeal(h, p, o - p - hd) : (__msbLen = o - p, p);");
 	assert !enc.includes("__msbAlloc(");
-	assert enc.includes("function __msbEnc(s) {\n\treturn __msbEncAt(s, false);\n}\nfunction __msbEncOwned(s) {\n\treturn __msbEncAt(s, true);\n}");
+	assert enc.includes("function __msbEnc(s) {\n\treturn __msbEncAt(s, false);\n}\nfunction __msbEncOwned(s) {\n\tconst n = s.length;\n\tif (n > 0 && n <= 24) {\n\t\tconst p = __msbHeapAlloc(n + 9);");
+	assert enc.includes("\t\tif (k === n) return __msbSeal(h, p, n);\n\t\t__msbMod._free(p);\n\t}\n\treturn __msbEncAt(s, true);\n}");
 	assert p.includes("function __msbCopyIn(a, off, n, T) {\n\t__msbInRange(a, off, n);\n\tconst p = __msbAlloc(");
 }
 
@@ -322,7 +323,7 @@ const long = [A.repeat(5000), B.repeat(5000), C.repeat(5000), base + A, base + H
 for (const s of long) {
 	const want = wtf8(s);
 	calls.length = 0;
-	const r = __msbEnc(s);
+	const r = [__msbEnc(s), __msbLen];
 	ok(calls.length === 1, "one allocation expected, got " + calls.length);
 	ok(calls[0] === want, "allocated " + calls[0] + " bytes for " + want + " bytes of " + s.length + " units");
 	ok(r[1] === want, "length " + r[1] + " expected " + want);
@@ -331,14 +332,14 @@ for (const s of long) {
 const short = [A.repeat(10), C.repeat(10), HI, LO + HI, u(97, 0xd83d, 98)];
 for (const s of short) {
 	calls.length = 0;
-	const r = __msbEnc(s);
+	const r = [__msbEnc(s), __msbLen];
 	ok(calls[0] <= 3 * s.length, "short string allocated " + calls[0] + " bytes for " + s.length + " units");
 	ok(r[1] === wtf8(s), "short length " + r[1] + " expected " + wtf8(s));
 	ok(__msbDec(r[0], r[1]) === s, "short round trip");
 }
 calls.length = 0;
-ok(__msbEnc("abc")[1] === 3 && calls[0] === 3, "ascii allocates its length");
-ok(__msbEnc("")[1] === 0 && calls[1] === 1, "empty ascii allocates one byte");
+ok((__msbEnc("abc"), __msbLen) === 3 && calls[0] === 3, "ascii allocates its length");
+ok((__msbEnc(""), __msbLen) === 0 && calls[1] === 1, "empty ascii allocates one byte");
 calls.length = 0;
 for (const n of [4294967296, 4294967298]) {
 	let e = null;
@@ -367,9 +368,9 @@ test "js side: the string glue allocates the exact UTF-8 length of a long string
 
 test "js side: a struct is passed leaf by leaf and its result is built by a taker pushed for the call" {
 	const js = bindingsFor(["tag"]).modules[0].code;
-	assert js.includes("e0_2 = __msbEncOwned(a0.text);");
-	assert js.includes("__msbMod._msb_calc_tag(a0.at.x, a0.at.y, e0_2[0], e0_2[1], a0.count);");
-	assert js.includes("\tlet e0_2, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0_2 = __msbEncOwned(a0.text);\n\t\tsent = true;\n\t\ttry { __msbMod._msb_calc_tag(a0.at.x, a0.at.y, e0_2[0], e0_2[1], a0.count); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0_2 && !sent) __msbMod._free(e0_2[0]);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;\n\t}\n}");
+	assert js.includes("e0_2 = __msbEncOwned(a0.text); e0_2n = __msbLen;");
+	assert js.includes("__msbMod._msb_calc_tag(a0.at.x, a0.at.y, e0_2, e0_2n, a0.count);");
+	assert js.includes("\tlet e0_2, e0_2n, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0_2 = __msbEncOwned(a0.text); e0_2n = __msbLen;\n\t\tsent = true;\n\t\ttry { __msbMod._msb_calc_tag(a0.at.x, a0.at.y, e0_2, e0_2n, a0.count); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0_2 && !sent) __msbMod._free(e0_2);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;\n\t}\n}");
 	assert js.includes("const d = __msb.takes.push((x0, x1, x2, x3, x4) => { r = { at: { x: x0, y: x1 }, text: __msbDec(x2, x3), count: x4 }; }) - 1;");
 	assert js.includes("if (__msb.takes.length > d) __msb.takes.length = d;");
 	assert js.includes("return r;");
@@ -377,25 +378,25 @@ test "js side: a struct is passed leaf by leaf and its result is built by a take
 
 test "js side: a Vec is copied into wasm memory and its result copied out into an array" {
 	const js = bindingsFor(["scale"]).modules[0].code;
-	assert js.includes("e0 = __msbCopyIn(a0, 0, a0.length, Float32Array);");
-	assert js.includes("__msbMod._msb_calc_scale(e0[0], e0[1], a1);");
+	assert js.includes("e0 = __msbCopyIn(a0, 0, a0.length, Float32Array); e0n = __msbLen;");
+	assert js.includes("__msbMod._msb_calc_scale(e0, e0n, a1);");
 	assert js.includes("(p, n) => { r = __msbVecOut(p >>> 0, n, Uint16Array, false); }");
-	assert js.includes("if (e0) __msbFree(e0[0]);");
-	assert js.includes("\tlet e0;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbCopyIn(a0, 0, a0.length, Float32Array);\n\t\ttry { __msbMod._msb_calc_scale(e0[0], e0[1], a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0[0]);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
+	assert js.includes("if (e0) __msbFree(e0);");
+	assert js.includes("\tlet e0, e0n;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbCopyIn(a0, 0, a0.length, Float32Array); e0n = __msbLen;\n\t\ttry { __msbMod._msb_calc_scale(e0, e0n, a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
 	assert bindingsFor(["scale"]).prelude.includes("function __msbVecOut(p, n, T, bool) {");
 }
 
 test "js side: a Span is copied in for the call, and a writable one is copied back before the copy is freed" {
 	const read = bindingsFor(["total"]).modules[0].code;
-	assert read.includes("e0 = __msbCopyIn(a0.base, a0.off, a0.len, Float32Array);");
-	assert read.includes("v = __msbMod._msb_calc_total(e0[0], e0[1]);") && read.includes("return v;");
+	assert read.includes("e0 = __msbCopyIn(a0.base, a0.off, a0.len, Float32Array); e0n = __msbLen;");
+	assert read.includes("v = __msbMod._msb_calc_total(e0, e0n);") && read.includes("return v;");
 	assert !read.includes("__msbCopyBack");
 	const write = bindingsFor(["fill"]).modules[0].code;
 	assert write.includes("\tconst mark = __msbTop;\n\ttry {");
 	assert write.includes("\t__msbTop = mark;\n");
-	assert write.includes("__msbFree(e0[0]);");
+	assert write.includes("__msbFree(e0);");
 	assert !write.includes("._free(");
-	assert write.includes("\t\tran = true;\n\t\ttry { __msbMod._msb_calc_fill(e0[0], e0[1], a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a0.base, a0.off, a0.len);\n\t\tif (bad0 === null) __msbCopyBack(e0[0], a0.base, a0.off, a0.len, Uint8Array, true);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0[0]);\n\tif (failed) throw thrown;\n");
+	assert write.includes("\t\tran = true;\n\t\ttry { __msbMod._msb_calc_fill(e0, e0n, a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a0.base, a0.off, a0.len);\n\t\tif (bad0 === null) __msbCopyBack(e0, a0.base, a0.off, a0.len, Uint8Array, true);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0);\n\tif (failed) throw thrown;\n");
 	assert bindingsFor(["fill"]).prelude.includes("function __msbCopyBack(p, a, off, n, T, bool) {");
 }
 
@@ -406,12 +407,12 @@ test "js side: a callback that returns a value still copies a writable Span back
 
 test "js side: the copy-back of a Span runs only once every argument is encoded, so a failed encode writes nothing back" {
 	const code = bindingsFor(["stamp"]).modules[0].code;
-	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array);\n\t\tsent = true;\n\t\tran = true;\n\t\ttry { v = __msbMod._msb_calc_stamp(e0[0], e0[1], e1[0], e1[1]); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a1.base, a1.off, a1.len);\n\t\tif (bad0 === null) __msbCopyBack(e1[0], a1.base, a1.off, a1.len, Int32Array, false);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0[0]);\n\tif (e1) __msbFree(e1[0]);\n\tif (failed) throw thrown;\n\treturn v;");
+	assert code.includes("\t\te1 = __msbCopyIn(a1.base, a1.off, a1.len, Int32Array); e1n = __msbLen;\n\t\tsent = true;\n\t\tran = true;\n\t\ttry { v = __msbMod._msb_calc_stamp(e0, e0n, e1, e1n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a1.base, a1.off, a1.len);\n\t\tif (bad0 === null) __msbCopyBack(e1, a1.base, a1.off, a1.len, Int32Array, false);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0);\n\tif (e1) __msbFree(e1);\n\tif (failed) throw thrown;\n\treturn v;");
 }
 
 test "js side: a Vec result with a writable Span copies back after the call and restores the takers after it" {
 	const code = bindingsFor(["cut"]).modules[0].code;
-	assert code.includes("\t\tran = true;\n\t\ttry { __msbMod._msb_calc_cut(e0[0], e0[1]); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a0.base, a0.off, a0.len);\n\t\tif (bad0 === null) __msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0[0]);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
+	assert code.includes("\t\tran = true;\n\t\ttry { __msbMod._msb_calc_cut(e0, e0n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\tif (ran) {\n\t\tconst bad0 = __msbRangeErr(a0.base, a0.off, a0.len);\n\t\tif (bad0 === null) __msbCopyBack(e0, a0.base, a0.off, a0.len, Int32Array, false);\n\t\telse { thrown = bad0; failed = true; }\n\t}\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
 }
 
 test "js side: each writable Span has its own copy-back, so one that throws cannot skip the next, and the frees still run last" {
@@ -453,7 +454,7 @@ test "js side: the registry poisons itself on the first exception that crossed t
 test "js side: a callback failure is stored in wasm by its message and the original object waits here for the export that lets it escape" {
 	const p = bindingsFor(["add64"]).prelude;
 	assert p.includes("\tlet pending = null;\n\tlet escaped = null;\n");
-	assert p.includes("\t\tfail(e, z) {\n\t\t\tif (dead) throw e;\n\t\t\tconst m = String(e?.message ?? e);\n\t\t\tpending = [e, m];\n\t\t\tthis.dirty = true;\n\t\t\tconst b = __msbEncOwned(m);\n\t\t\t__msbMod._msb_fail(b[0], b[1]);\n\t\t\treturn z;\n\t\t},\n");
+	assert p.includes("\t\tfail(e, z) {\n\t\t\tif (dead) throw e;\n\t\t\tconst m = String(e?.message ?? e);\n\t\t\tpending = [e, m];\n\t\t\tthis.dirty = true;\n\t\t\tconst b = __msbEncOwned(m);\n\t\t\t__msbMod._msb_fail(b, __msbLen);\n\t\t\treturn z;\n\t\t},\n");
 	assert p.includes("\t\tescape(p, n) { escaped = __msbDec(p >>> 0, n); this.dirty = true; },\n");
 	assert p.includes("\t\tleave() {\n\t\t\tthis.dirty = false;\n\t\t\tconst p = pending;\n\t\t\tpending = null;\n\t\t\tif (escaped === null) return;\n\t\t\tconst m = escaped;\n\t\t\tescaped = null;\n\t\t\tthrow p !== null && p[1] === m ? p[0] : new Error(m);\n\t\t},\n");
 }
@@ -472,7 +473,7 @@ test "js side: every wrapper enters before it pushes, encodes or allocates anyth
 	assert code.includes("function bundled_visit(a0, a1) {\n\t__msb.enter();\n\tconst id1 = __msb.push(");
 	assert code.includes("function bundled_tag(a0) {\n\t__msb.enter();\n\tlet r;\n");
 	assert code.includes("function bundled_scale(a0, a1) {\n\t__msb.enter();\n\tlet r;\n");
-	assert code.includes("function bundled_total(a0) {\n\t__msb.enter();\n\tlet v;\n\tlet e0;\n");
+	assert code.includes("function bundled_total(a0) {\n\t__msb.enter();\n\tlet v;\n\tlet e0, e0n;\n");
 }
 
 function checkGlueBody(prelude: string, name: string): string {
@@ -531,7 +532,7 @@ test "js side: a checked scalar parameter is tested for its JS type and range be
 
 test "js side: a checked string parameter is tested before anything is allocated" {
 	const code = bindingsFor(["twice"], true).modules[0].code;
-	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0, sent = false;\n\tconst mark = __msbTop;\n\ttry {");
+	assert code.includes("function bundled_twice(a0) {\n\t__msbType(a0, \"string\", \"string\", \"twice\", \"parameter 's'\");\n\t__msb.enter();\n\tlet r;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;\n\tlet e0, e0n, sent = false;\n\tconst mark = __msbTop;\n\ttry {");
 }
 
 test "js side: a checked struct is tested object by object, then field by field, in leaf order, before its taker is pushed" {
@@ -598,18 +599,18 @@ test "js side: a nullable scalar result is read after the call, gated by the pre
 
 test "js side: a nullable string is encoded only when present, and an absent string result stays null because the result take never runs" {
 	const code = nullableBindings(["greet"]).modules[0].code;
-	assert code.includes("e0 = a0 == null ? null : __msbEncOwned(a0);");
+	assert code.includes("e0 = a0 == null ? 0 : __msbEncOwned(a0); e0n = e0 ? __msbLen : 0;");
 	assert code.includes("\tlet r = null;\n\tconst d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }) - 1;");
-	assert code.includes("try { __msbMod._msb_calc_greet(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;");
-	assert code.includes("\t\tif (e0 && !sent) __msbMod._free(e0[0]);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;");
+	assert code.includes("try { __msbMod._msb_calc_greet(a0 == null ? 0 : 1, e0, e0n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;");
+	assert code.includes("\t\tif (e0 && !sent) __msbMod._free(e0);\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;");
 	assert !code.includes("_msb_ret_some");
 	assert !code.includes("_msb_ret_len");
 }
 
 test "js side: a nullable Vec is copied in only when present, and a nullable Vec result starts as null" {
 	const code = nullableBindings(["headOr", "upTo"]).modules[0].code;
-	assert code.includes("e0 = a0 == null ? null : __msbCopyIn(a0, 0, a0.length, Int32Array);");
-	assert code.includes("__msbMod._msb_calc_headOr(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0);");
+	assert code.includes("e0 = a0 == null ? 0 : __msbCopyIn(a0, 0, a0.length, Int32Array); e0n = e0 ? __msbLen : 0;");
+	assert code.includes("__msbMod._msb_calc_headOr(a0 == null ? 0 : 1, e0, e0n);");
 	assert code.includes("function bundled_upTo(a0) {\n\t__msb.enter();\n\tlet r = null;\n\tconst d = __msb.takes.push((p, n) => { r = __msbVecOut(p >>> 0, n, Float32Array, false); }) - 1;");
 	assert code.includes("\t\ttry { __msbMod._msb_calc_upTo(a0); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;");
 	assert !code.includes("_msb_ret_some");
@@ -617,8 +618,8 @@ test "js side: a nullable Vec is copied in only when present, and a nullable Vec
 
 test "js side: a nullable struct and its nullable fields each carry a flag in leaf order, and its taker builds null fields" {
 	const code = nullableBindings(["bump"]).modules[0].code;
-	assert code.includes("e0_1 = a0 == null || a0.note == null ? null : __msbEncOwned(a0.note);");
-	assert code.includes("__msbMod._msb_calc_bump(a0 == null ? 0 : 1, a0 == null ? 0 : a0.id, a0 == null || a0.note == null ? 0 : 1, e0_1 ? e0_1[0] : 0, e0_1 ? e0_1[1] : 0, a0 == null || a0.score == null ? 0 : 1, a0 == null || a0.score == null ? 0 : a0.score, a0 == null || a0.ok == null ? 0 : 1, a0 == null || a0.ok == null ? 0 : (a0.ok ? 1 : 0), a0 == null ? 0 : a0.at.x, a0 == null || a0.at.y == null ? 0 : 1, a0 == null || a0.at.y == null ? 0 : a0.at.y);");
+	assert code.includes("e0_1 = a0 == null || a0.note == null ? 0 : __msbEncOwned(a0.note); e0_1n = e0_1 ? __msbLen : 0;");
+	assert code.includes("__msbMod._msb_calc_bump(a0 == null ? 0 : 1, a0 == null ? 0 : a0.id, a0 == null || a0.note == null ? 0 : 1, e0_1, e0_1n, a0 == null || a0.score == null ? 0 : 1, a0 == null || a0.score == null ? 0 : a0.score, a0 == null || a0.ok == null ? 0 : 1, a0 == null || a0.ok == null ? 0 : (a0.ok ? 1 : 0), a0 == null ? 0 : a0.at.x, a0 == null || a0.at.y == null ? 0 : 1, a0 == null || a0.at.y == null ? 0 : a0.at.y);");
 	assert code.includes("(x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10) => { r = { id: x0, note: x1 !== 0 ? __msbDec(x2, x3) : null, score: x4 !== 0 ? x5 : null, ok: x6 !== 0 ? x7 !== 0 : null, at: { x: x8, y: x9 !== 0 ? x10 : null } }; }");
 	assert code.includes("\tlet r = null;");
 	assert !code.includes("_msb_ret_some");
