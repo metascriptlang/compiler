@@ -3187,11 +3187,18 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 				callArgs = [];
 			}
 			const params = sym != null ? constructorParamTypes(sym) : null;
-			const closures = reserveClosureArgs(s, node, callArgs, -1, params);
+			const held: int32[] = [];
+			for (let i = 0; i < callArgs.length; i = i + 1) {
+				const borrowed = params != null && i < params.length && params[i].kind != TypeKind.Sink;
+				held.push(borrowed && materializesFramePlace(s, callArgs[i]) ? allocRef(s) : -1);
+			}
 			const dest = callBlock(s, node.nodeType, callArgs, params);
-			for (let i = 0; i < callArgs.length; i = i + 1) compileClosureArg(s, callArgs[i], dest + 1 + i, closures.held[i]);
+			for (let i = 0; i < callArgs.length; i = i + 1) {
+				compileExprInto(s, callArgs[i], dest + 1 + i);
+				if (held[i] >= 0) emitInst(s, raiserABC(RaiserOpcode.Move, held[i], dest + 1 + i, 0));
+			}
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
-			releaseClosureArgs(s, closures);
+			for (const reg of held) if (reg >= 0) emitInst(s, raiserABC(RaiserOpcode.RcDec, reg, 0, 0));
 			return dest;
 		}
 	}
