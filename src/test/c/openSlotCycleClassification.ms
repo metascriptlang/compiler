@@ -3,7 +3,7 @@
 // collection. A hierarchy whose implementers cannot reach back registers nothing. Runtime
 // behaviour: corpus `cycleThroughInterfaceFieldIsCollected`.
 
-import { compileToC } from "../helpers";
+import { compileToC, withoutReachHooks } from "../helpers";
 
 function typeInfoOf(c: string, name: string): string {
 	for (const line of c.split("\n")) {
@@ -22,7 +22,7 @@ function cyclicOps(c: string): int32 {
 
 function traceRefs(c: string): int32 {
 	let n: int32 = 0;
-	for (const line of c.split("\n")) {
+	for (const line of withoutReachHooks(c).split("\n")) {
 		if (line.contains("msOrcTraceRef(")) n += 1;
 	}
 	return n;

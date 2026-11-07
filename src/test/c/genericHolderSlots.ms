@@ -77,5 +77,5 @@ test "E2E C: a view of a generic instance's field stays counted beside a write t
 	const r = compileToC(BAG("g.syms.value = new Sym()"));
 	assert r.ok;
 	const body = requestBody(r.ok ? r.value : "");
-	assert body.contains("msIncref(sym"), body;
+	assert body.contains("msIncrefRo(sym"), body;
 }

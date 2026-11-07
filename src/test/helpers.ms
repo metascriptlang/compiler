@@ -158,6 +158,23 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	return Result.ok(cCode);
 }
 
+export function withoutReachHooks(c: string): string {
+	const kept: string[] = [];
+	let inReach = false;
+	for (const line of c.split("\n")) {
+		if (inReach) {
+			if (line == "}") inReach = false;
+			continue;
+		}
+		if (!line.startsWith(" ") && line.contains("Reach(") && line.endsWith("{")) {
+			inReach = true;
+			continue;
+		}
+		kept.push(line);
+	}
+	return kept.join("\n");
+}
+
 // The C unit `msc build --emit=c` writes for one program, built by `$MSC` (else `./msc`) under out/<dir>/<name>:
 // std bodies reach the iterator inliner only in such a whole-program build, never through compileToC.
 export function builtModuleC(dir: string, name: string, source: string, flags: string[]): string {

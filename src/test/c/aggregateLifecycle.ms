@@ -1,4 +1,4 @@
-import { compileToC } from "../helpers";
+import { compileToC, withoutReachHooks } from "../helpers";
 
 struct CycleShape {
 	declarations: string;
@@ -15,7 +15,7 @@ test "array fields are cycle edges only when their element graph reaches the own
 	for (const c of cases) {
 		const result = compileToC(c.declarations);
 		assert result.ok, result.ok ? "" : result.error;
-		assert result.value.contains(`msOrcTraceRef((&((*self_p0).${c.field})), callback_p1);`) == c.cyclic, c.field + " trace";
+		assert withoutReachHooks(result.value).contains(`msOrcTraceRef((&((*self_p0).${c.field})), callback_p1);`) == c.cyclic, c.field + " trace";
 		assert result.value.contains(`msDecrefCyclicEdge(self_p0, (*self_p0).${c.field})`) == c.cyclic, c.field + " release";
 	}
 }

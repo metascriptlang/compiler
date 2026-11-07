@@ -171,7 +171,7 @@ function run(): int32 {
 console.log(\`\${run()}\`);
 `);
 	assert r.ok;
-	assert (r.ok ? r.value : "").contains("msDecrefCyclic(a_");
+	assert (r.ok ? r.value : "").contains("msDecrefCyclicRo(a_");
 }
 
 const SETS_TASK = (call: string) => `spawn(() => {
