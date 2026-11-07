@@ -2739,6 +2739,63 @@ immediately awaited value-returning CALL passed `msc check` on installed binary/
 argument shape. Use the [authoring recipes](LANG-PREFERENCE.md#9-one-awaitable-surface-three-execution-tools)
 and [boundary obligations](CONTRACTS.md), not a blanket “readonly means shareable” rule.
 
+#### An immutable module const is shared (SHARE without atomics)
+
+A module const the checker judges immutable is one object every thread sees: an actor may keep it in
+a field, a task may store it and return a value reached from it, and `===` holds across threads. No
+copy is made and no count becomes atomic.
+
+```ts
+class Node { next: Node | null = null; }
+function chain(): Node { const a = new Node(); a.next = new Node(); return a; }
+const EMPTY: Readonly<Node> = chain();             // built in its own initializer: shared
+
+actor Tree {
+	head: Readonly<Node> | null = null;
+	reset(): void { this.head = EMPTY; }           // kept by the actor
+	isEmpty(): boolean { return this.head === EMPTY; }
+}
+const next = spawn((): Readonly<Node> | null => EMPTY.next);
+console.log((await next) === EMPTY.next);          // true
+```
+
+What qualifies: a `const` that is deep `Readonly` and built by its own initializer (a `new`, a
+literal, a call returning a fresh value), or whose type the const rule keeps unwritable, and whose
+shape is a class handle (`Readonly<C>`, `Readonly<C> | null`), a `Readonly` struct, a const-frozen
+struct that carries a count, or a `Sendable` function (`isImmortalModuleConst`,
+`src/checker/effects.ms`). The slot that receives it is typed `Readonly<…>` or `Sendable<…>`.
+
+What stays refused:
+
+- A `Readonly` alias of mutable module state is not immutable: `const SHARED = new Node();
+  const ALIAS: Readonly<Node> = SHARED;` stored by an actor or a task is `uses module-level 'ALIAS'`
+  (`module state crosses threads only as …`).
+- A C extern still never receives it, directly or through a parameter bound to it:
+  `C may count or write what it receives there …`. The generic array primitives `push`, `pop` and
+  `capacity` move elements as bytes and are allowed on an array that holds it.
+- A const of a union of classes or of a generic struct instance keeps the store refusal
+  (`stores the module const '…'`).
+
+Why it is safe without atomics: right after its initializer, before any task can start, the
+const's whole graph is marked immortal (its count holds a halfway value). Every count op that can
+reach it is the Ro flavor chosen by the use type (`Readonly<T>`, `Sendable<F>`), which skips an
+immortal header with one compare; every other op emits the C it emitted before. One exit phase
+after all module deinits destroys each marked graph once. The rule is ULTRALOCK V0/V7. Prior art
+for the immortal count is CPython PEP 683 and Swift; Nim counts a shared global with
+`--mm:atomicArc` instead, which costs every op of every program.
+
+Measured on rtx with a candidate of tree `c4572c9cd630e0773033b1c7474eab266d2f3296`: corpus
+`immortalConstStoredInHolders` and `immortalConstSharedAcrossThreads` (eight actors and a spawn,
+stdout `8 104 true` / `done`) pass on C, danger, JS and ESM, and under ASan with the DRC ledger,
+whose oracle aborts on any plain count op on an immortal header; guard
+`immortalConstSharedRaceFree` is clean under TSan. Cost, measured when the Ro flavor first landed
+on this arc (an earlier tree, `MS_DRC_STAT`): msc compiling itself flavors 1.07M of 3,099.8M RC
+ops (0.035%). Not verified: Windows, and an awaited actor CALL that hands the const to a receiver
+which keeps it. Known red: on the Raiser target a spawn whose result is a
+value reached from the const is over-released at exit (`object cell … is not a live cell`, about
+one run in two), because the thunk returns the view uncounted while the task protocol treats a
+result as owned.
+
 #### Spawn Inside Actors
 
 Actors can spawn parallel work internally. Safety rules prevent data races:

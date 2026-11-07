@@ -1056,6 +1056,21 @@ and the annotation is not proof of safe arbitrary sharing. Keep mutable state be
 `std/actor/supervisor` has restart strategies/child specifications/introspection, but the checked
 native import fails inside its implementation (§19), so it is not a green supervision recipe.
 
+To share a table, a config graph or a handler with every actor and task, declare it once as a
+module const that is deep `Readonly` and built by its own initializer, and type the slots that
+hold it `Readonly<T>` (a handler `Sendable<F>`):
+
+```ts
+const ROUTES: Readonly<RouteTable> = buildRoutes();   // not: const R: Readonly<T> = mutableGlobal
+actor Router { table: Readonly<RouteTable> | null = null; init(): void { this.table = ROUTES; } }
+```
+
+It is one object on every thread (`===` holds), with no copy and no atomic count. Do not reach for
+a deep copy or `Locked<T>` for data that never changes after start-up; keep that for state that is
+written. A `Readonly` alias of a mutable module value is not this case and stays refused, and the
+const never goes to a C extern. Rules, refusals and measurements:
+[an immutable module const is shared](LANG.md#an-immutable-module-const-is-shared-share-without-atomics).
+
 ## 10. Use C directly; make the boundary explicit
 
 Do not add a new `@pure` annotation or replace it with another purity marker. It was removed
