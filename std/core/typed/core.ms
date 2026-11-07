@@ -59,6 +59,15 @@ export class ArrayBuffer {
 	}
 }
 
+function joinElements<T>(elements: Readonly<Span<T>>, separator: string): string {
+	let out = "";
+	for (let i = 0; i < elements.length; i++) {
+		if (i > 0) out += separator;
+		out += (elements[i] as number).toString();
+	}
+	return out;
+}
+
 // A view made by length holds its bytes itself (`own`): one object and one payload. The first time it is
 // shared (`buffer`, `subarray`) the bytes move into an ArrayBuffer (`store`) that every view of them reads,
 // so `buffer` answers the same object each time.
@@ -92,21 +101,14 @@ export class TypedArray<T> {
 		for (let i = 0; i < source.length; i++) into[at + i] = source[i];
 	}
 
-	join(separator: string = ","): string {
-		const elements: Readonly<Span<T>> = this;
-		let out = "";
-		for (let i = 0; i < elements.length; i++) {
-			if (i > 0) out += separator;
-			out += (elements[i] as number).toString();
-		}
-		return out;
-	}
-
-	toString(): string { return this.join(","); }
 }
 
 export class Int8Array extends TypedArray<int8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
+
+	join(separator: string = ","): string { return joinElements<int8>(this, separator); }
+
+	toString(): string { return this.join(","); }
 
 	constructor();
 	constructor(length: number);
@@ -162,6 +164,10 @@ export class Int8Array extends TypedArray<int8> {
 export class Uint8Array extends TypedArray<uint8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
 
+	join(separator: string = ","): string { return joinElements<uint8>(this, separator); }
+
+	toString(): string { return this.join(","); }
+
 	constructor();
 	constructor(length: number);
 	constructor(source: Readonly<uint8[]>);
@@ -215,6 +221,10 @@ export class Uint8Array extends TypedArray<uint8> {
 
 export class Uint8ClampedArray extends TypedArray<uint8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
+
+	join(separator: string = ","): string { return joinElements<uint8>(this, separator); }
+
+	toString(): string { return this.join(","); }
 
 	constructor();
 	constructor(length: number);
@@ -272,6 +282,10 @@ export class Uint8ClampedArray extends TypedArray<uint8> {
 export class Int16Array extends TypedArray<int16> {
 	static readonly BYTES_PER_ELEMENT: number = 2;
 
+	join(separator: string = ","): string { return joinElements<int16>(this, separator); }
+
+	toString(): string { return this.join(","); }
+
 	constructor();
 	constructor(length: number);
 	constructor(source: Readonly<int16[]>);
@@ -325,6 +339,10 @@ export class Int16Array extends TypedArray<int16> {
 
 export class Uint16Array extends TypedArray<uint16> {
 	static readonly BYTES_PER_ELEMENT: number = 2;
+
+	join(separator: string = ","): string { return joinElements<uint16>(this, separator); }
+
+	toString(): string { return this.join(","); }
 
 	constructor();
 	constructor(length: number);
@@ -380,6 +398,10 @@ export class Uint16Array extends TypedArray<uint16> {
 export class Int32Array extends TypedArray<int32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
 
+	join(separator: string = ","): string { return joinElements<int32>(this, separator); }
+
+	toString(): string { return this.join(","); }
+
 	constructor();
 	constructor(length: number);
 	constructor(source: Readonly<int32[]>);
@@ -433,6 +455,10 @@ export class Int32Array extends TypedArray<int32> {
 
 export class Uint32Array extends TypedArray<uint32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
+
+	join(separator: string = ","): string { return joinElements<uint32>(this, separator); }
+
+	toString(): string { return this.join(","); }
 
 	constructor();
 	constructor(length: number);
@@ -488,6 +514,10 @@ export class Uint32Array extends TypedArray<uint32> {
 export class Float32Array extends TypedArray<float32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
 
+	join(separator: string = ","): string { return joinElements<float32>(this, separator); }
+
+	toString(): string { return this.join(","); }
+
 	constructor();
 	constructor(length: number);
 	constructor(source: Readonly<float32[]>);
@@ -541,6 +571,10 @@ export class Float32Array extends TypedArray<float32> {
 
 export class Float64Array extends TypedArray<float64> {
 	static readonly BYTES_PER_ELEMENT: number = 8;
+
+	join(separator: string = ","): string { return joinElements<float64>(this, separator); }
+
+	toString(): string { return this.join(","); }
 
 	constructor();
 	constructor(length: number);
