@@ -304,7 +304,7 @@ function constant(s: RaiserCompState, value: int64): int32 {
 	return reg;
 }
 
-function literalValue(s: RaiserCompState, t: Type): int32 {
+export function literalValue(s: RaiserCompState, t: Type): int32 {
 	const body = bodyOf(t);
 	const value = body.kind == TypeKind.BooleanLiteral
 		? raiserBool(body.typeName == "true")

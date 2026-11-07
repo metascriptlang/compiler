@@ -39,7 +39,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
 	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
-import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy, bodyOf } from "./packedValues";
+import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy, bodyOf, literalValue } from "./packedValues";
 import { nullAccessHead } from "../../transform/maybeCarrier";
 import { packedSlotShapeOf } from "./valueCopy";
 import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
@@ -867,7 +867,7 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 	if (node.kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
 		const result = allocPackedValue(s, s.layouts, valueType);
-		const body = peelTransparentInstance(valueType);
+		const body = bodyOf(valueType);
 		for (let i = 0; i < d.keys.length; i += 1) {
 			const at = body.typeNames.indexOf(d.keys[i]);
 			if (at >= 0 && storesNothing(body, body.typeChildren[at])) compileExprForEffect(s, d.properties[i]);
@@ -957,11 +957,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			}
 			const at = body.typeNames.indexOf(d.property);
 			if (at >= 0 && storesNothing(body, body.typeChildren[at])) {
-				const t = body.typeChildren[at];
-				const literal = t.kind == TypeKind.BooleanLiteral ? raiserBool(t.typeName == "true") : raiserInt(enumMemberValue(t.typeReturn!, t.typeReturn!.typeNames.indexOf(t.typeNames[0]) as int32) as int64);
-				const value = allocReg(s, regClassOf(s, t));
-				emitLoadConst(s, value, literal);
-				return value;
+				return literalValue(s, body.typeChildren[at]);
 			}
 			if (isMaybeType(body) && d.property == "value" && node.flags.has(NodeFlag.ConvCheck)) checkPackedPresent(s, owner);
 			const field = packedField(s, s.layouts, owner, d.property);
