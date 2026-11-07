@@ -36,6 +36,20 @@ test "immortalConstMark: a Readonly<S> value copies through its own hook pair, w
 	assert plainCopy.contains("msIncref(") && !plainCopy.contains("msIncrefRo("), "the plain W copy hook keeps the plain op:\n" + plainCopy;
 }
 
+const COUNTLESS_INSTANCE = `
+class Cache { entries: Map<string, Result<string, string>> = new Map<string, Result<string, string>>(); }
+function filled(): Cache { const c = new Cache(); c.entries.set("a", Result.ok("b")); return c; }
+const K: Readonly<Cache> = filled();
+console.log(K.entries.size);
+`;
+
+test "immortalConstMark: the reach walk skips a generic-instance value whose body holds no count" {
+	const result = compileToC(COUNTLESS_INSTANCE);
+	assert result.ok, result.ok ? "" : result.error;
+	const c = result.ok ? result.value : "";
+	assert c.contains("msImmortalize(K__"), "the const is marked through its reach hook";
+}
+
 const CLOSURES = `
 type Handler = (n: int32) => int32;
 function mk(b: int32): Sendable<Handler> { return (n: int32): int32 => n + b; }
