@@ -7,9 +7,9 @@ import {
 	TypeAssertionData, HiddenStdConvData, ConditionalExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
 	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData, AwaitExprData, SpreadExprData,
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
-	ObjectPatternPropData, ArrayPatternData, createNodeAt, BuiltinKind } from "../ast/node";
+	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, EffectCause } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -47,6 +47,7 @@ export interface VarEntry {
 	scopePath: int32[];
 	external: boolean;
 	fromTemp: boolean;
+	moduleSource: EffectCause | null;
 }
 
 export interface MutationInfo {
@@ -103,6 +104,7 @@ export function registerVariable(p: Partitions, sym: Symbol | null, isParam: boo
 		scopePath: [],
 		external: isParam,
 		fromTemp: false,
+		moduleSource: null,
 	});
 }
 
@@ -909,6 +911,7 @@ interface BorrowUnit {
 	writers: Symbol[];
 	callWrites: CallWrite[];
 	worker: boolean;
+	actorCtor: string;
 }
 
 interface CallWrite {
@@ -1432,7 +1435,37 @@ function deps(u: BorrowUnit, dest: Symbol | null, src: Node | null): void {
 		const sources: Symbol[] = [];
 		rootsOf(src, sources);
 		for (const s of sources) { ufConnect(u.p, dest, s); }
+		markModuleSource(u, [dest], src);
 	}
+}
+
+function markModuleSource(u: BorrowUnit, dests: Symbol[], src: Node | null): void {
+	const c = moduleSourceOf(u.ctx.dispatchRegistry, src);
+	if (c == null) return;
+	for (const d of dests) {
+		const id = variableId(u.p, d);
+		if (id >= 0 && u.p.vars[id].moduleSource == null) u.p.vars[id].moduleSource = c;
+	}
+}
+
+function moduleSourceIn(u: BorrowUnit, root: int32): EffectCause | null {
+	for (let i = 0; i < u.p.vars.length; i += 1) {
+		if (u.p.vars[i].moduleSource != null && ufRoot(u.p, i) == root) return u.p.vars[i].moduleSource;
+	}
+	return null;
+}
+
+function moduleSourceOfValue(u: BorrowUnit, value: Node): EffectCause | null {
+	const direct = moduleSourceOf(u.ctx.dispatchRegistry, value);
+	if (direct != null || !carriesPointer(value.nodeType)) return direct;
+	const roots: Symbol[] = [];
+	rootsOf(value, roots);
+	for (const r of roots) {
+		const id = variableId(u.p, r);
+		const c = id >= 0 ? moduleSourceIn(u, ufRoot(u.p, id)) : null;
+		if (c != null) return c;
+	}
+	return null;
 }
 
 function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
@@ -1454,6 +1487,7 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 	if (d.operator == "=" && (left.kind == NodeKind.ArrayLiteral || left.kind == NodeKind.ObjectLiteral)) assignPattern(u, left, d.right);
 	mutateRoots(u, left, d.left, "", ownsStorage(left.nodeType) ? "" : VALUE_WRITE);
 	if (d.operator != "=") return;
+	refuseModuleStore(u, left, d.right);
 	const targets0: Symbol[] = [];
 	rootsOf(left, targets0);
 	if (targets0.length == 1 && isViewType(left.nodeType) && isBorrower(u, targets0[0])) borrowFrom(u, targets0[0], d.right);
@@ -1467,6 +1501,7 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 		for (const t of targets) {
 			for (const s of sources) { ufConnect(u.p, t, s); }
 		}
+		markModuleSource(u, targets, d.right);
 	}
 }
 
@@ -1910,6 +1945,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
 			if (u.pass == 1 && opensCallLend(u.ctx.dispatchRegistry, node)) openCallLend(u, node);
 			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
+			if (u.pass == 2 && isMessageSend(node)) refuseModuleArgs(u, node);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
@@ -1977,6 +2013,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 					const sources: Symbol[] = [];
 					rootsOf(d.forOfIterable, sources);
 					for (const s of sources) { ufConnect(u.p, binding, s); }
+					markModuleSource(u, [binding], d.forOfIterable);
 				}
 				walk(u, d.forOfPattern);
 				walk(u, d.forOfBody);
@@ -2197,10 +2234,7 @@ function openCallLend(u: BorrowUnit, site: Node): void {
 	const roots: Symbol[] = [];
 	const kept: Node[] = [];
 	for (let i = 0; i < found.length; i += 1) {
-		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) {
-			if (isMessageSend(site)) refuseModuleLend(u, site, found[i]);
-			continue;
-		}
+		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) continue;
 		roots.push(found[i]);
 		kept.push(tasks[i]);
 	}
@@ -2221,8 +2255,28 @@ function openCaptureLend(u: BorrowUnit, fn: Node): void {
 	pushLend(u, fn, pending.map((l: PendingLend): Symbol => l.capture!), [], pending.map((l: PendingLend): Node => l.task), "");
 }
 
-function refuseModuleLend(u: BorrowUnit, site: Node, root: Symbol): void {
-	addError(u.ctx, `module-level '${root.name}' cannot be lent to the actor call of '${calleeName(site)}': any code that runs before the reply can change module state while the actor reads it; pass a copy, move a local, or share it through Arc<T> or Locked<T>`, site.location.line, site.location.column);
+const MODULE_LEND_RULE = "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>, because any code that runs meanwhile can change it while the other thread reads it, so pass a copy or move a value built here";
+
+function refuseModuleArgs(u: BorrowUnit, call: Node): void {
+	const recv = receiverOf(call);
+	const args = (call.data as CallExprData).arguments;
+	for (const a of args) {
+		if (recv != null && a == recv) continue;
+		const c = moduleSourceOfValue(u, a);
+		if (c == null) continue;
+		addError(u.ctx, `the actor call of '${calleeName(call)}' lends a value that ${c.text}${MODULE_LEND_RULE}`, a.location.line, a.location.column);
+		return;
+	}
+}
+
+function refuseModuleStore(u: BorrowUnit, left: Node, value: Node): void {
+	if (u.actorCtor == "" || left.kind != NodeKind.MemberExpr) return;
+	const roots: Symbol[] = [];
+	rootsOf((left.data as MemberExprData).object, roots);
+	if (roots.length != 1 || roots[0].name != "this") return;
+	const c = moduleSourceOfValue(u, value);
+	if (c == null) return;
+	addError(u.ctx, `actor '${u.actorCtor}' keeps '${(left.data as MemberExprData).property}' on whichever thread takes its message, but the value stored there ${c.text}${MODULE_LEND_RULE}`, value.location.line, value.location.column);
 }
 
 function calleeName(call: Node): string {
@@ -2273,6 +2327,11 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 			const id = variableId(u.p, r);
 			if (id < 0) continue;
 			const root = ufRoot(u.p, id);
+			const reached = actor ? null : moduleSourceIn(u, root);
+			if (reached != null) {
+				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it holds a value that ${reached.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
+				break;
+			}
 			const call = callWriteIn(u, l, root);
 			if (call != null) {
 				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt} until ${until}, and the call at ${call.location.line}:${call.location.column} can change it while ${reader} reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`, l.site.location.line, l.site.location.column);
@@ -2314,7 +2373,7 @@ function scanUnitBody(dispatchRegistry: DispatchRegistry, node: Node | null, sca
 	if (lendsCapturesToActors(dispatchRegistry, node)) scan.spawn = true;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return;
-	if (!scan.spawn && (isSpawnCall(node) || isActorLend(dispatchRegistry, node))) scan.spawn = true;
+	if (!scan.spawn && (isSpawnCall(node) || (node.kind == NodeKind.CallExpr && isMessageSend(node)))) scan.spawn = true;
 	if (node.kind == NodeKind.CallExpr && lendsPastCall(dispatchRegistry, node, scan.module)) {
 		node.flags = node.flags.incl(NodeFlag.LendsPastCall);
 		scan.spawn = true;
@@ -2362,7 +2421,7 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 function newUnit(ctx: CheckerContext, pointers: Symbol[], worker: boolean): BorrowUnit {
 	return {
 		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
-		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], worker,
+		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], worker, actorCtor: "",
 	};
 }
 
@@ -2519,18 +2578,19 @@ function refuseLeavingLends(ctx: CheckerContext, node: Node | null, up: Node[]):
 	if (!transparent) up.pop();
 }
 
-function checkUnit(ctx: CheckerContext, body: Node | null, routine: Node | null = null, name: string = ""): void {
+function checkUnit(ctx: CheckerContext, body: Node | null, routine: Node | null = null, name: string = "", actorCtor: string = ""): void {
 	if (body == null) return;
 	const scan: UnitScan = { pointers: [], view: false, spawn: false, clear: new TypeVisitSet(), module: body.kind == NodeKind.Program };
 	scanUnitBody(ctx.dispatchRegistry, body, scan);
 	refuseLeavingLends(ctx, body, []);
 	if (scan.spawn) refuseBorrowingHandleEscapes(ctx, body);
 	const viewChannel = viewStructResult(routine) != null || hasViewRefParam(routine);
-	if ((body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) || (scan.pointers.length == 0 && !scan.view && !scan.spawn && !viewChannel)) {
+	if ((body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) || (scan.pointers.length == 0 && !scan.view && !scan.spawn && !viewChannel && actorCtor == "")) {
 		refuseViewStructReturns(ctx, null, routine, name, body);
 		return;
 	}
 	const u = newUnit(ctx, scan.pointers, false);
+	u.actorCtor = actorCtor;
 	runPass(u, body, 1);
 	for (const l of u.lends) {
 		if (l.end < 0) l.end = u.p.abstractTime;
@@ -3025,7 +3085,7 @@ function isOwnParam(routine: Node, sym: Symbol): boolean {
 	return sym.name == "this";
 }
 
-function scanUnits(ctx: CheckerContext, node: Node | null): void {
+function scanUnits(ctx: CheckerContext, node: Node | null, actor: string = ""): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
@@ -3038,7 +3098,7 @@ function scanUnits(ctx: CheckerContext, node: Node | null): void {
 			refuseInferredViewResult(ctx, node, (node.data as MethodDeclData).methodReturnType);
 			checkUnit(ctx, (node.data as MethodDeclData).methodBody, node, (node.data as MethodDeclData).methodName);
 		},
-		NodeKind.ConstructorDecl => checkUnit(ctx, (node.data as ConstructorDeclData).ctorBody),
+		NodeKind.ConstructorDecl => checkUnit(ctx, (node.data as ConstructorDeclData).ctorBody, null, "", actor),
 		NodeKind.ArrowFunction => {
 			checkClosureViewReturns(ctx, node, (node.data as ArrowFunctionData).arrowBody);
 			refuseInferredViewResult(ctx, node, (node.data as ArrowFunctionData).arrowReturnType);
@@ -3052,7 +3112,8 @@ function scanUnits(ctx: CheckerContext, node: Node | null): void {
 		NodeKind.TestDecl => checkUnit(ctx, (node.data as TestDeclData).testBody),
 		_ => {},
 	};
-	forEachChild(node, (child: Node): void => { scanUnits(ctx, child); });
+	const inActor = node.kind == NodeKind.ActorDecl ? (node.data as ActorDeclData).actorName : node.kind == NodeKind.DecoratedDecl ? actor : "";
+	forEachChild(node, (child: Node): void => { scanUnits(ctx, child, inActor); });
 }
 
 export function checkRoutineBorrows(ctx: CheckerContext, routine: Node): void {

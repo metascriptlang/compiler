@@ -739,10 +739,7 @@ function storedFresh(n: Node, s: FreshScope): boolean {
 	if (isFreshValue(n, s)) return true;
 	const p = peelView(n);
 	if (p.kind != NodeKind.SpreadExpr) return n.nodeType != null && isValueOnlyType(n.nodeType);
-	const src = (p.data as SpreadExprData).spreadArg.nodeType;
-	const bare = src == null ? null : brandBase(src) ?? src;
-	const t = bare != null && bare.kind == TypeKind.Ref ? bare.typeReturn : bare;
-	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.Span || t.kind == TypeKind.SizedArray) && isValueOnlyType(t.typeReturn);
+	return spreadCopiesValues(p);
 }
 
 function allStoredFresh(nodes: Node[], s: FreshScope): boolean {
@@ -996,6 +993,77 @@ function externSignatureHoldsPointer(sym: Symbol): boolean {
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return true;
 	return holdsPointerByValue(t.typeReturn, 0) || t.typeChildren.some((p: Type): boolean => holdsPointerByValue(p, 0) && !isLentValueView(p));
+}
+
+export function moduleSourceOf(dispatchRegistry: DispatchRegistry, node: Node | null): EffectCause | null {
+	if (node == null || (node.nodeType != null && (!typeCarriesRef(node.nodeType) || isAtomicRef(node.nodeType) || holdsOnlyPids(node.nodeType)))) return null;
+	const p = peelView(node);
+	return match (p.kind) {
+		NodeKind.Identifier => p.resolvedSym == null ? null
+			: isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach)
+			: moduleSourceOf(dispatchRegistry, constBindingInitializer(p.resolvedSym)),
+		NodeKind.MemberExpr => p.resolvedSym != null && isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach) : moduleSourceOf(dispatchRegistry, (p.data as MemberExprData).object),
+		NodeKind.ArrayAccess => moduleSourceOf(dispatchRegistry, (p.data as ArrayAccessData).array),
+		NodeKind.MoveExpr => moduleSourceOf(dispatchRegistry, (p.data as MoveExprData).moveArg),
+		NodeKind.ConditionalExpr => moduleSourceOf(dispatchRegistry, (p.data as ConditionalExprData).ternaryConsequent) ?? moduleSourceOf(dispatchRegistry, (p.data as ConditionalExprData).ternaryAlternate),
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (d.operator == "=") return moduleSourceOf(dispatchRegistry, d.right);
+			return d.operator == "??" || d.operator == "||" || d.operator == "&&" ? moduleSourceOf(dispatchRegistry, d.left) ?? moduleSourceOf(dispatchRegistry, d.right) : null;
+		},
+		NodeKind.ArrayLiteral => firstModuleSource(dispatchRegistry, (p.data as ArrayLiteralData).elements),
+		NodeKind.ObjectLiteral => firstModuleSource(dispatchRegistry, (p.data as ObjectLiteralData).properties),
+		NodeKind.SpreadExpr => spreadCopiesValues(p) ? null : moduleSourceOf(dispatchRegistry, (p.data as SpreadExprData).spreadArg),
+		NodeKind.AwaitExpr => moduleSourceOf(dispatchRegistry, (p.data as AwaitExprData).awaitArg),
+		NodeKind.NewExpr => firstModuleSource(dispatchRegistry, (p.data as NewExprData).newArguments),
+		NodeKind.CallExpr => isSpawnCall(p) ? null : callResultModuleSource(dispatchRegistry, p),
+		_ => null,
+	};
+}
+
+const resultSourceOpen: Symbol[] = [];
+
+function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node): EffectCause | null {
+	const recv = receiverOf(call);
+	const merged = (recv != null ? moduleSourceOf(dispatchRegistry, recv) : null) ?? firstModuleSource(dispatchRegistry, (call.data as CallExprData).arguments);
+	if (merged != null) return merged;
+	const sym = call.resolvedSym;
+	if (!isRoutine(sym) || isExternalRoutine(sym!) || resultSourceOpen.includes(sym!)) return null;
+	const body = routineBody(unpackDecl(sym!.declNode));
+	if (body == null) return null;
+	resultSourceOpen.push(sym!);
+	const returned: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
+	else returned.push(body);
+	const c = firstModuleSource(dispatchRegistry, returned);
+	resultSourceOpen.pop();
+	return through(call, "calls '" + sym!.name + "'", c);
+}
+
+function collectReturned(node: Node, out: Node[]): void {
+	if (node.kind == NodeKind.ReturnStmt) {
+		const arg = (node.data as ReturnStmtData).argument;
+		if (arg != null) out.push(arg);
+		return;
+	}
+	forEachChild(node, (child: Node): void => {
+		if (!isRoutineNode(child)) collectReturned(child, out);
+	});
+}
+
+function spreadCopiesValues(spread: Node): boolean {
+	const src = (spread.data as SpreadExprData).spreadArg.nodeType;
+	const bare = src == null ? null : brandBase(src) ?? src;
+	const t = bare != null && bare.kind == TypeKind.Ref ? bare.typeReturn : bare;
+	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.Span || t.kind == TypeKind.SizedArray) && isValueOnlyType(t.typeReturn);
+}
+
+function firstModuleSource(dispatchRegistry: DispatchRegistry, nodes: Node[]): EffectCause | null {
+	for (const n of nodes) {
+		const c = moduleSourceOf(dispatchRegistry, n);
+		if (c != null) return c;
+	}
+	return null;
 }
 
 function isExternalRoutine(sym: Symbol): boolean {

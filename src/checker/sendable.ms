@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf, decoratorNamed } from "./decoratorHelpers";
 import { CheckerContext, DispatchRegistry, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Effect, EffectCause, FreshScope, isImmortalModuleConst, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
+import { Effect, EffectCause, FreshScope, isImmortalModuleConst, moduleSourceOf, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding, isPromiseBuiltin } from "./symbol";
@@ -1914,7 +1914,10 @@ export function checkActorStoredClosures(actorName: string, body: Node[]): void 
 		if (m == null) continue;
 		if (m.kind == NodeKind.PropertyDecl) {
 			const pd = m.data as PropertyDeclData;
-			if (!pd.propIsStatic && pd.propInitializer != null) refuseStoredClosureReach(actorName, pd.propName, pd.propInitializer!);
+			if (!pd.propIsStatic && pd.propInitializer != null) {
+				refuseStoredClosureReach(actorName, pd.propName, pd.propInitializer!);
+				refuseModuleInitializer(actorName, pd.propName, pd.propInitializer!);
+			}
 		} else if (m.kind == NodeKind.ConstructorDecl) {
 			collectThisStores(actorName, (m.data as ConstructorDeclData).ctorBody);
 		}
@@ -1930,6 +1933,14 @@ function collectThisStores(actorName: string, node: Node | null): void {
 		}
 	}
 	forEachChild(node, (child: Node): void => { collectThisStores(actorName, child); });
+}
+
+function refuseModuleInitializer(actorName: string, field: string, value: Node): void {
+	deferEffectCheck(value, "actorModuleState", (ctx: CheckerContext): void => {
+		const c = moduleSourceOf(ctx.dispatchRegistry, value);
+		if (c == null) return;
+		addError(ctx, "actor '" + actorName + "' keeps '" + field + "' on whichever thread takes its message, but its initializer " + c.text + MODULE_STATE_RULE, value.location.line, value.location.column);
+	});
 }
 
 function refuseStoredClosureReach(actorName: string, field: string, value: Node): void {
