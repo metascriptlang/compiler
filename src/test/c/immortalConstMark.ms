@@ -50,6 +50,19 @@ test "immortalConstMark: the reach walk skips a generic-instance value whose bod
 	assert c.contains("msImmortalize(K__"), "the const is marked through its reach hook";
 }
 
+const RECURSIVE = `
+struct Tree { value: int32; children: Vec<Tree>; }
+const tree: Tree = { value: 1, children: [{ value: 2, children: [] }] };
+console.log(tree.children[0].value);
+`;
+
+test "immortalConstMark: a recursive value struct lifts its reach hook before its own element walk calls it" {
+	const result = compileToC(RECURSIVE);
+	assert result.ok, result.ok ? "" : result.error;
+	const c = result.ok ? result.value : "";
+	assert c.contains("void Tree__") && c.contains("Reach(Tree__"), "the reach hook of Tree is emitted";
+}
+
 const CLOSURES = `
 type Handler = (n: int32) => int32;
 function mk(b: int32): Sendable<Handler> { return (n: int32): int32 => n + b; }

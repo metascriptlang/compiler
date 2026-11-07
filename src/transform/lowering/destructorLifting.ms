@@ -2005,6 +2005,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
 		liftedOp(objType, attachedOpOf(hook), cName + hookSuffix(hook), null);
 	}
+	if (typeCarriesRef(objType)) liftedOp(objType, AttachedOp.AttachedReach, cName + hookSuffix("reach"), null);
 	const destroySym = generateHook("destroy",  typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
 	if (classType != null && !lctx.jsBackend && finalizesBeforeRelease(objType, orig, lctx)) {
