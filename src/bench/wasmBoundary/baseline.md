@@ -59,6 +59,27 @@ from work outside the host picker; every row the change does not reach is within
 
 `accept: 6/11 rows meet neon and wasmbindgen (mixed at most 10% above)`.
 
+## 2026-11-08, m1m, after the adopted Vec argument
+
+Main `0c9e750d5af` (a Vec argument crosses as a payload the wasm side adopts). A `--quiet 25` window,
+load 9.7 before and 2.4 after. Median of 5 rounds, us/op.
+
+| row | mixed | jsonly | neon | wasmbindgen | accept |
+|---|---|---|---|---|---|
+| add x1000 | 2.843 | 0.481 | 40.023 | 11.665 | ok |
+| add64 x1000 | 4.74 | 2.034 | 53.197 | 4.34 | ok |
+| strLen16 x1000 | 23.135 | 6.118 | 71.884 | 25.187 | ok |
+| echo16 x1000 | 120.906 | 0.324 | 86.674 | 149.548 | slower than neon |
+| mid x1000 | 51.802 | 0.882 | 367.201 | 326.27 | ok |
+| sumVec 1k Array | 1.48 | 3.026 | 52.33 | 1.471 | ok |
+| sumSpan 1k Float32Array | 1.026 | 2.68 | 1.036 | 1.002 | ok |
+| scaleSpan 1k Float32Array | 0.282 | 0.516 | 0.158 | 0.412 | slower than neon |
+| makeVec 1k | 2.547 | 3.283 | 0.812 | 0.922 | slower than neon, wasmbindgen |
+| callback 1k | 6.855 | 0.428 | 49.601 | 114.471 | ok |
+| primes 2M | 5732.016 | 20705.047 | 4399.302 | 5165.419 | slower than neon, wasmbindgen |
+
+`accept: 7/11 rows meet neon and wasmbindgen (mixed at most 10% above)`.
+
 Differences between the arms that are not the boundary: `makeVec` returns a JS `Array` on `mixed`
 (a `Vec<float32>` is an Array in JS) and a `Float32Array` on the Rust arms; `neon` runs native code,
 so `primes` and the in-place `scaleSpan` measure native against wasm there; wasm-bindgen's `mid`
