@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCompilerGraph, canonicalPath, outputOf, stripQuery, withInstance } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, sourceDeclarationOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
 
 export const loader = fileURLToPath(new URL("./webpackLoader.js", import.meta.url));
 const implementationFiles = ["webpack.js", "webpackLoader.js", "compilerCore.js", "sourceDeclarations.js", "package.json"].map(file => fileURLToPath(new URL(file, import.meta.url)));
@@ -46,7 +46,9 @@ export default class MetaScriptPlugin {
 		const root = resolve(options.root ?? compiler.context);
 		const entry = (Array.isArray(options.entry) ? options.entry : [options.entry]).map(file => canonicalPath(resolve(root, file)));
 		let publisher = null;
-		const outputs = options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, options.outDir);
+		const msc = options.msc ? canonicalPath(resolve(options.msc)) : null;
+		const workspace = resolve(root, options.outDir ?? "node_modules/.metascript");
+		const outputs = options.sourceDeclarations && ownedOutputPattern(options.sourceDeclarations, root, join(workspace, "webpack-"));
 		if (outputs) compiler.hooks.afterEnvironment?.tap(name, () => {
 			const native = compiler.watchFileSystem;
 			let previousWatchOptions, enrichedWatchOptions;
@@ -70,6 +72,7 @@ export default class MetaScriptPlugin {
 		let previousFailure = null;
 		let attempted = false;
 		let invalidated = true;
+		let controlInvalidated = true;
 		let previousInventory;
 		const close = () => {
 			publisher?.close(); publisher = null;
@@ -78,6 +81,7 @@ export default class MetaScriptPlugin {
 			previousFailure = null;
 			attempted = false;
 			invalidated = true;
+			controlInvalidated = true;
 			previousInventory = undefined;
 		};
 		compiler.hooks.watchClose?.tap(name, close);
@@ -86,9 +90,14 @@ export default class MetaScriptPlugin {
 			if (!file) return true;
 			const source = canonicalPath(file);
 			if (outputs?.test(source)) return false;
-			return /\.(ms|jms)$/.test(source) || previousDependencies.includes(source) || implementationFiles.includes(source) || (options.msc && source === canonicalPath(resolve(options.msc)));
+			return /\.(ms|jms)$/.test(source) || previousDependencies.includes(source) || implementationFiles.includes(source) || source === msc;
 		};
-		const invalidateSource = file => { if (relevant(file)) { invalidated = true; publisher?.invalidate(); } };
+		const invalidateSource = file => {
+			if (!relevant(file)) return;
+			invalidated = true;
+			if (!file || !/\.(ms|jms)$/.test(file)) controlInvalidated = true;
+			publisher?.invalidate();
+		};
 		compiler.hooks.invalid?.tap(name, invalidateSource);
 		compiler.hooks.thisCompilation.tap(name, (compilation, { normalModuleFactory }) => {
 			let graph = null;
@@ -97,20 +106,23 @@ export default class MetaScriptPlugin {
 			for (const file of previousDependencies) compilation.fileDependencies.add(file);
 			for (const file of implementationFiles) compilation.buildDependencies.add(file);
 			if (options.msc && (isAbsolute(options.msc) || options.msc.includes("/") || options.msc.includes("\\"))) {
-				compilation.buildDependencies.add(resolve(options.msc));
+				compilation.buildDependencies.add(msc);
+				compilation.fileDependencies.add(msc);
 			}
-			const workspace = resolve(root, options.outDir ?? "node_modules/.metascript");
 			let temporary;
 			try {
-				const watchRoots = outputs && sourceDeclarationWatchRoots(root, canonicalPath(resolve(root, options.sourceDeclarations.rootDir ?? root)), previousDependencies);
+				const watchRoots = options.sourceDeclarations && sourceDeclarationWatchRoots(root, canonicalPath(resolve(root, options.sourceDeclarations.rootDir ?? root)), previousDependencies);
 				const changes = [...(compiler.modifiedFiles ?? []), ...(compiler.removedFiles ?? [])];
 				const ambiguous = watchRoots && changes.some(file => watchRoots.includes(canonicalPath(file)));
 				const sourceChanged = changes.some(relevant);
-				const inventory = outputs && compiler.watchMode && (!attempted || ambiguous || invalidated || sourceChanged) ? sourceInventory(watchRoots, outputs) : previousInventory;
+				const inventory = options.sourceDeclarations && compiler.watchMode && (!attempted || ambiguous || invalidated || sourceChanged) ? sourceInventory(watchRoots, outputs) : previousInventory;
 				const changed = sourceChanged || inventory !== previousInventory;
-				if (options.sourceDeclarations && compiler.watchMode && attempted && !invalidated && !changed) {
+				const sourcesOnly = changes.length > 0 && changes.every(file => /\.(ms|jms)$/.test(file) || watchRoots.includes(canonicalPath(file)));
+				const compiledBytes = options.sourceDeclarations && compiler.watchMode && attempted && inventory === previousInventory && ((sourcesOnly && !controlInvalidated) || !(invalidated || changed));
+				if (compiledBytes) {
 					graph = previousGraph;
 					if (previousFailure) throw previousFailure;
+					if (invalidated) { publisher.publish(graph); invalidated = false; }
 				} else {
 					attempted = true;
 					previousInventory = inventory;
@@ -125,6 +137,7 @@ export default class MetaScriptPlugin {
 					previousGraph = graph;
 					previousFailure = null;
 					invalidated = false;
+					controlInvalidated = false;
 				}
 				previousDependencies = graph.dependencies;
 				for (const file of graph.dependencies) compilation.fileDependencies.add(file);
@@ -133,6 +146,7 @@ export default class MetaScriptPlugin {
 				failure = error;
 				previousFailure = error;
 				invalidated = false;
+				controlInvalidated = false;
 				publisher?.invalidate();
 				compilation.errors.push(error);
 			} finally {

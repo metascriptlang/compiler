@@ -1,9 +1,9 @@
 import { existsSync, unlinkSync } from "node:fs";
-import { join, resolve, dirname, relative } from "node:path";
+import { join, resolve, dirname, relative, sep } from "node:path";
 import MagicString from "magic-string";
 import { buildCompilerGraph, canonicalPath as canon, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, sourceDeclarationOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
 
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
 
@@ -78,9 +78,10 @@ export default function metascript(options = {}) {
 
 	function hotUpdate(ctx, context) {
 		const source = canon(ctx.file);
-		if (emitted?.byOutput.has(source)) return [];
-		if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, outDir).test(source)) return [];
-		if (!exactWatchFiles().includes(source) && !(options.sourceDeclarations && /\.(ms|jms)$/.test(source) && sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]).some(path => source.startsWith(`${path}/`)))) return;
+		if (!exactWatchFiles().includes(source) && !(options.sourceDeclarations && /\.(ms|jms)$/.test(source) && sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canon(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles]).some(path => source.startsWith(`${path}/`)))) {
+			if (emitted?.byOutput.has(source) || (options.sourceDeclarations && ownedOutputPattern(options.sourceDeclarations, root, resolve(outDir) + sep).test(source))) return [];
+			return;
+		}
 		const previous = emitted;
 		try {
 			emit(context);

@@ -141,7 +141,11 @@ export function sourceDeclarationWatchRoots(projectRoot, sourceRoot, dependencie
  return [...roots];
 }
 
-export function sourceDeclarationOutputPattern(options, projectRoot, workspace) {
- const paths = [resolve(projectRoot, options.outDir), resolve(projectRoot, workspace ?? "node_modules/.metascript")];
- return new RegExp(`^(?:${paths.map(path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?:[\\\\/]|$)`);
+const escapePath = path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function ownedOutputPattern(options, projectRoot, compilerOutputPrefix) {
+ const sep = "[\\\\/]", part = "[^\\\\/]*";
+ const declarations = escapePath(resolve(projectRoot, options.outDir));
+ const family = `package\\.json$|(?:.*${sep})?(?:\\.msc-${part}(?:${sep}|$)|${part}\\.d\\.(?:ms\\.ts|jms\\.ts|ts)$)`;
+ return new RegExp(`^(?!.*\\.(?:ms|jms)$)(?:${escapePath(compilerOutputPrefix)}.|${declarations}${sep}(?:${family}))`);
 }

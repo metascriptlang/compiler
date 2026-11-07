@@ -1,9 +1,11 @@
-import { dirname, isAbsolute, resolve } from "node:path";
+import { statSync } from "node:fs";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { buildCompilerGraph, canonicalPath, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, sourceDeclarationOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
 
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
+const SOURCE_WATCH_ROLLUP_VERSION = "4.67.5+metascript.2";
 
 function compilerInputs(input) {
 	if (input !== undefined && (input === null || (typeof input !== "string" && typeof input !== "object"))) {
@@ -19,6 +21,9 @@ export default function metascript(options = {}) {
 		throw new Error("MetaScript entry must contain .ms or .jms source paths");
 	}
 	const root = resolve(options.root ?? process.cwd());
+	const compiler = options.msc ? canonicalPath(resolve(options.msc)) : null;
+	const outputPattern = options.sourceDeclarations ? ownedOutputPattern(options.sourceDeclarations, root, resolve(root, options.outDir ?? "node_modules/.metascript") + sep) : null;
+	let watchCwd = process.cwd();
 	const explicitEntry = options.entry ? (Array.isArray(options.entry) ? options.entry : [options.entry]).map(file => canonicalPath(resolve(root, stripQuery(file)))) : null;
 	let publisher = null;
 	let entry = explicitEntry;
@@ -29,10 +34,21 @@ export default function metascript(options = {}) {
 	let watchFiles = new Set(entry ?? []);
 	let previousSources = new Set();
 
+	function isControl(file) {
+		return watchFiles.has(file) || file === compiler || MS_RE.test(file);
+	}
+
+	function ignoredOutput(path, stats) {
+		const file = canonicalPath(resolve(watchCwd, path));
+		if (!outputPattern?.test(file) || isControl(file)) return false;
+		try { return !(stats ?? statSync(file)).isDirectory(); }
+		catch (error) { if (error.code !== "ENOENT") throw error; return true; }
+	}
+
 	function registerWatches(context) {
 		if (options.sourceDeclarations && context.meta?.watchMode) for (const path of sourceDeclarationWatchRoots(root, publisher?.sourceRoot ?? canonicalPath(resolve(root, options.sourceDeclarations.rootDir ?? root)), [...watchFiles])) context.addWatchFile(path);
 		for (const file of watchFiles) context.addWatchFile(file);
-		if (options.msc) context.addWatchFile(canonicalPath(resolve(options.msc)));
+		if (compiler) context.addWatchFile(compiler);
 	}
 
 	function current(context) {
@@ -67,6 +83,25 @@ export default function metascript(options = {}) {
 	return {
 		name: "rollup-plugin-metascript",
 
+		options(inputOptions) {
+			const watch = inputOptions.watch ?? {};
+			const chokidar = watch.chokidar ?? {};
+			if (this.meta?.watchMode && inputOptions.watch !== false) watchCwd = resolve(chokidar.cwd ?? process.cwd());
+			if (!options.sourceDeclarations || !this.meta?.watchMode || inputOptions.watch === false) return null;
+			if (this.meta.rollupVersion !== SOURCE_WATCH_ROLLUP_VERSION) {
+				throw new Error(`MetaScript source-declaration watch requires Rollup ${SOURCE_WATCH_ROLLUP_VERSION}; pin the host Rollup dependency to vite-plugin-metascript/vendor/rollup4.tgz (received ${this.meta.rollupVersion ?? "no version"})`);
+			}
+			return {
+				...inputOptions,
+				watch: {
+					...watch,
+					chokidar: {
+						...chokidar,
+						ignored: [].concat(chokidar.ignored ?? [], ignoredOutput)
+					}
+				}
+			};
+		},
 
 		buildStart(inputOptions) {
 			if (options.sourceDeclarations && this.meta?.watchMode && attempted && !invalidated) { registerWatches(this); if (failure) throw failure; return; }
@@ -86,9 +121,9 @@ export default function metascript(options = {}) {
 		},
 
 		watchChange(id) {
-			const file = canonicalPath(stripQuery(id));
-			if (options.sourceDeclarations && sourceDeclarationOutputPattern(options.sourceDeclarations, root, options.outDir).test(file)) return;
-			if (watchFiles.has(file) || (options.msc && file === canonicalPath(resolve(options.msc))) || (options.sourceDeclarations && MS_RE.test(file))) { invalidated = true; publisher?.invalidate(); }
+			const file = canonicalPath(resolve(watchCwd, stripQuery(id)));
+			if (outputPattern?.test(file) && !isControl(file)) return;
+			if (watchFiles.has(file) || file === compiler || (options.sourceDeclarations && MS_RE.test(file))) { invalidated = true; publisher?.invalidate(); }
 		},
 
 		closeWatcher() {
