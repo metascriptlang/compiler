@@ -38,7 +38,7 @@ import { createLegacyEntry, locationResult } from "./packedCalls";
 import { packedSlotShapeOf } from "./valueCopy";
 import { createVmLayouts } from "./layout";
 import { RaiserSlotShape } from "../../raiser/bytecode";
-import { HiddenDerefData, HiddenStdConvData, ArrayAccessData, CallExprData, UnaryExprData } from "../../ast/node";
+import { HiddenDerefData, HiddenStdConvData, ArrayAccessData, CallExprData, UnaryExprData, BinaryExprData } from "../../ast/node";
 import { skipModifier } from "../../checker/types";
 import { isFrameOwnershipCall } from "./drcLower";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst, layoutOf, slotKindsOf } from "./valueCopy";
@@ -170,11 +170,26 @@ function markLegacyRoot(s: RaiserCompState, node: Node): void {
 }
 
 export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
+	const aliases: BinaryExprData[] = [];
+	collectRootsIn(s, node, aliases);
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const a of aliases) {
+			if (s.legacyRoots.has(a.left.resolvedSym!) && !s.legacyRoots.has(a.right.resolvedSym!)) {
+				s.legacyRoots.add(a.right.resolvedSym!);
+				grew = true;
+			}
+		}
+	}
+}
+
+function collectRootsIn(s: RaiserCompState, node: Node, aliases: BinaryExprData[]): void {
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		if (d.arguments.length > 0 && locationResult(s, node.nodeType, [])) markLegacyRoot(s, d.arguments[0]);
 		if (isFrameOwnershipCall(d)) {
-			for (const arg of d.arguments) collectLegacyRoots(s, arg.kind == NodeKind.HiddenAddr ? (arg.data as HiddenDerefData).expr : arg);
+			for (const arg of d.arguments) collectRootsIn(s, arg.kind == NodeKind.HiddenAddr ? (arg.data as HiddenDerefData).expr : arg, aliases);
 			return;
 		}
 	}
@@ -182,7 +197,11 @@ export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
 	if ((node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) && skipModifier(node.nodeType)?.kind == TypeKind.Span) markLegacyRoot(s, (node.data as HiddenStdConvData).convExpr);
 	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&") markLegacyRoot(s, (node.data as UnaryExprData).operand);
 	if (node.kind == NodeKind.ArrayAccess && (node.data as ArrayAccessData).index.kind != NodeKind.NumberLiteral) markLegacyRoot(s, (node.data as ArrayAccessData).array);
-	forEachChild(node, (child: Node): void => collectLegacyRoots(s, child));
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "=" && d.left.kind == NodeKind.Identifier && d.right.kind == NodeKind.Identifier && d.left.resolvedSym != null && d.right.resolvedSym != null) aliases.push(d);
+	}
+	forEachChild(node, (child: Node): void => collectRootsIn(s, child, aliases));
 }
 
 function planPackedRoutine(funcMap: RaiserFuncMap, idx: int32, params: Symbol[], body: Node, routine: Symbol | null, entryIdx: int32): boolean {
