@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isUnownedSlot, isReadonlyUnownedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant, isReadonlyView, isSendableFunction, readonlyCountedElement } from "../checker/types";
+import { isUnownedSlot, isReadonlyUnownedSlot, isOwnedSlot, isPlainFunctionPointer, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createClosureType, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise, isMaybeType, unwrapMaybeType, isIteratorResult, isStructType, setRepr, instantiateGenericBody, genericParamsOf, createUnionInOrder, spelled, markDuVariant, isReadonlyView, isSendableFunction, readonlyCountedElement } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { isSlotUnion, storesUnionTag } from "../checker/fit";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
@@ -231,6 +231,10 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 	}
 	if (isUnownedSlot(elem)) {
 		return makeRcInfo(RcKind.Named, "", "msArrayUnownedRefDestroy", "msArrayUnownedRefCopy", "msArrayRefWasMoved", "msArrayUnownedRefSink", true);
+	}
+	if (isOwnedSlot(elem) && !ctx.raiserBackend) {
+		const family = isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache) ? "msArrayOwnedAcyclicRef" : "msArrayOwnedRef";
+		return makeRcInfo(RcKind.Named, "", family + "Destroy", family + "Copy", "msArrayRefWasMoved", family + "Sink", true);
 	}
 	if (isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache)) {
 		return makeRcInfo(RcKind.Named, "", "msArrayAcyclicRefDestroy", "msArrayAcyclicRefCopy", "msArrayRefWasMoved", "msArrayAcyclicRefSink", true);
