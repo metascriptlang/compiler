@@ -45,6 +45,7 @@ import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst, layoutOf, s
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { lowerStaticFieldReads } from "../../transform/lowering/staticLower";
+import { lowerLentFirst, lentFirstLocation } from "./lentFirst";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { CallInlining } from "../../transform/lowering/iterInline";
 import { swapLiftedOps, LiftedOpsState } from "../../transform/lowering/destructorLifting";
@@ -90,7 +91,7 @@ export function analyzeForRaiser(program: Node, ctx: CheckerContext, tables: Wri
 	const outer = enterCompilerFuncs(ctx.compilerFuncs, ctx.table.identCache);
 	try {
 		ctx.gcMode = GcMode.Drc;
-		return lowerStaticFieldReads(analyzeProgram(program, ctx, tables, true));
+		return lowerLentFirst(lowerStaticFieldReads(analyzeProgram(program, ctx, tables, true)));
 	} finally {
 		leaveCompilerFuncs(outer);
 	}
@@ -250,7 +251,9 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 	for (let i = 0; i < paramSyms.length; i += 1) {
 		const param = paramSyms[i];
 		const shape = packed != null ? packed.shape.params[i] : null;
-		declareLocal(s, param, shape != null && shape.block ? allocPackedBlock(s, shape) : allocFor(s, param.symbolType), false, shape);
+		if (i == 0 && routine != null && lentFirstLocation(s, routine.symbolType)) s.lentParam = param;
+		const reg = shape != null && shape.block ? allocPackedBlock(s, shape) : param == s.lentParam ? allocDyn(s) : allocFor(s, param.symbolType);
+		declareLocal(s, param, reg, false, shape);
 	}
 
 	const hostName = routine != null ? runtimeHostName(routine) : "";

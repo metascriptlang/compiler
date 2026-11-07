@@ -136,6 +136,7 @@ export interface RaiserCompState {
 	legacyRoots: HashSet<Symbol>;
 	resultType: Type | null;
 	resultShape: RaiserSlotShape | null;
+	lentParam: Symbol | null;
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -175,7 +176,7 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	return { code, constants, nextReg: 0, regClasses: [], layouts: createVmLayouts(), legacyRoots: new HashSet<Symbol>(), resultType: null, resultShape: null, locals, loopStack,
+	return { code, constants, nextReg: 0, regClasses: [], layouts: createVmLayouts(), legacyRoots: new HashSet<Symbol>(), resultType: null, resultShape: null, lentParam: null, locals, loopStack,
 		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, packedMoveAt: -1, packedMoveSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>() };
 }
 

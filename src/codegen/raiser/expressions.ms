@@ -44,6 +44,7 @@ import { nullAccessHead } from "../../transform/maybeCarrier";
 import { readsMemberInPlace } from "../../analyzer/inject";
 import { isViewCall } from "../../checker/effects";
 import { packedSlotShapeOf } from "./valueCopy";
+import { lentFirstLocation } from "./lentFirst";
 import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
 import { vmLayoutOf } from "./layout";
 import { MemKind } from "../../raiser/layout";
@@ -908,7 +909,7 @@ function compileTypedExpr(s: RaiserCompState, node: Node): int32 {
 	if (packedSlotShapeOf(s.layouts, node.nodeType) != null &&
 		(node.kind == NodeKind.ObjectLiteral || node.kind == NodeKind.ConditionalExpr)) return emitPackedToLegacy(s, s.layouts, compilePackedExpr(s, node, node.nodeType!)).reg;
 	const reg = compileExprRaw(s, node);
-	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
+	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node) || node.resolvedSym != null && node.resolvedSym == s.lentParam) return reg;
 	const cls = regClassOf(s, node.nodeType);
 	if (cls == RaiserRegClass.Dyn) return reg;
 	const plain = allocReg(s, cls);
@@ -1279,7 +1280,7 @@ function reservedCell(s: RaiserCompState, hidden: Node): int32 {
 function reserveCells(s: RaiserCompState, args: Node[]): int32[] {
 	const regs: int32[] = [];
 	for (const a of args) {
-		if (a.kind != NodeKind.HiddenAddr) continue;
+		if (a.kind != NodeKind.HiddenAddr || isStatementBorrow(a)) continue;
 		const inner = (a.data as HiddenDerefData).expr;
 		if (!heldByLocation(s, inner.nodeType) || isPlace(s, inner) || (inRefFile(regClassOf(s, inner.nodeType)) && !(inner.nodeType != null && raiserStructSlotUnion(unwrapRef(inner.nodeType))))) continue;
 		const reg = allocRef(s);
@@ -1302,7 +1303,7 @@ function releaseCells(s: RaiserCompState, regs: int32[]): void {
 function compileCellAddress(s: RaiserCompState, hidden: Node, value: Node): int32 {
 	const held = reservedCell(s, hidden);
 	const valueClass = regClassOf(s, value.nodeType);
-	if (held < 0 && !inRefFile(valueClass)) return compileFrameTempAddress(s, value, valueClass);
+	if (held < 0 && (!inRefFile(valueClass) || isStatementBorrow(hidden))) return compileFrameTempAddress(s, value, valueClass);
 	const cell = allocBlock(s, [RaiserRegClass.Ref, regClassOf(s, value.nodeType)]);
 	const slot = cell + 1;
 	const reg = compileExpr(s, value);
@@ -1314,6 +1315,10 @@ function compileCellAddress(s: RaiserCompState, hidden: Node, value: Node): int3
 	const dest = allocDyn(s);
 	emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, cell, zero));
 	return dest;
+}
+
+function isStatementBorrow(hidden: Node): boolean {
+	return skipModifier(hidden.nodeType)?.kind == TypeKind.Borrow;
 }
 
 function compileFrameTempAddress(s: RaiserCompState, value: Node, valueClass: RaiserRegClass): int32 {
@@ -2143,11 +2148,11 @@ function hostValues(args: Node[]): Node[] {
 	return values;
 }
 
-function callBlock(s: RaiserCompState, resultType: Type | null, args: Node[], params: Type[] | null): int32 {
+function callBlock(s: RaiserCompState, resultType: Type | null, args: Node[], params: Type[] | null, fnType: Type | null = null): int32 {
 	const classes: RaiserRegClass[] = [regClassOf(s, resultType)];
 	for (let i = 0; i < args.length; i = i + 1) {
 		const declared = params != null && i < params.length ? params[i] : null;
-		classes.push(regClassOf(s, declared != null ? declared : args[i].nodeType));
+		classes.push(i == 0 && lentFirstLocation(s, fnType) ? RaiserRegClass.Dyn : regClassOf(s, declared != null ? declared : args[i].nodeType));
 	}
 	return allocBlock(s, classes);
 }
@@ -2821,7 +2826,7 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 			}
 			const cells = reserveCells(s, runtimeArgs);
 			const closures = reserveClosureArgs(s, node, runtimeArgs, -1, declaredParams != null ? runtimeParams : null);
-			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null);
+			const dest = callBlock(s, node.nodeType, runtimeArgs, declaredParams != null ? runtimeParams : null, calleeSym != null ? placedInstanceOf(placedInstances(), calleeSym).symbolType : null);
 			for (let i = 0; i < runtimeArgs.length; i = i + 1) compileClosureArg(s, runtimeArgs[i], dest + 1 + i, closures.held[i]);
 			const pastBase = runtimeArgs.length > 0 && !d.callee.flags.has(NodeFlag.NoDispatch) ? emitOverrideCalls(s, node, dest, dispatchOverrides(s, calleeSym), runtimeArgs.length) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, runtimeArgs.length));
@@ -2963,7 +2968,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
 		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) continue;
 		const declared = declaredParams != null && i < declaredParams.length ? declaredParams[i] : null;
-		closureClasses.push(regClassOf(s, declared != null ? declared : d.arguments[i].nodeType));
+		closureClasses.push(i == 0 && lentFirstLocation(s, calleeType) ? RaiserRegClass.Dyn : regClassOf(s, declared != null ? declared : d.arguments[i].nodeType));
 	}
 	const plain = calleeType != null && isPlainFunctionPointer(calleeType);
 	if (!plain) closureClasses.push(RaiserRegClass.Ref);

@@ -222,8 +222,6 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			emitInst(s, raiserABC(RaiserOpcode.Move, local, reg, 0));
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), local, isStr);
-		// A borrow a call returns reads the callee's first parameter, the slot after the call's result, past this statement.
-		if (d.initializer.kind == NodeKind.CallExpr && skipModifier(d.initializer.nodeType)?.kind == TypeKind.Borrow) s.locals.items[s.locals.items.length - 1].heldThrough = Math.max(local, reg + 1);
 		if (isMoveTempFromPlace(node, d.initializer)) {
 			s.moveTempAt = codeLen(s);
 			s.moveTempReg = local;
