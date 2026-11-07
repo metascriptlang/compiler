@@ -979,3 +979,52 @@ void msClosureArrayWasMoved(msClosureArray* arr) {
 	arr->len = 0;
 	arr->p = NULL;
 }
+
+/* ===== Owned<T> elements: an element leaving the array leaves its owner ===== */
+
+static void msOwnedRefArrayRelease(msRefArray* arr, int64_t from, int64_t to) {
+	if (arr->p == NULL) return;
+	if (from < 0) from = 0;
+	if (to > arr->len) to = arr->len;
+	for (int64_t i = from; i < to; i++) msOwnedRelease(arr->p->data[i]);
+}
+
+static void msOwnedRefArrayReleaseSpliced(msRefArray* arr, int64_t start, int64_t deleteCount) {
+	start = msSpliceStart(start, arr->len);
+	if (deleteCount > 0) msOwnedRefArrayRelease(arr, start, deleteCount > arr->len - start ? arr->len : start + deleteCount);
+}
+
+void msOwnedRefArrayDestroy(msRefArray* arr) {
+	msOwnedRefArrayRelease(arr, 0, arr->len);
+	msRefArrayDestroy(arr);
+}
+
+void msOwnedAcyclicRefArrayDestroy(msRefArray* arr) {
+	msOwnedRefArrayRelease(arr, 0, arr->len);
+	msAcyclicRefArrayDestroy(arr);
+}
+
+void msOwnedRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	msOwnedRefArrayRelease(arr, newLen, arr->len);
+	msRefArraySetLen(arr, newLen);
+}
+
+void msOwnedAcyclicRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	msOwnedRefArrayRelease(arr, newLen, arr->len);
+	msAcyclicRefArraySetLen(arr, newLen);
+}
+
+void msOwnedRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
+	msOwnedRefArrayReleaseSpliced(arr, start, deleteCount);
+	msRefArraySplice(arr, start, deleteCount);
+}
+
+void msOwnedRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	msOwnedRefArrayReleaseSpliced(arr, start, deleteCount);
+	msRefArraySplice3(arr, start, deleteCount, item);
+}
+
+void msOwnedAcyclicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	msOwnedRefArrayReleaseSpliced(arr, start, deleteCount);
+	msAcyclicRefArraySplice3(arr, start, deleteCount, item);
+}

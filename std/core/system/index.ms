@@ -413,6 +413,9 @@ extern function msOwnedTake(sink p: Ptr<void>): Ptr<void>;
 extern function msOwnedRelease(p: Ptr<void>): void;
 
 @compilerFunc
+extern function msOwnedAdopt(child: Ptr<void>, holder: Ptr<void>): void;
+
+@compilerFunc
 extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
@@ -569,6 +572,12 @@ extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
+extern function msArrayOwnedRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayOwnedAcyclicRefDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
 extern function msArrayRoRefDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
@@ -626,6 +635,12 @@ extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
+extern function msArrayOwnedRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayOwnedAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
 extern function msArrayUnownedRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 @compilerFunc
@@ -642,6 +657,12 @@ extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayOwnedRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+@compilerFunc
+extern function msArrayOwnedAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 @compilerFunc
 extern function msArrayUnownedRefSink(d: Ptr<void>, v: Ptr<void>): void;
@@ -686,6 +707,12 @@ extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
 extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
+extern function msOwnedRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msOwnedAcyclicRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
 extern function msUnownedRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
@@ -707,6 +734,12 @@ extern function msAtomicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 extern function msAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 @compilerFunc
+extern function msOwnedRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+@compilerFunc
+extern function msOwnedAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+@compilerFunc
 extern function msRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
 
 @compilerFunc
@@ -720,6 +753,15 @@ extern function msAtomicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCoun
 
 @compilerFunc
 extern function msAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+
+@compilerFunc
+extern function msOwnedRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
+
+@compilerFunc
+extern function msOwnedRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+
+@compilerFunc
+extern function msOwnedAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
 @compilerFunc
 extern function msSliceLen(start: int64, end: int64, len: int64): int64;
