@@ -152,6 +152,30 @@ export function hashToBase36(s: string): string {
 // Tests use internal names via the hash() overloads where possible.
 // Named calls (djb2, splitmix32) used where overload resolution is ambiguous.
 
+// ===== CRC-32 (IEEE 802.3, reflected polynomial 0xEDB88320) =====
+
+function crc32Table(): uint32[] {
+	const table: uint32[] = [];
+	for (let n: uint32 = 0; n < 256; n += 1) {
+		let c: uint32 = n;
+		for (let k = 0; k < 8; k += 1) c = (c & 1) != 0 ? (0xEDB88320 as uint32) ^ (c >>> 1) : c >>> 1;
+		table.push(c);
+	}
+	return table;
+}
+
+const CRC32_TABLE: Readonly<uint32[]> = crc32Table();
+
+export function crc32Update(previous: uint32, bytes: Readonly<Span<uint8>>): uint32 {
+	let c: uint32 = previous ^ (0xFFFFFFFF as uint32);
+	for (let i = 0; i < bytes.length; i += 1) c = CRC32_TABLE[(c ^ (bytes[i] as uint32)) & 0xFF] ^ (c >>> 8);
+	return c ^ (0xFFFFFFFF as uint32);
+}
+
+export function crc32<D extends string | Readonly<Span<uint8>>>(data: D): uint32 {
+	return crc32Update(0, typeof data == "string" ? data.asBytes() : data);
+}
+
 test "hash string deterministic" {
 	assert djb2("hello") == djb2("hello");
 	assert djb2("a") != djb2("b");
@@ -239,4 +263,16 @@ test "hashToBase36 deterministic" {
 
 test "hashValueToBase36 zero" {
 	assert hashValueToBase36(0) == "0";
+}
+
+test "crc32 of the check string is the CRC-32/ISO-HDLC check value" {
+	assert crc32("123456789") == (0xCBF43926 as uint32);
+}
+
+test "crc32 of empty input is zero" {
+	assert crc32("") == 0;
+}
+
+test "crc32Update over two halves equals crc32 of the whole" {
+	assert crc32Update(crc32("12345"), "6789".asBytes()) == crc32("123456789");
 }
