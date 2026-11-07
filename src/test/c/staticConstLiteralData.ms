@@ -113,3 +113,32 @@ test "a mutable library const array is still destroyed at exit" {
 	const c = compileProjectToC([{ entryPath: "src/rows.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: main }], "src/main.ms");
 	assert c.contains("bakedExit");
 }
+
+test "a read-only module const object bakes its array field, a struct const it names and the string consts it names" {
+	const c = compileToC(`
+struct Lim { words: int32; m: uint32[2]; }
+interface Shape { name: string; tag: uint8[]; lim: Lim; }
+const NAME = "p256";
+const LIM: Lim = { words: 2, m: [5, 6] };
+const shape: Readonly<Shape> = { name: NAME, tag: [7, 8], lim: LIM };
+const names: Readonly<string[]> = [NAME, "x"];
+console.log(shape.name, shape.tag[1], shape.lim.m[1], names[0]);
+`);
+	assert c.ok;
+	assert c.value.contains("Oms_tag_konst_.b,"), "the array field is not a static cell";
+	assert c.value.contains("MS_STRLIT_FLAG | 2, { 7, 8 }");
+	assert c.value.contains(".lim = { .words = 2, .m = { 5U, 6U } }"), "the named struct const is not inlined as data";
+	assert !c.value.contains("msArrayPayloadNew(");
+	assert !c.value.contains("msStringArrayFromArr(");
+}
+
+test "a mutable module const object keeps its array field built by init code" {
+	const c = compileToC(`
+interface Shape { name: string; tag: uint8[]; }
+const shape: Shape = { name: "a", tag: [7, 8] };
+shape.tag.push(9);
+console.log(shape.tag.length);
+`);
+	assert c.ok;
+	assert c.value.contains("msArrayPayloadNew(");
+}
