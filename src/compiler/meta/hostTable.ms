@@ -80,7 +80,7 @@ import { fromCodePoint } from "std/core/string";
 import { asciiLower, asciiUpper, isSpaceByte, repeat, reverse, equalsIgnoreCase } from "std/core/string/shared";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join, resolve } from "std/fs/path";
-import { registerCompileTimeRead } from "../cache";
+import { registerCompileTimeRead, registerCompileTimeEnv, registerCompileTimeProcess } from "../cache";
 import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 import "std/compress/zip";
@@ -301,6 +301,7 @@ function _stdFsChangeStamp(args: RaiserValue[]): RaiserValue {
 }
 
 function _stdProcessExecFileResult(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	const r = execFileResult(unboxString(args[0]), args.length > 1 ? _unboxStringArrayArg(args[1]) : [], args.length > 2 ? unboxString(args[2]) : "");
 	return _toVm(hostObject(
 		["started", "pipeOk", "exitCode", "signal", "output", "errorOutput", "startErrno"],
@@ -455,7 +456,9 @@ function _bridgeMsProcessExecPath(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessGetEnv(args: RaiserValue[]): RaiserValue {
-	return boxString(env.get(unboxString(args[0])));
+	const name = unboxString(args[0]);
+	registerCompileTimeEnv(name);
+	return boxString(env.get(name));
 }
 
 // Spawn-result state machine. The MS wrapper calls msProcessSpawnSync(cmd)
@@ -493,6 +496,7 @@ function _setSpawnStateErr(
 }
 
 function _bridgeMsProcessSpawnSync(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	const r = exec(unboxString(args[0]));
 	if (r.ok) {
 		_resetSpawnStateOk(r.value);
@@ -579,11 +583,13 @@ function _unboxStringArrayArg(v: RaiserValue): string[] {
 }
 
 function _bridgeMsProcessExecFile(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	const r = execFile(unboxString(args[0]), _unboxStringArrayArg(args[1]));
 	return boxInt(r);
 }
 
 function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	const r = execFileResult(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]));
 	_spawnStdout = r.output;
 	_spawnStderr = r.errorOutput;
@@ -648,6 +654,7 @@ function _trackHostChild(handle: int64): RaiserValue {
 }
 
 function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	return _trackHostChild(msProcChildSpawn(
 		unboxString(args[0]), _unboxStringArrayArg(args[1]),
 		unboxString(args[2]), unboxInt(args[3]) as int32,
@@ -655,6 +662,7 @@ function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcChildSpawnEnv(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
 	return _trackHostChild(msProcChildSpawnEnv(
 		unboxString(args[0]), _unboxStringArrayArg(args[1]),
 		unboxString(args[2]), unboxInt(args[3]) as int32,

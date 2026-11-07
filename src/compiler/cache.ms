@@ -216,6 +216,8 @@ let _projectInputKey = "";
 let _projectInputHashes: string[] = [];
 let _queryRecordDeps: string[] = [];
 let _queryRecordDepSet: HashSet<string> = new HashSet<string>();
+let _compileTimeEnvReads: HashSet<string> = new HashSet<string>();
+let _compileTimeProcessRan = false;
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -231,6 +233,8 @@ export function initCache(mode: number, forceRebuild: boolean, trimRoots: string
 	_nativeProjectDepSet = new HashSet<string>();
 	_queryRecordDeps = [];
 	_queryRecordDepSet = new HashSet<string>();
+	_compileTimeEnvReads = new HashSet<string>();
+	_compileTimeProcessRan = false;
 	_dirNames = new HashMap<string, HashSet<string>>();
 	_presenceByRecord = new HashMap<string, string>();
 	_subdirs = new HashMap<string, boolean>();
@@ -455,6 +459,22 @@ export function registerNativeDependencies(srcPath: string, compileCmd: string):
 export function registerCompileTimeRead(path: string): void {
 	registerNativeProjectDep(path);
 	recordCompileTimeRead(path);
+}
+
+/** A variable read at compile time is an input by its value: a later build with another value is not up to date. */
+export function registerCompileTimeEnv(name: string): void {
+	_compileTimeEnvReads.add(name);
+}
+
+/** A process run at compile time has inputs no record can name, so the build that ran it records nothing and the next build runs it again. */
+export function registerCompileTimeProcess(): void {
+	_compileTimeProcessRan = true;
+}
+
+const ENV_ENTRY = "$env:";
+
+function envEntry(name: string): string {
+	return `${ENV_ENTRY}${name}=${hashContent(env.get(name))}`;
 }
 
 function registerNativeProjectDep(path: string): void {
@@ -1654,6 +1674,7 @@ function readProjectRecord(cacheFile: string, outputFile: string, command: strin
 
 function storedDepCurrent(entry: string): boolean {
 	const path = storedDepPath(entry);
+	if (path.startsWith(ENV_ENTRY)) return entry == envEntry(path.slice(ENV_ENTRY.length, path.length));
 	if (path.startsWith(QUERY_ENTRY)) {
 		const presence = queryPresence(path.slice(QUERY_ENTRY.length, path.length));
 		return presenceTrusted(presence) && entry == `${path}=${presence}`;
@@ -1734,6 +1755,7 @@ export function writeProjectCache(
 	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
 	const inputs = objectListKey(depPaths);
 	const record = projectCacheFile(outputFile, command);
+	if (_compileTimeProcessRan) return dropStaleRecord(record);
 	const seen = new HashSet<string>();
 	let dependencies = "";
 	for (let i = 0; i < depPaths.length; i++) {
@@ -1756,6 +1778,7 @@ export function writeProjectCache(
 		if (!presenceTrusted(presence)) return dropStaleRecord(record);
 		dependencies = dependencies + `${PRE_DEP}${QUERY_ENTRY}${depFile}=${presence}\n`;
 	}
+	for (const name of _compileTimeEnvReads) dependencies = dependencies + `${PRE_DEP}${envEntry(name)}\n`;
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${join(cwd(), outputFile)}\n`;
 	content = content + `${PRE_CMDLINE}${command}\n`;

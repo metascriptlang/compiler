@@ -1261,6 +1261,29 @@ function runComptimeCache(): void {
 	put(`${host}/pkg/src/greeting.txt`, "yo");
 	record("macro read beside its expansion site after an edit", "yo:self", builtValue(`${host}/app`, build(`${host}/app`, "expansion-change")));
 
+	const proc = `${root}/comptime-process`;
+	ensureDir(proc);
+	put(`${proc}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${proc}/main.ms`, "import { exec, platform } from \"std/process\";\n\nconst RAN: string = @comptime { const r = exec(platform == \"win32\" ? \"type ran.txt\" : \"cat ran.txt\"); if (r.ok) return r.value.trim(); return \"failed\"; };\nconsole.log(RAN);\n");
+	put(`${proc}/ran.txt`, "a");
+	need(build(proc, "process-baseline") == 0, "compile-time process baseline");
+	need(value(proc) == "a", "compile-time process baseline value");
+	put(`${proc}/ran.txt`, "b");
+	record("compile-time process output after the file it reads changed", "b", builtValue(proc, build(proc, "process-change")));
+
+	const vars = `${root}/comptime-env`;
+	ensureDir(vars);
+	put(`${vars}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${vars}/main.ms`, "import { env } from \"std/process\";\n\nconst VAR: string = @comptime { return env.get(\"MSC_BOUNDARY_PROBE\"); };\nconsole.log(VAR);\n");
+	need(env.set("MSC_BOUNDARY_PROBE", "x"), "set MSC_BOUNDARY_PROBE");
+	record("compile-time env read", "x", builtValue(vars, build(vars, "env-first")));
+	const builtStamp = changeStamp(`${vars}/probe`);
+	need(build(vars, "env-unchanged") == 0, "compile-time env unchanged rebuild");
+	record("compile-time env read with the value unchanged keeps the binary", builtStamp, changeStamp(`${vars}/probe`));
+	need(env.set("MSC_BOUNDARY_PROBE", "y"), "reset MSC_BOUNDARY_PROBE");
+	record("compile-time env read after the variable changed", "y", builtValue(vars, build(vars, "env-change")));
+	need(env.delete("MSC_BOUNDARY_PROBE"), "unset MSC_BOUNDARY_PROBE");
+
 	const branch = `${root}/define-branch`;
 	ensureDir(branch);
 	put(`${branch}/build.ms`, "const config = {};\nexport default config;\n");
