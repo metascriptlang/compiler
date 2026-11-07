@@ -7,6 +7,7 @@ import { isRoutineNode } from "../../ast/shape";
 import { isAssignOp } from "../../ast/operators";
 import { forEachChild } from "../../ast/visitor";
 import { peelTransparentInstance } from "../../checker/types";
+import { declaresUserHook } from "../../checker/instantiate";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext, freshTemp, newLoweredSym } from "../context";
 import { makeVarDecl, makeIdentResolved, makeBinary, makeAssign, makeArrayAccess, makeMember, makeExprStmt, makeIf, makeWhile, makeBlock, makeHiddenDeref, makeNumber, isRuntimeProcCall } from "../util";
@@ -51,7 +52,29 @@ function freshEmptyArray(s: Node): Symbol | null {
 	const d = s.data as VariableDeclData;
 	if (d.declKind == DeclKind.Var || d.initializer == null || d.initializer.kind != NodeKind.ArrayLiteral) return null;
 	if ((d.initializer.data as ArrayLiteralData).elements.length != 0) return null;
-	return arrayType(s.resolvedSym.symbolType) != null ? s.resolvedSym : null;
+	const t = arrayType(s.resolvedSym.symbolType);
+	return t != null && zeroSlotRunsNoUserHook(t.typeReturn, 0) ? s.resolvedSym : null;
+}
+
+function zeroSlotRunsNoUserHook(t: Type | null, depth: int32): boolean {
+	if (t == null) return true;
+	if (depth > 64) return false;
+	const p = peelTransparentInstance(t);
+	return match (p.kind) {
+		TypeKind.Struct | TypeKind.Union | TypeKind.GenericInstance => !declaresUserHook(p) && allRunNoUserHook(p.typeChildren, depth)
+			&& (p.kind != TypeKind.GenericInstance || zeroSlotRunsNoUserHook(p.typeReturn, depth + 1)),
+		TypeKind.Tuple => allRunNoUserHook(p.typeChildren, depth),
+		TypeKind.SizedArray | TypeKind.Distinct | TypeKind.Alias => zeroSlotRunsNoUserHook(p.typeReturn, depth + 1),
+		_ => true,
+	};
+}
+
+function allRunNoUserHook(ts: Type[] | null, depth: int32): boolean {
+	if (ts == null) return true;
+	for (const c of ts) {
+		if (!zeroSlotRunsNoUserHook(c, depth + 1)) return false;
+	}
+	return true;
 }
 
 // An array local is a counted cell read through a deref.
