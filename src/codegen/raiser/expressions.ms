@@ -664,7 +664,22 @@ function packedPlaceOf(s: RaiserCompState, node: Node): RaiserFramePlace | null 
 function packedReadOwner(s: RaiserCompState, object: Node, property: string): RaiserFramePlace | null {
 	const body = object.nodeType != null ? bodyOf(object.nodeType) : null;
 	if (body == null || !(body.kind == TypeKind.Struct && body.typeNames.includes(property) || property == "length" && (body.kind == TypeKind.SizedArray || body.kind == TypeKind.Tuple))) return null;
+	const viewed = viewedRecord(object, property);
+	if (viewed != null) return packedReadOwner(s, viewed, property);
 	return packedPlaceOf(s, object);
+}
+
+function viewedRecord(object: Node, property: string): Node | null {
+	if (object.kind != NodeKind.TypeAssertion || object.flags.has(NodeFlag.ObjCheck) || object.nodeType == null) return null;
+	const inner = (object.data as TypeAssertionData).asExpr;
+	if (inner.nodeType == null || typeKey(inner.nodeType) == typeKey(object.nodeType)) return null;
+	if (typeKey(peelDistinct(inner.nodeType)) == typeKey(peelDistinct(object.nodeType))) return null;
+	const view = bodyOf(object.nodeType);
+	const source = bodyOf(inner.nodeType);
+	if (source.kind != TypeKind.Struct) return null;
+	const from = source.typeNames.indexOf(property);
+	const to = view.typeNames.indexOf(property);
+	return from >= 0 && to >= 0 && typeKey(source.typeChildren[from]) == typeKey(view.typeChildren[to]) ? inner : null;
 }
 
 function checkPackedPresent(s: RaiserCompState, place: RaiserFramePlace): void {
