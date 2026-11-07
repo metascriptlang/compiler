@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, ExportDeclData, DecoratedDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, MethodDeclData, ExportDeclData, DecoratedDeclData, CallExprData, makeLoc, BuiltinKind, TypeKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { parseAsBuildOf } from "../../parser/context";
@@ -45,6 +45,7 @@ import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy, observeComptimeRuns } from "../../compiler/meta/hostPolicy";
 import { recordBodyRead } from "../../checker/bodyReads";
+import { unwrapDecl } from "../../checker/visibility";
 
 // --- Full Pipeline API ---
 
@@ -272,10 +273,20 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 		}
 	}
 	for (const m of extensionsOf(mc.extensionRegistry)) {
-		if (m.sym == null || m.sym == skip || fromPrelude.has(m.sym) || isStdTierSym(m.sym)) continue;
+		if (m.sym == null || m.sym == skip) continue;
+		if ((fromPrelude.has(m.sym) || isStdTierSym(m.sym)) && !engineLacksTierOf(m)) continue;
 		out.push(m);
 	}
 	return out;
+}
+
+/** A static method of a build-tier class whose module the engine prelude does not hold: it compiles with its class (`declaringClassOf`), so a block sees it as the build does. */
+function engineLacksTierOf(m: ExtensionMethod): boolean {
+	const decl = unwrapDecl(m.sym!.declNode);
+	if (!m.isStatic || decl == null || decl.kind != NodeKind.MethodDecl || !isStdTierSym(m.sym!)) return false;
+	const stem = m.sym!.modulePath.slice(0, m.sym!.modulePath.byteLength - 4);
+	const scopes = raiserPreludeCtx().preludeModuleScopes;
+	return !scopes.has(stem + ".rms") && !scopes.has(stem + ".ms");
 }
 
 let _vmPreludeSyms: HashSet<Symbol> | null = null;
@@ -805,15 +816,52 @@ function sourceDeclOf(sym: Symbol): Node | null {
 	return null;
 }
 
-// A method compiles with its class, which binds its `this` and its siblings; the class is its
-// receiver, the first parameter of the lifted routine.
-function methodOwnerClass(sym: Symbol): Symbol | null {
-	if (sym.declNode == null || sym.declNode.kind != NodeKind.MethodDecl) return null;
-	const ft = sym.symbolType;
-	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length == 0) return null;
-	const recv = ft.typeChildren[0];
-	const body = recv.kind == TypeKind.Ref && recv.typeReturn != null ? recv.typeReturn : recv;
-	return body.sym != null && body.sym.symbolKind == SymbolKind.Class ? body.sym : null;
+/** The class whose body declares the method `sym`: a method compiles with its class, as `new K().m()` already does, never as a routine of its own. */
+function declaringClassOf(sym: Symbol): Symbol | null {
+	const decl = unwrapDecl(sym.declNode);
+	if (decl == null || decl.kind != NodeKind.MethodDecl) return null;
+	const candidates: Symbol[] = [];
+	for (const held of raiserPreludeCtx().preludeModuleScopes.get(sym.modulePath) ?? []) candidates.push(held);
+	for (const named of moduleScopeNamed(seedCtxForSym(sym).table)) candidates.push(named.sym);
+	for (const candidate of candidates) {
+		const cls = unwrapDecl(candidate.declNode);
+		if (candidate.symbolKind != SymbolKind.Class || cls == null || cls.kind != NodeKind.ClassDecl) continue;
+		for (const member of (cls.data as ClassDeclData).classBody) {
+			if (member == decl) return candidate;
+		}
+	}
+	return null;
+}
+
+/** A class checked again from a clone compiles its methods under the clone's symbols; each method symbol of the build reaches the entry of the same method, the n-th of its name. */
+function indexMembersAsRechecked(original: Node, clone: Node): void {
+	const built = unwrapDecl(original);
+	const rechecked = unwrapDecl(clone);
+	if (built == null || rechecked == null || built.kind != NodeKind.ClassDecl || rechecked.kind != NodeKind.ClassDecl) return;
+	const twins = methodsByName(rechecked);
+	const seen = new HashMap<string, int32>();
+	for (const member of (built.data as ClassDeclData).classBody) {
+		if (member.kind != NodeKind.MethodDecl || member.resolvedSym == null) continue;
+		const name = (member.data as MethodDeclData).methodName;
+		const nth = seen.get(name) ?? 0;
+		seen.set(name, nth + 1);
+		const named = twins.get(name);
+		if (named == null || nth >= named.length) continue;
+		const idx = _engine.funcMap.symbolIndices.get(named[nth]);
+		if (idx != null) _engine.funcMap.symbolIndices.set(member.resolvedSym!, idx);
+	}
+}
+
+function methodsByName(cls: Node): HashMap<string, Symbol[]> {
+	const out = new HashMap<string, Symbol[]>();
+	for (const member of (cls.data as ClassDeclData).classBody) {
+		if (member.kind != NodeKind.MethodDecl || member.resolvedSym == null) continue;
+		const name = (member.data as MethodDeclData).methodName;
+		const list = out.get(name) ?? [];
+		list.push(member.resolvedSym!);
+		out.set(name, list);
+	}
+	return out;
 }
 
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
@@ -824,8 +872,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (tierSym != null) return ensureCompiledIntoEngine(tierSym);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
-	const ownerClass = methodOwnerClass(sym);
-	if (ownerClass != null && ensureCompiledIntoEngine(ownerClass) >= 0) {
+	const declaringClass = isClass ? null : declaringClassOf(sym);
+	if (declaringClass != null && ensureCompiledIntoEngine(declaringClass) >= 0) {
 		const withClass = _engine.funcMap.symbolIndices.get(sym);
 		if (withClass != null) return withClass;
 	}
@@ -890,6 +938,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	_engineRecheckCount += 1;
 	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym.modulePath, sym);
+	if (isClass) indexMembersAsRechecked(sym.declNode, clone);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({
