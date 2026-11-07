@@ -984,7 +984,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName != "") {
-				if (walksValue(hook, fieldType, lctx)) {
+				if (walksValue(hook, unwrapped.body, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					if (fieldTypeHasHooks(unwrapped.body, unwrapped.mangledName, hook, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
