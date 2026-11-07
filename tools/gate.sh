@@ -2455,7 +2455,7 @@ run_tools_lane() {
       tools/managedToolchain/*.py) py=1 ;;
       *.ms)
         if [ ! -x "$CAND" ]; then echo "tools: $p is checked by the candidate compiler; include the build lane"; printf 'FAIL %s: check\n' "$p"; rc=1
-        elif ! "$CAND" check "$p"; then printf 'FAIL %s: check\n' "$p"; rc=1
+        elif ! "$CAND" check $(case "$p" in src/test/js/*) echo --target=js ;; esac) "$p"; then printf 'FAIL %s: check\n' "$p"; rc=1
         elif ! run_tool_test "$p"; then printf 'FAIL %s: run\n' "$p"; rc=1
         fi ;;
     esac
