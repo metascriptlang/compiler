@@ -24,6 +24,7 @@ import { setOuterProgramForComptime, setOuterCheckContext, clearOuterCheckContex
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUnownedPosition, refuseUsedSuspendingViewParams, annotatedType, operandAt, predicateReturnOf } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
+import { membersOf } from "./unitsInCheck";
 import { lookupModuleCtx, registerModuleCtx, enterModuleCheck, leaveModuleCheck, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { isParamProperty } from "./paramProperty";
@@ -1908,7 +1909,7 @@ function declaresStaticMember(classSym: Symbol, name: string): boolean {
 	for (let depth = 0; cur != null && depth < 64; depth += 1) {
 		const body = classDeclNodeOf(cur);
 		if (body != null) {
-			for (const declared of (body.data as ClassDeclData).classBody) {
+			for (const declared of membersOf(body)) {
 				const member = declared.kind == NodeKind.DecoratedDecl ? (declared.data as DecoratedDeclData).decoratedNode : declared;
 				if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic && (member.data as MethodDeclData).methodName == name) return true;
 				if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propName == name) return true;
@@ -2040,7 +2041,7 @@ function isUnresolvedFieldType(t: Type | null): boolean {
 }
 
 function inferredFieldDecl(classDecl: Node, name: string, isStatic: boolean): Node | null {
-	const body = (classDecl.data as ClassDeclData).classBody;
+	const body = membersOf(classDecl);
 	for (const raw of body) {
 		const member = classMemberDecl(raw);
 		if (member.kind != NodeKind.PropertyDecl) continue;
@@ -2253,7 +2254,7 @@ function staticFieldsInitializedAfter(owner: Symbol | null, block: Node): Node[]
 	const decl = classDeclNodeOf(owner!);
 	if (decl == null || decl.kind != NodeKind.ClassDecl) return pending;
 	let pastBlock = false;
-	for (const raw of (decl.data as ClassDeclData).classBody) {
+	for (const raw of membersOf(decl)) {
 		if (raw == block) {
 			pastBlock = true;
 			continue;

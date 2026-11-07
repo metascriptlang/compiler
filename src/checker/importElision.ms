@@ -1,5 +1,6 @@
+import { stmtsOf } from "./unitsInCheck";
 import { ModuleGraph, ImportEntry } from "../module/graph";
-import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, ProgramData, ImportDeclData, ExportDeclData, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, ImportDeclData, ExportDeclData, Type, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { lookupModuleCtx, lookupModuleProgram, declaresInstanceHooks } from "./instantiate";
 import { CheckerContext, findExportedSymbol } from "./context";
@@ -87,7 +88,7 @@ function ownsUserHook(t: Type): boolean {
 }
 
 function runsImplicitCode(program: Node): boolean {
-	for (const stmt of (program.data as ProgramData).programStmts) {
+	for (const stmt of stmtsOf(program)) {
 		let decl = stmt;
 		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
 		if (decl == null) continue;
@@ -103,7 +104,7 @@ interface ImportSite {
 
 function importsOf(program: Node): ImportSite[] {
 	const decls: ImportSite[] = [];
-	for (const stmt of (program.data as ProgramData).programStmts) {
+	for (const stmt of stmtsOf(program)) {
 		if (stmt == null) continue;
 		if (stmt.kind == NodeKind.ImportDecl) decls.push({ decl: stmt, reexport: false });
 		if (stmt.kind == NodeKind.ExportDecl) {

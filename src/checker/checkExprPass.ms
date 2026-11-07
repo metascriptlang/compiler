@@ -1,9 +1,10 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
+import { membersOf } from "./unitsInCheck";
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
-import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp, BuiltinKind } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -323,9 +324,7 @@ function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
 	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
 		if (decl == null) return declaresReadonlyField(sym, propName) ? sym : null as unknown as Symbol;
-		const body = decl.kind == NodeKind.ClassDecl
-			? (decl.data as ClassDeclData).classBody
-			: (decl.data as ActorDeclData).actorBody;
+		const body = decl.kind == NodeKind.ClassDecl ? membersOf(decl) : (decl.data as ActorDeclData).actorBody;
 		for (const m of body) {
 			let prop = m;
 			if (prop.kind == NodeKind.DecoratedDecl) {

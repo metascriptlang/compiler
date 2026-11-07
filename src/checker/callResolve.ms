@@ -1,6 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
+import { membersOf } from "./unitsInCheck";
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
 import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
@@ -1762,7 +1763,7 @@ function fieldsWithoutDefault(ctx: CheckerContext, classSym: Symbol, depth: int3
 			for (const name of fieldsWithoutDefault(ctx, parent, depth + 1)) missing.push(name);
 		}
 	}
-	for (const raw of cd.classBody) {
+	for (const raw of membersOf(decl)) {
 		let member = raw;
 		if (member.kind == NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;

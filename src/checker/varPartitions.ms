@@ -1,3 +1,4 @@
+import { membersOf } from "./unitsInCheck";
 import {
 	Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind,
 	IdentifierData, VariableDeclData, MemberExprData, ArrayAccessData, BlockStmtData, BinaryExprData, UpdateExprData,
@@ -489,7 +490,7 @@ export function calleeMayWrite(dispatchRegistry: DispatchRegistry, call: Node): 
 function constructorOf(newNode: Node): Node | null {
 	const sym = newNode.resolvedSym;
 	if (sym == null || sym.declNode == null || sym.declNode.kind != NodeKind.ClassDecl) return null;
-	for (const m of (sym.declNode.data as { classBody: Node[] }).classBody) {
+	for (const m of membersOf(sym.declNode)) {
 		if (m.kind == NodeKind.ConstructorDecl) return m;
 	}
 	return null;

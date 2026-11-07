@@ -4,6 +4,7 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
+import { membersOf } from "./unitsInCheck";
 import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
@@ -305,8 +306,8 @@ export function declaresUserHook(t: Type): boolean {
 	return false;
 }
 
-function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
-	for (const raw of classData.classBody) {
+function instantiateInstanceHooks(owner: Symbol, members: Node[], instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
+	for (const raw of members) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.MethodDecl) continue;
 		const md = member.data as MethodDeclDataLocal;
@@ -1239,10 +1240,10 @@ function instanceFieldType(instStruct: Type, fieldName: string): Type | null {
 	return null;
 }
 
-function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
+function instanceFieldInits(members: Node[], params: Type[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
 	const fields: Node[] = [];
 	let initialized = 0;
-	for (const raw of classData.classBody) {
+	for (const raw of members) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
@@ -1311,7 +1312,7 @@ function classDeclOf(classSym: Symbol): Node {
 }
 
 function ownField(decl: Node, fieldName: string): PropertyDeclData | null {
-	for (const raw of (decl.data as ClassDeclData).classBody) {
+	for (const raw of membersOf(decl)) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
@@ -1407,8 +1408,9 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		return null;
 	}
 	const classData = classDeclNode.data as ClassDeclData;
+	const members = membersOf(classDeclNode);
 	let ctorNode: Node | null = null;
-	for (const member of classData.classBody) {
+	for (const member of members) {
 		if (member.kind == NodeKind.ConstructorDecl) { ctorNode = member; }
 	}
 	const loc = ctorNode != null && ctorNode.location != null ? ctorNode.location : (classDeclNode.location != null ? classDeclNode.location : makeLoc(0, 0));
@@ -1427,7 +1429,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.instantiatedFrom = classSym;
 	substStruct.sym = instSym;
 	cacheInstance(host.typeInstCache, classSym, instSym, params, dedup.types);
-	const classBody: Node[] = instanceFieldInits(classData, params, dedup.types, substStruct, classSym, ctx, loc);
+	const classBody: Node[] = instanceFieldInits(members, params, dedup.types, substStruct, classSym, ctx, loc);
 	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc, newSite));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
@@ -1441,7 +1443,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.declNode = classNode;
 	addPendingInstance(host, classNode);
 	instantiateParentClass(parent, ctx);
-	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, classData, mangledClass, params, dedup.types, ctx, loc);
+	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, members, mangledClass, params, dedup.types, ctx, loc);
 	const instType = createGenericInstance(structBase, dedup.types);
 	instType.typeName = classSym.name;
 	instantiateHooksInType(instType, ctx, loc, 0);

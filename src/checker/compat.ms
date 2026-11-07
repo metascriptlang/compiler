@@ -1,6 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
+import { membersOf } from "./unitsInCheck";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
 import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
@@ -1309,7 +1310,7 @@ function routineName(raw: Node): string {
 
 function classMembers(cls: Type): Node[] {
 	const decl = classDeclNodeOf(cls.sym!);
-	return decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : [];
+	return decl != null && decl.kind == NodeKind.ClassDecl ? membersOf(decl) : [];
 }
 
 function answersTo(source: Type, fields: string[], name: string): boolean {

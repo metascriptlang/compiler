@@ -1,3 +1,4 @@
+import { membersOf } from "./unitsInCheck";
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData, TypeObjectData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType, isNativePattern, extensionOfSym } from "./context";
@@ -40,7 +41,7 @@ function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 	if (isClassLike(sym)) {
 		const decl = classDeclNodeOf(sym);
 		if (decl == null || decl.kind != NodeKind.ClassDecl) return DeclaredVisibility.NotDeclared;
-		for (const member of (decl.data as ClassDeclData).classBody) {
+		for (const member of membersOf(decl)) {
 			const m = unwrapDecl(member);
 			if (m == null || m.kind != NodeKind.PropertyDecl) continue;
 			const pd = m.data as PropertyDeclData;
@@ -328,7 +329,7 @@ export function refuseHiddenMethodCall(ctx: CheckerContext, call: Node): void {
 function constructorVisibility(cls: Symbol): DeclaredVisibility {
 	const decl = classDeclNodeOf(cls);
 	if (decl == null || decl.kind != NodeKind.ClassDecl) return DeclaredVisibility.NotDeclared;
-	for (const member of (decl.data as ClassDeclData).classBody) {
+	for (const member of membersOf(decl)) {
 		const m = unwrapDecl(member);
 		if (m != null && m.kind == NodeKind.ConstructorDecl) return memberVisibility((m.data as ConstructorDeclData).ctorVisibility);
 	}
@@ -387,7 +388,7 @@ export function abstractMethodOwnerName(objType: Type, name: string): string {
 	while (cls != null && isClassLike(cls)) {
 		const decl = classDeclNodeOf(cls);
 		if (decl == null || decl.kind != NodeKind.ClassDecl) return "";
-		for (const member of (decl.data as ClassDeclData).classBody) {
+		for (const member of membersOf(decl)) {
 			const m = unwrapDecl(member);
 			if (m != null && m.kind == NodeKind.MethodDecl && (m.data as MethodDeclData).methodName == name) return m.flags.has(NodeFlag.Abstract) ? (decl.data as ClassDeclData).className : "";
 		}

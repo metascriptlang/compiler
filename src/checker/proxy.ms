@@ -3,7 +3,8 @@
 // the target when H declares none (docs/LANG.md "Proxy"). The trap call is built at the use
 // site, so the handler's methods resolve as any method call written there would.
 
-import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt, BuiltinKind } from "../ast/node";
+import { membersOf } from "./unitsInCheck";
+import { ArrayAccessData, BinaryExprData, CallExprData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt, BuiltinKind } from "../ast/node";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
 import { CheckerContext, addError, assignTemp, boundRead, findAllExtensionsByName, findFirstMatchingExt, hoistedTemp } from "./context";
@@ -64,7 +65,7 @@ function classDeclares(handler: Type, trap: string): boolean {
 	if (decl != null && decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
 	if (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
 	if (decl == null || decl.kind != NodeKind.ClassDecl) return false;
-	for (const member of (decl.data as ClassDeclData).classBody) {
+	for (const member of membersOf(decl)) {
 		if (member.kind != NodeKind.MethodDecl) continue;
 		const md = member.data as MethodDeclData;
 		if (md.methodName == trap && !md.methodIsStatic) return true;

@@ -1,4 +1,5 @@
-import { Node, NodeKind, ClassDeclData, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { membersOf } from "./unitsInCheck";
+import { Node, NodeKind, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { CheckerContext, addError, newSym } from "./context";
 import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag } from "./symbol";
 import { createFunction, setMinArity, voidType } from "./types";
@@ -107,7 +108,7 @@ export function ctorSignaturesOf(routine: Symbol | null): Symbol[] {
 function declaredCtorRoutine(owner: Symbol): Symbol | null {
 	const decl = classDeclNodeOf(owner);
 	if (decl == null) return null;
-	const body = decl.kind == NodeKind.ActorDecl ? (decl.data as ActorDeclData).actorBody : (decl.data as ClassDeclData).classBody;
+	const body = decl.kind == NodeKind.ActorDecl ? (decl.data as ActorDeclData).actorBody : membersOf(decl);
 	for (const raw of body) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member.kind == NodeKind.ConstructorDecl && !isCtorSignature(member)) return member.resolvedSym;

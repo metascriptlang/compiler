@@ -1,5 +1,6 @@
 // Actor sendability + this-write isolation rules.
 
+import { stmtsOf } from "./unitsInCheck";
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind, ProgramData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf, decoratorNamed } from "./decoratorHelpers";
@@ -2563,7 +2564,9 @@ export function checkMoveSoleOwner(ctx: CheckerContext, sym: Symbol, moveNames: 
 	}
 	const body = ctx.currentFunction == null ? ctx.topProgram : enclosingBody(ctx);
 	const w: OwnerWalk = { ctx, sym, name: sym.name, label, moveNames, thunk, site: thunk.location, at, declared: ownedParam, reported: false };
-	if (body != null) walkOwner(body, w);
+	if (body != null && body.kind == NodeKind.Program) {
+		for (const stmt of stmtsOf(body)) walkOwner(stmt, w);
+	} else if (body != null) walkOwner(body, w);
 	if (!w.declared && !w.reported) {
 		addError(ctx, "cannot move '" + label + "': it is declared outside the enclosing function, so that function cannot prove it is the sole owner" + SOLE_OWNER_TAG, at.line, at.column);
 	}

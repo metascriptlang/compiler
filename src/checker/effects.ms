@@ -1,7 +1,8 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
+import { stmtsOf, membersOf } from "./unitsInCheck";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, DispatchRegistry, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -485,7 +486,7 @@ function staticReadonlyValues(sym: Symbol): Node[] | null {
 	const cls = declaringClass(sym, decl);
 	if (cls == null) return null;
 	const writes: StaticWrites = { values, other: false };
-	for (const m of (cls.data as ClassDeclData).classBody) {
+	for (const m of membersOf(cls)) {
 		if (m.kind == NodeKind.BlockStmt) collectStaticWrites(m, sym, writes);
 	}
 	return writes.other ? null : values;
@@ -510,7 +511,7 @@ function isAssignOperator(op: string): boolean {
 function moduleStatements(modulePath: string): Node[] | null {
 	recordBodyRead(modulePath);
 	const program = lookupModuleProgram(modulePath);
-	return program != null ? (program.data as ProgramData).programStmts : null;
+	return program != null ? stmtsOf(program) : null;
 }
 
 function declaringClass(sym: Symbol, decl: Node): Node | null {
@@ -539,7 +540,7 @@ function declares(stmt: Node, decl: Node): boolean {
 	if (s == decl || unpackDecl(s) == decl) return true;
 	const c = unpackDecl(s);
 	if (c == null || c.kind != NodeKind.ClassDecl) return false;
-	for (const m of (c.data as ClassDeclData).classBody) {
+	for (const m of membersOf(c)) {
 		if (m == decl || unpackDecl(m) == decl) return true;
 	}
 	return false;
@@ -552,7 +553,7 @@ function topLevelStartsTask(dispatchRegistry: DispatchRegistry, stmt: Node): boo
 function topLevelHas(dispatchRegistry: DispatchRegistry, stmt: Node, e: Effect): boolean {
 	const s = unpackDecl(stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt);
 	if (s == null || isRoutineNode(s) || s.kind == NodeKind.TestDecl) return false;
-	const members = s.kind == NodeKind.ClassDecl ? (s.data as ClassDeclData).classBody
+	const members = s.kind == NodeKind.ClassDecl ? membersOf(s)
 		: s.kind == NodeKind.ActorDecl ? (s.data as ActorDeclData).actorBody : null;
 	if (members == null) return walkEffect(dispatchRegistry, s, e) != null;
 	for (const m of members) {
@@ -577,7 +578,7 @@ function cycleStartsNoTask(dispatchRegistry: DispatchRegistry, path: string): bo
 		const program = lookupModuleProgram(member);
 		if (program == null || !checkedModules.has(member)) return false;
 		let starts = false;
-		for (const stmt of (program.data as ProgramData).programStmts) {
+		for (const stmt of stmtsOf(program)) {
 			if (topLevelStartsTask(dispatchRegistry, stmt)) {
 				starts = true;
 				break;
@@ -781,7 +782,7 @@ export function constructionEffect(dispatchRegistry: DispatchRegistry, classSym:
 	return memo(classSym, e, (): EffectCause | null => {
 		const decl = unpackDecl(classSym.declNode);
 		if (decl == null || (decl.kind != NodeKind.ClassDecl && decl.kind != NodeKind.ActorDecl)) return null;
-		const members = decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : (decl.data as ActorDeclData).actorBody;
+		const members = decl.kind == NodeKind.ClassDecl ? membersOf(decl) : (decl.data as ActorDeclData).actorBody;
 		for (const m of members) {
 			const member = unpackDecl(m);
 			if (member == null) continue;
