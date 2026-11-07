@@ -4,6 +4,7 @@
 // @stdout: union 103 5
 // @stdout: mixed 7 6 5
 // @stdout: plain 1 9
+// @stdout: class 102 3 104 3 103 2
 // @exit: 0
 // note: a typeof test on a parameter typed by a type parameter keeps its TypeScript meaning in every instance: an instance bound to one type takes only the branch that type reaches (the other branch, checked once against the constraint, would read a never there), and a union binding tests at run time.
 
@@ -41,6 +42,20 @@ function plain<T extends string | number>(x: T): number {
 	return x.length;
 }
 
+class Sized<B extends ByteInput> {
+	n: int32;
+	constructor(b: B) {
+		if (typeof b == "string") this.n = 100 + size(b.asBytes()); else this.n = size(b);
+	}
+	plus<C extends ByteInput>(c: C): int32 {
+		return typeof c == "string" ? 100 + size(c.asBytes()) : size(c);
+	}
+	static of<C extends ByteInput>(c: C): int32 {
+		if (typeof c != "string") return size(c);
+		return 100 + size(c.asBytes());
+	}
+}
+
 function pick(flag: boolean): string | Uint8Array {
 	return flag ? "abc" : new Uint8Array(5);
 }
@@ -53,3 +68,4 @@ console.log(`ternary ${ternary("hé")} ${ternary(typed)} ${ternary(bytes)}`);
 console.log(`union ${early(pick(true))} ${early(pick(false))}`);
 console.log(`mixed ${mixed("abcd", typed)} ${mixed(typed, typed)} ${mixed(bytes, "hé")}`);
 console.log(`plain ${plain(1)} ${plain("123456789")}`);
+console.log(`class ${new Sized("ab").n} ${new Sized(typed).n} ${new Sized(typed).plus("abcd")} ${new Sized(bytes).plus(typed)} ${Sized.of("hé")} ${Sized.of(bytes)}`);
