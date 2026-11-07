@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
+import { exit, exec, execFile, execFileCapture, execFileResult, execPath, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, isDir, readDir, readFile, writeFile, appendFile, remove, rename } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
@@ -1260,6 +1260,15 @@ interface CompileJob {
 // project. Set by cmdBuildC.
 let emitOnlyMode = false;
 
+let icVerifyDump = "";
+let icVerifyWarmDir = "";
+
+function dumpForVerify(name: string, text: string): void {
+	if (icVerifyDump == "") return;
+	ensureDir(icVerifyDump);
+	writeOutput(`${icVerifyDump}/${name}.c`, text);
+}
+
 function memoReplays(memo: DirectiveHit[]): boolean {
 	for (const hit of memo) {
 		if (hit.oFile == "" && !_compiledOFiles.has(hit.dependencyFile)) return false;
@@ -2485,6 +2494,7 @@ function buildHcrCandidateAbi(
 
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
+	dumpForVerify(key, source);
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
 	if (isCCodeCached(key, fp)) {
 		oSlots.push([stableOFileFp(key, fp)]);
@@ -3230,6 +3240,8 @@ interface WatchRun {
 	replay: string[][];
 	step: int32;
 	changed: string[];
+	verify: boolean;
+	verifiedDir: string;
 }
 
 function openWatch(entryPath: string, opts: CliOptions): WatchRun {
@@ -3257,13 +3269,85 @@ function openWatch(entryPath: string, opts: CliOptions): WatchRun {
 		feed = opened;
 	}
 	setRecoverableBuild(true);
-	return { entryPath, opts, session: createBuildSession(true), feed, replay, step: 0, changed: [] };
+	return { entryPath, opts, session: createBuildSession(true), feed, replay, step: 0, changed: [], verify: env.get("MSC_IC_VERIFY") == "1", verifiedDir: "" };
+}
+
+function emptyDir(dir: string): void {
+	ensureDir(dir);
+	for (const name of readDir(dir)) remove(`${dir}/${name}`);
+}
+
+function withEnv(name: string, value: string | null): string {
+	const prev = env.get(name);
+	if (value == null) env.delete(name);
+	else env.set(name, value);
+	return prev;
+}
+
+function restoreEnv(name: string, prev: string): void {
+	if (prev == "") env.delete(name);
+	else env.set(name, prev);
+}
+
+function verifyAgainstCold(warmDir: string, coldDir: string, cacheDir: string): string[] {
+	emptyDir(coldDir);
+	const args: string[] = [];
+	for (let i = 1; i < argv.length; i += 1) {
+		const arg = argv[i];
+		if (arg.startsWith("--watch") || arg.startsWith("--events")) continue;
+		args.push(arg);
+	}
+	if (!args.includes("--emit=c")) args.push("--emit=c");
+	const prevVerify = withEnv("MSC_IC_VERIFY", null);
+	const prevDump = withEnv("MSC_IC_VERIFY_DUMP", coldDir);
+	const prevCache = withEnv("MSC_CACHE_DIR", cacheDir);
+	const prevGlobal = withEnv("MSC_NO_GLOBAL_CACHE", "1");
+	const cold = execFileResult(execPath, args, cwd());
+	restoreEnv("MSC_IC_VERIFY", prevVerify);
+	restoreEnv("MSC_IC_VERIFY_DUMP", prevDump);
+	restoreEnv("MSC_CACHE_DIR", prevCache);
+	restoreEnv("MSC_NO_GLOBAL_CACHE", prevGlobal);
+	if (!cold.started || !cold.pipeOk || cold.exitCode != 0 || cold.signal != 0) {
+		return [`the warm build succeeded and a cold build of the same sources failed (${execPath} ${args.join(" ")}):\n${cold.output}${cold.errorOutput}`];
+	}
+	const warmUnits = readDir(warmDir).sort();
+	const coldUnits = readDir(coldDir).sort();
+	const problems: string[] = [];
+	if (coldUnits.length == 0) problems.push(`a cold build wrote no C unit to ${coldDir}, so nothing was compared`);
+	for (const unit of warmUnits) {
+		if (!coldUnits.includes(unit)) problems.push(`${unit} was emitted warm and not by a cold build`);
+	}
+	for (const unit of coldUnits) {
+		if (!warmUnits.includes(unit)) {
+			problems.push(`${unit} was emitted by a cold build and not warm`);
+			continue;
+		}
+		const warm = try readFile(`${warmDir}/${unit}`) catch "";
+		const cold = try readFile(`${coldDir}/${unit}`) catch "";
+		if (warm != cold) problems.push(`${unit} differs from a cold build at line ${firstDifferentLine(warm, cold)} (diff ${warmDir}/${unit} ${coldDir}/${unit})`);
+	}
+	return problems;
+}
+
+function firstDifferentLine(a: string, b: string): int32 {
+	const left = a.split("\n");
+	const right = b.split("\n");
+	for (let i = 0; i < left.length && i < right.length; i += 1) {
+		if (left[i] != right[i]) return i + 1;
+	}
+	return Math.min(left.length, right.length) + 1;
 }
 
 function watchBuild(run: WatchRun): boolean {
 	const opts = run.opts;
 	if (opts.emitC) opts.emitSubdir = `watch${run.step}`;
 	const t0 = performance.now();
+	const verifyRoot = `${outDirForMode(opts.mode)}/icverify`;
+	const warmDir = `${verifyRoot}/warm${run.step}`;
+	if (run.verify) {
+		emptyDir(warmDir);
+		icVerifyWarmDir = warmDir;
+	}
 	eventDiagnostics = [];
 	emitEvent("build.start", `,"build":${run.step},"changed":${jsonTexts(run.changed)}`);
 	let status = BuildStatus.Built;
@@ -3279,6 +3363,7 @@ function watchBuild(run: WatchRun): boolean {
 	if (!stopped && internal == "" && status == BuildStatus.Stale) {
 		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
 		run.session = createBuildSession(true);
+		if (run.verify) emptyDir(warmDir);
 		try {
 			status = buildC(run.entryPath, opts, run.session);
 		} catch (e) {
@@ -3288,10 +3373,26 @@ function watchBuild(run: WatchRun): boolean {
 		label = "rebuilt";
 	}
 	if (stopped) label = "failed";
+	icVerifyWarmDir = "";
 	if (internal != "") {
 		printError(`internal: the build threw '${internal}'`);
 		run.session = createBuildSession(true);
 		label = "failed";
+	}
+	if (run.verify && label != "failed") {
+		const verified = label == "up-to-date" ? run.verifiedDir : warmDir;
+		const problems = verifyAgainstCold(verified, `${verifyRoot}/cold${run.step}`, `${verifyRoot}/cache${run.step}`);
+		if (problems.length > 0) {
+			for (const problem of problems) {
+				console.log(`watch: verify build ${run.step} differs: ${problem.split("\n")[0]}`);
+				printError(`internal: incremental verify, build ${run.step}: ${problem}`);
+			}
+			run.session = createBuildSession(true);
+			label = "failed";
+		} else {
+			run.verifiedDir = verified;
+			console.log(`watch: verify build ${run.step}: ${readDir(verified).length} C units equal a cold build`);
+		}
 	}
 	const session = run.session;
 	const elapsed = Math.round(performance.now() - t0);
@@ -3578,6 +3679,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	session.lastBuilt = false;
 	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
+	icVerifyDump = session.keep ? icVerifyWarmDir : env.get("MSC_IC_VERIFY_DUMP");
 	initCache(opts.mode, opts.forceRebuild, trimRootList(opts));
 	resetCompiledOFiles();
 	_directiveMemos = session.keep && opts.isHcr ? session.directiveMemos : null;
@@ -4213,6 +4315,7 @@ resetLiftedOps();
 		const cCode = output.code;
 		output.code = "";
 		moduleOutputs.push(output);
+		dumpForVerify(mangleModuleName(buildModuleNameRoots(), p.modPath), cCode);
 
 		const sideFlags = !hcrImages ? allFlags : hcrModulePaths.includes(p.modPath) ? imageFlags : coreFlags;
 		// Process @compile("foo.c") directives
@@ -4313,13 +4416,17 @@ resetLiftedOps();
 		for (const mp of aliveModules) {
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
-		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan));
+		const coreSource = genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan);
+		dumpForVerify("_hcrcore", coreSource);
+		writeOutput(`${emitDir}/_hcrcore.c`, coreSource);
 		printDiag(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
 			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}.c`;
-			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)));
+			const imageSource = genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp));
+			dumpForVerify(`_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}`, imageSource);
+			writeOutput(imagePath, imageSource);
 			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
 		printDiag(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
@@ -4339,6 +4446,7 @@ resetLiftedOps();
 		);
 		const emitDir = emitDirOf(opts);
 		const dispPath = `${emitDir}/_dispatch.c`;
+		dumpForVerify("_dispatch", dispatcher);
 		writeOutput(dispPath, dispatcher);
 		printDiag(`${green("  Wrote")} ${bold(dispPath)}`);
 		printDiag(success(`Emitted ${compiled + 1} C module(s)`));
