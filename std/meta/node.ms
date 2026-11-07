@@ -256,7 +256,6 @@ export enum SymbolFlag {
 	CompilerProc, // a routine a synthesized call names: a @compilerFunc declaration or a generated runtime proc (reference: sfCompilerProc)
 	TypeBoundOp, // a routine attached to its canonical type as one of the type's ops: it takes public linkage
 	ClosureEnv, // the struct lambda lifting builds to hold a frame's captured variables
-	FreshInit, // a const bound to a fresh value (new, an object literal): an owned slot takes it, and the analyzer refuses the copy a non-last read would make
 	IteratorHelper, // @iteratorHelper std generator: a close before its first next closes its first parameter, the source iterator
 	ImmutableEnv, // a ClosureEnv whose every captured variable is a const: no field is written after the env is built
 	ImmutableModuleConst, // a module const the checker proved never written, on the source tree: a borrow of it takes no count on any thread
