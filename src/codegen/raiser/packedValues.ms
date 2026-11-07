@@ -1,6 +1,6 @@
 import { Type, TypeKind } from "../../ast/node";
 import {
-	storesNothing, typeKey, isMaybeType, literalBase,
+	storesNothing, typeKey, isMaybeType, literalBase, peelTransparentInstance,
 	getElementType, enumMemberValue,
 } from "../../checker/types";
 import { raiserPackedEligible } from "../../analyzer/classify";
@@ -277,9 +277,11 @@ function validateLegacy(s: RaiserCompState, legacy: RaiserLegacyValue): void {
 		throw new Error("internal: invalid legacy packed-codec carrier");
 	}
 	const cls = classOfReg(s, legacy.reg);
-	const body = bodyOf(legacy.valueType);
-	const maybeCarrier = isMaybeType(body) && body.typeReturn != null &&
-		(cls == RaiserRegClass.Ref || cls == regClassOf(s, body.typeReturn));
+	const carrier = peelTransparentInstance(legacy.valueType);
+	const at = isMaybeType(carrier) ? carrier.typeNames.indexOf("value") : -1;
+	const payloadClass = at >= 0 ? regClassOf(s, carrier.typeChildren[at]) : RaiserRegClass.Dyn;
+	const maybeCarrier = at >= 0 && (cls == RaiserRegClass.Ref || cls == payloadClass ||
+		cls == RaiserRegClass.Word && payloadClass == RaiserRegClass.Float);
 	if (cls != RaiserRegClass.Dyn && cls != regClassOf(s, legacy.valueType) &&
 		!maybeCarrier) {
 		throw new Error("internal: legacy packed-codec register class mismatch");
