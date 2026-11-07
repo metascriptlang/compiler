@@ -17,14 +17,17 @@ interface TypeTest {
 export function decideInstanceTypeTests(generic: Node, clone: Node, names: string[], params: Type[], types: Type[]): void {
 	if (generic.kind != NodeKind.FunctionDecl || clone.kind != NodeKind.FunctionDecl) return;
 	const gd = generic.data as FunctionDeclData;
+	decideParameterTypeTests(gd.params, gd.fnParamTypes, (clone.data as FunctionDeclData).fnBody, names, params, types);
+}
+
+export function decideParameterTypeTests(paramNames: string[], paramTypes: string[], body: Node | null, names: string[], params: Type[], types: Type[]): void {
 	const tags = new Map<string, TypeTest>();
-	for (let i = 0; i < gd.params.length && i < gd.fnParamTypes.length; i += 1) {
-		const at = names.indexOf(gd.fnParamTypes[i].trim());
+	for (let i = 0; i < paramNames.length && i < paramTypes.length; i += 1) {
+		const at = names.indexOf(paramTypes[i].trim());
 		if (at < 0 || at >= types.length) continue;
 		const tag = decidedTag(types[at]);
-		if (tag != "") tags.set(gd.params[i], { tag, reachable: at < params.length ? constraintTags(params[at].typeExtra) : null });
+		if (tag != "") tags.set(paramNames[i], { tag, reachable: at < params.length ? constraintTags(params[at].typeExtra) : null });
 	}
-	const body = (clone.data as FunctionDeclData).fnBody;
 	if (tags.size == 0 || body == null) return;
 	forgetRedeclared(body, tags);
 	if (tags.size > 0) decideIn(body, tags);

@@ -9,7 +9,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { decideInstanceTypeTests } from "./instanceTypeTest";
+import { decideInstanceTypeTests, decideParameterTypeTests } from "./instanceTypeTest";
 import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot, isBrandDistinct } from "./types";
 import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
@@ -1430,7 +1430,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	substStruct.sym = instSym;
 	cacheInstance(host.typeInstCache, classSym, instSym, params, dedup.types);
 	const classBody: Node[] = instanceFieldInits(members, params, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc, newSite));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, params, dedup.types, mangledClass, createRef(canonical), ctx, loc, newSite));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
@@ -1482,7 +1482,7 @@ function instanceStruct(structBase: Type, mangledClass: string, params: Type[], 
 	return substStruct;
 }
 
-function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, params: Type[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation, newSite: SourceLocation | null): Node {
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, names: string[], params: Type[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation, newSite: SourceLocation | null): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -1495,6 +1495,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 
 	// Substitute type vars in body
 	if (clonedBody != null) {
+		decideParameterTypeTests(ctorData.ctorParams, ctorData.ctorParamTypes, clonedBody, names, params, types);
 		replaceTypeVars(clonedBody, params, types);
 	}
 
