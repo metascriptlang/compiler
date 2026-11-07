@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, ThrowStmtData, SwitchStmtData, AssertStmtData, MemberExprData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier, typedArrayElement, declaredFieldType, booleanType } from "../../checker/types";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion, skipModifier, typedArrayElement, declaredFieldType, booleanType, isBrandDistinct, brandBase } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
@@ -47,6 +47,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 			}
 			if (spanTarget.kind == TypeKind.Span) {
 				let srcType = d.convExpr.nodeType;
+				if (isBrandDistinct(srcType)) srcType = brandBase(srcType);
 				if (srcType != null && srcType.kind == TypeKind.Ref && srcType.typeReturn != null) srcType = srcType.typeReturn;
 				if (srcType != null && ctx.jsBackend) {
 					const view = spanViewJS(d.convExpr, srcType, node.location);
@@ -155,7 +156,7 @@ function unconditionalExprsOf(stmt: Node): (Node | null)[] {
 }
 
 function isArraySource(t: Type | null): boolean {
-	let s = t;
+	let s = isBrandDistinct(t) ? brandBase(t) : t;
 	if (s != null && s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
 	return s != null && (s.kind == TypeKind.Array || s.kind == TypeKind.String || s.kind == TypeKind.Span || typedArrayElement(s) != null);
 }
