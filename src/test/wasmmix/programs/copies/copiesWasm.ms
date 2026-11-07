@@ -26,3 +26,17 @@ export function total(xs: Vec<uint16>): int32 {
 	for (const x of xs) s += x as int32;
 	return s;
 }
+
+@wasm
+export function grown(xs: Vec<float64>, extra: float64): Vec<float64> {
+	let ys = xs;
+	for (let i = 0; i < 40; i += 1) ys.push(extra + i);
+	return ys;
+}
+
+@wasm
+export function countTrue(bs: Vec<boolean>): int32 {
+	let n = 0;
+	for (const b of bs) if (b) n += 1;
+	return n;
+}
