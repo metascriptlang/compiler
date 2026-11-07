@@ -1670,6 +1670,7 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 					const carrier = compilePackedExpr(s, otherSide, otherSide.nodeType);
 					return jumpIfValue(s, emitPackedLoad(s, s.layouts, packedField(s, s.layouts, carrier, "present")), negated ? whenTrue : !whenTrue);
 				}
+				if (neverNullPacked(s, otherSide)) return jumpIfValue(s, compareNeverNull(s, otherSide, negated), whenTrue);
 				const valReg = compileExpr(s, otherSide);
 				const isNil = allocBool(s);
 				emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, valReg, RaiserValueKind.Nil as number));
@@ -1829,6 +1830,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			emitLogicalNot(s, absent, present);
 			return absent;
 		}
+		if (neverNullPacked(s, otherSide)) return compareNeverNull(s, otherSide, op == "!==" || op == "!=");
 		const valReg = compileExpr(s, otherSide);
 		const dest = allocBool(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, dest, valReg, RaiserValueKind.Nil as number));
@@ -2220,6 +2222,17 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 
 function readsInPlace(call: Node): boolean {
 	return isViewCall(call) || readsMemberInPlace(call);
+}
+
+function neverNullPacked(s: RaiserCompState, node: Node): boolean {
+	return node.nodeType != null && packedSlotShapeOf(s.layouts, node.nodeType) != null && maybePayloadType(node.nodeType) == null;
+}
+
+function compareNeverNull(s: RaiserCompState, node: Node, negated: boolean): int32 {
+	compileExprForEffect(s, node);
+	const result = allocBool(s);
+	emitLoadConst(s, result, raiserBool(negated));
+	return result;
 }
 
 function convertedFrom(node: Node): Node {
