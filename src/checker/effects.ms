@@ -1204,7 +1204,7 @@ function holdsPointerByValue(t: Type | null, depth: int32): boolean {
 function storedBorrow(dispatchRegistry: DispatchRegistry, what: BorrowSource | null): BorrowSource | null {
 	if (what == null || what.sym == null) return what;
 	if (what.kind == BorrowKind.ModuleConst) return isImmortalModuleConst(dispatchRegistry, what.sym) ? null : what;
-	return what.kind == BorrowKind.View && sharedParams.includes(what.sym.name) && viewParams.includes(what.sym.name) ? null : what;
+	return what.kind == BorrowKind.View && sharedParams.includes(what.sym.name) && viewParams.includes(what.sym.name) && !assignedSources.has(what.sym) ? null : what;
 }
 
 function storeCause(site: Node, what: BorrowSource, into: string): EffectCause {

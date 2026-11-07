@@ -96,6 +96,14 @@ test "moduleConstShare: a part of an immortal module const stored by a construct
 	assert refuses(foreign, "C may count or write what it receives there"), "a C extern given a part of the immortal const";
 }
 
+test "moduleConstShare: a constructor parameter given a part of an immortal const and reassigned to a mortal view before it is stored is refused in code a task runs" {
+	const reassigned = CELLS
+		+ "class Swaps { c: Readonly<Child>; constructor(c: Readonly<Child>, d: Readonly<Child>) { c = d; this.c = c; } }\n"
+		+ "function probe(i: uint32): uint32 { const own = new Child(); return (new Swaps(K.child, own).c.n as uint32) + i; }" + TASKS;
+	const found = checkProjectDiagnostics([{ entryPath: "src/main.ms", entrySource: reassigned }], "src/main.ms");
+	assert found.some((m) => m.indexOf("'c'") >= 0), found.join("\n");
+}
+
 test "moduleConstShare: a call through the field, a view result and a return outside tasks compile" {
 	const legal = [
 		{ name: "a call through the closure field", source: PLAIN + "function probe(i: uint32): uint32 { return T.keyOf(i); }" + TASKS },
