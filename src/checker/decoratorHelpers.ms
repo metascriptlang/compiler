@@ -145,7 +145,7 @@ export function decoratorNamed(decorators: Node[], name: string): Node | null {
 	return null;
 }
 
-export function inlineMemberMisuse(dec: Node, member: Node, ownerKind: SymbolKind, ownerGenerics: string): string {
+export function inlineMemberMisuse(dec: Node, member: Node, ownerKind: SymbolKind): string {
 	if ((dec.data as MacroInvocationData).macroArgs.length > 0) return "@inline takes no arguments";
 	const ctor = member.kind == NodeKind.ConstructorDecl;
 	const staticMethod = member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic;
@@ -157,7 +157,6 @@ export function inlineMemberMisuse(dec: Node, member: Node, ownerKind: SymbolKin
 		const md = member.data as MethodDeclData;
 		if (md.methodBody == null || routineFlagSet(md.methodFlags).has(RoutineFlag.Extern)) return "@inline needs a function with a body";
 	}
-	if (ownerGenerics != "") return "@inline on a member of a generic class is not supported: the C backend copies only a non-generic class's constructor and static methods";
 	return "";
 }
 

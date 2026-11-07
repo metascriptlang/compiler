@@ -31,7 +31,7 @@ import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 import { CheckedInstantiation } from "./context";
-import { TypeFlag, AttachedOp } from "../ast/node";
+import { TypeFlag, AttachedOp, CallingConvention } from "../ast/node";
 import { sameType } from "./compat";
 import { recordBodyRead } from "./bodyReads";
 
@@ -1522,6 +1522,11 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	ctorSym.state = SymbolState.Checked;
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
 	if (ctorNode.resolvedSym != null && hasFlag(ctorNode.resolvedSym, SymbolFlag.InheritsConstructor)) setFlag(ctorSym, SymbolFlag.InheritsConstructor);
+	if (hasFlag(ctorNode.resolvedSym, SymbolFlag.Inline)) {
+		setFlag(ctorSym, SymbolFlag.Inline);
+		ctorSym.symbolType.callConv = CallingConvention.CcInline;
+		ctorDeclNode.nodeType.callConv = CallingConvention.CcInline;
+	}
 	ctorSym.instanceArgs = types;
 	ctorSym.instanceParams = params;
 

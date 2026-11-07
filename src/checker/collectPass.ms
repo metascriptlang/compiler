@@ -356,10 +356,10 @@ function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
 	return false;
 }
 
-function acceptsInlineMember(ctx: CheckerContext, dd: DecoratedDeclData, ownerKind: SymbolKind, ownerGenerics: string): boolean {
+function acceptsInlineMember(ctx: CheckerContext, dd: DecoratedDeclData, ownerKind: SymbolKind): boolean {
 	const dec = decoratorNamed(dd.decorators, "inline");
 	if (dec == null || dd.decoratedNode == null) return false;
-	let problem = inlineMemberMisuse(dec, dd.decoratedNode, ownerKind, ownerGenerics);
+	let problem = inlineMemberMisuse(dec, dd.decoratedNode, ownerKind);
 	if (problem == "" && dd.decoratedNode.kind == NodeKind.MethodDecl && isGenericFn((dd.decoratedNode.data as MethodDeclData).methodFlags)) problem = "@inline on a generic static method is not supported: write it as a module-level @inline function";
 	if (decoratorNamed(dd.decorators, "exportName") != null) problem = "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
 	if (problem == "") return true;
@@ -939,7 +939,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	let throws = false;
 	let methodNode: Node | null = null;
 	let inlined = false;
-	if (member.kind == NodeKind.DecoratedDecl) inlined = acceptsInlineMember(ctx, member.data as DecoratedDeclData, classSym.symbolKind, classGenerics);
+	if (member.kind == NodeKind.DecoratedDecl) inlined = acceptsInlineMember(ctx, member.data as DecoratedDeclData, classSym.symbolKind);
 	if (inlined && classMemberDecl(member).kind == NodeKind.ConstructorDecl) {
 		const cd = classMemberDecl(member).data as ConstructorDeclData;
 		cd.ctorFlags = cd.ctorFlags == "" ? "inline" : cd.ctorFlags + "|inline";
