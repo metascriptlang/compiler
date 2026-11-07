@@ -440,6 +440,23 @@ function wholeRange(text: string): string {
 	return `{"start":{"line":0,"character":0},"end":{"line":${last},"character":${lines[last].length}}}`;
 }
 
+// The requests a checkpoint asks at each probe, in id order.
+const PROBE_METHODS = [
+	"textDocument/hover",
+	"textDocument/definition",
+	"textDocument/completion",
+	"textDocument/signatureHelp",
+	"textDocument/references",
+	"textDocument/rename",
+	"textDocument/documentHighlight",
+];
+
+function probeParams(p: LspProbe, method: string): string {
+	if (method == "textDocument/references") return positionWith(p, "\"context\":{\"includeDeclaration\":true}");
+	if (method == "textDocument/rename") return positionWith(p, "\"newName\":\"lspCheckpointRenamed\"");
+	return positionParams(p.uri, p.line, p.character);
+}
+
 function queryDrain(snap: Snapshot, checkpoints: LspCheckpoints, taken: int32): string[] {
 	const bodies: string[] = [];
 	let n = 0;
@@ -448,14 +465,7 @@ function queryDrain(snap: Snapshot, checkpoints: LspCheckpoints, taken: int32): 
 		return lspJsonString(`${QUERY_PREFIX}${taken}-${n}`);
 	};
 	for (const p of checkpoints.probes) {
-		const at = positionParams(p.uri, p.line, p.character);
-		bodies.push(request(next(), "textDocument/hover", at));
-		bodies.push(request(next(), "textDocument/definition", at));
-		bodies.push(request(next(), "textDocument/completion", at));
-		bodies.push(request(next(), "textDocument/signatureHelp", at));
-		bodies.push(request(next(), "textDocument/references", positionWith(p, "\"context\":{\"includeDeclaration\":true}")));
-		bodies.push(request(next(), "textDocument/rename", positionWith(p, "\"newName\":\"lspCheckpointRenamed\"")));
-		bodies.push(request(next(), "textDocument/documentHighlight", at));
+		for (const method of PROBE_METHODS) bodies.push(request(next(), method, probeParams(p, method)));
 	}
 	for (let i = 0; i < snap.uris.length; i++) {
 		const document = `{"textDocument":{"uri":${lspJsonString(snap.uris[i])}}}`;
@@ -1050,7 +1060,8 @@ function timeProbes(s: Session, checkpoints: LspCheckpoints, taken: int32): stri
 			const hover = request(lspJsonString(hoverId), "textDocument/hover", at);
 			const hovered = drive(s, [frames([hover])]);
 			if (!hovered.ok) return `timed hover: ${hovered.error}`;
-			const want = answerResult(s, `s:${QUERY_PREFIX}${taken}-${2 * k + 1}`);
+			const checkpointHover = PROBE_METHODS.length * k + PROBE_METHODS.indexOf("textDocument/hover") + 1;
+			const want = answerResult(s, `s:${QUERY_PREFIX}${taken}-${checkpointHover}`);
 			const got = answerResult(s, `s:${hoverId}`);
 			if (got != want) return `timed hover at ${where}: checkpoint ${want}, got ${got}`;
 			const completionId = `${QUERY_PREFIX}${taken}-completion-${round}-${k}`;
