@@ -1897,10 +1897,10 @@ export function moduleDepFile(modPath: string, baseFp: string): string {
 }
 
 function moduleHeaderPaths(modPath: string, baseFp: string): string[] {
-	const ownStem = `${getCacheDir()}/${cacheStem(modPath)}.`;
+	const ownStem = foldedPath(`${getCacheDir()}/${cacheStem(modPath)}.`);
 	const result: string[] = [];
 	for (const path of dependencyPathsIn(moduleDepFile(modPath, baseFp))) {
-		if (!(path.startsWith(ownStem) && path.endsWith(".c"))) result.push(path);
+		if (!(foldedPath(path).startsWith(ownStem) && path.endsWith(".c"))) result.push(path);
 	}
 	return result;
 }
@@ -2509,6 +2509,15 @@ test "a dependency file keeps the backslashes of Windows paths that clang writes
 	writeFile(path, "native: C:\\w\\runtime\\core\\system.c \\\r\n  C:\\b\\runtime\\windows\\..\\..\\lib\\clang\\23\\include\\stdint.h \\\n  C:\\my\\ dir\\x\\#y.h\r\n");
 	assert parseDependencyFile(path).join("|") == "C:\\w\\runtime\\core\\system.c|C:\\b\\runtime\\windows\\..\\..\\lib\\clang\\23\\include\\stdint.h|C:\\my dir\\x#y.h";
 	remove(path);
+}
+
+test "a module's own C file listed with Windows backslashes is not one of its headers" {
+	withProjectRecordFixture("own-c", (dir: string): void => {
+		const modPath = `${dir}/mod.ms`;
+		const own = `${dir}/${cacheStem(modPath)}.0123_2.c`.replaceAll("/", "\\");
+		writeFile(moduleDepFile(modPath, "base"), `native: ${own} C:\\b\\stdint.h\r\n`);
+		assert moduleHeaderPaths(modPath, "base").join("|") == "C:\\b\\stdint.h";
+	});
 }
 
 test "a dependency under the C compiler's own install is left to the compiler identity" {
