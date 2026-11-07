@@ -161,7 +161,7 @@ test "OpenSSL signatures verify; a tampered message, signature, hash or key does
 	assert !ecdsaVerifySync(pub256, message, bent, "sha256");
 	const cut = sig256.slice(0, sig256.length - 1);
 	assert !ecdsaVerifySync(pub256, message, cut, "sha256");
-	assert !ecdsaVerifySync(pub256, message, [], "sha256");
+	assert !ecdsaVerifySync(pub256, message, new Uint8Array(0), "sha256");
 }
 
 test "ECDH matches the OpenSSL shared secret both ways on p256 and p384" {

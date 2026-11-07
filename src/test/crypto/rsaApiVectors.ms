@@ -317,7 +317,7 @@ test "private RSA keeps native sign refusal and SHA1 verification policy" {
 	for (const hash of ["sha224", "md5", "sha3-256", "bogus"]) {
 		assert !verifySync(publicKey, message, pkcs1Sha256.decodeHex(), hash);
 	}
-	assert !verifySync(publicKey, message, []);
+	assert !verifySync(publicKey, message, new Uint8Array(0));
 }
 
 when (c) {
@@ -346,7 +346,7 @@ test "private RSA OAEP decrypts independent fixture and refuses tampering" {
 	ciphertext[50] = (ciphertext[50] ^ 1) as uint8;
 	refused(decryptSync(key, ciphertext),
 		CryptoErrorKind.DecryptionFailed, "rsa.decrypt");
-	refused(decryptSync(key, []),
+	refused(decryptSync(key, new Uint8Array(0)),
 		CryptoErrorKind.DecryptionFailed, "rsa.decrypt");
 }
 

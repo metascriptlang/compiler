@@ -226,7 +226,7 @@ test "private EC signing and curve mismatch errors preserve their contract" {
 		assert signature.error.operation == "ec.ecdsaSign";
 		assert signature.error.message ==
 			`ECDSA signing failed (hash ${hash}; sha1 is refused)`;
-		assert !ecdsaVerifySync(key.publicKey(), "message", [], hash);
+		assert !ecdsaVerifySync(key.publicKey(), "message", new Uint8Array(0), hash);
 	}
 	const other = must(EcPrivateKey.generateSync("p384"));
 	const shared = ecdhSync(key, other.publicKey());

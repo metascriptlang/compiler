@@ -283,7 +283,7 @@ test "KDF async and sync preserve UTF-8 NUL bytes and empty parameters" {
 		for (const iterations of [1, 2] as int32[]) {
 			const sync = pbkdf2Sync(text, "", iterations, 65, algorithm);
 			const done = await pbkdf2(text, "", iterations, 65, algorithm);
-			const octets = pbkdf2Sync(info, [], iterations, 65, algorithm);
+			const octets = pbkdf2Sync(info, new Uint8Array(0), iterations, 65, algorithm);
 			assert sync.ok && done.ok && octets.ok, algorithm;
 			assert sync.value.encodeHex() == done.value.encodeHex();
 			assert sync.value.encodeHex() == octets.value.encodeHex();
@@ -295,7 +295,7 @@ test "KDF async and sync preserve UTF-8 NUL bytes and empty parameters" {
 		}
 		const sync = hkdfSync(algorithm, text, "", "", 65);
 		const done = await hkdf(algorithm, text, "", "", 65);
-		const octets = hkdfSync(algorithm, info, [], [], 65);
+		const octets = hkdfSync(algorithm, info, new Uint8Array(0), new Uint8Array(0), 65);
 		assert sync.ok && done.ok && octets.ok, algorithm;
 		assert sync.value.encodeHex() == done.value.encodeHex();
 		assert sync.value.encodeHex() == octets.value.encodeHex();
