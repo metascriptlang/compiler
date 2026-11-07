@@ -8,7 +8,8 @@
 @include("runtime/net/socket.h");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
+import { wellFormedString } from "std/core/string/bytes";
 @compile("runtime/io/engineSelect.c");
 
 // ===== C primitives (blocking) =====
@@ -21,7 +22,6 @@ extern function msNetConnect(fd: int32, host: string, port: int32): int32;
 extern function msNetSocketUnix(): int32;
 extern function msNetBindUnix(fd: int32, path: string): int32;
 extern function msNetConnectUnix(fd: int32, path: string): int32;
-extern function msNetSend(fd: int32, data: string): int32;
 extern function msNetSendBytes(fd: int32, data: Readonly<Span<uint8>>): int32;
 extern function msNetRecvBytes(fd: int32, maxBytes: int32): Buffer;
 extern function msNetRecvNonBlockBytes(fd: int32, maxBytes: int32): Buffer;
@@ -32,7 +32,6 @@ extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
 extern function msNetSetBlocking(fd: int32): int32;
 extern function msNetAcceptNonBlock(fd: int32): int32;
-extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
 
 // ===== Public API =====
 
@@ -68,8 +67,11 @@ export function connectUnix(fd: int32, path: string): int32 {
 	return msNetConnectUnix(fd, path);
 }
 
-export function send(fd: int32, data: Bytes): int32 {
-	if (typeof data == "string") return msNetSend(fd, data);
+export function send<D extends ByteInput>(fd: int32, data: D): int32 {
+	return sendSpan(fd, typeof data == "string" ? data.asBytes() : data);
+}
+
+function sendSpan(fd: int32, data: Readonly<Span<uint8>>): int32 {
 	return msNetSendBytes(fd, data);
 }
 
@@ -111,8 +113,11 @@ export function recvNonBlock(fd: int32, maxBytes: int32): Buffer {
 	return msNetRecvNonBlockBytes(fd, maxBytes);
 }
 
-export function sendNonBlock(fd: int32, data: Bytes, offset: int32): int32 {
-	if (typeof data == "string") return msNetSendNonBlock(fd, data, offset);
+export function sendNonBlock<D extends ByteInput>(fd: int32, data: D, offset: int32): int32 {
+	return sendNonBlockSpan(fd, typeof data == "string" ? data.asBytes() : data, offset);
+}
+
+function sendNonBlockSpan(fd: int32, data: Readonly<Span<uint8>>, offset: int32): int32 {
 	return msNetSendNonBlockBytes(fd, data, offset);
 }
 
@@ -134,8 +139,12 @@ export async function recvAsync(fd: int32, maxBytes: int32): Promise<Buffer> {
 	return rawBuffer(result);
 }
 
-export async function sendAsync(fd: int32, data: Bytes): Promise<int32> {
-	const result = await msIoSend_ms(fd, rawString(data));
+export function sendAsync<D extends ByteInput>(fd: int32, data: D): Promise<int32> {
+	return sendAsyncOwned(fd, typeof data == "string" ? data : wellFormedString(data));
+}
+
+async function sendAsyncOwned(fd: int32, data: string): Promise<int32> {
+	const result = await msIoSend_ms(fd, data);
 	return result;
 }
 

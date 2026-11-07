@@ -543,11 +543,6 @@ int32_t msTlsWriteBytes(int64_t handle, const uint8_t *buf, int64_t len64) {
 	return total;
 }
 
-int32_t msTlsWrite(int64_t handle, msString data) {
-	if (msStrLen(data) == 0) return 0;
-	return msTlsWriteBytes(handle, (const uint8_t*)msStrData(&data), msStrLen(data));
-}
-
 void msTlsClose(int64_t handle) {
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx) return;

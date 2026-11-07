@@ -43,7 +43,6 @@ msUint8Array msTlsReadBytes(int64_t ctx, int32_t maxBytes);
 
 /* Write data through TLS connection (encrypted by mbedTLS).
  * Returns bytes written (0 for empty data), -1 on error. */
-int32_t msTlsWrite(int64_t ctx, msString data);
 int32_t msTlsWriteBytes(int64_t ctx, const uint8_t *data, int64_t len);
 
 /* Close TLS connection and free all resources. */
