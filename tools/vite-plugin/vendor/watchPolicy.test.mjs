@@ -10,7 +10,7 @@ assert.ok(Number(process.versions.node.split(".")[0]) >= 24, "Native watch polic
 const rollupModule = process.env.ROLLUP_MODULE || createRequire(import.meta.url).resolve("rollup");
 assert.ok(isAbsolute(rollupModule));
 const packageRoot = dirname(createRequire(pathToFileURL(rollupModule)).resolve("rollup/package.json"));
-assert.equal(JSON.parse(fs.readFileSync(join(packageRoot, "package.json"), "utf8")).version, "4.67.5+metascript.1");
+assert.equal(JSON.parse(fs.readFileSync(join(packageRoot, "package.json"), "utf8")).version, "4.67.5+metascript.2");
 function assertSameRuntime(source, copied) {
  const original = fs.lstatSync(source);
  const clone = fs.lstatSync(copied);
@@ -39,7 +39,7 @@ try {
 after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
 const root = resolve(tmpdir(), "native-policy-unit");
 const file = join(root, "entry.js");
-const stats = (size, mtimeMs = size, ino = 1) => ({ size, mtimeMs, ino });
+const stats = (size, mtimeMs = size, ino = 1) => ({ size, mtimeMs, ino, isFile: () => true });
 
 function fixture(t, options = {}) {
  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
@@ -168,3 +168,63 @@ for (const [event, removed, observed] of [
   assert.equal(watcher._isPathActive(observed, renewedGeneration), false);
  });
 }
+
+const heldRoot = resolve(tmpdir(), "empty-hold-policy"), heldFile = join(heldRoot, "config.mjs");
+const heldStats = (size, mtimeMs = size, ino = 1) => ({ size, mtimeMs, ino, isFile: () => true });
+function heldFixture(t,options={}){
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+ const watcher=new __nativePolicy.FSWatcher({useFsEvents:false,atomic:false,persistent:true,...options});
+ watcher._readyEmitted=true;
+ const events=[];
+ watcher.on('all',(event,path,stat)=>events.push({event,path,stat,at:Date.now()}));
+ t.after(()=>watcher.close());
+ return{watcher,events};
+}
+test('leading empty change emits genuine empty file exactly at10ms, never drops',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));assert.deepEqual(f.events,[]);t.mock.timers.tick(9);assert.deepEqual(f.events,[]);t.mock.timers.tick(1);assert.equal(f.events.length,1);assert.equal(f.events[0].at,10);assert.equal(f.events[0].stat.size,0);t.mock.timers.tick(40);assert.equal(f.events.length,1);
+});
+test('empty change completed inside10ms publishes latest nonempty stats once',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(5);const current=heldStats(7);await f.watcher._emit('change',heldFile,current);assert.equal(f.events.length,1);assert.equal(f.events[0].stat,current);assert.equal(f.events[0].at,5);t.mock.timers.tick(45);assert.equal(f.events.length,1);
+});
+test('new empty identity inside hold updates stats without resetting10ms deadline',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0,1));t.mock.timers.tick(5);const current=heldStats(0,2);await f.watcher._emit('change',heldFile,current);assert.deepEqual(f.events,[]);t.mock.timers.tick(5);assert.equal(f.events[0].stat,current);assert.equal(f.events[0].at,10);
+});
+test('meaningful write after empty release retains ordinary50ms trailing replay',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(10);t.mock.timers.tick(10);await f.watcher._emit('change',heldFile,heldStats(7));assert.deepEqual(f.events.map(e=>e.stat.size),[0]);t.mock.timers.tick(30);assert.deepEqual(f.events.map(e=>e.stat.size),[0,7]);
+});
+test('ready empty add followed by data publishes add with completed stats',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('add',heldFile,heldStats(0));assert.deepEqual(f.events,[]);t.mock.timers.tick(5);const current=heldStats(7);await f.watcher._emit('change',heldFile,current);assert.deepEqual(f.events.map(e=>e.event),['add']);assert.equal(f.events[0].stat,current);t.mock.timers.tick(50);assert.equal(f.events.length,1);
+});
+test('ready genuine empty add releases exactly10ms',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('add',heldFile,heldStats(0));t.mock.timers.tick(9);assert.deepEqual(f.events,[]);t.mock.timers.tick(1);assert.equal(f.events[0].event,'add');assert.equal(f.events[0].at,10);
+});
+test('initial empty add before ready is not held',async t=>{
+ const f=heldFixture(t);f.watcher._readyEmitted=false;await f.watcher._emit('add',heldFile,heldStats(0));assert.equal(f.events.length,1);assert.equal(f.events[0].at,0);
+});
+test('cancel held change cannot publish or clear a newer path lifetime',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(5);f.watcher._cancelPath(heldFile);await f.watcher._emit('change',heldFile,heldStats(0,2));t.mock.timers.tick(5);assert.deepEqual(f.events,[]);t.mock.timers.tick(5);assert.equal(f.events.length,1);assert.equal(f.events[0].stat.mtimeMs,2);assert.equal(f.events[0].at,15);
+});
+test('unwatch parent cancels descendant held change and held add',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));await f.watcher._emit('add',join(heldRoot,'other.js'),heldStats(0));f.watcher.unwatch(heldRoot);t.mock.timers.tick(100);assert.deepEqual(f.events,[]);
+});
+test('close cancels held change and held add timers',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));await f.watcher._emit('add',join(heldRoot,'other.js'),heldStats(0));await f.watcher.close();t.mock.timers.tick(100);assert.deepEqual(f.events,[]);
+});
+test('cancel one held path preserves another path trailing observation',async t=>{
+ const f=heldFixture(t),other=resolve(tmpdir(),'other-policy','input.js');await f.watcher._emit('change',heldFile,heldStats(0));await f.watcher._emit('change',other,heldStats(1));await f.watcher._emit('change',other,heldStats(2));f.watcher._cancelPath(heldFile);t.mock.timers.tick(50);assert.deepEqual(f.events.map(e=>[e.path,e.stat.size]),[[other,1],[other,2]]);
+});
+test('held release preserves cwd presentation but owns original path lifetime',async t=>{
+ const f=heldFixture(t,{cwd:heldRoot});await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(10);assert.equal(f.events[0].path,'config.mjs');
+});
+test('unknown completion remains conservative instead of dropping an observation',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(5);await f.watcher._emit('change',heldFile);assert.equal(f.events.length,1);assert.equal(f.events[0].stat,undefined);t.mock.timers.tick(45);assert.equal(f.events.length,1);
+});
+test('zero-size directory change is not treated as an empty file',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldRoot,{...heldStats(0),isFile:()=>false});assert.equal(f.events.length,1);assert.equal(f.events[0].at,0);
+});
+test('unlink drops held change without publishing a stale empty generation',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('change',heldFile,heldStats(0));t.mock.timers.tick(5);await f.watcher._emit('unlink',heldFile);t.mock.timers.tick(50);assert.deepEqual(f.events.map(e=>e.event),['unlink']);
+});
+test('unlink after held add follows the add in order, per reference policy',async t=>{
+ const f=heldFixture(t);await f.watcher._emit('add',heldFile,heldStats(0));t.mock.timers.tick(5);await f.watcher._emit('unlink',heldFile);assert.deepEqual(f.events.map(e=>e.event),['add','unlink']);t.mock.timers.tick(50);assert.equal(f.events.length,2);
+});

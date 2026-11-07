@@ -215,7 +215,7 @@ index a349d8f..bc1bc31 100644
  {
    "name": "rollup",
 -  "version": "4.67.5",
-+  "version": "4.67.5+metascript.1",
++  "version": "4.67.5+metascript.2",
    "description": "Next-generation ES module bundler",
    "main": "dist/rollup.js",
    "module": "dist/es/rollup.js",

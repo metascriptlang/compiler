@@ -1,5 +1,5 @@
 {
-  "version": "4.67.5+metascript.1",
+  "version": "4.67.5+metascript.2",
   "baseVersion": "4.67.5",
   "baseGit": "6b1937666ffaffd346992115283d63336bd2464a",
   "source": {
@@ -15,8 +15,8 @@
   "lockSHA256": "f96ef5bcf57db5b9f45f57702e355b1a75ab63e16336504f0b89967f1015dbbf",
   "nativeABI": "4.67.5",
   "patches": {
-    "rollup4.patch": "c03a8778464c0b60d101bf1c4000bca4d612ce6d572b3974cb5e2ef553b39e33",
-    "chokidar.patch": "e8d202f202acd830aa5b951c631b872df5dc7d1f5645a427cfdad57b809d778f"
+    "rollup4.patch": "54c2c188667a74d92bc98b9390d8ba09aecf379e4729bea8b5dc908ed920dc36",
+    "chokidar.patch": "57d9a40b2ce512ace2ee1524476fdd6d4cbb2939b3e952aa1429a40cbfc6d071"
   },
   "canonicalSources": {
     "src/Graph.ts": {
@@ -36,21 +36,21 @@
       "bytes": 10007
     },
     "node_modules/chokidar/index.js": {
-      "sha256": "34f9d4f36bbe35ba7478bad994b705ef5bb2af9ed76a137e8291e17aeb64ae63",
-      "bytes": 34254
+      "sha256": "b3694fa31d2d5ca15dd032c7c6868f536484ca32ff9e7c726dc7be4ee12ecdd9",
+      "bytes": 36914
     },
     "node_modules/chokidar/lib/nodefs-handler.js": {
       "sha256": "89d57d4393e101f9afd4dc27c1aac3aaedf394e4065603d53135427d979504bc",
       "bytes": 21315
     },
     "node_modules/chokidar/lib/fsevents-handler.js": {
-      "sha256": "81d590bd4e879503af1f56e96f8a815ceb838beb47cba4762b84ccdef5cc089d",
-      "bytes": 16809
+      "sha256": "32b377f9587eb232678978595b482c96e347a2d3118018df5596fa9363fa6448",
+      "bytes": 18224
     }
   },
-  "artifactSHA256": "728f65d0979c8cfd1980064705c5f847487b46c22b18ed7f1f99ab8c5bb50490",
+  "artifactSHA256": "657be935329cccd71431906c2d1383b664631a7f74bced1f969b477941ed8b3a",
   "buildNode": ">=24.12.0",
-  "runtimeNode": ">=18.0.0; CJS/ESM standalone JSON/error recovery and CLI verified at v18.0.0 on Linux x64 GNU",
+  "runtimeNode": ">=18.0.0; CJS/ESM standalone JSON/error recovery and a CLI build verified at v18.0.0 on Linux x64 GNU",
   "recipe": "node tools/vite-plugin/vendor/buildRollup.mjs /absolute/fresh-work-directory /absolute/rollup4.tgz",
   "stages": [
     "npm ci --ignore-scripts --no-audit --no-fund (locked upstream dev dependencies, before version mutation)",
@@ -67,13 +67,8 @@
   "validation": {
     "buildNode": "v24.12.0 Linux x64 GNU",
     "nativeABI": "4.67.5",
-    "nativeControls": "4/4 CJS/ESM JSON and actual ERROR recovery",
-    "app": "npm filetar retains version; Vite6.3.5 actual physical import/public meta; root override rollup:$rollup",
-    "nodeFloor": "2/2 standalone v18.0.0 controls plus CLI",
-    "rawArchiveSHA256": "45285f6b295eaf12b252edcae8178a4ac24865d46cc4c1ed619d3290341769e2",
-    "wholeAttemptRC": 2,
-    "residual": "Final fixture-empty guard failed on node-compile-cache; no processes/leases. Functional audit passed; whole attempt not green.",
-    "independentFullRebuild": false,
-    "postBuildGuard": "Builder now records exact raw symlink targets; native-free equivalent-target-text fixture detects delta; actual source archive20 raw targets verified after build"
+    "pluginSuite": "5 native plugin test files 182 pass/0 fail on Linux x64 (inotify) and on Darwin arm64 (FSEvents 2.3.3); 1 skip is the TS oracle, provisioned only by test.mjs",
+    "nodeFloor": "v18.0.0 Linux x64: ESM and CJS JSON immediate update plus ERROR recovery, CLI config build",
+    "notMeasured": "Windows native watch; independent rebuild byte equivalence"
   }
 }

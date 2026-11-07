@@ -1,12 +1,26 @@
 diff --git a/node_modules/chokidar/index.js b/node_modules/chokidar/index.js
-index 8752893..d864d6c 100644
+index 8752893..597c8a2 100644
 --- a/node_modules/chokidar/index.js
 +++ b/node_modules/chokidar/index.js
-@@ -307,6 +307,14 @@ constructor(_opts) {
+@@ -52,6 +52,12 @@ const {
+   isIBMi
+ } = require('./lib/constants');
+ 
++// writeFile truncates before it writes, so a callback can stat an empty file in between.
++// A ready `add` or leading `change` that sees one is held until the data lands, at most
++// this long, and published once with the written stats.
++const EMPTY_FILE_HOLD = 10;
++const isEmptyFile = stats => stats != null && stats.isFile() && stats.size === 0;
++
+ const stat = promisify(fs.stat);
+ const readdir = promisify(fs.readdir);
+ 
+@@ -307,6 +313,15 @@ constructor(_opts) {
    this._symlinkPaths = new Map();
  
    this._streams = new Set();
 +  this._pendingChanges = new Map();
++  this._heldAdds = new Map();
 +  this._pathMutation = 0;
 +  this._pathBarriers = new Map();
 +  this._closedAt = -1;
@@ -17,7 +31,7 @@ index 8752893..d864d6c 100644
    this.closed = false;
  
    // Set up default options.
-@@ -406,7 +414,14 @@ constructor(_opts) {
+@@ -406,7 +421,14 @@ constructor(_opts) {
   * @returns {FSWatcher} for chaining
   */
  add(paths_, _origAdd, _internal) {
@@ -32,7 +46,7 @@ index 8752893..d864d6c 100644
    this.closed = false;
    let paths = unifyPaths(paths_);
    if (cwd) {
-@@ -442,11 +457,11 @@ add(paths_, _origAdd, _internal) {
+@@ -442,11 +464,11 @@ add(paths_, _origAdd, _internal) {
    if (this.options.useFsEvents && this._fsEventsHandler) {
      if (!this._readyCount) this._readyCount = paths.length;
      if (this.options.persistent) this._readyCount += paths.length;
@@ -46,7 +60,7 @@ index 8752893..d864d6c 100644
        paths.map(async path => {
          const res = await this._nodeFsHandler._addToNodeFs(path, !_internal, 0, 0, _origAdd);
          if (res) this._emitReady();
-@@ -457,7 +472,7 @@ add(paths_, _origAdd, _internal) {
+@@ -457,7 +479,7 @@ add(paths_, _origAdd, _internal) {
        results.filter(item => item).forEach(item => {
          this.add(sysPath.dirname(item), sysPath.basename(_origAdd || item));
        });
@@ -55,7 +69,7 @@ index 8752893..d864d6c 100644
    }
  
    return this;
-@@ -480,6 +495,7 @@ unwatch(paths_) {
+@@ -480,6 +502,7 @@ unwatch(paths_) {
        path = sysPath.resolve(path);
      }
  
@@ -63,12 +77,15 @@ index 8752893..d864d6c 100644
      this._closePath(path);
  
      this._ignoredPaths.add(path);
-@@ -502,6 +518,15 @@ unwatch(paths_) {
+@@ -502,6 +525,18 @@ unwatch(paths_) {
  close() {
    if (this.closed) return this._closePromise;
    this.closed = true;
 +  this._closedAt = ++this._pathMutation;
++  this._pendingChanges.forEach(pending => this._dropHeldChange(pending));
 +  this._pendingChanges.clear();
++  this._heldAdds.forEach(held => clearTimeout(held.timer));
++  this._heldAdds.clear();
 +  this._throttled.forEach(entries => entries.forEach(entry => entry.clear(false)));
 +  if (this._pendingUnlinks) {
 +    this._pendingUnlinks.forEach(pending => clearTimeout(pending.timer));
@@ -79,7 +96,7 @@ index 8752893..d864d6c 100644
  
    // Memory management.
    this.removeAllListeners();
-@@ -544,6 +569,29 @@ emitWithAll(event, args) {
+@@ -544,6 +579,29 @@ emitWithAll(event, args) {
  // Common helpers
  // --------------
  
@@ -109,7 +126,7 @@ index 8752893..d864d6c 100644
  /**
   * Normalize and emit events.
   * Calling _emit DOES NOT MEAN emit() would be called!
-@@ -554,8 +602,68 @@ emitWithAll(event, args) {
+@@ -554,18 +612,118 @@ emitWithAll(event, args) {
   * @param {*=} val3
   * @returns the error if defined, otherwise the value of the FSWatcher instance's `closed` flag
   */
@@ -136,7 +153,16 @@ index 8752893..d864d6c 100644
 +    return relative === '' || (relative !== '..' && !relative.startsWith(`..${sysPath.sep}`) && !sysPath.isAbsolute(relative));
 +  };
 +  for (const [pendingKey, pending] of this._pendingChanges) {
-+    if (contains(pending.path)) this._pendingChanges.delete(pendingKey);
++    if (contains(pending.path)) {
++      this._dropHeldChange(pending);
++      this._pendingChanges.delete(pendingKey);
++    }
++  }
++  for (const [heldKey, held] of this._heldAdds) {
++    if (contains(held.path)) {
++      clearTimeout(held.timer);
++      this._heldAdds.delete(heldKey);
++    }
 +  }
 +  if (this._pendingWrites) {
 +    for (const [pendingPath, pending] of this._pendingWrites) {
@@ -167,18 +193,48 @@ index 8752893..d864d6c 100644
 +  });
 +}
 +
++_presentPath(path) {
++  if (isWindows) path = sysPath.normalize(path);
++  return this.options.cwd ? sysPath.relative(this.options.cwd, path) : path;
++}
++
++_dropHeldChange(pending) {
++  if (pending && pending.held) clearTimeout(pending.held.timer);
++}
++
++_holdTimer(release) {
++  const timer = setTimeout(release, EMPTY_FILE_HOLD);
++  if (!this.options.persistent) timer.unref();
++  return timer;
++}
++
  async _emit(event, path, val1, val2, val3) {
    if (this.closed) return;
 +  const sourcePath = path;
 +  const changeKey = sysPath.resolve(sourcePath);
++  const generation = this._pathMutation;
++  const heldAdd = this._heldAdds.get(changeKey);
++  if (heldAdd) {
++    if (event === EV_CHANGE) {
++      heldAdd.path = sourcePath;
++      if (val1) heldAdd.stats = val1;
++      if (!isEmptyFile(val1)) heldAdd.release();
++      return this;
++    }
++    heldAdd.release();
++  }
 +  if (event === EV_UNLINK || event === EV_UNLINK_DIR) {
++    this._dropHeldChange(this._pendingChanges.get(changeKey));
 +    this._pendingChanges.delete(changeKey);
 +  }
-+  const generation = this._pathMutation;
  
    const opts = this.options;
-   if (isWindows) path = sysPath.normalize(path);
-@@ -566,6 +674,12 @@ async _emit(event, path, val1, val2, val3) {
+-  if (isWindows) path = sysPath.normalize(path);
+-  if (opts.cwd) path = sysPath.relative(opts.cwd, path);
++  path = this._presentPath(path);
+   /** @type Array<any> */
+   const args = [event, path];
+   if (val3 !== undefined) args.push(val1, val2, val3);
    else if (val2 !== undefined) args.push(val1, val2);
    else if (val1 !== undefined) args.push(val1);
  
@@ -191,7 +247,7 @@ index 8752893..d864d6c 100644
    const awf = opts.awaitWriteFinish;
    let pw;
    if (awf && (pw = this._pendingWrites.get(path))) {
-@@ -575,24 +689,30 @@ async _emit(event, path, val1, val2, val3) {
+@@ -575,24 +733,30 @@ async _emit(event, path, val1, val2, val3) {
  
    if (opts.atomic) {
      if (event === EV_UNLINK) {
@@ -230,14 +286,30 @@ index 8752893..d864d6c 100644
        if (err) {
          event = args[0] = EV_ERROR;
          args[1] = err;
-@@ -613,8 +733,23 @@ async _emit(event, path, val1, val2, val3) {
+@@ -612,9 +776,54 @@ async _emit(event, path, val1, val2, val3) {
+     return this;
    }
  
++  if (event === EV_ADD && isEmptyFile(val1) && this._readyEmitted) {
++    const held = {path: sourcePath, stats: val1};
++    held.release = () => {
++      clearTimeout(held.timer);
++      if (this._heldAdds.get(changeKey) !== held) return;
++      this._heldAdds.delete(changeKey);
++      if (!this._isPathActive(held.path, generation)) return;
++      this.emitWithAll(EV_ADD, [EV_ADD, this._presentPath(held.path), held.stats]);
++    };
++    held.timer = this._holdTimer(held.release);
++    this._heldAdds.set(changeKey, held);
++    return this;
++  }
++
    if (event === EV_CHANGE) {
 -    const isThrottled = !this._throttle(EV_CHANGE, path, 50);
 -    if (isThrottled) return this;
 +    const throttler = this._throttle(EV_CHANGE, path, 50, suppressedCount => {
 +      const pending = this._pendingChanges.get(changeKey);
++      this._dropHeldChange(pending);
 +      this._pendingChanges.delete(changeKey);
 +      if (suppressedCount > 0 && pending && pending.replay && this._isPathActive(pending.path, pending.generation)) {
 +        this._emit(EV_CHANGE, pending.path, ...pending.values).catch(error => this._handleError(error));
@@ -249,14 +321,29 @@ index 8752893..d864d6c 100644
 +        pending.path = sourcePath;
 +        pending.values = [val1, val2, val3];
 +        pending.replay = true;
++        if (pending.held && !isEmptyFile(val1)) pending.held.release();
 +      }
 +      return this;
 +    }
-+    this._pendingChanges.set(changeKey, {path: sourcePath, values: [val1, val2, val3], generation, replay: false});
++    const pending = {path: sourcePath, values: [val1, val2, val3], generation, replay: false};
++    this._pendingChanges.set(changeKey, pending);
++    if (isEmptyFile(val1)) {
++      const release = () => {
++        this._dropHeldChange(pending);
++        pending.held = undefined;
++        if (this._pendingChanges.get(changeKey) !== pending || !this._isPathActive(pending.path, pending.generation)) return;
++        pending.replay = false;
++        const heldArgs = [EV_CHANGE, this._presentPath(pending.path)];
++        if (pending.values[0] !== undefined) heldArgs.push(pending.values[0]);
++        this.emitWithAll(EV_CHANGE, heldArgs);
++      };
++      pending.held = {timer: this._holdTimer(release), release};
++      return this;
++    }
    }
  
    if (opts.alwaysStat && val1 === undefined &&
-@@ -626,7 +761,7 @@ async _emit(event, path, val1, val2, val3) {
+@@ -626,7 +835,7 @@ async _emit(event, path, val1, val2, val3) {
        stats = await stat(fullPath);
      } catch (err) {}
      // Suppress event when fs_stat fails, to avoid sending undefined 'stat'
@@ -265,7 +352,7 @@ index 8752893..d864d6c 100644
      args.push(stats);
    }
    this.emitWithAll(event, args);
-@@ -656,7 +791,12 @@ _handleError(error) {
+@@ -656,7 +865,12 @@ _handleError(error) {
   * @param {Number} timeout duration of time to suppress duplicate actions
   * @returns {Object|false} tracking object or false if action should be suppressed
   */
@@ -279,7 +366,7 @@ index 8752893..d864d6c 100644
    if (!this._throttled.has(actionType)) {
      this._throttled.set(actionType, new Map());
    }
-@@ -672,15 +812,17 @@ _throttle(actionType, path, timeout) {
+@@ -672,15 +886,17 @@ _throttle(actionType, path, timeout) {
    }
  
    let timeoutObject;
@@ -298,7 +385,7 @@ index 8752893..d864d6c 100644
    const thr = {timeoutObject, clear, count: 0};
    action.set(path, thr);
    return thr;
-@@ -707,11 +849,18 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
+@@ -707,11 +923,18 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
    }
  
    const now = new Date();
@@ -319,7 +406,7 @@ index 8752893..d864d6c 100644
          return;
        }
  
-@@ -737,14 +886,15 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
+@@ -737,14 +960,15 @@ _awaitWriteFinish(path, threshold, event, awfEmit) {
    };
  
    if (!this._pendingWrites.has(path)) {
@@ -339,7 +426,7 @@ index 8752893..d864d6c 100644
        awaitWriteFinish,
        this.options.awaitWriteFinish.pollInterval
 diff --git a/node_modules/chokidar/lib/fsevents-handler.js b/node_modules/chokidar/lib/fsevents-handler.js
-index fe29393..ef2e553 100644
+index fe29393..d1c2b69 100644
 --- a/node_modules/chokidar/lib/fsevents-handler.js
 +++ b/node_modules/chokidar/lib/fsevents-handler.js
 @@ -31,6 +31,7 @@ const {
@@ -350,7 +437,33 @@ index fe29393..ef2e553 100644
    FSEVENT_CREATED,
    FSEVENT_MODIFIED,
    FSEVENT_DELETED,
-@@ -242,15 +243,17 @@ addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts) {
+@@ -221,6 +222,17 @@ class FsEventsHandler {
+  */
+ constructor(fsw) {
+   this.fsw = fsw;
++  this._fileStats = new Map();
++}
++
++// FSEvents reports a path again when nothing about it changed (an event from before the
++// stream started, or a coalesced flag); publish a file change only when its stats moved.
++_knownFileStats(path, stats) {
++  const key = sysPath.resolve(path);
++  const known = this._fileStats.get(key);
++  if (stats) this._fileStats.set(key, stats);
++  return known !== undefined && stats !== undefined &&
++    known.size === stats.size && known.mtimeMs === stats.mtimeMs && known.ino === stats.ino;
+ }
+ checkIgnored(path, stats) {
+   const ipaths = this.fsw._ignoredPaths;
+@@ -236,21 +248,23 @@ checkIgnored(path, stats) {
+   ipaths.delete(path + ROOT_GLOBSTAR);
+ }
+ 
+-addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts) {
++addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts, stats) {
+   const event = watchedDir.has(item) ? EV_CHANGE : EV_ADD;
+-  this.handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opts);
++  this.handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opts, stats);
  }
  
  async checkExists(path, fullPath, realPath, parent, watchedDir, item, info, opts) {
@@ -361,7 +474,8 @@ index fe29393..ef2e553 100644
 +    const stats = await stat(path);
 +    if (!this.fsw._isPathActive(path, generation)) return;
      if (sameTypes(info, stats)) {
-       this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
+-      this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
++      this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts, stats);
      } else {
        this.handleEvent(EV_UNLINK, path, fullPath, realPath, parent, watchedDir, item, info, opts);
      }
@@ -370,7 +484,21 @@ index fe29393..ef2e553 100644
      if (error.code === 'EACCES') {
        this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
      } else {
-@@ -277,7 +280,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+@@ -259,10 +273,11 @@ async checkExists(path, fullPath, realPath, parent, watchedDir, item, info, opts
+   }
+ }
+ 
+-handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opts) {
+-  if (this.fsw.closed || this.checkIgnored(path)) return;
++handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opts, stats) {
++  if (this.fsw.closed || this.checkIgnored(path, stats)) return;
+ 
+   if (event === EV_UNLINK) {
++    this._fileStats.delete(sysPath.resolve(path));
+     const isDirectory = info.type === FSEVENT_TYPE_DIRECTORY
+     // suppress unlink events on never before seen files
+     if (isDirectory || watchedDir.has(item)) {
+@@ -277,7 +292,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
          // push symlinks back to the top of the stack to get handled
          const curDepth = opts.depth === undefined ?
            undefined : calcDepth(fullPath, realPath) + 1;
@@ -379,16 +507,19 @@ index fe29393..ef2e553 100644
        }
  
        // track new paths
-@@ -289,7 +292,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+@@ -288,8 +303,9 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+      * @type {'add'|'addDir'|'unlink'|'unlinkDir'}
       */
      const eventName = info.type === FSEVENT_TYPE_DIRECTORY ? event + DIR_SUFFIX : event;
-     this.fsw._emit(eventName, path);
+-    this.fsw._emit(eventName, path);
 -    if (eventName === EV_ADD_DIR) this._addToFsEvents(path, false, true);
++    if (info.type !== FSEVENT_TYPE_DIRECTORY && this._knownFileStats(path, stats) && event === EV_CHANGE) return;
++    this.fsw._emit(eventName, path, stats);
 +    if (eventName === EV_ADD_DIR) this.fsw._trackAdd(this._addToFsEvents(path, false, true));
    }
  }
  
-@@ -304,6 +307,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
+@@ -304,6 +320,7 @@ handleEvent(event, path, fullPath, realPath, parent, watchedDir, item, info, opt
  _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
    if (this.fsw.closed || this.fsw._isIgnored(watchPath)) return;
    const opts = this.fsw.options;
@@ -396,7 +527,7 @@ index fe29393..ef2e553 100644
    const watchCallback = async (fullPath, flags, info) => {
      if (this.fsw.closed) return;
      if (
-@@ -313,6 +317,7 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+@@ -313,6 +330,7 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
      const path = transform(sysPath.join(
        watchPath, sysPath.relative(watchPath, fullPath)
      ));
@@ -404,7 +535,7 @@ index fe29393..ef2e553 100644
      if (globFilter && !globFilter(path)) return;
      // ensure directories are tracked
      const parent = sysPath.dirname(path);
-@@ -328,7 +333,7 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+@@ -328,10 +346,10 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
          try {
            stats = await stat(path);
          } catch (error) {}
@@ -412,8 +543,38 @@ index fe29393..ef2e553 100644
 +        if (!this.fsw._isPathActive(path, generation)) return;
          if (this.checkIgnored(path, stats)) return;
          if (sameTypes(info, stats)) {
-           this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
-@@ -387,7 +392,7 @@ async _handleFsEventsSymlink(linkPath, fullPath, transform, curDepth) {
+-          this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
++          this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts, stats);
+         } else {
+           this.handleEvent(EV_UNLINK, path, fullPath, realPath, parent, watchedDir, item, info, opts);
+         }
+@@ -341,8 +359,23 @@ _watchWithFsEvents(watchPath, realPath, transform, globFilter) {
+     } else {
+       switch (info.event) {
+       case FSEVENT_CREATED:
+-      case FSEVENT_MODIFIED:
+-        return this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
++      case FSEVENT_MODIFIED: {
++        let stats;
++        try {
++          stats = await stat(path);
++        } catch (error) {
++          if (!this.fsw._isPathActive(path, generation)) return;
++          if (error.code === 'EACCES') {
++            return this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts);
++          }
++          if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
++            return this.handleEvent(EV_UNLINK, path, fullPath, realPath, parent, watchedDir, item, info, opts);
++          }
++          return this.fsw._handleError(error);
++        }
++        if (!this.fsw._isPathActive(path, generation)) return;
++        return this.addOrChange(path, fullPath, realPath, parent, watchedDir, item, info, opts, stats);
++      }
+       case FSEVENT_DELETED:
+       case FSEVENT_MOVED:
+         return this.checkExists(path, fullPath, realPath, parent, watchedDir, item, info, opts);
+@@ -387,7 +420,7 @@ async _handleFsEventsSymlink(linkPath, fullPath, transform, curDepth) {
  
      // add the linkTarget for watching with a wrapper for transform
      // that causes emitted paths to incorporate the link's path
@@ -422,7 +583,15 @@ index fe29393..ef2e553 100644
        let aliasedPath = linkPath;
        if (linkTarget && linkTarget !== DOT_SLASH) {
          aliasedPath = path.replace(linkTarget, linkPath);
-@@ -451,6 +456,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+@@ -416,6 +449,7 @@ emitAdd(newPath, stats, processPath, opts, forceAdd) {
+ 
+   // ensure empty dirs get tracked
+   if (isDir) this.fsw._getWatchedDir(pp);
++  else this._knownFileStats(pp, stats);
+   if (dirObj.has(base)) return;
+   dirObj.add(base);
+ 
+@@ -451,6 +485,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
    const processPath = typeof transform === FUNCTION_TYPE ? transform : IDENTITY_FN;
  
    const wh = this.fsw._getWatchHelpers(path);
@@ -430,7 +599,7 @@ index fe29393..ef2e553 100644
  
    // evaluate what is at the path we're being asked to watch
    try {
-@@ -467,7 +473,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+@@ -467,7 +502,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
        if (priorDepth && priorDepth > opts.depth) return;
  
        // scan the contents of the dir
@@ -439,7 +608,7 @@ index fe29393..ef2e553 100644
          fileFilter: entry => wh.filterPath(entry),
          directoryFilter: entry => wh.filterDir(entry),
          ...Depth(opts.depth - (priorDepth || 0))
-@@ -487,13 +493,14 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+@@ -487,13 +522,14 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
            const curDepth = opts.depth === undefined ?
              undefined : calcDepth(joinedPath, sysPath.resolve(wh.watchPath)) + 1;
  
@@ -457,7 +626,7 @@ index fe29393..ef2e553 100644
      } else {
        this.emitAdd(wh.watchPath, stats, processPath, opts, forceAdd);
        this.fsw._emitReady();
-@@ -518,6 +525,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
+@@ -518,6 +554,7 @@ async _addToFsEvents(path, transform, forceAdd, priorDepth) {
        this.initWatch(realPath, path, wh, processPath);
      }
    }
