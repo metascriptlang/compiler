@@ -113,9 +113,10 @@ test "copying an owned local into a second owner is refused" {
 	assert message.contains("cannot copy 'a'"), message;
 }
 
-test "copying an owned field into a second owner is refused" {
-	const message = refused(TREE + "root.kids.push(new N());\nconst other: Owned<N> = new N();\nother.next = root.kids[0];\nconsole.log(root.kids[0].id);\n}\n");
-	assert message.contains("cannot copy 'root.kids[0]'"), message;
+test "an owned field store is checked at run time, beside the unchanged store" {
+	const r = compileToC(TREE + "root.kids.push(new N());\nconst other: Owned<N> = new N();\nother.next = root.kids[0];\nconsole.log(root.kids[0].id);\n}\nadopt(new N());\n");
+	assert r.ok, r.ok ? "" : r.error;
+	assert r.value.contains("msOwnedReplace((*other"), r.value;
 }
 
 test "the last read of an owned local moves it" {
