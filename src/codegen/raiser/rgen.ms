@@ -38,7 +38,8 @@ import { createLegacyEntry, locationResult } from "./packedCalls";
 import { packedSlotShapeOf } from "./valueCopy";
 import { createVmLayouts } from "./layout";
 import { RaiserSlotShape } from "../../raiser/bytecode";
-import { HiddenDerefData, ArrayAccessData, CallExprData, UnaryExprData } from "../../ast/node";
+import { HiddenDerefData, HiddenStdConvData, ArrayAccessData, CallExprData, UnaryExprData } from "../../ast/node";
+import { skipModifier } from "../../checker/types";
 import { isFrameOwnershipCall } from "./drcLower";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst, layoutOf, slotKindsOf } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
@@ -178,6 +179,7 @@ export function collectLegacyRoots(s: RaiserCompState, node: Node): void {
 		}
 	}
 	if (node.kind == NodeKind.HiddenAddr) markLegacyRoot(s, (node.data as HiddenDerefData).expr);
+	if ((node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) && skipModifier(node.nodeType)?.kind == TypeKind.Span) markLegacyRoot(s, (node.data as HiddenStdConvData).convExpr);
 	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&") markLegacyRoot(s, (node.data as UnaryExprData).operand);
 	if (node.kind == NodeKind.ArrayAccess && (node.data as ArrayAccessData).index.kind != NodeKind.NumberLiteral) markLegacyRoot(s, (node.data as ArrayAccessData).array);
 	forEachChild(node, (child: Node): void => collectLegacyRoots(s, child));
