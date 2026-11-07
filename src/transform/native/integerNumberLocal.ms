@@ -104,7 +104,7 @@ function redirectCasts(n: Node, sym: Symbol, intSym: Symbol): int32 {
 
 function isFloat(t: Type | null): boolean {
 	const r = peelToRepr(t);
-	return r != null && isFloatKind(r.kind);
+	return r != null && (r.kind == TypeKind.Float64 || r.kind == TypeKind.Number);
 }
 
 function isSignedInt(t: Type | null): boolean {
