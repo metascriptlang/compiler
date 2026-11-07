@@ -917,7 +917,11 @@ function isStdBuiltinWritingNothing(sym: Symbol): boolean {
 	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind);
 }
 
-const GENERIC_ARRAY_BYTE_MOVERS = ["msGenericArrayPush", "msGenericArrayPop", "msGenericArrayCapacity"];
+const GENERIC_ARRAY_BYTE_MOVERS = [
+	"msGenericArrayPush", "msGenericArrayPop", "msGenericArrayCapacity", "msGenericArrayCheckedIndex",
+	"msGenericArrayReserve", "msGenericArrayReserveMore", "msGenericArrayAppendBlock", "msGenericArraySetLen",
+	"msGenericArrayRotate", "msGenericArraySwap", "msGenericArraySwapWith",
+];
 
 function isGenericArrayByteMover(sym: Symbol): boolean {
 	const native = sym.nativeName.startsWith("&") ? sym.nativeName.slice(1) : sym.nativeName;
