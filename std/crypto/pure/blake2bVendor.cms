@@ -16,10 +16,10 @@ import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 // C bindings
-extern function msBlake2b(data: string, hashSize: int32): string;
-extern function msBlake2bKeyed(key: string, data: string, hashSize: int32): string;
+extern function msBlake2b(data: Readonly<Span<uint8>>, hashSize: int32): string;
+extern function msBlake2bKeyed(key: Readonly<Span<uint8>>, data: Readonly<Span<uint8>>, hashSize: int32): string;
 extern function msBlake2bInit(hashSize: int32): int64;
-extern function msBlake2bUpdate(ctx: int64, data: string): void;
+extern function msBlake2bUpdate(ctx: int64, data: Readonly<Span<uint8>>): void;
 extern function msBlake2bFinal(ctx: int64): string;
 
 function badHashSize(hashSize: int32, op: string): CryptoError | null {
@@ -34,7 +34,7 @@ function badHashSize(hashSize: int32, op: string): CryptoError | null {
 export function blake2bSync(data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(rawBuffer(msBlake2b(rawString(data), hashSize)));
+	return Result.ok(rawBuffer(msBlake2b((typeof data == "string" ? data.asBytes() : data), hashSize)));
 }
 
 export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
@@ -44,7 +44,7 @@ export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 =
 	}
 	const bad = badHashSize(hashSize, "blake2bKeyed");
 	if (bad != null) return Result.err(bad);
-	const result = msBlake2bKeyed(key, rawString(data), hashSize);
+	const result = msBlake2bKeyed(key.asBytes(), (typeof data == "string" ? data.asBytes() : data), hashSize);
 	if (result == "") return Result.err(cryptoError(CryptoErrorKind.HashFailed, "blake2bKeyed", "keyed hash failed"));
 	return Result.ok(rawBuffer(result));
 }
@@ -65,7 +65,7 @@ export class Blake2b {
 
 	update(data: Bytes): Blake2b {
 		if (this._ctx == 0) throw new Error("Blake2b.update: the hasher already produced its digest");
-		msBlake2bUpdate(this._ctx, rawString(data));
+		msBlake2bUpdate(this._ctx, (typeof data == "string" ? data.asBytes() : data));
 		return this;
 	}
 
