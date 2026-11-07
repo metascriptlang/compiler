@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, isUnownedSlot, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, createReadonlyView, viewsAsReadonlyStruct, isTagCarriedUnion, isClassOrArrayRef } from "../../checker/types";
+import { callConvKey, TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, importedScalarSym, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, isUnownedSlot, setRepr, arrayElementNeedsCleanup, tupleTypeNameIn, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKeyIn, isNominalKind, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayNameUnprofiled, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType, isUncountedElement, isReadonlyView, createReadonlyView, viewsAsReadonlyStruct, isReadonlyUnownedSlot, isSendableFunction, isTagCarriedUnion, isClassOrArrayRef } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol, CallingConvention } from "../../ast/node";
 import { monoInstanceName, monoInstanceNameIn } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -247,7 +247,8 @@ export function opTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type |
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return opTypeKeyIn(roots, t.typeReturn);
 	if (t.kind == TypeKind.Array) {
 		const elem = arrayOpElement(t.typeReturn);
-		const elemKey = isReadonlyView(t) && viewsAsReadonlyStruct(elem) ? "ro:" + typeKeyIn(roots, elem) : opTypeKeyIn(roots, elem);
+		const elemKey = isReadonlyView(t) && viewsAsReadonlyStruct(elem) ? "ro:" + typeKeyIn(roots, elem)
+			: (arrayCountsThroughRo(t, t.typeReturn) ? "ro:" : "") + opTypeKeyIn(roots, elem);
 		return (isUnownedSlot(t.typeReturn) ? "array:unowned:" : "array:") + elemKey;
 	}
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
@@ -257,6 +258,12 @@ export function opTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type |
 	if (t.kind == TypeKind.Cursor) return "cursor:" + opTypeKeyIn(roots, t.typeReturn);
 	if (isReadonlyStructView(t)) return "ro:" + typeKeyIn(roots, t);
 	return typeKeyIn(roots, t);
+}
+
+function arrayCountsThroughRo(arrT: Readonly<Type>, elem: Readonly<Type | null>): boolean {
+	if (elem == null) return false;
+	const counted = elem.kind == TypeKind.Ref || elem.kind == TypeKind.Function || isUnownedSlot(elem) || unwrapRefNullUnion(elem) != null;
+	return counted && (isReadonlyView(arrT) || isReadonlyView(elem) || isReadonlyUnownedSlot(elem) || isSendableFunction(elem));
 }
 
 export function isReadonlyStructView(t: Readonly<Type | null>): boolean {
