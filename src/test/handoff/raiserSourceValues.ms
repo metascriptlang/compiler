@@ -38,7 +38,7 @@ test "packed source: return snapshots all words before finally mutates the local
 	assert ctx.lastResult.intVal == 23;
 }
 
-test "packed source: arguments snapshot before later arguments mutate their source" {
+test "packed source: a path argument is read at the call, after later arguments mutate it, as on C and JS" {
 	const ctx = evalSourceFull(`
 		struct Pair { x: int64; y: int64; }
 		@noinline function first(p: Pair, n: int64): int64 { return p.x * 10 + p.y + n; }
@@ -50,7 +50,7 @@ test "packed source: arguments snapshot before later arguments mutate their sour
 		return run();
 	`);
 	assert ctx.lastError == "", ctx.lastError;
-	assert ctx.lastResult.intVal == 30;
+	assert ctx.lastResult.intVal == 80;
 }
 
 test "packed source: nullable presence and nullish coalescing keep zero and false" {
