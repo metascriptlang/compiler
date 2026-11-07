@@ -177,8 +177,14 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 	patchJumpTo(s, jumpPastInit, codeLen(s));
 }
 
+function takesGlobalCell(s: RaiserCompState, init: Node | null): boolean {
+	if (init == null || init.kind != NodeKind.HiddenDeref) return false;
+	const held = (init.data as HiddenDerefData).expr;
+	return held.kind == NodeKind.Identifier && resolveGlobal(s, held.resolvedSym) >= 0;
+}
+
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
-	const shape = resolveGlobal(s, node.resolvedSym) < 0 && node.resolvedSym != null && !s.legacyRoots.has(node.resolvedSym) ? packedSlotShapeOf(s.layouts, node.nodeType) : null;
+	const shape = resolveGlobal(s, node.resolvedSym) < 0 && node.resolvedSym != null && !s.legacyRoots.has(node.resolvedSym) && !takesGlobalCell(s, d.initializer) ? packedSlotShapeOf(s.layouts, node.nodeType) : null;
 	if (shape != null) {
 		const value = d.initializer != null ? compilePackedExpr(s, d.initializer, node.nodeType!) : allocPackedValue(s, s.layouts, node.nodeType!);
 		declareLocal(s, declaredSymbol(node, d.declName), value.base, false, shape);
