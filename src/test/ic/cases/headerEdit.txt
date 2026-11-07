@@ -1,0 +1,15 @@
+A C header an importer reads changes a struct's fields, though no source module changes.
+#!VERIFY
+#!FILE point.h
+typedef struct Point { int a; int b; } Point;
+#!FILE main.ms
+import { Point } from "./point.h";
+const p: Point = { a: 1, b: 2 };
+console.log(`${p.a + p.b}`);
+#!STEP expect: 3
+#!FILE point.h
+typedef struct Point { int a; int c; } Point;
+#!STEP fails: Property 'b' does not exist on type 'Point'
+#!FILE point.h
+typedef struct Point { int a; int b; } Point;
+#!STEP expect: 3

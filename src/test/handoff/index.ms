@@ -104,6 +104,7 @@ import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
 import "./icDispatchReads";
 import "./icTypeOrigins";
+import "./icComptimeReads";
 import "./bitSetCaseLabel";
 import "./destructuringRestLast";
 import "./destructuringWriteTargets";

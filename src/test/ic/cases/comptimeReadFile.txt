@@ -1,6 +1,5 @@
 A file read at compile time changes what the module computes, though no source module changes.
 #!VERIFY
-#!XFAIL a file read at compile time is not an input of the warm session, so the module stays green and keeps the old value (cache-reuse, After IC item 1)
 #!FILE data.txt
 abc
 #!FILE main.ms
@@ -15,3 +14,6 @@ console.log(`${length}`);
 #!FILE data.txt
 abcdef
 #!STEP expect: 7
+#!FILE data.txt
+abc
+#!STEP expect: 4
