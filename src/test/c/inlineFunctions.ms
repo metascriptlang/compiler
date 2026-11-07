@@ -41,6 +41,22 @@ export class Box {
 		return new Box(n * 2);
 	}
 }
+
+export class Cell<T> {
+	v: T;
+
+	@inline
+	constructor(v: T) {
+		this.v = v;
+	}
+}
+
+export class IntCell extends Cell<int32> {
+	@inline
+	constructor(n: int32) {
+		super(n + 1);
+	}
+}
 `;
 
 const OTHER = `import { twice, Span2, width, Box } from "./lib";
@@ -51,13 +67,13 @@ export function fromOther(n: int32): int32 {
 }
 `;
 
-const MAIN = `import { twice, plain, Span2, width, Box } from "./lib";
+const MAIN = `import { twice, plain, Span2, width, Box, Cell, IntCell } from "./lib";
 import { fromOther } from "./other";
 
 const n: int32 = 20;
 const a: Span2 = { low: 1, high: 5 };
 const b: Span2 = { low: 2, high: 9 };
-console.log(twice(n), plain(n), (a + b).width(), fromOther(n), Box.of(n).n);
+console.log(twice(n), plain(n), (a + b).width(), fromOther(n), Box.of(n).n, new Cell<string>("c").v, new IntCell(n).v);
 `;
 
 function emitted(): string {
@@ -125,6 +141,22 @@ test "an @inline constructor and static method are defined static inline in ever
 	assert !definesStaticInline(other, "Box_of");
 }
 
+function definesStaticInlineGenericInit(unit: string, cls: string): boolean {
+	const lines = unit.split("\n");
+	for (const line of lines) {
+		if (line.startsWith("static inline void " + cls + "_") && line.contains("_init(") && line.endsWith(") {")) return true;
+	}
+	return false;
+}
+
+test "an @inline constructor of a generic class is defined static inline in the module that builds an instance, and through super" {
+	const cCode = emitted();
+	assert !cCode.startsWith("ERROR"), cCode;
+	const main = moduleC(cCode, "main");
+	assert definesStaticInlineGenericInit(main, "Cell"), main;
+	assert definesStaticInlineInit(main, "IntCell");
+}
+
 test "a module that declares an @inline function but never calls it has no copy" {
 	const lib = moduleC(emitted(), "lib");
 	assert lib != "";
@@ -160,8 +192,8 @@ test "@inline is refused on anything but a module-level function" {
 	for (const row of rows) assert refusal(row).contains("@inline applies to a module-level function"), row;
 }
 
-test "@inline on a class member takes a static method or the constructor implementation of a non-generic class" {
-	assert refusal(`class G<T> {\n\tv: T;\n\t@inline\n\tconstructor(v: T) { this.v = v; }\n}\nconsole.log(new G<int32>(4).v);\n`).contains("@inline on a member of a generic class is not supported");
+test "@inline on a class member takes a static method or the constructor implementation" {
+	assert refusal(`class G<T> {\n\tv: T;\n\t@inline\n\tconstructor(v: T) { this.v = v; }\n}\nconsole.log(new G<int32>(4).v);\n`) == "";
 	assert refusal(`class S {\n\tv: number = 0;\n\t@inline\n\tconstructor(v: number);\n\tconstructor(v: number | string) { this.v = 1; }\n}\nconsole.log(new S(4).v);\n`).contains("@inline goes on the constructor implementation");
 	assert refusal(`class K {\n\t@inline\n\tstatic f(n: int32): int32 { return n + 1; }\n}\nconsole.log(K.f(4));\n`) == "";
 }
