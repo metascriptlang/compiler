@@ -89,6 +89,17 @@ export function setFileText(
 	return true;
 }
 
+export function setFileAbsent(store: TaFileInputStore, filePath: string, revision: int32): boolean {
+	const idx = findByPath(store, filePath);
+	if (idx < 0 || !store.files[idx].present) return false;
+	const file = store.files[idx];
+	file.present = false;
+	file.source = "";
+	file.changedAt = revision;
+	moveChangeMarkers(store, file.durability, revision);
+	return true;
+}
+
 // The id of a path's input, a path with no file included: an importer that found nothing at a
 // candidate path depends on that path, so writing the file there changes the input it read.
 export function getInputId(
@@ -351,4 +362,16 @@ test "a path with no file is an input a later write changes" {
 	assert setFileText(store, "/a/b.ms", "", 6);
 	assert getFileId(store, "/a/b.ms") == id && getFileChangedAt(store, id) == 6;
 	assert getFilePath(store, id) == "/a/b.ms";
+}
+
+test "a file found absent changes at that revision, once, and an empty file read back is a change again" {
+	const store = createFileInputStore();
+	setFileText(store, "/p/data.txt", "", 1);
+	const id = getFileId(store, "/p/data.txt");
+	assert setFileAbsent(store, "/p/data.txt", 2);
+	assert !setFileAbsent(store, "/p/data.txt", 3);
+	assert getFileId(store, "/p/data.txt") == -1;
+	assert getFileChangedAt(store, id) == 2;
+	assert setFileText(store, "/p/data.txt", "", 4);
+	assert getFileChangedAt(store, id) == 4;
 }

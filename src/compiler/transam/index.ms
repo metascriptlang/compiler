@@ -9,6 +9,8 @@
 
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind, BuiltinKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
+import { TaExternalReads, createExternalReads, noteExternalRead } from "./externalReads";
+import { installCompileTimeReadSink } from "../meta/compileTimeReads";
 import { TaAbsentProbes, createAbsentProbes, enterCheckProbes, leaveCheckProbes, knownAbsentAt, recordAbsentAt, recordDiskProbe } from "./absentProbes";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
 import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf, isCancelled } from "../../checker/context";
@@ -34,7 +36,7 @@ import { TaDispatchStore, createDispatchStore, prepareDispatch, trackDispatchRea
 import { DispatchRegistry, createDispatchRegistry, installDispatchReadSink } from "../../checker/context";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileId, getInputId, getFilePath, hasFile,
+	setFileText, setFileAbsent, getFileText, getFileId, getInputId, getFilePath, hasFile,
 	getFileCount, getFilePathByIndex,
 	getFileDurability, setFileDurability
 } from "./fileInput";
@@ -107,6 +109,7 @@ export function dbSetResolverConfig(db: TransAmDb, config: ResolverConfig): void
 export function dbBindGraph(db: TransAmDb, graph: ModuleGraph): void {
 	db.graph = graph;
 	graph.dispatchRegistry = db.dispatchRegistry;
+	for (const path of db.externalReads.paths) dbRefreshExternalRead(db, path);
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod != null && (mod.source != "" || mod.program != null)) dbSetFileText(db, path, mod.rawSource);
@@ -156,6 +159,7 @@ export class TransAmDb {
 	resolverConfig: ResolverConfig;
 	preludeCtx: CheckerContext | null;
 	absent: TaAbsentProbes;
+	externalReads: TaExternalReads;            // files a compile-time evaluation read, re-read at every bind
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 	verifying: HashSet<string>;                // modules whose recorded imports are being rechecked for early cutoff
@@ -227,6 +231,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		resolverConfig: createDefaultConfig(Backend.C, ""),
 		preludeCtx: null,
 		absent: createAbsentProbes(),
+		externalReads: createExternalReads(),
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 		verifying: new HashSet<string>(),
@@ -649,6 +654,21 @@ function treeForCheck(db: TransAmDb, filePath: string, reader: string): Node | n
 // Ensure a file is loaded into the db (read from disk if needed).
 // Preprocessing happens lazily via the Preprocess query (dbPreprocess), so this
 // just reads raw and stores as-is. The Preprocess query later resolves .h imports.
+function dbRefreshExternalRead(db: TransAmDb, path: string): void {
+	const read = readStdFile(path);
+	if (read.ok) {
+		dbSetFileText(db, path, read.value);
+		return;
+	}
+	const revision = nextRevision(db.revision);
+	if (setFileAbsent(db.fileInput, path, revision)) db.revision.value = revision;
+}
+
+function dbRecordExternalRead(db: TransAmDb, path: string): void {
+	if (noteExternalRead(db.externalReads, path)) dbEnsureFileLoaded(db, path);
+	recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, getInputId(db.fileInput, path, db.revision.value)));
+}
+
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
 	const read = readStdFile(filePath);
@@ -1203,6 +1223,8 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 	const entryDb = _checkingDb;
 	const entrySink = installBodyReadSink(null);
 	installBodyReadSink(entrySink);
+	const entryTimeReads = installCompileTimeReadSink(null);
+	installCompileTimeReadSink(entryTimeReads);
 	try {
 		// Macro-declaring deps need a FULL check first: checkProgram registers their
 		// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
@@ -1250,10 +1272,12 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 		if (bound == null && db.handedToCheck != null) db.handedToCheck.add(fileId);
 		const bodyReads = new HashSet<string>();
 		const outerSink = installBodyReadSink((modulePath: string): void => { bodyReads.add(modulePath); });
+		const outerTimeReads = installCompileTimeReadSink((path: string): void => { dbRecordExternalRead(db, path); });
 		const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
 		const checkerCtx = finishModuleCheck(unit);
 		for (const message of unchecked) addError(checkerCtx, message, 1, 1);
 		installBodyReadSink(outerSink);
+		installCompileTimeReadSink(outerTimeReads);
 		_checkingDb = outerDb;
 		db.bound.delete(filePath);
 
@@ -1286,6 +1310,7 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 		db.checkInProgress.delete(filePath);
 		_checkingDb = entryDb;
 		installBodyReadSink(entrySink);
+		installCompileTimeReadSink(entryTimeReads);
 		db.bound.delete(filePath);
 		forgetClientsOfDiscardedUnit(db, fileId);
 		throw e;
@@ -1397,6 +1422,7 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	ctx.disambTable = copyDisambTable(afterCheck);
 	const lowerReads = new HashSet<string>();
 	const outerSink = installBodyReadSink((modulePath: string): void => { lowerReads.add(modulePath); });
+	const outerTimeReads = installCompileTimeReadSink((path: string): void => { dbRecordExternalRead(db, path); });
 	const outerDispatch = trackDispatchReads(db.dispatch, db.cache, db.fileInput, db.depStack);
 	let lowered: Node;
 	try {
@@ -1407,6 +1433,7 @@ export function dbLower<T>(db: TransAmDb, filePath: string, lower: (checked: Nod
 	} finally {
 		installDispatchReadSink(db.dispatchRegistry, outerDispatch);
 		installBodyReadSink(outerSink);
+		installCompileTimeReadSink(outerTimeReads);
 		ctx.disambTable = checkTable;
 	}
 	for (const read of lowerReads) {
