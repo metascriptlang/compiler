@@ -5,8 +5,9 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, SymbolKind, DeclKind, createNode, BuiltinKind } from "../../ast/node";
-import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, TypeFlag, SymbolKind, DeclKind, createNode, BuiltinKind } from "../../ast/node";
+import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef, copyTypeShallow, withoutReadonlyView, isReadonlyView } from "../../checker/types";
+import { returnsView } from "../../checker/effects";
 import { GcMode } from "../../checker/context";
 import { TransformContext, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode } from "../walker";
@@ -247,6 +248,36 @@ export function disownResult(thunk: Node, retType: Type | null, ctx: TransformCo
 	}
 }
 
+// The awaiting side owns a task's result, so a thunk returning a view returns it counted, through
+// the flavor of the view's own type.
+export function ownTaskResult(thunk: Node, retType: Type | null): void {
+	if (retType == null || !returnsView(retType)) return;
+	if (thunk.kind == NodeKind.ArrowFunction || thunk.kind == NodeKind.FunctionExpr) {
+		if (thunk.nodeType != null) thunk.nodeType = withOwnedResult(thunk.nodeType!, retType);
+		return;
+	}
+	if (thunk.kind != NodeKind.ObjectLiteral || !thunk.flags.has(NodeFlag.Closure)) return;
+	const routine = (thunk.data as ObjectLiteralData).properties[0].resolvedSym;
+	if (routine != null && routine.symbolType != null) routine.symbolType = withOwnedResult(routine.symbolType!, retType);
+}
+
+function withOwnedResult(fn: Type, retType: Type): Type {
+	if (fn.kind != TypeKind.Function) return fn;
+	const owned = copyTypeShallow(fn);
+	owned.typeReturn = ownedResultType(retType);
+	return owned;
+}
+
+function ownedResultType(t: Type): Type {
+	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return ownedResultType(t.typeReturn);
+	if (t.kind != TypeKind.Union) return withoutReadonlyView(t);
+	if (isReadonlyView(t) && t.mutableView != null) return t.mutableView;
+	const u = copyTypeShallow(t);
+	u.typeFlags = u.typeFlags.excl(TypeFlag.IsReadonly);
+	u.typeChildren = t.typeChildren.map((m: Type): Type => m == null ? m : ownedResultType(m));
+	return u;
+}
+
 // ULTRALOCK T4: the thunk takes each moved capture out of its env slot at entry, so the scope-end
 // destroy drops it inside the task, before the result is published.
 export function takeMovedCaptures(closure: Node, ctx: TransformContext): void {
@@ -279,6 +310,17 @@ export function takeMovedCaptures(closure: Node, ctx: TransformContext): void {
 		takes.push(decl);
 	}
 	if (takes.length > 0) prependStmts(thunk, takes, loc);
+}
+
+export function ownTaskResults(program: Node): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.CallExpr) return node;
+		const cd = node.data as CallExprData;
+		const sym = node.resolvedSym != null ? node.resolvedSym : cd.callee.resolvedSym;
+		if (sym == null || sym.builtinKind != BuiltinKind.PromiseSpawn || cd.arguments.length < 1) return node;
+		if (node.nodeType != null && isAwaitable(node.nodeType)) ownTaskResult(spawnThunk(cd.arguments[0]), awaitedType(node.nodeType));
+		return node;
+	});
 }
 
 export function lowerSpawn(program: Node, ctx: TransformContext): Node {
@@ -315,6 +357,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureRetType = closureArg.nodeType.typeReturn;
 		}
 
+		ownTaskResult(boxTarget, closureRetType);
 		disownResult(boxTarget, closureRetType, ctx);
 		if (closureRetType != null && needsBoxing(closureRetType, ctx.raiserBackend)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):

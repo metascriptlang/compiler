@@ -35,7 +35,7 @@ import { cloneIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLit
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, armGroupDeadline, throwIfTimedOut, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk, needsBoxing } from "./spawnLower";
+import { boxReturns, boxForType, disownResult, ownTaskResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk, needsBoxing } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -135,6 +135,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				injectCancelSafePoints(closureBody, cloneIdent(ag.ident, loc), loc);
 			}
 		}
+		ownTaskResult(thunk, slot.innerType);
 		disownResult(thunk, slot.innerType, ctx);
 		// Box return values in closure body (spawnGroupLower runs before spawnLower,
 		// so closures extracted here bypass spawnLower's boxing pass).

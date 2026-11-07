@@ -5,6 +5,7 @@
 
 import { wrapTypedArraySpanSources } from "./lowering/spanLower";
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
+import { ownTaskResults } from "./lowering/spawnLower";
 import { Node, NodeKind, CallExprData, BuiltinKind } from "../ast/node";
 import { walkNode } from "./walker";
 import { pickWhenRaiser } from "./lowering/whenRaiserPick";
@@ -138,6 +139,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerUserOperators(result, ctx);
+	result = ownTaskResults(result);
 	result = lowerLambda(result, ctx);
 	result = lowerAsyncBridge(result, ctx);
 	result = lowerRuntimeNames(result, ctx);

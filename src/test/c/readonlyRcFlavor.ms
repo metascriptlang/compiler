@@ -58,6 +58,36 @@ test "readonlyRcFlavor: a count reached through Readonly<T> takes the Ro flavor 
 	assert count(destroy, "msDecrefCyclicEdgeRo(") == 1, "the Readonly<Node> field of a cyclic owner drops through the Ro edge:\n" + destroy;
 }
 
+const TASK_RESULT = `
+class Leaf { n: int32 = 1; }
+class Node { next: Node | null = null; leaf: Leaf = new Leaf(); }
+function chain(): Node { const a = new Node(); a.next = new Node(); return a; }
+const EMPTY: Readonly<Node> = chain();
+const next = spawn((): Readonly<Node> | null => EMPTY.next);
+console.log((await next) === EMPTY.next);
+`;
+
+function routineBodies(c: string, signatureHas: string): string[] {
+	const lines = c.split("\n");
+	const bodies: string[] = [];
+	for (let i = 0; i < lines.length; i += 1) {
+		if (!lines[i].contains(signatureHas) || !lines[i].endsWith("{") || lines[i].startsWith("\t") || lines[i].startsWith(" ")) continue;
+		const body: string[] = [];
+		let j = i + 1;
+		while (j < lines.length && lines[j] != "}") { body.push(lines[j].trim()); j += 1; }
+		bodies.push(body.join("\n"));
+	}
+	return bodies;
+}
+
+test "readonlyRcFlavor: a task returning a view of a module const counts its result through the Ro flavor, because the awaiter owns it" {
+	const result = compileToC(TASK_RESULT);
+	assert result.ok, result.ok ? "" : result.error;
+	const thunks = routineBodies(result.ok ? result.value : "", "anon").filter((b) => b.contains("EMPTY") && b.contains("return"));
+	assert thunks.length == 1, thunks.join("\n----\n");
+	assert thunks[0].contains("msIncrefCyclicRo("), thunks[0];
+}
+
 test "readonlyRcFlavor: a Sendable function field takes the Ro flavor of the closure ops, a plain closure field keeps them" {
 	const result = compileToC(CLOSURES);
 	assert result.ok, result.ok ? "" : result.error;

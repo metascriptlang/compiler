@@ -3582,3 +3582,18 @@ test "engine: an overflow in an inlined routine traces the frames its calls woul
 	const viaLambda = evalVM(lifted);
 	assert viaLambda.error != "" && vmDumpStack(viaLambda) == vmDumpStack(evalVM(liftedKept)), vmDumpStack(viaLambda);
 }
+
+test "engine: a task returning a view of a module const returns it counted, because the awaiter owns the result" {
+	const code = "class Leaf { n: int32 = 1; } class Node { next: Node | null = null; leaf: Leaf = new Leaf(); }"
+		+ " function chain(): Node { const a = new Node(); a.next = new Node(); return a; }"
+		+ " const EMPTY: Readonly<Node> = chain();"
+		+ " const next = spawn((): Readonly<Node> | null => EMPTY.next);"
+		+ " console.log((await next) === EMPTY.next);";
+	const thunks = compileLowered(code).functions.map((f) => disasmFunc(f)).filter((d) => d.contains("$fn_anon") && d.contains("; EMPTY"));
+	assert thunks.length == 1, thunks.join("\n");
+	const body = thunks[0];
+	assert body.contains("RcInc") && body.indexOf("RcInc") < body.indexOf("Ret "), body;
+	const vm = evalVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "true\n", vm.output;
+}
