@@ -265,7 +265,7 @@ function readsCheckedLocation(node: Node, dctx: DrcContext): boolean {
 	return node.nodeType != null && readsMemberInPlace(skipConversionWrappers(node)) && sinkClassify(node.nodeType, dctx).needsCleanup;
 }
 
-function readsMemberInPlace(node: Node): boolean {
+export function readsMemberInPlace(node: Node): boolean {
 	return isRuntimeProcCall(node, "msMaybeGet") || isRuntimeProcCall(node, "msUnionRead") || isRuntimeProcCall(node, "msUnionReadMaybe");
 }
 

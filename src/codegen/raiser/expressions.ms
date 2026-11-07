@@ -41,6 +41,8 @@ import {
 } from "./context";
 import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy, bodyOf, literalValue } from "./packedValues";
 import { nullAccessHead } from "../../transform/maybeCarrier";
+import { readsMemberInPlace } from "../../analyzer/inject";
+import { isViewCall } from "../../checker/effects";
 import { packedSlotShapeOf } from "./valueCopy";
 import { allocShapedCall, shapedArgumentBase, emitShapedCall } from "./packedCalls";
 import { vmLayoutOf } from "./layout";
@@ -854,7 +856,7 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 		}
 		const legacy = compileCallExpr(s, node);
 		const result = emitLegacyToPacked(s, s.layouts, { reg: legacy, valueType, shape: { words: 1, block: false } });
-		if (inRefFile(classOfReg(s, legacy))) emitInst(s, raiserABC(RaiserOpcode.RcDec, legacy, 0, 0));
+		if (!readsInPlace(node) && inRefFile(classOfReg(s, legacy))) emitInst(s, raiserABC(RaiserOpcode.RcDec, legacy, 0, 0));
 		return result;
 	}
 	if (node.kind == NodeKind.ConditionalExpr) {
@@ -2216,6 +2218,10 @@ function mayRaiseAcross(call: Node, args: Node[]): boolean {
 	return false;
 }
 
+function readsInPlace(call: Node): boolean {
+	return isViewCall(call) || readsMemberInPlace(call);
+}
+
 function convertedFrom(node: Node): Node {
 	let inner = node;
 	while (true) {
@@ -2234,7 +2240,8 @@ function materializesFramePlace(s: RaiserCompState, node: Node): boolean {
 
 function makesFreshCell(s: RaiserCompState, node: Node): boolean {
 	const inner = convertedFrom(node);
-	if (inner.kind == NodeKind.CallExpr || inner.kind == NodeKind.NewExpr || inner.kind == NodeKind.ObjectLiteral || inner.kind == NodeKind.ArrayLiteral) return true;
+	if (inner.kind == NodeKind.CallExpr) return !readsInPlace(inner);
+	if (inner.kind == NodeKind.NewExpr || inner.kind == NodeKind.ObjectLiteral || inner.kind == NodeKind.ArrayLiteral) return true;
 	return materializesFramePlace(s, inner) || packedRvalue(s, inner) && vmLayoutOf(s.layouts, inner.nodeType!).kind == MemKind.Block;
 }
 
