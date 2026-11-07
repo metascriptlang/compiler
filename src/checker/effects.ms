@@ -483,6 +483,7 @@ function isPidConst(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 function builtFresh(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 	const known = freshConsts.get(sym);
 	if (known != null) return known;
+	if (!checkedModules.has(sym.modulePath)) return false;
 	const init = constBindingInitializer(sym);
 	const values = init != null ? [init] : staticReadonlyValues(sym);
 	const fresh = values != null && values.length > 0 && allFresh(values, constInitScope(dispatchRegistry)) && noTaskStartsBefore(dispatchRegistry, sym, Effect.StartsTask);
