@@ -728,6 +728,10 @@ function shapedSourceCall(s: RaiserCompState, node: Node): int32 {
 	const cells = reserveCells(s, d.arguments);
 	const closures = reserveClosureArgs(s, node, d.arguments);
 	const dest = allocShapedCall(s, packed.paramTypes, packed.resultType, packed.shape);
+	let lastRunner = -1;
+	for (let i = 0; i < d.arguments.length; i += 1) if (runsCode(d.arguments[i])) lastRunner = i;
+	const readAtCall: int32[] = [];
+	const readAtCallSlot: int32[] = [];
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i += 1) {
 		const arg = d.arguments[i];
@@ -737,9 +741,17 @@ function shapedSourceCall(s: RaiserCompState, node: Node): int32 {
 		}
 		const at = shapedArgumentBase(dest, packed.shape, slot);
 		const shape = packed.shape.params[slot];
-		if (shape.block) emitPackedCopy(s, s.layouts, packedFramePlace(s, s.layouts, at, packed.paramTypes[slot], shape), compilePackedExpr(s, arg, packed.paramTypes[slot]));
+		if (shape.block && i < lastRunner && !runsCode(arg)) {
+			readAtCall.push(i);
+			readAtCallSlot.push(slot);
+		} else if (shape.block) emitPackedCopy(s, s.layouts, packedFramePlace(s, s.layouts, at, packed.paramTypes[slot], shape), compilePackedExpr(s, arg, packed.paramTypes[slot]));
 		else compileClosureArg(s, arg, at, closures.held[i]);
 		slot += 1;
+	}
+	for (let k = 0; k < readAtCall.length; k += 1) {
+		const at = readAtCallSlot[k];
+		emitPackedCopy(s, s.layouts, packedFramePlace(s, s.layouts, shapedArgumentBase(dest, packed.shape, at), packed.paramTypes[at], packed.shape.params[at]),
+			compilePackedExpr(s, d.arguments[readAtCall[k]], packed.paramTypes[at]));
 	}
 	emitShapedCall(s, dest, idx, packed.shape);
 	releaseClosureArgs(s, closures);
