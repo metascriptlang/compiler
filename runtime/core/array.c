@@ -849,7 +849,7 @@ void msRoRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i]);
-		free(p);
+		msMemFree(p);
 	}
 }
 
@@ -860,7 +860,7 @@ void msUnownedRoRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msUnownedDecrefRo(p->data[i]);
-		free(p);
+		msMemFree(p);
 	}
 }
 
@@ -958,7 +958,7 @@ void msRoClosureArrayDestroy(msClosureArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i].env);
-		free(p);
+		msMemFree(p);
 	}
 }
 
