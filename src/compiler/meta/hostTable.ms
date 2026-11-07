@@ -775,7 +775,7 @@ function _bridgeMsStdinDisableBuffering(args: RaiserValue[]): RaiserValue {
 
 @include("runtime/compress/zip.h");
 
-extern function msZipReaderOpen(data: string): int64;
+extern function msZipReaderOpen(data: Readonly<Span<uint8>>): int64;
 extern function msZipReaderCount(handle: int64): int32;
 extern function msZipReaderEntryName(handle: int64, index: int32): string;
 extern function msZipReaderEntrySize(handle: int64, index: int32): int64;
@@ -784,12 +784,12 @@ extern function msZipReaderFind(handle: int64, name: string): int32;
 extern function msZipReaderExtract(handle: int64, index: int32): string;
 extern function msZipReaderClose(handle: int64): void;
 extern function msZipWriterNew(): int64;
-extern function msZipWriterAdd(handle: int64, name: string, data: string, level: int32): int32;
+extern function msZipWriterAdd(handle: int64, name: string, data: Readonly<Span<uint8>>, level: int32): int32;
 extern function msZipWriterFinalize(handle: int64): string;
 extern function msZipWriterClose(handle: int64): void;
 
 function _bridgeMsZipReaderOpen(args: RaiserValue[]): RaiserValue {
-	return raiserInt(msZipReaderOpen(unboxString(args[0])));
+	return raiserInt(msZipReaderOpen(unboxString(args[0]).asBytes()));
 }
 
 function _bridgeMsZipReaderCount(args: RaiserValue[]): RaiserValue {
@@ -826,7 +826,7 @@ function _bridgeMsZipWriterNew(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsZipWriterAdd(args: RaiserValue[]): RaiserValue {
-	return boxInt(msZipWriterAdd(unboxInt(args[0]) as int64, unboxString(args[1]), unboxString(args[2]), unboxInt(args[3]) as int32));
+	return boxInt(msZipWriterAdd(unboxInt(args[0]) as int64, unboxString(args[1]), unboxString(args[2]).asBytes(), unboxInt(args[3]) as int32));
 }
 
 function _bridgeMsZipWriterFinalize(args: RaiserValue[]): RaiserValue {

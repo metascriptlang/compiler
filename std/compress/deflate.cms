@@ -15,7 +15,7 @@
 @compile("vendor/miniz/miniz_tinfl.c");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
@@ -29,13 +29,11 @@ extern function msDeflateDrain(handle: int64, maxBytes: int32): Buffer;
 extern function msDeflateFree(handle: int64): void;
 extern function msDeflateOneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Buffer;
 
-function feedBytes(handle: int64, chunk: Bytes, isLast: int32): int32 {
-	if (typeof chunk == "string") return msDeflateFeed(handle, chunk.asBytes(), isLast);
+function feedBytes(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32 {
 	return msDeflateFeed(handle, chunk, isLast);
 }
 
-function oneShot(data: Bytes, format: int32, level: int32): Buffer {
-	if (typeof data == "string") return msDeflateOneShot(data.asBytes(), format, level);
+function oneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Buffer {
 	return msDeflateOneShot(data, format, level);
 }
 
@@ -57,7 +55,11 @@ export function createDeflate(format: CompressFormat = CompressFormat.Gzip, leve
 
 // Feed a chunk of uncompressed input. Returns any compressed bytes produced
 // so far (may be empty while the compressor buffers input internally).
-export function deflateFeed(s: DeflateStream, chunk: Bytes): Result<Buffer, CompressError> {
+export function deflateFeed<D extends ByteInput>(s: DeflateStream, chunk: D): Result<Buffer, CompressError> {
+	return deflateFeedSpan(s, typeof chunk == "string" ? chunk.asBytes() : chunk);
+}
+
+function deflateFeedSpan(s: DeflateStream, chunk: Readonly<Span<uint8>>): Result<Buffer, CompressError> {
 	if (s.handle == 0) {
 		return Result.err(compressError(CompressErrorKind.OutOfMemory, "deflate context allocation failed"));
 	}
@@ -94,7 +96,11 @@ export function deflateFinish(s: DeflateStream): Result<Buffer, CompressError> {
 // ===== One-shot helpers =====
 
 // Compress to a complete gzip blob (RFC 1952).
-export function gzip(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
+export function gzip<D extends ByteInput>(data: D, level: int32 = 6): Result<Buffer, CompressError> {
+	return gzipSpan(typeof data == "string" ? data.asBytes() : data, level);
+}
+
+function gzipSpan(data: Readonly<Span<uint8>>, level: int32): Result<Buffer, CompressError> {
 	const out = oneShot(data, CompressFormat.Gzip as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "gzip compression failed"));
@@ -103,7 +109,11 @@ export function gzip(data: Bytes, level: int32 = 6): Result<Buffer, CompressErro
 }
 
 // Compress to a zlib-wrapped DEFLATE blob (RFC 1950).
-export function deflate(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
+export function deflate<D extends ByteInput>(data: D, level: int32 = 6): Result<Buffer, CompressError> {
+	return deflateSpan(typeof data == "string" ? data.asBytes() : data, level);
+}
+
+function deflateSpan(data: Readonly<Span<uint8>>, level: int32): Result<Buffer, CompressError> {
 	const out = oneShot(data, CompressFormat.Zlib as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "zlib compression failed"));
@@ -113,7 +123,11 @@ export function deflate(data: Bytes, level: int32 = 6): Result<Buffer, CompressE
 
 // Compress to a raw DEFLATE stream (RFC 1951). Empty input is allowed and
 // produces a 2-byte end-of-stream marker.
-export function deflateRaw(data: Bytes, level: int32 = 6): Result<Buffer, CompressError> {
+export function deflateRaw<D extends ByteInput>(data: D, level: int32 = 6): Result<Buffer, CompressError> {
+	return deflateRawSpan(typeof data == "string" ? data.asBytes() : data, level);
+}
+
+function deflateRawSpan(data: Readonly<Span<uint8>>, level: int32): Result<Buffer, CompressError> {
 	const out = oneShot(data, CompressFormat.Deflate as int32, level);
 	if (out.length == 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "deflate compression failed"));

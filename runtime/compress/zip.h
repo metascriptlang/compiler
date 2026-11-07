@@ -18,7 +18,7 @@
 typedef struct msZipReaderCtx msZipReaderCtx;
 
 /* Parse an archive from an in-memory buffer. Returns an opaque handle or 0. */
-int64_t msZipReaderOpen(msString data);
+int64_t msZipReaderOpen(const uint8_t* data, int64_t len);
 
 /* Number of entries in the archive. -1 on bad handle. */
 int32_t msZipReaderCount(int64_t handle);
@@ -50,7 +50,7 @@ int64_t msZipWriterNew(void);
 
 /* Add one entry with the given name, bytes, and compression level (0-9, 6 default).
  * Returns 0 on OK, <0 on error. */
-int32_t msZipWriterAdd(int64_t handle, msString name, msString data, int32_t level);
+int32_t msZipWriterAdd(int64_t handle, msString name, const uint8_t* data, int64_t len, int32_t level);
 
 /* Finalise the archive and return the resulting bytes.
  * After this call, only msZipWriterClose is valid. */

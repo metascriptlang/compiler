@@ -47,8 +47,8 @@ static const mz_zip_archive_file_stat* entryStat(struct msZipReaderCtx* c, int32
     return &c->stat;
 }
 
-int64_t msZipReaderOpen(msString data) {
-    if (msStrLen(data) <= 0) return 0;
+int64_t msZipReaderOpen(const uint8_t* data, int64_t len) {
+    if (len <= 0) return 0;
 
     struct msZipReaderCtx* c = (struct msZipReaderCtx*)msMemAlloc0(sizeof(*c));
     c->statIndex = -1;
@@ -61,9 +61,9 @@ int64_t msZipReaderOpen(msString data) {
      * Peak memory cost: ~2× the input size during extraction. For the
      * typical ~1 MB package tarball this is fine; callers handling very
      * large archives can stream entry-by-entry to keep peaks down. */
-    c->dataCopy = (char*)msMemAlloc((size_t)msStrLen(data));
-    memcpy(c->dataCopy, msStrData(&data), (size_t)msStrLen(data));
-    c->dataLen = (size_t)msStrLen(data);
+    c->dataCopy = (char*)msMemAlloc((size_t)len);
+    memcpy(c->dataCopy, data, (size_t)len);
+    c->dataLen = (size_t)len;
 
     if (!mz_zip_reader_init_mem(&c->zip, c->dataCopy, c->dataLen, 0)) {
         msMemFree(c->dataCopy);
@@ -160,7 +160,7 @@ int64_t msZipWriterNew(void) {
     return wCtxToHandle(c);
 }
 
-int32_t msZipWriterAdd(int64_t handle, msString name, msString data, int32_t level) {
+int32_t msZipWriterAdd(int64_t handle, msString name, const uint8_t* data, int64_t len, int32_t level) {
     struct msZipWriterCtx* c = wHandleToCtx(handle);
     if (!c || c->finalized) return -1;
 
@@ -175,10 +175,7 @@ int32_t msZipWriterAdd(int64_t handle, msString name, msString data, int32_t lev
     if (level < 0) level = 6;
     if (level > 9) level = 9;
 
-    const void* dataPtr = msStrLen(data) > 0 ? msStrData(&data) : NULL;
-    size_t dataLen = (msStrLen(data) > 0) ? (size_t)msStrLen(data) : 0;
-
-    if (!mz_zip_writer_add_mem(&c->zip, nameBuf, dataPtr, dataLen, (mz_uint)level)) {
+    if (!mz_zip_writer_add_mem(&c->zip, nameBuf, len > 0 ? data : NULL, len > 0 ? (size_t)len : 0, (mz_uint)level)) {
         return -1;
     }
     return 0;

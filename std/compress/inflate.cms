@@ -15,7 +15,7 @@
 @compile("vendor/miniz/miniz_tinfl.c");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
@@ -28,8 +28,7 @@ extern function msInflateFeed(handle: int64, chunk: Readonly<Span<uint8>>, isLas
 extern function msInflateDrain(handle: int64, maxBytes: int32): Buffer;
 extern function msInflateFree(handle: int64): void;
 
-function feedBytes(handle: int64, chunk: Bytes, isLast: int32): int32 {
-	if (typeof chunk == "string") return msInflateFeed(handle, chunk.asBytes(), isLast);
+function feedBytes(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32 {
 	return msInflateFeed(handle, chunk, isLast);
 }
 
@@ -41,13 +40,8 @@ function inflateFailure(status: int32, invalid: string): CompressError {
 	return compressError(CompressErrorKind.InvalidInput, invalid);
 }
 
-function isEmpty(data: Bytes): boolean {
-	if (typeof data == "string") return data.length == 0;
-	return data.length == 0;
-}
-
-function oneShot(data: Bytes, format: int32, failure: string): Result<Buffer, CompressError> {
-	if (isEmpty(data)) {
+function oneShot(data: Readonly<Span<uint8>>, format: int32, failure: string): Result<Buffer, CompressError> {
+	if (data.length == 0) {
 		return Result.err(compressError(CompressErrorKind.Truncated, "unexpected end of file"));
 	}
 	const handle = msInflateNew(format);
@@ -81,7 +75,11 @@ export function createInflate(format: CompressFormat = CompressFormat.Gzip): Inf
 
 // Feed a chunk of compressed input. Returns any bytes decoded so far
 // (may be empty if more input is needed before any output is produced).
-export function inflateFeed(s: InflateStream, chunk: Bytes): Result<Buffer, CompressError> {
+export function inflateFeed<D extends ByteInput>(s: InflateStream, chunk: D): Result<Buffer, CompressError> {
+	return inflateFeedSpan(s, typeof chunk == "string" ? chunk.asBytes() : chunk);
+}
+
+function inflateFeedSpan(s: InflateStream, chunk: Readonly<Span<uint8>>): Result<Buffer, CompressError> {
 	if (s.finished) {
 		return Result.err(compressError(CompressErrorKind.InvalidInput, "feed after finish"));
 	}
@@ -121,16 +119,28 @@ export function inflateFinish(s: InflateStream): Result<Buffer, CompressError> {
 // ===== One-shot helpers =====
 
 // Decompress a complete gzip blob (RFC 1952).
-export function gunzip(data: Bytes): Result<Buffer, CompressError> {
+export function gunzip<D extends ByteInput>(data: D): Result<Buffer, CompressError> {
+	return gunzipSpan(typeof data == "string" ? data.asBytes() : data);
+}
+
+function gunzipSpan(data: Readonly<Span<uint8>>): Result<Buffer, CompressError> {
 	return oneShot(data, CompressFormat.Gzip as int32, "gzip decompression failed");
 }
 
 // Decompress a zlib-wrapped DEFLATE blob (RFC 1950).
-export function inflate(data: Bytes): Result<Buffer, CompressError> {
+export function inflate<D extends ByteInput>(data: D): Result<Buffer, CompressError> {
+	return inflateSpan(typeof data == "string" ? data.asBytes() : data);
+}
+
+function inflateSpan(data: Readonly<Span<uint8>>): Result<Buffer, CompressError> {
 	return oneShot(data, CompressFormat.Zlib as int32, "zlib decompression failed");
 }
 
 // Decompress a raw DEFLATE stream (RFC 1951).
-export function inflateRaw(data: Bytes): Result<Buffer, CompressError> {
+export function inflateRaw<D extends ByteInput>(data: D): Result<Buffer, CompressError> {
+	return inflateRawSpan(typeof data == "string" ? data.asBytes() : data);
+}
+
+function inflateRawSpan(data: Readonly<Span<uint8>>): Result<Buffer, CompressError> {
 	return oneShot(data, CompressFormat.Deflate as int32, "deflate decompression failed");
 }
