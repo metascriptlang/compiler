@@ -5,8 +5,8 @@
 
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 import { Buffer } from "../core/buffer";
-import { rawBuffer, rawString } from "../core/buffer/bytes";
-import { utf8Text } from "../core/string/bytes";
+import { rawBuffer } from "../core/buffer/bytes";
+import { utf8Text, wellFormedString } from "../core/string/bytes";
 
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
@@ -47,7 +47,7 @@ export function readFileBytes(path: string): Result<Buffer, IoError> {
 }
 
 export function writeFileBytes(path: string, content: Readonly<Span<uint8>>): Result<void, IoError> {
-	return writeFile(path, rawString(content.slice(0)));
+	return writeFile(path, wellFormedString(content));
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {

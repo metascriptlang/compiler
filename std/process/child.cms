@@ -21,8 +21,8 @@ import {
 	outputOverflow,
 } from "./errors";
 import { incompleteTail } from "./utf8Tail";
-import { utf8Text } from "../core/string/bytes";
-import { rawString, rawBuffer } from "../core/buffer/bytes";
+import { utf8Text, wellFormedString } from "../core/string/bytes";
+import { rawBuffer } from "../core/buffer/bytes";
 import { childEnvironmentPairs } from "./environment";
 
 extern function msProcChildSpawn(
@@ -147,7 +147,7 @@ export class ChildProcess {
 		const raw = this.held[which] + msProcChildTake(this.handle, which);
 		const kept = incompleteTail(raw.asBytes());
 		const length = raw.byteLength;
-		this.held[which] = rawString([...raw.asBytes()[(length - kept)..length]] as Buffer);
+		this.held[which] = wellFormedString(raw.asBytes()[(length - kept)..length]);
 		return utf8Text(raw.byteSlice(0, length - kept), false);
 	}
 
