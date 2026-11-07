@@ -33,8 +33,10 @@ test "a Vec of plain children is cyclic" {
 	assert verdict("class N { kids: Vec<N> = []; }\nconst n = new N();", "N") == "cyclic";
 }
 
-test "an owned child behind a shared array is cyclic" {
-	assert verdict("class N { kids: Owned<N>[] = []; }\nconst n = new N();", "N") == "cyclic";
+test "an owned element of a shared array is refused" {
+	assert refused("class N { kids: Owned<N>[] = []; }\nconst n = new N();\n").contains("'Owned<N>' cannot be an array element");
+	assert refused("class N { kids: Array<Owned<N> | null> = []; }\nconst n = new N();\n").contains("cannot be an array element");
+	assert refused("class N { v: int32 = 0; }\ntype Kid = Owned<N>;\nfunction f(ks: Kid[]): int32 { return ks.length; }\n").contains("cannot be an array element");
 }
 
 test "a plain array of plain children is cyclic" {

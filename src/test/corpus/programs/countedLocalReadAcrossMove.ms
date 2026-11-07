@@ -36,11 +36,11 @@ function replacedKey(n: Owned<N>, k: N): Owned<N> {
 	console.log("key still", k.v, k.t.name);
 	return w;
 }
-function refill(ref a: Owned<N>[]): void {
+function refill(ref a: Vec<Owned<N>>): void {
 	const t = a[0].t;
 	a[0] = replaced(move a[0], t);
 }
-function refillKey(ref a: Owned<N>[]): void {
+function refillKey(ref a: Vec<Owned<N>>): void {
 	const k: N = a[0];
 	a[0] = replacedKey(move a[0], k);
 }
@@ -51,10 +51,10 @@ function dyingHolder(): int32 {
 	return g.v;
 }
 
-let xs: Owned<N>[] = [new N(5)];
+let xs: Vec<Owned<N>> = [new N(5)];
 refill(xs);
 console.log("refilled", xs[0].v);
-let ys: Owned<N>[] = [new N(7)];
+let ys: Vec<Owned<N>> = [new N(7)];
 refillKey(ys);
 console.log("refilled key", ys[0].v);
 console.log("holder", dyingHolder());
