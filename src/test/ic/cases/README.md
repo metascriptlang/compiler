@@ -13,6 +13,9 @@ sources at every step. The format follows the reference compiler's metamorphic I
   b.ms>` (exactly these project modules rechecked, sorted), `lowered: <n>`,
   `rebuilt` (the session may fall back to a full rebuild), `fails: <text>` (warm and cold both
   fail, cold with that text).
+- `#!VERIFY` runs the warm session under `MSC_IC_VERIFY=1`: after each warm build the session builds the
+  same sources cold in a child process and compares every C unit. The runner checks that verdict against
+  its own cold build at every step, and a disagreement fails the case even under `#!XFAIL`.
 - `#!XFAIL <why>` marks a case red today for the named reason; the runner fails it once it
   turns green, so the marker is dropped with the fix.
 - Lines before the first `#!FILE` describe the case.

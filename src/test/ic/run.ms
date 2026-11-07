@@ -35,6 +35,7 @@ interface IcStep {
 
 class CaseFailure {
 	reasons: string[] = [];
+	verifyReasons: string[] = [];
 }
 
 function both(r: ExecFileResult): string {
@@ -76,11 +77,13 @@ const KNOWN_ATTRS = ["expect", "noop", "body-edit", "iface-edit", "modules", "re
 interface IcCase {
 	steps: IcStep[];
 	xfail: string;
+	verify: boolean;
 }
 
 function parseCase(path: string): IcCase {
 	const steps: IcStep[] = [];
 	let xfail = "";
+	let verify = false;
 	let writes = new HashMap<string, string>();
 	let file = "";
 	let body: string[] = [];
@@ -107,6 +110,8 @@ function parseCase(path: string): IcCase {
 			}
 			steps.push({ writes, attrs, line: lineNo });
 			writes = new HashMap<string, string>();
+		} else if (line == "#!VERIFY") {
+			verify = true;
 		} else if (line.startsWith("#!XFAIL ")) {
 			xfail = line.slice(8, line.length).trim();
 		} else if (line.startsWith("#!")) {
@@ -124,7 +129,7 @@ function parseCase(path: string): IcCase {
 		console.log(`FAIL icRunner: ${path}: the first step must write main.ms, the build root`);
 		exit(1);
 	}
-	return { steps, xfail };
+	return { steps, xfail, verify };
 }
 
 function cFilesIn(dir: string): string[] {
@@ -185,7 +190,26 @@ function materialize(work: string, state: HashMap<string, string>, everWritten: 
 	for (const [f, text] of state) put(`${work}/${f}`, text);
 }
 
-function runCase(name: string, steps: IcStep[]): string[] {
+function verifyVerdict(log: string, build: int32): string {
+	const head = `watch: verify build ${build}`;
+	for (const line of log.split("\n")) {
+		if (line.startsWith(`${head}:`)) return "equal";
+		if (line.startsWith(`${head} differs:`)) return line.slice(head.length + 1, line.length);
+	}
+	return "";
+}
+
+function emittedDiffers(warmDir: string, coldDir: string): boolean {
+	const warmFiles = cFilesIn(warmDir);
+	const coldFiles = cFilesIn(coldDir);
+	if (warmFiles.join(",") != coldFiles.join(",")) return true;
+	for (const f of coldFiles) {
+		if (read(`${warmDir}/${f}`) != read(`${coldDir}/${f}`)) return true;
+	}
+	return false;
+}
+
+function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 	const fail = new CaseFailure();
 	const dir = `${TMP}/${name.replace(".txt", "")}`;
 	removeAll(dir);
@@ -203,7 +227,7 @@ function runCase(name: string, steps: IcStep[]): string[] {
 		}
 		if (pairs.length == 0) {
 			fail.reasons.push(`step ${k + 1} (line ${steps[k].line}) writes no file`);
-			return fail.reasons;
+			return fail;
 		}
 		replay = replay + pairs.join(" ") + "\n";
 	}
@@ -213,7 +237,9 @@ function runCase(name: string, steps: IcStep[]): string[] {
 	for (const [f, text] of steps[0].writes) state.set(f, text);
 	materialize(work, state, everWritten);
 	env.set("MSC_CACHE_DIR", `${dir}/warmCache`);
+	if (verify) env.set("MSC_IC_VERIFY", "1");
 	const watched = execFileResult(MSC, ["build", "main.ms", "--hcr", `--watch-replay=${dir}/replay.txt`, "--emit=c", `--events=${dir}/events.jsonl`], work);
+	env.delete("MSC_IC_VERIFY");
 	const statuses: WarmStatus[] = [];
 	const warmLogs: string[] = [];
 	let log = "";
@@ -228,7 +254,7 @@ function runCase(name: string, steps: IcStep[]): string[] {
 	}
 	if (statuses.length != steps.length) {
 		fail.reasons.push(`the warm session reported ${statuses.length} builds for ${steps.length} steps:\n${both(watched)}`);
-		return fail.reasons;
+		return fail;
 	}
 
 	const debug = `${work}/out/debug`;
@@ -256,6 +282,13 @@ function runCase(name: string, steps: IcStep[]): string[] {
 		if (!succeeded(cold)) {
 			fail.reasons.push(`${where}: the cold build failed:\n${both(cold)}`);
 			continue;
+		}
+		if (verify) {
+			const said = verifyVerdict(warmLogs[k], k);
+			const differs = emittedDiffers(`${debug}/watch${k}`, debug);
+			if (said == "" && warm.label != "failed") fail.verifyReasons.push(`${where}: the warm session printed no verify result for build ${k}`);
+			if (said == "equal" && differs) fail.verifyReasons.push(`${where}: verify passed a build whose C differs from a cold build`);
+			if (said.startsWith("differs") && !differs) fail.verifyReasons.push(`${where}: verify reported a difference a cold build does not show: ${said}`);
 		}
 		if (warm.label == "failed") {
 			fail.reasons.push(`${where}: the warm build failed: ${warm.text}\n${warmLogs[k]}${watched.errorOutput}`);
@@ -292,7 +325,7 @@ function runCase(name: string, steps: IcStep[]): string[] {
 			if (!succeeded(ran) || ran.output.trim() != want) fail.reasons.push(`${where}: expected '${want}', the program printed:\n${both(ran)}`);
 		}
 	}
-	return fail.reasons;
+	return fail;
 }
 
 const only = env.get("IC_ONLY") == "" ? [] as string[] : env.get("IC_ONLY").split(",");
@@ -311,9 +344,13 @@ let failed = 0;
 let expected = 0;
 for (const name of names) {
 	const c = parseCase(`${CASES}/${name}`);
-	const reasons = runCase(name, c.steps);
+	const result = runCase(name, c.steps, c.verify);
+	const reasons = result.reasons;
 	const tag = name.replace(".txt", "");
-	if (c.xfail != "" && reasons.length > 0) {
+	if (result.verifyReasons.length > 0) {
+		failed += 1;
+		for (const r of result.verifyReasons) console.log(`FAIL ${tag}: verify: ${r}`);
+	} else if (c.xfail != "" && reasons.length > 0) {
 		expected += 1;
 		console.log(`xfail ${tag}: ${c.xfail}`);
 		for (const r of reasons) console.log(`      ${r.split("\n")[0]}`);
