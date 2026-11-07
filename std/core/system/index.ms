@@ -410,6 +410,9 @@ extern function msOwnedReplace(old: Ptr<void>, v: Ptr<void>, holder: Ptr<void>):
 extern function msOwnedTake(sink p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
+extern function msOwnedRelease(p: Ptr<void>): void;
+
+@compilerFunc
 extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc

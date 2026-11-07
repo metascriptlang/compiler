@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isUnownedSlot, isReadonlyUnownedSlot, createReadonlyView, copyTypeShallow, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, typeCarriesRef, readonlyCountedElement, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
+import { isUnownedSlot, isReadonlyUnownedSlot, isOwnedRef, createReadonlyView, copyTypeShallow, isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, distinctLayerBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, isUnownedRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, isReadonlyView, isSendableFunction, typeCarriesRef, readonlyCountedElement, createUnionInOrder, storesNothing, isNullableBigInt, propagateToOwner, swapHeldBeyond, HeldBeyondState, literalTagDiscriminant, peelToStruct, enumMemberValue, runtimeClassSym, typeDisplayName, booleanType, jsMemberKind } from "../../checker/types";
 import { storesUnionTag } from "../../checker/fit";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, isReadonlyStructView, viewedArrayElement, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp, swapHookSyms, HookSymsState } from "../../codegen/c/types";
 import { VALUE_FIELD } from "./unionTagLower";
@@ -701,6 +701,13 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
+// A destroyed holder lets go of each Owned<T> child first, so a child a local still holds has no owner
+// that is gone. Raiser parity is the backend parity step of the owner check.
+function releaseOwnedChild(hook: string, fieldType: Type, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	if (hook != "destroy" || !isOwnedRef(fieldType) || lctx.raiserBackend) return;
+	buf.items.push(makeExprStmt(makeCall(runtimeRef("msOwnedRelease", loc), [clonePath(xf, loc)], loc), loc));
+}
+
 // An Unowned<T> field counts on its target's second count: never traced, never the last strong owner.
 function unownedOp(hook: string, xf: Node, yf: Node, readonly: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = readonly ? "msUnownedDecrefRo" : "msUnownedDecref";
@@ -942,6 +949,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				unownedOp(hook, xf, yf, isReadonlyView(fieldType), lctx, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
+				releaseOwnedChild(hook, fieldType, xf, lctx, buf, loc);
 				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
@@ -1011,6 +1019,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					unownedOp(hook, xf, yf, isReadonlyView(refInner), lctx, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
+					releaseOwnedChild(hook, refInner, xf, lctx, buf, loc);
 					refOp(hook, xf, yf, empties, refInner, cyclic, isAtomicRef(refInner), lctx, buf, loc);
 				}
 				return;
