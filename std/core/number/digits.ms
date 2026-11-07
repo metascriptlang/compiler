@@ -11,6 +11,9 @@ extern function msFloat64Bits(d: float64): uint64;
 extern function msStringNew(data: cstring, length: int64): string;
 extern function cMemcpy(to: Ptr<uint8>, from: Ptr<uint8>, size: uint64): Ptr<uint8> from "memcpy";
 extern function cMemmove(to: Ptr<uint8>, from: Ptr<uint8>, size: uint64): Ptr<uint8> from "memmove";
+extern function msStrReserve(s: Ptr<string>, n: int64): Ptr<uint8>;
+extern function msStrCommit(s: Ptr<string>, n: int64): void;
+extern function msStringAppend(dest: Ptr<string>, src: string): void;
 
 struct Decimal {
 	significand: uint64;
@@ -211,6 +214,13 @@ function decimalLength(value: uint64): int32 {
 	return 17;
 }
 
+function digitCount(value: uint64): int32 {
+	if (value < 10000000000000000) return decimalLength(value);
+	if (value < 100000000000000000) return 17;
+	if (value < 1000000000000000000) return 18;
+	return value < 10000000000000000000 ? 19 : 20;
+}
+
 @inline
 function digitText(digit: uint64): string {
 	return match (digit) {
@@ -267,10 +277,45 @@ export function numberToString(input: float64): string {
 	return decimalToString(input);
 }
 
+@exportName("msStringAppendInt")
+export function stringAppendInt(dest: Ptr<string>, value: int64): void {
+	const negative = value < 0;
+	const magnitude = negative ? (0 as uint64) - (value as uint64) : value as uint64;
+	const n = (negative ? 1 : 0) + digitCount(magnitude);
+	const buf = msStrReserve(dest, n as int64);
+	if (negative) buf[0] = 45;
+	writeDigitsEndingAt(buf, n, magnitude);
+	msStrCommit(dest, n as int64);
+}
+
+@exportName("msStringAppendNumber")
+export function stringAppendNumber(dest: Ptr<string>, input: float64): void {
+	if (input >= -1e15 && input <= 1e15) {
+		const whole = input as int64;
+		if (whole as float64 == input) {
+			stringAppendInt(dest, whole);
+			return;
+		}
+	}
+	if (input != input || input - input != 0.0) {
+		msStringAppend(dest, numberToString(input));
+		return;
+	}
+	const buf = msStrReserve(dest, decimalTextRoom as int64);
+	msStrCommit(dest, writeDecimal(buf, input) as int64);
+}
+
 @noinline
 function decimalToString(input: float64): string {
 	let text: uint8[64] = [];
 	const buf = (text as Span<uint8>) as Ptr<uint8>;
+	return msStringNew(buf as cstring, writeDecimal(buf, input) as int64);
+}
+
+// writeDecimal stores past its result's end (a zero run, a shifted tail), so its buffer holds this many bytes.
+const decimalTextRoom: int32 = 64;
+
+function writeDecimal(buf: Ptr<uint8>, input: float64): int32 {
 	let value = input;
 	let p = 0;
 	if (value < 0.0) {
@@ -353,5 +398,5 @@ function decimalToString(input: float64): string {
 			p += 1;
 		}
 	}
-	return msStringNew(buf as cstring, p as int64);
+	return p;
 }

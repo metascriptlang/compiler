@@ -1,0 +1,28 @@
+// A number's JSON text written straight into the output's buffer, with no string per number.
+
+@include("runtime/core/string.h");
+
+extern function appendIntText(this out: string, value: int64): void from "&msStringAppendInt";
+extern function appendNumberText(this out: string, value: float64): void from "&msStringAppendNumber";
+extern function knownAscii(s: string): boolean from "msStringKnownAscii";
+extern function markAscii(s: string): void from "msStringMarkAscii";
+
+export function appendInt(ref out: string, value: int64): void {
+	when (raiser) {
+		out += value.toString();
+	} else {
+		const ascii = out.byteLength == 0 || knownAscii(out);
+		out.appendIntText(value);
+		if (ascii) markAscii(out);
+	}
+}
+
+export function appendNumber(ref out: string, value: float64): void {
+	when (raiser) {
+		out += value.toString();
+	} else {
+		const ascii = out.byteLength == 0 || knownAscii(out);
+		out.appendNumberText(value);
+		if (ascii) markAscii(out);
+	}
+}

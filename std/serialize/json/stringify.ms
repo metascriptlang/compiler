@@ -5,6 +5,7 @@
 
 import { JsonKind, JsonValue } from "./types";
 import { jsonNull, jsonBool, jsonNumber, jsonInt, jsonString, jsonArray, jsonObject } from "./builder";
+import { appendInt, appendNumber } from "./numberText";
 
 // ===== Compact Stringify =====
 // color=false: {"key":"value","n":3}  (standard JSON)
@@ -30,7 +31,7 @@ function appendJson(ref out: string, value: JsonValue, color: boolean): void {
 		},
 		JsonKind.Number => {
 			if (color) out += "\x1b[33m";
-			out += jsonNumberStr(value.numVal);
+			appendJsonNumber(out, value.numVal);
 			if (color) out += "\x1b[0m";
 		},
 		JsonKind.String => {
@@ -67,7 +68,7 @@ function appendJson(ref out: string, value: JsonValue, color: boolean): void {
 		},
 		JsonKind.Int => {
 			if (color) out += "\x1b[33m";
-			out += value.intVal.toString();
+			appendInt(out, value.intVal);
 			if (color) out += "\x1b[0m";
 		},
 		JsonKind.Null => { out += color ? "\x1b[2mnull\x1b[0m" : "null"; },
@@ -90,8 +91,8 @@ function appendPretty(ref out: string, value: JsonValue, indent: number, depth: 
 	}
 	match (value.kind) {
 		JsonKind.Bool => { out += value.boolVal ? "true" : "false"; },
-		JsonKind.Number => { out += jsonNumberStr(value.numVal); },
-		JsonKind.Int => { out += value.intVal.toString(); },
+		JsonKind.Number => { appendJsonNumber(out, value.numVal); },
+		JsonKind.Int => { appendInt(out, value.intVal); },
 		JsonKind.String => { appendEscaped(out, value.strVal); },
 		JsonKind.Array => {
 			if (value.items.length == 0) {
@@ -151,9 +152,9 @@ function hexDigit(n: number): string {
 // RFC 8259 §6 — JSON numbers must be finite. NaN / ±Infinity have no JSON
 // representation; emit `null` (Python json default-strict convention).
 // Finite check: `x - x === 0` iff x is finite (NaN−NaN = NaN, Inf−Inf = NaN).
-function jsonNumberStr(v: number): string {
-	if (v - v != 0) return "null";
-	return v.toString();
+function appendJsonNumber(ref out: string, v: number): void {
+	if (v - v != 0) out += "null";
+	else appendNumber(out, v);
 }
 
 // A surrogate code point encodes as ED A0..BF xx in WTF-8; well-formed UTF-8
@@ -242,6 +243,17 @@ test "stringify finite zero → 0 (not null)" {
 	// Boundary — 0 should NOT trip the non-finite check
 	assert stringify(jsonNumber(0.0)) == "0";
 	assert stringify(jsonNumber(-0.0)) == "0";  // ±0 collapse
+}
+
+test "stringify writes every digit count of an int64 and the number forms beside other text" {
+	assert stringify(jsonInt(99999999999999999 as int64)) == "99999999999999999";
+	assert stringify(jsonInt(100000000000000000 as int64)) == "100000000000000000";
+	assert stringify(jsonInt(1000000000000000000 as int64)) == "1000000000000000000";
+	assert stringify(jsonInt(9223372036854775807 as int64)) == "9223372036854775807";
+	assert stringify(jsonInt(-9223372036854775807 as int64 - 1)) == "-9223372036854775808";
+	const mixed = stringify(jsonArray([jsonInt(-7), jsonNumber(-1.5e-7), jsonNumber(1e21), jsonNumber(1e15), jsonNumber(5e-324), jsonString("é")]));
+	assert mixed == "[-7,-1.5e-7,1e+21,1000000000000000,5e-324,\"é\"]", mixed;
+	assert mixed.length == 46;
 }
 
 test "stringify string" {

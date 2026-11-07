@@ -154,6 +154,8 @@ int64_t msStringByteAt(msString s, int64_t idx);
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
 void msStringAppendCodePoint(msString* dest, int64_t cp);
+void msStringAppendInt(msString* dest, int64_t value);
+void msStringAppendNumber(msString* dest, double value);
 
 /* Substring [start, end) by character position. TypeScript parity. */
 msString msStringSlice(msString s, int64_t start, int64_t end);
