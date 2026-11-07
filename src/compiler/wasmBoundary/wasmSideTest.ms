@@ -177,10 +177,11 @@ test "wasm entry: a struct crosses as leaf parameters and returns through one re
 	assert e.exportedFunctions.join(",") == "_msb_calc_tag,_malloc,_free,_MsMain";
 }
 
-test "wasm entry: a Vec parameter is rebuilt from ptr and len, a Vec result is handed over by msb_rv" {
+test "wasm entry: a Vec parameter adopts the payload JS wrote, a Vec result is handed over by msb_rv" {
 	const e = entryFor(["scale"]);
 	const s = e.source;
-	assert s.includes("function msbVecFrom_float32(ptr: uint32, len: int32): Vec<float32> {");
+	assert s.includes("function msbVecFrom_float32(block: uint32, len: int32): Vec<float32> {\n\tlet out: Vec<float32>;\n\tmsbAdoptVec(out out, block as uint64, len as int64);\n\treturn out;\n}");
+	assert s.split("#define msbAdoptVec(").length == 2;
 	assert s.includes("export function msb_calc_scale(xsPtr: uint32, xsLen: int32, k: float32): void {");
 	assert s.includes("\tconst r = msbm0_scale(msbVecFrom_float32(xsPtr, xsLen), k);");
 	assert s.includes("\tmsb_rv((r as Span<uint16>) as Ptr<void> as uint64 as int32, r.length as int32);");
@@ -241,7 +242,7 @@ test "wasm entry: each runtime export is used by the js glue of that function an
 		const m = manifestOf([name]);
 		const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
 		const e = wasmEntrySource(m.functions, (p: string) => "./calc");
-		const allocates = code.includes("__msbEncOwned(") || code.includes("__msbCopyIn(");
+		const allocates = code.includes("__msbEncOwned(") || code.includes("__msbCopyIn(") || code.includes("__msbCopyInOwned(");
 		const callback = code.includes("__msb.push(");
 		let want = "_" + m.functions[0].exportSymbol;
 		if (callback) want += ",_msb_fail";

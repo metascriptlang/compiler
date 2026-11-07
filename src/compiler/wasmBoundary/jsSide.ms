@@ -466,7 +466,13 @@ function wrapperLines(
 			}
 			BoundaryKind.Vec => {
 				const view = `a${i}, 0, a${i}.length, ${typedArrayOf(p.element)}`;
-				encodeView(`e${i}`, view, own, "copy", `parameter '${p.name}'`);
+				if (shared) {
+					const entry = `${view}, "copy", ${quoted(`parameter '${p.name}'`)}`;
+					encoded.push(`c${i}`);
+					sharedNames.push(`c${i}`);
+					sharedViews.push(own == "" ? `[${entry}]` : `${own} ? null : [${entry}]`);
+				}
+				encode(`e${i}`, view, "__msbCopyInOwned", true, own);
 			}
 			BoundaryKind.Span => {
 				const array = typedArrayOf(p.element);

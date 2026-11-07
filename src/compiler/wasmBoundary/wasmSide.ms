@@ -148,13 +148,18 @@ function orMaybe(flag: string, value: string): string {
 function vecFromLines(kind: BoundaryKind): string[] {
 	const t = valueTypeOf(kind);
 	return [
-		`function msbVecFrom_${t}(ptr: uint32, len: int32): Vec<${t}> {`,
-		`\tlet out: Vec<${t}> = [];`,
-		`\tfor (const x of (ptr as uint64 as Ptr<${t}>)[0..len]) out.push(x);`,
+		"extern function msbAdoptVec("
+			+ `out v: Vec<${t}>, block: uint64, length: int64): void;`,
+		`function msbVecFrom_${t}(block: uint32, len: int32): Vec<${t}> {`,
+		`\tlet out: Vec<${t}>;`,
+		"\tmsbAdoptVec(out out, block as uint64, len as int64);",
 		"\treturn out;",
 		"}",
 	];
 }
+
+const ADOPT_VEC_MACRO = '@emit("#define msbAdoptVec(v, b, l) ((v)->len = (l), '
+	+ '(v)->p = (l) > 0 ? (void*)(uintptr_t)(b) : NULL)");';
 
 function closureOf(cb: BoundaryCallback, idName: string): string {
 	const params = cb.params;
@@ -667,6 +672,7 @@ function entryLines(
 	}
 	for (const l of escapeLines()) lines.push(l);
 	if (usage.callbacks.length > 0) for (const l of failureLines()) lines.push(l);
+	if (usage.vecElements.length > 0) lines.push(ADOPT_VEC_MACRO);
 	for (const k of usage.vecElements) {
 		for (const l of vecFromLines(k)) lines.push(l);
 	}

@@ -157,9 +157,9 @@ test "js side: a string parameter is encoded as a payload that wasm adopts, and 
 	assert code.includes("function bundled_both(a0, a1, a2) {\n\t__msb.enter();\n\tlet e0, e0n, e2, e2n, sent = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\te2 = __msbEncOwned(a2); e2n = __msbLen;\n\t\tsent = true;\n\t\tlet v;\n\t\ttry { v = __msbMod._msb_calc_both(e0, e0n, a1, e2, e2n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn v;\n\t} finally {\n\t\t__msbTop = mark;\n\t\tif (e0 && !sent) __msbMod._free(e0);\n\t\tif (e2 && !sent) __msbMod._free(e2);\n\t}\n}");
 }
 
-test "js side: a Vec beside a string is still released after the call, only the string block is wasm's" {
+test "js side: a Vec beside a string is a payload wasm adopts like the string, freed here only when the call was never made" {
 	const code = bindingsFor(["mixed"]).modules[0].code;
-	assert code.includes("function bundled_mixed(a0, a1) {\n\t__msb.enter();\n\tlet v;\n\tlet e0, e0n, e1, e1n, sent = false;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\te1 = __msbCopyIn(a1, 0, a1.length, Float32Array); e1n = __msbLen;\n\t\tsent = true;\n\t\ttry { v = __msbMod._msb_calc_mixed(e0, e0n, e1, e1n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0);\n\tif (e1) __msbFree(e1);\n\tif (failed) throw thrown;\n\treturn v;\n}");
+	assert code.includes("function bundled_mixed(a0, a1) {\n\t__msb.enter();\n\tlet v;\n\tlet e0, e0n, e1, e1n, sent = false;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbEncOwned(a0); e0n = __msbLen;\n\t\te1 = __msbCopyInOwned(a1, 0, a1.length, Float32Array); e1n = __msbLen;\n\t\tsent = true;\n\t\ttry { v = __msbMod._msb_calc_mixed(e0, e0n, e1, e1n); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0);\n\tif (e1 && !sent) __msbMod._free(e1);\n\tif (failed) throw thrown;\n\treturn v;\n}");
 }
 
 test "js side: copied arguments are bump-allocated from the scratch block, and only a heap pointer is freed" {
@@ -167,7 +167,7 @@ test "js side: copied arguments are bump-allocated from the scratch block, and o
 	assert p.includes("function __msbAlloc(n) {\n\tconst room = __msbEnd - __msbTop;\n\tif (n <= room) {\n\t\tconst a = n + 15 & -16;\n\t\tif (a <= room) {\n\t\t\tconst q = __msbTop;\n\t\t\t__msbTop = q + a;\n\t\t\treturn q;\n\t\t}\n\t}\n\treturn __msbHeapAlloc(n);\n}");
 	assert p.includes("function __msbHeapAlloc(n) {\n\tconst p = n > 4294967295 ? 0 : __msbMod._malloc(n);");
 	assert p.includes("function __msbFree(p) {\n\tif (p < __msbBase || p >= __msbEnd) __msbMod._free(p);\n}");
-	assert !bindingsFor(["scale", "fill"]).modules[0].code.includes("__msbMod._free");
+	assert !bindingsFor(["total", "fill"]).modules[0].code.includes("__msbMod._free");
 }
 
 test "js side: the scratch block is reserved once after _MsMain, and only when a wrapper copies arguments in" {
@@ -191,7 +191,7 @@ test "js side: a wrapper marks the scratch top before its first encode and reset
 
 const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "mul64u", "evaluate", "isEven", "flip", "wide", "visit", "pick", "twice", "banner", "both", "sumBy", "edit", "patch", "stamp", "cut", "swap"];
 
-test "js side: a wrapper takes a scratch mark exactly when its function copies an argument in, and the wasm half adopts a string block and never a Vec or Span block" {
+test "js side: a wrapper takes a scratch mark exactly when its function copies an argument in, and the wasm half adopts a string or Vec block and never a Span block" {
 	for (const name of EVERY_FUNCTION) {
 		const m = manifestOf([name]);
 		const wants = copiesArgsIn(m.functions[0]);
@@ -199,7 +199,8 @@ test "js side: a wrapper takes a scratch mark exactly when its function copies a
 		const code = js.modules[0].code;
 		assert code.includes("const mark = __msbTop;") == wants;
 		assert code.includes("__msbFree(") == (code.includes("__msbCopyIn(") || code.includes("__msbCopyInViews("));
-		assert code.includes("__msbMod._free(") == code.includes("__msbEncOwned(");
+		const adopts = code.includes("__msbEncOwned(") || code.includes("__msbCopyInOwned(");
+		assert code.includes("__msbMod._free(") == adopts;
 		assert js.prelude.includes("__msbMod._malloc(16384)") == wants;
 		if (wants) {
 			const e = wasmEntrySource(m.functions, (p: string) => "./calc");
@@ -207,6 +208,7 @@ test "js side: a wrapper takes a scratch mark exactly when its function copies a
 			assert e.exportedFunctions.includes("_free");
 			assert e.runtimeMethods.includes("HEAPU8");
 			if (code.includes("__msbEncOwned(")) assert e.source.includes("msStringAdoptMalloced");
+			if (code.includes("__msbCopyInOwned(")) assert e.source.includes("msbAdoptVec(out out, block as uint64, len as int64);");
 		}
 	}
 }
@@ -376,13 +378,13 @@ test "js side: a struct is passed leaf by leaf and its result is built by a take
 	assert js.includes("return r;");
 }
 
-test "js side: a Vec is copied into wasm memory and its result copied out into an array" {
+test "js side: a Vec is copied into a payload wasm adopts and its result copied out into an array" {
 	const js = bindingsFor(["scale"]).modules[0].code;
-	assert js.includes("e0 = __msbCopyIn(a0, 0, a0.length, Float32Array); e0n = __msbLen;");
+	assert js.includes("e0 = __msbCopyInOwned(a0, 0, a0.length, Float32Array); e0n = __msbLen;");
 	assert js.includes("__msbMod._msb_calc_scale(e0, e0n, a1);");
 	assert js.includes("(p, n) => { r = __msbVecOut(p >>> 0, n, Uint16Array, false); }");
-	assert js.includes("if (e0) __msbFree(e0);");
-	assert js.includes("\tlet e0, e0n;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbCopyIn(a0, 0, a0.length, Float32Array); e0n = __msbLen;\n\t\ttry { __msbMod._msb_calc_scale(e0, e0n, a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0) __msbFree(e0);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
+	assert js.includes("if (e0 && !sent) __msbMod._free(e0);");
+	assert js.includes("\tlet e0, e0n, sent = false;\n\tlet thrown = null, failed = false;\n\tconst mark = __msbTop;\n\ttry {\n\t\te0 = __msbCopyInOwned(a0, 0, a0.length, Float32Array); e0n = __msbLen;\n\t\tsent = true;\n\t\ttry { __msbMod._msb_calc_scale(e0, e0n, a1); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t} catch (e) { thrown = e; failed = true; }\n\t__msbTop = mark;\n\tif (e0 && !sent) __msbMod._free(e0);\n\tif (__msb.takes.length > d) __msb.takes.length = d;\n\tif (failed) throw thrown;\n\treturn r;\n}");
 	assert bindingsFor(["scale"]).prelude.includes("function __msbVecOut(p, n, T, bool) {");
 }
 
@@ -609,7 +611,7 @@ test "js side: a nullable string is encoded only when present, and an absent str
 
 test "js side: a nullable Vec is copied in only when present, and a nullable Vec result starts as null" {
 	const code = nullableBindings(["headOr", "upTo"]).modules[0].code;
-	assert code.includes("e0 = a0 == null ? 0 : __msbCopyIn(a0, 0, a0.length, Int32Array); e0n = e0 ? __msbLen : 0;");
+	assert code.includes("e0 = a0 == null ? 0 : __msbCopyInOwned(a0, 0, a0.length, Int32Array); e0n = e0 ? __msbLen : 0;");
 	assert code.includes("__msbMod._msb_calc_headOr(a0 == null ? 0 : 1, e0, e0n);");
 	assert code.includes("function bundled_upTo(a0) {\n\t__msb.enter();\n\tlet r = null;\n\tconst d = __msb.takes.push((p, n) => { r = __msbVecOut(p >>> 0, n, Float32Array, false); }) - 1;");
 	assert code.includes("\t\ttry { __msbMod._msb_calc_upTo(a0); } catch (e) { throw __msb.die(e); }\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;");
@@ -643,17 +645,20 @@ test "js side: two views of which one is written are copied in as one shared cop
 	assert code.includes("__msbCopyBack(e0[0], a0.base, a0.off, a0.len, Int32Array, false);");
 }
 
-test "js side: a Vec joins the shared copy as a copy the wasm side takes at entry and is never copied back" {
+test "js side: a Vec beside a written view is checked against its writes in the shared copy, passed as its own adopted payload and never copied back" {
 	const code = bindingsFor(["flipAll"]).modules[0].code;
-	assert code.includes("[e0, e1] = __msbCopyInViews([[a0, 0, a0.length, Uint8Array, \"copy\", \"parameter 'all'\"], [a1.base, a1.off, a1.len, Uint8Array, \"write\", \"parameter 'part'\"]], hb, \"flipAll\");");
+	assert code.includes("[c0, e1] = __msbCopyInViews([[a0, 0, a0.length, Uint8Array, \"copy\", \"parameter 'all'\"], [a1.base, a1.off, a1.len, Uint8Array, \"write\", \"parameter 'part'\"]], hb, \"flipAll\");");
+	assert code.includes("e0 = __msbCopyInOwned(a0, 0, a0.length, Uint8Array); e0n = __msbLen;");
+	assert code.includes("__msbMod._msb_calc_flipAll(e0, e0n, e1[0], e1[1])");
 	assert code.split("__msbCopyBack(").length == 2;
 	assert code.includes("__msbCopyBack(e1[0], a1.base, a1.off, a1.len, Uint8Array, true);");
 }
 
-test "js side: an absent nullable Vec stays absent in the shared copy and passes pointer 0" {
+test "js side: an absent nullable Vec stays absent in the shared copy and passes pointer 0 and no payload" {
 	const code = nullableBindings(["headBoth"]).modules[0].code;
-	assert code.includes("[e0, e1] = __msbCopyInViews([a0 == null ? null : [a0, 0, a0.length, Int32Array, \"copy\", \"parameter 'xs'\"], [a1.base, a1.off, a1.len, Int32Array, \"write\", \"parameter 'ys'\"]], hb, \"headBoth\");");
-	assert code.includes("__msbMod._msb_calc_headBoth(a0 == null ? 0 : 1, e0 ? e0[0] : 0, e0 ? e0[1] : 0, e1[0], e1[1]);");
+	assert code.includes("[c0, e1] = __msbCopyInViews([a0 == null ? null : [a0, 0, a0.length, Int32Array, \"copy\", \"parameter 'xs'\"], [a1.base, a1.off, a1.len, Int32Array, \"write\", \"parameter 'ys'\"]], hb, \"headBoth\");");
+	assert code.includes("e0 = a0 == null ? 0 : __msbCopyInOwned(a0, 0, a0.length, Int32Array); e0n = e0 ? __msbLen : 0;");
+	assert code.includes("__msbMod._msb_calc_headBoth(a0 == null ? 0 : 1, e0, e0n, e1[0], e1[1]);");
 }
 
 test "js side: without two views and a writer a call keeps one copy per argument and the prelude carries no view glue" {
