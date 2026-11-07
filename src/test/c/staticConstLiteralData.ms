@@ -98,3 +98,18 @@ test "an unread library const array of sized-array literals is dropped with its 
 	assert !c.contains("MS_STRLIT_FLAG | 2");
 	assert !c.contains("msArrayPayloadNew(");
 }
+
+test "an unread read-only library const array is dropped with its data while its module still runs init" {
+	const lib = "export const TABLE: Readonly<uint32[]> = [11, 22, 33];\nexport function pick(i: int32): uint32 { return TABLE[i]; }\nexport const START: string[] = [\"lib\", \"init\"].map((s) => s);\n";
+	const main = "import { START } from \"./table\";\nconsole.log(START[0]);\n";
+	const c = compileProjectToC([{ entryPath: "src/table.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: main }], "src/main.ms");
+	assert c.contains("ZsrcZtableOms__Init000(void) {"), "the library module no longer runs init, so the pin no longer sees its exit";
+	assert !c.contains("MS_STRLIT_FLAG | 3");
+}
+
+test "a mutable library const array is still destroyed at exit" {
+	const lib = "export const ROWS: uint32[] = [11, 22, 33];\nexport const START: string[] = [\"lib\", \"init\"].map((s) => s);\n";
+	const main = "import { ROWS, START } from \"./rows\";\nROWS.push(44);\nconsole.log(START[0], ROWS.length);\n";
+	const c = compileProjectToC([{ entryPath: "src/rows.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: main }], "src/main.ms");
+	assert c.contains("bakedExit");
+}
