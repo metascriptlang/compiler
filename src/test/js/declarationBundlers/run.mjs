@@ -13,7 +13,7 @@ import { watchTestQueue } from '../../../../tools/vite-plugin/watchTestQueue.js'
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../../../..');
 const require = createRequire(new URL('../../../../tools/vite-plugin/package.json', import.meta.url));
-const pins = { vite: '6.3.5', rollup: '4.44.1', webpack: '5.99.9' };
+const pins = { vite: '6.3.5', rollup: '4.67.5+metascript.2', webpack: '5.99.9' };
 
 async function framework(name) {
   const file = process.env[`${name.toUpperCase()}_MODULE`] ?? require.resolve(name);

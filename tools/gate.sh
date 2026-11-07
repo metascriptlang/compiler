@@ -2464,12 +2464,19 @@ run_tools_lane() {
   if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
   if [ "$py" -eq 1 ] && ! (cd tools/managedToolchain && python3 -I -m unittest discover -s . -p '*Test.py'); then printf 'FAIL %s: self-test\n' tools/managedToolchain; rc=1; fi
   if [ "$native" -eq 1 ]; then
-    if ! command -v node >/dev/null 2>&1; then
+    if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
       echo 'native-adapters: Node >=24 test tooling is required; provision Node 24+ on PATH before the gate'
       printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
     else
       if ! node --test --test-concurrency=1 tools/vite-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/vite-plugin/test.test.mjs; rc=1; fi
-      if ! MSC="$CAND" node tools/vite-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1; fi
+      if ! npm install --prefix tools/vite-plugin --ignore-scripts --no-save --no-package-lock --no-audit --no-fund; then
+        echo 'native-adapters: dependency provisioning failed; wrapper was not run'
+        printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
+      elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/vite-plugin/node_modules/vite/dist/node/index.js" \
+        ROLLUP_MODULE="$TOP/tools/vite-plugin/node_modules/rollup/dist/es/rollup.js" \
+        WEBPACK_MODULE="$TOP/tools/vite-plugin/node_modules/webpack/lib/index.js" \
+        TS_ORACLE_MODULE="$TOP/tools/vite-plugin/node_modules/typescript/lib/typescript.js" \
+        node tools/vite-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1; fi
     fi
   fi
   return $rc

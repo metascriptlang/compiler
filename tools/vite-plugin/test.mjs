@@ -7,13 +7,15 @@ import { loadOracle } from '../../src/test/compat/typescript/run.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../..');
-const pins = { vite: '6.3.5', rollup: '4.44.1', webpack: '5.99.9' };
+const pins = { vite: '6.3.5', rollup: '4.67.5+metascript.2', webpack: '5.99.9' };
 const nativeFiles = ['compilerCore', 'sourceDeclarations', 'index', 'rollup', 'webpack']
   .map(name => `tools/vite-plugin/${name}.test.js`);
 const consumerFile = 'src/test/js/declarationBundlers/run.mjs';
 const provision = `Prerequisites must be provisioned before the gate; this wrapper never installs or repairs them.
 Coordinate dependency setup before running (not a measured safe automation recipe):
-  npm install --prefix tools/vite-plugin --ignore-scripts --no-save --package-lock=false --prefer-offline --no-audit --no-fund vite@6.3.5 rollup@4.44.1 webpack@5.99.9 magic-string@0.30.17 typescript@5.9.2
+  npm install --prefix tools/vite-plugin --ignore-scripts --no-save --no-package-lock --no-audit --no-fund
+Pinned devDependencies: vite@6.3.5 rollup@4.67.5+metascript.2 (vendor/rollup4.tgz) webpack@5.99.9 magic-string@0.30.17 typescript@5.9.2.
+The root override selects that Rollup for Vite too; app roots must select their host dependency explicitly.
 Then explicitly set existing module paths, for example after that layout is verified:
   MSC="$PWD/out/gate/msc" VITE_MODULE="$PWD/tools/vite-plugin/node_modules/vite/dist/node/index.js" ROLLUP_MODULE="$PWD/tools/vite-plugin/node_modules/rollup/dist/es/rollup.js" WEBPACK_MODULE="$PWD/tools/vite-plugin/node_modules/webpack/lib/index.js" TS_ORACLE_MODULE="$PWD/tools/vite-plugin/node_modules/typescript/lib/typescript.js" node tools/vite-plugin/test.mjs
 MagicString must also resolve by bare ESM import from tools/vite-plugin/index.js; NODE_PATH is insufficient.

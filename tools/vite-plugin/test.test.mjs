@@ -47,8 +47,8 @@ test('prerequisite failure is nonzero, named and provides pinned provisioning gu
   });
   assert.equal(child.status, 1);
   assert.match(child.stderr, /FAIL native-adapters prerequisites:.*ENOENT/);
-  assert.match(child.stderr, /npm install --prefix tools\/vite-plugin --ignore-scripts --no-save --package-lock=false/);
-  for (const pin of ['vite@6.3.5', 'rollup@4.44.1', 'webpack@5.99.9', 'magic-string@0.30.17', 'typescript@5.9.2']) {
+  assert.match(child.stderr, /npm install --prefix tools\/vite-plugin --ignore-scripts --no-save --no-package-lock/);
+  for (const pin of ['vite@6.3.5', 'rollup@4.67.5+metascript.2', 'webpack@5.99.9', 'magic-string@0.30.17', 'typescript@5.9.2']) {
     assert.ok(child.stderr.includes(pin));
   }
   assert.match(child.stderr, /no measured|not a measured safe automation/);
@@ -104,23 +104,43 @@ test('zero exit cannot conceal a skipped interface or a signalled process', t =>
   assert.deepEqual(JSON.parse(readFileSync(join(out, 'statuses.json'))).map(result => result.ok), [false, false]);
 });
 
-test('tools lane invokes wrapper once with CAND, and its failure is a named red', t => {
+for (const [name, npmStatus] of [
+  ['tools lane provisions once, invokes wrapper with CAND and names its red', 0],
+  ['tools lane names a prerequisite red and never runs the wrapper after install failure', 2],
+]) test(name, t => {
   const dir = fixture(t);
   mkdirSync(join(dir, 'bin'));
   writeFileSync(join(dir, 'why'), 'tools\ttools/vite-plugin/index.js\ntools\ttools/vite-plugin/test.mjs\ntools\tsrc/test/js/declarationBundlers/run.mjs\n');
   const node = join(dir, 'bin/node');
-  writeFileSync(node, '#!/usr/bin/env bash\nprintf "%s|%s\\n" "$MSC" "$*" >>"$CALLS"\ncase "$*" in tools/vite-plugin/test.mjs) exit 3 ;; esac\n');
+  writeFileSync(node, '#!/usr/bin/env bash\ncase "$*" in "-e "*) exit 0 ;; esac\nprintf "%s|%s\\n" "$MSC" "$*" >>"$CALLS"\ncase "$*" in tools/vite-plugin/test.mjs) printf "%s\\n" "$VITE_MODULE" "$ROLLUP_MODULE" "$WEBPACK_MODULE" "$TS_ORACLE_MODULE" >"$CALLS.env"; exit 3 ;; esac\n');
   chmodSync(node, 0o755);
+  const npm = join(dir, 'bin/npm');
+  writeFileSync(npm, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$CALLS.npm"\nexit "$NPM_STATUS"\n');
+  chmodSync(npm, 0o755);
   const source = readFileSync(join(repo, 'tools/gate.sh'), 'utf8');
   const body = source.match(/^run_tools_lane\(\) \{\n[\s\S]*?^\}/m)?.[0];
   assert.ok(body, 'tools lane definition must remain discoverable');
   const child = spawnSync('bash', ['-c', `${body}\nrun_tools_lane`], {
-    cwd: repo, encoding: 'utf8', env: { ...process.env, OUT: dir, CAND: '/actual/gate/candidate', MSC: '/wrong/inherited/compiler',
-      PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CALLS: join(dir, 'calls') },
+    cwd: repo, encoding: 'utf8', env: { ...process.env, TOP: repo, OUT: dir, CAND: '/actual/gate/candidate', MSC: '/wrong/inherited/compiler',
+      PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CALLS: join(dir, 'calls'), NPM_STATUS: String(npmStatus) },
   });
   assert.equal(child.status, 1, child.stderr);
-  assert.match(child.stdout, /FAIL tools\/vite-plugin\/test.mjs: check/);
+  assert.ok(child.stdout.includes('FAIL tools/vite-plugin/test.mjs: check'));
+  if (npmStatus) assert.match(child.stdout, /dependency provisioning failed; wrapper was not run/);
+  const reds = source.match(/^reds_of\(\) \{\n[\s\S]*?^\}/m)?.[0];
+  assert.ok(reds);
+  const log = join(dir, 'tools.log');
+  writeFileSync(log, child.stdout);
+  const parsed = spawnSync('bash', ['-c', `${reds}\nreds_of tools "$1" 1`, '--', log], { cwd: repo, encoding: 'utf8' });
+  assert.equal(parsed.status, 0, parsed.stderr);
+  assert.equal(parsed.stdout, 'tools/vite-plugin/test.mjs\n');
+  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'install --prefix tools/vite-plugin --ignore-scripts --no-save --no-package-lock --no-audit --no-fund\n');
   const calls = readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1], '/actual/gate/candidate|tools/vite-plugin/test.mjs');
+  assert.equal(calls.length, npmStatus ? 1 : 2);
+  if (!npmStatus) {
+    assert.equal(calls[1], '/actual/gate/candidate|tools/vite-plugin/test.mjs');
+    assert.deepEqual(readFileSync(join(dir, 'calls.env'), 'utf8').trim().split('\n'), [
+      'vite/dist/node/index.js', 'rollup/dist/es/rollup.js', 'webpack/lib/index.js', 'typescript/lib/typescript.js',
+    ].map(file => join(repo, 'tools/vite-plugin/node_modules', file)));
+  }
 });

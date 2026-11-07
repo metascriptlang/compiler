@@ -34,10 +34,21 @@
     "rollup.d.ts",
     "webpack.js",
     "webpack.d.ts",
-    "webpackLoader.js"
+    "webpackLoader.js",
+    "vendor"
   ],
   "dependencies": {
     "magic-string": "^0.30.17"
+  },
+  "devDependencies": {
+    "magic-string": "0.30.17",
+    "rollup": "file:vendor/rollup4.tgz",
+    "typescript": "5.9.2",
+    "vite": "6.3.5",
+    "webpack": "5.99.9"
+  },
+  "overrides": {
+    "rollup": "$rollup"
   },
   "peerDependencies": {
     "vite": ">=5",
