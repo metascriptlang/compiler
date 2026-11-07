@@ -9,7 +9,6 @@
 // @stdout: floats 3 1.5 3.5
 // @stdout: flags 3 true
 // @stdout: nested 6 9:7,8,9 grown 3:1,2,3|7,8,9|0,0,1 pair 4
-// @xfail(raiser): `let copy = FACES` aliases the sized array on the Raiser, so the write through the copy shows in FACES (old msc too); card 2026-10-19-raiser-copies-of-tuples-and-fixed-arrays-alias
 import { FACES, GRID, LABELS } from "./lib/tables";
 const NAMES2: string[2] = ["alpha", "beta"];
 
