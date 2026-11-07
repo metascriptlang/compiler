@@ -109,3 +109,51 @@ Every candidate row is faster than the 2026-11-04 table of its host: on rtx by 1
 `stringify numbers` on both hosts and on `stringify large` on rtx, and 3% behind on `stringify medium` on rtx. Parse stays
 behind node by 1.2 to 1.8x on rtx and 1.6 to 2.2x on m1m, and the typed rows by 1.8 to 2.3x on rtx and 2.8 to 2.9x on
 m1m. The `js` arm loses most on strings with escapes (34 against 1638 MB/s on rtx).
+
+## Against yyjson's mutable document — 2026-11-08
+
+`yyjson-mut` is `bench.yyjson.c` on yyjson `840c9fa` built `cc -O3`, run with `MSBENCH_YYJSON=<checkout>`. Its parse
+rows read the input and copy it into a mutable document, since yyjson builds none from text; its typed rows follow
+`bench.node.mjs`. `candidate` is `5811a0b8907`. Each run took a quiet window; the checksums of all three arms match.
+
+### rtx
+
+Load 4.32 before, 4.16 after.
+
+| row | unit | candidate | yyjson-mut | node |
+|---|---|---|---|---|
+| parse small object | us/op | 0.567 | 0.102 | 0.437 |
+| parse medium 64 KB | MB/s | 303.3 | 2179 | 389.1 |
+| parse large 1 MB | MB/s | 286.8 | 912.7 | 336.5 |
+| parse numbers 64 KB | MB/s | 530.4 | 1897 | 896.9 |
+| parse strings 64 KB | MB/s | 902.3 | 3898 | 1647 |
+| stringify small object | us/op | 0.267 | 0.043 | 0.237 |
+| stringify medium 64 KB | MB/s | 823.8 | 3670 | 862.8 |
+| stringify large 1 MB | MB/s | 824.1 | 3666 | 613.4 |
+| stringify numbers 64 KB | MB/s | 552.9 | 1422 | 405.3 |
+| stringify strings 64 KB | MB/s | 686.7 | 4245 | 1189 |
+| decode typed medium 64 KB | MB/s | 213 | 1679 | 381.8 |
+| encode typed medium 64 KB | MB/s | 385.7 | 3696 | 886 |
+
+### m1m
+
+Load 25.33 before (jobs that ended as the window opened), 14.36 after (one-minute average, 8 cores).
+
+| row | unit | candidate | yyjson-mut | node |
+|---|---|---|---|---|
+| parse small object | us/op | 1.172 | 0.304 | 0.541 |
+| parse medium 64 KB | MB/s | 153.5 | 828.4 | 303.2 |
+| parse large 1 MB | MB/s | 157.8 | 839.6 | 249.2 |
+| parse numbers 64 KB | MB/s | 277.4 | 904.7 | 567.6 |
+| parse strings 64 KB | MB/s | 353.4 | 1566 | 614.4 |
+| stringify small object | us/op | 0.545 | 0.086 | 0.365 |
+| stringify medium 64 KB | MB/s | 462.8 | 2709 | 549.1 |
+| stringify large 1 MB | MB/s | 462.6 | 2815 | 537.1 |
+| stringify numbers 64 KB | MB/s | 371.1 | 1227 | 243.4 |
+| stringify strings 64 KB | MB/s | 331.8 | 1919 | 1347 |
+| decode typed medium 64 KB | MB/s | 112.1 | 676.5 | 298 |
+| encode typed medium 64 KB | MB/s | 201.8 | 2706 | 553.5 |
+
+yyjson-mut is ahead of the candidate on every row: by 2.6x (stringify numbers) to 9.6x (encode typed) on rtx and by
+3.3x (parse numbers, stringify numbers) to 13.4x (encode typed) on m1m.
+
