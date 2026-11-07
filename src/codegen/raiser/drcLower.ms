@@ -6,7 +6,7 @@ import { RaiserOpcode, RaiserRegClass, inRefFile, raiserABC } from "../../raiser
 import { raiserConstString, raiserNil, RaiserValueKind } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocBlock, allocDyn, allocRef, allocWord, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, allocBool, allocReg, classOfReg, resolveLocal, resolveGlobal, addConst, getRaiserModulePath } from "./context";
 import { getOpByKey } from "../c/types";
-import { raiserFlatCellUnion, raiserBareUnion, raiserStructSlotUnion } from "../../analyzer/classify";
+import { raiserFlatCellUnion, raiserBareUnion, raiserStructSlotUnion, raiserPackedEligible } from "../../analyzer/classify";
 import { isUnionSlotLocation } from "../../analyzer/alias";
 import { userHookOf } from "../../transform/lowering/destructorLifting";
 import { storedFramePlace, copyPackedExpr, movePackedExpr, compileExpr, compileIndex } from "./expressions";
@@ -356,6 +356,13 @@ function isLiftedCellOp(call: CallExprData, op: AttachedOp): boolean {
 	return type != null && isCellType(type) && !runsDistinctHook(call, type) && isOpOf(type, op, sym);
 }
 
+function isPackedValueOp(call: CallExprData, op: AttachedOp): boolean {
+	const sym = call.callee.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length == 0) return false;
+	const type = placeOf(call.arguments[0]).nodeType;
+	return type != null && raiserPackedEligible(type) && !runsDistinctHook(call, type) && isOpOf(type, op, sym);
+}
+
 function isSizedArrayCopy(call: CallExprData): boolean {
 	const sym = call.callee.resolvedSym;
 	if (sym == null || !hasFlag(sym, SymbolFlag.GeneratedOp) || call.arguments.length != 2) return false;
@@ -411,7 +418,8 @@ function isHooklessCellWasMoved(call: CallExprData): boolean {
 export function isFrameOwnershipCall(d: CallExprData): boolean {
 	const row = ownershipRow(d.callee.resolvedSym);
 	if (row == ROW_INCREF || row == ROW_DECREF || row == ROW_DECREF_CYCLIC || row == ROW_CLEAR || row == ROW_TRACE || row == ROW_SINK || row == ROW_COPY_VALUE) return true;
-	return isHooklessCellWasMoved(d) || isCellHook(d, SymbolFlag.DestroyOp) || isLiftedCellSink(d) || isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isSizedArrayCopy(d);
+	return isHooklessCellWasMoved(d) || isCellHook(d, SymbolFlag.DestroyOp) || isLiftedCellSink(d) || isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isSizedArrayCopy(d) ||
+		isPackedValueOp(d, AttachedOp.AttachedAsgn) || isPackedValueOp(d, AttachedOp.AttachedSink) || isPackedValueOp(d, AttachedOp.AttachedWasMoved) || isPackedValueOp(d, AttachedOp.AttachedDestructor);
 }
 
 export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
@@ -423,12 +431,15 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		const frame = storedFramePlace(s, placeOf(d.arguments[0]));
 		if (frame != null) {
 			const generated = sym != null && sym.symFlags.has(SymbolFlag.GeneratedOp);
-			if (row == ROW_SINK || row == ROW_COPY_VALUE && d.arguments.length == 2 || generated && (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellSink(d) || isSizedArrayCopy(d))) {
-				if (row == ROW_SINK || isLiftedCellSink(d)) movePackedExpr(s, frame, placeOf(d.arguments[1]));
+			const packedSink = d.arguments.length == 2 && isPackedValueOp(d, AttachedOp.AttachedSink);
+			if (row == ROW_SINK || row == ROW_COPY_VALUE && d.arguments.length == 2 || generated && (isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isLiftedCellSink(d) || isSizedArrayCopy(d)) ||
+				packedSink || d.arguments.length == 2 && isPackedValueOp(d, AttachedOp.AttachedAsgn)) {
+				if (row == ROW_SINK || isLiftedCellSink(d) || packedSink) movePackedExpr(s, frame, placeOf(d.arguments[1]));
 				else copyPackedExpr(s, frame, placeOf(d.arguments[1]));
 				return true;
 			}
-			if (row == ROW_CLEAR || generated && (isCellHook(d, SymbolFlag.WasMovedOp) || isCellHook(d, SymbolFlag.DestroyOp))) {
+			if (row == ROW_CLEAR || generated && (isCellHook(d, SymbolFlag.WasMovedOp) || isCellHook(d, SymbolFlag.DestroyOp)) ||
+				d.arguments.length == 1 && (isPackedValueOp(d, AttachedOp.AttachedWasMoved) || isPackedValueOp(d, AttachedOp.AttachedDestructor))) {
 				emitPackedCopy(s, s.layouts, frame, allocPackedValue(s, s.layouts, frame.valueType));
 				return true;
 			}
@@ -436,7 +447,7 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 		}
 	}
 	if (d.arguments.length == 2 && (row == ROW_COPY_VALUE ||
-		isLiftedCellOp(d, AttachedOp.AttachedAsgn))) {
+		isLiftedCellOp(d, AttachedOp.AttachedAsgn) || isPackedValueOp(d, AttachedOp.AttachedAsgn) || isPackedValueOp(d, AttachedOp.AttachedSink))) {
 		const source = storedFramePlace(s, placeOf(d.arguments[1]));
 		if (source != null) {
 			const ownedSource = refRegister(s, d.callee.resolvedSym!.name,
