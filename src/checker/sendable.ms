@@ -4,9 +4,9 @@ import { stmtsOf } from "./unitsInCheck";
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind, ProgramData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf, decoratorNamed } from "./decoratorHelpers";
-import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
+import { CheckerContext, DispatchRegistry, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
+import { Effect, EffectCause, FreshScope, isImmortalModuleConst, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, receiverOf, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding, isPromiseBuiltin } from "./symbol";
@@ -1741,8 +1741,11 @@ export function refuseUnownedCrossing(ctx: CheckerContext, what: string, t: Type
 function refuseViewResult(ctx: CheckerContext, thunk: Node): void {
 	const fn = thunk.nodeType;
 	if (fn != null && fn.kind == TypeKind.Function && holdsView(fn.typeReturn, [])) {
-		addError(ctx, `spawn thunk returns ${typeDisplayName(fn.typeReturn)}, which reaches a value the parent only lends to the task; a borrowed view never leaves the task as its result — return a copy, or a scalar or string read out of it (PARALOCK E24)`,
-			thunk.location.line, thunk.location.column);
+		deferEffectCheck(thunk, "spawnViewResult", (ctx: CheckerContext): void => {
+			if (resultsShareImmortalConsts(ctx.dispatchRegistry, thunk)) return;
+			addError(ctx, `spawn thunk returns ${typeDisplayName(fn.typeReturn)}, which reaches a value the parent only lends to the task; a borrowed view never leaves the task as its result — return a copy, or a scalar or string read out of it (PARALOCK E24)`,
+				thunk.location.line, thunk.location.column);
+		});
 		return;
 	}
 	const body = routineParamsAndBody(thunk).body;
@@ -1758,6 +1761,26 @@ function refuseViewResult(ctx: CheckerContext, thunk: Node): void {
 			captured.location.line, captured.location.column);
 		return;
 	}
+}
+
+function resultsShareImmortalConsts(dispatchRegistry: DispatchRegistry, thunk: Node): boolean {
+	const body = routineParamsAndBody(thunk).body;
+	if (body == null) return false;
+	const results: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) collectResults(body, results);
+	else results.push(body);
+	return results.length > 0 && results.every((r: Node): boolean => rootedInImmortalConst(dispatchRegistry, r));
+}
+
+function rootedInImmortalConst(dispatchRegistry: DispatchRegistry, n: Node): boolean {
+	const p = peelOperand(n);
+	if (p.kind == NodeKind.NullLiteral) return true;
+	if (p.kind == NodeKind.ConditionalExpr) {
+		const c = p.data as ConditionalExprData;
+		return rootedInImmortalConst(dispatchRegistry, c.ternaryConsequent) && rootedInImmortalConst(dispatchRegistry, c.ternaryAlternate);
+	}
+	const root = p.kind == NodeKind.Identifier ? p : pathRoot(p);
+	return root != null && root.resolvedSym != null && isImmortalModuleConst(dispatchRegistry, root.resolvedSym!);
 }
 
 function collectResults(node: Node, out: Node[]): void {

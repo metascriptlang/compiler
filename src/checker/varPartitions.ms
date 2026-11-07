@@ -9,7 +9,7 @@ import {
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
 	ObjectPatternPropData, ArrayPatternData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -2900,12 +2900,12 @@ function checkClosureViewReturns(ctx: CheckerContext, routine: Node, body: Node 
 function refuseViewReturns(ctx: CheckerContext, arms: Node[], routine: Node, name: string, result: Type): void {
 	let view: Node | null = null;
 	for (const arm of arms) {
-		if (!isNullArm(arm) && viewReturnFault(arm, routine, false) == "") { view = arm; break; }
+		if (!isNullArm(arm) && viewReturnFault(ctx.dispatchRegistry, arm, routine, false) == "") { view = arm; break; }
 	}
 	const shown = typeDisplayName(result);
 	const owning = owningResult(result);
 	for (const arm of arms) {
-		const why = viewReturnFault(arm, routine, false);
+		const why = viewReturnFault(ctx.dispatchRegistry, arm, routine, false);
 		if (why == "") continue;
 		const at = `${arm.location.line}:${arm.location.column}`;
 		if (view == null) {
@@ -2923,37 +2923,37 @@ function owningResult(t: Type): string {
 	return parts.join(" | ");
 }
 
-function viewReturnFault(node: Node, routine: Node, stepped: boolean): string {
+function viewReturnFault(dispatchRegistry: DispatchRegistry, node: Node, routine: Node, stepped: boolean): string {
 	match (node.kind) {
 		NodeKind.NullLiteral => { return ""; },
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			const a = viewReturnFault(d.ternaryConsequent, routine, stepped);
-			return a != "" ? a : viewReturnFault(d.ternaryAlternate, routine, stepped);
+			const a = viewReturnFault(dispatchRegistry, d.ternaryConsequent, routine, stepped);
+			return a != "" ? a : viewReturnFault(dispatchRegistry, d.ternaryAlternate, routine, stepped);
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (d.operator != "??") return "cannot borrow from this expression, it is not a path expression";
-			const a = viewReturnFault(d.left, routine, stepped);
-			return a != "" ? a : viewReturnFault(d.right, routine, stepped);
+			const a = viewReturnFault(dispatchRegistry, d.left, routine, stepped);
+			return a != "" ? a : viewReturnFault(dispatchRegistry, d.right, routine, stepped);
 		},
-		NodeKind.MemberExpr => { return viewReturnFault((node.data as MemberExprData).object, routine, true); },
-		NodeKind.ArrayAccess => { return viewReturnFault((node.data as ArrayAccessData).array, routine, true); },
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return viewReturnFault((node.data as { expr: Node }).expr, routine, stepped); },
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { return viewReturnFault((node.data as HiddenStdConvData).convExpr, routine, stepped); },
-		NodeKind.TypeAssertion => { return viewReturnFault((node.data as TypeAssertionData).asExpr, routine, stepped); },
+		NodeKind.MemberExpr => { return viewReturnFault(dispatchRegistry, (node.data as MemberExprData).object, routine, true); },
+		NodeKind.ArrayAccess => { return viewReturnFault(dispatchRegistry, (node.data as ArrayAccessData).array, routine, true); },
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return viewReturnFault(dispatchRegistry, (node.data as { expr: Node }).expr, routine, stepped); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { return viewReturnFault(dispatchRegistry, (node.data as HiddenStdConvData).convExpr, routine, stepped); },
+		NodeKind.TypeAssertion => { return viewReturnFault(dispatchRegistry, (node.data as TypeAssertionData).asExpr, routine, stepped); },
 		NodeKind.CallExpr => {
 			if (!isViewCall(node)) return "cannot borrow from this expression, it is not a path expression";
 			const sources: Node[] = [];
 			viewCallSources(node, sources);
 			for (const a of sources) {
 				if (!carriesBorrow(a)) continue;
-				const why = viewReturnFault(a, routine, true);
+				const why = viewReturnFault(dispatchRegistry, a, routine, true);
 				if (why != "") return why;
 			}
 			return "";
 		},
-		NodeKind.Identifier => { return viewRootFault(node, routine, stepped); },
+		NodeKind.Identifier => { return viewRootFault(dispatchRegistry, node, routine, stepped); },
 		_ => { return "cannot borrow from this expression, it is not a path expression"; },
 	};
 }
@@ -2962,7 +2962,7 @@ function carriesBorrow(arg: Node): boolean {
 	return arg.nodeType == null || typeCarriesRef(arg.nodeType);
 }
 
-function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
+function viewRootFault(dispatchRegistry: DispatchRegistry, id: Node, routine: Node, stepped: boolean): string {
 	const sym = id.resolvedSym;
 	if (sym == null) return signatureParamFault(routine, (id.data as IdentifierData).name) ?? "cannot borrow from this expression, it is not a path expression";
 	if (sym.symbolKind == SymbolKind.Parameter) {
@@ -2971,15 +2971,15 @@ function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 	}
 	if (hasFlag(sym, SymbolFlag.Global) && !hasFlag(sym, SymbolFlag.StaticLocal)) {
 		if (hasFlag(sym, SymbolFlag.Mutable) || sym.symbolKind != SymbolKind.Variable || !isReadonlyView(sym.symbolType)) return `'${sym.name}' is not a Readonly module constant`;
-		if (stepped) return `a path below the module constant '${sym.name}' can be released while borrowed`;
+		if (stepped && !isImmortalModuleConst(dispatchRegistry, sym)) return `a path below the module constant '${sym.name}' can be released while borrowed`;
 		return "";
 	}
 	const bound = constRefAlias(sym);
-	if (bound != null && viewReturnFault(bound, routine, stepped) == "") return "";
+	if (bound != null && viewReturnFault(dispatchRegistry, bound, routine, stepped) == "") return "";
 	if (hasFlag(sym, SymbolFlag.ForVar) && !hasFlag(sym, SymbolFlag.Mutable) && sym.symbolType != null && holdsReference(sym)) {
 		const iterated: Node[] = [];
 		collectForOfIterable(routine, sym, iterated);
-		if (iterated.length == 1 && viewReturnFault(iterated[0], routine, true) == "") return "";
+		if (iterated.length == 1 && viewReturnFault(dispatchRegistry, iterated[0], routine, true) == "") return "";
 	}
 	return `'${sym.name}' escapes its stack frame`;
 }

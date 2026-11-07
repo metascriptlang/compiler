@@ -764,7 +764,7 @@ export function computeAliveSet(
 	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
 	while (markAliveGlobalDestroys(graph.dispatchRegistry, globalDestroys)) markImportedModulesAlive(graph);
-	if (_immortalizes) markReachWalks();
+	if (_immortalizes) markReachWalks(graph.dispatchRegistry);
 	return takeReachability();
 }
 
@@ -787,7 +787,7 @@ function markAliveGlobalDestroys(dispatchRegistry: DispatchRegistry, pending: Gl
 	return walked;
 }
 
-function markReachWalks(): void {
+function markReachWalks(dispatchRegistry: DispatchRegistry): void {
 	for (let i = 0; i < _aliveSet.typeInfos.length; i += 1) {
 		const demand = _aliveSet.typeInfos[i];
 		const reach = demand.kind == TypeInfoKind.Object ? getOpByKey(demand.subject, AttachedOp.AttachedReach)
@@ -795,7 +795,7 @@ function markReachWalks(): void {
 			: null;
 		if (reach == null) continue;
 		demand.reach = reach;
-		markReferenced(reach, demand.owner != "" ? demand.owner : reach.modulePath);
+		markReferenced(dispatchRegistry, reach, demand.owner != "" ? demand.owner : reach.modulePath);
 	}
 }
 

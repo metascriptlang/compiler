@@ -7,7 +7,7 @@ import { forEachChild } from "../ast/visitor";
 import { CheckerContext, DispatchRegistry, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
-import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
+import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isImmortalConstType, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { isScalarPrimitive } from "./fit";
 import { isFrozenByConst } from "./assignable";
@@ -120,7 +120,7 @@ export function deferEffectCheck(site: Node, rule: string, check: (ctx: CheckerC
 	deferred.push({ site, rule, check });
 }
 
-function judgeReadonlyModuleConsts(modulePath: string): void {
+function judgeReadonlyModuleConsts(dispatchRegistry: DispatchRegistry, modulePath: string): void {
 	const program = lookupModuleProgram(modulePath);
 	if (program == null) return;
 	for (const stmt of (program.data as ProgramData).programStmts) {
@@ -128,7 +128,7 @@ function judgeReadonlyModuleConsts(modulePath: string): void {
 		if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
 		if (n != null && n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
 		if (n == null || n.kind != NodeKind.VariableDecl || n.resolvedSym == null) continue;
-		if (isReadonlyView(n.resolvedSym.symbolType) || isSendableFunction(n.resolvedSym.symbolType)) isImmutableModuleConst(n.resolvedSym);
+		if (isReadonlyView(n.resolvedSym.symbolType) || immortalConstShape(n.resolvedSym.symbolType)) isImmutableModuleConst(dispatchRegistry, n.resolvedSym);
 	}
 }
 
@@ -140,7 +140,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	checkedModules.add(ctx.modulePath);
 	uncheckedBodiesReported = hasErrors(ctx);
 	for (const d of checks) d.check(ctx);
-	judgeReadonlyModuleConsts(ctx.modulePath);
+	judgeReadonlyModuleConsts(ctx.dispatchRegistry, ctx.modulePath);
 	hookRegistry = null;
 	checkHookEffects(ctx);
 	sideTable = emptyTable();
@@ -427,6 +427,16 @@ function isModuleState(sym: Symbol): boolean {
 // A module const that is deep Readonly and built in its own initializer, or whose type the const
 // rule keeps unwritable through every path, is never written and lives as long as the program, so a
 // borrow of it cannot outlive or race a write.
+export function immortalConstShape(t: Type | null): boolean {
+	if (t == null) return false;
+	if (isImmortalConstType(t)) return true;
+	return t.kind == TypeKind.Struct && !isReadonlyView(t) && typeCarriesRef(t) && isFrozenByConst(t);
+}
+
+export function isImmortalModuleConst(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
+	return isImmutableModuleConst(dispatchRegistry, sym) && immortalConstShape(sym.symbolType);
+}
+
 export function isImmutableModuleConst(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
 	if (!hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
 	const t = sym.symbolType;
@@ -1076,7 +1086,7 @@ function isLocalBinding(sym: Symbol | null): boolean {
 function bindingBorrow(dispatchRegistry: DispatchRegistry, n: Node, value: Node): BorrowSource | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
-	if (isImmutableModuleConst(dispatchRegistry, sym)) return { kind: BorrowKind.ModuleConst, sym };
+	if (isImmutableModuleConst(dispatchRegistry, sym)) return isImmortalModuleConst(dispatchRegistry, sym) ? null : { kind: BorrowKind.ModuleConst, sym };
 	if (isViewRoot(sym)) return { kind: BorrowKind.View, sym };
 	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
 	resolving.push(sym);

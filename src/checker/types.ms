@@ -2163,6 +2163,18 @@ export function propagateReadonlyView(t: Type | null): Type {
 	return createReadonlyView(t);
 }
 
+export function isImmortalConstType(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	if (isSendableFunction(t)) return true;
+	if (!isReadonlyView(t)) return false;
+	if (t.kind == TypeKind.Struct) return true;
+	return isImmortalCell(t) || isImmortalCell(unwrapRefNullUnion(t));
+}
+
+function isImmortalCell(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Ref && !isAtomicRef(t) && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor);
+}
+
 export function viewsAsReadonlyStruct(t: Readonly<Type | null>): boolean {
 	return t != null && t.kind == TypeKind.Struct && structCarriesRef(t, 0);
 }
