@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import {
 	encodeHex, decodeHex, encodeBase64, decodeBase64,
 } from "../../core/encoding";
@@ -191,17 +191,17 @@ export async function randomUUID(): Promise<Result<string, CryptoError>> {
 
 // ===== Timing-Safe Comparison =====
 
-export function timingSafeEqual(a: Bytes, b: Bytes): boolean {
-	const x = bytesOf(a);
-	const y = bytesOf(b);
+export function timingSafeEqual<A extends ByteInput, B extends ByteInput>(a: A, b: B): boolean {
+	return timingSafeEqualSpan(typeof a == "string" ? a.asBytes() : a, typeof b == "string" ? b.asBytes() : b);
+}
+
+function timingSafeEqualSpan(x: Readonly<Span<uint8>>, y: Readonly<Span<uint8>>): boolean {
 	if (x.length != y.length) return false;
 	let acc: uint8 = 0;
 	for (let i = 0; i < x.length; i++) acc = acc | (x[i] ^ y[i]);
 	const one: uint32 = 1;
 	return ((((acc as uint32) - one) >> 8) & one) == one;
 }
-
-// ===== Extended algorithm helpers (ripemd160, sha3-*) =====
 
 function sha3BitsOf(algorithm: string): int32 {
 	if (algorithm == "sha3-224") return 224;
@@ -243,8 +243,6 @@ function extOneShot(
 	if (bits < 0) throw new Error("bad ext algorithm: " + algorithm);
 	return sha3Of(bits, data);
 }
-
-// ===== Extended HMAC context (Zig16d31: lib/std/crypto/hmac.zig) =====
 
 class ExtHmacCtx {
 	_opad: uint8[];
@@ -330,19 +328,14 @@ export function cleanup(): void {}
 
 // ===== Hash and HMAC =====
 
-export function digestSync(
+export function digestSync<D extends ByteInput>(
 	algorithm: HashAlgorithm,
-	data: Bytes,
+	data: D,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind >= 0) {
 		when (c) {
-			if (typeof data == "string") {
-				return Result.ok(
-					hashOf(kind, data.asBytes()) as Buffer,
-				);
-			}
-			return Result.ok(hashOf(kind, data) as Buffer);
+			return Result.ok(hashOf(kind, typeof data == "string" ? data.asBytes() : data) as Buffer);
 		} else {
 			return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
 		}
@@ -353,10 +346,10 @@ export function digestSync(
 	return Result.ok(extOneShot(algorithm, bytesOf(data)) as Buffer);
 }
 
-export function hmacSync(
+export function hmacSync<K extends ByteInput, D extends ByteInput>(
 	algorithm: HashAlgorithm,
-	key: Bytes,
-	data: Bytes,
+	key: K,
+	data: D,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
 	if (kind >= 0) {
@@ -383,51 +376,51 @@ export function hmacSync(
 	return Result.ok(finishExtHmac(ctx) as Buffer);
 }
 
-export async function digest(
+export function digest<D extends ByteInput>(
 	algorithm: HashAlgorithm,
-	data: Bytes,
+	data: D,
 ): Promise<Result<Buffer, CryptoError>> {
-	return digestSync(algorithm, data);
+	return Promise.resolve(digestSync(algorithm, data));
 }
 
-export async function hmac(
+export function hmac<K extends ByteInput, D extends ByteInput>(
 	algorithm: HashAlgorithm,
-	key: Bytes,
-	data: Bytes,
+	key: K,
+	data: D,
 ): Promise<Result<Buffer, CryptoError>> {
-	return hmacSync(algorithm, key, data);
+	return Promise.resolve(hmacSync(algorithm, key, data));
 }
 
-export function sha256Sync(data: Bytes): Result<Buffer, CryptoError> {
+export function sha256Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> {
 	return digestSync("sha256", data);
 }
-export function sha384Sync(data: Bytes): Result<Buffer, CryptoError> {
+export function sha384Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> {
 	return digestSync("sha384", data);
 }
-export function sha512Sync(data: Bytes): Result<Buffer, CryptoError> {
+export function sha512Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> {
 	return digestSync("sha512", data);
 }
-export function sha1Sync(data: Bytes): Result<Buffer, CryptoError> {
+export function sha1Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> {
 	return digestSync("sha1", data);
 }
-export function md5Sync(data: Bytes): Result<Buffer, CryptoError> {
+export function md5Sync<D extends ByteInput>(data: D): Result<Buffer, CryptoError> {
 	return digestSync("md5", data);
 }
 
-export async function sha256(data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync("sha256", data);
+export function sha256<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> {
+	return digest("sha256", data);
 }
-export async function sha384(data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync("sha384", data);
+export function sha384<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> {
+	return digest("sha384", data);
 }
-export async function sha512(data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync("sha512", data);
+export function sha512<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> {
+	return digest("sha512", data);
 }
-export async function sha1(data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync("sha1", data);
+export function sha1<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> {
+	return digest("sha1", data);
 }
-export async function md5(data: Bytes): Promise<Result<Buffer, CryptoError>> {
-	return digestSync("md5", data);
+export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> {
+	return digest("md5", data);
 }
 
 export class Hasher {
@@ -446,7 +439,7 @@ export class Hasher {
 		return { _ctx: newSha3(bits) };
 	}
 
-	update(data: Bytes): Hasher {
+	update<D extends ByteInput>(data: D): Hasher {
 		const ctx = this._ctx;
 		if (ctx instanceof HashState) {
 			if (ctx.finished) return this;
@@ -487,7 +480,7 @@ export class Hmac {
 	_ctx: HmacState | ExtHmacCtx;
 	_done: boolean;
 
-	static create(algorithm: HashAlgorithm, key: Bytes): Hmac {
+	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 		const kind = hashKind(algorithm);
 		if (kind < 0 && !isExtAlg(algorithm)) {
 			throw new Error(
@@ -501,11 +494,15 @@ export class Hmac {
 		return { _ctx: ctx, _done: false };
 	}
 
-	update(data: Bytes): Hmac {
+	update<D extends ByteInput>(data: D): Hmac {
 		if (!this._done) {
 			const ctx = this._ctx;
 			if (ctx instanceof HmacState) {
-				updateHmac(ctx, bytesOf(data));
+				when (c) {
+					updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
+				} else {
+					updateHmac(ctx, bytesOf(data));
+				}
 			} else {
 				updateExtHmac(ctx, bytesOf(data));
 			}
@@ -530,7 +527,7 @@ export function createHash(algorithm: HashAlgorithm): Hasher {
 	return Hasher.create(algorithm);
 }
 
-export function createHmac(algorithm: HashAlgorithm, key: Bytes): Hmac {
+export function createHmac<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
 	return Hmac.create(algorithm, key);
 }
 
@@ -573,9 +570,8 @@ export function base64String(data: string): string {
 
 // ===== Encoding =====
 
-export function toHex(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeHex();
-	return data.encodeHex();
+export function toHex<D extends ByteInput>(data: D): string {
+	return encodeHex(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromHex(hex: string): Result<Buffer, CryptoError> {
@@ -594,9 +590,8 @@ export function fromHex(hex: string): Result<Buffer, CryptoError> {
 	return Result.ok(raw as Buffer);
 }
 
-export function toBase64(data: Bytes): string {
-	if (typeof data == "string") return data.asBytes().encodeBase64();
-	return data.encodeBase64();
+export function toBase64<D extends ByteInput>(data: D): string {
+	return encodeBase64(typeof data == "string" ? data.asBytes() : data);
 }
 
 export function fromBase64(b64: string): Result<Buffer, CryptoError> {

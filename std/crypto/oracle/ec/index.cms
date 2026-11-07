@@ -79,7 +79,7 @@
 @passC("-Wno-deprecated-declarations");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../../errors";
 export { CryptoError, CryptoErrorKind } from "../../errors";
 
@@ -91,8 +91,8 @@ extern function msCryptoEcExportPrivatePem(key: int64): string;
 extern function msCryptoEcExportPublicPem(key: int64): string;
 extern function msCryptoEcPublicOf(key: int64): int64;
 extern function msCryptoEcBits(key: int64): int32;
-extern function msCryptoEcdsaSign(key: int64, algorithm: string, data: string): string;
-extern function msCryptoEcdsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
+extern function msCryptoEcdsaSign(key: int64, algorithm: string, data: Readonly<Span<uint8>>): string;
+extern function msCryptoEcdsaVerify(key: int64, algorithm: string, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>): boolean;
 extern function msCryptoEcdhDerive(privateKey: int64, publicKey: int64): string;
 extern function msCryptoEcFree(key: int64): void;
 
@@ -179,20 +179,28 @@ export class EcPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export function ecdsaSignSync(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Result<Buffer, CryptoError> {
-	const sig = msCryptoEcdsaSign(key._h, hash, rawString(data));
+export function ecdsaSignSync<D extends ByteInput>(key: EcPrivateKey, data: D, hash: string = "sha256"): Result<Buffer, CryptoError> {
+	return ecdsaSignSpan(key, typeof data == "string" ? data.asBytes() : data, hash);
+}
+
+function ecdsaSignSpan(key: EcPrivateKey, data: Readonly<Span<uint8>>, hash: string): Result<Buffer, CryptoError> {
+	const sig = msCryptoEcdsaSign(key._h, hash, data);
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ec.ecdsaSign", `ECDSA signing failed (hash ${hash}; sha1 is refused)`));
 	return Result.ok(rawBuffer(sig));
 }
 
-export async function ecdsaSign(key: EcPrivateKey, data: Bytes, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> { return ecdsaSignSync(key, data, hash); }
+export function ecdsaSign<D extends ByteInput>(key: EcPrivateKey, data: D, hash: string = "sha256"): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(ecdsaSignSync(key, data, hash)); }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export function ecdsaVerifySync(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): boolean {
-	return msCryptoEcdsaVerify(key._h, hash, rawString(data), rawString(signature));
+export function ecdsaVerifySync<D extends ByteInput, S extends ByteInput>(key: EcPublicKey, data: D, signature: S, hash: string = "sha256"): boolean {
+	return ecdsaVerifySpan(key, typeof data == "string" ? data.asBytes() : data, typeof signature == "string" ? signature.asBytes() : signature, hash);
 }
 
-export async function ecdsaVerify(key: EcPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256"): Promise<boolean> { return ecdsaVerifySync(key, data, signature, hash); }
+function ecdsaVerifySpan(key: EcPublicKey, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>, hash: string): boolean {
+	return msCryptoEcdsaVerify(key._h, hash, data, signature);
+}
+
+export function ecdsaVerify<D extends ByteInput, S extends ByteInput>(key: EcPublicKey, data: D, signature: S, hash: string = "sha256"): Promise<boolean> { return Promise.resolve(ecdsaVerifySync(key, data, signature, hash)); }
 
 // The two keys must be on the same curve.
 export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Result<Buffer, CryptoError> {

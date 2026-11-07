@@ -25,7 +25,7 @@ typedef struct {
 } msArrayPayloadBase;
 
 static inline void msArrayPayloadFree(void* p) {
-	if ((((msArrayPayloadBase*)p)->cap & MS_STRLIT_FLAG) == 0) free(p);
+	if ((((msArrayPayloadBase*)p)->cap & MS_STRLIT_FLAG) == 0) msMemFree(p);
 }
 
 typedef struct {

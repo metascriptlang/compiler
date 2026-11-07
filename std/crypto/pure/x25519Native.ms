@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
@@ -11,7 +11,7 @@ export { CryptoError, CryptoErrorKind } from "../errors";
 export class X25519PublicKey {
 	_raw: uint8[];
 
-	static importSync(raw: Bytes): Result<X25519PublicKey, CryptoError> {
+	static importSync<D extends ByteInput>(raw: D): Result<X25519PublicKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 32) {
 			return Result.err(cryptoError(
@@ -22,9 +22,9 @@ export class X25519PublicKey {
 		return Result.ok({ _raw: bytes.slice(0) });
 	}
 
-	static async import(raw: Bytes):
+	static import<D extends ByteInput>(raw: D):
 		Promise<Result<X25519PublicKey, CryptoError>> {
-		return X25519PublicKey.importSync(raw);
+		return Promise.resolve(X25519PublicKey.importSync(raw));
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
@@ -45,7 +45,7 @@ export class X25519PrivateKey {
 	_scalar: uint8[];
 	_public: uint8[];
 
-	static fromRawSync(raw: Bytes): Result<X25519PrivateKey, CryptoError> {
+	static fromRawSync<D extends ByteInput>(raw: D): Result<X25519PrivateKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 32) {
 			wipeIfCopied(raw, bytes);
@@ -61,9 +61,9 @@ export class X25519PrivateKey {
 		return Result.ok(key);
 	}
 
-	static async fromRaw(raw: Bytes):
+	static fromRaw<D extends ByteInput>(raw: D):
 		Promise<Result<X25519PrivateKey, CryptoError>> {
-		return X25519PrivateKey.fromRawSync(raw);
+		return Promise.resolve(X25519PrivateKey.fromRawSync(raw));
 	}
 
 	static generateSync(): Result<X25519PrivateKey, CryptoError> {

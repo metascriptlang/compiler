@@ -621,7 +621,7 @@ void msUnownedRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msUnownedDecref(p->data[i]);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
@@ -844,7 +844,7 @@ void msRoRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i]);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
@@ -855,7 +855,7 @@ void msUnownedRoRefArrayDestroy(msRefArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msUnownedDecrefRo(p->data[i]);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
@@ -953,13 +953,13 @@ void msRoClosureArrayDestroy(msClosureArray* arr) {
 	arr->len = 0;
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msDecrefCyclicRo(p->data[i].env);
-		msMemFree(p);
+		msArrayPayloadFree(p);
 	}
 }
 
 void msRoClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 	const int64_t len = src->len;
-	const int64_t cap = src->p != NULL ? src->p->cap : 0;
+	const int64_t cap = src->p != NULL ? (src->p->cap & MS_CAP_MASK) : 0;
 	msClosurePayload* newp = NULL;
 	if (src->p != NULL) {
 		newp = (msClosurePayload*)msMemAlloc0(sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure));

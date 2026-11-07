@@ -1,23 +1,12 @@
 import { wipeBytes } from "./secret";
-import { load64BE, store64BE } from "./endian";
+import { InputBytes } from "./bytes";
+import { load32BE, load64BE, store32BE } from "./endian";
 /**
  * The GHASH of AES-GCM (NIST SP 800-38D) without tables, so no memory access or branch depends on the key or the
  * data. On C each carry-less product is built from integer multiplies of operands masked to every fourth bit, on
  * 64-bit halves read big-endian, with the key pre-multiplied by x so the products need no bit reflection. On JS, where
  * a uint64 is a BigInt, it is the bit-serial multiply of SP 800-38D on four uint32 words, each step selected by a mask.
  */
-
-function loadBE32(data: Readonly<uint8[]>, at: int32): uint32 {
-	return ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);
-}
-
-/** Writes `value` big-endian to `out[at, at + 4)`. */
-export function storeBE32(out: uint8[], at: int32, value: uint32): void {
-	out[at] = (value >> 24) as uint8;
-	out[at + 1] = ((value >> 16) & 0xff) as uint8;
-	out[at + 2] = ((value >> 8) & 0xff) as uint8;
-	out[at + 3] = (value & 0xff) as uint8;
-}
 
 when (c) {
 	export class Ghash {
@@ -28,10 +17,6 @@ when (c) {
 		productHi: uint64;
 		productLo: uint64;
 		tail: uint8[];
-	}
-
-	function loadBE64(data: Readonly<uint8[]>, at: int32): uint64 {
-		return ((loadBE32(data, at) as uint64) << 32) | (loadBE32(data, at + 4) as uint64);
 	}
 
 	@include("runtime/core/mulWide.h");
@@ -76,9 +61,9 @@ when (c) {
 	}
 
 	// acc = (acc ^ block) * key, reduced modulo x^128 + x^127 + x^126 + x^121 + 1.
-	function absorb(g: Ghash, data: Readonly<uint8[]>, at: int32): void {
-		const xHi = g.accHi ^ loadBE64(data, at);
-		const xLo = g.accLo ^ loadBE64(data, at + 8);
+	function absorb(g: Ghash, data: InputBytes, at: int32): void {
+		const xHi = g.accHi ^ load64BE(data, at);
+		const xLo = g.accLo ^ load64BE(data, at + 8);
 		carrylessProduct64(g, xLo, g.keyLo);
 		const loHi = g.productHi;
 		const loLo = g.productLo;
@@ -100,9 +85,9 @@ when (c) {
 		g.accLo = bHi ^ g.productLo ^ highLo;
 	}
 
-	function keyedGhash(key: Readonly<uint8[]>): Ghash {
-		const hHi = loadBE64(key, 0);
-		const hLo = loadBE64(key, 8);
+	function keyedGhash(key: InputBytes): Ghash {
+		const hHi = load64BE(key, 0);
+		const hLo = load64BE(key, 8);
 		const carry = (0 as uint64) - (hHi >> 63);
 		return {
 			keyHi: ((hHi << 1) | (hLo >> 63)) ^ ((0xc200000000000000 as uint64) & carry),
@@ -116,10 +101,10 @@ when (c) {
 	}
 
 	function storeAcc(g: Ghash, out: uint8[], at: int32): void {
-		storeBE32(out, at, (g.accHi >> 32) as uint32);
-		storeBE32(out, at + 4, (g.accHi & 0xffffffff) as uint32);
-		storeBE32(out, at + 8, (g.accLo >> 32) as uint32);
-		storeBE32(out, at + 12, (g.accLo & 0xffffffff) as uint32);
+		store32BE(out, at, (g.accHi >> 32) as uint32);
+		store32BE(out, at + 4, (g.accHi & 0xffffffff) as uint32);
+		store32BE(out, at + 8, (g.accLo >> 32) as uint32);
+		store32BE(out, at + 12, (g.accLo & 0xffffffff) as uint32);
 	}
 
 	function wipeState(g: Ghash): void {
@@ -145,11 +130,11 @@ when (c) {
 
 	// acc = (acc ^ block) * H: for each bit of X from the first, Z ^= V when the bit is set, then V = V * x, reduced by
 	// 0xe1 in the first byte when a bit falls off the end.
-	function absorb(g: Ghash, data: Readonly<uint8[]>, at: int32): void {
-		const x0 = g.acc0 ^ loadBE32(data, at);
-		const x1 = g.acc1 ^ loadBE32(data, at + 4);
-		const x2 = g.acc2 ^ loadBE32(data, at + 8);
-		const x3 = g.acc3 ^ loadBE32(data, at + 12);
+	function absorb(g: Ghash, data: InputBytes, at: int32): void {
+		const x0 = g.acc0 ^ load32BE(data, at);
+		const x1 = g.acc1 ^ load32BE(data, at + 4);
+		const x2 = g.acc2 ^ load32BE(data, at + 8);
+		const x3 = g.acc3 ^ load32BE(data, at + 12);
 		let z0: uint32 = 0;
 		let z1: uint32 = 0;
 		let z2: uint32 = 0;
@@ -177,12 +162,12 @@ when (c) {
 		g.acc3 = z3;
 	}
 
-	function keyedGhash(key: Readonly<uint8[]>): Ghash {
+	function keyedGhash(key: InputBytes): Ghash {
 		return {
-			h0: loadBE32(key, 0),
-			h1: loadBE32(key, 4),
-			h2: loadBE32(key, 8),
-			h3: loadBE32(key, 12),
+			h0: load32BE(key, 0),
+			h1: load32BE(key, 4),
+			h2: load32BE(key, 8),
+			h3: load32BE(key, 12),
 			acc0: 0,
 			acc1: 0,
 			acc2: 0,
@@ -192,10 +177,10 @@ when (c) {
 	}
 
 	function storeAcc(g: Ghash, out: uint8[], at: int32): void {
-		storeBE32(out, at, g.acc0);
-		storeBE32(out, at + 4, g.acc1);
-		storeBE32(out, at + 8, g.acc2);
-		storeBE32(out, at + 12, g.acc3);
+		store32BE(out, at, g.acc0);
+		store32BE(out, at + 4, g.acc1);
+		store32BE(out, at + 8, g.acc2);
+		store32BE(out, at + 12, g.acc3);
 	}
 
 	function wipeState(g: Ghash): void {
@@ -211,12 +196,12 @@ when (c) {
 }
 
 /** A GHASH under the 16-byte hash key H. */
-export function newGhash(key: Readonly<uint8[]>): Ghash {
+export function newGhash(key: InputBytes): Ghash {
 	return keyedGhash(key);
 }
 
 /** Absorbs `data[from, to)` as one segment, zero-padded to a whole block: AAD, cipher text and the length block are separate segments. */
-export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: int32): void {
+export function updateGhash(g: Ghash, data: InputBytes, from: int32, to: int32): void {
 	let at = from;
 	while (at + 16 <= to) {
 		absorb(g, data, at);
@@ -233,5 +218,5 @@ export function updateGhash(g: Ghash, data: Readonly<uint8[]>, from: int32, to: 
 export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
 	storeAcc(g, out, at);
 	wipeState(g);
-	for (let i = 0; i < 16; i++) g.tail[i] = 0;
+	wipeBytes(g.tail);
 }

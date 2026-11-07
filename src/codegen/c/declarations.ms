@@ -728,7 +728,7 @@ function bakedArrayCellRef(g: CGen, node: Readonly<Node>, varName: string, arrT:
 		addLine(sec(g, CSection.GlobalVars), `static struct { int64_t cap; ${getTypeDesc(g, elemT)} data[${count}]; } ${varName}_data_ = { MS_STRLIT_FLAG | ${count}, { ${leaves} } };`);
 		payload = `(void*)&${varName}_data_`;
 	}
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = MS_RC_INCREMENT << 26, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${count}, ${payload} } };`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = MS_RC_IMMORTAL, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${count}, ${payload} } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	return `&${varName}_konst_.b`;
 }

@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import {
@@ -18,8 +18,8 @@ function badHashSize(hashSize: int32, operation: string): CryptoError | null {
 	return null;
 }
 
-export function blake2bSync(
-	data: Bytes,
+export function blake2bSync<D extends ByteInput>(
+	data: D,
 	hashSize: int32 = 32,
 ): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
@@ -27,9 +27,9 @@ export function blake2bSync(
 	return Result.ok(blake2bOf(hashSize, [], bytesOf(data)) as Buffer);
 }
 
-export function blake2bKeyedSync(
-	keyBytes: Bytes,
-	data: Bytes,
+export function blake2bKeyedSync<D extends ByteInput, K extends ByteInput>(
+	keyBytes: D,
+	data: K,
 	hashSize: int32 = 32,
 ): Result<Buffer, CryptoError> {
 	const key = bytesOf(keyBytes);
@@ -49,25 +49,25 @@ export function blake2bKeyedSync(
 	return Result.ok(digest as Buffer);
 }
 
-export async function blake2b(
-	data: Bytes,
+export function blake2b<D extends ByteInput>(
+	data: D,
 	hashSize: int32 = 32,
 ): Promise<Result<Buffer, CryptoError>> {
-	return blake2bSync(data, hashSize);
+	return Promise.resolve(blake2bSync(data, hashSize));
 }
 
-export async function blake2bKeyed(
-	keyBytes: Bytes,
-	data: Bytes,
+export function blake2bKeyed<D extends ByteInput, K extends ByteInput>(
+	keyBytes: D,
+	data: K,
 	hashSize: int32 = 32,
 ): Promise<Result<Buffer, CryptoError>> {
-	return blake2bKeyedSync(keyBytes, data, hashSize);
+	return Promise.resolve(blake2bKeyedSync(keyBytes, data, hashSize));
 }
 
 export class Blake2b {
 	_state: Blake2bState;
 
-	update(data: Bytes): Blake2b {
+	update<D extends ByteInput>(data: D): Blake2b {
 		if (this._state.finished) {
 			throw new Error("Blake2b.update: the hasher already produced its digest");
 		}

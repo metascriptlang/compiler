@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets, randomInto } from "./random";
@@ -12,7 +12,7 @@ export { CryptoError, CryptoErrorKind } from "../errors";
 export class ChaChaKey {
 	_words: uint32[];
 
-	static import(raw: Bytes): Result<ChaChaKey, CryptoError> {
+	static import<R extends ByteInput>(raw: R): Result<ChaChaKey, CryptoError> {
 		const words = new Array<uint32>(8);
 		const bytes = bytesOf(raw);
 		const fits = keyWords(bytes, words);
@@ -65,18 +65,18 @@ function liveWords(key: ChaChaKey, operation: string): uint32[] {
 	return key._words;
 }
 
-export function sealSync(
+export function sealSync<P extends ByteInput, A extends ByteInput>(
 	key: ChaChaKey,
-	plainText: Bytes,
-	aad: Bytes = "",
+	plainText: P,
+	aad: A = "",
 ): Result<Buffer, CryptoError> {
 	const words = liveWords(key, "seal");
-	const plain = bytesOf(plainText);
+	const plain = (typeof plainText == "string" ? plainText.asBytes() : plainText);
 	const sealed = new Array<uint8>(plain.length + 40);
 	let success = false;
 	try {
 		randomInto(sealed, 24);
-		success = xchachaSealInto(words, bytesOf(aad), plain, sealed);
+		success = xchachaSealInto(words, (typeof aad == "string" ? aad.asBytes() : aad), plain, sealed);
 	} catch (_error) {
 		success = false;
 	}
@@ -89,21 +89,21 @@ export function sealSync(
 	return Result.ok(sealed as Buffer);
 }
 
-export async function seal(
+export function seal<P extends ByteInput, A extends ByteInput>(
 	key: ChaChaKey,
-	plainText: Bytes,
-	aad: Bytes = "",
+	plainText: P,
+	aad: A = "",
 ): Promise<Result<Buffer, CryptoError>> {
-	return sealSync(key, plainText, aad);
+	return Promise.resolve(sealSync(key, plainText, aad));
 }
 
-export function openSync(
+export function openSync<S extends ByteInput, A extends ByteInput>(
 	key: ChaChaKey,
-	sealedBytes: Bytes,
-	aad: Bytes = "",
+	sealedBytes: S,
+	aad: A = "",
 ): Result<Buffer, CryptoError> {
 	const words = liveWords(key, "open");
-	const sealed = bytesOf(sealedBytes);
+	const sealed = (typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes);
 	if (sealed.length < 40) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.InvalidInput,
@@ -111,7 +111,7 @@ export function openSync(
 		));
 	}
 	const plain = new Array<uint8>(sealed.length - 40);
-	if (!xchachaOpenInto(words, bytesOf(aad), sealed, plain)) {
+	if (!xchachaOpenInto(words, (typeof aad == "string" ? aad.asBytes() : aad), sealed, plain)) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.AuthenticationFailed,
 			"open", "authentication tag mismatch",
@@ -120,10 +120,10 @@ export function openSync(
 	return Result.ok(plain as Buffer);
 }
 
-export async function open(
+export function open<S extends ByteInput, A extends ByteInput>(
 	key: ChaChaKey,
-	sealedBytes: Bytes,
-	aad: Bytes = "",
+	sealedBytes: S,
+	aad: A = "",
 ): Promise<Result<Buffer, CryptoError>> {
-	return openSync(key, sealedBytes, aad);
+	return Promise.resolve(openSync(key, sealedBytes, aad));
 }

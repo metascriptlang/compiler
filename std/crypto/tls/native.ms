@@ -13,7 +13,7 @@ import {
 	setTimeout as setSocketTimeout,
 } from "std/net";
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { encodeHex } from "../../core/encoding";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import {
@@ -246,7 +246,7 @@ export function read(this conn: TlsConnection, maxBytes: int32 = 4096): Buffer {
 }
 
 // Bytes written, 0 for empty data, -1 on failure.
-export function write(this conn: TlsConnection, data: Bytes): int32 {
+export function write<D extends ByteInput>(this conn: TlsConnection, data: D): int32 {
 	const client = conn._client;
 	conn.timedOut = false;
 	if (client == null) {

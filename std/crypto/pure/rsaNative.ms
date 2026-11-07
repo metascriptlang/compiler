@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "./bytes";
 import { pemDecode, pemEncode } from "./pem";
 import { wipeBytes } from "./secret";
@@ -170,9 +170,9 @@ export class RsaPrivateKey {
 	}
 }
 
-export function signSync(
+export function signSync<D extends ByteInput>(
 	key: RsaPrivateKey,
-	data: Bytes,
+	data: D,
 	hash: string = "sha256",
 	padding: RsaPadding = "pkcs1v15",
 ): Result<Buffer, CryptoError> {
@@ -198,19 +198,19 @@ export function signSync(
 	return Result.ok(signature as Buffer);
 }
 
-export async function sign(
+export function sign<D extends ByteInput>(
 	key: RsaPrivateKey,
-	data: Bytes,
+	data: D,
 	hash: string = "sha256",
 	padding: RsaPadding = "pkcs1v15",
 ): Promise<Result<Buffer, CryptoError>> {
-	return signSync(key, data, hash, padding);
+	return Promise.resolve(signSync(key, data, hash, padding));
 }
 
-export function verifySync(
+export function verifySync<D extends ByteInput, K extends ByteInput>(
 	key: RsaPublicKey,
-	data: Bytes,
-	signature: Bytes,
+	data: D,
+	signature: K,
 	hash: string = "sha256",
 	padding: RsaPadding = "pkcs1v15",
 ): boolean {
@@ -229,19 +229,19 @@ export function verifySync(
 	}
 }
 
-export async function verify(
+export function verify<D extends ByteInput, K extends ByteInput>(
 	key: RsaPublicKey,
-	data: Bytes,
-	signature: Bytes,
+	data: D,
+	signature: K,
 	hash: string = "sha256",
 	padding: RsaPadding = "pkcs1v15",
 ): Promise<boolean> {
-	return verifySync(key, data, signature, hash, padding);
+	return Promise.resolve(verifySync(key, data, signature, hash, padding));
 }
 
-export function encryptSync(
+export function encryptSync<D extends ByteInput>(
 	key: RsaPublicKey,
-	data: Bytes,
+	data: D,
 ): Result<Buffer, CryptoError> {
 	const publicKey = key._data;
 	let encrypted: uint8[] | null = null;
@@ -261,16 +261,16 @@ export function encryptSync(
 	return Result.ok(encrypted as Buffer);
 }
 
-export async function encrypt(
+export function encrypt<D extends ByteInput>(
 	key: RsaPublicKey,
-	data: Bytes,
+	data: D,
 ): Promise<Result<Buffer, CryptoError>> {
-	return encryptSync(key, data);
+	return Promise.resolve(encryptSync(key, data));
 }
 
-export function decryptSync(
+export function decryptSync<D extends ByteInput>(
 	key: RsaPrivateKey,
-	data: Bytes,
+	data: D,
 ): Result<Buffer, CryptoError> {
 	const privateKey = key._data;
 	let decrypted: uint8[] | null = null;
@@ -290,9 +290,9 @@ export function decryptSync(
 	return Result.ok(decrypted as Buffer);
 }
 
-export async function decrypt(
+export function decrypt<D extends ByteInput>(
 	key: RsaPrivateKey,
-	data: Bytes,
+	data: D,
 ): Promise<Result<Buffer, CryptoError>> {
-	return decryptSync(key, data);
+	return Promise.resolve(decryptSync(key, data));
 }

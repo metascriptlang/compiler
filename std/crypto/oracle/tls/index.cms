@@ -114,7 +114,7 @@
 // the PSA drivers here call into. psa_util.c is no longer among them; this
 // module compiles it directly (see above).
 import { CryptoError, CryptoErrorKind, cryptoError } from "../../errors";
-import { Bytes, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 
 // C bindings
 extern function msTlsConnect(hostname: string, port: int32, caPath: string, timeoutMs: int32): int64;
@@ -123,7 +123,6 @@ extern function msTlsLastError(): string;
 extern function msTlsConnTimedOut(ctx: int64): int32;
 extern function msTlsConnLastError(ctx: int64): string;
 extern function msTlsReadBytes(ctx: int64, maxBytes: int32): Buffer;
-extern function msTlsWrite(ctx: int64, data: string): int32;
 extern function msTlsWriteBytes(ctx: int64, data: Readonly<Span<uint8>>): int32;
 extern function msTlsClose(ctx: int64): void;
 extern function msTlsPeerCertSubject(ctx: int64): string;
@@ -178,13 +177,17 @@ export function read(this conn: TlsConnection, maxBytes: int32 = 4096): Buffer {
 }
 
 // Bytes written, 0 for empty data, -1 on failure.
-export function write(this conn: TlsConnection, data: Bytes): int32 {
+export function write<D extends ByteInput>(this conn: TlsConnection, data: D): int32 {
+	return writeSpan(conn, typeof data == "string" ? data.asBytes() : data);
+}
+
+function writeSpan(conn: TlsConnection, data: Readonly<Span<uint8>>): int32 {
 	if (conn._handle == 0) {
 		conn.lastError = tlsClosedMessage;
 		conn.timedOut = false;
 		return -1;
 	}
-	const written = typeof data == "string" ? msTlsWrite(conn._handle, data) : msTlsWriteBytes(conn._handle, data);
+	const written = msTlsWriteBytes(conn._handle, data);
 	conn.timedOut = msTlsConnTimedOut(conn._handle) != 0;
 	conn.lastError = written < 0 ? (conn.timedOut ? "TLS write timed out" : "TLS write failed") : "";
 	return written;

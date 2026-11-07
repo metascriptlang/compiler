@@ -5,7 +5,7 @@
  */
 
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "./bytes";
 import { PemBlock, pemEncode } from "./pem";
 import {
@@ -216,9 +216,9 @@ function agreementFailed(): CryptoError {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export function ecdsaSignSync(
+export function ecdsaSignSync<D extends ByteInput>(
 	key: EcPrivateKey,
-	data: Bytes,
+	data: D,
 	hash: string = "sha256",
 ): Result<Buffer, CryptoError> {
 	const kind = ecdsaHash(hash, true);
@@ -229,19 +229,19 @@ export function ecdsaSignSync(
 	return Result.ok(ecdsaRawToDer(raw) as Buffer);
 }
 
-export async function ecdsaSign(
+export function ecdsaSign<D extends ByteInput>(
 	key: EcPrivateKey,
-	data: Bytes,
+	data: D,
 	hash: string = "sha256",
 ): Promise<Result<Buffer, CryptoError>> {
-	return ecdsaSignSync(key, data, hash);
+	return Promise.resolve(ecdsaSignSync(key, data, hash));
 }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export function ecdsaVerifySync(
+export function ecdsaVerifySync<D extends ByteInput, K extends ByteInput>(
 	key: EcPublicKey,
-	data: Bytes,
-	signature: Bytes,
+	data: D,
+	signature: K,
 	hash: string = "sha256",
 ): boolean {
 	const kind = ecdsaHash(hash, false);
@@ -253,13 +253,13 @@ export function ecdsaVerifySync(
 	return ecdsaVerifyRaw(curve, key._data.point, digest, raw);
 }
 
-export async function ecdsaVerify(
+export function ecdsaVerify<D extends ByteInput, K extends ByteInput>(
 	key: EcPublicKey,
-	data: Bytes,
-	signature: Bytes,
+	data: D,
+	signature: K,
 	hash: string = "sha256",
 ): Promise<boolean> {
-	return ecdsaVerifySync(key, data, signature, hash);
+	return Promise.resolve(ecdsaVerifySync(key, data, signature, hash));
 }
 
 // The two keys must be on the same curve.

@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import {
@@ -29,9 +29,9 @@ function freshDefaultLimits(): Argon2Limits {
 
 export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
 
-export function argon2HashSync(
-	password: Bytes,
-	saltBytes: Bytes,
+export function argon2HashSync<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	saltBytes: K,
 	timeCost: int32 = DEFAULT_TIME_COST,
 	memoryCost: int32 = DEFAULT_MEMORY_COST,
 	parallelism: int32 = DEFAULT_PARALLELISM,
@@ -59,9 +59,9 @@ export function argon2HashSync(
 	return Result.ok(encoded.value);
 }
 
-export async function argon2Hash(
-	password: Bytes,
-	saltBytes: Bytes,
+export async function argon2Hash<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	saltBytes: K,
 	timeCost: int32 = DEFAULT_TIME_COST,
 	memoryCost: int32 = DEFAULT_MEMORY_COST,
 	parallelism: int32 = DEFAULT_PARALLELISM,
@@ -72,9 +72,9 @@ export async function argon2Hash(
 	);
 }
 
-export function argon2HashRawSync(
-	password: Bytes,
-	saltBytes: Bytes,
+export function argon2HashRawSync<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	saltBytes: K,
 	timeCost: int32 = DEFAULT_TIME_COST,
 	memoryCost: int32 = DEFAULT_MEMORY_COST,
 	parallelism: int32 = DEFAULT_PARALLELISM,
@@ -103,9 +103,9 @@ export function argon2HashRawSync(
 	return Result.ok(raw.value as Buffer);
 }
 
-export async function argon2HashRaw(
-	password: Bytes,
-	saltBytes: Bytes,
+export async function argon2HashRaw<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	saltBytes: K,
 	timeCost: int32 = DEFAULT_TIME_COST,
 	memoryCost: int32 = DEFAULT_MEMORY_COST,
 	parallelism: int32 = DEFAULT_PARALLELISM,
@@ -116,9 +116,9 @@ export async function argon2HashRaw(
 	);
 }
 
-export function argon2VerifySync(
+export function argon2VerifySync<D extends ByteInput>(
 	encoded: string,
-	password: Bytes,
+	password: D,
 	limits: Argon2Limits = freshDefaultLimits(),
 ): boolean {
 	if (decodeArgon2id(encoded) == null) return false;
@@ -132,10 +132,10 @@ export function argon2VerifySync(
 	return ok;
 }
 
-export async function argon2Verify(
+export function argon2Verify<D extends ByteInput>(
 	encoded: string,
-	password: Bytes,
+	password: D,
 	limits: Argon2Limits = freshDefaultLimits(),
 ): Promise<boolean> {
-	return argon2VerifySync(encoded, password, limits);
+	return Promise.resolve(argon2VerifySync(encoded, password, limits));
 }

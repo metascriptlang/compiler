@@ -43,7 +43,7 @@ function absorbPads(key: HashBytes, inner: HashState, outer: HashState): void {
 	wipeBytes(pad);
 }
 
-export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
+export function newHmac(kind: int32, key: HashBytes): HmacState {
 	requireKind(kind);
 	const innerKeyed = newHash(kind);
 	const outerKeyed = newHash(kind);
@@ -59,7 +59,7 @@ export function newHmac(kind: int32, key: Readonly<uint8[]>): HmacState {
 	return hmac;
 }
 
-export function updateHmac(hmac: HmacState, data: Readonly<uint8[]>): void {
+export function updateHmac(hmac: HmacState, data: HashBytes): void {
 	updateHash(hmac.inner, data);
 }
 

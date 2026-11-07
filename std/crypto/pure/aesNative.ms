@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
@@ -16,7 +16,7 @@ export class AesKey {
 	_raw: uint8[];
 	_schedule: KeySchedule;
 
-	static import(raw: Bytes): Result<AesKey, CryptoError> {
+	static import<R extends ByteInput>(raw: R): Result<AesKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 16 && bytes.length != 32) {
 			wipeIfCopied(raw, bytes);
@@ -73,10 +73,10 @@ function liveSchedule(key: AesKey, operation: string): KeySchedule {
 	return key._schedule;
 }
 
-export function sealSync(
+export function sealSync<P extends ByteInput, A extends ByteInput>(
 	key: AesKey,
-	plainTextBytes: Bytes,
-	aadBytes: Bytes = "",
+	plainTextBytes: P,
+	aadBytes: A = "",
 ): Result<Buffer, CryptoError> {
 	const schedule = liveSchedule(key, "seal");
 	let nonce: uint8[] = [];
@@ -90,7 +90,7 @@ export function sealSync(
 	}
 	try {
 		return Result.ok(gcmSealWithNonce(
-			schedule, nonce, bytesOf(plainTextBytes), bytesOf(aadBytes),
+			schedule, nonce, (typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes), (typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes),
 		) as Buffer);
 	} catch (_error) {
 		return Result.err(cryptoError(
@@ -100,27 +100,27 @@ export function sealSync(
 	}
 }
 
-export async function seal(
+export function seal<P extends ByteInput, A extends ByteInput>(
 	key: AesKey,
-	plainTextBytes: Bytes,
-	aadBytes: Bytes = "",
+	plainTextBytes: P,
+	aadBytes: A = "",
 ): Promise<Result<Buffer, CryptoError>> {
-	return sealSync(key, plainTextBytes, aadBytes);
+	return Promise.resolve(sealSync(key, plainTextBytes, aadBytes));
 }
 
-export function openSync(
+export function openSync<S extends ByteInput, A extends ByteInput>(
 	key: AesKey,
-	sealedBytes: Bytes,
-	aadBytes: Bytes = "",
+	sealedBytes: S,
+	aadBytes: A = "",
 ): Result<Buffer, CryptoError> {
 	const schedule = liveSchedule(key, "open");
-	const sealed = bytesOf(sealedBytes);
+	const sealed = (typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes);
 	if (sealed.length < 28) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.InvalidInput, "open", "sealed data too short",
 		));
 	}
-	const plain = gcmOpen(schedule, sealed, bytesOf(aadBytes));
+	const plain = gcmOpen(schedule, sealed, (typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes));
 	if (plain == null) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.AuthenticationFailed,
@@ -130,21 +130,21 @@ export function openSync(
 	return Result.ok(plain as Buffer);
 }
 
-export async function open(
+export function open<S extends ByteInput, A extends ByteInput>(
 	key: AesKey,
-	sealedBytes: Bytes,
-	aadBytes: Bytes = "",
+	sealedBytes: S,
+	aadBytes: A = "",
 ): Promise<Result<Buffer, CryptoError>> {
-	return openSync(key, sealedBytes, aadBytes);
+	return Promise.resolve(openSync(key, sealedBytes, aadBytes));
 }
 
-export function cbcEncryptSync(
+export function cbcEncryptSync<P extends ByteInput, I extends ByteInput>(
 	key: AesKey,
-	plainTextBytes: Bytes,
-	ivBytes: Bytes,
+	plainTextBytes: P,
+	ivBytes: I,
 ): Result<Buffer, CryptoError> {
 	const schedule = liveSchedule(key, "cbcEncrypt");
-	const iv = bytesOf(ivBytes);
+	const iv = (typeof ivBytes == "string" ? ivBytes.asBytes() : ivBytes);
 	if (iv.length != 16) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes",
@@ -152,7 +152,7 @@ export function cbcEncryptSync(
 	}
 	try {
 		return Result.ok(
-			encryptCbc(schedule, iv, bytesOf(plainTextBytes)) as Buffer,
+			encryptCbc(schedule, iv, (typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes)) as Buffer,
 		);
 	} catch (_error) {
 		return Result.err(cryptoError(
@@ -162,27 +162,27 @@ export function cbcEncryptSync(
 	}
 }
 
-export async function cbcEncrypt(
+export function cbcEncrypt<P extends ByteInput, I extends ByteInput>(
 	key: AesKey,
-	plainTextBytes: Bytes,
-	ivBytes: Bytes,
+	plainTextBytes: P,
+	ivBytes: I,
 ): Promise<Result<Buffer, CryptoError>> {
-	return cbcEncryptSync(key, plainTextBytes, ivBytes);
+	return Promise.resolve(cbcEncryptSync(key, plainTextBytes, ivBytes));
 }
 
-export function cbcDecryptSync(
+export function cbcDecryptSync<C extends ByteInput, I extends ByteInput>(
 	key: AesKey,
-	cipherTextBytes: Bytes,
-	ivBytes: Bytes,
+	cipherTextBytes: C,
+	ivBytes: I,
 ): Result<Buffer, CryptoError> {
 	const schedule = liveSchedule(key, "cbcDecrypt");
-	const iv = bytesOf(ivBytes);
+	const iv = (typeof ivBytes == "string" ? ivBytes.asBytes() : ivBytes);
 	if (iv.length != 16) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes",
 		));
 	}
-	const plain = decryptCbc(schedule, iv, bytesOf(cipherTextBytes));
+	const plain = decryptCbc(schedule, iv, (typeof cipherTextBytes == "string" ? cipherTextBytes.asBytes() : cipherTextBytes));
 	if (plain == null) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.DecryptionFailed,
@@ -192,10 +192,10 @@ export function cbcDecryptSync(
 	return Result.ok(plain as Buffer);
 }
 
-export async function cbcDecrypt(
+export function cbcDecrypt<C extends ByteInput, I extends ByteInput>(
 	key: AesKey,
-	cipherTextBytes: Bytes,
-	ivBytes: Bytes,
+	cipherTextBytes: C,
+	ivBytes: I,
 ): Promise<Result<Buffer, CryptoError>> {
-	return cbcDecryptSync(key, cipherTextBytes, ivBytes);
+	return Promise.resolve(cbcDecryptSync(key, cipherTextBytes, ivBytes));
 }

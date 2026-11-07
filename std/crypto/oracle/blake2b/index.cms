@@ -11,15 +11,15 @@
 @passC("-Ivendor/monocypher/src");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../../errors";
 export { CryptoError, CryptoErrorKind } from "../../errors";
 
 // C bindings
-extern function msBlake2b(data: string, hashSize: int32): string;
-extern function msBlake2bKeyed(key: string, data: string, hashSize: int32): string;
+extern function msBlake2b(data: Readonly<Span<uint8>>, hashSize: int32): string;
+extern function msBlake2bKeyed(key: Readonly<Span<uint8>>, data: Readonly<Span<uint8>>, hashSize: int32): string;
 extern function msBlake2bInit(hashSize: int32): int64;
-extern function msBlake2bUpdate(ctx: int64, data: string): void;
+extern function msBlake2bUpdate(ctx: int64, data: Readonly<Span<uint8>>): void;
 extern function msBlake2bFinal(ctx: int64): string;
 
 function badHashSize(hashSize: int32, op: string): CryptoError | null {
@@ -31,41 +31,44 @@ function badHashSize(hashSize: int32, op: string): CryptoError | null {
 
 // ===== One-shot Hashing =====
 
-export function blake2bSync(data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
-	const bad = badHashSize(hashSize, "blake2b");
-	if (bad != null) return Result.err(bad);
-	return Result.ok(rawBuffer(msBlake2b(rawString(data), hashSize)));
+export function blake2bSync<D extends ByteInput>(data: D, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	return blake2bSpan(typeof data == "string" ? data.asBytes() : data, hashSize);
 }
 
-export function blake2bKeyedSync(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Result<Buffer, CryptoError> {
-	const key = rawString(keyBytes);
-	if (key.byteLength < 1 || key.byteLength > 64) {
+function blake2bSpan(data: Readonly<Span<uint8>>, hashSize: int32): Result<Buffer, CryptoError> {
+	const bad = badHashSize(hashSize, "blake2b");
+	if (bad != null) return Result.err(bad);
+	return Result.ok(rawBuffer(msBlake2b(data, hashSize)));
+}
+
+export function blake2bKeyedSync<K extends ByteInput, D extends ByteInput>(keyBytes: K, data: D, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	return blake2bKeyedSpan(typeof keyBytes == "string" ? keyBytes.asBytes() : keyBytes, typeof data == "string" ? data.asBytes() : data, hashSize);
+}
+
+function blake2bKeyedSpan(key: Readonly<Span<uint8>>, data: Readonly<Span<uint8>>, hashSize: int32): Result<Buffer, CryptoError> {
+	if (key.length < 1 || key.length > 64) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
 	}
 	const bad = badHashSize(hashSize, "blake2bKeyed");
 	if (bad != null) return Result.err(bad);
-	const result = msBlake2bKeyed(key, rawString(data), hashSize);
+	const result = msBlake2bKeyed(key, data, hashSize);
 	if (result == "") return Result.err(cryptoError(CryptoErrorKind.HashFailed, "blake2bKeyed", "keyed hash failed"));
 	return Result.ok(rawBuffer(result));
 }
 
 /** Completes inline on C: nothing waits, so nothing spawns. */
-export async function blake2b(data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
-	return blake2bSync(data, hashSize);
-}
+export function blake2b<D extends ByteInput>(data: D, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(blake2bSync(data, hashSize)); }
 
-export async function blake2bKeyed(keyBytes: Bytes, data: Bytes, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
-	return blake2bKeyedSync(keyBytes, data, hashSize);
-}
+export function blake2bKeyed<K extends ByteInput, D extends ByteInput>(keyBytes: K, data: D, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(blake2bKeyedSync(keyBytes, data, hashSize)); }
 
 // ===== Streaming (sync only) =====
 
 export class Blake2b {
 	_ctx: int64;
 
-	update(data: Bytes): Blake2b {
+	update<D extends ByteInput>(data: D): Blake2b {
 		if (this._ctx == 0) throw new Error("Blake2b.update: the hasher already produced its digest");
-		msBlake2bUpdate(this._ctx, rawString(data));
+		blake2bUpdate(this._ctx, typeof data == "string" ? data.asBytes() : data);
 		return this;
 	}
 
@@ -107,4 +110,8 @@ test "blake2b async and sync agree on the RFC 7693 abc vector, keyed and streame
 	assert (await blake2bKeyed("k", "abc")).ok;
 	assert !(await blake2bKeyed("", "abc")).ok;
 	assert !(await blake2b("abc", 0)).ok;
+}
+
+function blake2bUpdate(ctx: int64, data: Readonly<Span<uint8>>): void {
+	msBlake2bUpdate(ctx, data);
 }

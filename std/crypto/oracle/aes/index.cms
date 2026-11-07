@@ -32,19 +32,19 @@
 @passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../../errors";
 import { newUninitOutputBuffer, outputBytes } from "../../outputBuffer";
 
 // C bindings
-extern function msCryptoAesKeyNew(raw: string): int64;
+extern function msCryptoAesKeyNew(raw: Readonly<Span<uint8>>): int64;
 extern function msCryptoAesKeyGenerate(byteLength: int32): int64;
 extern function msCryptoAesKeyExport(handle: int64): string;
 extern function msCryptoAesKeyFree(handle: int64): void;
 extern function msCryptoAesSealInto(key: int64, plainText: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
 extern function msCryptoAesOpenInto(key: int64, sealed: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>, out: Ptr<uint8>): int64;
-extern function msCryptoAesCbcEncrypt(key: int64, plainText: string, iv: string): string;
-extern function msCryptoAesCbcDecrypt(key: int64, cipherText: string, iv: string, ref plainText: string): int64;
+extern function msCryptoAesCbcEncrypt(key: int64, plainText: Readonly<Span<uint8>>, iv: Readonly<Span<uint8>>): string;
+extern function msCryptoAesCbcDecrypt(key: int64, cipherText: Readonly<Span<uint8>>, iv: Readonly<Span<uint8>>, ref plainText: string): int64;
 
 export { CryptoError, CryptoErrorKind } from "../../errors";
 
@@ -58,12 +58,8 @@ export class AesKey {
 	_handle: int64;
 
 	/** From exactly 16 (AES-128) or 32 (AES-256) raw bytes. */
-	static import(raw: Bytes): Result<AesKey, CryptoError> {
-		const handle = msCryptoAesKeyNew(rawString(raw));
-		if (handle == 0) {
-			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
-		}
-		return Result.ok({ _handle: handle });
+	static import<R extends ByteInput>(raw: R): Result<AesKey, CryptoError> {
+		return importAesKey(typeof raw == "string" ? raw.asBytes() : raw);
 	}
 
 	/** A random key from the OS source: 128 or 256 bits. */
@@ -101,11 +97,14 @@ function liveHandle(key: AesKey, op: string): int64 {
  * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
  * Completes inline on C: nothing waits, so nothing spawns.
  */
-export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+export function sealSync<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Result<Buffer, CryptoError> {
+	return sealSpan(key, typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes);
+}
+
+function sealSpan(key: AesKey, text: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "seal");
-	const text: Readonly<Span<uint8>> = typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes;
 	const sealed = newUninitOutputBuffer(12 + (text.length as int64) + 16);
-	const status = msCryptoAesSealInto(handle, text, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes, outputBytes(sealed));
+	const status = msCryptoAesSealInto(handle, text, aad, outputBytes(sealed));
 	if (status == -1) {
 		return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the OS random source failed"));
 	}
@@ -115,27 +114,30 @@ export function sealSync(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = "
 	return Result.ok(sealed);
 }
 
-export async function seal(key: AesKey, plainTextBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return sealSync(key, plainTextBytes, aadBytes); }
+export function seal<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(sealSync(key, plainTextBytes, aadBytes)); }
 
 /**
  * Decrypt AES-GCM sealed blob. Verifies authentication tag.
  * Input: nonce(12) || cipherText || authTag(16).
  * Returns plainText or error if authentication fails.
  */
-export function openSync(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Result<Buffer, CryptoError> {
+export function openSync<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Result<Buffer, CryptoError> {
+	return openSpan(key, typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes);
+}
+
+function openSpan(key: AesKey, sealed: Readonly<Span<uint8>>, aad: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "open");
-	const sealed: Readonly<Span<uint8>> = typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes;
 	if (sealed.length < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
 	const plain = newUninitOutputBuffer((sealed.length as int64) - 28);
-	if (msCryptoAesOpenInto(handle, sealed, typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes, outputBytes(plain)) != 1) {
+	if (msCryptoAesOpenInto(handle, sealed, aad, outputBytes(plain)) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
 	return Result.ok(plain);
 }
 
-export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""): Promise<Result<Buffer, CryptoError>> { return openSync(key, sealedBytes, aadBytes); }
+export function open<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(openSync(key, sealedBytes, aadBytes)); }
 
 // ===== CBC Mode (expert use — no authentication) =====
 
@@ -143,40 +145,46 @@ export async function open(key: AesKey, sealedBytes: Bytes, aadBytes: Bytes = ""
  * AES-CBC encrypt with PKCS7 padding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
-export function cbcEncryptSync(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+export function cbcEncryptSync<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Result<Buffer, CryptoError> {
+	return cbcEncryptSpan(key, typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes, typeof ivBytes == "string" ? ivBytes.asBytes() : ivBytes);
+}
+
+function cbcEncryptSpan(key: AesKey, data: Readonly<Span<uint8>>, iv: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "cbcEncrypt");
-	const iv = rawString(ivBytes);
-	if (iv.byteLength != 16) {
+	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
-	const result = msCryptoAesCbcEncrypt(handle, rawString(plainTextBytes), iv);
+	const result = msCryptoAesCbcEncrypt(handle, data, iv);
 	if (result.byteLength == 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "cbcEncrypt", "AES-CBC encryption failed"));
 	}
 	return Result.ok(rawBuffer(result));
 }
 
-export async function cbcEncrypt(key: AesKey, plainTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> { return cbcEncryptSync(key, plainTextBytes, ivBytes); }
+export function cbcEncrypt<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(cbcEncryptSync(key, plainTextBytes, ivBytes)); }
 
 /**
  * AES-CBC decrypt with PKCS7 unpadding. IV: must be 16 bytes.
  * WARNING: CBC provides no authentication, so the padding check is an oracle for anyone who can
  * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
-export function cbcDecryptSync(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Result<Buffer, CryptoError> {
+export function cbcDecryptSync<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Result<Buffer, CryptoError> {
+	return cbcDecryptSpan(key, typeof cipherTextBytes == "string" ? cipherTextBytes.asBytes() : cipherTextBytes, typeof ivBytes == "string" ? ivBytes.asBytes() : ivBytes);
+}
+
+function cbcDecryptSpan(key: AesKey, data: Readonly<Span<uint8>>, iv: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
 	const handle = liveHandle(key, "cbcDecrypt");
-	const iv = rawString(ivBytes);
-	if (iv.byteLength != 16) {
+	if (iv.length != 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}
 	let plainText = "";
-	if (msCryptoAesCbcDecrypt(handle, rawString(cipherTextBytes), iv, plainText) != 1) {
+	if (msCryptoAesCbcDecrypt(handle, data, iv, plainText) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "cbcDecrypt", "AES-CBC decryption failed (bad padding or key)"));
 	}
 	return Result.ok(rawBuffer(plainText));
 }
 
-export async function cbcDecrypt(key: AesKey, cipherTextBytes: Bytes, ivBytes: Bytes): Promise<Result<Buffer, CryptoError>> { return cbcDecryptSync(key, cipherTextBytes, ivBytes); }
+export function cbcDecrypt<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(cbcDecryptSync(key, cipherTextBytes, ivBytes)); }
 
 function patternBuffer(size: int32): Buffer {
 	const buf = Buffer.alloc(size);
@@ -216,4 +224,12 @@ test "aes import rejects a bad key length and generate round-trips through expor
 	const sealed = await seal(generated.value, "x");
 	assert sealed.ok;
 	assert (await open(again.value, sealed.value)).ok;
+}
+
+function importAesKey(raw: Readonly<Span<uint8>>): Result<AesKey, CryptoError> {
+	const handle = msCryptoAesKeyNew(raw);
+	if (handle == 0) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
+	}
+	return Result.ok({ _handle: handle });
 }

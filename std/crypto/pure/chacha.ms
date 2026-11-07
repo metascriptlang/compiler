@@ -1,3 +1,4 @@
+import { InputBytes } from "./bytes";
 import {
 	newPoly1305,
 	updatePoly1305,
@@ -41,7 +42,7 @@ function rotl(x: uint32, n: uint32): uint32 {
  * The words of 32 raw key bytes, as `dst` takes them; false, with `dst`
  * untouched, when the key is not 32 bytes.
  */
-export function keyWords(key: Readonly<uint8[]>, dst: uint32[]): boolean {
+export function keyWords(key: InputBytes, dst: uint32[]): boolean {
 	if (key.length != 32) return false;
 	for (let i = 0; i < 8; i++) dst[i] = load32LE(key, i * 4);
 	return true;
@@ -191,7 +192,7 @@ function chachaCore(
 function hchacha(
 	w: ChaChaWork,
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
+	nonce: InputBytes,
 	nonceOff: int32,
 ): void {
 	const n0 = load32LE(nonce, nonceOff);
@@ -217,7 +218,7 @@ function hchacha(
 function chachaXor(
 	w: ChaChaWork,
 	counter: uint32,
-	src: Readonly<uint8[]>,
+	src: InputBytes,
 	srcOff: int32,
 	dst: uint8[],
 	dstOff: int32,
@@ -256,7 +257,7 @@ function chachaXor(
 function startCipher(
 	w: ChaChaWork,
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
+	nonce: InputBytes,
 ): void {
 	hchacha(w, key, nonce, 0);
 	w.nonce[0] = 0;
@@ -267,7 +268,7 @@ function startCipher(
 function startIetf(
 	w: ChaChaWork,
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
+	nonce: InputBytes,
 ): void {
 	for (let i = 0; i < 8; i++) w.key[i] = key[i];
 	w.nonce[0] = load32LE(nonce, 0);
@@ -282,9 +283,9 @@ function startIetf(
  */
 export function chacha20Xor(
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
+	nonce: InputBytes,
 	counter: uint32,
-	src: Readonly<uint8[]>,
+	src: InputBytes,
 	dst: uint8[],
 ): boolean {
 	if (nonce.length != 12 || dst.length != src.length) return false;
@@ -318,8 +319,8 @@ function wipeWork(w: ChaChaWork): void {
  */
 function computeTag(
 	w: ChaChaWork,
-	aad: Readonly<uint8[]>,
-	cipher: Readonly<uint8[]>,
+	aad: InputBytes,
+	cipher: InputBytes,
 	cipherOff: int32,
 	cipherLength: int32,
 ): void {
@@ -344,8 +345,8 @@ function computeTag(
  */
 export function xchachaSealInto(
 	key: Readonly<uint32[]>,
-	aad: Readonly<uint8[]>,
-	plain: Readonly<uint8[]>,
+	aad: InputBytes,
+	plain: InputBytes,
 	out: uint8[],
 ): boolean {
 	const length = plain.length as int32;
@@ -365,8 +366,8 @@ export function xchachaSealInto(
  */
 export function xchachaOpenInto(
 	key: Readonly<uint32[]>,
-	aad: Readonly<uint8[]>,
-	sealed: Readonly<uint8[]>,
+	aad: InputBytes,
+	sealed: InputBytes,
 	out: uint8[],
 ): boolean {
 	const length = (sealed.length as int32) - 40;
@@ -382,7 +383,7 @@ export function xchachaOpenInto(
 
 function tagMatches(
 	w: ChaChaWork,
-	sealed: Readonly<uint8[]>,
+	sealed: InputBytes,
 	at: int32,
 ): boolean {
 	let diff: uint32 = 0;
@@ -397,9 +398,9 @@ function tagMatches(
  */
 export function chacha20Poly1305SealInto(
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
-	aad: Readonly<uint8[]>,
-	plain: Readonly<uint8[]>,
+	nonce: InputBytes,
+	aad: InputBytes,
+	plain: InputBytes,
 	out: uint8[],
 ): boolean {
 	const length = plain.length as int32;
@@ -419,9 +420,9 @@ export function chacha20Poly1305SealInto(
  */
 export function chacha20Poly1305OpenInto(
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
-	aad: Readonly<uint8[]>,
-	sealed: Readonly<uint8[]>,
+	nonce: InputBytes,
+	aad: InputBytes,
+	sealed: InputBytes,
 	out: uint8[],
 ): boolean {
 	const length = (sealed.length as int32) - 16;
@@ -441,8 +442,8 @@ export function chacha20Poly1305OpenInto(
  */
 export function chacha20Poly1305SealAt(
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
-	aad: Readonly<uint8[]>,
+	nonce: InputBytes,
+	aad: InputBytes,
 	buf: uint8[],
 	at: int32,
 	length: int32,
@@ -463,8 +464,8 @@ export function chacha20Poly1305SealAt(
  */
 export function chacha20Poly1305OpenAt(
 	key: Readonly<uint32[]>,
-	nonce: Readonly<uint8[]>,
-	aad: Readonly<uint8[]>,
+	nonce: InputBytes,
+	aad: InputBytes,
 	buf: uint8[],
 	at: int32,
 	length: int32,

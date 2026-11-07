@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import {
 	HashAlgorithm, createHmac, digestSync, isHashSupported,
 } from "./coreNative";
@@ -88,9 +88,9 @@ function extendedKey(
 	return out;
 }
 
-export function pbkdf2Sync(
-	password: Bytes,
-	salt: Bytes,
+export function pbkdf2Sync<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	salt: K,
 	iterations: int32,
 	keyLength: int32,
 	digest: HashAlgorithm,
@@ -125,21 +125,21 @@ export function pbkdf2Sync(
 	}
 }
 
-export async function pbkdf2(
-	password: Bytes,
-	salt: Bytes,
+export function pbkdf2<D extends ByteInput, K extends ByteInput>(
+	password: D,
+	salt: K,
 	iterations: int32,
 	keyLength: int32,
 	digest: HashAlgorithm,
 ): Promise<Result<Buffer, CryptoError>> {
-	return pbkdf2Sync(password, salt, iterations, keyLength, digest);
+	return Promise.resolve(pbkdf2Sync(password, salt, iterations, keyLength, digest));
 }
 
-export function hkdfSync(
+export function hkdfSync<D extends ByteInput, K extends ByteInput, S extends ByteInput>(
 	algorithm: HashAlgorithm,
-	ikm: Bytes,
-	salt: Bytes,
-	info: Bytes,
+	ikm: D,
+	salt: K,
+	info: S,
 	length: int32,
 ): Result<Buffer, CryptoError> {
 	if (length < 1) {
@@ -170,12 +170,12 @@ export function hkdfSync(
 	}
 }
 
-export async function hkdf(
+export function hkdf<D extends ByteInput, K extends ByteInput, S extends ByteInput>(
 	algorithm: HashAlgorithm,
-	ikm: Bytes,
-	salt: Bytes,
-	info: Bytes,
+	ikm: D,
+	salt: K,
+	info: S,
 	length: int32,
 ): Promise<Result<Buffer, CryptoError>> {
-	return hkdfSync(algorithm, ikm, salt, info, length);
+	return Promise.resolve(hkdfSync(algorithm, ikm, salt, info, length));
 }

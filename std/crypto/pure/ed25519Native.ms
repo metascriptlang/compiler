@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { Bytes } from "std/core/buffer/bytes";
+import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied } from "./bytes";
 import { randomOctets } from "./random";
@@ -13,7 +13,7 @@ export { CryptoError, CryptoErrorKind } from "../errors";
 export class Ed25519PublicKey {
 	_raw: uint8[];
 
-	static importSync(raw: Bytes): Result<Ed25519PublicKey, CryptoError> {
+	static importSync<D extends ByteInput>(raw: D): Result<Ed25519PublicKey, CryptoError> {
 		const bytes = bytesOf(raw);
 		if (bytes.length != 32) {
 			return Result.err(cryptoError(
@@ -24,9 +24,9 @@ export class Ed25519PublicKey {
 		return Result.ok({ _raw: bytes.slice(0) });
 	}
 
-	static async import(raw: Bytes):
+	static import<D extends ByteInput>(raw: D):
 		Promise<Result<Ed25519PublicKey, CryptoError>> {
-		return Ed25519PublicKey.importSync(raw);
+		return Promise.resolve(Ed25519PublicKey.importSync(raw));
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
@@ -47,7 +47,7 @@ export class Ed25519PrivateKey {
 	_seed: uint8[];
 	_public: uint8[];
 
-	static fromSeedSync(seed: Bytes):
+	static fromSeedSync<D extends ByteInput>(seed: D):
 		Result<Ed25519PrivateKey, CryptoError> {
 		const bytes = bytesOf(seed);
 		const publicBytes = ed25519PublicFromSeed(bytes);
@@ -63,9 +63,9 @@ export class Ed25519PrivateKey {
 		return Result.ok({ _seed: owned, _public: publicBytes });
 	}
 
-	static async fromSeed(seed: Bytes):
+	static fromSeed<D extends ByteInput>(seed: D):
 		Promise<Result<Ed25519PrivateKey, CryptoError>> {
-		return Ed25519PrivateKey.fromSeedSync(seed);
+		return Promise.resolve(Ed25519PrivateKey.fromSeedSync(seed));
 	}
 
 	static generateSync(): Result<Ed25519PrivateKey, CryptoError> {
@@ -119,9 +119,9 @@ export class Ed25519PrivateKey {
 	}
 }
 
-export function signSync(
+export function signSync<D extends ByteInput>(
 	key: Ed25519PrivateKey,
-	message: Bytes,
+	message: D,
 ): Result<Buffer, CryptoError> {
 	const signature = ed25519Sign(key._seed, key._public, bytesOf(message));
 	if (signature.length != 64) {
@@ -132,25 +132,25 @@ export function signSync(
 	return Result.ok(signature as Buffer);
 }
 
-export async function sign(
+export function sign<D extends ByteInput>(
 	key: Ed25519PrivateKey,
-	message: Bytes,
+	message: D,
 ): Promise<Result<Buffer, CryptoError>> {
-	return signSync(key, message);
+	return Promise.resolve(signSync(key, message));
 }
 
-export function verifySync(
+export function verifySync<D extends ByteInput, K extends ByteInput>(
 	key: Ed25519PublicKey,
-	signature: Bytes,
-	message: Bytes,
+	signature: D,
+	message: K,
 ): boolean {
 	return ed25519Verify(key._raw, bytesOf(signature), bytesOf(message));
 }
 
-export async function verify(
+export function verify<D extends ByteInput, K extends ByteInput>(
 	key: Ed25519PublicKey,
-	signature: Bytes,
-	message: Bytes,
+	signature: D,
+	message: K,
 ): Promise<boolean> {
-	return verifySync(key, signature, message);
+	return Promise.resolve(verifySync(key, signature, message));
 }

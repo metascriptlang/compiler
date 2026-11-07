@@ -1,3 +1,4 @@
+import { InputBytes } from "./bytes";
 import { wipeBytes, wipeWords } from "./secret";
 import { load32LE } from "./endian";
 /**
@@ -13,7 +14,7 @@ export class Poly1305State {
 }
 
 export function newPoly1305(
-	key: Readonly<uint8[]>,
+	key: InputBytes,
 	keyOff: int32,
 ): Poly1305State {
 	return {
@@ -41,7 +42,7 @@ export function newPoly1305(
  */
 function absorb(
 	s: Poly1305State,
-	data: Readonly<uint8[]>,
+	data: InputBytes,
 	off: int32,
 	blocks: int32,
 	hibit: uint32,
@@ -97,7 +98,7 @@ function absorb(
 
 export function updatePoly1305(
 	s: Poly1305State,
-	data: Readonly<uint8[]>,
+	data: InputBytes,
 	off: int32,
 	length: int32,
 ): void {

@@ -79,7 +79,7 @@
 @passC("-Wno-deprecated-declarations");
 
 import { Buffer } from "std/core/buffer";
-import { Bytes, rawString, rawBuffer } from "std/core/buffer/bytes";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../../errors";
 export { CryptoError, CryptoErrorKind } from "../../errors";
 
@@ -90,10 +90,10 @@ extern function msCryptoRsaImportPublicPem(pem: string): int64;
 extern function msCryptoRsaExportPrivatePem(key: int64): string;
 extern function msCryptoRsaExportPublicPem(key: int64): string;
 extern function msCryptoRsaPublicOf(key: int64): int64;
-extern function msCryptoRsaSign(key: int64, algorithm: string, pss: int32, data: string): string;
-extern function msCryptoRsaVerify(key: int64, algorithm: string, pss: int32, data: string, signature: string): boolean;
-extern function msCryptoRsaEncrypt(key: int64, data: string): string;
-extern function msCryptoRsaDecrypt(key: int64, data: string): string;
+extern function msCryptoRsaSign(key: int64, algorithm: string, pss: int32, data: Readonly<Span<uint8>>): string;
+extern function msCryptoRsaVerify(key: int64, algorithm: string, pss: int32, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>): boolean;
+extern function msCryptoRsaEncrypt(key: int64, data: Readonly<Span<uint8>>): string;
+extern function msCryptoRsaDecrypt(key: int64, data: Readonly<Span<uint8>>): string;
 extern function msCryptoRsaFree(key: int64): void;
 
 export type RsaPadding = "pkcs1v15" | "pss";
@@ -170,34 +170,50 @@ export class RsaPrivateKey {
 }
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
-export function signSync(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
-	const sig = msCryptoRsaSign(key._h, hash, padding == "pss" ? 1 : 0, rawString(data));
+export function signSync<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
+	return signSpan(key, typeof data == "string" ? data.asBytes() : data, hash, padding);
+}
+
+function signSpan(key: RsaPrivateKey, data: Readonly<Span<uint8>>, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
+	const sig = msCryptoRsaSign(key._h, hash, padding == "pss" ? 1 : 0, data);
 	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)`));
 	return Result.ok(rawBuffer(sig));
 }
 
-export async function sign(key: RsaPrivateKey, data: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> { return signSync(key, data, hash, padding); }
+export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(signSync(key, data, hash, padding)); }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
-export function verifySync(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
-	return msCryptoRsaVerify(key._h, hash, padding == "pss" ? 1 : 0, rawString(data), rawString(signature));
+export function verifySync<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
+	return verifySpan(key, typeof data == "string" ? data.asBytes() : data, typeof signature == "string" ? signature.asBytes() : signature, hash, padding);
 }
 
-export async function verify(key: RsaPublicKey, data: Bytes, signature: Bytes, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> { return verifySync(key, data, signature, hash, padding); }
+function verifySpan(key: RsaPublicKey, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>, hash: string, padding: RsaPadding): boolean {
+	return msCryptoRsaVerify(key._h, hash, padding == "pss" ? 1 : 0, data, signature);
+}
+
+export function verify<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> { return Promise.resolve(verifySync(key, data, signature, hash, padding)); }
 
 // RSA-OAEP with SHA-256.
-export function encryptSync(key: RsaPublicKey, data: Bytes): Result<Buffer, CryptoError> {
-	const encrypted = msCryptoRsaEncrypt(key._h, rawString(data));
+export function encryptSync<D extends ByteInput>(key: RsaPublicKey, data: D): Result<Buffer, CryptoError> {
+	return encryptSpan(key, typeof data == "string" ? data.asBytes() : data);
+}
+
+function encryptSpan(key: RsaPublicKey, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
+	const encrypted = msCryptoRsaEncrypt(key._h, data);
 	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
 	return Result.ok(rawBuffer(encrypted));
 }
 
-export async function encrypt(key: RsaPublicKey, data: Bytes): Promise<Result<Buffer, CryptoError>> { return encryptSync(key, data); }
+export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(encryptSync(key, data)); }
 
-export function decryptSync(key: RsaPrivateKey, data: Bytes): Result<Buffer, CryptoError> {
-	const decrypted = msCryptoRsaDecrypt(key._h, rawString(data));
+export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): Result<Buffer, CryptoError> {
+	return decryptSpan(key, typeof data == "string" ? data.asBytes() : data);
+}
+
+function decryptSpan(key: RsaPrivateKey, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
+	const decrypted = msCryptoRsaDecrypt(key._h, data);
 	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
 	return Result.ok(rawBuffer(decrypted));
 }
 
-export async function decrypt(key: RsaPrivateKey, data: Bytes): Promise<Result<Buffer, CryptoError>> { return decryptSync(key, data); }
+export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(decryptSync(key, data)); }
