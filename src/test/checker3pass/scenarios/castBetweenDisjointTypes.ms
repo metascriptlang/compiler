@@ -24,6 +24,35 @@ test "as between types that share no value is refused, a distinct judged by its 
 	}
 }
 
+test "as from an array, a number, a string or a function to a class instance is refused" {
+	const box = "class Box { n: number = 1; }\n";
+	const cases: string[][] = [
+		[box + "const a: int32[] = [1, 2];\nconst r = a as Box;", "cannot convert int32[] to Box — an array is not a Box; read an element or its length"],
+		[box + "const x: number = 5;\nconst r = x as Box;", "cannot convert number to Box —"],
+		[box + "const s: string = \"hi\";\nconst r = s as Box;", "cannot convert string to Box —"],
+		[box + "const f = (): int32 => 1;\nconst r = f as Box;", "cannot convert"],
+		[box + "const a: uint8[] = [1];\nconst r = a as Box | null;", "cannot convert uint8[] to Box | null — an array is not a Box"],
+	];
+	for (const c of cases) {
+		const text = refusal(c[0]);
+		assert text.contains(c[1]), c[0] + " must be refused: " + text;
+	}
+}
+
+test "as between class instances, null and a class still checks" {
+	const classes = "class Base { n: number = 1; }\nclass Sub extends Base { m: number = 2; }\n";
+	const sources: string[] = [
+		classes + "const r = new Sub() as Base;",
+		classes + "const b: Base = new Sub();\nconst r = b as Sub;",
+		classes + "const r = null as Base | null;",
+		classes + "function f(x: Base | null): Base { return x as Base; }",
+	];
+	for (const source of sources) {
+		const text = refusal(source);
+		assert text == "", source + " must check: " + text;
+	}
+}
+
 test "as between types that overlap still checks" {
 	const sources: string[] = [
 		"const i = 7 as int32;\nconst r = i as number;",
