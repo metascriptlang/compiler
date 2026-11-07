@@ -3167,9 +3167,12 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 					node.location.line, node.location.column);
 				callArgs = [];
 			}
-			const dest = callBlock(s, node.nodeType, callArgs, sym != null ? constructorParamTypes(sym) : null);
-			emitCallArgs(s, dest, callArgs);
+			const params = sym != null ? constructorParamTypes(sym) : null;
+			const closures = reserveClosureArgs(s, node, callArgs, -1, params);
+			const dest = callBlock(s, node.nodeType, callArgs, params);
+			for (let i = 0; i < callArgs.length; i = i + 1) compileClosureArg(s, callArgs[i], dest + 1 + i, closures.held[i]);
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
+			releaseClosureArgs(s, closures);
 			return dest;
 		}
 	}
