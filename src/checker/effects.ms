@@ -123,7 +123,7 @@ export function deferEffectCheck(site: Node, rule: string, check: (ctx: CheckerC
 }
 
 function judgeReadonlyModuleConsts(dispatchRegistry: DispatchRegistry, program: Node): void {
-	for (const stmt of (program.data as ProgramData).programStmts) {
+	for (const stmt of stmtsOf(program)) {
 		let n: Node | null = stmt;
 		if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
 		if (n != null && n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
