@@ -20,6 +20,17 @@ build() { # <arm> <msc> <output>
 	case $1 in
 		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
 		js) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
+		mixed) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
+		jsonly) "$2" build "$HERE/bench.ms" --target=js --danger --wasm-placement=off --output="$OUT/$3.mjs" >/dev/null ;;
+		neon)
+			cargo build -q --release --manifest-path "$HERE/neon/Cargo.toml" --target-dir "$OUT/neon-target"
+			for lib in libneonbench.dylib libneonbench.so neonbench.dll; do
+				[ -f "$OUT/neon-target/release/$lib" ] && cp "$OUT/neon-target/release/$lib" "$OUT/neon.node"
+			done
+			[ -f "$OUT/neon.node" ] || { echo "run.sh: neon built no addon" >&2; exit 2; } ;;
+		wasmbindgen)
+			cargo build -q --release --target wasm32-unknown-unknown --manifest-path "$HERE/wasmbindgen/Cargo.toml" --target-dir "$OUT/wb-target"
+			wasm-bindgen --target nodejs --out-dir "$OUT/wb" "$OUT/wb-target/wasm32-unknown-unknown/release/wbbench.wasm" ;;
 		rust) rustc -C opt-level=3 "$HERE/bench.rs" -o "$OUT/rust" ;;
 		nim) nim c -d:danger --hints:off --nimcache:"$OUT/nimcache" -o:"$PWD/$OUT/nim" "$HERE/bench.nim" >/dev/null ;;
 		yyjson-mut) cc -O3 -I"$MSBENCH_YYJSON/src" "$HERE/bench.yyjson.c" "$MSBENCH_YYJSON/src/yyjson.c" -lm -o "$OUT/yyjson-mut" ;;
@@ -31,11 +42,14 @@ runArm() { # <arm>
 		base)
 			case ${wanted[0]} in
 				raiser) "$MSBENCH_BASE" run --target=raiser "$HERE/bench.ms" ;;
-				js) "$NODE" "$OUT/base.mjs" ;;
+				js | mixed | jsonly) "$NODE" "$OUT/base.mjs" ;;
 				*) "$OUT/base" ;;
 			esac ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
 		js) "$NODE" "$OUT/js.mjs" ;;
+		mixed | jsonly) "$NODE" "$OUT/$1.mjs" ;;
+		neon) NEON_ADDON="$PWD/$OUT/neon.node" "$NODE" "$HERE/neon/bench.mjs" ;;
+		wasmbindgen) WB_MODULE="$PWD/$OUT/wb/wbbench.js" "$NODE" "$HERE/wasmbindgen/bench.mjs" ;;
 		node) "$NODE" "$HERE/bench.node.mjs" ;;
 		luajit-joff) "$LUAJIT" -joff "$HERE/bench.lua" ;;
 		luajit-jon) "$LUAJIT" -jon "$HERE/bench.lua" ;;
@@ -62,6 +76,9 @@ for arm in "${wanted[@]}"; do
 			build yyjson-mut; versions+=" · yyjson $(cat "$MSBENCH_YYJSON/COMMIT" 2>/dev/null || git -C "$MSBENCH_YYJSON" rev-parse --short HEAD 2>/dev/null || echo unknown) cc -O3 ($(cc --version | head -1))" ;;
 		luajit-*) [ -x "$LUAJIT" ] || { echo "skip $arm: no $LUAJIT"; continue; }; [ "$arm" = luajit-jon ] || versions+=" · $("$LUAJIT" -v | cut -d' ' -f1-2)" ;;
 		lua54) [ -x "$LUA54" ] || { echo "skip $arm: no $LUA54"; continue; }; versions+=" · $("$LUA54" -v | cut -d' ' -f1-2)" ;;
+		neon) command -v cargo >/dev/null || { echo "skip neon: no cargo"; continue; }; versions+=" · $(cargo --version | cut -d' ' -f1-2)"; build neon "$MSC" neon ;;
+		wasmbindgen) command -v wasm-bindgen >/dev/null || { echo "skip wasmbindgen: no wasm-bindgen"; continue; }; versions+=" · $(wasm-bindgen --version)"; build wasmbindgen "$MSC" wasmbindgen ;;
+		mixed | jsonly) versions+=" · node $("$NODE" --version)"; build "$arm" "$MSC" "$arm" ;;
 		*) build "$arm" "$MSC" "$arm" ;;
 	esac
 	arms+=("$arm")
