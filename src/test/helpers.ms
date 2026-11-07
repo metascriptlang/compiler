@@ -158,6 +158,13 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	return Result.ok(cCode);
 }
 
+function reachHookHeader(line: string): boolean {
+	const open = line.indexOf("(");
+	if (open < 0) return false;
+	const words = line.substring(0, open).split(" ");
+	return words[words.length - 1].endsWith("Reach");
+}
+
 export function withoutReachHooks(c: string): string {
 	const kept: string[] = [];
 	let inReach = false;
@@ -166,7 +173,7 @@ export function withoutReachHooks(c: string): string {
 			if (line == "}") inReach = false;
 			continue;
 		}
-		if (!line.startsWith(" ") && line.contains("Reach(") && line.endsWith("{")) {
+		if (line.startsWith("void ") && line.endsWith("{") && reachHookHeader(line)) {
 			inReach = true;
 			continue;
 		}
