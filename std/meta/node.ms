@@ -77,7 +77,7 @@ export enum TypeFlag {
 	HasInheritedFields,   // class has flattened parent fields (suppresses DRC parent-call)
 	IsAtomic,             // Arc<T> atomic-rc marker on a Ref
 	DuVariant,            // INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
-	OpenClass,            // class is extended (non-final): canFormAcycle returns true unconditionally, the tfFinal rule. Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
+	OpenClass,            // class is extended (non-final), stamped on the PARENT struct in resolveClass with each subclass noted on the parent's symbol (`subclasses`): a CBase-typed field may point at a subclass that closes a back-edge, so canFormAcycle walks them, and without notes the class is cyclic (the tfFinal rule)
 	BrandWiden,           // TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
 	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, lockHolder, value }` cell (PARALOCK I22)
 	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
@@ -415,6 +415,7 @@ export class Symbol {
 	staticOwner: Symbol | null;
 	typeParamOwner: Symbol | null;
 	typeParams: Type[];
+	subclasses: Type[] | null; // Class: the structs of the classes that extend it, noted when each subclass resolves; every copy of the class's type shares this symbol
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

@@ -4074,6 +4074,42 @@ function heldEntry(slot: Type): HeldBeyond {
 	return made;
 }
 
+// A class extended somewhere notes each subclass on its declaring symbol, which every copy of its type
+// shares (a generic class on the declaration it is instantiated from too); a subclass checked again
+// replaces its earlier note.
+export function noteSubclass(parent: Type, sub: Type): void {
+	if (parent.sym == null) return;
+	noteSubclassOn(parent.sym, sub);
+	if (parent.sym.instantiatedFrom != null) noteSubclassOn(parent.sym.instantiatedFrom, sub);
+}
+
+function noteSubclassOn(parent: Symbol, sub: Type): void {
+	if (parent.subclasses == null) parent.subclasses = [];
+	const list = parent.subclasses;
+	for (let i = 0; i < list.length; i += 1) {
+		if (sameDeclaration(list[i], sub)) {
+			list[i] = sub;
+			return;
+		}
+	}
+	list.push(sub);
+}
+
+// The subclasses noted for a class, null when none was (a class never extended, or one whose notes are lost).
+export function subclassesOf(t: Type): Type[] | null {
+	const sym = t.sym;
+	if (sym == null) return null;
+	if (sym.subclasses != null) return sym.subclasses;
+	return sym.instantiatedFrom != null ? sym.instantiatedFrom.subclasses : null;
+}
+
+function sameDeclaration(a: Type, b: Type): boolean {
+	if (a === b) return true;
+	const x = a.sym;
+	const y = b.sym;
+	return x != null && y != null && x.modulePath == y.modulePath && x.name == y.name && x.disamb == y.disamb;
+}
+
 function opensToHeld(slot: Type): boolean {
 	return slot.kind == TypeKind.Struct && (slot.sym == null || slot.sym.symbolKind == SymbolKind.Interface);
 }
