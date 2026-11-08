@@ -155,5 +155,13 @@ int32_t msAllocatorZeroChecks(void) {
 	msHeapFree(rr);
 	msHeapFree(gg);
 	msHeapFree(filler);
+
+	phase = "consecutive big payloads with room to spare start at different page offsets";
+	unsigned char* spreadA = msHeapAlloc(9000);
+	unsigned char* spreadB = msHeapAlloc(9000);
+	CHECK((uintptr_t)spreadA % 4096 != (uintptr_t)spreadB % 4096);
+	CHECK((uintptr_t)spreadA % 64 == 48 && (uintptr_t)spreadB % 64 == 48);
+	msHeapFree(spreadB);
+	msHeapFree(spreadA);
 	return 0;
 }
