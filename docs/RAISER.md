@@ -134,7 +134,7 @@ Where the Raiser stands against that, on main `25e95678cd3`:
 | Part | Reference | Raiser |
 |---|---|---|
 | which routines can run native | any routine, by qualified name | only an `extern` with a bridge in `hostTable.ms` |
-| cost of one native call | the callback call itself | `vmHandleCallHost` checks restricted and comptime mode, swaps the host heaps, saves floor and suspended runs, checks for a raise: about 18 ns a call (row differences in `src/bench/raiser/baseline.md`) |
+| cost of one native call | the callback call itself | an in-place bridge that spawns no child, once its site has resolved it and outside restricted mode, is called from the dispatch loop and reads only the VM it is handed; then one load checks for a raise. On rtx (load 11–14), us per 1000 calls before and after: Math.sqrt 22.5 to 10.7 (LuaJIT `-joff` 9.6), user C sqrt 25.6 to 13.7. A boxed bridge still goes through `vmHandleCallHost`, which publishes the host heaps and saves floor and suspended runs (not measured alone) |
 | program's own C | argument slots handed to libffi, a string by its data pointer, every scalar kind and pointers | a generated C bridge (no per-call libffi setup), each argument copied into a word array, a `cstring` copied twice (`runtime/raiser/bridge.h`), integers, floats and text only |
 | value layout | the C backend's | the same for strings and for the `{len, p}` head of a scalar array; object cells give each field an 8-byte slot behind a tagged handle; structs are heap cells (NIM-REF CT-47) |
 
