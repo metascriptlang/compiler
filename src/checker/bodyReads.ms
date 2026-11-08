@@ -42,7 +42,7 @@ const SITES: ReaderSite[] = [
 	{ file: "checker/importElision.ms", readers: 3, records: 0 },
 	{ file: "checker/vmOnly.ms", readers: 1, records: 0 },
 	{ file: "checker/orchestrator.ms", readers: 5, records: 0 },
-	{ file: "compiler/meta/expand.ms", readers: 5, records: 1 },
+	{ file: "compiler/meta/expand.ms", readers: 4, records: 1 },
 	{ file: "compiler/meta/decorators.ms", readers: 1, records: 0 },
 	{ file: "compiler/meta/stdTags.ms", readers: 1, records: 0 },
 	{ file: "compiler/meta/typeQuery.ms", readers: 1, records: 0 },
