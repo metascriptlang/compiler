@@ -22,6 +22,7 @@ build() { # <arm> <msc> <output>
 		js) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
 		jsonly) "$2" build "$HERE/bench.ms" --target=js --danger --wasm-placement=off --output="$OUT/$3.mjs" >/dev/null ;;
+		mixed-chrome) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
 		neon)
 			cargo build -q --release --manifest-path "$HERE/neon/Cargo.toml" --target-dir "$OUT/neon-target"
 			for lib in libneonbench.dylib libneonbench.so neonbench.dll; do
@@ -31,6 +32,9 @@ build() { # <arm> <msc> <output>
 		wasmbindgen)
 			cargo build -q --release --target wasm32-unknown-unknown --manifest-path "$HERE/wasmbindgen/Cargo.toml" --target-dir "$OUT/wb-target"
 			wasm-bindgen --target nodejs --out-dir "$OUT/wb" "$OUT/wb-target/wasm32-unknown-unknown/release/wbbench.wasm" ;;
+		wasmbindgen-chrome)
+			cargo build -q --release --target wasm32-unknown-unknown --manifest-path "$HERE/wasmbindgen/Cargo.toml" --target-dir "$OUT/wb-target"
+			wasm-bindgen --target web --out-dir "$OUT/wbweb" "$OUT/wb-target/wasm32-unknown-unknown/release/wbbench.wasm" ;;
 		rust) rustc -C opt-level=3 "$HERE/bench.rs" -o "$OUT/rust" ;;
 		nim) nim c -d:danger --hints:off --nimcache:"$OUT/nimcache" -o:"$PWD/$OUT/nim" "$HERE/bench.nim" >/dev/null ;;
 		yyjson-mut) cc -O3 -I"$MSBENCH_YYJSON/src" "$HERE/bench.yyjson.c" "$MSBENCH_YYJSON/src/yyjson.c" -lm -o "$OUT/yyjson-mut" ;;
@@ -50,6 +54,8 @@ runArm() { # <arm>
 		mixed | jsonly) "$NODE" "$OUT/$1.mjs" ;;
 		neon) NEON_ADDON="$PWD/$OUT/neon.node" "$NODE" "$HERE/neon/bench.mjs" ;;
 		wasmbindgen) WB_MODULE="$PWD/$OUT/wb/wbbench.js" "$NODE" "$HERE/wasmbindgen/bench.mjs" ;;
+		mixed-chrome) "$NODE" src/test/wasmmix/browser/runPage.mjs . "$OUT/mixed-chrome.mjs" --timeout-ms 900000 ;;
+		wasmbindgen-chrome) "$NODE" src/test/wasmmix/browser/runPage.mjs . "$HERE/wasmbindgen/browser.mjs" --timeout-ms 900000 ;;
 		node) "$NODE" "$HERE/bench.node.mjs" ;;
 		luajit-joff) "$LUAJIT" -joff "$HERE/bench.lua" ;;
 		luajit-jon) "$LUAJIT" -jon "$HERE/bench.lua" ;;
@@ -79,6 +85,11 @@ for arm in "${wanted[@]}"; do
 		neon) command -v cargo >/dev/null || { echo "skip neon: no cargo"; continue; }; versions+=" · $(cargo --version | cut -d' ' -f1-2)"; build neon "$MSC" neon ;;
 		wasmbindgen) command -v wasm-bindgen >/dev/null || { echo "skip wasmbindgen: no wasm-bindgen"; continue; }; versions+=" · $(wasm-bindgen --version)"; build wasmbindgen "$MSC" wasmbindgen ;;
 		mixed | jsonly) versions+=" · node $("$NODE" --version)"; build "$arm" "$MSC" "$arm" ;;
+		# CHROME names the browser runPage.mjs drives headless; without it the browser arms are skipped.
+		mixed-chrome | wasmbindgen-chrome)
+			[ -n "${CHROME:-}" ] || { echo "skip $arm: no CHROME"; continue; }
+			case " ${arms[*]} " in *" mixed-chrome "* | *" wasmbindgen-chrome "*) ;; *) versions+=" · $("$CHROME" --version)" ;; esac
+			build "$arm" "$MSC" "$arm" ;;
 		*) build "$arm" "$MSC" "$arm" ;;
 	esac
 	arms+=("$arm")

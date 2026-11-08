@@ -4,13 +4,16 @@ Command, from the recompiler root on m1m (quiet window, `run-remote.sh --host m1
 
 ```bash
 source ~/projects/emsdk/emsdk_env.sh; export PATH=$HOME/.cargo/bin:$PATH
+export CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 MSC=./msc src/bench/run.sh wasmBoundary 5 && node src/bench/wasmBoundary/accept.mjs
 ```
 
 Arms: `mixed` is `bench.ms` built `--target=js --danger` with its `@wasm` functions in wasm; `jsonly`
 is the same program with `--wasm-placement=off`; `neon` is the same rows in Rust through neon-bindings
 1.1.2 (N-API, native, `neon/`); `wasmbindgen` is the same rows in Rust compiled to
-`wasm32-unknown-unknown` with wasm-bindgen 0.2.130 glue (`wasmbindgen/`). Every arm runs the shared
+`wasm32-unknown-unknown` with wasm-bindgen 0.2.130 glue (`wasmbindgen/`). `mixed-chrome` and `wasmbindgen-chrome` are the
+`mixed` and `wasmbindgen` builds run in headless Chrome through `src/test/wasmmix/browser/runPage.mjs`
+(skipped without `CHROME`). Every arm runs the shared
 harness (`src/bench/harness.mjs`). A row named `x1000` is one op of 1000 calls, so its `us/op` reads
 as ns per call; the other rows are one call per op.
 
@@ -113,3 +116,32 @@ Differences between the arms that are not the boundary: `makeVec` returns a JS `
 (a `Vec<float32>` is an Array in JS) and a `Float32Array` on the Rust arms; `neon` runs native code,
 so `primes` and the in-place `scaleSpan` measure native against wasm there; wasm-bindgen's `mid`
 allocates a `Point` in wasm per call and frees it, its idiomatic struct path.
+
+## 2026-11-08, m1m, the bar is wasm-bindgen on the same runtime
+
+The arc ships JS calling wasm in the browser. MetaScript has no N-API bridge, and `neon` is a
+native Node addon a page cannot load, so from this table on the bar is wasm-bindgen on the same
+runtime: `mixed` against `wasmbindgen` on Node, `mixed-chrome` against `wasmbindgen-chrome` in
+Chrome. `neon` stays a Node-only reference column. Main `69d3d241bb7` plus the Chrome arms,
+Chrome 149.0.7827.114. A `--quiet 30` window, load 7.4 before and 1.8 after. Median of 5 rounds,
+us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.932 | 11.556 | 2.903 | 3.542 | 40.452 |
+| add64 x1000 | 4.742 | 4.356 | 4.118 | 4.776 | 52.273 |
+| strLen16 x1000 | 23.536 | 25.664 | 23.959 | 25.465 | 73.061 |
+| echo16 x1000 | 124.203 | 154.493 | 129.333 | 213.171 | 87.178 |
+| mid x1000 | 53.199 | 329.204 | 58.029 | 210.079 | 368.576 |
+| sumVec 1k Array | 1.528 | 1.473 | 1.612 | 1.61 | 52.465 |
+| sumSpan 1k Float32Array | 1.056 | 1.004 | 1.034 | 1.006 | 1.044 |
+| scaleSpan 1k Float32Array | 0.285 | 0.423 | 0.279 | 0.434 | 0.158 |
+| scaleBox 1k held by callee | 0.121 | 0.191 | 0.118 | 0.196 | 0.096 |
+| makeVec 1k | 2.633 | 0.896 | 2.482 | 1.07 | 0.82 |
+| callback 1k | 6.959 | 116.402 | 8.479 | 120.051 | 49.651 |
+| primes 2M | 5891.718 | 5213.07 | 6064 | 5588.889 | 4491.787 |
+
+`accept node: 10/12 rows meet wasmbindgen`, `accept chrome: 11/12 rows meet wasmbindgen-chrome`
+(at most 10% above). The misses: `makeVec` on both (a `Vec<float32>` is a JS `Array`, wasm-bindgen
+returns a `Float32Array`; a typed array result waits for the std typed arrays), and `primes` on
+Node, 13% above (MetaScript's wasm code for the sieve, not the boundary; not traced).

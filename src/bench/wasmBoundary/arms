@@ -1,1 +1,1 @@
-mixed jsonly neon wasmbindgen
+mixed jsonly neon wasmbindgen mixed-chrome wasmbindgen-chrome
