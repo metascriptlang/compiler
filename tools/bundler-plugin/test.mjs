@@ -13,11 +13,12 @@ const nativeFiles = ['compilerCore', 'sourceDeclarations', 'vite', 'rollup', 'we
 const consumerFile = 'src/test/js/declarationBundlers/run.mjs';
 const provision = `Prerequisites must be provisioned before the gate; this wrapper never installs or repairs them.
 Coordinate dependency setup before running (not a measured safe automation recipe):
-  npm ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund
-Pinned devDependencies: vite@6.3.5 rollup@4.67.5+metascript.2 (vendor/rollup4.tgz) webpack@5.99.9 magic-string@0.30.17 typescript@5.9.2; package-lock.json pins every transitive package.
+  npm ci --prefix tools/bundler-plugin/harness --ignore-scripts --prefer-offline --no-audit --no-fund
+  rm -rf tools/bundler-plugin/node_modules && ln -s harness/node_modules tools/bundler-plugin/node_modules
+The harness pins vite@6.3.5 rollup@4.67.5+metascript.2 (vendor/rollup4.tgz) webpack@5.99.9 magic-string@0.30.17 typescript@5.9.2; harness/package-lock.json pins every transitive package. The link lets the adapters and their .d.ts resolve bare imports from their own directory.
 The root override selects that Rollup for Vite too; app roots must select their host dependency explicitly.
 Then explicitly set existing module paths, for example after that layout is verified:
-  MSC="$PWD/out/gate/msc" VITE_MODULE="$PWD/tools/bundler-plugin/node_modules/vite/dist/node/index.js" ROLLUP_MODULE="$PWD/tools/bundler-plugin/node_modules/rollup/dist/es/rollup.js" WEBPACK_MODULE="$PWD/tools/bundler-plugin/node_modules/webpack/lib/index.js" TS_ORACLE_MODULE="$PWD/tools/bundler-plugin/node_modules/typescript/lib/typescript.js" node tools/bundler-plugin/test.mjs
+  MSC="$PWD/out/gate/msc" VITE_MODULE="$PWD/tools/bundler-plugin/harness/node_modules/vite/dist/node/index.js" ROLLUP_MODULE="$PWD/tools/bundler-plugin/harness/node_modules/rollup/dist/es/rollup.js" WEBPACK_MODULE="$PWD/tools/bundler-plugin/harness/node_modules/webpack/lib/index.js" TS_ORACLE_MODULE="$PWD/tools/bundler-plugin/harness/node_modules/typescript/lib/typescript.js" node tools/bundler-plugin/test.mjs
 MagicString must also resolve by bare ESM import from tools/bundler-plugin/vite.js; NODE_PATH is insufficient.
 Node >=24 is required for test tooling only; use a pre-provisioned Node 24+ executable.
 Missing candidate: include the gate build lane (manual build: msc build src/index.ms --danger --lto=off --output=out/gate/msc).`;

@@ -47,7 +47,7 @@ test('prerequisite failure is nonzero, named and provides pinned provisioning gu
   });
   assert.equal(child.status, 1);
   assert.match(child.stderr, /FAIL native-adapters prerequisites:.*ENOENT/);
-  assert.match(child.stderr, /npm ci --prefix tools\/bundler-plugin --ignore-scripts/);
+  assert.match(child.stderr, /npm ci --prefix tools\/bundler-plugin\/harness --ignore-scripts/);
   for (const pin of ['vite@6.3.5', 'rollup@4.67.5+metascript.2', 'webpack@5.99.9', 'magic-string@0.30.17', 'typescript@5.9.2']) {
     assert.ok(child.stderr.includes(pin));
   }
@@ -134,13 +134,13 @@ for (const [name, npmStatus] of [
   const parsed = spawnSync('bash', ['-c', `${reds}\nreds_of tools "$1" 1`, '--', log], { cwd: repo, encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr);
   assert.equal(parsed.stdout, 'tools/bundler-plugin/test.mjs\n');
-  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund\n');
+  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'ci --prefix tools/bundler-plugin/harness --ignore-scripts --prefer-offline --no-audit --no-fund\n');
   const calls = readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
   assert.equal(calls.length, npmStatus ? 1 : 2);
   if (!npmStatus) {
     assert.equal(calls[1], '/actual/gate/candidate|tools/bundler-plugin/test.mjs');
     assert.deepEqual(readFileSync(join(dir, 'calls.env'), 'utf8').trim().split('\n'), [
       'vite/dist/node/index.js', 'rollup/dist/es/rollup.js', 'webpack/lib/index.js', 'typescript/lib/typescript.js',
-    ].map(file => join(repo, 'tools/bundler-plugin/node_modules', file)));
+    ].map(file => join(repo, 'tools/bundler-plugin/harness/node_modules', file)));
   }
 });

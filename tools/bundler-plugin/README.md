@@ -27,7 +27,7 @@ Copy `vendor/rollup4.tgz` into your application's **tracked** `vendor/rollup4.tg
 
 Install normally after merging these fields with existing configuration. The root override also selects the host used by Vite. Do not reference a tarball inside `node_modules`: a clean install removes that directory. Other package managers need their corresponding root-level override and actual host-resolution verification.
 
-The override in this plugin's own development package does not propagate into an application's dependency tree. Ordinary non-watch builds do not require this repaired host.
+The test harness's own override (`harness/package.json`) does not reach an application's dependency tree. Ordinary non-watch builds do not require this repaired host.
 
 ## Webpack source-declaration watch
 
@@ -37,7 +37,7 @@ A directory the plugin creates inside the project (the declaration `outDir`, and
 
 ## Testing the adapters
 
-`test.mjs` is the gate's entry: it runs the native adapter tests and the real-compiler consumers in `src/test/js/declarationBundlers/run.mjs`, after `npm ci` from `package-lock.json`. The lockfile is there because the transitive tree used to float: watchpack 2.6.x arrived unpinned and changed watch behaviour between gates. Cost on rtx: 66–91 s at low load.
+`test.mjs` is the gate's entry: it runs the native adapter tests and the real-compiler consumers in `src/test/js/declarationBundlers/run.mjs`. The pinned bundlers live in the private `harness/` package, installed with `npm ci` from its lockfile and linked as this directory's `node_modules`, so the adapters and their `.d.ts` resolve bare imports as they do in an application. The plugin's own `package.json` lists only what applications install: bun installs a `file:` dependency's devDependencies and resolves their relative paths from the application, so test tooling there broke `bun install`. The lockfile exists because the transitive tree used to float: watchpack 2.6.x arrived unpinned and changed watch behaviour between gates. Cost on rtx: 55–91 s at low load.
 
 Traps a watch test meets, each paid for with a red gate:
 

@@ -2470,13 +2470,14 @@ run_tools_lane() {
       printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1
     else
       if ! node --test --test-concurrency=1 tools/bundler-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/bundler-plugin/test.test.mjs; rc=1; fi
-      if ! npm ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund; then
+      if ! npm ci --prefix tools/bundler-plugin/harness --ignore-scripts --prefer-offline --no-audit --no-fund \
+        || ! { rm -rf tools/bundler-plugin/node_modules && ln -s harness/node_modules tools/bundler-plugin/node_modules; }; then
         echo 'native-adapters: dependency provisioning failed; wrapper was not run'
         printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1
-      elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/bundler-plugin/node_modules/vite/dist/node/index.js" \
-        ROLLUP_MODULE="$TOP/tools/bundler-plugin/node_modules/rollup/dist/es/rollup.js" \
-        WEBPACK_MODULE="$TOP/tools/bundler-plugin/node_modules/webpack/lib/index.js" \
-        TS_ORACLE_MODULE="$TOP/tools/bundler-plugin/node_modules/typescript/lib/typescript.js" \
+      elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/bundler-plugin/harness/node_modules/vite/dist/node/index.js" \
+        ROLLUP_MODULE="$TOP/tools/bundler-plugin/harness/node_modules/rollup/dist/es/rollup.js" \
+        WEBPACK_MODULE="$TOP/tools/bundler-plugin/harness/node_modules/webpack/lib/index.js" \
+        TS_ORACLE_MODULE="$TOP/tools/bundler-plugin/harness/node_modules/typescript/lib/typescript.js" \
         node tools/bundler-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1; fi
     fi
   fi

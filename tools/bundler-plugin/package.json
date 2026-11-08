@@ -1,7 +1,7 @@
 {
   "name": "metascript-bundler-plugin",
   "version": "0.1.0",
-  "description": "MetaScript adapters for Vite, Rollup and webpack — resolve .ms imports to compiler-emitted ES modules",
+  "description": "MetaScript adapters for Vite, Rollup and webpack \u2014 resolve .ms imports to compiler-emitted ES modules",
   "type": "module",
   "exports": {
     "./vite": {
@@ -38,24 +38,20 @@
   "dependencies": {
     "magic-string": "^0.30.17"
   },
-  "devDependencies": {
-    "magic-string": "0.30.17",
-    "rollup": "file:vendor/rollup4.tgz",
-    "typescript": "5.9.2",
-    "vite": "6.3.5",
-    "webpack": "5.99.9"
-  },
-  "overrides": {
-    "rollup": "$rollup"
-  },
   "peerDependencies": {
     "vite": ">=5",
     "rollup": ">=4",
     "webpack": "^5.0.0"
   },
   "peerDependenciesMeta": {
-    "vite": { "optional": true },
-    "rollup": { "optional": true },
-    "webpack": { "optional": true }
+    "vite": {
+      "optional": true
+    },
+    "rollup": {
+      "optional": true
+    },
+    "webpack": {
+      "optional": true
+    }
   }
 }

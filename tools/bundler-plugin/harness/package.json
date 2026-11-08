@@ -1,0 +1,15 @@
+{
+  "name": "metascript-bundler-plugin-harness",
+  "private": true,
+  "description": "Pinned bundler toolchain for testing metascript-bundler-plugin; never installed by applications",
+  "devDependencies": {
+    "magic-string": "0.30.17",
+    "rollup": "file:../vendor/rollup4.tgz",
+    "typescript": "5.9.2",
+    "vite": "6.3.5",
+    "webpack": "5.99.9"
+  },
+  "overrides": {
+    "rollup": "$rollup"
+  }
+}
