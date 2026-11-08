@@ -2,7 +2,7 @@ import { statSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { buildCompilerGraph, canonicalPath, stripQuery, instanceOf, withInstance, outputOf } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, dependencyDirectory, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
 
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
 const SOURCE_WATCH_ROLLUP_VERSION = "4.67.5+metascript.2";
@@ -40,9 +40,10 @@ export default function metascript(options = {}) {
 
 	function ignoredOutput(path, stats) {
 		const file = canonicalPath(resolve(watchCwd, path));
-		if (!outputPattern?.test(file) || isControl(file)) return false;
-		try { return !(stats ?? statSync(file)).isDirectory(); }
-		catch (error) { if (error.code !== "ENOENT") throw error; return true; }
+		const dependencies = dependencyDirectory.test(file);
+		if (!(dependencies || outputPattern?.test(file)) || isControl(file)) return false;
+		try { return (stats ?? statSync(file)).isDirectory() === dependencies; }
+		catch (error) { if (error.code !== "ENOENT") throw error; return !dependencies; }
 	}
 
 	function registerWatches(context) {

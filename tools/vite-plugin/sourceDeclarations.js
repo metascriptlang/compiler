@@ -141,6 +141,7 @@ export function sourceDeclarationWatchRoots(projectRoot, sourceRoot, dependencie
  return [...roots];
 }
 
+export const dependencyDirectory = /(?:^|[\\/])node_modules$/;
 const anySeparator = "[\\\\/]";
 const escapePath = path => path.split(/[\\/]/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(anySeparator);
 

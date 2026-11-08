@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCompilerGraph, canonicalPath, outputOf, stripQuery, withInstance } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputGlobs, ownedOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, dependencyDirectory, sourceDeclarationWatchRoots, ownedOutputGlobs, ownedOutputPattern } from "./sourceDeclarations.js";
 
 export const loader = fileURLToPath(new URL("./webpackLoader.js", import.meta.url));
 const implementationFiles = ["webpack.js", "webpackLoader.js", "compilerCore.js", "sourceDeclarations.js", "package.json"].map(file => fileURLToPath(new URL(file, import.meta.url)));
@@ -16,7 +16,7 @@ function sourceInventory(roots, outputs) {
 	const visited = new Set(), sources = new Map();
 	const visit = file => {
 		const path = canonicalPath(file);
-		if (outputs.test(path) || visited.has(path)) return;
+		if (outputs.test(path) || dependencyDirectory.test(path) || visited.has(path)) return;
 		visited.add(path);
 		try {
 			if (statSync(path).isDirectory()) {
@@ -69,13 +69,14 @@ export default class MetaScriptPlugin {
 		const workspace = resolve(root, options.outDir ?? "node_modules/.metascript");
 		const outputs = options.sourceDeclarations && ownedOutputPattern(options.sourceDeclarations, root, join(workspace, "webpack-"));
 		const outputGlobs = options.sourceDeclarations && ownedOutputGlobs(options.sourceDeclarations, root, join(workspace, "webpack-"));
+		const unwatched = outputs && new RegExp(`${outputs.source}|${dependencyDirectory.source}`);
 		if (outputs) compiler.hooks.afterEnvironment?.tap(name, () => {
 			const native = compiler.watchFileSystem;
 			let previousWatchOptions, enrichedWatchOptions;
 			compiler.watchFileSystem = {
 				watch(files, directories, missing, startTime, watchOptions, callback, callbackUndelayed) {
 					if (watchOptions !== previousWatchOptions) {
-						enrichedWatchOptions = { ...watchOptions, ignored: ignoringOutputs(watchOptions.ignored, outputs, outputGlobs) };
+						enrichedWatchOptions = { ...watchOptions, ignored: ignoringOutputs(watchOptions.ignored, unwatched, outputGlobs) };
 						previousWatchOptions = watchOptions;
 					}
 					try {
@@ -84,7 +85,7 @@ export default class MetaScriptPlugin {
 							callbackUndelayed?.(file, time);
 						});
 					} catch (error) {
-						if (!Array.isArray(enrichedWatchOptions.ignored) || !enrichedWatchOptions.ignored.includes(outputs)) throw error;
+						if (!Array.isArray(enrichedWatchOptions.ignored) || !enrichedWatchOptions.ignored.includes(unwatched)) throw error;
 						throw new Error(`MetaScript webpack excludes its outputs from watchOptions.ignored ${outputGlobs ? "beside RegExp items" : `through a RegExp item, because ${root} has glob characters`}, and this watchpack accepts RegExp array items only from 2.6.0; give watchOptions.ignored as one RegExp or a function`, { cause: error });
 					}
 				},

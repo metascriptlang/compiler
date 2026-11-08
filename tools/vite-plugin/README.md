@@ -2,6 +2,10 @@
 
 Public options and entry points are defined by the adjacent `.d.ts` files.
 
+## Source discovery skips node_modules
+
+In source-declaration watch, the webpack and Rollup adapters find new sources under the project root but never enter a directory named `node_modules`: the webpack source inventory does not read it, and neither watcher descends into it (Vite's own watcher already ignores it). Files the compiler reports as dependencies stay watched one by one. A MetaScript package installed after an import of it failed is therefore picked up on the next edit of a project source or a restart. With a glob `watchOptions.ignored`, webpack cannot exclude the directory without its files, so it keeps watching `node_modules` unless those globs cover it.
+
 ## Rollup source-declaration watch
 
 This mode needs the patched host identified by `rollup.js`'s `options` hook. It refuses an unqualified host instead of starting a watch session that can silently miss recovery.
@@ -29,7 +33,7 @@ The override in this plugin's own development package does not propagate into an
 
 The adapter adds its output exclusions to `watchOptions.ignored` in the shape the configured value already has: one RegExp for a RegExp or nothing, globs after a glob or glob list, a function around a function. Every watchpack 2.x that webpack 5 can resolve accepts those shapes; watchpack refuses RegExp items in an array before 2.6.0 and functions before 2.3.0. A project path containing `* ? [ ] { }` cannot be written as a glob, so with a glob `ignored` it needs watchpack 2.6.0 or later, and the adapter's error names that case on an older one. Checked with each shape against watchpack 2.0.0, 2.2.0, 2.3.1, 2.4.4, 2.5.2, 2.6.3 and 2.6.4 by reading back each version's normalized matcher: plugin outputs ignored, sources and the user's own pattern kept.
 
-A directory the plugin creates inside the project (the declaration `outDir`, `node_modules/.metascript`) wakes one more webpack generation, which compiles nothing. The project root is a context dependency, so a new entry in it is a change, and ignoring the directory would also stop watching sources placed in it. Suppressing that generation was rejected: webpack's `invalid` hook has already fired for the change, and swallowing the aggregated callback means re-arming the watcher, which races an edit made in between.
+A directory the plugin creates inside the project (the declaration `outDir`, and `node_modules/.metascript` when a glob `ignored` keeps `node_modules` watched) wakes one more webpack generation, which compiles nothing. The project root is a context dependency, so a new entry in it is a change, and ignoring the directory would also stop watching sources placed in it. Suppressing that generation was rejected: webpack's `invalid` hook has already fired for the change, and swallowing the aggregated callback means re-arming the watcher, which races an edit made in between.
 
 ## Maintaining the vendored host
 

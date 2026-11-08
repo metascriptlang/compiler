@@ -465,7 +465,7 @@ test("composed ignored separates plugin outputs, user patterns and sources in th
  compiler.watchFileSystem = {watch(...values) { options = values[4]; return {close() {}}; }};
  compiler.hooks.afterEnvironment.call();
  const owned = ["editor-types/main.d.ms.ts","editor-types/nested/main.d.jms.ts","editor-types/package.json","editor-types/.msc-source-lease","editor-types/.msc-source-lease/owner.json","editor-types/.msc-source-ledger.json","node_modules/.metascript/webpack-private","node_modules/.metascript/webpack-private/out.js"].map(path => join(f.root,path));
- const kept = [f.entry,f.dependency,f.settings.msc,join(f.root,"editor-types"),join(f.root,"editor-types/new.jms"),join(f.root,"editor-types/schema.json"),join(f.root,"node_modules/.metascript"),join(f.root,"node_modules/.metascript/late.ms")];
+ const kept = [f.entry,f.dependency,f.settings.msc,join(f.root,"editor-types"),join(f.root,"editor-types/new.jms"),join(f.root,"editor-types/schema.json"),join(f.root,"node_modules/.metascript"),join(f.root,"node_modules/.metascript/late.ms"),join(f.root,"node_modules/pkg/index.ms")];
  for (const ignored of userIgnoredShapes) {
   compiler.watchFileSystem.watch([],[],[],0,{ignored},() => {});
   const probe = new Watchpack(options);
@@ -477,6 +477,7 @@ test("composed ignored separates plugin outputs, user patterns and sources in th
   for (const path of owned) assert.equal(ignores(path),true,`${label}: ${path}`);
   for (const path of kept) assert.equal(ignores(path),false,`${label}: ${path}`);
   assert.equal(ignores(join(f.root,"keep-this/user.js")),Boolean(ignored),label);
+  assert.equal(ignores(join(f.root,"node_modules")),typeof ignored !== "string" && !Array.isArray(ignored),`${label}: a glob cannot name the directory without its files`);
  }
 });
 
@@ -711,6 +712,17 @@ for (const declarationDir of ["editor-types", "."]) test(`webpack directory inve
  }
  const generated = join(f.root,declarationDir,"main.d.ms.ts");
  writeFileSync(generated,"external generated-file edit"); generation(compiler); assert.equal(f.calls(),calls);
+});
+
+test("webpack source inventory skips node_modules", t => {
+ const f = fixture(t);
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(sourceSettings(f)),{shutdown:new Hook()});
+ compiler.watchMode = true; t.after(() => compiler.hooks.shutdown.call());
+ let g = generation(compiler); assert.deepEqual(g.compilation.errors,[]); const calls = f.calls();
+ compiler.modifiedFiles = new Set([f.root]);
+ mkdirSync(join(f.root,"node_modules/pkg"),{recursive:true});
+ writeFileSync(join(f.root,"node_modules/pkg/new.jms"),"installed source"); generation(compiler); assert.equal(f.calls(),calls);
+ writeFileSync(join(f.root,"outside.jms"),"project source"); generation(compiler); assert.equal(f.calls(),calls + 1);
 });
 
 for (const prefix of ["editor-types", "workspace"]) test(`webpack exact compiler and JSON controls precede ${prefix} ownership`, t => {

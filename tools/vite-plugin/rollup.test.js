@@ -591,6 +591,10 @@ for (const [name, ignored] of [
 			assert.equal(owned(path), true);
 		}
 		assert.equal(owned(join(root, "editor-types"), outputDirectoryStats), false);
+		assert.equal(owned(join(root, "node_modules"), outputDirectoryStats), true);
+		assert.equal(owned(join(root, "packages/app/node_modules"), outputDirectoryStats), true);
+		assert.equal(owned(join(root, "node_modules")), false, "a node_modules not created yet stays watched");
+		assert.equal(owned(join(root, "node_modules/pkg/index.ms"), outputFileStats), false);
 		assert.equal(owned(join(root, "editor-types")), false);
 		for (const path of [inputOptions.input, join(root, "types.jms"), adapterOptions.msc, join(root, "compiler.json"), join(root, "rollup.config.js"), join(root, "state.json"), join(root, "editor-types-sibling/main.ms"), join(root, "editor-types/new.ms"), join(root, "node_modules/.metascript/new.jms")]) assert.equal(owned(path, outputFileStats), false);
 		const again = plugin.options.call(watchContext, inputOptions);
