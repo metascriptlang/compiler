@@ -23,7 +23,6 @@
 2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
-2	msHeapFree
 2	msMainLoopIdle
 2	msPidTableFull
 2	msPoolRunEdge
@@ -32,6 +31,7 @@
 3	msActorJobRun
 3	msCancelTimer
 3	msHeapAlloc
+3	msHeapFree
 3	msHeapTakeTracked
 3	msPoolCompensate
 3	msPoolRunQueued
@@ -39,6 +39,7 @@
 3	msWaitForReady
 4	msActorLendWakeCb
 4	msActorShutdownAtExit
+4	msHeapCloseRuns
 4	msProcessTimersIn
 5	msActorProcess
 6	msActorSendOrDrop

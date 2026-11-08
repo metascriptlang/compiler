@@ -19,14 +19,15 @@
 2	msChannelPostOne
 2	msCompletionQueuePushOwned
 2	msCompletionQueuePushReleaseBatch
-2	msHeapFree
 2	msPoolRunEdge
 2	msSpawnWorkerSettle
 2	msTimerDelayFrom
 3	msAwaitSlotWait
 3	msHeapAlloc
+3	msHeapFree
 3	msHeapTakeTracked
 3	msRunOnce
+4	msHeapCloseRuns
 4	msPoolWorkerLoop
 4	msProcessTimersIn
 7	main__SsrcZtestZcorpusZprogramsZ405U2DlockedU53haredU43ounterOms_u0
