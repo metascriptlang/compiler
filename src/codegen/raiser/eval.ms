@@ -750,6 +750,17 @@ function sourceDeclOf(sym: Symbol): Node | null {
 	return null;
 }
 
+// A method compiles with its class, which binds its `this` and its siblings; the class is its
+// receiver, the first parameter of the lifted routine.
+function methodOwnerClass(sym: Symbol): Symbol | null {
+	if (sym.declNode == null || sym.declNode.kind != NodeKind.MethodDecl) return null;
+	const ft = sym.symbolType;
+	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length == 0) return null;
+	const recv = ft.typeChildren[0];
+	const body = recv.kind == TypeKind.Ref && recv.typeReturn != null ? recv.typeReturn : recv;
+	return body.sym != null && body.sym.symbolKind == SymbolKind.Class ? body.sym : null;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
@@ -758,6 +769,11 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (tierSym != null) return ensureCompiledIntoEngine(tierSym);
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
+	const ownerClass = methodOwnerClass(sym);
+	if (ownerClass != null && ensureCompiledIntoEngine(ownerClass) >= 0) {
+		const withClass = _engine.funcMap.symbolIndices.get(sym);
+		if (withClass != null) return withClass;
+	}
 	const counterpart = raiserCounterpart(sym);
 	if (counterpart != sym) {
 		const counterpartIdx = ensureCompiledIntoEngine(counterpart);
