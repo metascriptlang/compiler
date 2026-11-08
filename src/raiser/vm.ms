@@ -555,6 +555,11 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 	if (cls == CLS_DYN) {
 		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs as int64, 0); return; }
 		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs as int64, val.intVal); return; }
+		const held = vm.regs.slots[abs];
+		if (held != 0 && isShell(held) && heapBoxRc(held) == 1) {
+			heapBoxSetValue(held, val);
+			return;
+		}
 		const box = heapAllocBox(vm.arrayHeap, val);
 		heapBoxSetRc(box, 0);
 		writeRef(vm, abs as int64, box);
@@ -9510,6 +9515,21 @@ function returnThroughFinally(): RaiserVM {
 	const fMain = createRaiserFunction("main", mainCode, [], 0, 0, 2, [RaiserRegClass.Word, RaiserRegClass.Word]);
 	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4, [RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	return execModule(createRaiserModule("placed", [fMain, fGuarded], 0));
+}
+
+test "a value written into a Dyn register that alone holds its box goes into that box" {
+	const main = createRaiserFunction("main", [raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [], 0, 0, 2, [RaiserRegClass.Dyn, RaiserRegClass.Dyn]);
+	const vm = createVM(createRaiserModule("reuse", [main], 0));
+	const at = vm.base as number;
+	writeAbs(vm, CLS_DYN, at, raiserInt(1));
+	const first = vm.regs.slots[at];
+	writeAbs(vm, CLS_DYN, at, raiserFloat(2.5));
+	assert vm.regs.slots[at] == first && heapBoxLive(vm.arrayHeap) == 1, `${heapBoxLive(vm.arrayHeap)}`;
+	assert heapBoxValue(vm.arrayHeap, first).floatVal == 2.5;
+	writeRef(vm, (at + 1) as int64, first);
+	writeAbs(vm, CLS_DYN, at, raiserInt(3));
+	assert vm.regs.slots[at] != first && heapBoxValue(vm.arrayHeap, first).floatVal == 2.5;
+	assert heapBoxValue(vm.arrayHeap, vm.regs.slots[at]).intVal == 3;
 }
 
 test "a return through a finally frees the box that held it" {
