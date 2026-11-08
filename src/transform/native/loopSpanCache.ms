@@ -1,8 +1,8 @@
 // A loop holding no call, no array-variable assignment and no `.length` write cannot change any array
 // header, so its arrays are read through a local Span. Admitting any other node kind here breaks
 // that rule: a header change inside the loop would go unseen. The calls admitted are an integer check
-// (it reads and writes scalars or an element, and raises), and one through a const closure with no env
-// whose routine body keeps the same rule, touches no array and calls nothing. A checked build caches
+// (it reads and writes scalars or an element, and raises), and one to a routine of this module, named or
+// bound to a const, whose body keeps the same rule with no array of its own. A checked build caches
 // only a loop that stores an element: a read-only loop gains nothing, and its reduction is blockReduce's.
 
 import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData, CallExprData, FunctionDeclData, ReturnStmtData } from "../../ast/node";
@@ -31,12 +31,12 @@ class LoopCache {
 	cached: Cached[];
 	closures: HashMap<Symbol, Symbol>;
 	routines: HashMap<Symbol, Node>;
-	inCallee: boolean;
+	visiting: HashSet<Symbol>;
 }
 
 export function lowerLoopSpans(program: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend || ctx.raiserBackend) return program;
-	const st: LoopCache = { ctx, bound: createSymSet(), cached: [], closures: new HashMap<Symbol, Symbol>(), routines: new HashMap<Symbol, Node>(), inCallee: false };
+	const st: LoopCache = { ctx, bound: createSymSet(), cached: [], closures: new HashMap<Symbol, Symbol>(), routines: new HashMap<Symbol, Node>(), visiting: new HashSet<Symbol>() };
 	collectCallees(program, st);
 	if (!ctx.boundChecks) dropProvenLengthGuards(program, st);
 	scan(program, st);
@@ -55,28 +55,24 @@ function collectCallees(n: Node, st: LoopCache): void {
 
 function isStableCall(n: Node, st: LoopCache): boolean {
 	const d = n.data as CallExprData;
-	if (st.inCallee || d.callee.kind != NodeKind.Identifier || d.callee.resolvedSym == null || !isScalar(n.nodeType)) return false;
-	const fn = st.closures.get(d.callee.resolvedSym);
+	if (d.callee.kind != NodeKind.Identifier || d.callee.resolvedSym == null || !isScalar(n.nodeType)) return false;
+	const callee = d.callee.resolvedSym;
+	const fn = st.closures.has(callee) ? st.closures.get(callee)! : callee.symbolKind == SymbolKind.Function ? callee : null;
 	const decl = fn != null ? st.routines.get(fn) : null;
 	if (decl == null) return false;
 	for (const a of d.arguments) {
 		if (!isHeaderStable(a, st)) return false;
 	}
+	if (st.visiting.has(fn!)) return true;
 	const outer = st.cached;
 	st.cached = [];
-	st.inCallee = true;
-	const stmts = extractBodyStmts((decl.data as FunctionDeclData).fnBody);
+	st.visiting.add(fn!);
 	let ok = true;
-	for (let i = 0; ok && i < stmts.length; i++) {
-		const s = stmts[i];
-		if (s.kind != NodeKind.ReturnStmt) ok = isHeaderStable(s, st);
-		else {
-			const value = (s.data as ReturnStmtData).argument;
-			ok = i == stmts.length - 1 && value != null && isHeaderStable(value, st);
-		}
+	for (const s of extractBodyStmts((decl.data as FunctionDeclData).fnBody)) {
+		if (ok) ok = isHeaderStable(s, st);
 	}
 	ok = ok && st.cached.length == 0;
-	st.inCallee = false;
+	st.visiting.delete(fn!);
 	st.cached = outer;
 	return ok;
 }
@@ -224,6 +220,10 @@ function arrayUse(a: Node, st: LoopCache): boolean {
 
 function isHeaderStable(n: Node, st: LoopCache): boolean {
 	if (n.kind == NodeKind.NumberLiteral || n.kind == NodeKind.BooleanLiteral) return true;
+	if (n.kind == NodeKind.ReturnStmt) {
+		const value = (n.data as ReturnStmtData).argument;
+		return st.visiting.size > 0 && (value == null || isHeaderStable(value, st));
+	}
 	if (n.kind == NodeKind.NullLiteral) return isScalar(n.nodeType);
 	if (n.kind == NodeKind.BlockStmt || n.kind == NodeKind.BreakStmt || n.kind == NodeKind.ContinueStmt || n.kind == NodeKind.ExprStmt
 			|| n.kind == NodeKind.IfStmt || n.kind == NodeKind.WhileStmt) return allHeaderStable(n, st);
