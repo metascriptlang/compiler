@@ -33,10 +33,22 @@ test "a Vec of plain children is cyclic" {
 	assert verdict("class N { kids: Vec<N> = []; }\nconst n = new N();", "N") == "cyclic";
 }
 
-test "an owned element of a shared array is refused" {
-	assert refused("class N { kids: Owned<N>[] = []; }\nconst n = new N();\n").contains("'Owned<N>' cannot be an array element");
-	assert refused("class N { kids: Array<Owned<N> | null> = []; }\nconst n = new N();\n").contains("cannot be an array element");
-	assert refused("class N { v: int32 = 0; }\ntype Kid = Owned<N>;\nfunction f(ks: Kid[]): int32 { return ks.length; }\n").contains("cannot be an array element");
+test "an array of owned children is acyclic, through nullable elements and nested arrays too" {
+	assert verdict("class N { kids: Owned<N>[] = []; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { kids: Array<Owned<N> | null> = []; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { grid: Owned<N>[][] = []; }\nconst n = new N();", "N") == "acyclic";
+	assert refused("class N { v: int32 = 0; }\ntype Kid = Owned<N>;\nfunction f(ks: Kid[]): int32 { return ks.length; }\nconsole.log(f([new N()]));\n") == "compiled";
+}
+
+test "an array of owned children beside a plain back edge is cyclic" {
+	assert verdict("class N { kids: Owned<N>[] = []; up: N | null = null; }\nconst n = new N();", "N") == "cyclic";
+}
+
+test "an Owned<U> slot of a declared union keeps U's C type, so reading it as U converts nothing" {
+	const src = "class N { v: int32 = 0; data: Owned<D> = { kind: 3 } as D; }\ntype A = { kind: 1; l: Owned<N> | null };\ntype B = { kind: 2; r: Owned<N> | null };\ntype C = { kind: 3 };\ntype D = A | B | C;\nfunction read(n: N): D { return n.data; }\nfunction share(to: N, from: N): void { to.data = from.data; }\nconst n = new N();\nconst m = new N();\nshare(m, n);\nconsole.log(read(m).kind);\n";
+	const r = compileToC(src);
+	assert r.ok, r.ok ? "" : r.error;
+	assert !r.value.contains("msUnionConv_"), "Owned<D> and D share one C union, so a read of n.data copies it as it is";
 }
 
 test "a plain array of plain children is cyclic" {
