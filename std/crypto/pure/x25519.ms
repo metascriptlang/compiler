@@ -1,5 +1,5 @@
 import { encodeHex, decodeHex } from "../../core/encoding";
-import { Fe, feZero, feOne, feFromBytes, feToBytes, feAdd, feSub, feAddLoose, feSubLoose, feMul, feMul121666, feSqr, feInv, feCMov } from "./ed25519Field";
+import { Fe, feZero, feOne, feFromBytes, feToBytes, feAddLoose, feSubLoose, feMul, feMul121666, feSqr, feInv, feCMov } from "./ed25519Field";
 import { wipeBytes } from "./secret";
 
 /** The RFC 7748 Montgomery ladder: 255 steps that swap by mask, never by branch. An all-zero result means a low-order input. */

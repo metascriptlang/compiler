@@ -1,6 +1,14 @@
 import { wipeBytes } from "./secret";
 import { InputBytes } from "./bytes";
-import { load32BE, load64BE, store32BE } from "./endian";
+import { store32BE } from "./endian";
+
+when (c) {
+	import { load64BE } from "./endian";
+}
+
+when (js) {
+	import { load32BE } from "./endian";
+}
 /**
  * The GHASH of AES-GCM (NIST SP 800-38D) without tables, so no memory access or branch depends on the key or the
  * data. On C each carry-less product is built from integer multiplies of operands masked to every fourth bit, on

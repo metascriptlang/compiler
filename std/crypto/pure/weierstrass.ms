@@ -12,10 +12,13 @@ import {
 } from "./asn1";
 import { Limbs, mul, add, equal, invert, nonzero, toMontgomery, fromMontgomery, fromBytes, reduceBytes, toBytes } from "./montgomery";
 import { CurveMath, mulBase, mulSecret, mulDoubleBasePublic, affineBytes, decodePoint, encodePoint } from "./pcurve";
-import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw, bigExpandPoint } from "./bigCurve";
 import { hashOf } from "./hash";
 import { hmacOf } from "./hmac";
 import { declassify, wipeBytes } from "./secret";
+
+when (js) {
+	import { bigPointValid, bigPublicPoint, bigEcdhShared, bigSignRaw, bigVerifyRaw, bigExpandPoint } from "./bigCurve";
+}
 
 export interface Curve {
 	name: string;
