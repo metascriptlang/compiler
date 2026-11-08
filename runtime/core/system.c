@@ -226,6 +226,8 @@ void msTestErrorFlag(void) {
 	exit(1);
 }
 
+void msFutureDecref(void* fut) { msFutureDeferredRelease(fut); }
+
 void msRaiseAwaitedError(void* err) {
 	msErr = true;
 	msCurrException = err != NULL ? (msException*)err : (msException*)msMakeError(msStringFromCStr("noproc"));

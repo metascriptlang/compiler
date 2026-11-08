@@ -381,8 +381,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 	void* __msDecrefAnyP = (void*)(p); \
 	if (__msDecrefAnyP != NULL) { \
 		const msTypeInfo* __t = msHeader(__msDecrefAnyP)->type; \
-		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(__msDecrefAnyP); \
+		if (__t != NULL && __t->decrefFn != NULL) { \
+			__t->decrefFn(__msDecrefAnyP); \
 		} else if (msDecRefIsLast(__msDecrefAnyP)) { \
 			MS_DESTROY_DISPATCH(__t, __msDecrefAnyP); \
 			msDestroyAndDispose(__msDecrefAnyP); \
@@ -419,8 +419,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 	void* __msDecrefCyclicP = (void*)(p); \
 	if (__msDecrefCyclicP != NULL) { \
 		const msTypeInfo* __t = msHeader(__msDecrefCyclicP)->type; \
-		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(__msDecrefCyclicP); \
+		if (__t != NULL && __t->decrefFn != NULL) { \
+			__t->decrefFn(__msDecrefCyclicP); \
 		} else if (msOrcDecRefIsLast(__msDecrefCyclicP)) { \
 			MS_DESTROY_DISPATCH(__t, __msDecrefCyclicP); \
 			msDestroyAndDispose(__msDecrefCyclicP); \
@@ -464,8 +464,8 @@ static inline void* msUnownedGiveRo(void* p) {
 	bool __msEdgeQueued = false; \
 	if (__msEdgeP != NULL) { \
 		const msTypeInfo* __t = msHeader(__msEdgeP)->type; \
-		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(__msEdgeP); \
+		if (__t != NULL && __t->decrefFn != NULL) { \
+			__t->decrefFn(__msEdgeP); \
 		} else if (isLast(__msEdgeP)) { \
 			__msEdgeQueued = msDropEdgeLast((void*)(owner), __msEdgeP); \
 		} \

@@ -36,6 +36,7 @@ typedef struct msTypeInfo {
 	msDestroyProc finalizeFn; /* the onDestroy part of destroyFn; the cycle collector runs it for a whole dead cycle first */
 	msDestroyProc releaseFn;  /* destroyFn without that part */
 	msTraceProc reachFn;      /* every counted child, acyclic too: msImmortalize's walk */
+	msDestroyProc decrefFn;   /* replaces the count drop: a future's count is released on its owner thread */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

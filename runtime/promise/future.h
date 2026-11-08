@@ -223,12 +223,15 @@ _Static_assert(offsetof(msFutureBase, finished) == 0, "msFutureBase.finished mus
  * route to msFutureDeferredRelease (deferred decref to dispatcher).
  * destroyFn is NULL — the actual destroy (msFutureDestroyInner) is called by
  * msFutureDrcDestroy on the dispatcher drain, not by msDecref's destroyFn path. */
+void msFutureDecref(void* fut);
+
 static const msTypeInfo msFutureTypeInfo = {
 	.name = "msFuture",
 	.isCyclic = false,
 	.traceFn = NULL,
 	.destroyFn = NULL,
 	.flags = MS_TYPE_FLAG_FUTURE,
+	.decrefFn = msFutureDecref,
 };
 
 /* Common typed futures (always available) */
