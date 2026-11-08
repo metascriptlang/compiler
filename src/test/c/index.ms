@@ -107,6 +107,7 @@ import "./inductionPointer";
 import "./typeInfoHookAdapters";
 import "./flowsRecorder";
 import "./awaitWaitPath";
+import "./inheritedCycleClassification";
 import "./ownedEdge";
 import "./unownedEdge";
 import "./openSlotCycleClassification";
