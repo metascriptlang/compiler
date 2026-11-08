@@ -145,3 +145,27 @@ us/op.
 (at most 10% above). The misses: `makeVec` on both (a `Vec<float32>` is a JS `Array`, wasm-bindgen
 returns a `Float32Array`; a typed array result waits for the std typed arrays), and `primes` on
 Node, 13% above (MetaScript's wasm code for the sieve, not the boundary; not traced).
+
+## 2026-11-08, m1m, after the typed array result
+
+Main `2ab90f5bd97`: `makeVec` returns a `Float32Array` written through a `Span` of it, as the
+wasm-bindgen arm returns one. A `--quiet 30` window. Median of 5 rounds, us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.856 | 11.528 | 2.869 | 3.475 | 39.889 |
+| add64 x1000 | 4.592 | 4.248 | 4.005 | 4.653 | 51.358 |
+| strLen16 x1000 | 23.294 | 25.187 | 23.477 | 24.955 | 71.747 |
+| echo16 x1000 | 121.95 | 150.714 | 128.171 | 205.394 | 85.709 |
+| mid x1000 | 52.39 | 326.685 | 57.438 | 206.899 | 360.561 |
+| sumVec 1k Array | 1.481 | 1.466 | 1.613 | 1.593 | 51.767 |
+| sumSpan 1k Float32Array | 1.026 | 1.004 | 1.027 | 1.006 | 1.036 |
+| scaleSpan 1k Float32Array | 0.276 | 0.412 | 0.27 | 0.427 | 0.155 |
+| scaleBox 1k held by callee | 0.117 | 0.189 | 0.118 | 0.192 | 0.095 |
+| makeVec 1k | 0.643 | 0.95 | 1.166 | 1.052 | 0.823 |
+| callback 1k | 6.81 | 115.012 | 8.336 | 118.5 | 48.79 |
+| primes 2M | 5716.727 | 5164.906 | 6069.388 | 5575.472 | 4411.961 |
+
+`accept node: 11/12`, `accept chrome: 11/12`. The misses: `primes` on Node, 11% above
+(MetaScript's wasm code for the sieve; compiler card 2026-11-08-wasm-sieve-13-percent-behind-rust-wasm),
+and `makeVec` in Chrome, 10.8% above, one run, not split yet.
