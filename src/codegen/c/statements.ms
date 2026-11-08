@@ -233,7 +233,7 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!statementCanRaise(exprNode)) return;
-	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
+	emitStmtsLine(p, `if (MS_UNLIKELY(msErr)) goto ${raiseTarget(p)};`);
 }
 
 function frameLocalRoot(n: Readonly<Node | null>, p: Readonly<CProc>): Readonly<Symbol | null> {
@@ -1249,7 +1249,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 	if (hasCatch) {
 		// After try body, check error flag
-		emitStmtsLine(p, `if (msErr) goto ${catchLabel};`);
+		emitStmtsLine(p, `if (MS_UNLIKELY(msErr)) goto ${catchLabel};`);
 		emitStmtsLine(p, `goto ${finallyLabel};`);
 
 		// Catch label
@@ -1318,7 +1318,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	}
 
 	// An error still set after the finally must reach the ENCLOSING handler.
-	emitStmtsLine(p, "if (msErr) {");
+	emitStmtsLine(p, "if (MS_UNLIKELY(msErr)) {");
 	setStmtsIndent(p, oldIndent + 2);
 	emitErrorGoto(p);
 	setStmtsIndent(p, oldIndent + 1);

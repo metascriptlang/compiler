@@ -1437,7 +1437,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			if (!p.suppressRaiseCheck && inferredCallRaises(node)) {
 				const counted = g.checkerCtx == null || g.checkerCtx.gcMode == GcMode.Drc;
 				const release = counted ? `${node.flags.has(NodeFlag.PlainRelease) ? "msDecref" : "msDecrefCyclic"}(${newTmp}); ` : "";
-				emitStmtsLine(p, `if (msErr) { ${release}goto ${raiseTarget(p)}; }`);
+				emitStmtsLine(p, `if (MS_UNLIKELY(msErr)) { ${release}goto ${raiseTarget(p)}; }`);
 			}
 			ctx.results.push(newTmp);
 			return;
@@ -2636,7 +2636,7 @@ function nrvoTempNeedsZero(cType: string): boolean {
 function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.NullLiteral) return;
 	emitStmtsLine(p, `(void)(${arg});`);
-	if (!p.suppressRaiseCheck && statementCanRaise(node)) emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
+	if (!p.suppressRaiseCheck && statementCanRaise(node)) emitStmtsLine(p, `if (MS_UNLIKELY(msErr)) goto ${raiseTarget(p)};`);
 }
 
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Readonly<Type>, node: Readonly<Node>, ctx: ExprEvalCtx): void {

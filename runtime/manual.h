@@ -409,6 +409,13 @@ typedef struct {
 #endif
 
 /* ===== Exception Handling: one program-wide state, defined in core/system.c ===== */
+#ifndef MS_UNLIKELY
+#if defined(__GNUC__) || defined(__clang__)
+#define MS_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define MS_UNLIKELY(x) (x)
+#endif
+#endif
 #ifdef MSOS_SOLANA
 #define msErr (msSolanaCurrentContext()->err)
 #define msCurrException (msSolanaCurrentContext()->currException)

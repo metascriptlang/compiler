@@ -131,6 +131,14 @@ msError* msMakeError(msString message);
 
 /* MS_THREAD_LOCAL becomes available via future.h above. */
 MS_TLS_EXTERN(bool, msErr);
+/* A raise check is the cold branch: the compiler lays the error path out of line. */
+#ifndef MS_UNLIKELY
+#if defined(__GNUC__) || defined(__clang__)
+#define MS_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define MS_UNLIKELY(x) (x)
+#endif
+#endif
 MS_TLS_EXTERN(msException*, msCurrException);
 void msClearException(void);
 void msDiscardCurrentException(void);

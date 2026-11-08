@@ -19,7 +19,9 @@
 
 #ifndef MS_LIKELY
 #define MS_LIKELY(x)   __builtin_expect(!!(x), 1)
+#ifndef MS_UNLIKELY
 #define MS_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
 #endif
 
 #include <stdio.h>
