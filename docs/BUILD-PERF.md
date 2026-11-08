@@ -57,6 +57,54 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-09 — a ref release disposes through one call
+
+rtx, Linux x86-64. One g1, built from tree `9966bc7d6d35` with the host `msc`, built every arm; the arms
+differ only in `runtime/`, each adding one step to the one before. The shipped steps are tree
+`516f13436208`.
+
+| arm | step | msc `.text` `--danger` | `--lto=off` | `check src/index.ms` instructions, `--danger` / `--lto=off` |
+|---|---|---|---|---|
+| c0 | before | 40,014,429 | 28,214,703 | 62.79G / 77.74G |
+| c1 | the four decref macros call `msDestroyAndDisposeDyn` instead of the destroy dispatch and the dispose | 28,814,556 (−28.0%) | 21,079,247 (−25.3%) | −0.03% / 0.00% |
+| c2 | `msDropEdgeLast` keeps its stack-room check inline and disposes through the same call | 28,408,164 (−1.4%) | 20,856,635 (−1.1%) | −0.04% / +0.05% |
+| c3 | `msStringCopy` is one call | 28,229,120 (−0.6%) | 20,709,827 (−0.7%) | +0.02% / +0.01% |
+| c4 | `msRegisterCycle` and `msUnregisterCycle` are `noinline` | 22,639,154 (−19.8%) | 20,708,291 (0.0%) | −0.83% / −0.86% |
+| | c4 against c0 | **−43.4%** | **−26.6%** | **−0.87% / −0.81%** |
+
+Instructions are `perf stat -e instructions:u` on a warm check, medians of 5 interleaved rounds in a
+30-minute quiet window; one non-quiet round of the same arms gave the same step ratios within
+0.03%. Hello world `--danger --strip` `.text`: 17,139 → 16,411 B. `src/bench/collections`
+`.text` 96,634 → 84,898 B, `src/bench/json` 168,778 → 127,030 B.
+
+Wall time, the same window, each arm's row against c0's in the same round (median of the 5 per-round
+ratios): over the 30 bench rows and the two checks, the geometric mean is 0.994 for c4. The slowest
+rows are `Map set/get string 10k` 1.056 (rounds 0.66 to 1.60) and `map/filter 10k` 1.026 (0.97 to
+1.04), against a round-to-round spread of 58% and 7.5% for c0 itself; `check` is 0.988 at `--danger`
+(0.95 to 1.00) and 0.977 at `--lto=off` (0.61 to 1.77). Step c1 alone was slower on `json parse strings 64 KB` in every round (1.17, 1.08
+to 1.36); c4 is 0.990 on the same row. That the c1 row is code placement in the parse loop, which
+calls no release, is a guess, not measured.
+
+Why a release site was big: msc's emitted C has about 146k generic release sites (92,767
+`msDecrefCyclic`, 53,491 `msDecref`), and each expanded the destroy dispatch and the whole dispose
+(unowned check, cycle-root unregister, slab free) inline. The reference inlines only the last-ref
+check and calls the rest (`nimDecRefIsLast` inline, `nimDestroyAndDispose` a call); `rememberCycle`
+is `noinline` there. Under LTO the two cycle-root calls, reached only when a root is added or
+removed, were inlined into every cyclic decref; `noinline` takes 5.6 MB off and the instructions go
+down, because the inline copies cost more in the instruction cache than the rare call.
+
+Rejected, each against its parent arm in the same runs:
+- `msRememberCycle` out of line whole, as the reference does: `.text` −12.8% / −1.2%, instructions
+  **+4.2% / +5.9%**, because every cyclic decref then pays a call even when it registers nothing.
+- `msOrcTraceRef` with only the null check inline: `.text` −1.8% / −2.1%, instructions **+0.87% /
+  +0.72%** (the reference keeps `nimTraceRef` inline too).
+- `msDropEdgeLast` out of line whole: −1.8% / −1.4%, instructions **+0.20% / +0.15%**; the split in
+  c2 keeps the size and not the cost.
+
+Pinned by `src/test/guard/releaseDisposeOutOfLine.ms`. Not measured: macOS and Windows sizes, other
+hosts' wall time, and Nim's static split for final types (a direct `=destroy` plus a raw dispose, two
+calls and an alignment argument per site, so larger than one call; not built).
+
 ## Measured 2026-11-08 — what a hello world links
 
 `console.log("hello world")`, `msc build --danger --strip`. Before = tree `3acc0d784e76`, after =
