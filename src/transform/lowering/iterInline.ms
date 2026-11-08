@@ -4,7 +4,7 @@ import {
 	MemberExprData, UnaryExprData, NewExprData, ArrayLiteralData, ArrayAccessData, HiddenStdConvData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
 	TryCatchStmtData, BinaryExprData, UpdateExprData, ConditionalExprData, InlineFrame,
 	HiddenDerefData, OutExprData, BreakStmtData, ContinueStmtData, IdentifierData,
-	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData, isEmptyBlock,
+	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode, mapChildren, hasEffect } from "../walker";
@@ -40,6 +40,11 @@ interface InlineState {
 	fromCaller: HashSet<Node>;
 	localNames: HashSet<string>;
 	stored: HashMap<Symbol, StoredChain>;
+}
+
+interface PathReads {
+	ended: int32;
+	through: int32;
 }
 
 interface StoredChain {
@@ -924,26 +929,44 @@ function chainSource(body: Node, param: Symbol, arg: Node, st: InlineState): Inl
 }
 
 function readOncePerPath(body: Node, param: Symbol): boolean {
-	let main = false;
-	for (const s of extractBodyStmts(body)) {
-		const n = readCount(s, param);
-		if (n == 0) continue;
-		if (main || n != 1) return false;
-		if (leavesAfterRead(s, param)) continue;
-		if (!readOutsideLoops(s, param)) return false;
-		main = true;
-	}
-	return main;
+	const total = readCount(body, param);
+	if (total == 0 || loopFreeReads(body, param) != total) return false;
+	const runs = pathReads(extractBodyStmts(body), param);
+	return runs.ended <= 1 && runs.through <= 1;
 }
 
-function leavesAfterRead(s: Node, param: Symbol): boolean {
-	if (s.kind != NodeKind.IfStmt) return false;
+function pathReads(stmts: Node[], sym: Symbol): PathReads {
+	let ended: int32 = -1;
+	let through: int32 = 0;
+	for (const s of stmts) {
+		const r = statementReads(s, sym);
+		if (r.ended >= 0 && through + r.ended > ended) ended = through + r.ended;
+		if (r.through < 0) return { ended, through: -1 };
+		through += r.through;
+	}
+	return { ended, through };
+}
+
+function statementReads(s: Node, sym: Symbol): PathReads {
+	if (s.kind == NodeKind.ReturnStmt || s.kind == NodeKind.ThrowStmt) return { ended: readCount(s, sym), through: -1 };
+	if (s.kind == NodeKind.BlockStmt) return pathReads((s.data as BlockStmtData).statements, sym);
+	if (s.kind != NodeKind.IfStmt) return { ended: -1, through: readCount(s, sym) };
 	const d = s.data as IfStmtData;
-	if (!isEmptyBlock(d.alternate) || mentions(d.condition, param) || holdsYield(d.consequent)) return false;
-	const stmts = extractBodyStmts(d.consequent);
-	const last = stmts[stmts.length - 1];
-	const leaves = last.kind == NodeKind.ThrowStmt || last.kind == NodeKind.ReturnStmt;
-	return leaves && readOutsideLoops(d.consequent, param);
+	const test = readCount(d.condition, sym);
+	const a = pathReads(extractBodyStmts(d.consequent), sym);
+	const b = d.alternate != null ? pathReads(extractBodyStmts(d.alternate), sym) : { ended: -1, through: 0 };
+	const ended = a.ended > b.ended ? a.ended : b.ended;
+	const through = a.through > b.through ? a.through : b.through;
+	return { ended: ended < 0 ? -1 : test + ended, through: through < 0 ? -1 : test + through };
+}
+
+function loopFreeReads(node: Node, sym: Symbol): int32 {
+	if (node.kind == NodeKind.Identifier && node.resolvedSym == sym) return 1;
+	if (node.kind == NodeKind.ForOfStmt) return loopFreeReads((node.data as ForOfStmtData).forOfIterable, sym);
+	if (isRoutineOrTestNode(node) || (isLoopKind(node.kind) && !isWrapper(node))) return 0;
+	let n: int32 = 0;
+	forEachChild(node, (child: Node): void => { n += loopFreeReads(child, sym); });
+	return n;
 }
 
 function readOutsideLoops(node: Node, sym: Symbol): boolean {
@@ -1685,6 +1708,24 @@ test "a forwarder that touches its source only on a throwing path is expanded do
 test "a forwarder that touches its source on the path it forwards keeps the source an iterator" {
 	const fwd = "function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { shut(it); return firstN(it, n); }\n";
 	assert forOfsLeft(fwd + "for (const x of firsts(count(9), 3)) { }") == 1;
+}
+
+test "a forwarder that touches its source once on every path is expanded down to its generator" {
+	const fwds: string[] = [
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { if (n < 0) { shut(it); throw new Error(\"neg\"); } else if (n > 99) { shut(it); throw new Error(\"big\"); } return firstN(it, n); }\n",
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { if (n < 0) { if (n < -5) { shut(it); throw new Error(\"far\"); } shut(it); throw new Error(\"neg\"); } return firstN(it, n); }\n",
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { { if (n < 0) { shut(it); throw new Error(\"neg\"); } } return firstN(it, n); }\n",
+	];
+	for (const fwd of fwds) assert forOfsLeft(fwd + "for (const x of firsts(count(9), 3)) { }") == 0, fwd;
+}
+
+test "a forwarder that touches its source twice on one path keeps the source an iterator" {
+	const fwds: string[] = [
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { if (n > 5) { shut(it); } return firstN(it, n); }\n",
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { if (n < 0) { shut(it); } else { shut(it); } return firstN(it, n); }\n",
+		"function firsts(it: Iterator<int32>, n: int32): Iterator<int32> { if (it.return != null && n < 0) { shut(it); throw new Error(\"neg\"); } return firstN(it, n); }\n",
+	];
+	for (const fwd of fwds) assert forOfsLeft(fwd + "for (const x of firsts(count(9), 3)) { }") == 1, fwd;
 }
 
 const staticSrc = sumSrc
