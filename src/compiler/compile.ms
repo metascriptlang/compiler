@@ -3965,6 +3965,10 @@ resetLiftedOps();
 			}
 			session.hcrTypeLayouts = typesNow;
 		}
+		if (session.check.heldChanged != "") {
+			session.staleReason = `the types accepted behind an interface or record by ${session.check.heldChanged} changed`;
+			return BuildStatus.Stale;
+		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
 			if (asyncBodies.has(cm.modPath)) fingerprint = fingerprint + "#asyncBody";
