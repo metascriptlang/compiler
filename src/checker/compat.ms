@@ -3,7 +3,7 @@
 import { membersOf } from "./unitsInCheck";
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
+import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isUnownedSlot, withoutUnowned, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -23,6 +23,7 @@ function isUntypedPointer(t: Type): boolean {
 
 function sameElement(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
+	if (isUnownedSlot(a) != isUnownedSlot(b)) return false;
 	if (sameType(a, b)) return true;
 	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return false;
 	if (isOpenElement(a) || isOpenElement(b)) return isAssignable(a, b);
@@ -936,6 +937,20 @@ export function unknownReturnRefusal(source: Type | null, target: Type | null): 
 	const slot = skipModifier(target.typeReturn);
 	if (held == null || slot == null || !heldAsUnknown(held, slot)) return "";
 	return " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning unknown, which holds only class or interface instances";
+}
+
+function arrayElementOf(t: Type | null): Type | null {
+	const arr = t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : t;
+	return arr != null && (arr.kind == TypeKind.Array || arr.kind == TypeKind.Span) ? arr.typeReturn : null;
+}
+
+// An array is assigned by sharing it, and the two element kinds are released differently when it dies.
+export function unownedElementsRefusal(source: Type | null, target: Type | null): string {
+	const from = arrayElementOf(source);
+	const into = arrayElementOf(target);
+	if (from == null || into == null || isUnownedSlot(from) == isUnownedSlot(into)) return "";
+	const plain = typeDisplayName(withoutUnowned(isUnownedSlot(from) ? from : into));
+	return " — an array of " + plain + " holds its elements strongly and an array of Unowned<" + plain + "> on their Unowned count, so one array cannot stand for the other; copy the elements into the other array one by one";
 }
 
 export function returnReprRefusal(source: Type | null, target: Type | null, fnText: string): string {
