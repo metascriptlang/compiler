@@ -75,3 +75,54 @@ Behind node on both hosts: `template literal` (7.9x on m1m, 3.3x on rtx), `numbe
 `array spread` (4.5x, 2.2x), `split` (1.1x, 1.3x) and `string +=` (1.5x, 1.05x). Behind on m1m only: `array push`
 (2.1x), `map/filter` (2.0x), `array slice` (1.8x) and `Map set/get string` (1.2x), the rows that allocate most; on rtx
 the same rows lead node by 1.2 to 3.6x.
+
+## The region heap against libc — rtx, 2026-11-08
+
+Three arms, built on rtx with three compilers, each reading its own `runtime/`: `region heap` is main `804c40e867a`
+(tree `f954f3def3d`), the first main whose desktop programs allocate from the region heap; `heap off` is the same tree
+with `MS_HEAP_ENABLED 0` in `runtime/allocator.h` (allocation through libc); `before the allocator` is main
+`44612a83c22` (tree `a49fc6310ad`). In the io run, `nm` showed `msHeapAlloc` only in the first arm's binary. The arms ran
+interleaved, six runs each, and each row keeps its best run, because the load
+(14.57, 31.45, 45.17 before, 7.36, 23.59, 38.69 after) moved a five-round median by
+more than the differences measured here. `heap / off` is the region heap's speed over the heap-off arm's (above 1 is
+faster). Heap off matches the pre-allocator main on every row (0.98-1.01), so the column isolates the allocator.
+
+| row | unit | region heap | heap off | before the allocator | heap / off |
+|---|---|---|---|---|---|
+| string += 1k | us/op | 2.05 | 2.075 | 2.067 | 1.01 |
+| template literal 1k | us/op | 19.06 | 17.68 | 17.46 | 0.93 |
+| number toString 1k | us/op | 8.591 | 8.426 | 8.426 | 0.98 |
+| split 1k fields | us/op | 7.555 | 16.88 | 16.79 | 2.23 |
+| join 10k strings | us/op | 38.43 | 38.4 | 38.5 | 1.00 |
+| indexOf 16 KB miss | us/op | 1.825 | 1.805 | 1.811 | 0.99 |
+| includes 16 KB miss | us/op | 1.821 | 1.811 | 1.814 | 0.99 |
+| replaceAll 16 KB | us/op | 4.515 | 4.622 | 4.546 | 1.02 |
+| array push 10k | us/op | 5.456 | 4.83 | 4.798 | 0.89 |
+| sort 10k numbers | us/op | 665.9 | 660.4 | 663.2 | 0.99 |
+| sort 10k strings | us/op | 1318 | 1436 | 1422 | 1.09 |
+| map/filter 10k | us/op | 52.24 | 52.6 | 52.33 | 1.01 |
+| array slice 10k | us/op | 0.945 | 1.015 | 1.021 | 1.07 |
+| array spread 10k | us/op | 0.804 | 0.69 | 0.694 | 0.86 |
+| Map set/get int 10k | us/op | 206.1 | 201.3 | 202.1 | 0.98 |
+| Map set/get string 10k | us/op | 393.5 | 439.2 | 440.2 | 1.12 |
+| Map forEach 10k | us/op | 5.285 | 5.477 | 5.429 | 1.04 |
+| Set add/has 10k | us/op | 219.4 | 215.1 | 217 | 0.98 |
+
+```
+~/metascript/.gate-host/run-remote.sh --cores 2 --host rtx -- bash -c '
+  for arm in cand noheap pre; do M=<that arm's compiler: 804c40e867a, the same tree with the heap off, 44612a83c22>
+    $M build src/bench/collections/bench.ms --release --output=out/collections-$arm; done
+  for r in 1 2 3 4 5 6; do for arm in cand noheap pre; do ./out/collections-$arm | sed "s/^/$arm\t/"; done; done'
+```
+
+Why the three slower rows are slower (pinned to one core, `perf record` and `perf stat`):
+
+- **array push 10k (0.89): growth copies.** The region heap's realloc is alloc, copy, free, as the reference's is
+  (Nim `15dd34468` `lib/system/alloc.nim:1329-1337`); glibc `realloc` grows the block in place. memmove takes 17.5%
+  of the region heap arm's cycles and does not appear in the libc arm's profile (1.75e9 against 1.44e9 cycles). The
+  `memset` of new capacity (11-14%) is in both arms.
+- **array spread 10k (0.86): the 80 KB copy between two big chunks**, the same 4K aliasing as io `copyTo` above, plus
+  big-chunk get and release at 4% against glibc's 2% (1.87e9 against 1.64e9 cycles, the same L1 misses).
+- **template literal 1k (0.93): 3% when pinned (372 against 361 ms), not traced further.** Allocation plus free cost
+  the same in both arms (about 335M cycles each); the extra cycles show in `msStringConcatArr` and memmove. Moving
+  the output string by 0, 8 or 64 cells does not change it, so it is not cell placement.

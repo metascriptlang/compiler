@@ -78,3 +78,64 @@ Commit `5e328c6222e`, tree `082d453c198`, 2026-11-04, load 9.0 before, 4.8 after
 
 The rows behind node on both hosts are Buffer `indexOf` (byte 20x on m1m and 42x on rtx, 16-byte needle 8.4x and 31x)
 and base64 (encode 8.4x and 4.1x, decode 12x and 9.1x); `hex encode` is within 6% on m1m. The fs rows tie or lead.
+
+## The region heap against libc — rtx, 2026-11-08
+
+Three arms, built on rtx with three compilers, each reading its own `runtime/`: `region heap` is main `804c40e867a`
+(tree `f954f3def3d`), the first main whose desktop programs allocate from the region heap; `heap off` is the same tree
+with `MS_HEAP_ENABLED 0` in `runtime/allocator.h` (allocation through libc); `before the allocator` is main
+`44612a83c22` (tree `a49fc6310ad`). In the io run, `nm` showed `msHeapAlloc` only in the first arm's binary. The arms ran
+interleaved, six runs each, and each row keeps its best run, because the load
+(26.42, 36.16, 42.43 before, 19.81, 57.91, 56.09 after) moved a five-round median by
+more than the differences measured here. `heap / off` is the region heap's speed over the heap-off arm's (above 1 is
+faster). Heap off matches the pre-allocator main on every row (0.97-1.08), so the column isolates the allocator.
+
+| row | unit | region heap | heap off | before the allocator | heap / off |
+|---|---|---|---|---|---|
+| alloc 1 KB | us/op | 0.01 | 0.015 | 0.015 | 1.50 |
+| alloc 1 MB | MB/s | 188870 | 192243 | 183424 | 0.98 |
+| from string utf8 1 MB | MB/s | 47901 | 49348 | 50153 | 0.97 |
+| toString utf8 1 MB | MB/s | 4600 | 4630 | 4387 | 0.99 |
+| base64 encode 1 MB | MB/s | 29277 | 28833 | 29808 | 1.02 |
+| base64 decode 1 MB | MB/s | 30829 | 30406 | 30690 | 1.01 |
+| hex encode 1 MB | MB/s | 3104 | 3052 | 3122 | 1.02 |
+| hex decode 1 MB | MB/s | 11574 | 11581 | 11767 | 1.00 |
+| concat 2x512 KB | MB/s | 87939 | 87362 | 83430 | 1.01 |
+| slice copy 64 KB | MB/s | 102694 | 112398 | 113216 | 0.91 |
+| copyTo 64 KB | MB/s | 93766 | 118865 | 119947 | 0.79 |
+| indexOf byte 1 MB | MB/s | 170612 | 216301 | 220109 | 0.79 |
+| indexOf 16 B needle 1 MB | MB/s | 171057 | 222459 | 222337 | 0.77 |
+| fs write+read 4 KB | MB/s | 1454 | 1466 | 1465 | 0.99 |
+| fs write+read 1 MB | MB/s | 6786 | 7012 | 6930 | 0.97 |
+| fs readFile utf8 1 MB | MB/s | 4214 | 4278 | 3972 | 0.98 |
+| fs stat size | us/op | 0.21 | 0.212 | 0.212 | 1.01 |
+| fs readdir 32 entries | us/op | 2.668 | 2.808 | 2.813 | 1.05 |
+| fs append 100x64 B | us/op | 100.2 | 102.1 | 103.1 | 1.02 |
+
+```
+~/metascript/.gate-host/run-remote.sh --cores 2 --host rtx -- bash -c '
+  for arm in cand noheap pre; do M=<that arm's compiler: 804c40e867a, the same tree with the heap off, 44612a83c22>
+    $M build src/bench/io/bench.ms --release --output=out/io-$arm; done
+  for r in 1 2 3 4 5 6; do for arm in cand noheap pre; do ./out/io-$arm | sed "s/^/$arm\t/"; done; done'
+```
+
+Why the four slower rows are slower; probes and counters were pinned to one core (`taskset -c 31`) on the same arms:
+
+- **indexOf byte, indexOf 16 B needle (0.79, 0.77): the libc arm scans the zero page.** `scan` is `Buffer.alloc(1 MB)`
+  with 16 bytes written. libc `calloc` returns fresh `mmap` pages that nothing touches, and every one of them maps the
+  kernel's shared zero page, so `memchr` reads one 4 KB page from L1: L1-dcache-load-misses 0.2M against 328M, the
+  same 1.968e9 instructions, 515M against 693M cycles. The region heap zeroes what it hands out, as the reference
+  does (Nim `rawAlloc0` → `zeroMem`), so its pages are real and the scan runs at L2 speed. Real buffers have been
+  written; the row measures an untouched one. Transparent huge pages are not involved (`madvise` mode, 0 KB
+  `AnonHugePages` in both arms).
+- **copyTo, slice copy (0.79, 0.91): 4K aliasing between source and destination.** Both arms copy with the same libc
+  `__memmove_avx512_unaligned_erms` (95-99.9% of samples). Moving the destination of a 64 KB copy across a page gives
+  the same curve in both arms: within about 64-256 bytes of the source's page offset 77-91 GB/s, farther 100-115 GB/s.
+  The region heap puts every big chunk's payload at the page-aligned chunk plus a fixed header, so two big buffers
+  always share a page offset, the slow end; glibc packs chunks with 16-byte headers and its offsets fall where the
+  sizes put them. The reference places big chunks the same way (Nim `15dd34468` `lib/system/alloc.nim:1085-1091`,
+  `addr(c.data)` of a page-aligned chunk), with no offset or colouring.
+
+Rejected: spreading big-chunk payload offsets (jemalloc's `cache_oblivious` random cache-line offset). It is a
+mechanism the reference lacks, and a speed gain alone does not justify a divergence from the reference
+(`~/metascript/CLAUDE.md` §Language behaviour).
