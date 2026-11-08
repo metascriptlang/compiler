@@ -17,7 +17,7 @@ function copied<T>(xs: T[]): T[] {
 	return out;
 }
 
-function hex(bytes: Readonly<uint8[]>): string {
+function hex(bytes: Readonly<Span<uint8>>): string {
 	let out = "";
 	for (const b of bytes) out += b.toString(16).padStart(2, "0");
 	return out;

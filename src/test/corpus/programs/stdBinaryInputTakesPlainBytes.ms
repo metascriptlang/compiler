@@ -16,14 +16,14 @@ function must<T>(result: Result<T, CryptoError>): T {
 }
 
 const plain: uint8[] = [1, 2, 255];
-const branded = plain as Buffer;
+const branded = Buffer.from(plain);
 console.log(toHex(plain), toHex(branded), toHex("04"));
 
 const key: uint8[] = [107, 101, 121];
 const viaPlain = toHex(must(hmacSync("sha256", key, plain)));
-const viaBuffer = toHex(must(hmacSync("sha256", key as Buffer, branded)));
+const viaBuffer = toHex(must(hmacSync("sha256", Buffer.from(key), branded)));
 console.log(viaPlain.slice(0, 4), viaPlain == viaBuffer, timingSafeEqual(plain, branded), timingSafeEqual(plain, "abc"));
 console.log(toHex(must(sha256Sync(plain))) == toHex(must(sha256Sync(branded))), toHex(must(digestSync("sha256", plain))).length / 8);
 
 const wire: uint8[] = [0x18, 0x2a];
-console.log(decode(wire).ok, decode(wire as Buffer).ok);
+console.log(decode(wire).ok, decode(Buffer.from(wire)).ok);

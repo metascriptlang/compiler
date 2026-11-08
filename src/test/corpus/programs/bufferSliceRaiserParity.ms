@@ -9,7 +9,7 @@ function make(values: number[]): Buffer {
 	when (js) { return Buffer.fromArray(values); } else {
 		const raw: uint8[] = [];
 		for (const v of values) raw.push(v as uint8);
-		return raw as Buffer;
+		return Buffer.from(raw);
 	}
 }
 function show(b: Buffer): string {

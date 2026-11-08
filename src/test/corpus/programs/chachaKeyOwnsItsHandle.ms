@@ -32,7 +32,7 @@ function importKey(raw: Buffer): ChaChaKey {
 	return imported.value;
 }
 
-function flip(blob: Buffer, index: int32): Buffer {
+function flip(blob: Buffer, index: number): Buffer {
 	const copy = Buffer.copy(blob);
 	copy[index] = (copy[index] ^ 1) as uint8;
 	return copy;

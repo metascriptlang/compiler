@@ -14,8 +14,8 @@ import { sha256Sync, toHex } from "std/crypto";
 import { AesKey, open, seal } from "std/crypto/aes";
 import { expandKey, gcmSealWithNonce } from "std/crypto/pure/aes";
 
-function pattern(count: int32, salt: int32): Buffer {
-	const out = Buffer.alloc(count);
+function pattern(count: int32, salt: int32): uint8[] {
+	const out = new Array<uint8>(count);
 	for (let i: int32 = 0; i < count; i++) out[i] = ((i * 7 + salt) & 255) as uint8;
 	return out;
 }
@@ -34,13 +34,13 @@ async function sweep(keyLength: int32): Promise<string> {
 		const plain = pattern(len, 3);
 		for (const aadLength of [0, 17]) {
 			const aad = pattern(aadLength, 200);
-			const reference = gcmSealWithNonce(schedule, nonce, plain, aad) as Buffer;
+			const reference = Buffer.from(gcmSealWithNonce(schedule, nonce, plain, aad));
 			const back = await open(key, reference, aad);
 			if (!back.ok || toHex(back.value) != toHex(plain)) opened = false;
 			const sealed = await seal(key, plain, aad);
 			if (!sealed.ok) throw new Error("seal failed");
-			const drawn = sealed.value.slice(0, 12);
-			const again = gcmSealWithNonce(schedule, drawn, plain, aad) as Buffer;
+			const drawn: uint8[] = [...sealed.value.slice(0, 12)];
+			const again = Buffer.from(gcmSealWithNonce(schedule, drawn, plain, aad));
 			if (toHex(again) != toHex(sealed.value)) sealMatches = false;
 			const next = sha256Sync(digest + toHex(reference));
 			if (!next.ok) throw new Error("sha256 failed");

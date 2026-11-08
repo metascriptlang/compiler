@@ -12,13 +12,13 @@
 // @stdout: 0:
 // @stdout: 0:
 // @stdout: 98000 247 105
-// @stdout: 247 9
+// @stdout: 9 9
 // @stdout: 1 42 10 15 7
 // @stdout: 9 3:7,8,9,
 
 import { Buffer } from "std/core/buffer";
 
-function show(b: uint8[]): string {
+function show(b: Readonly<Span<uint8>>): string {
 	let out = `${b.length}:`;
 	for (let i = 0; i < b.length; i++) out += `${b[i]},`;
 	return out;

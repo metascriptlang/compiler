@@ -10,7 +10,7 @@ function decodeLine(bytes: int32[], encoding: string): string {
 	const buf = Buffer.alloc(bytes.length);
 	let shown = "";
 	for (let i: int32 = 0; i < bytes.length; i++) {
-		buf.set(i, bytes[i]);
+		buf[i] = bytes[i] as uint8;
 		shown = shown + (i > 0 ? " " : "") + hex2(bytes[i]);
 	}
 	const s = buf.toStringEncoded(encoding, 0, bytes.length);
@@ -35,9 +35,9 @@ function main(): void {
 	console.log(decodeLine([0x41, 0xE9, 0xFF], "latin1"));
 	console.log(decodeLine([0x41, 0xE9, 0xFF], "ascii"));
 	const cut = Buffer.alloc(3);
-	cut.set(0, 0x7A);
-	cut.set(1, 0xC3);
-	cut.set(2, 0x0A);
+	cut[0] = 0x7A;
+	cut[1] = 0xC3;
+	cut[2] = 0x0A;
 	const text = cut.toStringEncoded("utf-8", 0, 3);
 	console.log(`trim ${text.slice(0, text.length - 1).length} ${text.endsWith("\n")}`);
 }

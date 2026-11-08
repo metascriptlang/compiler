@@ -77,7 +77,7 @@ const key16 = must(fromHex("000102030405060708090a0b0c0d0e0f"));
 const aesKey = must(AesKey.import(key16));
 const sealed: Buffer = must(await seal(aesKey, "attack at dawn", "hdr"));
 const opened: Buffer = must(await open(aesKey, sealed, "hdr"));
-const forged = await open(aesKey, must(fromHex("00".repeat(sealed.length))), "hdr");
+const forged = await open(aesKey, must(fromHex("00".repeat(sealed.length as int32))), "hdr");
 console.log("aes", sealed.length, opened.asString() == "attack at dawn", forged.ok);
 
 const key32 = must(fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"));

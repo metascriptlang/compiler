@@ -8,7 +8,7 @@ function check(name: string, ok: boolean): boolean {
 
 function bytesOf(b: Buffer): string {
 	let s = "";
-	for (let i = 0; i < b.byteLength(); i++) s += (i > 0 ? " " : "") + b.byteAt(i).toString(16);
+	for (let i = 0; i < b.byteLength; i++) s += (i > 0 ? " " : "") + b.byteAt(i).toString(16);
 	return s;
 }
 

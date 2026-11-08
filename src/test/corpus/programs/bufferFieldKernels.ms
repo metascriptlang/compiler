@@ -16,7 +16,7 @@ function note(value: number): void {
 }
 
 function noteBytes(value: Buffer): void {
-	for (let i: int32 = 0; i < value.byteLength(); i++) log += `${value.byteAt(i)}.`;
+	for (let i: int32 = 0; i < value.byteLength; i++) log += `${value.byteAt(i)}.`;
 	log += ";";
 	entries += 1;
 }
@@ -36,7 +36,7 @@ function section(name: string): void {
 
 function patterned(length: int32, salt: int32): Buffer {
 	const value = Buffer.alloc(length);
-	for (let i: int32 = 0; i < length; i++) value.set(i, (i * 73 + salt * 19 + 11) & 255);
+	for (let i: int32 = 0; i < length; i++) value[i] = ((i * 73 + salt * 19 + 11) & 255) as uint8;
 	return value;
 }
 
@@ -173,8 +173,8 @@ function checkFloats(): void {
 
 function checkSearch(): void {
 	const hay = patterned(300, 2);
-	hay.set(150, 7);
-	hay.set(299, 7);
+	hay[150] = 7;
+	hay[299] = 7;
 	for (const byte of [0, 7, 11, 84, 255]) {
 		for (const from of [0, 1, 100, 150, 151, 298, 299]) {
 			note(hay.indexOf(byte, from));
@@ -193,22 +193,22 @@ function checkSearch(): void {
 				if (from <= 300 - width) note(hay.lastIndexOfBuffer(needle, from));
 			}
 			note(hay.lastIndexOfBuffer(needle, 300 - width));
-			needle.set(width - 1, (needle.byteAt(width - 1) + 1) & 255);
+			needle[width - 1] = ((needle.byteAt(width - 1) + 1) & 255) as uint8;
 			note(hay.indexOfBuffer(needle, 0));
 			note(hay.lastIndexOfBuffer(needle, 300 - width));
 		}
 	}
 	const runs = Buffer.alloc(2000);
-	for (let i: int32 = 0; i < 2000; i++) runs.set(i, 97);
+	for (let i: int32 = 0; i < 2000; i++) runs[i] = 97;
 	for (const width of [2, 6, 7, 16]) {
 		const needle = Buffer.alloc(width);
-		for (let i: int32 = 0; i < width; i++) needle.set(i, 97);
-		needle.set(width - 1, 98);
+		for (let i: int32 = 0; i < width; i++) needle[i] = 97;
+		needle[width - 1] = 98;
 		note(runs.indexOfBuffer(needle, 0));
-		runs.set(1990, 98);
+		runs[1990] = 98;
 		note(runs.indexOfBuffer(needle, 0));
 		note(runs.indexOfBuffer(needle, 1990));
-		runs.set(1990, 97);
+		runs[1990] = 97;
 	}
 	section("search");
 }
@@ -218,7 +218,7 @@ function checkFillCopy(): void {
 		for (const end of [1, 8, 21, 40]) {
 			if (start > end) continue;
 			const out = patterned(40, 1);
-			out.fill(171, start, end);
+			out.fillByte(171, start, end);
 			noteBytes(out);
 			const pattern = patterned(5, 3);
 			out.fillBuffer(pattern, start, end);

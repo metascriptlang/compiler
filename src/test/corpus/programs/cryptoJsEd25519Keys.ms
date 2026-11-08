@@ -23,7 +23,7 @@ const key = must(await Ed25519PrivateKey.generate());
 const signature = must(await sign(key, "hello"));
 console.log("generated sign verify", await verify(key.publicKey(), signature, "hello"));
 console.log("tampered message", await verify(key.publicKey(), signature, "hellp"));
-const flipped = signature.slice(0);
+const flipped = Buffer.from(signature);
 flipped[10] = (flipped[10] ^ 1) as uint8;
 console.log("flipped signature byte", await verify(key.publicKey(), flipped, "hello"));
 
@@ -40,7 +40,7 @@ const order: uint8[] = [
 	0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
 ];
-const malleated = signature.slice(0);
+const malleated = Buffer.from(signature);
 let carry = 0;
 for (let i = 0; i < 32; i++) {
 	const sum = (malleated[32 + i] as int32) + (order[i] as int32) + carry;

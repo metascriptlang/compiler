@@ -7,7 +7,7 @@ function bytes(values: number[]): Buffer {
 	when (js) { return Buffer.fromArray(values); } else {
 		const raw: uint8[] = [];
 		for (const v of values) raw.push(v as uint8);
-		return raw as Buffer;
+		return Buffer.from(raw);
 	}
 }
 const b = bytes([0x61, 0x62]);

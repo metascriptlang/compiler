@@ -34,15 +34,15 @@ function pattern(count: int32, salt: int32): Buffer {
 	return out;
 }
 
-function flip(blob: Buffer, index: int32): Buffer {
+function flip(blob: Buffer, index: number): Buffer {
 	const copy = Buffer.copy(blob);
 	copy[index] = (copy[index] ^ 1) as uint8;
 	return copy;
 }
 
 function nist(name: string, keyHex: string, nonceHex: string, plainHex: string, aadHex: string, bodyHex: string, tagHex: string): string {
-	const sealed = gcmSealWithNonce(expandKey(bytes(keyHex)), bytes(nonceHex), bytes(plainHex), bytes(aadHex));
-	return `${name} ${toHex(sealed as Buffer) == nonceHex + bodyHex + tagHex}`;
+	const sealed = gcmSealWithNonce(expandKey([...bytes(keyHex)]), [...bytes(nonceHex)], [...bytes(plainHex)], [...bytes(aadHex)]);
+	return `${name} ${toHex(Buffer.from(sealed)) == nonceHex + bodyHex + tagHex}`;
 }
 
 const message = "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39";

@@ -9,7 +9,7 @@ function run(): void {
 	let held: Buffer | string = "seven!!";
 	console.log(describe(held));
 	const raw: uint8[] = [1, 2, 3];
-	held = raw as Buffer;
+	held = Buffer.from(raw);
 	console.log(describe(held));
 	held = "again";
 	console.log(describe(held));

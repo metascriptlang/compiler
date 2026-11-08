@@ -15,7 +15,7 @@ function note(value: number): void {
 }
 
 function noteBytes(value: Buffer): void {
-	for (let i: int32 = 0; i < value.byteLength(); i++) log += `${value.byteAt(i)}.`;
+	for (let i: int32 = 0; i < value.byteLength; i++) log += `${value.byteAt(i)}.`;
 	log += ";";
 	entries += 1;
 }
@@ -30,7 +30,7 @@ function section(name: string): void {
 
 function patterned(length: int32, salt: int32): Buffer {
 	const value = Buffer.alloc(length);
-	for (let i: int32 = 0; i < length; i++) value.set(i, (i * 73 + salt * 19 + 11) & 255);
+	for (let i: int32 = 0; i < length; i++) value[i] = ((i * 73 + salt * 19 + 11) & 255) as uint8;
 	return value;
 }
 
@@ -84,7 +84,8 @@ function checkFieldBounds(): void {
 				attempt(() => out.writeUIntBE(258, at, width));
 				attempt(() => out.writeIntLE(-258, at, width));
 			}
-			out.set(at, 300);
+			const slot = Math.trunc(at);
+			if (slot >= 0 && slot < out.length) out[slot] = 300 % 256;
 			noteBytes(out);
 		}
 	}
@@ -119,7 +120,7 @@ function checkRangeBounds(): void {
 	const ranges: number[][] = [[-5, 3], [2, 2], [5, 2], [3, 100], [-1, -1], [1.5, 4.5], [0, 12]];
 	for (const range of ranges) {
 		const out = patterned(12, 4);
-		out.fill(258, range[0], range[1]);
+		out.fillByte(258, range[0], range[1]);
 		noteBytes(out);
 		out.fillBuffer(patterned(1, 5), range[0], range[1]);
 		noteBytes(out);

@@ -9,4 +9,4 @@ console.log(`${Buffer.byteLength(json)} ${Buffer.byteLength("")} ${Buffer.byteLe
 console.log(`${Buffer.byteLength("abc", "hex")} ${Buffer.byteLength("abcd", "hex")} ${Buffer.byteLength("aGVsbG8", "base64")} ${Buffer.byteLength("aGVsb=", "base64")} ${Buffer.byteLength("YQ==", "base64url")}`);
 console.log(`${Buffer.byteLength("hé😀", "utf16le")} ${Buffer.byteLength("hé", "latin1")} ${Buffer.byteLength("hé", "ascii")} ${Buffer.byteLength("hé", "utf8")}`);
 const s = "x€";
-console.log(`${Bytes.byteLength(s)} ${Bytes.fromArray([1, 2, 3]).byteLength()}`);
+console.log(`${Bytes.byteLength(s)} ${Bytes.fromArray([1, 2, 3]).byteLength}`);

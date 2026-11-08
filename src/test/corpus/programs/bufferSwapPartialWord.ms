@@ -3,7 +3,7 @@
 
 function patterned(length: int32): Buffer {
 	const value = Buffer.alloc(length);
-	for (let i: int32 = 0; i < length; i++) value.set(i, (i * 73 + 11) & 255);
+	for (let i: int32 = 0; i < length; i++) value[i] = ((i * 73 + 11) & 255) as uint8;
 	return value;
 }
 

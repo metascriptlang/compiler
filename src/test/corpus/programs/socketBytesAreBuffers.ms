@@ -30,7 +30,7 @@ function listenOnFreePort(): int32[] {
 
 function allByteValues(): Buffer {
 	const all = Buffer.alloc(256);
-	for (let i = 0; i < 256; i++) all.set(i, i);
+	for (let i = 0; i < 256; i++) all[i] = i as uint8;
 	return all;
 }
 
@@ -46,7 +46,7 @@ function describe(name: string, bytes: Buffer): void {
 
 function patterned(length: int32): Buffer {
 	const bytes = Buffer.alloc(length);
-	for (let i = 0; i < length; i++) bytes.set(i, (i * 7) % 256);
+	for (let i = 0; i < length; i++) bytes[i] = ((i * 7) % 256) as uint8;
 	return bytes;
 }
 
@@ -57,14 +57,14 @@ function exactPattern(bytes: Buffer, length: int32): boolean {
 }
 
 function readAll(fd: int32, want: int32, nonBlocking: boolean, window: int32): Buffer {
-	const got = Buffer.alloc(0);
+	const got: uint8[] = [];
 	const t0 = Date.now();
 	while (got.length < want && Date.now() - t0 < 5000) {
 		const part = nonBlocking ? recvNonBlock(fd, window) : recv(fd, window);
 		if (part.length == 0 && !nonBlocking) break;
 		appendBytes(got, part);
 	}
-	return got;
+	return Buffer.from(got);
 }
 
 function loopback(data: Buffer | string, want: int32, nonBlocking: boolean, window: int32 = 8192): Buffer {
@@ -92,7 +92,7 @@ function wsServer(listenFd: int32): int32 {
 	const req = parseUpgradeRequest(raw);
 	if (!req.ok) return -2;
 	send(fd, buildUpgradeResponse(deriveAcceptKey(req.value.clientKey), "", []));
-	send(fd, buildFrameUnmasked(OPCODE_BINARY, true, allByteValues()) as Buffer);
+	send(fd, Buffer.from(buildFrameUnmasked(OPCODE_BINARY, true, allByteValues())));
 	const seen: uint8[] = [];
 	const t0 = Date.now();
 	while (Date.now() - t0 < 5000) {
@@ -101,7 +101,7 @@ function wsServer(listenFd: int32): int32 {
 		appendBytes(seen, chunk);
 		const frame = parseFrame(seen, 0);
 		if (frame.ok && !frame.value.needMore) {
-			describe("ws binary request", frame.value.frame.payload as Buffer);
+			describe("ws binary request", Buffer.from(frame.value.frame.payload));
 			break;
 		}
 	}
@@ -118,7 +118,7 @@ function websocket(): void {
 		return;
 	}
 	const msg = recvSync(client.value);
-	if (msg.ok) describe("ws binary reply", msg.value.data as Buffer);
+	if (msg.ok) describe("ws binary reply", Buffer.from(msg.value.data));
 	else console.log("recv failed: " + msg.error.message);
 	sendBinarySync(client.value, allByteValues());
 	await server;

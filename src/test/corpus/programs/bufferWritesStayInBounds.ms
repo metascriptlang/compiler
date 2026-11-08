@@ -6,16 +6,17 @@
 // @stdout: The value of "offset" is out of range. It must be >= 0 and <= 1. Received 9
 // @stdout: 2 0 0
 // @stdout: 4 97 100
-// A byte write outside a Buffer changes nothing and never grows it, on every backend: set, fills and write keep the
-// length, a fractional index truncates, the stored byte is the value modulo 256, and writeUInt8 throws Node's RangeError.
+// A byte write never grows a Buffer, on every backend: fills and write past the end keep the length, a fractional index
+// truncates, `as uint8` keeps the value modulo 256, and writeUInt8 throws Node's RangeError. An indexed store outside the
+// buffer stops like an array index does (std/core/typed/index.cms), so it has no line here.
 const b = Buffer.alloc(2);
-b.set(5, 1);
-b.set(-1, 1);
 console.log(b.length, b[0], b[1]);
-b.set(0, 300);
-b.set(1.5, 7);
+const big: int32 = 300;
+b[0] = big as uint8;
+b[1.5] = 7;
 console.log(b.length, b[0], b[1]);
-b.set(0, -1);
+const minus: int32 = -1;
+b[0] = minus as uint8;
 console.log(b.length, b[0], b[1]);
 
 const filled = Buffer.alloc(2);

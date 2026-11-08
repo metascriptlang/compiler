@@ -11,14 +11,14 @@ async function check(d: Buffer): Promise<boolean> {
 	return d.length > 0;
 }
 
-function flip(b: Buffer, i: int32): Buffer {
+function flip(b: Buffer, i: number): Buffer {
 	const c = Buffer.copy(b);
 	c[i] = (c[i] ^ 1) as uint8;
 	return c;
 }
 
 async function count(d: Buffer): Promise<int32> {
-	return d.length;
+	return d.length as int32;
 }
 
 async function row(): Promise<string> {

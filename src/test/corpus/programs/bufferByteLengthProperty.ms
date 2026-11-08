@@ -11,4 +11,4 @@ const zeros = Buffer.alloc(4);
 const t: number = text.byteLength;
 const z: number = zeros.byteLength;
 const sum = text.byteLength + zeros.byteLength;
-console.log(`buffer ${t} ${z} ${sum} ${text.byteLength > zeros.byteLength} ${zeros.byteLength == 0} ${text.byteLength - zeros.byteLength} ${zeros.byteLength * 3} ${text.byteLength()} ${size(zeros)}`);
+console.log(`buffer ${t} ${z} ${sum} ${text.byteLength > zeros.byteLength} ${zeros.byteLength == 0} ${text.byteLength - zeros.byteLength} ${zeros.byteLength * 3} ${text.byteLength} ${size(zeros)}`);

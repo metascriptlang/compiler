@@ -17,4 +17,4 @@ const b: Buffer = Buffer.alloc(3);
 const bytes: uint8[] = [1, 2, 3, 4];
 const text = "hello";
 const empty: Buffer = Buffer.alloc(0);
-console.log(`${b.byteLength} ${lengthOf(b)} ${b.byteLength * 2} ${b.byteLength()} | ${bytesIn(bytes)} ${bytes.byteLength} | ${text.byteLength} ${text.byteLength()} | ${new Chunk().byteLength} | ${empty.byteLength}`);
+console.log(`${b.byteLength} ${lengthOf(b)} ${b.byteLength * 2} ${b.byteLength} | ${bytesIn(bytes)} ${bytes.byteLength} | ${text.byteLength} ${text.byteLength()} | ${new Chunk().byteLength} | ${empty.byteLength}`);

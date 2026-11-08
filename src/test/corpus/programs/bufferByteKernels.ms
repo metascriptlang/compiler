@@ -5,18 +5,18 @@
 
 function bytesOf(values: int32[]): Buffer {
 	const value = Buffer.alloc(values.length);
-	for (let i = 0; i < values.length; i++) value.set(i, values[i]);
+	for (let i = 0; i < values.length; i++) value[i] = values[i] as uint8;
 	return value;
 }
 
 function patterned(length: int32, salt: int32): Buffer {
 	const value = Buffer.alloc(length);
-	for (let i: int32 = 0; i < length; i++) value.set(i, (i * 73 + salt * 19 + 11) & 255);
+	for (let i: int32 = 0; i < length; i++) value[i] = ((i * 73 + salt * 19 + 11) & 255) as uint8;
 	return value;
 }
 
 function asciiOracle(value: Buffer): boolean {
-	for (let i: int32 = 0; i < value.byteLength(); i++) {
+	for (let i: int32 = 0; i < value.byteLength; i++) {
 		if (value.byteAt(i) > 127) return false;
 	}
 	return true;
@@ -28,16 +28,16 @@ function checkAscii(): void {
 	let accepted: int32 = 0;
 	for (let length: int32 = 0; length <= 40; length++) {
 		const clean = Buffer.alloc(length);
-		for (let i: int32 = 0; i < length; i++) clean.set(i, 32 + (i % 90));
+		for (let i: int32 = 0; i < length; i++) clean[i] = (32 + (i % 90)) as uint8;
 		for (let high: int32 = -1; high < length; high++) {
 			for (const byte of [128, 255]) {
 				if (high < 0 && byte == 255) continue;
-				if (high >= 0) clean.set(high, byte);
+				if (high >= 0) clean[high] = byte as uint8;
 				const got = Buffer.isAscii(clean);
 				if (got != asciiOracle(clean)) mismatches += 1;
 				if (got) accepted += 1;
 				cases += 1;
-				if (high >= 0) clean.set(high, 32 + (high % 90));
+				if (high >= 0) clean[high] = (32 + (high % 90)) as uint8;
 			}
 		}
 	}
@@ -86,8 +86,8 @@ function checkUtf8(): void {
 		signature += Buffer.isUtf8(alone) ? "1" : "0";
 		for (let prefix: int32 = 0; prefix < 12; prefix++) {
 			const value = Buffer.alloc(prefix + sequence.length);
-			for (let i: int32 = 0; i < prefix; i++) value.set(i, 0x61 + i);
-			for (let i: int32 = 0; i < sequence.length; i++) value.set(prefix + i, sequence[i]);
+			for (let i: int32 = 0; i < prefix; i++) value[i] = (0x61 + i) as uint8;
+			for (let i: int32 = 0; i < sequence.length; i++) value[prefix + i] = sequence[i] as uint8;
 			if (Buffer.isUtf8(value)) accepted += 1;
 			cases += 1;
 		}

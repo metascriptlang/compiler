@@ -14,8 +14,8 @@ import { sha256Sync, toHex } from "std/crypto";
 import { AesKey, open, openSync } from "std/crypto/aes";
 import { expandKey, gcmSealWithNonce } from "std/crypto/pure/aes";
 
-function pattern(count: int32, salt: int32): Buffer {
-	const out = Buffer.alloc(count);
+function pattern(count: int32, salt: int32): uint8[] {
+	const out = new Array<uint8>(count);
 	for (let i: int32 = 0; i < count; i++) out[i] = ((i * 7 + salt) & 255) as uint8;
 	return out;
 }
@@ -35,7 +35,7 @@ async function sweep(keyLength: int32): Promise<string> {
 		const plainHex = toHex(plain);
 		for (let aadLength: int32 = 0; aadLength <= 40; aadLength++) {
 			const aad = pattern(aadLength, 200);
-			const sealed = gcmSealWithNonce(schedule, nonce, plain, aad) as Buffer;
+			const sealed = Buffer.from(gcmSealWithNonce(schedule, nonce, plain, aad));
 			const back = await open(key, sealed, aad);
 			if (!back.ok || toHex(back.value) != plainHex) opened = false;
 			const backSync = openSync(key, sealed, aad);

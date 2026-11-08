@@ -1,5 +1,5 @@
-// Parity program: a sized `new Array<T>(n)` and Buffer.alloc are zero-filled, exactly n long and
-// still growable; bytes written through fs and read back are unchanged at 0, 1 and 65536 bytes
+// Parity program: a sized `new Array<T>(n)` and Buffer.alloc are zero-filled and exactly n long, and
+// the Array still grows; bytes written through fs and read back are unchanged at 0, 1 and 65536 bytes
 // (on js that is the Array to Uint8Array and back conversion pair).
 //
 // @stdout: alloc 0 1 65536 zero=true
@@ -43,8 +43,8 @@ const n1 = new Array<number>(1);
 const nBig = new Array<number>(70000);
 console.log(`numbers ${n0.length} ${n1.length} ${nBig.length} zero=${allZeroNumbers(n0) && allZeroNumbers(n1) && allZeroNumbers(nBig)}`);
 
-big.push(7);
-console.log(`grow ${big.length} ${big[65536]} ${big[0]}`);
+bigBytes.push(7);
+console.log(`grow ${bigBytes.length} ${bigBytes[65536]} ${bigBytes[0]}`);
 
 const dir = "/tmp/mscorpusBufferRoundTrip-" + basename(dirname(argv[0])) + "-" + basename(argv[0]);
 removeAll(dir);

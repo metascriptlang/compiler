@@ -27,19 +27,21 @@ function hex(text: string): Buffer {
 	return Buffer.fromString(text, "hex");
 }
 
-function flip(blob: Buffer, index: int32): Buffer {
+function flip(blob: Buffer, index: number): Buffer {
 	const copy = Buffer.copy(blob);
 	copy[index] = (copy[index] ^ 1) as uint8;
 	return copy;
 }
 
 function polyTag(message: Buffer, chunk: int32): string {
-	const mac = newPoly1305(hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"), 0);
-	for (let at = 0; at < message.length; at += chunk) {
-		const take = message.length - at < chunk ? message.length - at : chunk;
-		updatePoly1305(mac, message, at, take);
+	const mac = newPoly1305([...hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b")], 0);
+	const bytes: uint8[] = [...message];
+	const size = bytes.length as int32;
+	for (let at = 0; at < size; at += chunk) {
+		const take = size - at < chunk ? size - at : chunk;
+		updatePoly1305(mac, bytes, at, take);
 	}
-	const tag = Buffer.alloc(16);
+	const tag = new Array<uint8>(16);
 	finishPoly1305(mac, tag, 0);
 	return toHex(tag);
 }
