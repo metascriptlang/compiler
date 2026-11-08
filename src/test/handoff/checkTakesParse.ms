@@ -43,7 +43,7 @@ test "a build checks each module on the tree the loader parsed" {
 
 test "a session rechecks the importer of a changed interface on the tree its next load parsed" {
 	resetBuildState();
-	const session = createCheckSession();
+	const session = createCheckSession(true);
 	const first = checksLoaderTrees([{ entryPath: "/s/lib.ms", entrySource: LIB }, { entryPath: "/s/main.ms", entrySource: MAIN }], session);
 	assert first == "", first;
 	const edited = "export function twice(n: int32): int32 { return n + n; }\nexport function thrice(n: int32): int32 { return n * 3; }";
@@ -54,7 +54,7 @@ test "a session rechecks the importer of a changed interface on the tree its nex
 
 test "reading a parse the check took fails loud" {
 	resetBuildState();
-	const session = createCheckSession();
+	const session = createCheckSession(true);
 	const checked = checksLoaderTrees([{ entryPath: "/r/lib.ms", entrySource: LIB }, { entryPath: "/r/main.ms", entrySource: MAIN }], session);
 	assert checked == "", checked;
 	let refused = "";

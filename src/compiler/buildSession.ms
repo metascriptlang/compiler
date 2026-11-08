@@ -103,7 +103,7 @@ export class BuildSession {
 export function createBuildSession(keep: boolean): BuildSession {
 	return {
 		keep,
-		check: createCheckSession(),
+		check: createCheckSession(keep),
 		lowerFingerprints: new HashMap<string, string>(),
 		lowerDiagnostics: new HashMap<string, ModuleError[]>(),
 		lowerClaims: new HashMap<string, LowerClaims>(),

@@ -23,6 +23,7 @@ import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 import { HeldNote, heldNoteMark, heldNotesFrom, replayHeldNotes, heldNotesText } from "./types";
 
 export class CheckSession {
+	keep: boolean;
 	db: TransAmDb | null;
 	checks: HashMap<string, CheckerContext>;
 	instances: HashMap<string, Node[]>;
@@ -32,8 +33,9 @@ export class CheckSession {
 	heldChanged: string;                // a module checked again whose notes differ from its last check, "" when none
 }
 
-export function createCheckSession(): CheckSession {
+export function createCheckSession(keep: boolean): CheckSession {
 	return {
+		keep,
 		db: null,
 		checks: new HashMap<string, CheckerContext>(),
 		instances: new HashMap<string, Node[]>(),
@@ -147,7 +149,7 @@ function keptPrelude(db: TransAmDb): CheckerContext {
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
-	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null);
+	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null && session.keep);
 	graph.dispatchRegistry = db.dispatchRegistry;
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
