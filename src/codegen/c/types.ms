@@ -1471,7 +1471,7 @@ function typeInfoFields(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly
 	const label = typeInfoLabel(g, info);
 	const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 	return `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-		+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}${reach}`
+		+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info)}${info.kind == TypeInfoKind.RefArrayCell ? " | MS_TYPE_FLAG_ARRAY_CELL" : ""}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}${finalizer != "" ? " | MS_TYPE_FLAG_FINALIZER" : ""}${info.trace != null && hasFlag(info.trace, SymbolFlag.OwnedCycle) ? " | MS_TYPE_FLAG_OWNED_CYCLE" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}${finalizer}${reach}`
 		+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 }
 

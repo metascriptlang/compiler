@@ -66,6 +66,7 @@ import { markTypeOnlyImports } from "../checker/importElision";
 import { markVmOnlyRoutines } from "../checker/vmOnly";
 import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
+import { setOwnedCycleCheck } from "../transform/cycles";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules, DynamicModulePlan } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeHeaderTimings, registerHeaderCache, headerModuleSource, isCHeaderPath } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
@@ -514,6 +515,7 @@ function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
 
 function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null, testBuild: boolean = false): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
+	setOwnedCycleCheck(opts.mode == MODE_DEBUG);
 	const packages = cacheRoot();
 	setModuleNameRoots({
 		compiler: config.stdPath != "" ? dirname(config.stdPath) : "",

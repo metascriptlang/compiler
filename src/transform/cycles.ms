@@ -27,6 +27,25 @@ import { monoInstanceName } from "../monomorphize/registry";
 
 // The holder keeps a type's identity for its own lifetime: a pass that rewrites a type's
 // fields in place between two classifications of it must use a fresh cache.
+// A debug or test build keeps a class whose cycles all pass an owned edge under the collector, so a
+// garbage owned cycle is found and reported instead of leaking as it does in a release build.
+let _checkOwnedCycles = true;
+
+export function setOwnedCycleCheck(on: boolean): void {
+	_checkOwnedCycles = on;
+}
+
+// The class can form a cycle in this build only because owned edges count as plain ones here.
+export function formsOnlyOwnedCycles(t: Type): boolean {
+	if (!_checkOwnedCycles) return false;
+	_checkOwnedCycles = false;
+	try {
+		return !canFormAcycle(t, createNameSet(), createNameSet());
+	} finally {
+		_checkOwnedCycles = true;
+	}
+}
+
 function typeIdentity(t: Type, holder: NameSet): string {
 	const known = nameSetTypeKey(holder, t);
 	if (known != null) return known;
@@ -86,7 +105,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 		TypeKind.Ref => {
 			if (t.typeReturn == null) return true;
 			if (isUnownedRef(t)) return false;
-			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !(isOwnedRef(t) || isOwnedCell(t)), marker, t.typeReturn.kind == TypeKind.GenericInstance);
+			const ownedHop = !_checkOwnedCycles && (isOwnedRef(t) || isOwnedCell(t));
+			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !ownedHop, marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
 		TypeKind.Function | TypeKind.Unknown => true,
 		TypeKind.Struct => {

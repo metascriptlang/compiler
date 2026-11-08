@@ -260,6 +260,7 @@ export enum SymbolFlag {
 	ImmutableModuleConst, // a module const the checker proved never written, on the source tree: a borrow of it takes no count on any thread
 	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 	Wasm, // @wasm: an exported function the js build places in its wasm half
+	OwnedCycle, // the trace of a class that stays under the collector only because this build checks owned cycles: a dead set holding one stops the program
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard

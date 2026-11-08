@@ -31,7 +31,7 @@ import { parseNumberLiteral } from "../../utils/string";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { instanceHomeOf, lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, cellTraceHasEdge, custodyReaches, custodyAddsEdge } from "../cycles";
+import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, cellTraceHasEdge, custodyReaches, custodyAddsEdge, formsOnlyOwnedCycles } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -2027,6 +2027,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
 		const edgeless = !hasUserDefinedHook(orig, "trace", lctx) && !cellTraceHasEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache);
 		if (!hasCycles || edgeless) setFlag(traceSym, SymbolFlag.Acyclic);
+		else if (formsOnlyOwnedCycles(objType)) setFlag(traceSym, SymbolFlag.OwnedCycle);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 	if (!hasUserDefinedHook(orig, "trace", lctx) && custodyAddsEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
