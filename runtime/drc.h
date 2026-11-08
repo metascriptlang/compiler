@@ -479,6 +479,8 @@ static inline void* msUnownedGive(void* p) {
 	return p;
 }
 
+void msDestroyAndDisposeDyn(void* p);
+
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
@@ -541,8 +543,7 @@ static inline bool msDropHasRoom(void) {
 static inline bool msDropEdgeLast(void* owner, void* p) {
 	msSlab* s = &msSlabTLS;
 	if (msStackPointer() - s->drop.floor < s->drop.span) {
-		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
-		msDropDispose(s, p);
+		msDestroyAndDisposeDyn(p);
 		return false;
 	}
 	return msDropEdgeSlow(owner, p);

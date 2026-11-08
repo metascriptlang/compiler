@@ -1129,4 +1129,10 @@ void msFreeImmortals(void) {
 	msCellSeqFree(&cells);
 }
 
+__attribute__((noinline)) void msDestroyAndDisposeDyn(void* p) {
+	const msTypeInfo* t = msHeader(p)->type;
+	MS_DESTROY_DISPATCH(t, p);
+	msDestroyAndDispose(p);
+}
+
 #endif /* MSGC_MANUAL */

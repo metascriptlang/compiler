@@ -384,8 +384,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		if (__t != NULL && __t->decrefFn != NULL) { \
 			__t->decrefFn(__msDecrefAnyP); \
 		} else if (msDecRefIsLast(__msDecrefAnyP)) { \
-			MS_DESTROY_DISPATCH(__t, __msDecrefAnyP); \
-			msDestroyAndDispose(__msDecrefAnyP); \
+			msDestroyAndDisposeDyn(__msDecrefAnyP); \
 		} \
 	} \
 } while(0)
@@ -396,8 +395,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msDecref(p)           do { \
 	void* __msDecrefP = (void*)(p); \
 	if (__msDecrefP != NULL && msDecRefIsLast(__msDecrefP)) { \
-		MS_DESTROY_DISPATCH(msHeader(__msDecrefP)->type, __msDecrefP); \
-		msDestroyAndDispose(__msDecrefP); \
+		msDestroyAndDisposeDyn(__msDecrefP); \
 	} \
 } while(0)
 #define msPtrWasMoved(p)      msWasMoved(p)
@@ -407,9 +405,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msAtomicDecref(p)     do { \
 	void* __msAtomicDecrefP = (void*)(p); \
 	if (__msAtomicDecrefP != NULL && msAtomicDecRefIsLast(__msAtomicDecrefP)) { \
-		const msTypeInfo* __t = msHeader(__msAtomicDecrefP)->type; \
-		MS_DESTROY_DISPATCH(__t, __msAtomicDecrefP); \
-		msDestroyAndDispose(__msAtomicDecrefP); \
+		msDestroyAndDisposeDyn(__msAtomicDecrefP); \
 	} \
 } while(0)
 
@@ -422,8 +418,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		if (__t != NULL && __t->decrefFn != NULL) { \
 			__t->decrefFn(__msDecrefCyclicP); \
 		} else if (msOrcDecRefIsLast(__msDecrefCyclicP)) { \
-			MS_DESTROY_DISPATCH(__t, __msDecrefCyclicP); \
-			msDestroyAndDispose(__msDecrefCyclicP); \
+			msDestroyAndDisposeDyn(__msDecrefCyclicP); \
 		} \
 	} \
 } while(0)
