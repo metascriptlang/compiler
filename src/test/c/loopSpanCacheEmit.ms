@@ -140,10 +140,34 @@ test "loop span cache: a const closure that captures keeps the heap cell" {
 	assert !c.includes("dollarspan_"), "a call through a closure with an env was admitted";
 }
 
-test "loop span cache: a const closure that calls keeps the heap cell" {
-	const c = closureLoop("const g = (x: int32): int32 => same(x);", "g(a[i])");
-	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert !c.includes("dollarspan_"), "a closure whose body calls was admitted";
+test "loop span cache: a call to a routine whose body touches no array header reads through local spans" {
+	const callers: string[][] = [
+		["", "same(a[i]) * 2"],
+		["const g = (x: int32): int32 => same(x) + 1;", "g(a[i])"],
+		["const g = (x: int32): int32 => { if (x > 9) return 9; return same(x); };", "g(a[i])"],
+	];
+	for (const k of callers) {
+		const c = closureLoop(k[0], k[1]);
+		assert !c.startsWith("error:"), c.slice(0, 400);
+		assert c.includes("msSpanAccessUnchecked(dollarspan_"), k[0] + " " + k[1];
+	}
+	const recursive = emitted("function depth(x: int32): int32 { return x <= 0 ? 0 : 1 + depth(x - 1); }\n" + loopIn("for (let i: int32 = 0; i < a.length; i++) { out[i] = depth(a[i]); }"), true);
+	assert !recursive.startsWith("error:"), recursive.slice(0, 400);
+	assert recursive.includes("msSpanAccessUnchecked(dollarspan_"), "a recursive routine that touches no array was not admitted";
+}
+
+test "loop span cache: a call to a routine that changes an array keeps the heap cell" {
+	const callers: string[] = [
+		"const G: int32[] = [1, 2];\nfunction popped(x: int32): int32 { G.pop(); return x; }",
+		"function grow(x: int32): int32 { const v: int32[] = []; v.push(x); return v.length; }",
+		"const G: int32[] = [1, 2];\nfunction again(x: int32): int32 { if (x > 0) return again(x - 1) + 1; G.pop(); return 0; }",
+	];
+	const names: string[] = ["popped", "grow", "again"];
+	for (let k = 0; k < callers.length; k++) {
+		const c = emitted(callers[k] + "\n" + loopIn(`for (let i: int32 = 0; i < a.length; i++) { out[i] = ${names[k]}(a[i]); }`), true);
+		assert !c.startsWith("error:"), c.slice(0, 400);
+		assert !c.includes("dollarspan_"), callers[k];
+	}
 }
 
 test "loop span cache: a const closure that reads an array argument keeps the heap cell" {
