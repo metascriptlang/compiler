@@ -1,4 +1,4 @@
-// note: an object a local still holds outlives the holder of its Owned field; it leaves that owner with it, so it can be stored again and can own others.
+// note: an object a local still holds outlives the holder of its Owned field; it can be stored again and can own others.
 // @stdout: 2 4
 function keepChild(): N {
 	const h = new N(1);

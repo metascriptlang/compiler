@@ -1,6 +1,6 @@
-// Owned<T> is the unique owning edge of a class reference: a cycle needs one edge that is not
-// owned, any reference of the class enters an owned slot, and the store checks at run time that
-// the object has no other owner. Runtime behaviour: corpus `ownedTreeDrop`, `ownedField*`.
+// Owned<T> is an owning edge of a class reference: a cycle needs one edge that is not owned, any
+// reference of the class enters an owned slot, and an object may sit in several owned slots.
+// Runtime behaviour: corpus `ownedTreeDrop`, `ownedField*`, `ownedElementsMoveBetweenHolders`.
 
 import { compileToC } from "../helpers";
 
@@ -23,19 +23,6 @@ function verdict(decls: string, name: string): string {
 function refused(src: string): string {
 	const r = compileToC(src);
 	return r.ok ? "compiled" : r.error;
-}
-
-function typeInfoLine(decls: string, name: string): string {
-	const r = compileToC(decls + "\nconsole.log(\"ok\");\n");
-	if (!r.ok) return r.error;
-	return typeInfoOf(r.value, name);
-}
-
-test "a class some Owned<T> names, and its subclass, carry the owner-word flag in their TypeInfo" {
-	const decls = "class N { kid: Owned<N> | null = null; }\nclass M extends N { }\nclass P { v: int32 = 0; }\nconst n = new N();\nconst m = new M();\nconst p = new P();";
-	assert typeInfoLine(decls, "N").contains("MS_TYPE_FLAG_OWNED_TARGET"), "N is named by Owned<N>";
-	assert typeInfoLine(decls, "M").contains("MS_TYPE_FLAG_OWNED_TARGET"), "M can sit in an Owned<N> slot";
-	assert !typeInfoLine(decls, "P").contains("MS_TYPE_FLAG_OWNED_TARGET"), "P is named by no Owned<T>";
 }
 
 test "a Vec of owned children is acyclic" {
@@ -108,15 +95,13 @@ const TREE = `class N { id: int32 = 0; kids: Vec<Owned<N>> = []; next: Owned<N> 
 function adopt(root: Owned<N>): void {
 `;
 
-test "copying an owned local into a second owner is refused" {
-	const message = refused(TREE + "const a: Owned<N> = new N();\nroot.kids.push(a);\nroot.kids.push(a);\n}\n");
-	assert message.contains("cannot copy 'a'"), message;
+test "an owned local pushed twice compiles" {
+	assert refused(TREE + "const a: Owned<N> = new N();\nroot.kids.push(a);\nroot.kids.push(a);\n}\nadopt(new N());\n") == "compiled";
 }
 
-test "an owned field store is checked at run time, beside the unchanged store" {
+test "an owned field takes an element another owned slot holds" {
 	const r = compileToC(TREE + "root.kids.push(new N());\nconst other: Owned<N> = new N();\nother.next = root.kids[0];\nconsole.log(root.kids[0].id);\n}\nadopt(new N());\n");
 	assert r.ok, r.ok ? "" : r.error;
-	assert r.value.contains("msOwnedReplace((*other"), r.value;
 }
 
 test "the last read of an owned local moves it" {
@@ -129,10 +114,9 @@ test "an owned value reads as a plain reference without a copy of the owner" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a plain reference enters an owned element slot with its store checked at run time" {
+test "a plain reference enters an owned element slot and stays readable" {
 	const r = compileToC(TREE + "let p: N = new N();\nroot.kids.push(p);\nconsole.log(p.id);\n}\nadopt(new N());\n");
 	assert r.ok, r.ok ? "" : r.error;
-	assert r.value.contains("msOwnedAdopt("), r.value;
 }
 
 test "a plain argument passes to an owned parameter" {
@@ -144,28 +128,27 @@ test "a fresh value and null become owned" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a Vec holding an owned edge is copied only at its last read" {
-	const message = refused(TREE + "const other: Owned<N> = new N();\nother.kids = root.kids;\nconsole.log(root.kids.length);\n}\n");
-	assert message.contains("cannot copy 'root.kids'"), message;
+test "a Vec holding owned edges is copied while it is still read" {
+	assert refused(TREE + "const other: Owned<N> = new N();\nother.kids = root.kids;\nconsole.log(root.kids.length);\n}\nadopt(new N());\n") == "compiled";
 }
 
-test "a struct holding an owned field is move-only" {
+test "a struct holding an owned field is copied while it is still read" {
 	const message = refused("class N { id: int32 = 0; }\nstruct S { a: Owned<N>; n: int32; }\nfunction f(): void {\n\tconst s: S = { a: new N(), n: 1 };\n\tlet t: S = { a: new N(), n: 2 };\n\tt = s;\n\tconsole.log(s.n, t.n);\n}\nf();\n");
-	assert message.contains("cannot copy 's'"), message;
+	assert message == "compiled", message;
 }
 
 const HELD = "class N { id: int32 = 0; }\nstruct Plain { n: Owned<N>; }\nstruct Gen<T> { n: Owned<N>; tag: T; }\n";
 
-test "a generic struct instance holding an owned field is move-only" {
+test "a generic struct instance holding an owned field is copied while it is still read" {
 	const message = refused(HELD + "function f(): void {\n\tconst a: Gen<int32> = { n: new N(), tag: 0 };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
-	assert message.contains("cannot copy 'a'"), message;
+	assert message == "compiled", message;
 }
 
-test "an alias of a struct holding an owned field is move-only" {
+test "an alias of a struct holding an owned field is copied while it is still read" {
 	const plain = refused(HELD + "type W = Plain;\nfunction f(): void {\n\tconst a: W = { n: new N() };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
-	assert plain.contains("cannot copy 'a'"), plain;
+	assert plain == "compiled", plain;
 	const generic = refused(HELD + "type G = Gen<int32>;\nfunction f(): void {\n\tconst a: G = { n: new N(), tag: 0 };\n\tconst b = a;\n\tconsole.log(a.n.id, b.n.id);\n}\nf();\n");
-	assert generic.contains("cannot copy 'a'"), generic;
+	assert generic == "compiled", generic;
 }
 
 test "a generic class holding an owned field is copied as a shared reference" {
@@ -195,7 +178,7 @@ test "a const bound to a fresh value enters an owned slot at its last read" {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a const pushed twice compiles; the second owner stops at run time" {
+test "a const pushed twice compiles" {
 	assert refused(TREE + "const b = new N();\nroot.kids.push(b);\nroot.kids.push(b);\n}\nadopt(new N());\n") == "compiled";
 }
 
@@ -230,7 +213,7 @@ test "a value popped from an owned Vec is a plain local" {
 
 const CAST = "class N { id: int32 = 0; kids: Vec<Owned<N>> = []; }\nconst a = new N();\nconst shared: N[] = [new N()];\n";
 
-test "a cast of a shared reference into an owning edge compiles; its store is checked at run time" {
+test "a cast of a shared reference into an owning edge compiles" {
 	assert refused(CAST + "a.kids.push(shared[0] as Owned<N>);\n") == "compiled";
 }
 
@@ -248,7 +231,7 @@ test "a cast of a shared value into an owned union slot compiles" {
 	assert refused("type D = { x: int32 } | { y: string };\nclass N { data: Owned<D> = { x: 0 }; }\nconst n = new N();\nconst shared: D[] = [{ x: 1 }];\nn.data = shared[0] as D;\n") == "compiled";
 }
 
-test "a cast through unknown into an owning edge compiles; its store is checked at run time" {
+test "a cast through unknown into an owning edge compiles" {
 	assert refused(CAST + "a.kids.push((shared[0] as unknown) as Owned<N>);\n") == "compiled";
 }
 

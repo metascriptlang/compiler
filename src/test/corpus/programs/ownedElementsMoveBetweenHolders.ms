@@ -1,4 +1,4 @@
-// note: plain locals move between Vec<Owned<T>> holders with push, pop, shift, an index store and a length cut; an element whose holder is destroyed, popped or cut away leaves that owner and can be pushed again.
+// note: plain locals move between Vec<Owned<T>> holders with push, pop, shift, an index store and a length cut; an element can sit under two holders at once, and one whose holder is destroyed, popped or cut away can be pushed again.
 // @stdout: 3 2 0 1 2
 class N {
 	v: int32 = 0;

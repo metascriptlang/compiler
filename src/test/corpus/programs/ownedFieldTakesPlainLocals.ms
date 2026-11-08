@@ -1,4 +1,4 @@
-// note: an Owned field takes a plain local, a call result and a computed holder's store with no `move`; the local stays readable after the store, and an object its owner let go of can be stored again.
+// note: an Owned field takes a plain local, a call result and a computed holder's store with no `move`; the local stays readable after the store, and an object can be stored again into another owned slot.
 // @stdout: 5 5 1
 // @stdout: 4 true 4 3
 class N {

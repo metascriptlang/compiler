@@ -121,17 +121,11 @@ test "bindingOwnership: a move of a name the function does not own is refused on
 	}
 }
 
-test "bindingOwnership: an owned local copied while it is still read is refused on every backend" {
+test "bindingOwnership: an owned local copied while it is still read compiles on every backend" {
 	const shapes = "class N { id: int32 = 1; kids: Vec<Owned<N>> = []; }\n";
-	const refused = [
-		{ name: "a second owner bound while the first is read", body: "export function run(): int32 { const o: Owned<N> = new N(); const second: Owned<N> = o; return o.id + second.id; }", variable: "o" },
-		{ name: "an owned local pushed in a loop", body: "export function run(): int32 { const root: Owned<N> = new N(); const a: Owned<N> = new N(); for (let i = 0; i < 2; i++) root.kids.push(a); return root.kids.length; }", variable: "a" },
-	];
-	for (const item of refused) {
-		const errors = refusedOnBothBackends(shapes + item.body);
-		assert errors.split("cannot copy '" + item.variable + "'").length == 3, item.name + ": " + errors;
-	}
 	const kept = [
+		{ name: "a second owner bound while the first is read", body: "export function run(): int32 { const o: Owned<N> = new N(); const second: Owned<N> = o; return o.id + second.id; }" },
+		{ name: "an owned local pushed in a loop", body: "export function run(): int32 { const root: Owned<N> = new N(); const a: Owned<N> = new N(); for (let i = 0; i < 2; i++) root.kids.push(a); return root.kids.length; }" },
 		{ name: "the last read of an owned local", body: "export function run(): int32 { const root: Owned<N> = new N(); const a: Owned<N> = new N(); root.kids.push(a); return root.kids.length; }" },
 		{ name: "an owned local read as a plain reference", body: "export function run(): int32 { const a: Owned<N> = new N(); const p: N = a; return a.id + p.id; }" },
 	];
@@ -236,12 +230,13 @@ test "bindingOwnership: an explicit move out of a path a dead local owns by valu
 	}
 }
 
-test "bindingOwnership: a local holding a counted reference read out of a moved place keeps the moved value, and no local can name the Vec holding the moved slot" {
+test "bindingOwnership: a local holding a counted reference read out of a moved place keeps the moved value, and a local copy of the Vec holding the moved slot keeps its own elements" {
 	const shapes = "class Ty { name: string = \"t\"; }\nclass N { v: int32 = 1; t: Ty = new Ty(); }\nclass H { k: Owned<N> = new N(); kids: Vec<Owned<N>> = [new N()]; }\nfunction take(n: Owned<N>, t: Ty): Owned<N> { return n; }\nfunction keep(n: Owned<N>, k: N): Owned<N> { return n; }\nfunction peek(n: Owned<N>, ks: Vec<Owned<N>>): Owned<N> { return n; }\n";
 	const kept = [
 		{ name: "a field read before an element refill", body: "function r(ref a: Vec<Owned<N>>): void { const t = a[0].t; a[0] = take(move a[0], t); }\nexport function run(): int32 { let xs: Vec<Owned<N>> = [new N()]; r(xs); return xs[0].v; }" },
 		{ name: "the moved element itself", body: "function r(ref a: Vec<Owned<N>>): void { const k: N = a[0]; a[0] = keep(move a[0], k); }\nexport function run(): int32 { let xs: Vec<Owned<N>> = [new N()]; r(xs); return xs[0].v; }" },
 		{ name: "a field read before a field move out of a dying holder", body: "export function run(): int32 { const h = new H(); const t = h.k.t; const g = take(move h.k, t); return g.v; }" },
+		{ name: "a local copy of the holder", body: "export function run(): int32 { const h = new H(); const kids = h.kids; h.kids[0] = peek(move h.kids[0], kids); return h.kids[0].v; }" },
 	];
 	for (const item of kept) {
 		const result = compileToC(shapes + item.body);
@@ -249,7 +244,6 @@ test "bindingOwnership: a local holding a counted reference read out of a moved 
 	}
 	const refused = [
 		{ name: "the slot read in the refilling call", body: "function r(ref a: Vec<Owned<N>>): void { a[0] = take(move a[0], a[0].t); }\nexport function run(): int32 { let xs: Vec<Owned<N>> = [new N()]; r(xs); return xs[0].v; }", refusal: "cannot move 'a[…]': type 'Owned<N>' has no default value" },
-		{ name: "a local naming the holder", body: "export function run(): int32 { const h = new H(); const kids = h.kids; h.kids[0] = peek(move h.kids[0], kids); return h.kids[0].v; }", refusal: "cannot copy 'h.kids'" },
 	];
 	for (const item of refused) {
 		const result = compileToC(shapes + item.body);
