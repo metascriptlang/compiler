@@ -13,6 +13,10 @@ import {
 } from "./montgomery";
 import { declassify, valueBarrier } from "./secret";
 
+when (c) {
+	import { p256Windows, p384Windows, p256Multiples, p384Multiples } from "./pcurveBaseTable";
+}
+
 export struct CurveMath {
 	field: Modulus;
 	order: Modulus;
@@ -324,7 +328,7 @@ function dbl4(cm: Readonly<CurveMath>, p: Point): Point {
 }
 
 /** Multiples 0·p to count·p; the entries past `count` stay the identity. */
-function precompute(cm: Readonly<CurveMath>, p: Point, count: int32): Point[16] {
+export function precompute(cm: Readonly<CurveMath>, p: Point, count: int32): Point[16] {
 	const o = identity(cm);
 	let pc: Point[16] = [o, o, o, o, o, o, o, o, o, o, o, o, o, o, o, o];
 	pc[1] = p;
@@ -360,65 +364,6 @@ export function mulSecret(cm: Readonly<CurveMath>, p: Point, k: Readonly<uint8[]
 	if (isIdentity(cm, p)) return null;
 	return mulTable(cm, precompute(cm, p, 15), k);
 }
-
-/** Affine x then y of each point, Montgomery form, `stride` words per coordinate, through one inversion shared by every point. */
-function affineWords(cm: Readonly<CurveMath>, points: Readonly<Point[]>, stride: int32): uint32[] {
-	const f = cm.field;
-	const prefix: Limbs[] = [];
-	let acc = f.one;
-	for (const p of points) {
-		prefix.push(acc);
-		acc = mul(f, acc, p.z);
-	}
-	let inv = invert(f, acc);
-	const out = new Array<uint32>(2 * stride * points.length);
-	for (let i = points.length - 1; i >= 0; i--) {
-		const zinv = mul(f, inv, prefix[i]);
-		inv = mul(f, inv, points[i].z);
-		const x = mul(f, points[i].x, zinv);
-		const y = mul(f, points[i].y, zinv);
-		for (let w = 0; w < f.words; w++) {
-			out[2 * stride * i + w] = x[w];
-			out[2 * stride * i + stride + w] = y[w];
-		}
-	}
-	return out;
-}
-
-/** j·16^i·G for j = 1 to 8 in each window i of 2·size + 1: entry j of window i at `(16 * i + 2 * (j - 1)) * words`; empty on JavaScript, which reads none. */
-@comptime
-function baseWindowWords(cm: Readonly<CurveMath>): uint32[] {
-	when (js) {
-		return [];
-	} else {
-		const points: Point[] = [];
-		let base = basePoint(cm);
-		for (let i = 0; i <= 8 * cm.field.words; i++) {
-			const pc = precompute(cm, base, 8);
-			for (let j = 1; j <= 8; j++) points.push(pc[j]);
-			base = dbl(cm, pc[8]);
-		}
-		return affineWords(cm, points, cm.field.words);
-	}
-}
-
-/** 1·G to 15·G, 12 words per coordinate: entry j at `(j - 1) * 24`; empty on JavaScript, which reads none. */
-@comptime
-function baseMultipleWords(cm: Readonly<CurveMath>): uint32[] {
-	when (js) {
-		return [];
-	} else {
-		const pc = precompute(cm, basePoint(cm), 15);
-		const points: Point[] = [];
-		for (let j = 1; j < 16; j++) points.push(pc[j]);
-		return affineWords(cm, points, 12);
-	}
-}
-
-const p256Windows: Readonly<uint32[]> = baseWindowWords(p256Math);
-const p384Windows: Readonly<uint32[]> = baseWindowWords(p384Math);
-const p256Multiples: Readonly<uint32[]> = baseMultipleWords(p256Math);
-const p384Multiples: Readonly<uint32[]> = baseMultipleWords(p384Math);
 
 /** The base-point multiples 0·G to 15·G: read from the native table, or computed where JavaScript carries none. */
 function baseMultiples(cm: Readonly<CurveMath>): Point[16] {
