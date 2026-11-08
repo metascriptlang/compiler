@@ -63,6 +63,25 @@ pub fn scale_span(xs: &mut [f32], k: f32) {
 }
 
 #[wasm_bindgen]
+pub struct FBuf {
+    v: Vec<f32>,
+}
+
+#[wasm_bindgen]
+impl FBuf {
+    #[wasm_bindgen(constructor)]
+    pub fn new(n: u32) -> FBuf {
+        FBuf { v: (0..n).map(|i| i as f32 * 0.25).collect() }
+    }
+
+    pub fn scale(&mut self, k: f32) {
+        for x in self.v.iter_mut() {
+            *x *= k;
+        }
+    }
+}
+
+#[wasm_bindgen]
 pub fn each(n: i32, cb: &js_sys::Function) -> i32 {
     let mut s: i32 = 0;
     for i in 0..n {

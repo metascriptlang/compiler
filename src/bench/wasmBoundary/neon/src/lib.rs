@@ -1,6 +1,7 @@
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
 use neon::types::JsBigInt;
+use std::cell::RefCell;
 
 fn add(mut cx: FunctionContext) -> JsResult<JsNumber> {
     let a = cx.argument::<JsNumber>(0)?.value(&mut cx) as i32;
@@ -66,6 +67,25 @@ fn scale_span(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     Ok(cx.undefined())
 }
 
+struct FBuf(RefCell<Vec<f32>>);
+
+impl Finalize for FBuf {}
+
+fn make_box(mut cx: FunctionContext) -> JsResult<JsBox<FBuf>> {
+    let n = cx.argument::<JsNumber>(0)?.value(&mut cx) as usize;
+    let v: Vec<f32> = (0..n).map(|i| i as f32 * 0.25).collect();
+    Ok(cx.boxed(FBuf(RefCell::new(v))))
+}
+
+fn scale_box(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let b = cx.argument::<JsBox<FBuf>>(0)?;
+    let k = cx.argument::<JsNumber>(1)?.value(&mut cx) as f32;
+    for x in b.0.borrow_mut().iter_mut() {
+        *x *= k;
+    }
+    Ok(cx.undefined())
+}
+
 fn each(mut cx: FunctionContext) -> JsResult<JsNumber> {
     let n = cx.argument::<JsNumber>(0)?.value(&mut cx) as i32;
     let cb = cx.argument::<JsFunction>(1)?;
@@ -105,6 +125,8 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("sumSpan", sum_span)?;
     cx.export_function("makeVec", make_vec)?;
     cx.export_function("scaleSpan", scale_span)?;
+    cx.export_function("makeBox", make_box)?;
+    cx.export_function("scaleBox", scale_box)?;
     cx.export_function("each", each)?;
     cx.export_function("primes", primes)?;
     Ok(())

@@ -80,6 +80,35 @@ load 9.7 before and 2.4 after. Median of 5 rounds, us/op.
 
 `accept: 7/11 rows meet neon and wasmbindgen (mixed at most 10% above)`.
 
+## 2026-11-08, m1m, with the callee-held row
+
+Same tree plus the `scaleBox` row: the 1000 floats live on the callee's side and are scaled in
+place, through a `Handle<VecBox<float32>>` on `mixed`, a `JsBox` holding a `Vec<f32>` on `neon`,
+and a `#[wasm_bindgen]` struct holding a `Vec<f32>` on `wasmbindgen`, so no arm copies.
+`scaleSpan` stays the copy row: wasm cannot address a JS-owned buffer, so a writable Span is
+copied in and back, as wasm-bindgen's `&mut [f32]` is; `neon` scales the JS buffer natively.
+A `--quiet 25` window, load 8.9 before and 2.9 after. Median of 5 rounds, us/op.
+
+| row | mixed | jsonly | neon | wasmbindgen | accept |
+|---|---|---|---|---|---|
+| add x1000 | 2.825 | 0.481 | 39.726 | 11.656 | ok |
+| add64 x1000 | 4.616 | 2.006 | 51.29 | 4.326 | ok |
+| strLen16 x1000 | 22.945 | 5.916 | 70.991 | 25.191 | ok |
+| echo16 x1000 | 121.041 | 0.324 | 84.904 | 150.782 | slower than neon |
+| mid x1000 | 51.73 | 0.883 | 362.285 | 327.001 | ok |
+| sumVec 1k Array | 1.484 | 3.011 | 51.401 | 1.464 | ok |
+| sumSpan 1k Float32Array | 1.025 | 2.702 | 1.036 | 1.003 | ok |
+| scaleSpan 1k Float32Array | 0.277 | 0.516 | 0.155 | 0.413 | slower than neon |
+| scaleBox 1k held by callee | 0.117 | 1.014 | 0.094 | 0.187 | slower than neon |
+| makeVec 1k | 2.572 | 3.288 | 0.816 | 0.819 | slower than neon, wasmbindgen |
+| callback 1k | 6.679 | 0.429 | 48.817 | 115.061 | ok |
+| primes 2M | 5729.638 | 20704.143 | 4403.99 | 5167.635 | slower than neon, wasmbindgen |
+
+`accept: 7/12 rows meet neon and wasmbindgen (mixed at most 10% above)`. A handle call with no
+loop measured 0.013 us (probe, same day), against about 0.04 us per neon call (`add x1000`), so
+`scaleBox` trails `neon` in the scaling loop itself: wasm SIMD against native code, the class of
+`primes`, not the boundary.
+
 Differences between the arms that are not the boundary: `makeVec` returns a JS `Array` on `mixed`
 (a `Vec<float32>` is an Array in JS) and a `Float32Array` on the Rust arms; `neon` runs native code,
 so `primes` and the in-place `scaleSpan` measure native against wasm there; wasm-bindgen's `mid`

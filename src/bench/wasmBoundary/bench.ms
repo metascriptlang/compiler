@@ -1,5 +1,6 @@
 import { bench } from "../harness";
-import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, each, primes } from "./benchWasm";
+import { Handle } from "std/ffi";
+import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, makeBox, scaleBox, each, primes } from "./benchWasm";
 
 let sink: number = 0;
 const s16 = "hello wasm world";
@@ -42,6 +43,10 @@ bench("sumSpan 1k Float32Array", 0, (): void => {
 bench("scaleSpan 1k Float32Array", 0, (): void => {
 	scaleSpan(fx, 1);
 });
+const box = makeBox(1000);
+bench("scaleBox 1k held by callee", 0, (): void => {
+	scaleBox(box, 1);
+});
 bench("makeVec 1k", 0, (): void => {
 	sink += makeVec(1000).length;
 });
@@ -51,4 +56,5 @@ bench("callback 1k", 0, (): void => {
 bench("primes 2M", 0, (): void => {
 	sink += primes(2000000);
 });
+box.release();
 if (sink == 0) console.log("sink unused");

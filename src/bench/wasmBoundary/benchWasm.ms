@@ -1,3 +1,5 @@
+import { Handle, VecBox } from "std/ffi";
+
 export struct Point {
 	x: float64;
 	y: float64;
@@ -51,6 +53,19 @@ export function makeVec(n: int32): Vec<float32> {
 
 @wasm
 export function scaleSpan(xs: Span<float32>, k: float32): void {
+	for (let i = 0; i < xs.length; i += 1) xs[i] = xs[i] * k;
+}
+
+@wasm
+export function makeBox(n: int32): Handle<VecBox<float32>> {
+	const b = new VecBox<float32>();
+	for (let i = 0; i < n; i += 1) b.items.push((i as float32) * 0.25);
+	return Handle.retain(b);
+}
+
+@wasm
+export function scaleBox(h: Handle<VecBox<float32>>, k: float32): void {
+	const xs = h.value().items as Span<float32>;
 	for (let i = 0; i < xs.length; i += 1) xs[i] = xs[i] * k;
 }
 

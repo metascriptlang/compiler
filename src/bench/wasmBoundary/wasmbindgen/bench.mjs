@@ -24,7 +24,10 @@ bench("mid x1000", 0, () => {
 bench("sumVec 1k Array", 0, () => { sink += w.sumVec(xs); });
 bench("sumSpan 1k Float32Array", 0, () => { sink += w.sumSpan(fx); });
 bench("scaleSpan 1k Float32Array", 0, () => { w.scaleSpan(fx, 1); });
+const box = new w.FBuf(1000);
+bench("scaleBox 1k held by callee", 0, () => { box.scale(1); });
 bench("makeVec 1k", 0, () => { sink += w.makeVec(1000).length; });
 bench("callback 1k", 0, () => { sink += w.each(1000, (k) => k & 7); });
 bench("primes 2M", 0, () => { sink += w.primes(2000000); });
+box.free();
 if (sink === 0) console.log("sink unused");

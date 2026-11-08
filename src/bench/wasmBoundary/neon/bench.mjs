@@ -16,6 +16,8 @@ bench("mid x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s += n.m
 bench("sumVec 1k Array", 0, () => { sink += n.sumVec(xs); });
 bench("sumSpan 1k Float32Array", 0, () => { sink += n.sumSpan(fx); });
 bench("scaleSpan 1k Float32Array", 0, () => { n.scaleSpan(fx, 1); });
+const box = n.makeBox(1000);
+bench("scaleBox 1k held by callee", 0, () => { n.scaleBox(box, 1); });
 bench("makeVec 1k", 0, () => { sink += n.makeVec(1000).length; });
 bench("callback 1k", 0, () => { sink += n.each(1000, (k) => k & 7); });
 bench("primes 2M", 0, () => { sink += n.primes(2000000); });
