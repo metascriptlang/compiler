@@ -197,4 +197,11 @@ what the rows before it leave behind: in one page, `makeVec` measured right afte
 `echo16 x1000` takes 1.08-1.24 us, measured before the string rows 0.74-0.81, and the same
 function alone 0.76-0.79 against wasm-bindgen's 1.06-1.13 (3 to 5 rounds, m1m, not quiet). A
 forced `gc()` before it keeps it at 1.06-1.15; Node shows none of it (0.64-0.71 everywhere).
-Not traced further.
+Which row precedes the slow phase changes from run to run (after `echo16` in one, after `scaleBox`
+in another). A Chrome CPU profile of the row early and late in one page (m1m, 2 rounds, 0.84 against
+1.25 us) keeps the wasm fill loop at about 0.28 us and grows the JS taker
+`new C(HEAPU8.slice(...).buffer, o, k)` from about 0.50 to 0.85 us, garbage collection from 1.5% to
+5%: the cost is Chrome allocating the result's `ArrayBuffer`, which a copy result needs and
+wasm-bindgen's `.slice()` pays too, so no glue change within the copy contract reaches it. Probe:
+`--js-flags=--expose-gc` and `console.profile` around the rows, read through CDP
+`Profiler.consoleProfileFinished`.
