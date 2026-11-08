@@ -352,7 +352,7 @@ export function registerStdUnitStamps(tool: () => string, std: (stdPath: string)
 }
 
 export function stdUnitRequested(): boolean {
-	return env.get("MSC_STD_UNIT") == "1";
+	return env.get("MSC_NO_STD_UNIT") != "1";
 }
 
 function unitBase(): string {

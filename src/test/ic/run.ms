@@ -422,7 +422,7 @@ function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 }
 
 const STD_UNIT_CHECK = "stdUnit";
-const STD_UNIT_ENV = ["MSC_NO_GLOBAL_CACHE", "MSC_GLOBAL_CACHE_DIR", "MSC_CACHE_DIR", "MSC_STD_UNIT", "MSC_IC_VERIFY"];
+const STD_UNIT_ENV = ["MSC_NO_GLOBAL_CACHE", "MSC_GLOBAL_CACHE_DIR", "MSC_CACHE_DIR", "MSC_NO_STD_UNIT", "MSC_IC_VERIFY"];
 const FOREIGN_UNIT = "[miss: a foreign or mismatched unit]x1";
 
 const UNIT_PROGRAM_A = [
@@ -495,8 +495,8 @@ function stdUnitFiles(cache: string): string[] {
 
 function unitBuild(work: string, localCache: string, unit: boolean, verify: boolean): ExecFileResult {
 	env.set("MSC_CACHE_DIR", localCache);
-	if (unit) env.set("MSC_STD_UNIT", "1");
-	else env.delete("MSC_STD_UNIT");
+	if (unit) env.delete("MSC_NO_STD_UNIT");
+	else env.set("MSC_NO_STD_UNIT", "1");
 	if (verify) env.set("MSC_IC_VERIFY", "1");
 	else env.delete("MSC_IC_VERIFY");
 	return execFileResult(MSC, ["build", "main.ms", "--force", "--emit=c", "--time"], work);
@@ -551,8 +551,8 @@ function runStdUnitSteps(dir: string, cache: string, project: string, reasons: s
 	checkUnitStep("step 4 (foreign key)", unitBuild(b, `${dir}/localCache4`, true, true), "written", FOREIGN_UNIT, reasons);
 
 	const inert = unitBuild(a, `${dir}/localCache5`, false, false);
-	if (!succeeded(inert) || !both(inert).contains("preludePack: ")) reasons.push(`step 5 (MSC_STD_UNIT unset): the build failed or printed no --time check lines:\n${unitEvidence(inert)}`);
-	if (lineWith(both(inert), "stdUnit: ") != "") reasons.push(`step 5 (MSC_STD_UNIT unset): the unit is not inert:\n${lineWith(both(inert), "stdUnit: ")}`);
+	if (!succeeded(inert) || !both(inert).contains("preludePack: ")) reasons.push(`step 5 (MSC_NO_STD_UNIT=1): the build failed or printed no --time check lines:\n${unitEvidence(inert)}`);
+	if (lineWith(both(inert), "stdUnit: ") != "") reasons.push(`step 5 (MSC_NO_STD_UNIT=1): the unit is not inert:\n${lineWith(both(inert), "stdUnit: ")}`);
 }
 
 function runStdUnitCheck(): string[] {
