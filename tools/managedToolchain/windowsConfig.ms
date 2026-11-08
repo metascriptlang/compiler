@@ -25,6 +25,20 @@ export function parseWindowsTarget(
 	};
 }
 
+export function windowsClangTriple(target: WindowsTarget): string {
+	return match (target) {
+		WindowsTarget.X64 => "x86_64-w64-windows-gnu",
+		WindowsTarget.Arm64 => "aarch64-w64-windows-gnu",
+	};
+}
+
+export function windowsAutoconfHost(target: WindowsTarget): string {
+	return match (target) {
+		WindowsTarget.X64 => "x86_64-w64-mingw32",
+		WindowsTarget.Arm64 => "aarch64-w64-mingw32",
+	};
+}
+
 export function windowsVariantDirectory(
 	target: WindowsTarget,
 	variant: WindowsVariant,
@@ -53,10 +67,7 @@ export function renderWindowsSourceConfig(
 	if (major < 1) { return Result.err("LLVM major must be positive"); }
 	const directory = windowsVariantDirectory(target, variant);
 	const resourceDirectory = "<CFGDIR>/../../lib/clang/" + String(major);
-	const triple = match (target) {
-		WindowsTarget.X64 => "x86_64-w64-windows-gnu",
-		WindowsTarget.Arm64 => "aarch64-w64-windows-gnu",
-	};
+	const triple = windowsClangTriple(target);
 	const cpu = match (target) {
 		WindowsTarget.X64 => "x86-64",
 		WindowsTarget.Arm64 => "generic",
@@ -75,6 +86,7 @@ export function renderWindowsSourceConfig(
 		"--unwindlib=none",
 	];
 	if (variant == WindowsVariant.Dll) { lines.push("-shared"); }
+	lines.push("-mno-incremental-linker-compatible");
 	lines.push("--ld-path=<CFGDIR>/../../bin/ld.lld");
 	lines.push("-Xlinker -L -Xlinker <CFGDIR>/" + directory);
 	lines.push("-resource-dir " + resourceDirectory);

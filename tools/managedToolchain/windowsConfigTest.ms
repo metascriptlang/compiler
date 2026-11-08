@@ -10,6 +10,7 @@ const EXE = "-target x86_64-w64-windows-gnu\n" +
 	"-isystem <CFGDIR>/../../lib/clang/23/include\n" +
 	"-isystem <CFGDIR>/include/libc/mingw-w64\n" +
 	"--rtlib=compiler-rt\n--unwindlib=none\n" +
+	"-mno-incremental-linker-compatible\n" +
 	"--ld-path=<CFGDIR>/../../bin/ld.lld\n" +
 	"-Xlinker -L -Xlinker <CFGDIR>/x86_64-windows-gnu\n" +
 	"-resource-dir <CFGDIR>/../../lib/clang/23\n" +
