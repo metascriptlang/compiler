@@ -1,6 +1,6 @@
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, Symbol,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData,
 	MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
@@ -137,6 +137,23 @@ export function surfaceText(node: Node | null): string {
 	return textOf(hashInto(createText(), node, false));
 }
 
+let _surfaceRefs: Symbol[] | null = null;
+
+// The surface text of a declaration and, in `refs`, the symbol of every name it holds, in text order.
+export function surfaceTextAndRefs(node: Node | null, refs: Symbol[]): string {
+	const outer = _surfaceRefs;
+	_surfaceRefs = refs;
+	try {
+		return surfaceText(node);
+	} finally {
+		_surfaceRefs = outer;
+	}
+}
+
+function noteRef(node: Node): void {
+	if (_surfaceRefs != null && node.resolvedSym != null) _surfaceRefs.push(node.resolvedSym);
+}
+
 const HASHED_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.Optional | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.TypeModifier | NodeFlag.ValueUnion | NodeFlag.Parenthesized | NodeFlag.QuoteSplice | NodeFlag.WhenDeferred | NodeFlag.WhenRaiser | NodeFlag.WhenPicked | NodeFlag.CommaWritten | NodeFlag.ExplicitDeref;
 
 function hFlags(h: TaText, flags: BitSet<NodeFlag>): TaText {
@@ -187,6 +204,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		// === Identifier ===
 		NodeKind.Identifier => {
 			h = hS(h, (node.data as IdentifierData).name);
+			noteRef(node);
 		},
 
 		// === Expressions ===
@@ -209,6 +227,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
 			h = hN(h, d.object); h = hS(h, d.property); h = hB(h, d.isOptional);
+			noteRef(node);
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;

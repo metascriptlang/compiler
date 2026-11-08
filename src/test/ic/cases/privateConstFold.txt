@@ -1,0 +1,16 @@
+main folds an exported constant of b whose initializer names a private constant of b; editing the
+private constant reaches main's fold although the exported declaration's text is unchanged.
+#!VERIFY
+#!FILE b.ms
+const L: int32 = 2;
+export const K: int32 = L + 1;
+#!FILE main.ms
+import { K } from "./b";
+const folded = @comptime { return K * 10; };
+const M: int32 = K * 2;
+console.log(`${folded} ${M}`);
+#!STEP expect: 30 6
+#!FILE b.ms
+const L: int32 = 5;
+export const K: int32 = L + 1;
+#!STEP expect: 60 12

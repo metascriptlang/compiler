@@ -2,7 +2,7 @@ import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "
 import { makeSymbol, symbolKey, builtinKindName } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
 import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod, DispMethodEntry } from "../../checker/context";
-import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceText } from "./hash";
+import { TaText, createText, textOf, hNull, hS as putString, hI as putInt, hB as putBool, nodeText, surfaceTextAndRefs } from "./hash";
 import { createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, TransAmDb } from "./index";
 import { recordModuleImport } from "./moduleDeps";
 import { getFileId } from "./fileInput";
@@ -14,6 +14,7 @@ enum TypeShape { Plain, Param, Instance }
 class DigestState {
 	modulePath: string;
 	ids: HashMap<Type, int32>;
+	expanded: HashSet<Symbol>;
 }
 
 function shapeOf(kind: TypeKind): TypeShape {
@@ -67,7 +68,7 @@ function putType(st: DigestState, out: TaText, t: Type | null): TaText {
 	if (shape != TypeShape.Param && t.sym != null && t.sym.modulePath != st.modulePath) {
 		out = putString(out, symbolKey(t.sym));
 		if (shape == TypeShape.Instance) out = putTypes(st, out, t.typeChildren);
-		return out;
+		return putForeign(st, out, t.sym);
 	}
 	out = putStrings(out, t.typeNames);
 	out = putTypes(st, out, t.typeChildren);
@@ -124,13 +125,41 @@ function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
 	}
 	out = sym.ctorRoutine != null ? putType(st, out, sym.ctorRoutine.symbolType) : hNull(out);
 	out = putType(st, out, sym.symbolType);
-	return sym.declNode != null ? putString(out, surfaceText(sym.declNode)) : hNull(out);
+	if (sym.declNode == null) return hNull(out);
+	const refs: Symbol[] = [];
+	out = putString(out, surfaceTextAndRefs(sym.declNode, refs));
+	for (const ref of refs) {
+		if (ref != sym && foldsInto(ref)) out = putForeign(st, out, ref);
+	}
+	return out;
+}
+
+// An immutable value a declaration names can be folded into whatever reads the declaration, so its own
+// declaration belongs to the reader's surface, whichever module holds it and whether or not it is exported.
+// A declaration from another module is written in full once per digest: an importer reads types and folded
+// values through it with no edge of its own to their module.
+function foldsInto(sym: Symbol): boolean {
+	const kind = sym.symbolKind;
+	return (kind == SymbolKind.Variable || kind == SymbolKind.Property || kind == SymbolKind.EnumMember)
+		&& !sym.symFlags.has(SymbolFlag.Mutable);
+}
+
+function putForeign(st: DigestState, out: TaText, sym: Symbol): TaText {
+	if (st.expanded.has(sym)) return out;
+	st.expanded.add(sym);
+	const home = st.modulePath;
+	st.modulePath = sym.modulePath;
+	out = putRoutine(st, out, sym);
+	out = putInt(out, sym.overloads.length);
+	for (const ov of sym.overloads) out = putRoutine(st, out, ov);
+	st.modulePath = home;
+	return out;
 }
 
 function putExport(st: DigestState, out: TaText, ctx: CheckerContext, sym: Symbol): TaText {
 	const names = ctx.interfNames.get(sym) ?? [sym.name];
 	out = putStrings(out, names);
-	if (sym.modulePath != ctx.modulePath) return putString(out, symbolKey(sym));
+	if (sym.modulePath != ctx.modulePath) return putForeign(st, putString(out, symbolKey(sym)), sym);
 	out = putRoutine(st, out, sym);
 	out = putInt(out, sym.overloads.length);
 	for (const ov of sym.overloads) out = putRoutine(st, out, ov);
@@ -145,7 +174,7 @@ function putExport(st: DigestState, out: TaText, ctx: CheckerContext, sym: Symbo
 }
 
 export function ifaceDigest(ctx: CheckerContext): string {
-	const st: DigestState = { modulePath: ctx.modulePath, ids: new HashMap<Type, int32>() };
+	const st: DigestState = { modulePath: ctx.modulePath, ids: new HashMap<Type, int32>(), expanded: new HashSet<Symbol>() };
 	let out = putInt(createText(), ctx.interf.length);
 	for (const sym of ctx.interf) out = putExport(st, out, ctx, sym);
 	out = putString(out, ctx.includeDirectives);
@@ -163,6 +192,7 @@ export function dispatchDigest(entries: DispMethodEntry[]): string {
 		const st: DigestState = {
 			modulePath: entry.classSym.modulePath,
 			ids: new HashMap<Type, int32>(),
+			expanded: new HashSet<Symbol>(),
 		};
 		out = putString(out, symbolKey(entry.classSym));
 		out = putString(out, entry.methodName);
@@ -299,10 +329,10 @@ test "a dependency's interface change reaches every importer in the chain, a bod
 	assert body[0] == a[0] && body[1] == a[1] && body[2] == a[2];
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int64 { return 1; }");
 	const sig = chain(db);
-	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] > a[2];
+	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] > a[2], `${a} -> ${sig}`;
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
 	const undone = chain(db);
-	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] > sig[2];
+	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] > sig[2], `${sig} -> ${undone}`;
 }
 
 function chain(db: TransAmDb): int32[] {
@@ -312,6 +342,23 @@ function chain(db: TransAmDb): int32[] {
 		changed.push(cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, path))).changedAt);
 	}
 	return changed;
+}
+
+test "an importer's digest moves with a foreign declaration its interface names, and only with that one" {
+	const dep = (x: string, other: string): string => `export class C { x: ${x} = 1; }\nexport function other(): ${other} { return 1; }`;
+	const use = 'import { C } from "./dep";\nexport function make(): C { return new C(); }';
+	const base = digests(dep("int32", "int32"), use);
+	assert base[1] != digests(dep("int64", "int32"), use)[1];
+	assert base[1] == digests(dep("int32", "int64"), use)[1];
+	const reexport = 'export { C } from "./dep";';
+	assert digests(dep("int32", "int32"), reexport)[1] != digests(dep("int64", "int32"), reexport)[1];
+}
+
+test "a constant's digest moves with a constant its initializer folds from, foreign or private" {
+	const use = 'import { N } from "./dep";\nconst L: int32 = 2;\nexport const K: int32 = N + L;';
+	const base = digests("export const N: int32 = 4;", use);
+	assert base[1] != digests("export const N: int32 = 5;", use)[1];
+	assert base[1] != digests("export const N: int32 = 4;", use.replace("L: int32 = 2", "L: int32 = 3"))[1];
 }
 
 test "an errored module still has a digest that moves with its errors" {

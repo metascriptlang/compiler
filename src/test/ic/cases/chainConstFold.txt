@@ -1,0 +1,16 @@
+A compile-time fold in main reads a constant of b whose initializer names a constant of a; a value
+edit of a reaches the fold although b's interface text is unchanged.
+#!VERIFY
+#!FILE a.ms
+export const N: int32 = 4;
+#!FILE b.ms
+import { N } from "./a";
+export const K: int32 = N;
+#!FILE main.ms
+import { K } from "./b";
+const folded = @comptime { return K * 10; };
+console.log(folded);
+#!STEP expect: 40
+#!FILE a.ms
+export const N: int32 = 5;
+#!STEP expect: 50

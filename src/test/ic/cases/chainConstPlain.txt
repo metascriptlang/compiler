@@ -1,0 +1,16 @@
+main folds a constant of b into its own constant; b's constant folds from a constant of a. A value
+edit of a reaches main's fold although b's text is unchanged.
+#!VERIFY
+#!FILE a.ms
+export const N: int32 = 4;
+#!FILE b.ms
+import { N } from "./a";
+export const K: int32 = N + 1;
+#!FILE main.ms
+import { K } from "./b";
+const M: int32 = K * 2;
+console.log(M);
+#!STEP expect: 10
+#!FILE a.ms
+export const N: int32 = 6;
+#!STEP expect: 14

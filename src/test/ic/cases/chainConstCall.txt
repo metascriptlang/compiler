@@ -1,0 +1,20 @@
+main's compile-time fold reads a constant of b computed by a call into a; a body edit of the
+called function reaches the fold.
+#!VERIFY
+#!FILE a.ms
+export function base(): int32 {
+	return 4;
+}
+#!FILE b.ms
+import { base } from "./a";
+export const K: int32 = base();
+#!FILE main.ms
+import { K } from "./b";
+const folded = @comptime { return K * 10; };
+console.log(folded);
+#!STEP expect: 40
+#!FILE a.ms
+export function base(): int32 {
+	return 5;
+}
+#!STEP expect: 50
