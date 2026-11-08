@@ -105,8 +105,9 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 		TypeKind.Ref => {
 			if (t.typeReturn == null) return true;
 			if (isUnownedRef(t)) return false;
-			const ownedHop = !_checkOwnedCycles && (isOwnedRef(t) || isOwnedCell(t));
-			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !ownedHop, marker, t.typeReturn.kind == TypeKind.GenericInstance);
+			const ownedHop = !_checkOwnedCycles && isOwnedRef(t);
+			const arrayCell = t.typeReturn.kind == TypeKind.Array;
+			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !(ownedHop || arrayCell), marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
 		TypeKind.Function | TypeKind.Unknown => true,
 		TypeKind.Struct => {
@@ -171,19 +172,6 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 		TypeKind.Distinct | TypeKind.Alias | TypeKind.Var | TypeKind.Sink | TypeKind.Lent | TypeKind.Result => cfaAux(t.typeReturn, origKey, withRef, sawPlainEdge, marker),
 		_ => holdsNoCell(t),
 	};
-}
-
-// An array cell whose elements are owned is itself an owned edge: a cycle through it goes on
-// through one of its owned elements.
-function isOwnedCell(t: Type): boolean {
-	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array && ownsElements(t.typeReturn.typeReturn);
-}
-
-function ownsElements(e: Type | null): boolean {
-	if (e == null) return false;
-	if ((e.kind == TypeKind.Alias || e.kind == TypeKind.Distinct) && e.typeReturn != null) return ownsElements(e.typeReturn);
-	if (e.kind == TypeKind.Union) return e.typeChildren.some((m: Type): boolean => isOwnedRef(m) || isOwnedCell(m));
-	return isOwnedRef(e) || isOwnedCell(e);
 }
 
 function holdsNoCell(t: Type): boolean {
