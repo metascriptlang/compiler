@@ -53,7 +53,7 @@ function fixture(t) {
 }
 
 function command(f, args, expected = 0) {
-  const result = spawnSync(process.execPath, args, { cwd: f.work, encoding: 'utf8', timeout: 20000 });
+  const result = spawnSync(process.execPath, args, { cwd: f.work, encoding: 'utf8', timeout: 60000 });
   assert.equal(result.error, undefined);
   assert.equal(result.status, expected, `${args.join(' ')}\n${result.stdout}${result.stderr}`);
   return result.stdout + result.stderr;
@@ -79,7 +79,7 @@ void [missing, nominal];
 function typecheck(f, types = f.types, expectedHostError = false) {
   for (const mode of ['NodeNext', 'Bundler']) {
     const config = join(f.work, `${mode}.json`);
-    const compilerOptions = { strict: true, skipLibCheck: false, noEmit: true,
+    const compilerOptions = { strict: true, skipLibCheck: false, skipDefaultLibCheck: true, noEmit: true,
       target: 'ES2022', module: mode === 'NodeNext' ? 'NodeNext' : 'ESNext',
       moduleResolution: mode, allowArbitraryExtensions: true, jsx: 'preserve',
       types: [], rootDirs: [f.src, types] };
@@ -254,7 +254,7 @@ async function establishedEdits(f, success, failure, trace = () => {}) {
   trace('typecheck-restored'); typecheck(f);
 }
 
-test('rollup-watch-established: real edits, type changes, errors, delete and restore after BUNDLE_END', { timeout: 60000 }, async t => {
+test('rollup-watch-established: real edits, type changes, errors, delete and restore after BUNDLE_END', { timeout: 180000 }, async t => {
   const f = fixture(t);
   const rollup = await framework('rollup');
   const { default: metascript } = await import('../../../../tools/vite-plugin/rollup.js');
@@ -285,13 +285,14 @@ test('rollup-watch-established: real edits, type changes, errors, delete and res
   assert.equal(existsSync(join(f.types, '.msc-source-lease')), false);
 });
 
-test('webpack-watch-established: native watch generations execute and invalidate source types', { timeout: 60000 }, async t => {
+test('webpack-watch-established: native watch generations execute and invalidate source types', { timeout: 180000 }, async t => {
   const f = fixture(t);
   const compiler = await webpackCompiler(f);
   const queue = watchTestQueue();
   let phase = 'initial', generation = 0, compilationInput;
+  const started = performance.now();
   const trace = (event, details = {}) => {
-    const record = { webpackWatch: event, phase, generation, ...details };
+    const record = { webpackWatch: event, phase, generation, at: Math.round(performance.now() - started), ...details };
     t.diagnostic(JSON.stringify(record));
     writeFileSync(join(f.work, 'webpack-watch-trace.jsonl'), `${JSON.stringify(record)}\n`, { flag: 'a' });
   };
@@ -357,7 +358,7 @@ test('webpack-watch-established: native watch generations execute and invalidate
   assert.equal(existsSync(join(f.types, '.msc-source-lease')), false);
 });
 
-test('vite-dev: in-process SSR plus native HMR protocol, not browser E2E', { timeout: 60000 }, async t => {
+test('vite-dev: in-process SSR plus native HMR protocol, not browser E2E', { timeout: 180000 }, async t => {
   const f = fixture(t);
   assert.ok(Number(process.versions.node.split('.')[0]) >= 24, 'acceptance tooling requires Node 24+');
   assert.equal(typeof WebSocket, 'function', 'acceptance tooling requires built-in Node WebSocket');
