@@ -148,6 +148,43 @@ static inline int64_t msBlockEnd(int64_t b, int64_t len) {
 	return len - b > MS_REDUCE_BLOCK ? b + MS_REDUCE_BLOCK : len;
 }
 
+#define msStickyOp_(T, op, a, b, bad) ({ T __r; (bad) |= op((T)(a), (T)(b), &__r); __r; })
+#define msStickyWide_(T, op, a, b, bad) ({ int64_t __w = (int64_t)(T)(a) op (int64_t)(T)(b); (bad) |= __w != (int64_t)(T)__w; (T)__w; })
+#define msStickyAddI8(a, b, bad) msStickyWide_(int8_t, +, a, b, bad)
+#define msStickyAddI16(a, b, bad) msStickyWide_(int16_t, +, a, b, bad)
+#define msStickyAddI32(a, b, bad) msStickyWide_(int32_t, +, a, b, bad)
+#define msStickyAddI64(a, b, bad) msStickyOp_(int64_t, __builtin_add_overflow, a, b, bad)
+#define msStickySubI8(a, b, bad) msStickyWide_(int8_t, -, a, b, bad)
+#define msStickySubI16(a, b, bad) msStickyWide_(int16_t, -, a, b, bad)
+#define msStickySubI32(a, b, bad) msStickyWide_(int32_t, -, a, b, bad)
+#define msStickySubI64(a, b, bad) msStickyOp_(int64_t, __builtin_sub_overflow, a, b, bad)
+#define msStickyMulI8(a, b, bad) msStickyWide_(int8_t, *, a, b, bad)
+#define msStickyMulI16(a, b, bad) msStickyWide_(int16_t, *, a, b, bad)
+#define msStickyMulI32(a, b, bad) msStickyWide_(int32_t, *, a, b, bad)
+#define msStickyMulI64(a, b, bad) msStickyOp_(int64_t, __builtin_mul_overflow, a, b, bad)
+#define msStickyNegI8(a, bad) msStickyWide_(int8_t, -, 0, a, bad)
+#define msStickyNegI16(a, bad) msStickyWide_(int16_t, -, 0, a, bad)
+#define msStickyNegI32(a, bad) msStickyWide_(int32_t, -, 0, a, bad)
+#define msStickyNegI64(a, bad) msStickyOp_(int64_t, __builtin_sub_overflow, 0, a, bad)
+#define msStickyRange_(v, lo, hi, bad) ({ int64_t __v = (int64_t)(v); (bad) |= (__v < (lo)) | (__v > (hi)); __v; })
+#define msStickyRangeI8(v, lo, hi, bad) ((int8_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyRangeU8(v, lo, hi, bad) ((uint8_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyRangeI16(v, lo, hi, bad) ((int16_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyRangeU16(v, lo, hi, bad) ((uint16_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyRangeI32(v, lo, hi, bad) ((int32_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyRangeU32(v, lo, hi, bad) ((uint32_t)msStickyRange_(v, lo, hi, bad))
+#define msStickyExactI64(v, bad) ({ int64_t __v = (v); (bad) |= (__v <= -9007199254740992LL) | (__v >= 9007199254740992LL); __v; })
+#define msStickyAt(a, i, bad) ({ int64_t __i = (i); int __in = (uint64_t)__i < (uint64_t)(a).len; (bad) |= !__in; __in ? (a).p->data[__i] : 0; })
+#define msStickySpanAt(s, i, bad) ({ int64_t __i = (i); int __in = (uint64_t)__i < (uint64_t)(s).len; (bad) |= !__in; __in ? (s).data[__i] : 0; })
+/* A block of a reduction sums its positive and its negative terms apart: every partial sum lies between acc plus
+   the negatives and acc plus the positives, so when both ends fit no step of the block overflows. */
+#define msBlockSumFits(acc, pos, neg, sub, lo, hi) ((sub) \
+	? ((int64_t)(acc) - (pos) >= (lo) && (int64_t)(acc) - (neg) <= (hi)) \
+	: ((int64_t)(acc) + (neg) >= (lo) && (int64_t)(acc) + (pos) <= (hi)))
+#define msBlockWithin(a, b, e) ((b) >= 0 && (e) <= (int64_t)(a).len)
+#define msBlockWithinSpan(s, b, e) ((b) >= 0 && (e) <= (int64_t)(s).len)
+#define msBlockSumOf(acc, pos, neg, sub) ((sub) ? (int64_t)(acc) - (pos) - (neg) : (int64_t)(acc) + (pos) + (neg))
+
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
 	if (acc > max) return 0;
 	return term <= (max - acc) / (uint64_t)n;

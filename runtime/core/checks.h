@@ -41,6 +41,21 @@ static inline int64_t msCheckRangeI64(double v) {
 	return (int64_t)v;
 }
 
+static inline int64_t msCheckRangeExact_(int64_t v, int64_t lo, int64_t hi) {
+	if (v < lo || v > hi) msRaiseRangeErrorF((double)v, lo, hi);
+	return v;
+}
+#define msCheckRangeExactI8(v, lo, hi) ((int8_t)msCheckRangeExact_((v), (lo), (hi)))
+#define msCheckRangeExactU8(v, lo, hi) ((uint8_t)msCheckRangeExact_((v), (lo), (hi)))
+#define msCheckRangeExactI16(v, lo, hi) ((int16_t)msCheckRangeExact_((v), (lo), (hi)))
+#define msCheckRangeExactU16(v, lo, hi) ((uint16_t)msCheckRangeExact_((v), (lo), (hi)))
+#define msCheckRangeExactI32(v, lo, hi) ((int32_t)msCheckRangeExact_((v), (lo), (hi)))
+#define msCheckRangeExactU32(v, lo, hi) ((uint32_t)msCheckRangeExact_((v), (lo), (hi)))
+
+static inline int64_t msExactI64(int64_t v) {
+	return v > -9007199254740992LL && v < 9007199254740992LL ? v : msCheckRangeI64((double)v);
+}
+
 static inline uint64_t msCheckRangeU64(double v) {
 	if (!(v > -1.0 && v < 18446744073709551616.0)) msRaiseRangeErrorFToU64(v);
 	return (uint64_t)v;

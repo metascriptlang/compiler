@@ -789,6 +789,27 @@ extern function msCheckRangeU32(v: float64, lo: int64, hi: int64): uint32;
 extern function msCheckRangeI64(v: float64): int64;
 
 @compilerFunc
+extern function msCheckRangeExactI8(v: int64, lo: int64, hi: int64): int8;
+
+@compilerFunc
+extern function msCheckRangeExactU8(v: int64, lo: int64, hi: int64): uint8;
+
+@compilerFunc
+extern function msCheckRangeExactI16(v: int64, lo: int64, hi: int64): int16;
+
+@compilerFunc
+extern function msCheckRangeExactU16(v: int64, lo: int64, hi: int64): uint16;
+
+@compilerFunc
+extern function msCheckRangeExactI32(v: int64, lo: int64, hi: int64): int32;
+
+@compilerFunc
+extern function msCheckRangeExactU32(v: int64, lo: int64, hi: int64): uint32;
+
+@compilerFunc
+extern function msExactI64(v: int64): int64;
+
+@compilerFunc
 extern function msCheckRangeI64FromU64(v: uint64): int64;
 @compilerFunc
 extern function msCheckRangeI32FromU64(v: uint64, lo: int64, hi: int64): int32;
@@ -1057,6 +1078,64 @@ extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
 extern function msArrDataAtEither(c: boolean, a: Ptr<void>, b: Ptr<void>, i: int64): Ptr<void>;
 @compilerFunc
 extern function msBlockEnd(b: int64, len: int64): int64;
+@compilerFunc
+extern function msStickyAddI8(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyAddI16(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyAddI32(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyAddI64(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickySubI8(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickySubI16(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickySubI32(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickySubI64(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyMulI8(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyMulI16(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyMulI32(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyMulI64(a: int64, b: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyNegI8(a: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyNegI16(a: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyNegI32(a: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyNegI64(a: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeI8(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeU8(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeI16(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeU16(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeI32(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyRangeU32(v: int64, lo: int64, hi: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyExactI64(v: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickyAt(a: Ptr<void>, i: int64, bad: boolean): int64;
+@compilerFunc
+extern function msStickySpanAt(s: Ptr<void>, i: int64, bad: boolean): int64;
+@compilerFunc
+extern function msBlockSumFits(acc: int64, pos: int64, neg: int64, sub: boolean, lo: int64, hi: int64): boolean;
+@compilerFunc
+extern function msBlockWithin(a: Ptr<void>, b: int64, e: int64): boolean;
+@compilerFunc
+extern function msBlockWithinSpan(s: Ptr<void>, b: int64, e: int64): boolean;
+@compilerFunc
+extern function msBlockSumOf(acc: int64, pos: int64, neg: int64, sub: boolean): int64;
 @compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc
