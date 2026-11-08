@@ -2741,6 +2741,24 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				}
 				break;
 			}
+			case RaiserOpcode.CallHost: {
+				const entry = func.hostCache[((word >> 24) & 65535) as int32];
+				if (entry == null || !entry.leaf || vm.hostCallsRestricted) {
+					slow = true;
+					break;
+				}
+				vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb;
+				vm.hostArgsAt = (((word >> 40) & 65535) as int32) + 3;
+				vm.hostResult = ((word >> 8) & 65535) as int32;
+				const outerInPlace = vm.inPlaceHost;
+				vm.inPlaceHost = entry.inPlace;
+				_inPlaceHostFns[entry.inPlace](vm);
+				vm.inPlaceHost = outerInPlace;
+				slots = vm.regs.slots;
+				objects = vm.objectHeap.objects;
+				if (hostRaised()) slow = true;
+				break;
+			}
 			case RaiserOpcode.CallClosureTyped: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -3721,7 +3739,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				break;
 			}
 			case RaiserOpcode.LoadFieldRequired:
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Catch: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.UnownedRc: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArraySetLen: case RaiserOpcode.ConcatStr: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Catch: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.UnionConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.FutureThen: case RaiserOpcode.FutureRead: case RaiserOpcode.CollectCycles: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.DestroyValue: case RaiserOpcode.SinkValue: case RaiserOpcode.AssignInPlace: case RaiserOpcode.RcHeld: case RaiserOpcode.RcKeptCheck: case RaiserOpcode.UnownedRc: case RaiserOpcode.ArrayPop: case RaiserOpcode.ArrayShift: case RaiserOpcode.ArraySplice: case RaiserOpcode.ArraySplice3: case RaiserOpcode.ArrayReverse: case RaiserOpcode.ArraySort: case RaiserOpcode.ArrayFill: case RaiserOpcode.ArraySliceCopy: case RaiserOpcode.ArrayConcat: {
 				slow = true;
 				break;
 			}
@@ -3736,7 +3754,10 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 			const ta = retag(OPERAND_KINDS[k], ia);
 			const tb = retag(OPERAND_KINDS[k + 1], ib);
 			const tc = retag(OPERAND_KINDS[k + 2], ic);
-			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
+			if (op == RaiserOpcode.CallHost && hostRaised()) {
+				vmFinishHostRaise(vm);
+				if (vm.halted) { vmNoteSite(vm, func, pc); break; }
+			} else if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
 				if (vm.halted) { vmNoteSite(vm, func, pc); break; }
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
@@ -5610,7 +5631,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 
 	// Save/restore so a bridge that re-enters a nested VM leaves the outer
 	// VM's heaps active when it resumes.
-	const swapState = !hostStateActive(vm.objectHeap, vm.arrayHeap, vm.programArgv);
+	const swapState = inPlace < 0 && !hostStateActive(vm.objectHeap, vm.arrayHeap, vm.programArgv);
 	let prevObjHeap: RaiserObjectHeap | null = null;
 	let prevArrHeap: RaiserArrayHeap | null = null;
 	let prevArgv: string[] | null = null;
@@ -5656,6 +5677,10 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		if (inPlace < 0) setRegConform(vm, ia, result);
 		return;
 	}
+	vmFinishHostRaise(vm);
+}
+
+function vmFinishHostRaise(vm: RaiserVM): void {
 	const fatal = hostRaiseIsFatal();
 	const raised = takeHostRaise();
 	if (raised != null) {
@@ -7032,6 +7057,28 @@ test "a host call leaves the active host heaps as it found them, none included" 
 	assert activeHostObjectHeap() == outerObjects;
 }
 
+test "an in-place host call reads only the VM it is handed: no call from its site publishes the active heaps" {
+	_resetHostRegistryForTests();
+	let during: RaiserArrayHeap | null = null;
+	registerInPlaceHostFn("peek", (vm: RaiserVM): void => {
+		during = activeHostArrayHeap();
+		hostReturnInt(vm, 1);
+	});
+	const mod = makeTestModule([
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserConstString("peek")]);
+	const outer = createArrayHeap();
+	setActiveHostHeaps(createStructHeap(), outer);
+	for (const run of [0, 1]) {
+		during = null;
+		const vm = execModule(mod);
+		assert vm.error == "", vm.error;
+		assert during == outer;
+	}
+	setActiveHostHeaps(null, null);
+}
+
 test "CallHost zero-arg native" {
 	_resetHostRegistryForTests();
 	const constFn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => {
@@ -7066,7 +7113,11 @@ function execHostRaiseInCatch(fatal: boolean): RaiserVM {
 		raiseFromHost("host failure", fatal);
 		return raiserNil();
 	});
-	return execModule(makeTestModule(
+	return execModule(hostRaiseInCatchModule());
+}
+
+function hostRaiseInCatchModule(): RaiserModule {
+	return makeTestModule(
 		[
 			raiserABx(RaiserOpcode.Try, 0, 3),
 			raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
@@ -7082,7 +7133,26 @@ function execHostRaiseInCatch(fatal: boolean): RaiserVM {
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
 		[raiserConstString("raise"), raiserConstString("finally"), raiserConstString("message")]
-	));
+	);
+}
+
+test "a pure in-place host error ends the same on a site's cached call as on its first" {
+	_resetHostRegistryForTests();
+	registerInPlaceHostFn("raise", (vm: RaiserVM): void => { raiseFromHost("host failure", false); }, HostCapability.Pure);
+	const caught = hostRaiseInCatchModule();
+	for (const run of [0, 1]) {
+		const vm = execModule(caught);
+		assert vm.error == "", vm.error;
+		assert vm.output == "host failure\nfinally\n", vm.output;
+		assert vm.safePoints.length == 0;
+	}
+	registerInPlaceHostFn("raise", (vm: RaiserVM): void => { raiseFromHost("host failure", true); }, HostCapability.Pure);
+	const fatal = hostRaiseInCatchModule();
+	for (const run of [0, 1]) {
+		const vm = execModule(fatal);
+		assert vm.error == "host failure", vm.error;
+		assert vm.output == "", vm.output;
+	}
 }
 
 test "a fatal host error bypasses the guest catch and finally" {
@@ -7538,6 +7608,24 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 	assert r.intVal == 218;
 	assert vm.suspendedRuns.length == 0;
 	assert vm.floor == 0 && vm.floor == 0;
+}
+
+test "a pure in-place host call that tries to run the VM again is refused on a site's cached call too" {
+	_resetHostRegistryForTests();
+	const inner = createRaiserFunction("inner", [raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.Print, 1, 0, 0), raiserABC(RaiserOpcode.Ret, 1, 0, 0)], [raiserInt(100)], 1, 0, 4);
+	const outer = createRaiserFunction("outer", [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	], [raiserConstString("reenter"), raiserInt(7)], 1, 0, 8);
+	const mod = createRaiserModule("t", [inner, outer], 0);
+	registerInPlaceHostFn("reenter", (v: RaiserVM): void => { hostReturnInt(v, vmCallFunction(v, 0, [raiserInt(1)]).intVal); }, HostCapability.Pure);
+	for (const run of [0, 1]) {
+		const vm = createVM(mod);
+		vmCallFunction(vm, 1, [raiserInt(5)]);
+		assert vm.output == "", vm.output;
+		assert vm.error.startsWith("internal: the in-place host function 'reenter' tried to run the VM again"), vm.error;
+	}
 }
 
 test "an in-place host call that tries to run the VM again is refused before any instruction runs, naming the bridge" {

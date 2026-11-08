@@ -24,6 +24,7 @@ export interface HostEntry {
 	fn: RaiserHostFn;
 	inPlace: int32;
 	capability: HostCapability;
+	leaf: boolean;  // in place and spawns no child: it cannot run the VM again, so a call saves no floor and resumes no run
 	live: boolean;  // false once _resetHostRegistryForTests dropped it, so a call site that cached it resolves again
 }
 
@@ -48,14 +49,17 @@ export function registerHostFn(
 		entry.fn = fn;
 		entry.inPlace = -1;
 		entry.capability = capability;
+		entry.leaf = false;
 		return;
 	}
-	const newEntry: HostEntry = { name, fn, inPlace: -1, capability, live: true };
+	const newEntry: HostEntry = { name, fn, inPlace: -1, capability, leaf: false, live: true };
 	_registry.entries.set(name, newEntry);
 }
 
 export function setHostEntryInPlace(name: string, slot: int32): void {
-	_registry.entries.get(name)!.inPlace = slot;
+	const entry = _registry.entries.get(name)!;
+	entry.inPlace = slot;
+	entry.leaf = entry.capability != HostCapability.ChildProcess;
 }
 
 export function lookupHost(name: string): HostEntry | null {
@@ -84,11 +88,11 @@ export function hostRegistrySize(): number {
 }
 
 // --- Active VM heaps ---
-// Bridges receive RaiserValue args by value; an Object/Array value is only a
-// handle, so a bridge that must dereference one (msNodeChildCount/At) needs
-// the executing VM's heaps. vmHandleCallHost publishes them here before each
-// dispatch and restores the previous pair after, so nested VM runs inside a
-// bridge leave the outer VM's heaps active when the outer bridge resumes.
+// A boxed bridge receives RaiserValue args with no VM, so vmHandleCallHost
+// publishes the executing VM's heaps here before it and restores the previous
+// pair after, which leaves the outer VM's heaps active when a bridge that ran a
+// nested VM resumes. An in-place bridge reads only the VM it is handed: nothing
+// is published for it, so its calls save and restore nothing.
 
 let _activeObjectHeap: RaiserObjectHeap | null = null;
 let _activeArrayHeap: RaiserArrayHeap | null = null;
@@ -147,7 +151,11 @@ export function activeProgramArgv(): string[] | null {
 
 // Test-only: reset state between test runs.
 export function _resetHostRegistryForTests(): void {
-	for (const name of _registry.entries) _registry.entries.get(name)!.live = false;
+	for (const name of _registry.entries) {
+		const entry = _registry.entries.get(name)!;
+		entry.live = false;
+		entry.leaf = false;
+	}
 	_registry.entries.clear();
 	_registry.initialized = false;
 	_activeObjectHeap = createStructHeap();
