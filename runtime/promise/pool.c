@@ -236,8 +236,19 @@ extern void msMsgPoolsThreadTeardown(void);
 
 static void msAfterThreadRuns(void);
 
+static _Atomic(msExitHookFn) msThreadExitRelease = NULL;
+
+static void msThreadReleaseFlush(void) { msFutureReleaseFlush(); }
+
+void msArmDeferredRelease(void) {
+    if (atomic_load_explicit(&msThreadExitRelease, memory_order_relaxed) != NULL) return;
+    atomic_store_explicit(&msThreadExitRelease, msThreadReleaseFlush, memory_order_release);
+    msArmExitDrain();
+}
+
 static void msThreadExit(void) {
-    msFutureReleaseFlush();
+    msExitHookFn release = atomic_load_explicit(&msThreadExitRelease, memory_order_acquire);
+    if (release != NULL) release();
     msAfterThreadRuns();
 }
 
