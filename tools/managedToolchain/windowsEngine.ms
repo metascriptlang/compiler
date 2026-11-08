@@ -675,7 +675,7 @@ function readLicense(path: string | null): Result<EngineLicense, string> {
 		statement: "supplied by the operator and not checked against the release",
 	});
 }
-function claimPartial(output: string): Result<string, string> {
+export function claimPartial(output: string): Result<string, string> {
 	const parent = dirname(output);
 	try engineIo(ensureDir(parent));
 	for (let i: int32 = 0; i < 100; i += 1) {
