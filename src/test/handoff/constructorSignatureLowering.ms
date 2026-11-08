@@ -3,8 +3,9 @@ import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { ctorVariantIndex } from "../../checker/ctorRoutine";
 import { transformProgram } from "../../transform/index";
-import { Node, NodeKind, Symbol, ProgramData, ClassDeclData, ConstructorDeclData, FunctionDeclData, NewExprData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, Symbol, TypeKind, ProgramData, ClassDeclData, ConstructorDeclData, FunctionDeclData, NewExprData, CallExprData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
 import { resetBuildState } from "../../compiler/buildSession";
 import { forEachChild } from "../../ast/visitor";
@@ -61,20 +62,23 @@ function initFunctions(program: Node): number {
 	return count;
 }
 
-test "constructorSignatureLowering: C keeps one init function and every new runs it" {
+test "constructorSignatureLowering: C runs each new through the implementation checked with its signature's types" {
 	const unit = checkedWithSignatures(false);
 	const impl = ctorMembers(unit.program)[2].resolvedSym!;
 	assert !hasFlag(impl, SymbolFlag.OverloadSig);
 	const lowered = transformProgram(unit.program, unit.ctx, false);
-	assert initFunctions(lowered) == 1;
+	assert initFunctions(lowered) == 3;
 	assert ctorMembers(lowered).length == 0;
 	const sites: Symbol[] = [];
 	constructSites(lowered, sites);
 	assert sites.length == 2, `${sites.length}`;
-	for (const s of sites) assert s == impl;
+	assert ctorVariantIndex(sites[0]) == 0 && ctorVariantIndex(sites[1]) == 1;
+	assert sites[0].symbolType.typeChildren[1].kind == TypeKind.String;
+	assert sites[1].symbolType.typeChildren[1].kind == TypeKind.Number;
+	assert ctorVariantIndex(impl) == -1;
 }
 
-test "constructorSignatureLowering: JS keeps one constructor and every new names the implementation" {
+test "constructorSignatureLowering: JS keeps one constructor and every new names a routine of the class" {
 	const unit = checkedWithSignatures(true);
 	const impl = ctorMembers(unit.program)[2].resolvedSym!;
 	const lowered = transformProgram(unit.program, unit.ctx, true);
@@ -84,5 +88,5 @@ test "constructorSignatureLowering: JS keeps one constructor and every new names
 	const sites: Symbol[] = [];
 	constructSites(lowered, sites);
 	assert sites.length == 2, `${sites.length}`;
-	for (const s of sites) assert s == impl;
+	for (const s of sites) assert s.ctorOwner == impl.ctorOwner;
 }
