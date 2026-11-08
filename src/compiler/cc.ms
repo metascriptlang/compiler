@@ -834,7 +834,7 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 		flags = appendFlag(flags, "-lws2_32");
 		flags = appendFlag(flags, "-lmswsock");
 		flags = appendFlag(flags, "-lbcrypt");
-		if (opts.ccCompiler != CC_PREPARED && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+		if (!isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 			flags = appendFlag(flags, "-Wl,-Bstatic -lpthread");
 		}
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
@@ -1875,14 +1875,14 @@ test "prepared Windows configurations keep their platform baseline instead of th
 	assert cliCompileFlags(opts).contains("-D_WIN32_WINNT=0x0A00");
 }
 
-test "a Windows link through an external clang or gcc carries winpthread inside the executable" {
+test "a Windows link through clang, gcc or the prepared toolchain carries winpthread inside the executable" {
 	const opts = newCliOptions();
 	opts.targetOs = "windows";
 	opts.ccCompiler = 1;
 	assert cliLinkFlags("", opts).contains("-Wl,-Bstatic -lpthread");
 	opts.ccBinary = "/prepared/clang --config=/prepared/windows.cfg";
 	opts.ccCompiler = CC_PREPARED;
-	assert !cliLinkFlags("", opts).contains("-Bstatic");
+	assert cliLinkFlags("", opts).contains("-Wl,-Bstatic -lpthread");
 	opts.targetOs = "linux";
 	opts.ccCompiler = 1;
 	opts.ccBinary = "";
