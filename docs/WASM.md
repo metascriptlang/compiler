@@ -74,6 +74,18 @@ three handle checks and drop the site.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 
+- **Glue changes measured and rejected** (m1m, real bench, 3 interleaved runs, 2026-11-07/08):
+  caching heap views, `malloc` and exports in locals (no row faster, strLen 8% slower); a string
+  result through a kept wasm-side slot instead of an import (echo 148 against 144 ns, and it broke
+  `resultThrowPoison`); building the adopted Vec by spread or by an indexed copy after presizing
+  (sumVec unchanged: the cost was the second block, removed by adopting the payload); caching
+  `Module["msb"]` in the wasm loader and one shared string taker instead of a closure per call
+  (echo 121.0 against 121.1 and 118.5). Echo's remaining cost is the JS-side `malloc`, the wasm
+  free, and the copy a function makes when it returns its borrowed parameter.
+- **No zero-copy path for JS-owned data.** Wasm cannot address a JS `ArrayBuffer`, so a `Span` of
+  JS data is copied in and back, as wasm-bindgen's `&mut [f32]` glue does; data the wasm side
+  holds is shared without a copy through `Handle<VecBox<T>>` (bench row `scaleBox`).
+
 ## Is it still green
 
 Two checks answer it, both outside the land gate and the core tests, run on a host with Emscripten:
