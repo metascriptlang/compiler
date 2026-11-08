@@ -85,7 +85,7 @@ let _visitedSet: HashSet<string> = new HashSet<string>();
 let _visitedSyms: HashSet<Symbol> = new HashSet<Symbol>();
 let _markedUnions: HashSet<Type> = new HashSet<Type>();
 let _cellInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
-let _cellDemanders: HashSet<string> = new HashSet<string>();
+let _cellDemanders: HashMap<string, string[]> = new HashMap<string, string[]>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -222,13 +222,15 @@ function moveTypeInfoOwnerIntoCore(dispatchRegistry: DispatchRegistry, key: stri
 
 function markCellDemander(dispatchRegistry: DispatchRegistry, demand: CTypeInfoDemand, modulePath: string): void {
 	const demander = _singleModule != "" ? _singleModule : modulePath;
-	const site = demand.key + "\t" + demander;
-	if (_cellDemanders.has(site)) return;
-	_cellDemanders.add(site);
+	const demanders = _cellDemanders.get(demand.key);
+	if (demanders == null) _cellDemanders.set(demand.key, [demander]);
+	else if (demanders.includes(demander)) return;
+	else demanders.push(demander);
 	aliveSetAddModule(_aliveSet, demander);
 	if (demand.destroy != null) markReferenced(dispatchRegistry, demand.destroy, demander);
 	if (demand.trace != null) markReferenced(dispatchRegistry, demand.trace, demander);
 	if (demand.custody != null) markReferenced(dispatchRegistry, demand.custody, demander);
+	if (demand.reach != null) markReferenced(dispatchRegistry, demand.reach, demander);
 }
 
 function markRefArrayCell(dispatchRegistry: DispatchRegistry, arrT: Type, modulePath: string): void {
@@ -682,7 +684,7 @@ export function computeAliveSet(
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
 	_cellInfos = new HashMap<string, CTypeInfoDemand>();
-	_cellDemanders = new HashSet<string>();
+	_cellDemanders = new HashMap<string, string[]>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
@@ -795,7 +797,11 @@ function markReachWalks(dispatchRegistry: DispatchRegistry): void {
 			: null;
 		if (reach == null) continue;
 		demand.reach = reach;
-		markReferenced(dispatchRegistry, reach, demand.owner != "" ? demand.owner : reach.modulePath);
+		if (demand.kind == TypeInfoKind.Object) {
+			markReferenced(dispatchRegistry, reach, demand.owner != "" ? demand.owner : reach.modulePath);
+			continue;
+		}
+		for (const demander of _cellDemanders.get(demand.key) ?? []) markReferenced(dispatchRegistry, reach, demander);
 	}
 }
 
@@ -810,7 +816,7 @@ function takeReachability(): AliveSet {
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
 	_cellInfos = new HashMap<string, CTypeInfoDemand>();
-	_cellDemanders = new HashSet<string>();
+	_cellDemanders = new HashMap<string, string[]>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
@@ -830,7 +836,7 @@ export function collectModuleTypeInfoDemands(dispatchRegistry: DispatchRegistry,
 	_visitedSyms = new HashSet<Symbol>();
 	_markedUnions = new HashSet<Type>();
 	_cellInfos = new HashMap<string, CTypeInfoDemand>();
-	_cellDemanders = new HashSet<string>();
+	_cellDemanders = new HashMap<string, string[]>();
 	_singleModule = modulePath;
 	declIndexBuild([program], [modulePath]);
 	for (const stmt of (program.data as ProgramData).programStmts) {
