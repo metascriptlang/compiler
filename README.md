@@ -70,7 +70,7 @@ done.
 - **One concurrency model.** `await`. `spawn` returns an affine handle: it must be awaited exactly once and cannot escape, and the checker enforces it. Actors own a mailbox; a `void` method is a send, a returning method is a call that yields a `Promise`. Actor state is isolated, `nonisolated` fields opt out. Details: [docs/LANG-CONCURRENCE.md](docs/LANG-CONCURRENCE.md).
 - **Metaprogramming.** `macro` (AST to AST), `quote`, `@comptime` blocks run on Raiser, an embedded register-based bytecode VM, TypeScript-style decorators applied at compile time, and JSX parsed into a compile-time AST for macros to consume. [docs/LANG-METAPROGRAMMING.md](docs/LANG-METAPROGRAMMING.md), [docs/LANG-JSX.md](docs/LANG-JSX.md).
 - **Testing in the language.** `test` is a keyword; a test body asserts with `assert`. `msc test file.ms` runs the file's tests plus those of everything it imports.
-- **One source, many targets.** C through `clang` or `zig cc`: macOS, Linux, Windows, Android, iOS, FreeBSD, cross-compiled from any host. wasm32-WASI and Emscripten for the browser. `--app=lib|staticlib` for embedding. A JavaScript backend with source maps.
+- **One source, many targets.** C through the prepared clang/lld toolchain by default, or `clang`, `gcc` or `zig cc`: macOS, Linux, Windows, Android, iOS, FreeBSD, cross-compiled from any host. wasm32-WASI and Emscripten for the browser. `--app=lib|staticlib` for embedding. A JavaScript backend with source maps.
 - **A toolchain.** `msc build | run | test | check | fmt | init | lsp | upgrade`, a [compiler cache with explicit sharing boundaries](docs/BUILD-CACHE.md), and a package manager (`add`, `install`, `publish`) with a registry and lockfiles.
 
 ## Quick start

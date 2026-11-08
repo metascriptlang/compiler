@@ -222,6 +222,55 @@ Pinned by `src/test/guard/helloLinksNoAsyncRuntime.ms`. Not measured: Windows si
 15dd34468 (`~/projects/nim/bin` holds no compiler), and wasm/emcc, whose `main` calls
 `msDrainUntilIdle` directly.
 
+## Measured 2026-11-08 — the prepared bundle becomes the default; Windows leaves zig's runtime
+
+With no `--cc`, msc builds with the prepared clang/lld bundle every target the bundle carries a runtime for, and
+with zig every target it lacks (`resolveCCIn`, `bundleCarries`, `src/compiler/toolchain.ms`). The Windows bundle's C
+runtime is built from mingw-w64 13.0.0 and the compiler-rt builtins of LLVM 23.1.4
+(`tools/managedToolchain/prepareWindowsRuntime.ms`), not taken from zig.
+
+**Why the Windows runtime had to leave zig.** zig's `compiler_rt` exports `memset` on every non-C object format
+(`~/projects/zig` `lib/compiler_rt.zig:155-158`, master `16d31ceed5`), and it overrides the UCRT import with a loop
+that runs at about 4 GB/s: 80 KB memset 20 us under `zig cc -target x86_64-windows-gnu -O2`, 1.5 us from the UCRT
+(d87, best of 5 runs of 2000 calls). The producer now refuses a runtime whose `memset` is defined anywhere but the
+UCRT import library (`checkMovedSymbols`). zig had also folded winpthreads into its `zigc.lib`. In the mingw-w64 shape
+it is a separate archive, so the prepared Windows link carries `-Wl,-Bstatic -lpthread` like an external clang
+(`cliLinkFlags`, `src/compiler/cc.ms`).
+
+`.probe/sliceBench.ms` (`src/bench/harness`), `--release`, d87 (i7-8700K, Windows 11), one candidate msc built
+from tree `644d30375577373fcd6c9717ea54f0aae66131d2`. The same candidate builds the old zig-runtime bundle (old), the
+source-built bundle (new) and scoop clang with `--target=x86_64-w64-mingw32` (clang-mingw). Two runs, us/op, spread
+under 4% in every row; the host was not in a quiet window:
+
+| row | old | new | clang-mingw |
+|---|---|---|---|
+| slice 10k | 22.0 / 22.0 | 2.95 / 2.93 | 2.92 / 2.92 |
+| slice 100k | 230 / 231 | 38.3 / 38.9 | 37.6 / 37.9 |
+| fill 10k (push growth) | 47.6 / 47.6 | 16.4 / 16.6 | 16.8 / 16.9 |
+
+Other checks on the new d87 bundle with that candidate:
+- `tools/managedToolchain/platformMatrix.ms`, windows-x64: every consumer cell passes on both the bundle and zig.
+  The cells are hello, threads, crypto, the C and C++ companions, a shared library, debug info, release, danger,
+  UBSan (three cells) and HCR. Full LTO passes on the bundle; zig cannot run it. The debugger-stop cell fails on
+  both, because the harness drives gdb, which reads no CodeView/PDB.
+- The candidate self-builds through the bundle (217 s, not in a quiet window).
+
+Two producer runs on rtx gave byte-identical overlays.
+
+Self-host build time, bundle against zig, from the quiet A/B of 2026-11-07/08: each step recorded the CPU the rest of
+the host used. Only these summaries were kept; the per-run rows were not retained. The Windows rows predate the new
+runtime, which changes how fast programs run, not how fast compiles run, and they were not re-measured:
+
+| host | cold, `--lto=off`: bundle / zig `-g0` / zig | best working config: bundle thin / zig |
+|---|---|---|
+| d87 x86_64-windows | 181 / 269 / 316 s | 223 / 317 s |
+| m1m aarch64-macos | 90 / 109 / 126 s | 110 / 126 s |
+| rtx x86_64-linux | 53 / 56 / 77 s | 60 / 88 s |
+
+An edit rebuild was equal on both. msc built by the bundle runs 2–11% faster. `zig cc` on Linux emits full DWARF
+without `-g` (a danger msc is 221 MB against 33 MB), which is why the A/B has a `-g0` zig arm. `-O2` against `-O3`
+for release differs by under 1% on all three hosts, so release keeps `-O2`.
+
 ## Measured 2026-10-29 — the native toolchain bundle against managed zig
 
 Self-host `msc build src/index.ms` (450 modules) on RTX (WSL2, 24 threads, pinned to 16 CPUs,

@@ -288,7 +288,9 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   L51); run tests from the tree root.
 - Probing a `runtime/` or `std/` edit with the installed `msc`: build a private
   home that symlinks every entry of `~/.metascript` except the tree you replace.
-  A home missing `zig`/`vendor` fails with `'stdint.h' file not found`. A header
+  A home missing `vendor` fails with `'stdint.h' file not found`. A build run from a tree root finds the bundle at
+  `~/.metascript/msc-toolchain` (`nativeToolchainPath`); with no bundle anywhere, a build fails with
+  `no prepared toolchain bundle is published for host` and names `--cc=zig` and `--cc=<path>`. A header
   edit re-keys the object cache: after appending `#error` to
   `runtime/core/string.h`, a warm rebuild failed on it (measured 2026-09-19,
   v0.2.55), so no `rm -rf out` is needed after a runtime edit.

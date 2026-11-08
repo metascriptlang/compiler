@@ -5,7 +5,7 @@ The compiler is written in MetaScript. Working on it means building it with the 
 ## Prerequisites
 
 - A released `msc` on your `PATH`: `curl -fsSL https://metascriptlang.org/install.sh | sh`
-- A C compiler: `zig` or `clang`
+- The prepared LLVM toolchain bundle for your host, msc's default C compiler. msc looks for it at `$MSC_NATIVE_TOOLCHAIN`, then beside its own runtime root, then at `~/.metascript/msc-toolchain` (`nativeToolchainPath`, `src/compiler/toolchain.ms`). `zig` is needed only for targets the bundle does not carry: Wasm, bare, musl, another OS or CPU.
 - Submodules checked out: `git submodule update --init --recursive` (C libraries under `vendor/`, editor plugins under `tools/editor-plugin/`)
 
 ## Build
