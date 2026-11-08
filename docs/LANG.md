@@ -3282,6 +3282,113 @@ On 2026-10-04 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 3
 clang targets msvc, which `--hcr` does not build). Linux watch timing, macOS watch and iOS
 remain unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
+## JS and wasm in one program (`@wasm`)
+
+A `--target=js` build runs each exported function marked `@wasm`, and every function it calls, as
+WebAssembly, and the rest of the program as JS. The caller writes an ordinary call: the compiler
+generates both sides of the boundary, so there is no bridge to write. The same program built for C,
+or with `--wasm-placement=off`, runs in one place and prints the same output.
+
+```typescript
+// shapesWasm.ms
+@wasm
+export function ramp(n: int32): Float32Array {
+	const out = new Float32Array(n);
+	const xs: Span<float32> = out;
+	for (let i = 0; i < n; i += 1) xs[i] = (i as float32) + 0.5;
+	return out;
+}
+
+@wasm
+export function scale(xs: Span<float32>, k: float32): void {
+	for (let i = 0; i < xs.length; i += 1) xs[i] = xs[i] * k;
+}
+
+@wasm
+export function evaluate(value: int32, callback: (value: int32) => int32): int32 {
+	return callback(value) + 1;
+}
+```
+
+```typescript
+// main.ms
+import { ramp, scale, evaluate } from "./shapesWasm";
+
+function run(): void {
+	const a = ramp(4);           // a Float32Array on the JS side: 0.5,1.5,2.5,3.5
+	scale(a, 2);                 // written through the Span, seen in a: 1,3,5,7
+	console.log(a.join(","));
+	console.log(`${evaluate(20, (x: int32): int32 => x * 2)}`); // 41
+}
+run();
+```
+
+`msc build main.ms --target=js` writes the bundle and, beside it, `<stem>.wasm.mjs` and
+`<stem>.wasm`; the wasm half is built by Emscripten, found the way `findEmcc` in
+`src/compiler/cc.ms` looks for it. `msc run --target=js` places the same way.
+
+**What crosses.** A value crosses as a copy unless the row says it is lent or held:
+
+| Parameter or result | What the other side gets |
+|---|---|
+| numbers, `boolean` | the value; `int64`/`uint64` as an exact BigInt on the JS side |
+| `string` | a copy, as WTF-8 both ways: lone surrogates, a BOM and NUL survive |
+| a struct, `Vec<T>` of scalars, `T \| null` of these | a copy, nested fields included |
+| a typed array result (`Float32Array`, `Int32Array`, … the nine TS classes), nullable | a new array of the same class over a copy of the whole buffer, `byteOffset` and `length` kept |
+| `Span<T>` parameter (a `Vec<T>`, a slice `xs[1..3]` or a typed array passes to it) | lent for the call; a writable Span's writes are copied back; two views of one array share one copy |
+| a callback parameter | lent for the call, re-entrant (a callback may call wasm again) |
+| `Handle<C>` of an exported class `C` (`std/ffi`) | wasm owns the object, JS holds a counted reference: `release()`, `retain()`, `[Symbol.dispose]` |
+| `Handle<VecBox<T>>` with `h.view(f)` | a `Span<T>` over wasm memory inside `f` only, with no copy |
+
+**Errors cross as themselves.** A JS throw inside a callback reaches the JS caller as the same
+object; a wasm throw reaches it as an `Error` with its message. A trap cannot be unwound: it ends
+the wasm instance, and every later call to it throws saying so.
+
+**Refused at compile time, with the reason and the fix in the message:**
+
+- a callback the wasm side keeps past the call: `wasm-placed function 'listen' keeps its callback
+  parameter 'visit': it stores it in 'kept' at 5:7, but a JS callback is only lent for the call`;
+  the same for a `view` kept past `f`;
+- a module variable used by both halves: `the module variable 'total' is used by wasm-placed
+  function 'bump' and also by 'peek' at 9:9, which runs on the JS side: JS and wasm each keep their
+  own copy of module state, so neither sees the other's changes`;
+- a type with no copy form, as a parameter or result; each message names what crosses instead:
+  a class instance (`crosses as Handle<Counter>`, or return its values as a struct), an array
+  reference `T[]` (a `Vec` of bool, integer or float elements), a `Map` or `Set` (its keys and
+  values as `Vec` parameters), an enum (`x as int32`, back with `n as Color`, which checks the
+  range), a union (a tag integer and the payload, or one `@wasm` function per variant), a function
+  as a result or a struct field (a function crosses only as a parameter), and a callback that
+  returns a nullable value.
+
+**Refused at the call, as a thrown `Error`:**
+
+- a typed array result the wasm side still holds, whose `ArrayBuffer` another view holds, or whose
+  class extends the declared one, because the copy would stop seeing the original's writes: `the
+  Float32Array it returns is still held on the wasm side, so the copy JS receives would stop seeing
+  its writes: return Float32Array.from(x), a copy nothing else holds`;
+- a boundary call while a `view` is open, because the call could grow wasm memory: `boundary call
+  while a view of Handle<VecBox<float32>> created at handleViewOpenWasm.ms:4 is open: the call
+  could grow wasm memory`;
+- a `Handle` used or released after its last release: `use of Handle<Counter> created at
+  handleMisuseWasm.ms:8 after release`. A release while a call lends the handle waits for that call
+  to end.
+
+**Default (dev) builds check more.** They check argument types on the functions the entry
+re-exports, name the creation site in handle messages, and at exit print `msb leak: Handle<Counter>
+created at handleLeakWasm.ms:8 never released` for each handle still held; `MSB_LEAKS=error` makes
+that exit 1, and an exit code the program set is kept. `--release` and `--danger` keep the three
+handle checks and drop the site.
+
+The example, run as written on m1m 2026-11-08 (main `d8910b23c70`, Node 24.1.0, emcc 5.0.5), prints
+`1,3,5,7` and `41` built mixed, with `--wasm-placement=off` and for C. Each other statement is a
+wasmmix program under `src/test/wasmmix/programs/` (the example's parts `typedArrayResults` and
+`callback`, the refusals `refused*`, `typedArrayMisuse`, `handleMisuse`, `handleViewOpen`,
+`handleLeak`, the errors `callbackThrow*` and `trapPoison`). `src/test/wasmmix/check.sh` runs them
+on C, JS, mixed JS + wasm and headless Chrome 149: the same day and tree, all 80 programs pass (the
+units, 174/174, last ran on main `5e2b893c5bc`, before a docs and bench-only change). Not run:
+Windows and Linux hosts, other browsers. Design, rejected paths and
+measurements, including the bench against wasm-bindgen: [`WASM.md`](WASM.md).
+
 ## Strings and Characters
 
 Strings are immutable text values. Primitive characters and read-only byte views serve

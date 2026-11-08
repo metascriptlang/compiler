@@ -2009,10 +2009,33 @@ unreviewed code; macros/plugins/build actions are trusted-code boundaries.
 | VM (`--target=raiser`) | Evaluator-supported APIs/extern bridges, not native/JS parity. Unbridged runtime calls are not valid merely because parsing succeeded. |
 | `--app=lib` / `staticlib` | Stable exported ABI and host init/cleanup. Initialize the entry module/dependencies, not indiscriminately program-wide `MsMain`; do not depend on mangled internal names as a public ABI. |
 | Bare/manual | Explicit host/allocation/runtime boundary. Removing automatic RC does not remove cleanup obligations or provide a new allocator API. |
-| WASM / Emscripten | Distinct `--os=wasm` / `--os=emcc` toolchain/host paths. Mixed JS/WASM placement/ownership and `@wasm()` are design, not these target flags. |
+| WASM / Emscripten | Distinct `--os=wasm` / `--os=emcc` toolchain/host paths for a whole program in wasm. A JS program with a hot part in wasm is `--target=js` with `@wasm` functions instead (below). |
 | HCR (`--hcr`, `std/hcr`) | Explicit reload boundary and compatible state/resources. Globals persist; a changed initializer is not migration. Restart-required/rejected reloads are real outcomes. |
 | Cross-compilation / mobile / UI hosts | Actual SDK, ABI, libraries and host lifecycle; a target name is not app certification. |
 | Erlang | Postponed, not an alternative supported recipe. |
+
+### One program across JS and wasm
+
+Mark with `@wasm` the exported function whose work is heavy and whose inputs and outputs are few,
+and keep the boundary coarse: one call that does a loop, not a loop of calls. Each crossing pays
+for its copies, and a string pays for an encode on the way in and a decode on the way out. On the
+2026-11-08 ship baseline (`src/bench/wasmBoundary/baseline.md`, Node), a call with two integers
+costs about 3 ns, a 16-character string echoed through wasm about 120 ns, and a 1000-float array
+summed in wasm about 1 us. Contract and refusals: [LANG §JS and wasm](LANG.md#js-and-wasm-in-one-program-wasm).
+
+| Data | Write it as |
+|---|---|
+| numbers in, numbers out | plain parameters and a plain result; an enum as `x as int32` |
+| an array the call reads or fills in place | a `Span<T>` parameter (`Readonly<Span<T>>` when it only reads); a `Vec<T>`, a slice or a typed array passes to it |
+| an array the call makes | a typed array result (`Float32Array`, …) written through a `Span` of it; return it only when nothing on the wasm side keeps it, or return `Float32Array.from(x)` |
+| data wasm keeps between calls | an exported class behind `Handle<C>`, or `Handle<VecBox<T>>` read and written in place through `h.view(f)`; release it with `defer h.release()` |
+| work JS must do in the middle | a callback parameter; it is lent for the call, so keep the state it produces, not the callback |
+| state both halves read | none: pass it as a parameter and return what changed, or move every reader into wasm |
+
+Typed array writes go through a `Span` view (`const xs: Span<float32> = out; xs[i] = v`) rather
+than `out[i]`, which measured 1.28 against 0.69 us for 1000 floats on Node (`docs/WASM.md`). Build
+the same program with `--wasm-placement=off`, or for C, to check that the placement changes no
+result; `src/test/wasmmix/check.sh` is that check for the compiler.
 
 ### Allocation-constrained and manually hosted code
 
