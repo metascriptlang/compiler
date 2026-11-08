@@ -17,7 +17,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, expectsEnumMember, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { viewTypeArgumentFault, distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
+import { viewTypeArgumentFault, distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, typedArrayElement, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
 import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes, refuseViewField } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -857,6 +857,8 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
 			d.spreadArg = widenArrayBrand(d.spreadArg);
+			const typedElement = typedArrayElement(d.spreadArg.nodeType);
+			if (typedElement != null) d.spreadArg = wrapInConv(d.spreadArg, createSpan(typedElement));
 			if (isFunctionShaped(d.spreadArg.nodeType) && !valueOfInPlace(ctx, d.spreadArg)) {
 				addError(ctx, "a function value cannot be spread — call it first", node.location.line, node.location.column);
 			}
