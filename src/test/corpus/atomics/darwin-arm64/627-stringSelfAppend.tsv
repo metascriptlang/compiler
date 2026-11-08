@@ -16,6 +16,7 @@
 3	_msCompletionQueuePushOwned
 3	_msCompletionQueuePushReleaseBatch
 3	_msHeapAlloc
+3	_msHeapTakeTracked
 3	_msPoolWakeWorker
 4	_msAwaitGroupCompleteSlot
 4	_msChannelDrain

@@ -23,6 +23,7 @@
 3	_msCompletionQueuePushOwned
 3	_msCompletionQueuePushReleaseBatch
 3	_msHeapAlloc
+3	_msHeapTakeTracked
 3	_msPoolWakeWorker
 37	_main__SsrcZtestZcorpusZprogramsZ405U2DlockedU53haredU43ounterOms_u0
 4	_msAwaitGroupCompleteSlot

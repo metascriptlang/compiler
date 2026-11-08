@@ -154,6 +154,7 @@ struct msHeapBig {
     msHeapChunk base;
     msHeapBig* next;
     msHeapBig* prev;
+    size_t zeroed;
     _Alignas(16) unsigned char data[];
 };
 
@@ -167,7 +168,8 @@ struct msHeapSmall {
     uint32_t free;
     uint32_t acc;
     uint32_t foreignCells;
-    uint32_t alignOffset;
+    uint16_t alignOffset;
+    uint16_t bumpZeroed;
     _Alignas(16) unsigned char data[];
 };
 
@@ -421,6 +423,7 @@ static msHeapBig* msHeapSplit(msHeapRegion* a, msHeapBig* chunk, size_t size) {
     rest->base.prevSize = size;
     rest->base.owner = msHeapOwnerOf(a);
     rest->next = rest->prev = NULL;
+    rest->zeroed = chunk->zeroed;
     chunk->base.size = size;
     msHeapInclude(a, (uintptr_t)rest);
     msHeapUpdateNext(a, rest);
@@ -451,6 +454,7 @@ static msHeapBig* msHeapRequest(msHeapRegion* a, size_t size) {
     chunk->base.owner = msHeapOwnerOf(a);
     chunk->base.prevSize = 0;
     chunk->next = chunk->prev = NULL;
+    chunk->zeroed = MS_HEAP_FRESH_PAGES_ZERO;
     size_t lastSize = a->lastSize ? a->lastSize : MS_HEAP_PAGE_SIZE;
     uintptr_t left = (uintptr_t)chunk - lastSize;
     if (msHeapContains(a, left) && ((msHeapChunk*)left)->size == lastSize)
@@ -479,6 +483,7 @@ static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size) {
 
 static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
     chunk->base.prevSize &= ~(size_t)1;
+    chunk->zeroed = 0;
     if (chunk->base.size > MS_HEAP_MAX_BIG) {
         msHeapExclude(a, (uintptr_t)chunk);
         msHeapDeallocPages(chunk, chunk->base.size);
@@ -494,6 +499,7 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
                 left->base.size += chunk->base.size;
                 msHeapExclude(a, (uintptr_t)chunk);
                 chunk = left;
+                chunk->zeroed = 0;
                 if (chunk->base.size > MS_HEAP_MAX_BIG) {
                     msHeapBig* rest = msHeapSplit(a, chunk, MS_HEAP_MAX_BIG);
                     msHeapInsertBig(a, chunk);
@@ -574,14 +580,17 @@ static void msHeapDrainRemoteBig(msHeapRegion* a) {
 #define msHeapDrainRemoteBig(a) ((void)0)
 #endif
 
-void* msHeapAlloc(size_t size) {
+static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* zeroed) {
     msHeapRegion* a = msHeapHere();
     size_t cellSize = msHeapRound(size ? size : 1, MS_HEAP_ALIGN);
     if (cellSize <= MS_HEAP_PAGE_SIZE - sizeof(msHeapSmall)) {
         msHeapSmall* chunk = a->small[cellSize / MS_HEAP_ALIGN];
         void* result;
         if (!chunk) {
-            chunk = (msHeapSmall*)msHeapGetBig(a, MS_HEAP_PAGE_SIZE);
+            msHeapBig* page = msHeapGetBig(a, MS_HEAP_PAGE_SIZE);
+            uint16_t pageZeroed = page->zeroed != 0;
+            chunk = (msHeapSmall*)page;
+            chunk->bumpZeroed = pageZeroed;
             chunk->base.size = cellSize;
             chunk->next = chunk->prev = NULL;
             chunk->freeList = NULL;
@@ -591,13 +600,16 @@ void* msHeapAlloc(size_t size) {
             msHeapFetchRemoteCells(a, chunk);
             if (chunk->free >= cellSize) msHeapInsertSmall(a, chunk);
             result = chunk->data;
+            *zeroed = pageZeroed;
         } else {
             if (chunk->freeList) {
                 result = chunk->freeList;
                 chunk->freeList = chunk->freeList->next;
                 if (msHeapPage(result) != &chunk->base) --chunk->foreignCells;
+                *zeroed = 0;
             } else {
                 result = chunk->data + chunk->acc;
+                *zeroed = chunk->bumpZeroed;
                 chunk->acc += (uint32_t)cellSize;
             }
             chunk->free -= (uint32_t)cellSize;
@@ -617,16 +629,28 @@ void* msHeapAlloc(size_t size) {
         chunk->base.prevSize = 1;
         chunk->base.owner = msHeapOwnerOf(a);
         chunk->next = chunk->prev = NULL;
+        chunk->zeroed = MS_HEAP_FRESH_PAGES_ZERO;
         msHeapInclude(a, (uintptr_t)chunk);
     } else chunk = msHeapGetBig(a, bytes);
     a->occupied += chunk->base.size;
+    *zeroed = chunk->zeroed != 0;
     return chunk->data;
+}
+
+void* msHeapAlloc(size_t size) {
+    int zeroed;
+    return msHeapTake(size, &zeroed);
+}
+
+static __attribute__((noinline)) void* msHeapTakeTracked(size_t size, int* zeroed) {
+    return msHeapTake(size, zeroed);
 }
 
 void* msHeapCalloc(size_t count, size_t size) {
     size_t bytes = msHeapProduct(count, size);
-    void* p = msHeapAlloc(bytes);
-    msHeapZero(p, bytes);
+    int zeroed;
+    void* p = msHeapTakeTracked(bytes, &zeroed);
+    if (!zeroed) msHeapZero(p, bytes);
     return p;
 }
 

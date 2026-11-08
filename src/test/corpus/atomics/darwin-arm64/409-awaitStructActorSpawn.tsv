@@ -36,6 +36,7 @@
 3	_msCompletionQueuePushOwned
 3	_msCompletionQueuePushReleaseBatch
 3	_msHeapAlloc
+3	_msHeapTakeTracked
 3	_msPoolWakeWorker
 30	_msActorShutdownAtExit
 4	_msActorJobsFree
@@ -46,7 +47,7 @@
 5	_msAwaitGroupFailSlot
 5	_msFutureAddCallback
 5	_msSpawnWorkerSettle
-52	_msCDDispatch
+51	_msCDDispatch
 53	_msActorDestroyWithReason
 7	_main
 7	_msPoolSubmit

@@ -1,7 +1,7 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 20
-// @maxatomics(darwin-arm64) 176
-// @maxatomics(linux-x86_64) 59
+// @maxatomics(darwin-arm64) 179
+// @maxatomics(linux-x86_64) 62
 // @stdout: locked total=480000
 // @serial
 // @skip-js: main() awaits without being async, which the JS backend refuses; Arc and Locked themselves lower on JS (arcLockedValuePayloads)

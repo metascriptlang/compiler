@@ -53,6 +53,10 @@
 #endif
 #endif
 
+#ifndef MS_HEAP_FRESH_PAGES_ZERO
+#define MS_HEAP_FRESH_PAGES_ZERO MS_HEAP_THREADS
+#endif
+
 MS_HEAP_API void* msHeapAlloc(size_t size);
 MS_HEAP_API void* msHeapCalloc(size_t count, size_t size);
 MS_HEAP_API void* msHeapRealloc(void* p, size_t oldSize, size_t newSize);
