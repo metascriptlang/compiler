@@ -86,7 +86,7 @@ When publishing support or proposing a rename/removal, classify the exact shape 
 |---|---|
 | The fix tracks the reference implementation and stays inside the task | do it, verify it in the edit loop, report after; it reaches `main` through the land gate |
 | Two directions both track the reference, or the fix crosses a recorded intentional divergence | ask — one question, with a recommendation |
-| The root or its class reaches beyond the card, and the fix still tracks the reference | widen the card's Goal and Done when and continue; the widened part is its own slice; say so in the report |
+| The same root cause reaches sites beyond the card, and the fix still tracks the reference | widen the card's Goal and Done when and continue; the widened part is its own slice; say so in the report |
 | The work leaves the arc's goal (another product decision, another repo) | stop and report |
 | The fix needs a pass, structure or protocol the design and the reference both lack | stop and ask, marked **NEW MECHANISM**, before writing it |
 
