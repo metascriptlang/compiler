@@ -217,7 +217,10 @@ function reportGraphErrors(graph: ModuleGraph): void {
 	const hook = _diagnosticHook;
 	for (const err of graph.errors) {
 		if (hook != null) hook("", { message: err, line: 0, column: 0, severity: ErrorSeverity.Error });
-		else printDiag(red("graph error: ") + err);
+		else {
+			recordDiagnostic(diagnosticJson("", 0, 0, "error", `graph error: ${err}`));
+			printDiag(red("graph error: ") + err);
+		}
 	}
 	for (const dep of graph.circularDeps) {
 		let circMsg = `circular import: ${dep.fromPath} <-> ${dep.toPath}`;
@@ -228,6 +231,7 @@ function reportGraphErrors(graph: ModuleGraph): void {
 		if (dep.importLine > 0) {
 			circMsg = circMsg + ` (line ${dep.importLine})`;
 		}
+		recordDiagnostic(diagnosticJson("", 0, 0, "warning", circMsg));
 		printDiag(yellow("warning: ") + circMsg);
 	}
 }
@@ -295,8 +299,21 @@ function plainText(s: string): string {
 	return out;
 }
 
+let icVerifyCollecting = false;
+let icVerifyDiagnostics: string[] = [];
+let icVerifyDiagnosticsFile = "";
+
+function recordDiagnostic(json: string): void {
+	if (eventsPath != "") eventDiagnostics.push(json);
+	if (icVerifyCollecting) icVerifyDiagnostics.push(json);
+	if (icVerifyDiagnosticsFile != "" && !appendFile(icVerifyDiagnosticsFile, `${json}\n`).ok) {
+		printDiag(`error: incremental verify cannot write the diagnostic to '${icVerifyDiagnosticsFile}'`);
+		exit(1);
+	}
+}
+
 function recordError(message: string): void {
-	if (eventsPath != "") eventDiagnostics.push(diagnosticJson("", 0, 0, "error", plainText(message)));
+	recordDiagnostic(diagnosticJson("", 0, 0, "error", plainText(message)));
 }
 
 function printError(message: string): void {
@@ -317,7 +334,7 @@ export function setDiagnosticHook(hook: ((file: string, e: ModuleError) => void)
 
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
-	if (eventsPath != "") eventDiagnostics.push(diagnosticJson(modPath, e.line, e.column, e.severity == ErrorSeverity.Warning ? "warning" : "error", e.message));
+	recordDiagnostic(diagnosticJson(modPath, e.line, e.column, e.severity == ErrorSeverity.Warning ? "warning" : "error", e.message));
 	const hook = _diagnosticHook;
 	if (hook != null) {
 		hook(modPath, e);
@@ -1736,13 +1753,13 @@ function checkedDeclarationSourceRoot(entries: string[], opts: CliOptions): stri
 	if (opts.declarationSourceRoot == "") return "";
 	const root = canonicalModulePath(opts.declarationSourceRoot);
 	if (!isDir(root)) {
-		printDiag(`${error("error")}: --declaration-source-root must be an existing directory: ${root}`);
+		printError(`--declaration-source-root must be an existing directory: ${root}`);
 		stopBuild();
 	}
 	for (const path of entries) {
 		if (!path.startsWith(root.endsWith("/") ? root : `${root}/`)
 			|| (!path.endsWith(".ms") && !path.endsWith(".jms"))) {
-			printDiag(`${error("error")}: source declaration entry ${path} must be under ${root} and end in .ms or .jms`);
+			printError(`source declaration entry ${path} must be under ${root} and end in .ms or .jms`);
 			stopBuild();
 		}
 	}
@@ -1753,14 +1770,14 @@ function reserveJsTreeOutput(taken: HashMap<string, string>, path: string): void
 	const key = path.toLowerCase();
 	const previous = taken.get(key) ?? taken.get(`${key}/`);
 	if (previous != null) {
-		printDiag(`${error("error")}: output collision: ${previous} and ${path}`);
+		printError(`output collision: ${previous} and ${path}`);
 		stopBuild();
 	}
 	let parent = dirname(key);
 	while (parent != "." && parent != "" && parent != "/") {
 		const file = taken.get(parent);
 		if (file != null) {
-			printDiag(`${error("error")}: output collision: ${file} and ${path}`);
+			printError(`output collision: ${file} and ${path}`);
 			stopBuild();
 		}
 		taken.set(`${parent}/`, path);
@@ -1824,7 +1841,7 @@ function publishJsDeclarations(root: string, files: JsDeclarationOutput[]): void
 		const path = join(root, file.outRel);
 		ensureDir(dirname(path));
 		if (!atomicWriteFile(path, file.text)) {
-			printDiag(`${error("error")}: cannot publish declaration ${path}`);
+			printError(`cannot publish declaration ${path}`);
 			stopBuild();
 		}
 	}
@@ -1924,7 +1941,7 @@ function placeWasmModules(
 	const entry = wasmEntrySource(functions, (path: string): string => path.replaceAll("\\", "/"));
 	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.runtimeMethods, entry.jsLibrary, outStem, opts);
 	if (!built.ok) {
-		printDiag(`${error("error")}: ${built.error}`);
+		printError(built.error);
 		stopBuild();
 	}
 	const symOf = (f: BoundaryFunction): Symbol => {
@@ -2233,7 +2250,7 @@ function hcrSharedNativeDirectives(modules: ProcessedModule[], includePaths: Has
 				const config = appendFlag(entry.slice(tab + 1, entry.length), userProjectFlag(source, opts.projectRoot, root));
 				const previous = flags.get(shared);
 				if (previous != null && previous != config) {
-					printDiag(`${error("error")}: HCR shared native source '${shared}' has conflicting @compile flags`);
+					printError(`HCR shared native source '${shared}' has conflicting @compile flags`);
 					stopBuild();
 				}
 				flags.set(shared, config);
@@ -2710,7 +2727,7 @@ function compileTimeModules(paths: string[], stdPath: string): string[] {
 function refuseRuntimeCompileTimeReach(aliveSet: Readonly<AliveSet>): void {
 	if (aliveSet.compileTimeReaches.length == 0) return;
 	for (const chain of aliveSet.compileTimeReaches) {
-		printDiag(`${error("error")}: runtime code calls a function that exists only while macros expand: ${chain}; call it from a macro or a @comptime function`);
+		printError(`runtime code calls a function that exists only while macros expand: ${chain}; call it from a macro or a @comptime function`);
 	}
 	throw new Error(BUILD_STOPPED);
 }
@@ -3289,8 +3306,10 @@ function restoreEnv(name: string, prev: string): void {
 	else env.set(name, prev);
 }
 
-function verifyAgainstCold(warmDir: string, coldDir: string, cacheDir: string): string[] {
+function verifyAgainstCold(warmDir: string, warmDiagnostics: string[], warmFailed: boolean, coldDir: string, cacheDir: string): string[] {
 	emptyDir(coldDir);
+	const coldDiagnosticsFile = `${coldDir}.diagnostics`;
+	if (exists(coldDiagnosticsFile)) remove(coldDiagnosticsFile);
 	const args: string[] = [];
 	for (let i = 1; i < argv.length; i += 1) {
 		const arg = argv[i];
@@ -3302,17 +3321,29 @@ function verifyAgainstCold(warmDir: string, coldDir: string, cacheDir: string): 
 	const prevDump = withEnv("MSC_IC_VERIFY_DUMP", coldDir);
 	const prevCache = withEnv("MSC_CACHE_DIR", cacheDir);
 	const prevGlobal = withEnv("MSC_NO_GLOBAL_CACHE", "1");
+	const prevDiagnostics = withEnv("MSC_IC_VERIFY_DIAGNOSTICS", coldDiagnosticsFile);
 	const cold = execFileResult(execPath, args, cwd());
+	restoreEnv("MSC_IC_VERIFY_DIAGNOSTICS", prevDiagnostics);
 	restoreEnv("MSC_IC_VERIFY", prevVerify);
 	restoreEnv("MSC_IC_VERIFY_DUMP", prevDump);
 	restoreEnv("MSC_CACHE_DIR", prevCache);
 	restoreEnv("MSC_NO_GLOBAL_CACHE", prevGlobal);
-	if (!cold.started || !cold.pipeOk || cold.exitCode != 0 || cold.signal != 0) {
+	if (!cold.started || !cold.pipeOk || cold.signal != 0) {
+		return [`a cold build of the same sources did not run to an exit (${execPath} ${args.join(" ")}):\n${cold.output}${cold.errorOutput}`];
+	}
+	if (!warmFailed && cold.exitCode != 0) {
 		return [`the warm build succeeded and a cold build of the same sources failed (${execPath} ${args.join(" ")}):\n${cold.output}${cold.errorOutput}`];
 	}
+	if (warmFailed && cold.exitCode == 0) return [`the warm build failed and a cold build of the same sources succeeded (${execPath} ${args.join(" ")})`];
+	const coldText = try readFile(coldDiagnosticsFile) catch "";
+	const coldDiagnostics = coldText == "" ? [] as string[] : coldText.slice(0, coldText.length - 1).split("\n");
+	const problems: string[] = [];
+	if (warmDiagnostics.join("\n") != coldDiagnostics.join("\n")) {
+		problems.push(`diagnostics differ from a cold build at entry ${firstDifferentLine(warmDiagnostics.join("\n"), coldDiagnostics.join("\n"))}:\nwarm:\n${warmDiagnostics.join("\n")}\ncold:\n${coldDiagnostics.join("\n")}`);
+	}
+	if (warmFailed) return problems;
 	const warmUnits = readDir(warmDir).sort();
 	const coldUnits = readDir(coldDir).sort();
-	const problems: string[] = [];
 	if (coldUnits.length == 0) problems.push(`a cold build wrote no C unit to ${coldDir}, so nothing was compared`);
 	for (const unit of warmUnits) {
 		if (!coldUnits.includes(unit)) problems.push(`${unit} was emitted warm and not by a cold build`);
@@ -3349,6 +3380,8 @@ function watchBuild(run: WatchRun): boolean {
 		icVerifyWarmDir = warmDir;
 	}
 	eventDiagnostics = [];
+	icVerifyDiagnostics = [];
+	icVerifyCollecting = run.verify;
 	emitEvent("build.start", `,"build":${run.step},"changed":${jsonTexts(run.changed)}`);
 	let status = BuildStatus.Built;
 	let stopped = false;
@@ -3364,6 +3397,8 @@ function watchBuild(run: WatchRun): boolean {
 		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
 		run.session = createBuildSession(true);
 		if (run.verify) emptyDir(warmDir);
+		eventDiagnostics = [];
+		icVerifyDiagnostics = [];
 		try {
 			status = buildC(run.entryPath, opts, run.session);
 		} catch (e) {
@@ -3374,14 +3409,16 @@ function watchBuild(run: WatchRun): boolean {
 	}
 	if (stopped) label = "failed";
 	icVerifyWarmDir = "";
+	icVerifyCollecting = false;
 	if (internal != "") {
 		printError(`internal: the build threw '${internal}'`);
 		run.session = createBuildSession(true);
 		label = "failed";
 	}
-	if (run.verify && label != "failed") {
+	const diagnostics = eventDiagnostics.slice(0, eventDiagnostics.length);
+	if (run.verify && internal == "") {
 		const verified = label == "up-to-date" ? run.verifiedDir : warmDir;
-		const problems = verifyAgainstCold(verified, `${verifyRoot}/cold${run.step}`, `${verifyRoot}/cache${run.step}`);
+		const problems = verifyAgainstCold(verified, icVerifyDiagnostics, stopped, `${verifyRoot}/cold${run.step}`, `${verifyRoot}/cache${run.step}`);
 		if (problems.length > 0) {
 			for (const problem of problems) {
 				console.log(`watch: verify build ${run.step} differs: ${problem.split("\n")[0]}`);
@@ -3389,9 +3426,11 @@ function watchBuild(run: WatchRun): boolean {
 			}
 			run.session = createBuildSession(true);
 			label = "failed";
+		} else if (stopped) {
+			console.log(`watch: verify build ${run.step}: ${icVerifyDiagnostics.length} diagnostics equal a failed cold build`);
 		} else {
 			run.verifiedDir = verified;
-			console.log(`watch: verify build ${run.step}: ${readDir(verified).length} C units equal a cold build`);
+			console.log(`watch: verify build ${run.step}: ${readDir(verified).length} C units and ${icVerifyDiagnostics.length} diagnostics equal a cold build`);
 		}
 	}
 	const session = run.session;
@@ -3402,7 +3441,7 @@ function watchBuild(run: WatchRun): boolean {
 		const rechecked: string[] = [];
 		for (const path of session.check.rechecked) rechecked.push(path);
 		rechecked.sort();
-		emitEvent("build.done", `,"build":${run.step},"ms":${elapsed},"checked":${session.check.rechecked.size},"lowered":${session.loweredCount},"rechecked":${jsonTexts(rechecked)}`);
+		emitEvent("build.done", `,"build":${run.step},"ms":${elapsed},"checked":${session.check.rechecked.size},"lowered":${session.loweredCount},"rechecked":${jsonTexts(rechecked)},"diagnostics":[${diagnostics.join(",")}]`);
 	}
 	run.step = run.step + 1;
 	return label != "failed";
@@ -3680,6 +3719,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
 	icVerifyDump = session.keep ? icVerifyWarmDir : env.get("MSC_IC_VERIFY_DUMP");
+	icVerifyDiagnosticsFile = session.keep ? "" : env.get("MSC_IC_VERIFY_DIAGNOSTICS");
 	initCache(opts.mode, opts.forceRebuild, trimRootList(opts));
 	resetCompiledOFiles();
 	_directiveMemos = session.keep && opts.isHcr ? session.directiveMemos : null;
@@ -3767,7 +3807,7 @@ resetLiftedOps();
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
 	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {
-		printDiag(`${error("error")}: ${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
+		printError(`${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
 		stopBuild();
 	}
 
@@ -5207,7 +5247,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const outRel = outRelForModule(modPath, projectRoot, stdRoot);
 		const taken = modulePathOfOutRel.get(outRel);
 		if (taken != null) {
-			printDiag(`${error("error")}: ${taken} and ${modPath} would both be written to ${outRoot}/${outRel}`);
+			printError(`${taken} and ${modPath} would both be written to ${outRoot}/${outRel}`);
 			exit(1);
 		}
 		modulePathOfOutRel.set(outRel, modPath);
