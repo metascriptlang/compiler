@@ -26,7 +26,7 @@ interface ReaderSite {
 const READER_TOKENS = ["routineBody(", "lookupModuleProgram(", "lookupModuleCtx(", "pickBodyCtx(", "declaringModuleCtx(", "preludeBodyCtx(", "foreignBody("];
 
 const SITES: ReaderSite[] = [
-	{ file: "checker/instantiate.ms", readers: 14, records: 2 },
+	{ file: "checker/instantiate.ms", readers: 15, records: 2 },
 	{ file: "checker/template.ms", readers: 0, records: 1 },
 	{ file: "checker/checkPass.ms", readers: 7, records: 0 },
 	{ file: "checker/checkExprPass.ms", readers: 1, records: 0 },
