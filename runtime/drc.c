@@ -881,7 +881,7 @@ static void refuseOwnedCycle(msGcEnv* j) {
 			void* child = *(void**)j->traceStack.data[--j->traceStack.len].ptr;
 			int32_t k = child == NULL ? -1 : deadIndex(set, child);
 			if (k < 0) continue;
-			if (adjLen == adjCap) { adjCap *= 2; adj = (int32_t*)realloc(adj, (size_t)adjCap * sizeof(int32_t)); }
+			if (adjLen == adjCap) { adj = (int32_t*)msRealloc(adj, (size_t)adjCap * sizeof(int32_t), (size_t)adjCap * 2 * sizeof(int32_t)); adjCap *= 2; }
 			adj[adjLen++] = k;
 		}
 	}
