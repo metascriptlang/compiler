@@ -1236,7 +1236,11 @@ consume a count; this example instead ends it with `release()` and does not use 
 
 For a real SDK, unregister must also wait for callbacks already executing and forbid future ones
 before release. If callbacks come from foreign threads, runtime entry/thread attachment and
-synchronization need the actual host contract; this fixture certifies none of those. Keep the
+synchronization need the actual host contract; this fixture certifies none of those. What the
+runtime does attach on its own: a foreign thread that runs MS code gets its allocator region and
+per-thread state released when it exits (corpus `foreignThreadExitReleasesItsRegion`: 2200 such
+threads, peak RSS 2.8 MB on Linux, 3.0 MB on macOS, 4.9 MB on Windows), while an await on it still
+aborts (`foreignThreadAwaitFailsLoud`). Keep the
 scoped cleanup, or an equivalent owner, on every exit; unregister must finish before release.
 A stable exported function avoids assuming that a capturing lambda is a C ABI.
 
