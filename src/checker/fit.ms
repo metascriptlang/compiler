@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, unownedElementsRefusal, arityAdapts, runtimeParams, closureIntoCPointerReason } from "./compat";
 import { CheckerContext, isEngineCheckMode, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym, markUsedIn } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, jsValueKind, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, isReadonlyView, typeNameOf, distinctWidenBody, brandBase, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, awaitedType, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedUnitDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, isLiteralSet, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind, isOwnedRef, withoutOwned, createOwned } from "./types";
+import { isVarargs, createOwned, ownedClosureIn, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, jsValueKind, isStringLike, withoutNullMember, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, isReadonlyView, typeNameOf, distinctWidenBody, brandBase, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, awaitedType, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedUnitDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, isLiteralSet, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind, isOwnedRef, withoutOwned, createOwned } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -3586,10 +3586,25 @@ export function fitSendable(ctx: CheckerContext, expr: Node, formal: Type, exprT
 
 // A refused value is retyped to its slot, so the checks after the slot do not report the same mismatch again.
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
+	if (!formsOwnedClosure(ctx, expr, formal, exprType)) return expr;
 	const mark = ctx.errors.length;
 	const fitted = fitSlot(ctx, expr, formal, exprType);
 	if (formal == null || fitted != expr || !reportedErrorSince(ctx, mark)) return fitted;
 	return wrapInConv(expr, formal);
+}
+
+// An owned closure is formed from a function expression where it is stored, which marks the expression so
+// lambda lifting checks its environment; a closure formed elsewhere was never checked and is refused.
+function formsOwnedClosure(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): boolean {
+	const owned = ownedClosureIn(formal);
+	if (owned == null || ownedClosureIn(exprType) != null) return true;
+	if (expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) {
+		expr.nodeType = createOwned(expr.nodeType != null && expr.nodeType.kind == TypeKind.Function ? expr.nodeType : owned);
+		return true;
+	}
+	if (expr.kind == NodeKind.NullLiteral || (exprType != null && exprType.kind == TypeKind.Null)) return true;
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — an Owned closure is formed from a function expression where it is stored, so its captures can be checked; write the function expression here, or have the function that forms it return " + typeDisplayName(owned), expr.location.line, expr.location.column);
+	return false;
 }
 
 function isPathRootedInVariable(node: Node): boolean {

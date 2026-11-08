@@ -1758,7 +1758,7 @@ export function createMaybeType(inner: Type): Type {
 }
 
 function maybePayloadIs(cached: Type, inner: Type): boolean {
-	return isReadonlyView(cached.typeReturn) == isReadonlyView(inner) && sameDeclarationsIn(cached.typeReturn, inner, [], []);
+	return isReadonlyView(cached.typeReturn) == isReadonlyView(inner) && isOwnedClosure(cached.typeReturn) == isOwnedClosure(inner) && sameDeclarationsIn(cached.typeReturn, inner, [], []);
 }
 
 // A pair already being compared is taken as equal, the coinductive answer for a recursive type; every
@@ -1812,6 +1812,23 @@ export function createOwned(ref: Type): Type {
 	c.plainType = ref;
 	ref.ownedType = c;
 	return c;
+}
+
+// An owned closure's environment cannot be part of a cycle: it is checked where the closure is formed
+// from a function expression, so a cell holding the closure has no cycle through it.
+export function isOwnedClosure(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Function && t.typeFlags.has(TypeFlag.IsOwned);
+}
+
+// The owned closure type a slot of type `t` holds: `t` itself, the closure a nullable slot holds, or a
+// member of its union.
+export function ownedClosureIn(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (isOwnedClosure(t)) return t;
+	if (isMaybeType(t)) return ownedClosureIn(t.typeReturn);
+	if (t.kind != TypeKind.Union) return null;
+	const m = t.typeChildren.find((c: Type): boolean => isOwnedClosure(c));
+	return m != null ? m : null;
 }
 
 export function createUnowned(ref: Type): Type {

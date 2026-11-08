@@ -9,7 +9,7 @@
 import { callTypeInstanceHooks, callGenericTypeHook } from "./checkerCallbacks";
 import { firstPrivateField, refuseExtendingPrivateConstructor } from "./visibility";
 import { Node, NodeKind, NodeFlag, TypeAnnotationData, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData, BuiltinKind } from "../ast/node";
-import { getAttachedOp, setAttachedOp, peelThrough, PEEL_ALIAS, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isUnownedSlot, withoutUnowned, unownedOutsideArrays, noteSubclass, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
+import { getAttachedOp, setAttachedOp, peelThrough, PEEL_ALIAS, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createOwned, createUnowned, isUnownedSlot, withoutUnowned, unownedOutsideArrays, noteSubclass, isPlainFunctionPointer, isOwnedRef, isAtomicRef, isValuePointee, countedReferenceOf, countedReferenceText, boxedCountedReference, boxedReferenceRefusal, boundParamName, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance, isIterator, spelled, createSendable, copyTypeShallow, plainFunctionPointerType, getMinArity, viewShown, nestedViewShown, viewTypeArgumentFault } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, defineSymbolAs, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf, RoutineFlag, routineFlagSet, builtinKindName } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem, stdSymbol } from "./context";
@@ -1000,6 +1000,7 @@ function ownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: i
 	if (isUnresolvedType(inner) || inner.kind == TypeKind.Error) return inner;
 	const union = peelThrough(inner, PEEL_ALIAS);
 	if (union != null && union.kind == TypeKind.Union) return ownedUnionOf(ctx, inner, union, line, col);
+	if (inner.kind == TypeKind.Function) return ownedClosureOf(ctx, inner, line, col);
 	if (inner.kind != TypeKind.Ref || isAtomicRef(inner) || (inner.typeReturn != null && isValuePointee(inner.typeReturn))) {
 		addError(ctx, "Owned<T> takes a class type, got '" + typeDisplayName(inner) + "': a Vec or string is already unique, and a struct is a value", line, col);
 		return inner;
@@ -1015,6 +1016,10 @@ function ownedUnionOf(ctx: CheckerContext, written: Type, union: Type, line: int
 			members.push(m);
 			continue;
 		}
+		if (m.kind == TypeKind.Function) {
+			members.push(ownedClosureOf(ctx, m, line, col));
+			continue;
+		}
 		if (m.kind != TypeKind.Ref || isAtomicRef(m) || (m.typeReturn != null && isValuePointee(m.typeReturn))) {
 			addError(ctx, "Owned<T> takes a class type or a union of classes, got '" + typeDisplayName(written) + "': its member '" + typeDisplayName(m) + "' is not a class", line, col);
 			return written;
@@ -1025,6 +1030,16 @@ function ownedUnionOf(ctx: CheckerContext, written: Type, union: Type, line: int
 	owned.typeChildren = members;
 	owned.plainType = union;
 	return owned;
+}
+
+// Owned<F> of a closure type owns the closure's environment, which is checked to hold no cycle where the
+// closure is formed.
+function ownedClosureOf(ctx: CheckerContext, fn: Type, line: int32, col: int32): Type {
+	if (isPlainFunctionPointer(fn)) {
+		addError(ctx, "Owned<T> of a function takes a closure type, got '" + typeDisplayName(fn) + "': a plain function pointer has no environment to own", line, col);
+		return fn;
+	}
+	return createOwned(fn);
 }
 
 function unownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
