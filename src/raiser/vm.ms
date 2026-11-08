@@ -20,7 +20,7 @@ import {
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, assertPacked, callSiteMatches, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
+	makeTestModule, assertPacked, callSiteMatches, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule, touchFunction,
 } from "./module";
 import { objectCellSlot, objectCellSetSlot } from "./objectCell";
 import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
@@ -667,6 +667,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	if (refuseShapeBoundary(vm, callee, "vmCallFunction RaiserValue entry/return")) return raiserNil();
 	settleFloor(vm);
 	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
+	if (!callee.touched) touchFunction(vm.mod, callee, funcIdx as int32);
 	vm.funcIdx = funcIdx as int32;
 	vm.base = vm.floor as int32;
 	vm.ip = 0;
@@ -2172,6 +2173,7 @@ function moduleFail(vm: RaiserVM, error: RaiserValue): void {
 
 function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	const body = getModuleFunc(vm.mod, funcIdx);
+	if (!body.touched) touchFunction(vm.mod, body, funcIdx as int32);
 	startFrame(vm.regs, 0, body);
 	vm.callStack.depth = 0;
 	const sp: number[] = [];
@@ -2728,6 +2730,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					const args = fb + (func.blocks[ic] as int32);
 					for (let i = 0; i < argc; i += 1) slots[nb + i] = slots[args + i];
 					if (callee.ownRefs.length != 0) enterFrame(vm, slots, nb as int64, callee, argc);
+					if (!callee.touched) touchFunction(mod, callee, ib);
 					fb = nb;
 					funcIdx = ib;
 					func = callee;
@@ -2762,6 +2765,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					const args = fb + (func.blocks[ic] as int32);
 					for (let i = 0; i < argc; i += 1) slots[nb + i] = slots[args + i];
 					if (callee.ownRefs.length != 0) enterFrame(vm, slots, nb as int64, callee, argc);
+					if (!callee.touched) touchFunction(mod, callee, target as int32);
 					fb = nb;
 					funcIdx = target as int32;
 					func = callee;
@@ -2805,6 +2809,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 					const args = fb + (func.blocks[ic] as int32);
 					for (let i = 0; i < argc; i += 1) slots[nb + i] = slots[args + i];
 					if (callee.ownRefs.length != 0) enterFrame(vm, slots, nb as int64, callee, argc);
+					if (!callee.touched) touchFunction(mod, callee, target as int32);
 					fb = nb;
 					funcIdx = target as int32;
 					func = callee;
@@ -4290,6 +4295,7 @@ function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int
 	frame.spBase = vm.safePoints.length as int32;
 	vm.callStack.depth = depth + 1;
 
+	if (!callee.touched) touchFunction(vm.mod, callee, calleeFuncIdx as int32);
 	vm.base = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;

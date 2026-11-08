@@ -36,6 +36,7 @@ export interface RaiserFunction {
 	sigs: int64[];        // sigs[n] is the class signature of the first n registers
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
+	touched: boolean;     // entered since the module's touched list was last taken
 }
 
 export interface RaiserInlineSite {
@@ -74,6 +75,7 @@ export interface RaiserModule {
 	globalInit: RaiserValue[];
 	records: RaiserModuleRecord[];
 	exports: RaiserExport[];
+	touched: int32[];     // the functions entered since the last takeTouched, each once
 }
 
 // --- Constructors ---
@@ -119,7 +121,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		ownRefs.push(r);
 		if (r < paramWords) firstLocalRef += 1;
 	}
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, paramWords, callShape, localsCount, frameSize: regCount as int32, ownRefs, firstLocalRef, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: callShape == null ? layout.sigs : [], copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, inlined, inlineSites, fieldCache, constants, constWords, hostCache, nameIds, names, arity, paramWords, callShape, localsCount, frameSize: regCount as int32, ownRefs, firstLocalRef, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: callShape == null ? layout.sigs : [], copyPlans: [], classTypes: [], touched: false };
 	validateShapeClasses(func);
 	bindReturns(func);
 	return func;
@@ -203,7 +205,29 @@ export function createRaiserModule(name: string, functions: RaiserFunction[], en
 		assertPacked(func);
 		bindDirectCalls(func, functions);
 	}
-	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
+	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [], touched: [] };
+}
+
+export function touchFunction(mod: RaiserModule, func: RaiserFunction, funcIdx: int32): void {
+	func.touched = true;
+	mod.touched.push(funcIdx);
+}
+
+// The functions entered since the previous call, so a caller that takes the list before and after a run
+// learns every routine the run executed.
+export function takeTouched(mod: RaiserModule): int32[] {
+	const taken = mod.touched;
+	for (const idx of taken) {
+		if (idx < mod.functions.length) mod.functions[idx].touched = false;
+	}
+	mod.touched = [];
+	return taken;
+}
+
+export function retouch(mod: RaiserModule, funcIdxs: int32[]): void {
+	for (const idx of funcIdxs) {
+		if (idx < mod.functions.length && !mod.functions[idx].touched) touchFunction(mod, mod.functions[idx], idx);
+	}
 }
 
 function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): void {
