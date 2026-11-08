@@ -19,6 +19,7 @@ import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, generatedProcSym, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym } from "./scope";
+import { bindCStd } from "../transform/testUtil";
 
 
 function intersect(a: HashSet<Symbol>, b: HashSet<Symbol>): HashSet<Symbol> {
@@ -193,12 +194,14 @@ export function optimizeDrc(program: Node): Node {
 // ===== Tests =====
 
 function makeWmCall(v: Symbol): Node {
+	bindCStd();
 	const loc = testLoc();
 	return makeExprStmt(
 		makeCall(makeTypedIdentResolved(attachedOpSym("msStringWasMoved", AttachedOp.AttachedWasMoved), null, loc), [makeIdentResolved(v, loc)], loc), loc);
 }
 
 function makeDestroyCallForTest(v: Symbol): Node {
+	bindCStd();
 	const loc = testLoc();
 	return makeExprStmt(
 		makeCall(makeTypedIdentResolved(attachedOpSym("msStringDecref", AttachedOp.AttachedDestructor), null, loc), [makeIdentResolved(v, loc)], loc), loc);
