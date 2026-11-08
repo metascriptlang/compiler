@@ -4035,6 +4035,14 @@ class HeldBeyond {
 	seen: HashSet<Type>;
 }
 
+// Every note in the order the checker made it, so a session that keeps a module's check replays that
+// module's notes into the next build's fresh tables.
+export class HeldNote {
+	slot: Type;
+	held: Type;
+}
+
+let _heldLog: HeldNote[] = [];
 let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
 let _heldByFieldNames: HashMap<string, HashMap<Type, HeldBeyond>> = new HashMap<string, HashMap<Type, HeldBeyond>>();
 let _speculationDepth: int32 = 0;
@@ -4054,6 +4062,7 @@ export function swapHeldBeyond(next: HeldBeyondState | null): HeldBeyondState {
 export function resetHeldBeyond(): void {
 	_heldBySym = new HashMap<Symbol, HeldBeyond>();
 	_heldByFieldNames = new HashMap<string, HashMap<Type, HeldBeyond>>();
+	_heldLog = [];
 	_speculationDepth = 0;
 }
 
@@ -4138,6 +4147,7 @@ function opensToHeld(slot: Type): boolean {
 // object; a slot nothing else was accepted into stays closed.
 export function noteHeldBeyond(slot: Type, held: Type): void {
 	if (_speculationDepth > 0 || !opensToHeld(slot)) return;
+	_heldLog.push({ slot: slot, held: held });
 	const entry = heldEntry(slot);
 	if (entry.seen.has(held)) return;
 	entry.seen.add(held);
@@ -4146,6 +4156,33 @@ export function noteHeldBeyond(slot: Type, held: Type): void {
 
 // An unnamed record is one type wherever it is spelled, so the types held beyond it are those
 // noted under every slot with its identity (field names and field types).
+export function heldNoteMark(): int32 {
+	return _heldLog.length as int32;
+}
+
+export function heldNotesFrom(mark: int32): HeldNote[] {
+	return _heldLog.slice(mark);
+}
+
+export function replayHeldNotes(notes: HeldNote[]): void {
+	for (const n of notes) noteHeldBeyond(n.slot, n.held);
+}
+
+// The notes as declarations, to tell whether a module checked again noted other types than before.
+export function heldNotesText(notes: HeldNote[]): string {
+	const name = (t: Type): string => t.sym != null ? `${t.sym.modulePath}:${t.sym.name}:${t.sym.disamb}` : anonStructName(t.typeNames, t.typeChildren);
+	const seen = new HashSet<string>();
+	const keys: string[] = [];
+	for (const n of notes) {
+		const key = name(n.slot) + ">" + name(n.held);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		keys.push(key);
+	}
+	keys.sort();
+	return keys.join(";");
+}
+
 export function heldBeyond(slot: Type): Type[] {
 	if (!opensToHeld(slot)) return [];
 	if (slot.sym != null) {

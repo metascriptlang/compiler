@@ -20,6 +20,7 @@ import { checkCallExprProfile } from "./callResolve";
 import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
+import { HeldNote, heldNoteMark, heldNotesFrom, replayHeldNotes, heldNotesText } from "./types";
 
 export class CheckSession {
 	db: TransAmDb | null;
@@ -27,6 +28,8 @@ export class CheckSession {
 	instances: HashMap<string, Node[]>;
 	rechecked: HashSet<string>;
 	ops: HashMap<string, KeyedOp[]>;
+	held: HashMap<string, HeldNote[]>;  // per module: the types its check accepted behind an interface or record
+	heldChanged: string;                // a module checked again whose notes differ from its last check, "" when none
 }
 
 export function createCheckSession(): CheckSession {
@@ -36,6 +39,8 @@ export function createCheckSession(): CheckSession {
 		instances: new HashMap<string, Node[]>(),
 		rechecked: new HashSet<string>(),
 		ops: new HashMap<string, KeyedOp[]>(),
+		held: new HashMap<string, HeldNote[]>(),
+		heldChanged: "",
 	};
 }
 
@@ -166,6 +171,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	if (session != null) {
 		session.db = db;
 		session.rechecked = new HashSet<string>();
+		session.heldChanged = "";
 	}
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
@@ -181,16 +187,23 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
 		const opsMark0 = opMark();
+		const heldMark0 = heldNoteMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, ctx.generatedInstances);
 			session.ops.set(path, opsFrom(opsMark0));
+			const notes = heldNotesFrom(heldMark0);
+			const before = session.held.get(path);
+			if (before != null && session.heldChanged == "" && heldNotesText(before) != heldNotesText(notes)) session.heldChanged = path;
+			session.held.set(path, notes);
 			session.rechecked.add(path);
 		} else if (session != null && ctx != null) {
 			const warmOps = session.ops.get(path);
 			if (warmOps != null) replayOps(warmOps);
+			const warmHeld = session.held.get(path);
+			if (warmHeld != null) replayHeldNotes(warmHeld);
 		}
 		const _tm1 = performance.now();
 		if (graphTiming && (_tm1 - _tm0) > 100) {
