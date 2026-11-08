@@ -165,3 +165,32 @@ The indexOf rows now match the libc arm above (216301 / 222459), which closes th
 and not in another on the same code are left out, among them m1m `slice copy 64 KB` (0.80-1.55 across four runs) and
 `alloc 1 MB` (bimodal 47-107 GB/s within one process, P-core against E-core; 75 interleaved runs gave best 107264
 against 106163), rtx `array slice 10k` (0.94, then 1.00 pinned). Not measured: Windows.
+
+## Realloc in place and spread big payloads — rtx, 2026-11-08
+
+Two runtime changes, each keeping every program's result. Realloc copies by the block's own size, as the reference
+does (Nim `15dd34468` `lib/system/alloc.nim:1329-1337`), keeps the block when the new size still fits with at most half
+of it unused (mimalloc `v2.1.7` `src/alloc.c:246`), and grows a big chunk into its free right neighbour (jemalloc
+`5.3.0` `src/large.c:84-128`); array growth zeroes only the tail not known to be zero (Rust `grow_zeroed`). Big payloads
+start at a deterministic multiple of 64 bytes inside the chunk's slack, stride 27 over 64 slots (jemalloc
+`opt_cache_oblivious`, `arena_inlines_b.h:427-450`, without its extra page), so two big buffers rarely share a page
+offset. Pinned by `allocatorCoreContracts`, `allocatorZeroOnlyWhenDirty` and `allocatorThreadRegions`.
+
+Three arms on one candidate compiler: `base` is the runtime of main `d3033574822`, `realloc` adds the first change,
+`full` both. Interleaved best of 8, pinned to one core (`taskset -c 31`), load 15-22 (other gates). Rows outside
+0.95-1.05 against `base`:
+
+| row | realloc | full |
+|---|---|---|
+| copyTo 64 KB (MB/s) | 0.88 | 1.16 (118220; the libc arm above is 119947) |
+| slice copy 64 KB (MB/s) | 1.00 | 1.16 |
+| array push 10k (us/op, collections) | 1.09 | 1.11 |
+| array spread 10k (us/op, collections) | — | 1.14 |
+| toString utf8 1 MB (MB/s) | 0.93 | 0.93 |
+| fs readFile utf8 1 MB (MB/s) | 0.93 | 0.94 |
+
+The two utf8 rows run no realloc (`utf8String` allocates, scans and copies). The same loop alone, with the setup's
+`repeat` and `fromString`, has identical instructions in all three arms (4.0840e10) and cycles 5.57-5.70e9 in each, so
+the row moves with where the bench's earlier buffers leave the heap, not with a slower path. `copyTo` under `realloc`
+alone (0.88) is the same placement effect, which the spread removes. Not measured: Windows; m1m runs of these arms
+moved 0.8-2.3x between runs on the copy rows (P/E-core placement) and are left out.
