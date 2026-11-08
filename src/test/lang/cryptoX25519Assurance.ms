@@ -19,6 +19,8 @@ import {
 	withWrongExpected,
 } from "../crypto/vectors/x25519Cases";
 
+import "std/crypto/oracle/x25519";
+
 @include("vendor/monocypher/src/monocypher.h");
 extern function crypto_x25519(out: Ptr<uint8>, scalar: Ptr<uint8>, point: Ptr<uint8>): void;
 
