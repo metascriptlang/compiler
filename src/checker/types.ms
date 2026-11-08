@@ -1857,24 +1857,30 @@ export function withoutUnowned(t: Type): Type {
 // The Unowned<T> a type holds in an element, a union member, a tuple slot or a type argument;
 // a class or struct is not entered, because its own fields may hold one.
 export function unownedInside(t: Type | null): Type | null {
-	return unownedIn(t, 0);
+	return unownedIn(t, 0, false);
 }
 
-function unownedIn(t: Type | null, depth: int32): Type | null {
+// The Unowned<T> a type holds anywhere but as the element of an array, which counts its own elements.
+export function unownedOutsideArrays(t: Type | null): Type | null {
+	return unownedIn(t, 0, true);
+}
+
+function unownedIn(t: Type | null, depth: int32, countedByArray: boolean): Type | null {
 	if (t == null || depth > 64) return null;
 	if (isUnownedRef(t)) return t;
+	if (countedByArray && t.kind == TypeKind.Array && isUnownedSlot(t.typeReturn)) return null;
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias
-			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var) return unownedIn(t.typeReturn, depth + 1);
+			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var) return unownedIn(t.typeReturn, depth + 1, countedByArray);
 	if (t.kind == TypeKind.Ref) {
 		const p = t.typeReturn;
-		return p != null && (p.kind == TypeKind.GenericInstance || p.kind == TypeKind.Array) ? unownedIn(p, depth + 1) : null;
+		return p != null && (p.kind == TypeKind.GenericInstance || p.kind == TypeKind.Array) ? unownedIn(p, depth + 1, countedByArray) : null;
 	}
 	if (t.kind == TypeKind.Union || t.kind == TypeKind.Tuple || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Varargs || t.kind == TypeKind.Function) {
 		for (const c of t.typeChildren) {
-			const u = unownedIn(c, depth + 1);
+			const u = unownedIn(c, depth + 1, countedByArray);
 			if (u != null) return u;
 		}
-		if (t.kind == TypeKind.Function) return unownedIn(t.typeReturn, depth + 1);
+		if (t.kind == TypeKind.Function) return unownedIn(t.typeReturn, depth + 1, countedByArray);
 	}
 	return null;
 }

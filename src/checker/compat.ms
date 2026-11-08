@@ -23,7 +23,7 @@ function isUntypedPointer(t: Type): boolean {
 
 function sameElement(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
-	if (isUnownedSlot(a) != isUnownedSlot(b)) return false;
+	if (!sameElementCounting(a, b)) return false;
 	if (sameType(a, b)) return true;
 	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return false;
 	if (isOpenElement(a) || isOpenElement(b)) return isAssignable(a, b);
@@ -944,12 +944,28 @@ function arrayElementOf(t: Type | null): Type | null {
 	return arr != null && (arr.kind == TypeKind.Array || arr.kind == TypeKind.Span) ? arr.typeReturn : null;
 }
 
+// An element held on its Unowned count and one held strongly are released differently, at any depth of arrays.
+function sameElementCounting(a: Type, b: Type): boolean {
+	if (isUnownedSlot(a) != isUnownedSlot(b)) return false;
+	const ea = arrayElementOf(a);
+	const eb = arrayElementOf(b);
+	return ea == null || eb == null || sameElementCounting(ea, eb);
+}
+
+function differentlyCountedElement(from: Type, into: Type): Type | null {
+	if (isUnownedSlot(from) != isUnownedSlot(into)) return isUnownedSlot(from) ? from : into;
+	const ef = arrayElementOf(from);
+	const ei = arrayElementOf(into);
+	return ef != null && ei != null ? differentlyCountedElement(ef, ei) : null;
+}
+
 // An array is assigned by sharing it, and the two element kinds are released differently when it dies.
 export function unownedElementsRefusal(source: Type | null, target: Type | null): string {
 	const from = arrayElementOf(source);
 	const into = arrayElementOf(target);
-	if (from == null || into == null || isUnownedSlot(from) == isUnownedSlot(into)) return "";
-	const plain = typeDisplayName(withoutUnowned(isUnownedSlot(from) ? from : into));
+	const unowned = from != null && into != null ? differentlyCountedElement(from, into) : null;
+	if (unowned == null) return "";
+	const plain = typeDisplayName(withoutUnowned(unowned));
 	return " — an array of " + plain + " holds its elements strongly and an array of Unowned<" + plain + "> on their Unowned count, so one array cannot stand for the other; copy the elements into the other array one by one";
 }
 
