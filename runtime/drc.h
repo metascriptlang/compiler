@@ -48,6 +48,17 @@
 #define MS_RC_IMMORTAL_FLOOR ((intptr_t)1 << (sizeof(intptr_t) * 8 - 2))
 #define MS_RC_IMMORTAL       ((intptr_t)3 << (sizeof(intptr_t) * 8 - 3))
 
+/* The lower 4 bits. A destroyed object that Unowned<T> edges still point at keeps its memory as a
+ * husk marked MS_COL_DEAD until the last edge goes; nothing strong reaches a husk, so the collector
+ * never colors one. */
+#define MS_COL_BLACK   0
+#define MS_COL_GRAY    1
+#define MS_COL_WHITE   2
+#define MS_COL_DEAD    3
+#define MS_MAYBE_CYCLE 4
+#define MS_COLLECTING  8  /* in a dead set the collector is finalizing */
+#define MS_COLOR_MASK  3
+
 /* ===== Reference Header ===== */
 
 typedef struct {
@@ -441,8 +452,9 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	return false;
 }
 
-void msUnownedOutlives(void* p);
 _Noreturn void msRaiseUnownedOverflow(void* p);
+_Noreturn void msRaiseUnownedDead(void* p);
+void msUnownedFreeHusk(void* p);
 
 static inline void msUnownedIncref(void* p) {
 	if (p != NULL && MS_UNOWNED_INCREMENT != 0) {
@@ -456,8 +468,14 @@ static inline void msUnownedIncref(void* p) {
 static inline void msUnownedDecref(void* p) {
 	if (p != NULL) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedDecref");
-		msHeader(p)->rc -= MS_UNOWNED_INCREMENT;
+		msRefHeader* h = msHeader(p);
+		h->rc -= MS_UNOWNED_INCREMENT;
+		if (__builtin_expect((h->rc & (MS_UNOWNED_MASK | MS_COLOR_MASK)) == MS_COL_DEAD, 0)) msUnownedFreeHusk(p);
 	}
+}
+
+static inline void msUnownedCheckLive(void* p) {
+	if (__builtin_expect((msHeader(p)->rc & MS_COLOR_MASK) == MS_COL_DEAD, 0)) msRaiseUnownedDead(p);
 }
 
 static inline void msUnownedAssignAt(void** slot, void* p) {
@@ -473,10 +491,25 @@ static inline void* msUnownedTake(void* p) {
 	return p;
 }
 
+/* A read of an Unowned<T> slot as a plain T: stops on a husk, else a strong count the reader releases. */
+static inline void* msUnownedLoad(void* p) {
+	if (p != NULL) {
+		msUnownedCheckLive(p);
+		msIncRef(p);
+	}
+	return p;
+}
+
 static inline void* msUnownedGive(void* p) {
+	if (p != NULL) msUnownedCheckLive(p);
 	msIncRef(p);
 	msUnownedDecref(p);
 	return p;
+}
+
+static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	h->rc = (h->rc & ~(intptr_t)MS_COLOR_MASK) | MS_COL_DEAD;
 }
 
 void msDestroyAndDisposeDyn(void* p);
@@ -485,7 +518,7 @@ static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
 		if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
-			msUnownedOutlives(p);
+			msUnownedKeepHusk(h, p);
 			return;
 		}
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
@@ -501,7 +534,7 @@ static inline void msDestroyAndDispose(void* p) {
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
 	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
-		msUnownedOutlives(p);
+		msUnownedKeepHusk(h, p);
 		return;
 	}
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
@@ -552,13 +585,6 @@ static inline bool msDropEdgeLast(void* owner, void* p) {
 #define msWasMoved(p) ((p) = NULL)
 
 /* ===== ORC Cycle Collector ===== */
-
-#define MS_COL_BLACK   0
-#define MS_COL_GRAY    1
-#define MS_COL_WHITE   2
-#define MS_MAYBE_CYCLE 4
-#define MS_COLLECTING  8  /* in a dead set the collector is finalizing */
-#define MS_COLOR_MASK  3
 
 typedef struct {
 	void* ptr;

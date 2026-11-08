@@ -295,8 +295,8 @@ _Noreturn void msRaiseOwnedCycle(const msTypeInfo** types, int32_t count) {
 	exit(1);
 }
 
-_Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left) {
-	fprintf(stderr, "Error: %lld Unowned<%s> edge(s) still point at the %s being freed; each would dangle\n", (long long)left, msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
+_Noreturn void msRaiseUnownedDead(void* p) {
+	fprintf(stderr, "Error: an Unowned<%s> edge was read after its %s was destroyed\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }

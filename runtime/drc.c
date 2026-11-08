@@ -811,30 +811,12 @@ static void forEachEdge(msGcEnv* j, void* p, const msTypeInfo* type, bool drop) 
 
 static MS_TLS_STORAGE bool msOrcFinalizing = false;
 
-/* A cell freed while the collector finalizes may still be the target of Unowned
- * edges held by cells later in the same dead set; its free waits for the end of the set. */
-static MS_TLS_STORAGE msCellSeq msUnownedDeferred;
-
-_Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left);
-
-static void drainUnownedDeferred(void) {
-	while (msUnownedDeferred.len > 0) {
-		void* p = msUnownedDeferred.data[--msUnownedDeferred.len].ptr;
-		intptr_t left = msHeader(p)->rc & MS_UNOWNED_MASK;
-		if (left != 0) msRaiseUnownedOutlives(p, left >> 4);
-		msDestroyAndDispose(p);
-	}
-}
-
-void msUnownedOutlives(void* p) {
-	if (msOrcFinalizing) {
-		msCellSeqPush(&msUnownedDeferred, (msCell){ p, NULL });
-		return;
-	}
-	msOrcCollect();
-	intptr_t left = msHeader(p)->rc & MS_UNOWNED_MASK;
-	if (left != 0) msRaiseUnownedOutlives(p, left >> 4);
-	msDestroyAndDispose(p);
+/* The last Unowned<T> edge to a husk went: its memory goes back. */
+void msUnownedFreeHusk(void* p) {
+	msRefHeader* h = msHeader(p);
+	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
+	MS_HCR_COUNT(h->type, -1);
+	msSlabFree(h, h->allocSize);
 }
 
 static void finalizeCollected(msGcEnv* j) {
@@ -865,7 +847,6 @@ static void finalizeCollected(msGcEnv* j) {
 		msDestroyAndDispose(p);
 	}
 	msOrcFinalizing = false;
-	drainUnownedDeferred();
 }
 
 _Noreturn void msRaiseOwnedCycle(const msTypeInfo** types, int32_t count);

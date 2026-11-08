@@ -422,7 +422,13 @@ static inline void* msUnownedTakeRo(void* p) {
 	msUnownedIncrefRo(p);
 	return p;
 }
+static inline void* msUnownedLoadRo(void* p) {
+	if (p != NULL && !msIsImmortal(p)) msUnownedCheckLive(p);
+	msIncrefRo(p);
+	return p;
+}
 static inline void* msUnownedGiveRo(void* p) {
+	if (p != NULL && !msIsImmortal(p)) msUnownedCheckLive(p);
 	msIncrefRo(p);
 	msUnownedDecrefRo(p);
 	return p;

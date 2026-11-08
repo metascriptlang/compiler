@@ -541,12 +541,14 @@ static inline void msUnownedAssignAt(void** slot, void* p) { *slot = p; }
 #define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
 static inline void* msUnownedTake(void* p) { return p; }
 static inline void* msUnownedGive(void* p) { return p; }
+static inline void* msUnownedLoad(void* p) { return p; }
 #define msUnownedIncrefRo(p)  ((void)0)
 #define msUnownedDecrefRo(p)  ((void)0)
 #define msUnownedAssignRoAt(slot, p) msUnownedAssignAt((slot), (p))
 #define msUnownedAssignRo(slot, p) msUnownedAssignAt((void**)(slot), (p))
 #define msUnownedTakeRo(p)    msUnownedTake(p)
 #define msUnownedGiveRo(p)    msUnownedGive(p)
+#define msUnownedLoadRo(p)    msUnownedLoad(p)
 
 #define msClosureDestroy(c)   do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureCopy(c)      ((void)0)
