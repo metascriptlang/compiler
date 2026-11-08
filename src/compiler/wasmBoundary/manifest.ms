@@ -22,6 +22,7 @@ import { lookupInstanceHook } from "../../checker/instantiate";
 import { hasFlag } from "../../checker/symbol";
 import {
 	PEEL_ALIAS,
+	classParentOf,
 	getAttachedOp,
 	getBuiltinKind,
 	hasGenericParams,
@@ -35,6 +36,7 @@ import {
 	peelThrough,
 	runtimeClassSym,
 	typeDisplayNameUnprofiled,
+	typedArrayElement,
 	unwrapMaybeType,
 	unwrapRefNullUnion,
 } from "../../checker/types";
@@ -86,6 +88,7 @@ export interface BoundaryFunction {
 	resultElement: BoundaryKind;
 	resultHandle: string | null;
 	resultLabel: string;
+	resultClass: string;
 }
 
 export interface BoundaryRefusal {
@@ -423,6 +426,7 @@ interface ValueShape {
 	leaves: BoundaryLeaf[];
 	element: BoundaryKind;
 	handle: string | null;
+	className: string;
 }
 
 function declaresHook(t: Type): boolean {
@@ -517,6 +521,44 @@ function classTargetOf(t: Type): Type {
 		: t;
 }
 
+const TYPED_ARRAY_CLASSES = [
+	"Int8Array",
+	"Uint8Array",
+	"Uint8ClampedArray",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"Float32Array",
+	"Float64Array",
+];
+
+function typedArrayClassOf(t: Type): string | null {
+	const target = classTargetOf(t);
+	const parent = classParentOf(target);
+	if (parent == null || getBuiltinKind(parent) != BuiltinKind.TypedArray) {
+		return null;
+	}
+	const name = target.sym != null ? target.sym!.name : "";
+	return TYPED_ARRAY_CLASSES.includes(name) ? name : null;
+}
+
+function typedArrayWhy(t: Type, at: NoFormAt): string {
+	const element = describe(peeled(typedArrayElement(classTargetOf(t))!));
+	return byPosition(
+		at,
+		"and a typed array parameter does not cross, because the callee would "
+			+ "write a copy: take a Span<" + element + ">, lent for the call and "
+			+ "written back, or a Readonly<Span<" + element + ">>; a typed array "
+			+ "passes to either",
+		"and only the TS typed array classes cross as a result, not a class that "
+			+ "extends one: return a copy made with the class it extends, as in "
+			+ "Float32Array.from(x)",
+		"and a struct field cannot hold a typed array: return it from its own "
+			+ "@wasm function",
+	);
+}
+
 function classWhy(at: NoFormAt, nullable: boolean, t: Type): string {
 	const identity = `and a ${nullable ? "nullable " : ""}class instance has an `
 		+ "identity on one heap and does not cross as a copy: ";
@@ -558,6 +600,9 @@ function enumWhy(t: Type, at: NoFormAt): string {
 
 function unionWhy(t: Type, at: NoFormAt): string | null {
 	const held = unwrapRefNullUnion(t);
+	if (held != null && typedArrayElement(classTargetOf(held)) != null) {
+		return typedArrayWhy(held, at);
+	}
 	if (held != null) return isClassRef(held) ? classWhy(at, true, held) : null;
 	const variants = "and a union has no single boundary form: ";
 	return variants + byPosition(
@@ -613,6 +658,9 @@ function noFormWhy(t: Type, at: NoFormAt): string | null {
 	) {
 		return arrayWhy(at);
 	}
+	if (isClassRef(t) && typedArrayElement(classTargetOf(t)) != null) {
+		return typedArrayWhy(t, at);
+	}
 	return isClassRef(t) ? classWhy(at, false, t) : null;
 }
 
@@ -637,7 +685,7 @@ function valueShape(
 		if (!structLeaves(c, what, t, [], leaves)) return null;
 		const element = BoundaryKind.Void;
 		const handle = null;
-		return { kind: BoundaryKind.Struct, nullable, leaves, element, handle };
+		return { kind: BoundaryKind.Struct, nullable, leaves, element, handle, className: "" };
 	}
 	if (t.kind == TypeKind.Array && t.typeReturn != null) {
 		const et = peeled(t.typeReturn!);
@@ -654,7 +702,7 @@ function valueShape(
 			return null;
 		}
 		const handle = null;
-		return { kind: BoundaryKind.Vec, nullable, leaves: [], element, handle };
+		return { kind: BoundaryKind.Vec, nullable, leaves: [], element, handle, className: "" };
 	}
 	return null;
 }
@@ -782,7 +830,7 @@ function paramOf(
 
 function plainShape(kind: BoundaryKind, nullable: boolean): ValueShape {
 	const element = BoundaryKind.Void;
-	return { kind, nullable, leaves: [], element, handle: null };
+	return { kind, nullable, leaves: [], element, handle: null, className: "" };
 }
 
 function resultOf(c: Collector, type: Type | null): ValueShape | null {
@@ -814,14 +862,23 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		shape.element = handleElementOf(t);
 		return shape;
 	}
+	const heldTyped = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
+	const typed = typedArrayClassOf(heldTyped ?? t);
+	if (typed != null) {
+		const shape = plainShape(BoundaryKind.Typed, nullable || heldTyped != null);
+		const viewed = typedArrayElement(classTargetOf(heldTyped ?? t))!;
+		shape.element = scalarKind(peeled(viewed))!;
+		shape.className = typed;
+		return shape;
+	}
 	const errorsBefore = c.errors.length;
 	const shape = valueShape(c, "the result", t, nullable);
 	if (shape != null) return shape;
 	if (c.errors.length == errorsBefore) {
 		const why = noFormWhy(t, NoFormAt.Result)
 			?? "which has no JS/wasm boundary form: return void, bool, an integer, "
-				+ "a float, a string, a struct of those or a Vec of numbers, each "
-				+ "also nullable";
+				+ "a float, a string, a struct of those, a Vec of numbers or a TS "
+				+ "typed array, each also nullable";
 		refuse(c, "no-form", "the result", declared, why);
 	}
 	return null;
@@ -986,6 +1043,7 @@ function boundaryFunction(
 		resultLabel: result.handle == null
 			? ""
 			: handleLabel(c, result.handle!, nameAt),
+		resultClass: result.className,
 	};
 }
 

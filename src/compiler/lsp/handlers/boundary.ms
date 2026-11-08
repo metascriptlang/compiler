@@ -60,6 +60,7 @@ function crossing(
 		BoundaryKind.Vec => resultSide
 			? "copied out of wasm memory"
 			: "copied into wasm memory",
+		BoundaryKind.Typed => "copied out of wasm memory into a new typed array",
 		BoundaryKind.Span => mode == BoundaryMode.Shared
 			? "lent for the call, written back after it"
 			: "lent for the call, read only",
@@ -125,7 +126,7 @@ export function boundaryHoverSection(
 
 function costRank(p: BoundaryParam): int32 {
 	return match (p.kind) {
-		BoundaryKind.Vec => 5,
+		BoundaryKind.Vec | BoundaryKind.Typed => 5,
 		BoundaryKind.Span => 4,
 		BoundaryKind.Struct => 3,
 		BoundaryKind.String => 2,
@@ -149,6 +150,7 @@ function costRank(p: BoundaryParam): int32 {
 function costLabel(p: BoundaryParam): string {
 	return match (p.kind) {
 		BoundaryKind.Vec => "copy Vec",
+		BoundaryKind.Typed => "copy typed array",
 		BoundaryKind.Span => "lend Span",
 		BoundaryKind.Struct => "flatten struct",
 		BoundaryKind.String => "encode string",

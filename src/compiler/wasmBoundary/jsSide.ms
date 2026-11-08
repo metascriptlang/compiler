@@ -49,7 +49,8 @@ function wireToJsValue(kind: BoundaryKind, expr: string): string {
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
 			| BoundaryKind.Span
-			| BoundaryKind.Handle => {
+			| BoundaryKind.Handle
+			| BoundaryKind.Typed => {
 				unwiredKind(kind, "scalar conversion from the wasm side");
 			},
 	};
@@ -74,7 +75,8 @@ function jsValueToWire(kind: BoundaryKind, expr: string): string {
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
 			| BoundaryKind.Span
-			| BoundaryKind.Handle => {
+			| BoundaryKind.Handle
+			| BoundaryKind.Typed => {
 				unwiredKind(kind, "scalar conversion to the wasm side");
 			},
 	};
@@ -321,6 +323,10 @@ function takerOf(f: BoundaryFunction): string {
 	if (f.result == BoundaryKind.Vec) {
 		return `(p, n) => { r = ${vecOut("p >>> 0", "n", f.resultElement)}; }`;
 	}
+	if (f.result == BoundaryKind.Typed) {
+		const bytes = "__msbMod.HEAPU8.slice(p >>> 0, (p >>> 0) + n).buffer";
+		return `(p, n, o, k) => { r = new globalThis.${f.resultClass}(${bytes}, o, k); }`;
+	}
 	const names: string[] = [];
 	const values: string[] = [];
 	let w = 0;
@@ -514,7 +520,10 @@ function wrapperLines(
 	};
 	const body: string[] = match (f.result) {
 		BoundaryKind.Void => [guardedCall(""), "if (__msb.dirty) __msb.leave();"],
-		BoundaryKind.String | BoundaryKind.Struct | BoundaryKind.Vec => {
+		BoundaryKind.String
+			| BoundaryKind.Struct
+			| BoundaryKind.Vec
+			| BoundaryKind.Typed => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
 			lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
 			cleanup.push("if (__msb.takes.length > d) __msb.takes.length = d;");

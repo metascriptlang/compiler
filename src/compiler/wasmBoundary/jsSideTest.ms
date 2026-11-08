@@ -44,6 +44,7 @@ export function smearBy(cb: (dst: Span<float64>, src: Readonly<Span<float64>>) =
 export function lookBoth(cb: (a: Readonly<Span<int32>>, b: Readonly<Span<int32>>) => void): void {}
 export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
+export function rampF(n: int32): Float32Array { return new Float32Array(n); }
 `;
 
 const NULLABLE = `
@@ -61,6 +62,7 @@ export function upTo(n: int32): Vec<float32> | null { return null; }
 export function bump(i: Item | null): Item | null { return i; }
 export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
 export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
+export function maybeBytes(n: int32): Uint8ClampedArray | null { return null; }
 `;
 
 const HANDLES = `
@@ -248,7 +250,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", overloadIndex: 0, exportSymbol: "msb_calc_note",
 			params: [{ name: "cb", kind: BoundaryKind.Callback, nullable: false, mode: BoundaryMode.Borrowed, callback: cb, leaves: [], element: BoundaryKind.Void, handle: null }],
-			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void, resultHandle: null, resultLabel: "",
+			result: BoundaryKind.Void, resultNullable: false, resultLeaves: [], resultElement: BoundaryKind.Void, resultHandle: null, resultLabel: "", resultClass: "",
 		}],
 		errors: [],
 		handles: [],
@@ -754,4 +756,13 @@ test "js side: a VecBox result is owned with its typed array and a view reports 
 	assert b.prelude.includes("if (this.lent !== 0) {");
 	const plain = bindingsFor(["add64"]);
 	assert plain.prelude.includes("view(r, f)") == false;
+}
+
+test "js side: a typed array result is rebuilt as a new array of its class over a copy of its bytes, keeping its offset and length" {
+	const code = bindingsFor(["rampF"]).modules[0].code;
+	assert code.includes("const d = __msb.takes.push((p, n, o, k) => { r = new globalThis.Float32Array(__msbMod.HEAPU8.slice(p >>> 0, (p >>> 0) + n).buffer, o, k); }) - 1;"), code;
+	assert code.includes("try { __msbMod._msb_calc_rampF(a0); } catch (e) { throw __msb.die(e); }"), code;
+	assert code.includes("return r;");
+	const maybe = nullableBindings(["maybeBytes"]).modules[0].code;
+	assert maybe.includes("\tlet r = null;\n\tconst d = __msb.takes.push((p, n, o, k) => { r = new globalThis.Uint8ClampedArray("), maybe;
 }

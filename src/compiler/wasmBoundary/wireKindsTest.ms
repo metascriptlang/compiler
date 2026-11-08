@@ -20,7 +20,7 @@ const ALL_KINDS: BoundaryKind[] = [
 	BoundaryKind.Bool, BoundaryKind.I8, BoundaryKind.I16, BoundaryKind.I32, BoundaryKind.U8, BoundaryKind.U16,
 	BoundaryKind.U32, BoundaryKind.I64, BoundaryKind.U64, BoundaryKind.F32, BoundaryKind.F64, BoundaryKind.Void,
 	BoundaryKind.Callback, BoundaryKind.String, BoundaryKind.Struct, BoundaryKind.Vec, BoundaryKind.Span,
-	BoundaryKind.Handle,
+	BoundaryKind.Handle, BoundaryKind.Typed,
 ];
 
 const SCALARS: BoundaryKind[] = [
@@ -54,6 +54,7 @@ function accepts(kind: BoundaryKind, at: Position, jsSide: boolean): boolean {
 		BoundaryKind.Struct | BoundaryKind.Vec => at == Position.Param || at == Position.Result,
 		BoundaryKind.Span => at == Position.Param || at == Position.CallbackParam,
 		BoundaryKind.Handle => (at == Position.Param || at == Position.Result),
+		BoundaryKind.Typed => at == Position.Result,
 	};
 }
 
@@ -86,7 +87,7 @@ function leavesOf(kind: BoundaryKind): BoundaryLeaf[] {
 }
 
 function functionOf(params: BoundaryParam[], result: BoundaryKind, resultLeaves: BoundaryLeaf[], resultElement: BoundaryKind): BoundaryFunction {
-	return { modulePath: "/p/calc.ms", moduleKey: "calc", name: "f", exportSymbol: "msb_calc_f", params, result, resultLeaves, resultElement, resultHandle: result == BoundaryKind.Handle ? "Counter" : null, resultLabel: "" };
+	return { modulePath: "/p/calc.ms", moduleKey: "calc", name: "f", exportSymbol: "msb_calc_f", params, result, resultLeaves, resultElement, resultHandle: result == BoundaryKind.Handle ? "Counter" : null, resultLabel: "", resultClass: result == BoundaryKind.Typed ? "Float32Array" : "" };
 }
 
 function functionAt(kind: BoundaryKind, at: Position): BoundaryFunction {

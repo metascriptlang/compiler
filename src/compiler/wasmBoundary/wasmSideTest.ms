@@ -31,6 +31,9 @@ export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
 export function probeU32(cb: (x: uint32) => uint32): uint32 { return cb(4294967295); }
 export function probeU64(cb: (x: uint64) => uint64): uint64 { return cb(18446744073709551615); }
+export function rampF(n: int32): Float32Array { return new Float32Array(n); }
+export function rampI(n: int32): Int32Array { return new Int32Array(n); }
+export function rampF2(n: int32): Float32Array { return new Float32Array(n); }
 `;
 
 const NULLABLE = `
@@ -44,6 +47,7 @@ export function parity(n: uint8): boolean | null { return null; }
 export function greet(s: string | null): string | null { return s; }
 export function headOr(xs: Vec<int32> | null): int32 { return 0; }
 export function upTo(n: int32): Vec<float32> | null { return null; }
+export function maybeF(n: int32): Float32Array | null { return null; }
 export function bump(i: Item | null): Item | null { return i; }
 export function replay(cb: (n: int32 | null, s: string | null) => void): void {}
 export function replayBig(cb: (f: boolean | null, b: int64 | null) => void): void {}
@@ -235,7 +239,7 @@ test "wasm entry: a string parameter alone needs the allocator" {
 	assert e.runtimeMethods.join(",") == "HEAPU8";
 }
 
-const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "isEven", "visit", "twice", "report", "sumBy", "edit", "editFloat", "label", "make", "bytes", "ramp"];
+const EVERY_FUNCTION = ["tag", "scale", "total", "fill", "add64", "evaluate", "isEven", "visit", "twice", "report", "sumBy", "edit", "editFloat", "label", "make", "bytes", "ramp", "rampF"];
 
 test "wasm entry: each runtime export is used by the js glue of that function and each use is exported" {
 	for (const name of EVERY_FUNCTION) {
@@ -427,4 +431,28 @@ test "wasm entry: a Handle of a VecBox is typed in place and its view exports ap
 	assert e.runtimeMethods.includes("HEAPU8");
 	const none = handleEntryFor(["open", "bump"]);
 	assert none.source.includes("msb_vec_ptr_") == false && none.exportedFunctions.includes("_msb_vec_ptr_float32") == false;
+}
+
+test "wasm entry: a typed array result is handed to msb_rt only when it is exactly its class and nothing else holds it or its buffer" {
+	const e = entryFor(["rampF", "rampI", "rampF2"]);
+	const s = e.source;
+	assert s.includes("\t\tconst r = msbm0_rampF(n);\n\t\tmsbTypedFloat32Array(r, \"rampF\");"), s;
+	assert s.includes("\t\tmsbTypedInt32Array(r, \"rampI\");");
+	assert s.split("function msbTypedFloat32Array(r: Float32Array, f: string): void {").length == 2;
+	assert s.split("function msbTypedInt32Array(r: Int32Array, f: string): void {").length == 2;
+	assert s.split("#define msbSameClass(a, b) (msHeader(a)->type == msHeader(b)->type)").length == 2;
+	assert s.includes("const msbClassFloat32Array = new Float32Array(0);");
+	assert s.includes("\tif (msHeldCount(r as Ptr<void>) != 0) {");
+	assert s.includes("\tif (!msbSameClass(r as Ptr<void>, msbClassFloat32Array as Ptr<void>)) {");
+	assert s.includes("\tif (msbBufferHeld(r.store!) != 0) {");
+	assert s.includes("\t\tmsb_rt(own, r.own.length as int32, 0, r.length as int32);");
+	assert s.includes("\tmsb_rt(bytes, r.store!.bytes.length as int32, r.byteOffset as int32, r.length as int32);");
+	assert e.jsLibrary.includes("\tmsb_rt: (a0, a1, a2, a3) => Module['msb'].takes.pop()(a0, a1, a2, a3),"), e.jsLibrary;
+	assert e.runtimeMethods.includes("HEAPU8");
+}
+
+test "wasm entry: a nullable typed array result is handed over only when it is not null" {
+	const s = nullableEntryFor(["maybeF"]).source;
+	assert s.includes("\t\tconst r = msbm0_maybeF(n);\n\t\tif (r != null) {\n\t\t\tmsbTypedFloat32Array(r, \"maybeF\");\n\t\t}"), s;
+	assert !s.includes("msb_ret_some");
 }

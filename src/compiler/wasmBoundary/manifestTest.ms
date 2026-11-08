@@ -530,3 +530,26 @@ test "manifest: a Handle of a VecBox of a non-scalar, a bool or a bare Vec keeps
 		assert errorFor(m.errors, n).includes("T must be an exported class, as in Handle<Counter>"), n;
 	}
 }
+
+test "manifest: a TS typed array result crosses as a copy of its class, and a typed array parameter, field or subclass result refuses with its way out" {
+	const src = `
+class Tagged extends Float32Array {}
+struct Keep { a: Float32Array; n: int32; }
+export function f32(n: int32): Float32Array { return new Float32Array(n); }
+export function clamped(n: int32): Uint8ClampedArray { return new Uint8ClampedArray(n); }
+export function maybeI32(n: int32): Int32Array | null { return null; }
+export function takesF32(a: Float32Array): int32 { return 0; }
+export function fieldF32(k: Keep): int32 { return 0; }
+export function sub(n: int32): Tagged { return null as unknown as Tagged; }
+`;
+	const names = ["f32", "clamped", "maybeI32", "takesF32", "fieldF32", "sub"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.functions.length == 3, m.errors.map((e) => e.message).join("; ");
+	const f = m.functions[0];
+	assert f.result == BoundaryKind.Typed && f.resultClass == "Float32Array" && f.resultElement == BoundaryKind.F32 && !f.resultNullable;
+	assert m.functions[1].resultClass == "Uint8ClampedArray" && m.functions[1].resultElement == BoundaryKind.U8;
+	assert m.functions[2].result == BoundaryKind.Typed && m.functions[2].resultClass == "Int32Array" && m.functions[2].resultNullable;
+	assert errorFor(m.errors, "takesF32").includes("parameter 'a' has type 'Float32Array', and a typed array parameter does not cross, because the callee would write a copy: take a Span<float32>, lent for the call and written back, or a Readonly<Span<float32>>");
+	assert errorFor(m.errors, "fieldF32").includes("a struct field cannot hold a typed array: return it from its own @wasm function");
+	assert errorFor(m.errors, "sub").includes("only the TS typed array classes cross as a result, not a class that extends one: return a copy made with the class it extends, as in Float32Array.from(x)");
+}

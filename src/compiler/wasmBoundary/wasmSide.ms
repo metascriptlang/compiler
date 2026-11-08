@@ -158,6 +158,48 @@ function vecFromLines(kind: BoundaryKind): string[] {
 	];
 }
 
+function typedResultLines(classes: string[]): string[] {
+	const lines = [
+		"extern function msHeldCount(p: Ptr<void>): int64;",
+		'@emit("#define msbSameClass(a, b) (msHeader(a)->type == msHeader(b)->type)");',
+		"extern function msbSameClass(a: Ptr<void>, b: Ptr<void>): boolean;",
+		"function msbBufferHeld(b: ArrayBuffer): int64 {",
+		"\treturn msHeldCount(b as Ptr<void>);",
+		"}",
+	];
+	for (const c of classes) {
+		const copy = `return ${c}.from(x), a copy nothing else holds`;
+		const helper = [
+			`const msbClass${c} = new ${c}(0);`,
+			`function msbTyped${c}(r: ${c}, f: string): void {`,
+			"\tif (msHeldCount(r as Ptr<void>) != 0) {",
+			`\t\tthrow new Error(f + ": the ${c} it returns is still held on the `
+				+ "wasm side, so the copy JS receives would stop seeing its writes: "
+				+ `${copy}");`,
+			"\t}",
+			`\tif (!msbSameClass(r as Ptr<void>, msbClass${c} as Ptr<void>)) {`,
+			`\t\tthrow new Error(f + ": it returns an instance of a class that `
+				+ `extends ${c}, which has no JS/wasm boundary form: ${copy}");`,
+			"\t}",
+			"\tif (r.store == null) {",
+			"\t\tconst own = (r.own as Span<uint8>) as Ptr<void> as uint64 as int32;",
+			"\t\tmsb_rt(own, r.own.length as int32, 0, r.length as int32);",
+			"\t\treturn;",
+			"\t}",
+			"\tif (msbBufferHeld(r.store!) != 0) {",
+			`\t\tthrow new Error(f + ": the ${c} it returns views an ArrayBuffer that `
+				+ "another view or object still holds, so the copy JS receives would "
+				+ `stop sharing it: ${copy}");`,
+			"\t}",
+			"\tconst bytes = (r.store!.bytes as Span<uint8>) as Ptr<void> as uint64 as int32;",
+			"\tmsb_rt(bytes, r.store!.bytes.length as int32, r.byteOffset as int32, r.length as int32);",
+			"}",
+		];
+		for (const l of helper) lines.push(l);
+	}
+	return lines;
+}
+
 const ADOPT_VEC_MACRO = '@emit("#define msbAdoptVec(v, b, l) ((v)->len = (l), '
 	+ '(v)->p = (l) > 0 ? (void*)(uintptr_t)(b) : NULL)");';
 
@@ -386,6 +428,10 @@ function wrapperLines(
 			const take = `msb_rv(${base}, r.length as int32);`;
 			guardedExport(f, sig, "void", takenBody(f, call, take), "")
 		},
+		BoundaryKind.Typed => {
+			const take = `msbTyped${f.resultClass}(r, "${f.name}");`;
+			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+		},
 		BoundaryKind.Handle => {
 			const ret = "return r.ptr as uint64 as uint32;";
 			const body = [`const r = ${call};`, ret];
@@ -473,6 +519,7 @@ interface EntryUsage {
 	copiesFloat32: boolean;
 	hasScalarSome: boolean;
 	vecElements: BoundaryKind[];
+	typedClasses: string[];
 	resultImports: string[];
 	callbacks: BoundaryCallback[];
 	handles: string[];
@@ -501,6 +548,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		copiesFloat32: false,
 		hasScalarSome: false,
 		vecElements: [],
+		typedClasses: [],
 		resultImports: [],
 		callbacks: [],
 		handles: [],
@@ -521,8 +569,16 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			f.resultNullable
 			&& f.result != BoundaryKind.Struct
 			&& f.result != BoundaryKind.Vec
+			&& f.result != BoundaryKind.Typed
 		) {
 			usage.hasScalarSome = true;
+		}
+		if (f.result == BoundaryKind.Typed) {
+			usage.readsHeap = true;
+			addResultImport("msb_rt");
+			if (!usage.typedClasses.includes(f.resultClass)) {
+				usage.typedClasses.push(f.resultClass);
+			}
 		}
 		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!, f.resultElement);
 		if (f.result == BoundaryKind.Vec) {
@@ -616,7 +672,8 @@ function moduleImportLines(
 }
 
 function resultLettersOf(name: string): string {
-	return name == "msb_rv" ? "ii" : name.slice("msb_rs_".length);
+	if (name == "msb_rv") return "ii";
+	return name == "msb_rt" ? "iiii" : name.slice("msb_rs_".length);
 }
 
 function resultImportParams(name: string): string[] {
@@ -681,6 +738,9 @@ function entryLines(
 	}
 	for (const name of usage.resultImports) {
 		for (const l of importLines(name, resultLettersOf(name), "v", false)) lines.push(l);
+	}
+	if (usage.typedClasses.length > 0) {
+		for (const l of typedResultLines(usage.typedClasses)) lines.push(l);
 	}
 	for (const f of fns) {
 		const alias = aliasOf(f, usage.modules);
