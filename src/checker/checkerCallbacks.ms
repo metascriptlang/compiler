@@ -53,7 +53,7 @@ let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, params: Type[], c
 };
 
 let evalComptimeBlockFn: EvalComptimeBlockFn = (node: Node, ctx: CheckerContext): Node => {
-	return node;
+	throw new Error("internal: checker callback evalComptimeBlock was called before it was installed");
 };
 
 let expandMacroInvocationFn: ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32): Node => {
