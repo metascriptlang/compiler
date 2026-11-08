@@ -103,10 +103,17 @@ test "an Unowned element of a field's own array is pushed on the second count an
 	}
 }
 
-test "an Unowned edge deeper than a field's own array, or in a type argument, is refused until it is counted there" {
+test "an Unowned edge in a union member or a type argument is refused until it is counted there" {
 	const head = "class N { id: int32 = 1; }\n";
-	assert emitted(head + "class H { ups: Unowned<N>[][] = []; }\nconsole.log(new H().ups.length);\n").contains("a deeper element or a type argument is not built yet");
-	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\nconsole.log(new H().ups.size >= 0);\n").contains("a deeper element or a type argument is not built yet");
+	const refused = "inside a union member, a tuple, a function type or a type argument it is not built yet";
+	assert emitted(head + "class H { ups: (Unowned<N> | string)[] = []; }\nconsole.log(new H().ups.length);\n").contains(refused);
+	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\nconsole.log(new H().ups.size >= 0);\n").contains(refused);
+}
+
+test "an array of Unowned elements is held anywhere an array is: nested, nullable, a local, a parameter or a return" {
+	const c = emitted("class N { id: int32 = 1; }\nclass H { grid: Unowned<N>[][] = []; maybe: Unowned<N>[] | null = null; }\nfunction pick(xs: Unowned<N>[]): Unowned<N>[] { const out: Unowned<N>[] = []; for (const x of xs) out.push(x); return out; }\nconst n = new N();\nconst h = new H();\nh.grid.push([n]);\nh.maybe = pick(h.grid[0]);\nconsole.log(h.grid.length);\n");
+	assert !c.contains("error"), unownedLines(c);
+	assert c.contains("msUnownedTake("), unownedLines(c);
 }
 
 test "a value holding an Unowned edge does not cross a thread by move, reply or spawn result" {
