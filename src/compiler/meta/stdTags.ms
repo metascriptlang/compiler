@@ -26,15 +26,21 @@ export function isMetaSeedName(name: string): boolean {
 	return false;
 }
 
+// The module-scope symbols of `path`: its registered check, else the prelude's scope of it, because a
+// module the prelude holds is checked there and never by the graph.
+export function registeredModuleSymbols(path: string, prelude: CheckerContext | null = null): Symbol[] {
+	const ctx = lookupModuleCtx(path);
+	if (ctx != null) return moduleScopeSymbols(ctx.table);
+	return prelude != null ? prelude.preludeModuleScopes.get(path) ?? [] : [];
+}
+
 // One pass over the module scopes of the graph; a tag nothing in the graph carries stays null.
 export function metaTagged(graph: ModuleGraph, tags: BuiltinKind[]): (Symbol | null)[] {
 	const found: (Symbol | null)[] = [];
 	for (let i = 0; i < tags.length; i += 1) found.push(null);
 	let missing = tags.length;
 	for (const path of graph.modulePaths) {
-		const ctx = lookupModuleCtx(path);
-		if (ctx == null) continue;
-		for (const sym of moduleScopeSymbols(ctx.table)) {
+		for (const sym of registeredModuleSymbols(path)) {
 			if (sym.builtinKind == BuiltinKind.None) continue;
 			const at = tags.indexOf(sym.builtinKind);
 			if (at < 0 || found[at] != null) continue;
@@ -46,15 +52,22 @@ export function metaTagged(graph: ModuleGraph, tags: BuiltinKind[]): (Symbol | n
 	return found;
 }
 
+// The std/meta declarations carrying `tags` as `ctx` reaches them: through its graph, else through the
+// prelude, which holds std/meta when the graph leaves it to the prelude.
+export function metaTaggedFor(graph: ModuleGraph | null, ctx: CheckerContext | null, tags: BuiltinKind[]): (Symbol | null)[] {
+	const found = graph != null ? metaTagged(graph, tags) : tags.map((_: BuiltinKind): Symbol | null => null);
+	if (ctx != null) fillFromPreludeModules(ctx, tags, found);
+	if (ctx != null && ctx.preludeCtx != null) fillFromPreludeModules(ctx.preludeCtx, tags, found);
+	return found;
+}
+
 // The std/meta declarations the synthesized macro, decorator and comptime programs name, bound under
 // names the compiler writes; a user spelling of Node, NodeKind or DeclKind never reaches them.
 export function metaTypeSeeds(graph: ModuleGraph | null, ctx: CheckerContext | null): NamedSymbol[] {
 	const seeds: NamedSymbol[] = [];
 	const tags: BuiltinKind[] = [];
 	for (const entry of META_TYPE_TAGS) tags.push(entry.tag);
-	const found = graph != null ? metaTagged(graph, tags) : tags.map((_: BuiltinKind): Symbol | null => null);
-	if (ctx != null) fillFromPreludeModules(ctx, tags, found);
-	if (ctx != null && ctx.preludeCtx != null) fillFromPreludeModules(ctx.preludeCtx, tags, found);
+	const found = metaTaggedFor(graph, ctx, tags);
 	for (let i = 0; i < META_TYPE_TAGS.length; i += 1) {
 		const sym = found[i];
 		if (sym != null) seeds.push({ name: META_TYPE_TAGS[i].seed, sym: sym });

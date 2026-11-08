@@ -59,9 +59,9 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType, genericParamNamesOf } from "../../checker/types";
-import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
+import { declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag, isTypeSymbol } from "../../checker/symbol";
-import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
+import { metaTaggedFor, registeredModuleSymbols, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
@@ -503,10 +503,12 @@ function quotedSymbolOf(node: Node): Symbol | null {
 }
 
 function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
-	if (declCtx.moduleGraph == null) return null;
-	const bindSym = metaTagged(declCtx.moduleGraph, [BuiltinKind.MetaBindSym])[0];
-	const metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
-	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
+	const bindSym = metaTaggedFor(declCtx.moduleGraph, declCtx, [BuiltinKind.MetaBindSym])[0];
+	if (bindSym == null) return null;
+	for (const sym of registeredModuleSymbols(bindSym.modulePath, declCtx.preludeCtx ?? declCtx)) {
+		if (sym.name == "msMetaBindSym") return sym;
+	}
+	return null;
 }
 
 function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLocation): Node {

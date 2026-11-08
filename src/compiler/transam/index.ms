@@ -862,8 +862,7 @@ function checkedByPrelude(db: TransAmDb, modulePath: string, collected: Exported
 	if (prelude == null || !prelude.preludeModuleScopes.has(modulePath)) return collected;
 	const out: ExportedSymInfo[] = [];
 	for (const info of collected) {
-		const routine = info.sym.symbolKind == SymbolKind.Function || info.sym.symbolKind == SymbolKind.Method;
-		if (!routine || !prelude.preludeModuleScopes.has(info.sym.modulePath)) {
+		if (!prelude.preludeModuleScopes.has(info.sym.modulePath)) {
 			out.push(info);
 			continue;
 		}
@@ -1002,7 +1001,8 @@ function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
 
 function checkedElsewhere(db: TransAmDb, modulePath: string): boolean {
 	const held = lookupModuleCtx(modulePath);
-	return held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath);
+	return held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath)
+		|| db.preludeCtx != null && db.preludeCtx.preludeModuleScopes.has(modulePath);
 }
 
 function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): boolean {
