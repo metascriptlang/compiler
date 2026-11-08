@@ -194,3 +194,33 @@ The two utf8 rows run no realloc (`utf8String` allocates, scans and copies). The
 the row moves with where the bench's earlier buffers leave the heap, not with a slower path. `copyTo` under `realloc`
 alone (0.88) is the same placement effect, which the spread removes. Not measured: Windows; m1m runs of these arms
 moved 0.8-2.3x between runs on the copy rows (P/E-core placement) and are left out.
+
+## Remote frees in runs — rtx, 2026-11-09
+
+A small cell freed by a thread that does not own it now waits in that thread's open run for its owner and size class,
+and the run reaches the owner's shared list in one compare-and-swap with its length in its first cell (ULTRALOCK M10,
+snmalloc `0.7.1` `remotecache.h`, `remoteallocator.h`); the owner counts a fetched list by run lengths instead of
+visiting every cell. Every program keeps its result. Pinned by `allocatorThreadRegions` (`remoteRuns`).
+
+The probe is C over the allocator source alone: one owner allocates 4M messages and hands them round-robin to F freer
+threads over single-producer rings of 1024; each freer frees what its ring holds. `main` is the allocator of main
+`66e6d87e608`, `runs` this change. Interleaved best of 5, cores 24-31, load 15-38 from other jobs, so only the best is
+read (means moved up to 5x). ns per message, `main` → `runs`:
+
+| size | F = 1 | F = 2 | F = 4 |
+|---|---|---|---|
+| 32 B | 11.6 → 4.5 | 17.4 → 10.6 | 31.4 → 11.0 |
+| 256 B | 19.6 → 6.4 | 22.2 → 17.8 | 26.2 → 18.2 |
+| 1 KiB | 20.5 → 13.3 | 23.8 → 18.5 | 27.6 → 19.9 |
+
+A freer that finds its ring empty pauses 64 times before it looks again. A freer that looks again at once keeps
+reading the line the owner writes for every message, and the faster it frees the more it reads: there `runs` still
+wins eight rows of nine (F = 4: 34.1 → 20.5, 27.5 → 22.4, 28.4 → 23.3) and loses 32 B at F = 2 (17.4 → 18.7). Batching
+the frees alone, with the owner still visiting every cell, lost 10-20% at 256 B and 1 KiB, F = 2, against such a
+freer; per-thread profiles put the owner's time in visiting the fetched cells (50-56%) and the extra cost in the
+owner's own ring stores. MetaScript's own consumers do not poll this way: actors run when scheduled, workers park, and
+the pool's lock spins 40 rounds before it parks.
+
+The owner's local loop (allocate and free 64 live cells, pinned to one core, best of 10) runs 1.0% fewer instructions
+at 32 B and 2.8% fewer at 256 B and 1 KiB, the unread `foreignCells` count gone, at 3.34-3.38 ns against 3.38-3.54.
+Not measured: m1m, Windows, and the `src/bench` program rows, which free no cell from another thread.
