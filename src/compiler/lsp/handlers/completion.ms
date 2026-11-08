@@ -22,6 +22,7 @@ import {
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports, isCancelled, extensionsOf } from "../../../checker/context";
 import { sharedPreludeOwns } from "../../../checker/checkPass";
+import { defaultGlobalImports, extraGlobalImports } from "../../../checker/prelude";
 import { completionSources } from "../projectUniverse";
 import { requestCancel, resetCancel } from "../../transam/cancel";
 import { sgJsxSiteAt, sgCompleteJsx, sgFieldDeclLine } from "../../../checker/suggest";
@@ -172,7 +173,12 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 
 function lspIsPreludeModule(db: TransAmDb, modulePath: string): boolean {
 	const prelude = db.preludeCtx;
-	return prelude != null && (prelude.preludeModuleScopes.has(modulePath) || sharedPreludeOwns(prelude, modulePath));
+	if (prelude == null) return false;
+	if (sharedPreludeOwns(prelude, modulePath)) return true;
+	for (const specifier of [...defaultGlobalImports(), ...extraGlobalImports()]) {
+		if (dbResolveImport(db, modulePath, specifier) == modulePath) return true;
+	}
+	return false;
 }
 
 function lspEnsureSourceExports(db: TransAmDb, sources: string[], currentPath: string): void {
