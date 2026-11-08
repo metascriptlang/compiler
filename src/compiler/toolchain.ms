@@ -1183,13 +1183,23 @@ function installBundle(compilerRoot: string, source: BundleSource, assumeYes: bo
 	return installed;
 }
 
-function nativeToolchainPath(compilerRoot: string, explicit: string): string {
+// The bundle a build uses: the explicit one, the one beside the compiler's runtime root, then the one installed in
+// the MetaScript home, which a compiler run from a source tree finds the way an installed compiler does.
+function nativeToolchainPath(compilerRoot: string, explicit: string, home: string = ""): string {
 	if (explicit != "") return explicit;
-	if (compilerRoot == "") return "";
-	for (const entry of readDir(compilerRoot)) {
-		if (entry == "msc-toolchain" || entry == "msc-toolchain/") return join(compilerRoot, "msc-toolchain");
+	for (const root of [compilerRoot, home]) {
+		if (root == "") continue;
+		for (const entry of readDir(root)) {
+			if (entry == "msc-toolchain" || entry == "msc-toolchain/") return join(root, "msc-toolchain");
+		}
 	}
 	return "";
+}
+
+// Whether the bundle at root carries a runtime for the build's target; a target it lacks builds with Zig.
+function bundleCarries(root: string, opts: CliOptions): boolean {
+	const name = nativeRuntimeConfig(opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.abi);
+	return name != "" && exists(join(root, `runtime/${name}`));
 }
 
 test "native bundle discovery preserves explicit selection and notices an incomplete adjacent bundle" {
@@ -1205,8 +1215,8 @@ test "native bundle discovery preserves explicit selection and notices an incomp
 	assert rmdir(root).ok;
 }
 
-function requestedBundle(compilerRoot: string, explicit: string, assumeYes: boolean): Result<string, string> {
-	const found = nativeToolchainPath(compilerRoot, explicit);
+function requestedBundle(compilerRoot: string, explicit: string, assumeYes: boolean, home: string = ""): Result<string, string> {
+	const found = nativeToolchainPath(compilerRoot, explicit, home);
 	if (found != "") return Result.ok(found);
 	let installed: Result<string, string> = Result.err("msc has no runtime directory to install a toolchain beside");
 	if (compilerRoot != "") {
@@ -1231,10 +1241,12 @@ function selectZig(opts: CliOptions): void {
 // cmdBuildC and cmdTest both do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
 // cc.ms (ltoBroken/resolveLto) and run right after this, once the compiler is known.
 export function resolveCC(opts: CliOptions, stampRoot: string): void {
-	resolveCCIn(opts, stampRoot, resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
+	resolveCCIn(opts, stampRoot, resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"), metascriptHome());
 }
 
-function resolveCCIn(opts: CliOptions, stampRoot: string, compilerRoot: string, explicit: string): void {
+// With no --cc the prepared bundle builds every target it carries a runtime for; a target it lacks (Wasm, bare,
+// musl, another OS or CPU) builds with Zig, and a host with no bundle fails naming the alternatives.
+function resolveCCIn(opts: CliOptions, stampRoot: string, compilerRoot: string, explicit: string, home: string = ""): void {
 	if (opts.ccBinary == "zig") {
 		selectZig(opts);
 		return;
@@ -1243,12 +1255,12 @@ function resolveCCIn(opts: CliOptions, stampRoot: string, compilerRoot: string, 
 	if (wantBundle) opts.ccBinary = "";
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "emcc") return;
-	if (!wantBundle && explicit == "") {
+
+	const native = requestedBundle(compilerRoot, explicit, opts.autoYes, home);
+	if (native.ok && !wantBundle && explicit == "" && !bundleCarries(native.value, opts)) {
 		if (ensureZig(opts.autoYes) == "") stopBuild();
 		return;
 	}
-
-	const native = requestedBundle(compilerRoot, explicit, opts.autoYes);
 	const selected: Result<void, string> = native.ok ? selectNativeToolchain(opts, native.value, stampRoot) : Result.err(native.error);
 	if (!selected.ok) {
 		eprintln(`error: ${selected.error}`);
@@ -1379,24 +1391,47 @@ test "the bundle source is the table row of the host, or the override, and fails
 	assert localArchivePath("https://example.com/x.tar") == "";
 }
 
-test "an adjacent bundle does not replace Zig without an explicit opt-in" {
+test "an adjacent bundle builds by default the target it carries, and Zig a target it lacks" {
 	const root = installRoot();
 	assert root != "";
 	const bundle = selectionProbe(true);
 	assert bundle != "";
 	assert rename(bundle, join(root, "msc-toolchain")).ok;
+	const opts = linuxOptions();
+	resolveCCIn(opts, "", root, "");
+	assert opts.ccCompiler == CC_PREPARED;
+	assert opts.ccBinary.contains(join(root, "msc-toolchain"));
+	verifySelectedToolchain();
 	const home = env.get("HOME");
 	const zigDir = join(root, ".metascript/zig");
 	assert ensureDir(zigDir).ok;
 	assert writeFile(zigBinaryIn(zigDir), "probe").ok;
 	env.set("HOME", root);
-	const opts = linuxOptions();
-	resolveCCIn(opts, "", root, "");
+	const wasm = linuxOptions();
+	wasm.targetOs = "wasm";
+	wasm.cpuTarget = "wasm32";
+	resolveCCIn(wasm, "", root, "");
 	env.set("HOME", home);
-	verifySelectedToolchain();
-	assert opts.ccCompiler == 0;
-	assert opts.ccBinary == "";
+	assert wasm.ccCompiler == 0;
+	assert wasm.ccBinary == "";
 	assert removeAll(root).ok;
+}
+
+test "a source-tree compiler finds the bundle installed in the MetaScript home" {
+	const home = installRoot();
+	const tree = installRoot();
+	assert home != "" && tree != "";
+	const bundle = selectionProbe(true);
+	assert bundle != "";
+	assert rename(bundle, join(home, "msc-toolchain")).ok;
+	assert nativeToolchainPath(tree, "", "") == "";
+	assert nativeToolchainPath(tree, "", home) == join(home, "msc-toolchain");
+	const opts = linuxOptions();
+	resolveCCIn(opts, "", tree, "", home);
+	assert opts.ccCompiler == CC_PREPARED;
+	assert opts.ccBinary.contains(join(home, "msc-toolchain"));
+	verifySelectedToolchain();
+	assert removeAll(home).ok && removeAll(tree).ok;
 }
 
 test "the bundle alias explicitly selects an adjacent prepared toolchain" {
