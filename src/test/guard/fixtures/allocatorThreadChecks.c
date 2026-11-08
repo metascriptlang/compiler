@@ -5,6 +5,7 @@
 #define msHeapAlloc msHeapThreadProbeAlloc
 #define msHeapCalloc msHeapThreadProbeCalloc
 #define msHeapRealloc msHeapThreadProbeRealloc
+#define msHeapRealloc0 msHeapThreadProbeRealloc0
 #define msHeapFree msHeapThreadProbeFree
 #define msHeapReset msHeapThreadProbeReset
 #define msHeapThreadRelease msHeapThreadProbeRelease
@@ -76,6 +77,11 @@ static int inSet(void* p, void** set, int n) {
     return 0;
 }
 
+static int inPages(void* p, void** set, int n) {
+    for (int i = 0; i < n; ++i) if (msHeapPage(set[i]) == msHeapPage(p)) return 1;
+    return 0;
+}
+
 /* M10: a cell another thread frees goes onto the owner's shared list, and the
  * owner reuses it once its active chunk has no free cell; calloc zeroes it. */
 static void remoteSmallReuse(void) {
@@ -105,12 +111,33 @@ static void remoteBigReuse(void) {
     probeJoin(probeSpawn(freeBigs, NULL));
     CHECK(__atomic_load_n(&msHeapCurrent->sharedBig, __ATOMIC_ACQUIRE) != NULL);
     void* again = msHeapCalloc(1, BIG);
-    CHECK(inSet(again, bigs, 8));
+    CHECK(inPages(again, (void**)bigs, 8));
     for (int b = 0; b < BIG; ++b) CHECK(((unsigned char*)again)[b] == 0);
     CHECK(msHeapCurrent->sharedBig == NULL && a->pendingBig == NULL);
     CHECK(a->occupied == before + msHeapPage(again)->size);
     msHeapFree(again);
     CHECK(a->occupied == before);
+}
+
+/* A thread that does not own a big chunk never grows it in place, because that
+ * edits the owner's region; it moves the bytes instead. */
+static unsigned char* reallocTarget;
+static void reallocElsewhere(void* arg) {
+    (void)arg;
+    reallocTarget = msHeapRealloc(reallocTarget, BIG, 4 * BIG);
+    for (int b = 0; b < BIG; ++b) CHECK(reallocTarget[b] == 0x6b);
+    msHeapThreadRelease();
+}
+
+static void foreignRealloc(void) {
+    phase = "realloc from a thread that does not own the chunk";
+    unsigned char* original = msHeapAlloc(BIG);
+    memset(original, 0x6b, BIG);
+    reallocTarget = original;
+    probeJoin(probeSpawn(reallocElsewhere, NULL));
+    CHECK(reallocTarget != original);
+    for (int b = 0; b < BIG; ++b) CHECK(reallocTarget[b] == 0x6b);
+    msHeapFree(reallocTarget);
 }
 
 /* M10 stress: every thread allocates, stamps and hands cells to its neighbour,
@@ -215,6 +242,7 @@ static void foreignThreadExit(void) {
 int32_t msAllocatorThreadChecks(void) {
     remoteSmallReuse();
     remoteBigReuse();
+    foreignRealloc();
     stress();
     retireAndAdopt();
     foreignThreadExit();

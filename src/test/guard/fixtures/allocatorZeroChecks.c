@@ -6,6 +6,7 @@
 #define msHeapAlloc msHeapZeroProbeAlloc
 #define msHeapCalloc msHeapZeroProbeCalloc
 #define msHeapRealloc msHeapZeroProbeRealloc
+#define msHeapRealloc0 msHeapZeroProbeRealloc0
 #define msHeapFree msHeapZeroProbeFree
 #define msHeapReset msHeapZeroProbeReset
 #define msHeapThreadRelease msHeapZeroProbeThreadRelease
@@ -103,5 +104,56 @@ int32_t msAllocatorZeroChecks(void) {
 	unsigned char* plain = msHeapAlloc(96);
 	CHECK(plain == second + 96);
 	checkBytes(plain, 96, UNTOUCHED);
+
+	phase = "realloc0 grown into a fresh neighbour zeroes only the slack and the absorbed header";
+	unsigned char* filler = msHeapAlloc(57344 - sizeof(msHeapBig));
+	CHECK(filler == bigA + 4096);
+	size_t onePage = 4096 - sizeof(msHeapBig);
+	unsigned char* g = msHeapCalloc(1, onePage);
+	checkBytes(g, onePage, UNTOUCHED);
+	memset(g, 0x5c, onePage);
+	size_t want = 4 * 4096 - sizeof(msHeapBig);
+	unsigned char* gg = msHeapRealloc0(g, 100, want);
+	CHECK(gg == g);
+	checkBytes(gg, 100, 0x5c);
+	checkBytes(gg + 100, 4096 - 100, 0);
+	checkBytes(gg + 4096, want - 4096, UNTOUCHED);
+
+	phase = "realloc0 moved to fresh memory leaves the fresh tail alone";
+	unsigned char* m = msHeapCalloc(1, 96);
+	memset(m, 0x5c, 96);
+	unsigned char* mm = msHeapRealloc0(m, 40, 9000);
+	CHECK((unsigned char*)msHeapPage(mm) == (unsigned char*)msHeapPage(gg) + 4 * 4096);
+	checkBytes(mm, 40, 0x5c);
+	checkBytes(mm + 40, 56, 0);
+	checkBytes(mm + 96, 9000 - 96, UNTOUCHED);
+
+	phase = "realloc0 moved to reused memory zeroes the tail";
+	memset(mm, 0xf7, 9000);
+	msHeapFree(mm);
+	unsigned char* r = msHeapCalloc(1, 96);
+	CHECK(r == m);
+	checkBytes(r, 96, 0);
+	memset(r, 0x5c, 96);
+	unsigned char* rr = msHeapRealloc0(r, 96, 9000);
+	CHECK(msHeapPage(rr) == msHeapPage(mm));
+	checkBytes(rr, 96, 0x5c);
+	checkBytes(rr + 96, 9000 - 96, 0);
+
+	phase = "realloc0 grown into a dirty neighbour zeroes the whole tail";
+	unsigned char* d = msHeapAlloc(onePage);
+	unsigned char* dn = msHeapAlloc(3 * 4096 - sizeof(msHeapBig));
+	CHECK((unsigned char*)msHeapPage(d) == (unsigned char*)msHeapPage(rr) + 3 * 4096 && dn == d + 4096);
+	memset(dn, 0xf7, 3 * 4096 - sizeof(msHeapBig));
+	msHeapFree(dn);
+	memset(d, 0x5c, onePage);
+	unsigned char* dd = msHeapRealloc0(d, onePage, want);
+	CHECK(dd == d);
+	checkBytes(dd, onePage, 0x5c);
+	checkBytes(dd + onePage, want - onePage, 0);
+	msHeapFree(dd);
+	msHeapFree(rr);
+	msHeapFree(gg);
+	msHeapFree(filler);
 	return 0;
 }

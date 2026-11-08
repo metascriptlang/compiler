@@ -5,6 +5,7 @@
 #define msHeapAlloc msHeapProbeAlloc
 #define msHeapCalloc msHeapProbeCalloc
 #define msHeapRealloc msHeapProbeRealloc
+#define msHeapRealloc0 msHeapProbeRealloc0
 #define msHeapFree msHeapProbeFree
 #define msHeapReset msHeapProbeReset
 #define msHeapThreadRelease msHeapProbeThreadRelease
@@ -139,6 +140,35 @@ int32_t msAllocatorCoreChecks(void) {
 	CHECK(clean == dirty);
 	checkBytes(clean, 15, 0);
 	msHeapFree(clean);
+
+	phase = "realloc copies the block, not the caller's old size";
+	unsigned char* whole = msHeapAlloc(100);
+	for (unsigned i = 0; i < 100; ++i) whole[i] = (unsigned char)(i + 1);
+	whole = msHeapRealloc(whole, 10, 5000);
+	for (unsigned i = 0; i < 100; ++i) CHECK(whole[i] == (unsigned char)(i + 1));
+	msHeapFree(whole);
+
+	phase = "realloc keeps a block that still fits with at most half of it unused";
+	unsigned char* fit = msHeapAlloc(100);
+	CHECK(msHeapRealloc(fit, 100, 112) == fit);
+	CHECK(msHeapRealloc(fit, 112, 56) == fit);
+	unsigned char* moved = msHeapRealloc(fit, 56, 40);
+	CHECK(moved != fit);
+	msHeapFree(moved);
+
+	phase = "realloc grows a big chunk into its free right neighbour";
+	size_t twoPages = 2 * 4096 - sizeof(msHeapBig);
+	unsigned char* grow = msHeapAlloc(twoPages);
+	for (size_t i = 0; i < twoPages; ++i) grow[i] = (unsigned char)i;
+	size_t growRequests = requests;
+	unsigned char* grown = msHeapRealloc(grow, twoPages, 5 * 4096 - sizeof(msHeapBig));
+	CHECK(grown == grow && requests == growRequests);
+	CHECK(msHeapPage(grown)->size == 5 * 4096);
+	for (size_t i = 0; i < twoPages; ++i) CHECK(grown[i] == (unsigned char)i);
+	unsigned char* after = msHeapAlloc(4096 - sizeof(msHeapBig));
+	CHECK(after == grown + 5 * 4096);
+	msHeapFree(after);
+	msHeapFree(grown);
 
 	phase = "realloc prefix and zero-size";
 	unsigned char* p = msHeapAlloc(512);
