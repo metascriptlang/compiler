@@ -234,7 +234,13 @@ tool_ids() {
     if [ "$t" = zig ]; then v=$(zig version 2>&1 | head -1); else v=$("$t" --version 2>&1 | head -1); fi
     printf '%s %s %s\n' "$t" "$(command -v "$t")" "$v"
   done
-  printf 'toolchain %s\n' "$(cat "${MSC_NATIVE_TOOLCHAIN:-$TOP/msc-toolchain}/IDENTITY" 2>/dev/null || echo absent)"
+  printf 'toolchain %s\n' "$(cat "$(native_bundle)/IDENTITY" 2>/dev/null || echo absent)"
+}
+# The bundle msc builds with when no --cc is given, searched in its order (nativeToolchainPath, src/compiler/toolchain.ms).
+native_bundle() {
+  if [ -n "${MSC_NATIVE_TOOLCHAIN:-}" ]; then printf '%s' "$MSC_NATIVE_TOOLCHAIN"
+  elif [ -d "$TOP/msc-toolchain" ]; then printf '%s' "$TOP/msc-toolchain"
+  else printf '%s' "${HOME:-$USERPROFILE}/.metascript/msc-toolchain"; fi
 }
 
 # The inputs of a corpus cell that no emit shows. The src/compiler files pick cc flags, linking and the build cache;
@@ -1616,6 +1622,11 @@ CHANGES
   [ "$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a")" != "$new" ] || { printf 'FAIL support stamp: a bundle named by MSC_NATIVE_TOOLCHAIN kept the stamp\n'; bad=1; }
   old=$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a"); printf 'dd\n' >"$d/env-bundle/IDENTITY"
   [ "$(MSC_NATIVE_TOOLCHAIN="$d/env-bundle" support_stamp "$d/a")" != "$old" ] || { printf 'FAIL support stamp: another env-selected bundle kept the stamp\n'; bad=1; }
+  mkdir -p "$d/home-bundle/.metascript/msc-toolchain"; printf 'ee\n' >"$d/home-bundle/.metascript/msc-toolchain/IDENTITY"
+  old=$(HOME="$d/home-bundle" support_stamp "$d/a")
+  [ "$old" != "$new" ] || { printf 'FAIL support stamp: a bundle installed in the MetaScript home kept the stamp\n'; bad=1; }
+  printf 'ff\n' >"$d/home-bundle/.metascript/msc-toolchain/IDENTITY"
+  [ "$(HOME="$d/home-bundle" support_stamp "$d/a")" != "$old" ] || { printf 'FAIL support stamp: another home-installed bundle kept the stamp\n'; bad=1; }
   mkdir -p "$d/h1/.metascript/zig" "$d/h2/.metascript/zig"
   printf '#!/bin/sh\necho 9.9.9\n' >"$d/h1/.metascript/zig/zig"; chmod +x "$d/h1/.metascript/zig/zig"
   cp "$d/h1/.metascript/zig/zig" "$d/h2/.metascript/zig/zig"
