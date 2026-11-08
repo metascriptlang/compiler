@@ -1279,6 +1279,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const implCtor = ctorRoutineOf(classSym);
 	const signatureImpl = hasCtor && classSym != null ? ctorRoutineOf(constructorDeclaringClass(classSym) ?? classSym) : null;
 	const signatures = ctorSignaturesOf(signatureImpl);
+	if (signatures.length > 0) d.newArguments = writtenArguments(d.newArguments);
 	const pickedSig = signatures.length > 0 ? pickCtorSignature(ctx, node, d.newArguments, classSym!.name, signatureImpl!, signatures, expected) : null;
 	if (signatures.length > 0 && pickedSig == null) return resolvedType != null ? resolvedType : inferredType();
 	const declaredCtor = pickedSig != null ? pickedSig : implCtor;
@@ -1705,6 +1706,28 @@ function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[
 
 // A `new` ranks the constructor signatures and runs the implementation. The implementation is
 // never a candidate itself, as in a call to an overloaded function.
+// A super call takes the signature's variant only when what it passes holds the variant's types,
+// since the signature was picked on the arguments alone; otherwise it runs the implementation.
+function argumentsFit(ctx: CheckerContext, args: Node[], formals: Type[] | null): boolean {
+	if (formals == null || hasSpreadArg(args)) return false;
+	const mark = ctx.errors.length;
+	let fits = true;
+	for (let ai = 0; ai < args.length && ai < formals.length; ai += 1) {
+		callCheckExpr(ctx, args[ai], formals[ai]);
+		const argType = args[ai].nodeType;
+		if (argType == null || !isAssignable(argType, formals[ai])) fits = false;
+	}
+	ctx.errors = ctx.errors.slice(0, mark);
+	for (const arg of args) clearCheckerState(arg);
+	return fits;
+}
+
+// A body checked again (an instance, a macro's helper) still holds the defaults its first check
+// filled; a signature is picked on what the call wrote, and the defaults are filled again after.
+function writtenArguments(args: Node[]): Node[] {
+	return args.some((a: Node): boolean => a.flags.has(NodeFlag.FilledDefault)) ? args.filter((a: Node): boolean => !a.flags.has(NodeFlag.FilledDefault)) : args;
+}
+
 function pickCtorSignature(ctx: CheckerContext, node: Node, args: Node[], className: string, impl: Symbol, sigs: Symbol[], expected: Type | null): Symbol | null {
 	if (!validateOverloadSigs(ctx, overloadMembers(impl), impl, 1)) return null;
 	if (hasSpreadArg(args)) {
@@ -2151,12 +2174,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const signatureImpl = ctorRoutineOf(signatureOwner);
 		const signatures = ctorSignaturesOf(signatureImpl);
 		const forwardsImplementation = ctx.currentFunction != null && hasFlag(ctx.currentFunction, SymbolFlag.InheritsConstructor);
+		if (signatures.length > 0 && !forwardsImplementation) d.arguments = writtenArguments(d.arguments);
 		const pickedSig = signatures.length > 0 && !forwardsImplementation ? pickCtorSignature(ctx, node, d.arguments, signatureOwner.name, signatureImpl!, signatures, null) : null;
 		if (signatures.length > 0 && !forwardsImplementation && pickedSig == null) {
 			node.nodeType = voidType();
 			return voidType();
 		}
-		if (pickedSig != null && parentCtor == signatureImpl && parentInst == null) d.callee.resolvedSym = signatureCtorRoutine(ctx, parentSym, signatureImpl!, pickedSig);
+		if (pickedSig != null && parentCtor == signatureImpl && parentInst == null) {
+			const variant = signatureCtorRoutine(ctx, parentSym, signatureImpl!, pickedSig);
+			if (variant != parentCtor && argumentsFit(ctx, d.arguments, ctorFormalTypes(variant))) d.callee.resolvedSym = variant;
+		}
 		let ctorParamTypes = ctorFormalTypes(d.callee.resolvedSym);
 		if (substNames.length > 0 && ctorParamTypes != null && parentInst != null) {
 			const substParams = declaredTypeParams(parentSym, substNames.length);
