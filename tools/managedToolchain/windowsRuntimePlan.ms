@@ -85,9 +85,9 @@ export function builtinsDirectory(target: WindowsTarget, major: string): string 
 
 export function builtinsCmakeArguments(
 	target: WindowsTarget, source: string, stage: string, config: string,
-	build: string, ninja: string,
+	build: string, ninja: string, prefixMaps: string[],
 ): string[] {
-	const flags = "--no-default-config --config=" + config + " -gcodeview";
+	const flags = ["--no-default-config", "--config=" + config, "-gcodeview", "-gno-codeview-command-line", "-fdebug-compilation-dir=.", ...prefixMaps].join(" ");
 	const triple = windowsClangTriple(target);
 	const tool = (name: string): string => join(stage, "bin/" + name);
 	const args = [

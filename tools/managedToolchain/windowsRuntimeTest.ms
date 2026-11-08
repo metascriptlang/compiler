@@ -53,9 +53,9 @@ function main(): void {
 		"builtins sit where --rtlib=compiler-rt looks for the triple");
 
 	const args = builtinsCmakeArguments(WindowsTarget.X64, "/s", "/stage", "/stage/runtime/windows/x.cfg",
-		"/b", "/n");
-	check(args.indexOf("-DCMAKE_C_FLAGS=--no-default-config --config=/stage/runtime/windows/x.cfg -gcodeview") >= 0,
-		"compiler-rt compiles through the shipped config");
+		"/b", "/n", ["-ffile-prefix-map=/s=/llvm-project"]);
+	check(args.indexOf("-DCMAKE_C_FLAGS=--no-default-config --config=/stage/runtime/windows/x.cfg -gcodeview -gno-codeview-command-line -fdebug-compilation-dir=. " +
+		"-ffile-prefix-map=/s=/llvm-project") >= 0, "compiler-rt compiles through the shipped config");
 	check(args.indexOf("-DCOMPILER_RT_BUILD_SANITIZERS=OFF") >= 0, "sanitizers are not built");
 	check(args.indexOf("-DCOMPILER_RT_BUILD_BUILTINS=OFF") < 0, "builtins are built");
 	check(args.indexOf("-DCMAKE_C_COMPILER=/stage/bin/clang") >= 0, "the stage's clang compiles");
