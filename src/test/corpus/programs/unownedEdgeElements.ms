@@ -7,8 +7,9 @@
 // @stdout: struct copies 2 3 2
 // @stdout: tree destroyed 1001
 // @stdout: N destroyed 11
-// @stdout: Error: 1 Unowned<N> edge(s) still point at the N being freed; each would dangle
-// note: an Unowned<T> element of a field's own array (Vec<Unowned<T>> or Unowned<T>[]) is counted on push, index store, literal and struct copy and given up on pop, splice, reassignment and holder death, so a tree whose children keep their parents in an array stays acyclic and every target is freed exactly once; a target freed while an element still points at it stops the program.
+// @stdout: kept 1, N destroyed 12
+// @stdout: Error: an Unowned<N> edge was read after its N was destroyed
+// note: an Unowned<T> element of a field's own array (Vec<Unowned<T>> or Unowned<T>[]) is counted on push, index store, literal and struct copy and given up on pop, splice, reassignment and holder death, so a tree whose children keep their parents in an array stays acyclic and every target is freed exactly once; reading an element whose target was destroyed stops the program.
 class N { id: int32; constructor(id: int32) { this.id = id; } }
 let destroyedN = 0;
 function onDestroy(this n: N): void { destroyedN++; }
@@ -101,4 +102,5 @@ console.log("tree destroyed " + destroyedT.toString());
 console.log("N destroyed " + destroyedN.toString());
 const keeper = new H();
 dangle(keeper);
-console.log("unreachable " + keeper.ups.length.toString());
+console.log("kept " + keeper.ups.length.toString() + ", N destroyed " + destroyedN.toString());
+console.log("unreachable " + keeper.ups[0].id.toString());

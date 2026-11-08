@@ -1,9 +1,12 @@
 // @exit: 1
-// @skip-js: C-only by design: the check runs when the DRC frees the target; JS frees nothing
+// @skip-js: C-only by design: onDestroy counts the DRC's destroys and the check runs when an edge is read after its target was destroyed; JS frees nothing
 // @stdout: attached 7
-// @stdout: Error: 1 Unowned<N> edge(s) still point at the N being freed; each would dangle
-// note: a target freed while an Unowned<T> edge still points at it stops the program at the free, before the edge can be read.
+// @stdout: destroyed 1, edge kept
+// @stdout: Error: an Unowned<N> edge was read after its N was destroyed
+// note: a target destroyed while an Unowned<T> edge still points at it is destroyed on time and keeps only its memory; reading the edge afterwards stops the program instead of reading the destroyed object.
 class N { id: int32 = 7; }
+let destroyed = 0;
+function onDestroy(this n: N): void { destroyed++; }
 class H { at: Unowned<N> | null = null; }
 let h: H = new H();
 function attach(): void {
@@ -12,4 +15,6 @@ function attach(): void {
 	console.log("attached " + n.id.toString());
 }
 attach();
-console.log("unreachable");
+console.log("destroyed " + destroyed.toString() + ", edge kept");
+const seen = h.at;
+console.log("unreachable " + (seen != null ? seen.id : 0).toString());

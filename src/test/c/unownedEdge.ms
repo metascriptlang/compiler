@@ -21,6 +21,10 @@ function verdict(decls: string, name: string): string {
 	return line.contains(".isCyclic = MS_TRUE") ? "cyclic" : "acyclic";
 }
 
+function unownedLines(c: string): string {
+	return c.split("\n").filter((line: string): boolean => line.includes("Unowned") || line.includes("error")).join("\n");
+}
+
 function emitted(src: string): string {
 	const r = compileToC(src);
 	return r.ok ? r.value : r.error;
@@ -62,6 +66,24 @@ test "a literal's Unowned field takes its value on the second count, not a stron
 test "the last read of an Unowned field is a copy, not a move" {
 	const c = emitted("class T { id: int32 = 4; }\nstruct V { at: Unowned<T> | null; }\nfunction f(t: T): int32 {\n\tlet v: V = { at: null };\n\tv.at = t;\n\tconst r = v.at;\n\treturn r != null ? r.id : 0;\n}\nconsole.log(f(new T()));\n");
 	assert !c.contains("msPtrWasMoved(v_1_.at)"), c;
+}
+
+test "a read of an Unowned slot as a plain value is a checked strong load; a copy into another slot is not" {
+	const head = "class T { id: int32 = 4; }\nclass H { at: Unowned<T> | null = null; ups: Unowned<T>[] = []; }\n";
+	const field = emitted(head + "function f(h: H): int32 { const r = h.at; return r != null ? r.id : 0; }\nconst t = new T();\nconst h = new H();\nh.at = t;\nconsole.log(f(h));\n");
+	assert field.contains("msUnownedLoad((*h_p0).at)"), unownedLines(field);
+	const element = emitted(head + "function f(h: H): int32 { return h.ups[0].id; }\nconst t = new T();\nconst h = new H();\nh.ups.push(t);\nconsole.log(f(h));\n");
+	assert element.contains("= msUnownedLoad("), unownedLines(element);
+	const copied = emitted(head + "function f(a: H, b: H): void { a.at = b.at; a.ups.push(b.ups[0]); }\nconst t = new T();\nconst a = new H();\nconst b = new H();\nb.at = t;\nb.ups.push(t);\nf(a, b);\nconsole.log(a.ups.length);\n");
+	assert !copied.contains("msUnownedLoad"), unownedLines(copied);
+}
+
+test "an array of T and an array of Unowned<T> never stand for each other" {
+	const head = "class N { id: int32 = 1; }\nclass H { ups: Unowned<N>[] = []; }\nconst h = new H();\n";
+	const refused = "so one array cannot stand for the other";
+	assert emitted(head + "const xs: N[] = [new N()];\nh.ups = xs;\nconsole.log(h.ups.length);\n").contains(refused);
+	assert emitted(head + "const ys: N[] = h.ups;\nconsole.log(ys.length);\n").contains(refused);
+	assert emitted(head + "function f(a: N[]): int32 { return a.length; }\nconsole.log(f(h.ups));\n").contains(refused);
 }
 
 test "Unowned is a field type: a local, a parameter, a return or a static that names it is refused" {
