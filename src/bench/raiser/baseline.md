@@ -33,33 +33,53 @@ rtx, against 7.5, 7.0 and 19 us/op with a local copy below. `module object read 
 
 ## rtx — AMD Ryzen 9 9950X, Linux x86_64
 
-Commit `1b4eafd7173`, tree `d49e622c620`, builder msc `1caa3622619`, 2026-11-04, load 15.2 before, 9.9 after (32
-threads). Host flags `--linux --host rtx --cores 16`.
+Commit `25e95678cd3` (main), builder msc `02029f04dc4`, 2026-11-08, load 20.1 before, 7.1 after (32 threads). Host
+flags `--linux --host rtx --cores 16`; candidate built `--danger` with the default thin LTO.
 
 | row | unit | raiser | c | luajit-joff | luajit-jon | lua54 |
 |---|---|---|---|---|---|---|
-| int add loop 1k | us/op | 2.188 | 0.196 | 3.049 | 0.485 | 2.127 |
-| float add loop 1k | us/op | 2.999 | 0.347 | 2.268 | 0.347 | 2.27 |
-| int to float 1k | us/op | 7.561 | 0.477 | 2.265 | 0.481 | 2.27 |
-| fib(25) recursion | us/op | 2599 | 202.8 | 1702 | 274.9 | 2435 |
-| module variable read 1k | us/op | 8.795 | 0.193 | 2.269 | 0.346 | 2.549 |
-| module object read 1k | us/op | 59.63 | 0.194 | 3.003 | 0.347 | 3.738 |
-| field read/write 1k | us/op | 7.49 | 0.208 | 7.752 | 0.404 | 11.34 |
-| ms call 1k | us/op | 15.69 | 0.183 | 5.168 | 0.492 | 8.766 |
-| closure call 1k | us/op | 19.03 | 1.144 | 6.771 | 0.492 | 10.4 |
-| Math.sqrt host call 1k | us/op | 43.31 | 4.263 | 8.809 | 4.123 | 9.314 |
-| array push 1k | us/op | 9.021 | 0.554 | 3.755 | 1.107 | 5.459 |
-| array index 1k | us/op | 7.005 | 0.198 | 2.753 | 0.358 | 3.341 |
-| string concat 1k | us/op | 12.28 | 0.863 | 146.5 | 116 | 35.1 |
-| Map set 1k | us/op | 514.6 | 3.489 | 11.47 | 1.697 | 4.085 |
-| Map get 1k | us/op | 510.7 | 2.43 | 13.49 | 1.754 | 6.738 |
-| object alloc 1k | us/op | 91.64 | 1.161 | 32.77 | 0.496 | 54 |
-| sha256 64 KB host bridge | MB/s | 350.9 | 2635 | - | - | - |
+| int add loop 1k | us/op | 2.229 | 0.196 | 2.287 | 0.491 | 2.172 |
+| float add loop 1k | us/op | 2.628 | 0.35 | 2.277 | 0.356 | 2.297 |
+| int to float 1k | us/op | 2.643 | 0.477 | 2.281 | 0.492 | 2.302 |
+| fib(25) recursion | us/op | 2543 | 205.7 | 1731 | 278.8 | 2426 |
+| module variable read 1k | us/op | 7.872 | 0.194 | 2.289 | 0.355 | 2.549 |
+| module object read 1k | us/op | 8.794 | 0.194 | 3.022 | 0.355 | 3.732 |
+| field read/write 1k | us/op | 7.43 | 0.207 | 7.85 | 0.423 | 11.28 |
+| ms call 1k | us/op | 3.136 | 0.185 | 5.287 | 0.505 | 8.68 |
+| closure call 1k | us/op | 16.2 | 0.955 | 6.816 | 0.503 | 10.32 |
+| Math.sqrt host call 1k | us/op | 22.74 | 4.26 | 9.027 | 4.184 | 9.187 |
+| user C sqrt call 1k | us/op | 25.62 | 4.253 | 31.55 | 4.243 | - |
+| array push 1k | us/op | 2.896 | 0.524 | 3.797 | 1.134 | 5.37 |
+| array index 1k | us/op | 3.813 | 0.197 | 2.807 | 0.361 | 3.355 |
+| string concat 1k | us/op | 13.04 | 1.022 | 133.1 | 89.76 | 37.86 |
+| Map set 1k | us/op | 307.9 | 3.527 | 11.6 | 1.75 | 4.159 |
+| Map get 1k | us/op | 243 | 2.429 | 13.6 | 1.764 | 6.554 |
+| object alloc 1k | us/op | 56.86 | 2.725 | 29.76 | 0.498 | 52.58 |
+| union string tag 1k | us/op | 55.2 | 2.244 | 13.21 | 2.331 | 18.61 |
+| union number tag 1k | us/op | 47.86 | 2.235 | 12.93 | 2.61 | 17.74 |
+| int tag record 1k | us/op | 47.23 | 0.985 | 12.36 | 3.017 | 19.11 |
+| sha256 64 KB host bridge | MB/s | 2514 | 2626 | - | - | - |
 
-Furthest from LuaJIT `-joff`: Map set (45x), Map get (38x), module object read (20x), Math.sqrt (4.9x), module
-variable read (3.9x), int to float (3.3x); the Raiser is ahead on int add loop (0.72x) and string concat, and even on
-field read/write. Furthest from `-jon`: Map set (303x), Map get (291x), object alloc (185x), module object read
-(172x), closure call (39x), ms call (32x).
+### Where each row's gap comes from
+
+Instructions per iteration, on the same main: Raiser counted at run time (a per-opcode counter applied to a probe
+build only, each row's program run with and without the row, divided by 1000), LuaJIT read from `luajit -bl
+bench.lua`. One plain instruction costs about 1.1 ns on both sides, so a row at parity runs as many instructions as
+LuaJIT and a row behind runs more of them or dearer ones.
+
+| row | Raiser | LuaJIT | what the extra is |
+|---|---|---|---|
+| int add, field read/write | 2, 8 | 2, 8 | none: parity |
+| float add, int to float | 3 | 2 | a loop-invariant constant reloaded; the int conversion LuaJIT does not need |
+| module variable / object read | 6 / 7 | 3 / 4 | a TDZ guard (LoadGlobal, BTruthy, two Jump) inside the loop |
+| fib(25), per call | 4.5 | 7.5 | fewer instructions: CallDirect+Ret costs about 7.7 ns against about 2 |
+| closure call | 7 | 8 | CallClosureTyped about 10 ns |
+| Math.sqrt | 5 | 5 | CallHost about 18 ns; LuaJIT runs `math.sqrt` as a fast function |
+| object alloc | 18 | 6 | constructor not inlined; Try/Finally around each iteration, a constructor being assumed to raise |
+| union / tag rows | 25–29 | ~13 | the `for of` element is an owned copy: RcInc, MoveR, WasMoved, Try/Finally/RcDec per element |
+| Map get / set | 94 / 102 | 6 / 3 | the std Map runs as bytecode across 6–8 routines; LuaJIT runs one table instruction in C |
+
+The ns costs of the call opcodes are differences between rows, not measured in isolation. Not measured: m1m.
 
 ## m1m — Apple M1 Pro, macOS arm64
 
