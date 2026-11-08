@@ -1,7 +1,7 @@
 // Incremental-compilation oracle: msc run --target=raiser src/test/ic/run.ms, from the recompiler root.
 // Each case in cases/ is a sequence of edits; every step's warm build must emit the same C as a cold build
 // of the same sources, and its counts must match what the step declares. Format: cases/README.md.
-// Env: MSC=<path to msc> (default ./msc, else installed msc), IC_ONLY=<case,names>.
+// Env: MSC=<path to msc> (default ./msc, else installed msc), IC_ONLY=<case,names> (stdUnit names the std unit check).
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
@@ -421,6 +421,158 @@ function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 	return fail;
 }
 
+const STD_UNIT_CHECK = "stdUnit";
+const STD_UNIT_ENV = ["MSC_NO_GLOBAL_CACHE", "MSC_GLOBAL_CACHE_DIR", "MSC_CACHE_DIR", "MSC_STD_UNIT", "MSC_IC_VERIFY"];
+const FOREIGN_UNIT = "[miss: a foreign or mismatched unit]x1";
+
+const UNIT_PROGRAM_A = [
+	"class Counter {",
+	"\tcount: int32 = 0;",
+	"\tbump(by: int32): int32 {",
+	"\t\tthis.count += by;",
+	"\t\treturn this.count;",
+	"\t}",
+	"}",
+	"const scores = new Map<string, int32>();",
+	"scores.set(\"a\", 1);",
+	"const doubled = [1, 2, 3].map((n: int32): int32 => n * 2);",
+	"const counter = new Counter();",
+	"console.log(`${doubled.join(\",\")} ${scores.get(\"a\") ?? 0} ${counter.bump(2)}`);",
+	"",
+].join("\n");
+
+const UNIT_PROGRAM_B = [
+	"class Greeter {",
+	"\tname: string;",
+	"\tconstructor(name: string) {",
+	"\t\tthis.name = name;",
+	"\t}",
+	"\tgreet(): string {",
+	"\t\treturn `hi ${this.name}`;",
+	"\t}",
+	"}",
+	"const ages = new Map<string, int32>();",
+	"ages.set(\"b\", 2);",
+	"const names = [\"x\", \"y\"].map((s: string): string => s.toUpperCase());",
+	"console.log(`${new Greeter(names[0]).greet()} ${ages.size}`);",
+	"",
+].join("\n");
+
+function restoreEnv(name: string, previous: string): void {
+	if (previous == "") env.delete(name);
+	else env.set(name, previous);
+}
+
+function lineWith(text: string, marker: string): string {
+	for (const line of text.split("\n")) {
+		if (line.contains(marker)) return line.trim();
+	}
+	return "";
+}
+
+function unitEvidence(r: ExecFileResult): string {
+	const lines: string[] = [`exit ${r.exitCode}`];
+	for (const line of both(r).split("\n")) {
+		const t = line.trim();
+		if (t.startsWith("stdUnit: ") || t.startsWith("verify: ") || t.contains("error") || t.contains("internal")) lines.push(t);
+	}
+	return lines.join("\n");
+}
+
+function stdUnitFiles(cache: string): string[] {
+	const found: string[] = [];
+	const base = `${cache}/stdunit`;
+	if (!exists(base)) return found;
+	for (const e of readDir(base)) {
+		if (!e.endsWith("/")) continue;
+		const dir = `${base}/${e.slice(0, e.length - 1)}`;
+		for (const f of readDir(dir)) {
+			if (f.endsWith(".su")) found.push(`${dir}/${f}`);
+		}
+	}
+	return found;
+}
+
+function unitBuild(work: string, localCache: string, unit: boolean, verify: boolean): ExecFileResult {
+	env.set("MSC_CACHE_DIR", localCache);
+	if (unit) env.set("MSC_STD_UNIT", "1");
+	else env.delete("MSC_STD_UNIT");
+	if (verify) env.set("MSC_IC_VERIFY", "1");
+	else env.delete("MSC_IC_VERIFY");
+	return execFileResult(MSC, ["build", "main.ms", "--force", "--emit=c", "--time"], work);
+}
+
+function checkUnitStep(step: string, r: ExecFileResult, state: string, note: string, reasons: string[]): string {
+	const unit = lineWith(both(r), "stdUnit: ");
+	const verified = lineWith(both(r), "verify: ");
+	const problems: string[] = [];
+	if (!succeeded(r)) problems.push("the build failed");
+	if (!verified.contains(" C units and ") || !verified.endsWith(" diagnostics equal a cold build")) problems.push("no 'verify: N C units and M diagnostics equal a cold build' line");
+	if (!unit.contains(`state=${state} `)) problems.push(`the unit state is not ${state}`);
+	if (note != "" && !unit.contains(note)) problems.push(`the unit notes lack '${note}'`);
+	if (problems.length > 0) reasons.push(`${step}: ${problems.join("; ")}:\n${unitEvidence(r)}`);
+	return unit;
+}
+
+function runStdUnitSteps(dir: string, cache: string, project: string, reasons: string[]): void {
+	const a = `${project}/a`;
+	const b = `${project}/b`;
+	checkUnitStep("step 1 (first build, fresh global cache)", unitBuild(a, `${dir}/localCache1`, true, true), "written", "[miss: no unit]x1", reasons);
+	const units = stdUnitFiles(cache);
+	if (units.length != 1) {
+		reasons.push(`step 1 (first build, fresh global cache): ${units.length} units under ${cache}/stdunit, expected 1: [${units.join(", ")}]`);
+		return;
+	}
+	const path = units[0];
+
+	const hit = checkUnitStep("step 2 (second program, same project)", unitBuild(b, `${dir}/localCache2`, true, true), "hit", "", reasons);
+	if (hit.contains(" [")) reasons.push(`step 2 (second program, same project): a hit carries notes:\n${hit}`);
+
+	const whole = read(path);
+	const headerEnd = whole.indexOf("\n", whole.indexOf("\n") + 1);
+	const torn = whole.slice(0, whole.length / 2);
+	if (headerEnd < 0 || torn.length <= headerEnd) {
+		reasons.push(`step 3 (torn unit): ${path} holds ${whole.length} characters, too few to tear past its header`);
+		return;
+	}
+	put(path, torn);
+	const tornLine = checkUnitStep("step 3 (torn unit)", unitBuild(a, `${dir}/localCache3`, true, true), "written", "[miss: ", reasons);
+	if (tornLine.contains("[miss: no unit]") || tornLine.contains(FOREIGN_UNIT)) reasons.push(`step 3 (torn unit): the miss names no decoding problem:\n${tornLine}`);
+	if (read(path).length <= torn.length) reasons.push(`step 3 (torn unit): ${path} was not rewritten (${read(path).length} characters, torn ${torn.length})`);
+
+	const rewritten = read(path);
+	const first = rewritten.indexOf("\n");
+	const second = rewritten.indexOf("\n", first + 1);
+	if (first < 0 || second < 0 || rewritten.slice(first + 1, first + 3) != "K\t") {
+		reasons.push(`step 4 (foreign key): ${path} has no 'K' key line after its magic`);
+		return;
+	}
+	put(path, rewritten.slice(0, first + 1) + "K\tforeign" + rewritten.slice(second, rewritten.length));
+	checkUnitStep("step 4 (foreign key)", unitBuild(b, `${dir}/localCache4`, true, true), "written", FOREIGN_UNIT, reasons);
+
+	const inert = unitBuild(a, `${dir}/localCache5`, false, false);
+	if (!succeeded(inert) || !both(inert).contains("preludePack: ")) reasons.push(`step 5 (MSC_STD_UNIT unset): the build failed or printed no --time check lines:\n${unitEvidence(inert)}`);
+	if (lineWith(both(inert), "stdUnit: ") != "") reasons.push(`step 5 (MSC_STD_UNIT unset): the unit is not inert:\n${lineWith(both(inert), "stdUnit: ")}`);
+}
+
+function runStdUnitCheck(): string[] {
+	const reasons: string[] = [];
+	const dir = `${TMP}/${STD_UNIT_CHECK}`;
+	removeAll(dir);
+	const cache = `${dir}/globalCache`;
+	const project = `${dir}/project`;
+	put(`${project}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${project}/a/main.ms`, UNIT_PROGRAM_A);
+	put(`${project}/b/main.ms`, UNIT_PROGRAM_B);
+	const saved: string[] = [];
+	for (const name of STD_UNIT_ENV) saved.push(env.get(name));
+	env.delete("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_GLOBAL_CACHE_DIR", cache);
+	runStdUnitSteps(dir, cache, project, reasons);
+	for (let i = 0; i < STD_UNIT_ENV.length; i += 1) restoreEnv(STD_UNIT_ENV[i], saved[i]);
+	return reasons;
+}
+
 const only = env.get("IC_ONLY") == "" ? [] as string[] : env.get("IC_ONLY").split(",");
 const names: string[] = [];
 for (const e of readDir(CASES)) {
@@ -429,8 +581,10 @@ for (const e of readDir(CASES)) {
 	names.push(e);
 }
 names.sort();
-if (only.length > 0 && names.length != only.length) {
-	console.log(`FAIL icRunner: IC_ONLY names ${only.length} case(s), ${names.length} found`);
+const unitSelected = only.length == 0 || only.includes(STD_UNIT_CHECK);
+const checks = names.length + (unitSelected ? 1 : 0);
+if (only.length > 0 && checks != only.length) {
+	console.log(`FAIL icRunner: IC_ONLY names ${only.length} case(s), ${checks} found`);
 	exit(1);
 }
 let failed = 0;
@@ -457,5 +611,14 @@ for (const name of names) {
 		for (const r of reasons) console.log(`FAIL ${tag}: ${r}`);
 	}
 }
-console.log(`ic: ${names.length - failed - expected} passed, ${expected} expected red, ${failed} failed`);
+if (unitSelected) {
+	const reasons = runStdUnitCheck();
+	if (reasons.length == 0) {
+		console.log(`ok   ${STD_UNIT_CHECK}`);
+	} else {
+		failed += 1;
+		for (const r of reasons) console.log(`FAIL ${STD_UNIT_CHECK}: ${r}`);
+	}
+}
+console.log(`ic: ${checks - failed - expected} passed, ${expected} expected red, ${failed} failed`);
 if (failed > 0) exit(1);
