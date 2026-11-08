@@ -24,7 +24,7 @@ export function blake2bSync<D extends ByteInput>(
 ): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, [], bytesOf(data)) as Buffer);
+	return Result.ok(blake2bOf(hashSize, [], (typeof data == "string" ? data.asBytes() : data)) as Buffer);
 }
 
 export function blake2bKeyedSync<D extends ByteInput, K extends ByteInput>(
@@ -44,7 +44,7 @@ export function blake2bKeyedSync<D extends ByteInput, K extends ByteInput>(
 		wipeIfCopied(keyBytes, key);
 		return Result.err(bad);
 	}
-	const digest = blake2bOf(hashSize, key, bytesOf(data));
+	const digest = blake2bOf(hashSize, key, (typeof data == "string" ? data.asBytes() : data));
 	wipeIfCopied(keyBytes, key);
 	return Result.ok(digest as Buffer);
 }
@@ -71,7 +71,7 @@ export class Blake2b {
 		if (this._state.finished) {
 			throw new Error("Blake2b.update: the hasher already produced its digest");
 		}
-		const bytes = bytesOf(data);
+		const bytes = (typeof data == "string" ? data.asBytes() : data);
 		updateBlake2b(this._state, bytes, 0, bytes.length as int32);
 		return this;
 	}

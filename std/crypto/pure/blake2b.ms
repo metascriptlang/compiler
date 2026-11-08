@@ -1,4 +1,5 @@
 import { wipeBytes, wipeWords64 } from "./secret";
+import { InputBytes } from "./bytes";
 
 const iv: uint64[8] = [
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
@@ -16,7 +17,7 @@ export class Blake2bState {
 }
 
 /** A hash of `outputSize` bytes (1..64), keyed when `key` is not empty (1..64 bytes); the caller checks both. */
-export function newBlake2b(outputSize: int32, key: Readonly<uint8[]>): Blake2bState {
+export function newBlake2b(outputSize: int32, key: InputBytes): Blake2bState {
 	const s: Blake2bState = {
 		h: [0, 0, 0, 0, 0, 0, 0, 0],
 		block: [0],
@@ -1237,7 +1238,7 @@ function compress(s: Blake2bState, data: Readonly<Span<uint8>>, off: int32, isLa
 	s.h[7] = s.h[7] ^ v7 ^ v15;
 }
 
-export function updateBlake2b(s: Blake2bState, data: Readonly<uint8[]>, off: int32, length: int32): void {
+export function updateBlake2b(s: Blake2bState, data: InputBytes, off: int32, length: int32): void {
 	if (s.finished) throw new Error("hash already finished");
 	if (off < 0 || length < 0 || off + length > data.length) throw new Error(`updateBlake2b: range ${off}+${length} outside ${data.length} bytes`);
 	let at = off;
@@ -1280,7 +1281,7 @@ export function finishBlake2b(s: Blake2bState): uint8[] {
 	return out;
 }
 
-export function blake2bOf(outputSize: int32, key: Readonly<uint8[]>, data: Readonly<uint8[]>): uint8[] {
+export function blake2bOf(outputSize: int32, key: InputBytes, data: InputBytes): uint8[] {
 	const s = newBlake2b(outputSize, key);
 	updateBlake2b(s, data, 0, data.length as int32);
 	return finishBlake2b(s);
