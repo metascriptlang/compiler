@@ -4,7 +4,6 @@
 //  1. (moved) newExprLower — positional-new lowering now runs in the shared pipeline
 //  2. closureCallMarker   — mark calls through closure types for different calling convention
 //  3. (removed) pointerParam — now handled at codegen time (Reference: indirect location parity)
-//  4a. integerNumberLocal — cast a const `number` holding a masked integer back from that integer, not a double (before rangeCheckInject)
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
 //  5. optionalCoercion    — wrap T returns for T|null return types
 //  6. presizedPush      — build an array a counted loop pushes onto once per step the way `map` does: presized, written by index (NIM-REF TR-41)
@@ -30,7 +29,6 @@ import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerUnownedStores } from "./unownedStoreLower";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerPresizedPushes } from "./presizedPush";
-import { keepIntegerNumberLocals } from "./integerNumberLocal";
 import { lowerInductionPointers } from "./inductionPointer";
 import { lowerLoopSpans } from "./loopSpanCache";
 import { markConstData } from "./constDataMark";
@@ -43,8 +41,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.markClosureCalls");
 	result = lowerNumberBitwiseOperands(result, ctx);
 	flowLap("pass.native.lowerNumberBitwiseOperands");
-	result = keepIntegerNumberLocals(result, ctx);
-	flowLap("pass.keepIntegerNumberLocals");
 	result = injectRangeChecks(result, ctx);
 	flowLap("pass.injectRangeChecks");
 	result = injectIntChecks(result, ctx);
