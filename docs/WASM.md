@@ -82,6 +82,12 @@ three handle checks and drop the site.
   `Module["msb"]` in the wasm loader and one shared string taker instead of a closure per call
   (echo 121.0 against 121.1 and 118.5). Echo's remaining cost is the JS-side `malloc`, the wasm
   free, and the copy a function makes when it returns its borrowed parameter.
+  A typed array result (m1m probe, Node 24.1.0 and Chrome 149, 5 interleaved rounds, 2026-11-08)
+  stays `new C(HEAPU8.slice(p, p + n).buffer, o, k)`: wasm-bindgen's `new C(HEAPU8.buffer, p + o,
+  k).slice()` measured the same at 1000 floats (Chrome 0.60-0.64 us both, Node 0.51-0.55) and only
+  cut the fixed cost of an empty array (Chrome 0.21 to 0.10 us, Node 0.14 to 0.096), while it hands
+  a subarray result a buffer of its own length at offset 0 instead of the shape JS gives it;
+  `ArrayBuffer.prototype.slice` measured slower on both (empty 0.28 and 0.26 us).
 - **No zero-copy path for JS-owned data.** Wasm cannot address a JS `ArrayBuffer`, so a `Span` of
   JS data is copied in and back, as wasm-bindgen's `&mut [f32]` glue does; data the wasm side
   holds is shared without a copy through `Handle<VecBox<T>>` (bench row `scaleBox`).

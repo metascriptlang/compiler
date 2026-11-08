@@ -169,3 +169,32 @@ wasm-bindgen arm returns one. A `--quiet 30` window. Median of 5 rounds, us/op.
 `accept node: 11/12`, `accept chrome: 11/12`. The misses: `primes` on Node, 11% above
 (MetaScript's wasm code for the sieve; compiler card 2026-11-08-wasm-sieve-13-percent-behind-rust-wasm),
 and `makeVec` in Chrome, 10.8% above, one run, not split yet.
+
+## 2026-11-08, m1m, ship baseline
+
+Branch `wt/js-wasm-one-program` at `8d9131964ef`, compiler unchanged since main `5e2b893c5bc`;
+`primes 2M` on Node parked on compiler card 2026-11-08-wasm-sieve-13-percent-behind-rust-wasm. A
+`--quiet 30` window. Median of 5 rounds, us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.905 | 11.532 | 2.878 | 3.516 | 39.759 |
+| add64 x1000 | 4.672 | 4.322 | 4.083 | 4.712 | 51.925 |
+| strLen16 x1000 | 23.485 | 25.353 | 23.523 | 24.863 | 71.774 |
+| echo16 x1000 | 122.431 | 149.133 | 127.098 | 205.933 | 85.721 |
+| mid x1000 | 52.04 | 327.349 | 57.192 | 207.733 | 362.841 |
+| sumVec 1k Array | 1.48 | 1.465 | 1.601 | 1.599 | 52.42 |
+| sumSpan 1k Float32Array | 1.026 | 1.004 | 1.027 | 1.007 | 1.036 |
+| scaleSpan 1k Float32Array | 0.278 | 0.417 | 0.272 | 0.425 | 0.158 |
+| scaleBox 1k held by callee | 0.118 | 0.19 | 0.119 | 0.194 | 0.096 |
+| makeVec 1k | 0.65 | 1.003 | 1.16 | 1.059 | 0.856 |
+| callback 1k | 6.894 | 114.382 | 8.451 | 119.628 | 49.879 |
+| primes 2M | 5717.469 | 5173.54 | 6052 | 5578.182 | 4396.824 |
+
+`accept node: 11/12 rows meet wasmbindgen, 1 slower row(s) parked on a card`, `accept chrome:
+12/12`, exit 0. `makeVec` in Chrome is 9.5% above, under the 10% bar by little. The row measures
+what the rows before it leave behind: in one page, `makeVec` measured right after
+`echo16 x1000` takes 1.08-1.24 us, measured before the string rows 0.74-0.81, and the same
+function alone 0.76-0.79 against wasm-bindgen's 1.06-1.13 (3 to 5 rounds, m1m, not quiet). A
+forced `gc()` before it keeps it at 1.06-1.15; Node shows none of it (0.64-0.71 everywhere).
+Not traced further.
