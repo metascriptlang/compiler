@@ -92,9 +92,8 @@ export enum TypeFlag {
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
-	IsOwned,              // Owned<T> on a class Ref: the unique owning edge, so a cycle needs a non-owned edge and a copy of it is refused
+	IsOwned,              // Owned<T> on a class Ref: an owning edge; a cycle made only of owning edges does not keep its class under the collector
 	IsUnowned,            // Unowned<T> on a class Ref: a stored edge counted on the target's second count; it never keeps the target alive and its target cannot die while it exists
-	OwnedTarget,          // a class some Owned<T> names: its objects carry an owner word, checked when an owned slot adopts one
 }
 
 // ===== Attached Lifecycle Ops =====

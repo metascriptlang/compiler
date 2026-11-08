@@ -497,12 +497,6 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msArrayAcyclicRefDestroy(arr)  ((void)0)
 #define msArrayAcyclicRefCopy(d, s)    do { (d) = (s); } while(0)
 #define msArrayAcyclicRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
-#define msArrayOwnedRefDestroy(arr)    ((void)0)
-#define msArrayOwnedRefCopy(d, s)      do { (d) = (s); } while(0)
-#define msArrayOwnedRefSink(d, ...)    do { (d) = (__VA_ARGS__); } while(0)
-#define msArrayOwnedAcyclicRefDestroy(arr)  ((void)0)
-#define msArrayOwnedAcyclicRefCopy(d, s)    do { (d) = (s); } while(0)
-#define msArrayOwnedAcyclicRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
 #define msArrayUnownedRefDestroy(arr)  ((void)0)
 #define msArrayUnownedRefCopy(d, s)    do { (d) = (s); } while(0)
 #define msArrayUnownedRefSink(d, ...)  do { (d) = (__VA_ARGS__); } while(0)
@@ -545,10 +539,6 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 
 static inline void msUnownedAssignAt(void** slot, void* p) { *slot = p; }
 #define msUnownedAssign(slot, p) msUnownedAssignAt((void**)(slot), (p))
-#define msOwnedAdopt(child, holder)        ((void)(child), (void)(holder))
-#define msOwnedRelease(child)               ((void)(child))
-#define msOwnedReplace(old, v, holder)      ((void)(old), (void)(v), (void)(holder))
-static inline void* msOwnedTake(void* p) { return p; }
 static inline void* msUnownedTake(void* p) { return p; }
 static inline void* msUnownedGive(void* p) { return p; }
 #define msUnownedIncrefRo(p)  ((void)0)

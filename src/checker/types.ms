@@ -1811,7 +1811,6 @@ export function createOwned(ref: Type): Type {
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsOwned);
 	c.plainType = ref;
 	ref.ownedType = c;
-	if (ref.typeReturn != null) ref.typeReturn.typeFlags = ref.typeReturn.typeFlags.incl(TypeFlag.OwnedTarget);
 	return c;
 }
 
@@ -1897,12 +1896,6 @@ export function unownedSlotOf(place: Node): boolean {
 export function ownedSlotOf(place: Node): boolean {
 	if (place.kind == NodeKind.ArrayAccess) return isOwnedSlot(place.nodeType);
 	return place.kind == NodeKind.MemberExpr && ((place.resolvedSym != null && isOwnedSlot(place.resolvedSym.symbolType)) || isOwnedSlot(place.nodeType));
-}
-
-export function ownedElementOf(t: Type | null): Type | null {
-	const arr = t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : t;
-	if (arr == null || arr.kind != TypeKind.Array || !isOwnedSlot(arr.typeReturn)) return null;
-	return arr.typeReturn;
 }
 
 export function isOwnedRef(t: Readonly<Type | null>): boolean {
