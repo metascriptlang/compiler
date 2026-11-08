@@ -164,33 +164,7 @@ static inline bool msErrTake(void) {
    Literal CoW: shallow copy for literals (pointer only, no alloc).
    Buffer reuse: if dest has enough capacity, memcpy without malloc.
    Full copy only when dest buffer is too small or is a literal. */
-static inline void msStringCopy(msString* dest, msString src) {
-	/* Identity: same pointer + same length = same string */
-	if (msStrSameBuffer(*dest, src) && msStrLen(*dest) == msStrLen(src)) return;
-	/* Shared payload (e.g. after bitwise copy): both point to same buffer.
-	   Don't free — source still owns it. Must allocate a fresh independent copy. */
-	if (msStrSameBuffer(*dest, src)) {
-		*dest = msStringDup(src);
-		return;
-	}
-	/* Source is literal (or interned char): shallow copy — pointer only */
-	if (msStrNeedsNoFree(src)) {
-		msStringDestroy(*dest);
-		*dest = src;
-		return;
-	}
-	/* Source is heap: try buffer reuse (reuse if capacity sufficient) */
-	if (msStrIsHeap(*dest) && msStrCap(*dest) >= msStrLen(src)) {
-		msStrSetLen(dest, msStrLen(src));
-		memcpy(msStrWritable(dest), msStrData(&src), msStrLen(src) + 1);
-		msStringInheritAscii(*dest, src);
-		return;
-	}
-	/* Must allocate new buffer */
-	msString newStr = msStrDupHeap(src);
-	msStringDestroy(*dest);
-	*dest = newStr;
-}
+void msStringCopy(msString* dest, msString src);
 #define msStringWasMoved(s)   do { (s) = MS_EMPTY_STRING; } while(0)
 #define msPlainWasMoved(x)    memset(&(x), 0, sizeof(x))
 #define msSwap(a, b)          ({ __typeof__(a) msSwapA_ = (a); __typeof__(a) msSwapB_ = (b); \

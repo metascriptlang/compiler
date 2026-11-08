@@ -424,4 +424,32 @@ _Noreturn void msMapFatal(msString msg) {
 	exit(2);
 }
 
+__attribute__((noinline)) void msStringCopy(msString* dest, msString src) {
+	/* Identity: same pointer + same length = same string */
+	if (msStrSameBuffer(*dest, src) && msStrLen(*dest) == msStrLen(src)) return;
+	/* Shared payload (e.g. after bitwise copy): both point to same buffer.
+	   Don't free — source still owns it. Must allocate a fresh independent copy. */
+	if (msStrSameBuffer(*dest, src)) {
+		*dest = msStringDup(src);
+		return;
+	}
+	/* Source is literal (or interned char): shallow copy — pointer only */
+	if (msStrNeedsNoFree(src)) {
+		msStringDestroy(*dest);
+		*dest = src;
+		return;
+	}
+	/* Source is heap: try buffer reuse (reuse if capacity sufficient) */
+	if (msStrIsHeap(*dest) && msStrCap(*dest) >= msStrLen(src)) {
+		msStrSetLen(dest, msStrLen(src));
+		memcpy(msStrWritable(dest), msStrData(&src), msStrLen(src) + 1);
+		msStringInheritAscii(*dest, src);
+		return;
+	}
+	/* Must allocate new buffer */
+	msString newStr = msStrDupHeap(src);
+	msStringDestroy(*dest);
+	*dest = newStr;
+}
+
 #endif /* !MSOS_BARE || !MSGC_MANUAL */
